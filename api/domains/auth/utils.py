@@ -45,7 +45,9 @@ def get_authenticated_user(
     verified_required: bool = False,
 ) -> CurrentUserContext:
     try:
-        payload = jwt.decode(token, config.secret_signing_key, algorithms=[JWT_ENCODING_ALGORITHM])
+        payload = jwt.decode(
+            token, config.secret_signing_key, algorithms=[JWT_ENCODING_ALGORITHM]
+        )
         current_user_id: str | None = payload.get("user_id")
         token_type: str | None = payload.get("token_type")
 
@@ -62,14 +64,18 @@ def get_authenticated_user(
         raise EmailNotVerifiedException()
 
     user_organizations = organization_user_repository.get_by_user_id(user.id)
-    user_organization_map = {user_org.organization_id: user_org for user_org in user_organizations}
+    user_organization_map = {
+        user_org.organization_id: user_org for user_org in user_organizations
+    }
     organization_ids = list(user_organization_map.keys())
     user_organization = None
 
     if organization_id:
         user_organization = user_organization_map.get(organization_id, None)
         if not user_organization and not user.is_superuser:
-            raise ForbiddenException(detail=f"User {user.id} does not have access to organization {organization_id}")
+            raise ForbiddenException(
+                detail=f"User {user.id} does not have access to organization {organization_id}"
+            )
 
     if organization_roles and not user.is_superuser:
         if not user_organization or user_organization.role not in organization_roles:
@@ -95,7 +101,9 @@ def get_current_user(
         request: Request,
         token: Annotated[str, Depends(oauth2_scheme)],
         user_repository: UserRepository = Injected(UserRepository),
-        organization_user_repository: OrganizationUserRepository = Injected(OrganizationUserRepository),
+        organization_user_repository: OrganizationUserRepository = Injected(
+            OrganizationUserRepository
+        ),
         config: Config = Injected(Config),
     ) -> CurrentUserContext:
         organization_id = get_organization_id(request)
@@ -109,7 +117,9 @@ def get_current_user(
             verified_required=verified_required,
         )
         if check_superuser and not context.user.is_superuser:
-            raise ForbiddenException(detail=f"User {context.user.id} is not a superuser")
+            raise ForbiddenException(
+                detail=f"User {context.user.id} is not a superuser"
+            )
         return context
 
     return wrapper

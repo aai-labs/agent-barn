@@ -48,7 +48,9 @@ class RefreshToken(BaseModel, table=True):
 
     token: str = Field()
     user_id: UUID = Field(foreign_key="user.id", nullable=False, ondelete="CASCADE")
-    expires_at: datetime = Field(sa_column=Column(DateTime(timezone=True), nullable=False))
+    expires_at: datetime = Field(
+        sa_column=Column(DateTime(timezone=True), nullable=False)
+    )
     stamp: str
 
 
@@ -63,7 +65,9 @@ class PasswordResetToken(BaseModel, table=True):
     user_id: UUID = Field(foreign_key="user.id", nullable=False, ondelete="CASCADE")
     is_used: bool
     jti: str
-    expires_at: datetime = Field(sa_column=Column(DateTime(timezone=True), nullable=False))
+    expires_at: datetime = Field(
+        sa_column=Column(DateTime(timezone=True), nullable=False)
+    )
 
 
 class CurrentUserContext(PydanticBaseModel):
@@ -74,5 +78,7 @@ class CurrentUserContext(PydanticBaseModel):
 
     def require_current_user_organization(self) -> OrganizationUser:
         if not self.current_user_organization:
-            raise ForbiddenException(detail="You don't have permission for this organization.")
+            raise ForbiddenException(
+                detail="You don't have permission for this organization."
+            )
         return self.current_user_organization

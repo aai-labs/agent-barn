@@ -117,7 +117,9 @@ def refresh_access_token(
 
 @auth_router.get("/me", response_model=UserRead)
 def get_current_user_context(
-    context: Annotated[CurrentUserContext, Depends(get_current_user(verified_required=False))],
+    context: Annotated[
+        CurrentUserContext, Depends(get_current_user(verified_required=False))
+    ],
     user_service: UserService = Injected(UserService),
 ):
     return user_service.to_user_read(context.user)

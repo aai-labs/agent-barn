@@ -9,13 +9,13 @@ from pydantic import PostgresDsn
 
 from api.core.config import Config
 from api.domains.auth.repository import RefreshTokenRepository
-from api.domains.users.organization_users.repository import OrganizationUserRepository
-from api.domains.users.organization_users.service import OrganizationUserService
-from api.domains.users.models import User
-from api.domains.users.repository import UserRepository
-from api.domains.users.service import UserService
 from api.domains.organizations.models import OrganizationCreate, OrganizationUpdate
 from api.domains.organizations.service import OrganizationService
+from api.domains.users.models import User
+from api.domains.users.organization_users.repository import OrganizationUserRepository
+from api.domains.users.organization_users.service import OrganizationUserService
+from api.domains.users.repository import UserRepository
+from api.domains.users.service import UserService
 
 
 def build_user_service() -> tuple[
@@ -128,7 +128,7 @@ def test_organization_service_create_raises_500_when_read_missing():
         organization_repository=repo, user_organization_service=Mock()
     )
 
-    context = SimpleNamespace(user=SimpleNamespace(id=uuid7()))
+    context = SimpleNamespace(user=SimpleNamespace(id=uuid7(), is_superuser=False))
     assert_that(
         calling(org_service.create_organization).with_args(
             OrganizationCreate(name="Org"), context

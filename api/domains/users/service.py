@@ -36,9 +36,13 @@ class UserService:
         existing = self.user_repository.get_by_email(email)
         if existing:
             return existing
-        return self.create_superuser(email=email, password=password, full_name="Super User")
+        return self.create_superuser(
+            email=email, password=password, full_name="Super User"
+        )
 
-    def create_superuser(self, email: str, password: str, full_name: str | None = None) -> User:
+    def create_superuser(
+        self, email: str, password: str, full_name: str | None = None
+    ) -> User:
         validate_strong_password(password)
         user_data = UserCreateSuperAdmin(email=email, full_name=full_name)
         user = User(
@@ -47,8 +51,12 @@ class UserService:
         )
         return self.user_repository.save(user)
 
-    def get_user_by_id_and_organization_id(self, user_id: UUID, organization_id: UUID) -> User:
-        user = self.user_repository.get_by_id_and_organization_id(user_id, organization_id)
+    def get_user_by_id_and_organization_id(
+        self, user_id: UUID, organization_id: UUID
+    ) -> User:
+        user = self.user_repository.get_by_id_and_organization_id(
+            user_id, organization_id
+        )
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -78,7 +86,9 @@ class UserService:
         organization_users = self.organization_user_service.find_by_user_id(user.id)
         return UserRead(**user.model_dump(), organization_users=organization_users)
 
-    def get_paginated_users(self, filters: UserFilter, page: int = 1, page_size: int = 15) -> PaginatedItems[UserRead]:
+    def get_paginated_users(
+        self, filters: UserFilter, page: int = 1, page_size: int = 15
+    ) -> PaginatedItems[UserRead]:
         pagination = Pagination(page=page, size=page_size)
         paginated_users: PaginatedItems[User] = self.user_repository.find_all_paginated(
             pagination=pagination,
@@ -103,7 +113,9 @@ class UserService:
     def verify_user_password(self, user_id: UUID, password: str) -> None:
         user = self.get_user(user_id)
         if not check_hash(password, user.hashed_password):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid password")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid password"
+            )
 
     def change_password(self, user_id: UUID, password_data: UserPasswordChange) -> None:
         user = self.get_user(user_id)

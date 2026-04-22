@@ -49,7 +49,9 @@ def seed_demo_data(injector: Injector) -> None:
         for demo_user in DEMO_USERS:
             validate_strong_password(demo_user["password"])
 
-            user = user_repository.get_by_email_with_session(demo_user["email"], session)
+            user = user_repository.get_by_email_with_session(
+                demo_user["email"], session
+            )
             if user is None:
                 user = User(
                     email=demo_user["email"],

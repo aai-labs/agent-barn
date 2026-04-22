@@ -4,7 +4,6 @@ from uuid import UUID
 from fastapi import HTTPException, status
 from injector import inject, singleton
 
-from api.domains.organizations.models import OrganizationRead
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.users.organization_users.exceptions import (
     UserAlreadyPartOfOrganizationException,
@@ -54,7 +53,9 @@ class OrganizationUserService:
         self, user_data: OrganizationUser
     ) -> OrganizationUserRead:
         try:
-            organization = self.organization_repository.get_read(user_data.organization_id)
+            organization = self.organization_repository.get_read(
+                user_data.organization_id
+            )
             if not organization:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
