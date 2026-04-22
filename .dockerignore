@@ -1,0 +1,10 @@
+.git
+.DS_Store
+.pnpm-store
+web/node_modules
+web/.next
+api/.venv
+api/.pytest_cache
+api/.ruff_cache
+api/__pycache__
+api/tests

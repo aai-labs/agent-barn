@@ -1,0 +1,57 @@
+services:
+  db:
+    image: postgres:18
+    container_name: aai_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+    ports:
+      - "${POSTGRES_PORT:?POSTGRES_PORT is required}:5432"
+    volumes:
+      - aai_db_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:?POSTGRES_USER is required} -d ${POSTGRES_DB:?POSTGRES_DB is required}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    container_name: aai_api
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_CONNECTION_URL: postgresql://${POSTGRES_USER:?POSTGRES_USER is required}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@db:5432/${POSTGRES_DB:?POSTGRES_DB is required}
+      SECRET_SIGNING_KEY: ${SECRET_SIGNING_KEY:?SECRET_SIGNING_KEY is required}
+      SUPER_USER_CREDENTIALS: ${SUPER_USER_CREDENTIALS:?SUPER_USER_CREDENTIALS is required}
+      EMAIL_SERVER_CREDENTIAL: ${EMAIL_SERVER_CREDENTIAL-}
+      EMAIL_SMTP_SERVER: ${EMAIL_SMTP_SERVER-}
+      ENVIRONMENT: ${ENVIRONMENT:?ENVIRONMENT is required}
+      WEB_APP_URL: ${WEB_APP_URL:?WEB_APP_URL is required}
+    ports:
+      - "${API_PORT:?API_PORT is required}:8000"
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_BACKEND_URL: http://api:8000
+    container_name: aai_web
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+    environment:
+      NEXT_PUBLIC_BACKEND_URL: http://api:8000
+    ports:
+      - "3000:3000"
+
+volumes:
+  aai_db_postgres_data:
