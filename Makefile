@@ -1,7 +1,7 @@
 COMPOSE := docker compose -f compose.yml
 
 .PHONY: \
-	dev-api dev-web migrate rollback rollabck makemigrations test-api test-ui coverage check-api fix-api \
+	dev-api dev-web migrate rollback rollabck makemigrations test-api test-ui lint-ui coverage check-api fix-api \
 	up down restart logs build clean db-up db-down db-logs db-restart
 
 # Non-docker commands
@@ -27,6 +27,9 @@ test-api:
 
 test-ui:
 	cd web && pnpm test
+
+lint-ui:
+	cd web && pnpm lint
 
 coverage:
 	cd api && uv run python -m pytest tests -v --cov=api --cov-report=term-missing --cov-report=xml
