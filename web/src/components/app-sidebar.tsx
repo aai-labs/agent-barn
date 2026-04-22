@@ -7,6 +7,7 @@ import Link from "next/link";
 import { NavMain } from "@/components/nav-main";
 import { NavUser } from "@/components/nav-user";
 import { OrganizationSwitcher } from "@/components/org-switcher";
+import { SuperAdminOrganizationBadge } from "@/components/super-admin-organization-badge";
 import {
   Sidebar,
   SidebarContent,
@@ -53,18 +54,22 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   return (
     <Sidebar collapsible="icon" {...props}>
       <SidebarHeader>
-        <OrganizationSwitcher
-          organizations={mappedOrganizations}
-          selectedOrganizationId={selectedOrganization?.id ?? null}
-          onOrganizationSelect={(organizationId) => {
-            const organization = organizations.find(
-              (item) => item.id === organizationId,
-            );
-            if (organization) {
-              setOrganization(organization);
-            }
-          }}
-        />
+        {user.isSuperuser ? (
+          <SuperAdminOrganizationBadge />
+        ) : (
+          <OrganizationSwitcher
+            organizations={mappedOrganizations}
+            selectedOrganizationId={selectedOrganization?.id ?? null}
+            onOrganizationSelect={(organizationId) => {
+              const organization = organizations.find(
+                (item) => item.id === organizationId,
+              );
+              if (organization) {
+                setOrganization(organization);
+              }
+            }}
+          />
+        )}
       </SidebarHeader>
       <SidebarContent>
         <NavMain items={navMain} LinkComponent={Link} />
