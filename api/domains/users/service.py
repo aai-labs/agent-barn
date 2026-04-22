@@ -37,7 +37,7 @@ class UserService:
         existing = self.user_repository.get_by_email(email)
         if existing:
             return existing
-        return self.create_superuser(email=email, password=password)
+        return self.create_superuser(email=email, password=password, full_name="Super User")
 
     def create_superuser(self, email: str, password: str, full_name: str | None = None) -> User:
         validate_strong_password(password)
