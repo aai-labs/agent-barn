@@ -16,6 +16,7 @@ from api.domains.users.service import UserService
 from api.infrastructure.email.logging_utils import (
     log_email_delivery_disabled_warning,
 )
+from api.tools.demo_seed import seed_demo_data
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,12 @@ async def lifespan(_: FastAPI):
 
     try:
         user_service.ensure_default_superuser()
+
+        """
+        Seed demo data after ensuring the default superuser exists
+        YOU CAN SAFELY REMOVE THIS AND DELETE THE `demo_seed.py` FILE
+        """
+        seed_demo_data(injector)
     except Exception:
         logger.error("Error during startup bootstrap: %s", traceback.format_exc())
         raise HTTPException(
