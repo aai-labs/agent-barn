@@ -1,6 +1,6 @@
 "use client";
 
-import { type ReactNode } from "react";
+import { type ReactNode, useEffect } from "react";
 import { usePathname } from "next/navigation";
 
 import { PUBLIC_PATHS } from "@/auth/constants";
@@ -8,6 +8,7 @@ import { SessionExpirationHandler } from "@/auth/providers/session-expiration-ha
 import { useAuthStore } from "@/auth/providers/auth-store";
 import { UserContextProvider } from "@/auth/providers/user-context-provider";
 import { OrganizationProvider } from "@/organizations/providers/organization-provider";
+import { initStoreSync } from "@/organizations/stores/init-store-sync";
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const pathname = usePathname() ?? "";
@@ -15,6 +16,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const isPublicPage = PUBLIC_PATHS.some(
     (path) => pathname === path || pathname.startsWith(`${path}/`),
   );
+
+  useEffect(() => {
+    initStoreSync();
+  }, []);
 
   if (isPublicPage) {
     return <>{children}</>;
