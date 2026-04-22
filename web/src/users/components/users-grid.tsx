@@ -1,7 +1,8 @@
 "use client";
 
-import { useDeferredValue, useState } from "react";
+import { useState } from "react";
 import { Loader2, Search, Shield, UserRound } from "lucide-react";
+import { useDebouncedValue } from "@tanstack/react-pacer";
 
 import {
   Card,
@@ -43,7 +44,7 @@ function LoadingCard() {
 
 export function UsersGrid() {
   const [search, setSearch] = useState("");
-  const deferredSearch = useDeferredValue(search);
+  const [debouncedSearch] = useDebouncedValue(search, { wait: 300 });
   const {
     users,
     total,
@@ -51,7 +52,7 @@ export function UsersGrid() {
     fetchNextPage,
     isFetchingNextPage,
     isLoading,
-  } = useInfiniteUsers({ search: deferredSearch });
+  } = useInfiniteUsers({ search: debouncedSearch });
 
   return (
     <div className="space-y-5 p-4 pt-2 md:p-6 md:pt-2">

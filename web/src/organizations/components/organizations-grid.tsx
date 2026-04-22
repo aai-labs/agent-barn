@@ -1,7 +1,8 @@
 "use client";
 
-import { useDeferredValue, useState } from "react";
+import { useState } from "react";
 import { Building, Loader2, Search, UserRound } from "lucide-react";
+import { useDebouncedValue } from "@tanstack/react-pacer";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -36,7 +37,7 @@ function LoadingCard() {
 
 export function OrganizationsGrid() {
   const [search, setSearch] = useState("");
-  const deferredSearch = useDeferredValue(search);
+  const [debouncedSearch] = useDebouncedValue(search, { wait: 300 });
   const {
     organizations,
     total,
@@ -44,13 +45,15 @@ export function OrganizationsGrid() {
     fetchNextPage,
     isFetchingNextPage,
     isLoading,
-  } = useInfiniteOrganizations({ search: deferredSearch });
+  } = useInfiniteOrganizations({ search: debouncedSearch });
 
   return (
     <div className="space-y-5 p-4 pt-2 md:p-6 md:pt-2">
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">Organizations</h1>
+          <h1 className="text-xl font-semibold tracking-tight">
+            Organizations
+          </h1>
           <p className="text-sm text-muted-foreground">
             Super admin view of all organizations.
           </p>
