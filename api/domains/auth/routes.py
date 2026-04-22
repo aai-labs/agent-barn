@@ -9,8 +9,8 @@ from fastapi import (
     Response,
     status,
 )
-from fastapi_injector import Injected
 from fastapi.security import OAuth2PasswordRequestForm
+from fastapi_injector import Injected
 
 from api.core.config import Config
 from api.domains.auth.hashing import check_hash
@@ -87,19 +87,17 @@ def refresh_access_token(
 
     if not refresh_token:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token is required"
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Refresh token is required",
         )
 
     token = auth_service.verify_refresh_token(refresh_token)
     user = user_service.get_user(token.user_id)
-    if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token"
-        )
 
     if user.security_stamp != token.stamp:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token"
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid refresh token",
         )
 
     auth_service.revoke_refresh_token(token)
@@ -117,13 +115,12 @@ def refresh_access_token(
     )
 
 
-@auth_router.get("/me", response_model=CurrentUserContext)
+@auth_router.get("/me", response_model=UserRead)
 def get_current_user_context(
-    context: Annotated[
-        CurrentUserContext, Depends(get_current_user(verified_required=False))
-    ],
+    context: Annotated[CurrentUserContext, Depends(get_current_user(verified_required=False))],
+    user_service: UserService = Injected(UserService),
 ):
-    return context
+    return user_service.to_user_read(context.user)
 
 
 @auth_router.post("/me", response_model=UserRead)

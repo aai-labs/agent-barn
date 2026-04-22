@@ -48,7 +48,6 @@ class UserRead(BaseModel):
     email: str
     is_superuser: bool
     email_verified_at: datetime | None = None
-    organization_user: OrganizationUserRead | None = None
     organization_users: list[OrganizationUserRead] | None = None
 
 

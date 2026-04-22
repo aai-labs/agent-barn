@@ -97,7 +97,7 @@ def test_create_superuser_sets_superuser_and_verified_fields():
     assert user.email_verified_at is not None
 
 
-def test_to_user_read_with_organization_fetches_membership():
+def test_to_user_read_with_organization_fetches_memberships():
     service, _, organization_user_service, _, _ = build_user_service()
     user = User(email="u@example.com", hashed_password="hash")
     org_id = uuid7()
@@ -120,16 +120,12 @@ def test_to_user_read_with_organization_fetches_membership():
             owner_name=None,
         ),
     )
-    organization_user_service.find_by_user_id_and_organization_id.return_value = (
-        org_user_read
-    )
+    organization_user_service.find_by_user_id.return_value = [org_user_read]
 
-    result = service.to_user_read(user, organization_id=org_id)
+    result = service.to_user_read(user)
 
-    organization_user_service.find_by_user_id_and_organization_id.assert_called_once_with(
-        user.id, org_id
-    )
-    assert_that(result.organization_user, equal_to(org_user_read))
+    organization_user_service.find_by_user_id.assert_called_once_with(user.id)
+    assert_that(result.organization_users, equal_to([org_user_read]))
 
 
 def test_update_current_user_persists_changes():

@@ -39,9 +39,7 @@ class UserService:
             return existing
         return self.create_superuser(email=email, password=password)
 
-    def create_superuser(
-        self, email: str, password: str, full_name: str | None = None
-    ) -> User:
+    def create_superuser(self, email: str, password: str, full_name: str | None = None) -> User:
         validate_strong_password(password)
         user_data = UserCreateSuperAdmin(email=email, full_name=full_name)
         user = User(
@@ -51,12 +49,8 @@ class UserService:
         )
         return self.user_repository.save(user)
 
-    def get_user_by_id_and_organization_id(
-        self, user_id: UUID, organization_id: UUID
-    ) -> User:
-        user = self.user_repository.get_by_id_and_organization_id(
-            user_id, organization_id
-        )
+    def get_user_by_id_and_organization_id(self, user_id: UUID, organization_id: UUID) -> User:
+        user = self.user_repository.get_by_id_and_organization_id(user_id, organization_id)
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -82,20 +76,11 @@ class UserService:
             )
         return user
 
-    def to_user_read(self, user: User, organization_id: UUID | None = None) -> UserRead:
-        organization_user = None
-        if organization_id:
-            organization_user = (
-                self.organization_user_service.find_by_user_id_and_organization_id(
-                    user.id, organization_id
-                )
-            )
+    def to_user_read(self, user: User) -> UserRead:
+        organization_users = self.organization_user_service.find_by_user_id(user.id)
+        return UserRead(**user.model_dump(), organization_users=organization_users)
 
-        return UserRead(**user.model_dump(), organization_user=organization_user)
-
-    def get_paginated_users(
-        self, filters: UserFilter, page: int = 1, page_size: int = 15
-    ) -> PaginatedItems[UserRead]:
+    def get_paginated_users(self, filters: UserFilter, page: int = 1, page_size: int = 15) -> PaginatedItems[UserRead]:
         pagination = Pagination(page=page, size=page_size)
         paginated_users: PaginatedItems[User] = self.user_repository.find_all_paginated(
             pagination=pagination,
@@ -115,14 +100,12 @@ class UserService:
         for key, value in user_data.model_dump(exclude_unset=True).items():
             setattr(user, key, value)
         user = self.user_repository.save(user)
-        return UserRead(**user.model_dump())
+        return self.to_user_read(user)
 
     def verify_user_password(self, user_id: UUID, password: str) -> None:
         user = self.get_user(user_id)
         if not check_hash(password, user.hashed_password):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid password"
-            )
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid password")
 
     def change_password(self, user_id: UUID, password_data: UserPasswordChange) -> None:
         user = self.get_user(user_id)

@@ -70,14 +70,15 @@ def test_get_user_not_found_raises_404():
         assert_that(exc.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
-def test_to_user_read_without_organization_id_skips_lookup():
+def test_to_user_read_without_memberships_returns_empty_memberships():
     service, _, organization_user_service, _, _ = build_user_service()
     user = User(email="user@example.com", hashed_password="hash")
+    organization_user_service.find_by_user_id.return_value = []
 
-    user_read = service.to_user_read(user, organization_id=None)
+    user_read = service.to_user_read(user)
 
-    assert_that(user_read.organization_user is None)
-    organization_user_service.find_by_user_id_and_organization_id.assert_not_called()
+    assert_that(user_read.organization_users, equal_to([]))
+    organization_user_service.find_by_user_id.assert_called_once_with(user.id)
 
 
 def test_delete_user_deletes_refresh_tokens_memberships_and_user():

@@ -113,6 +113,56 @@ def test_signup_grants_access_to_organizations_immediately():
         assert_that(allowed_response.json(), has_key("items"))
 
 
+def test_me_returns_safe_user_and_organizations():
+    with given(
+        [
+            prepare_injector(),
+            prepare_api_server(),
+            create_test_client(),
+            database_repo_is_ready(),
+            database_is_clean(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        signup_response = client.post(
+            "/api/v1/auth/signup",
+            json={
+                "email": "me-contract@example.com",
+                "password": "StrongPass123",
+                "full_name": "Me Contract",
+            },
+        )
+        access_token = signup_response.json()["access_token"]
+
+        me_response = client.get(
+            "/api/v1/auth/me", headers={"Authorization": f"Bearer {access_token}"}
+        )
+
+        assert_that(me_response.status_code, equal_to(status.HTTP_200_OK))
+        payload = me_response.json()
+        assert_that(payload["email"], equal_to("me-contract@example.com"))
+        assert_that(payload, has_key("organization_users"))
+        assert_that(payload["organization_users"], has_length(1))
+        assert_that(
+            payload["organization_users"][0]["organization"]["name"],
+            contains_string("Organization"),
+        )
+        assert_that(
+            payload["organization_users"][0]["organization"]["owner_email"],
+            equal_to("me-contract@example.com"),
+        )
+        assert_that(
+            payload["organization_users"][0]["organization"]["owner_name"],
+            equal_to("Me Contract"),
+        )
+        assert_that(payload, is_not(has_key("hashed_password")))
+        assert_that(payload, is_not(has_key("security_stamp")))
+        assert_that(payload, is_not(has_key("organization_ids")))
+        assert_that(payload, is_not(has_key("user_organization_map")))
+        assert_that(payload, is_not(has_key("current_user_organization")))
+
+
 def test_forgot_and_reset_password_flow():
     email_module = MockEmailModule()
     with given(

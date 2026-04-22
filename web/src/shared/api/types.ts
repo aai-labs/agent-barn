@@ -17,8 +17,10 @@ export interface ApiResult<T = any> {
   headers?: AxiosHeaders | Record<string, any>;
 }
 
-export interface RequestOptions<T = any>
-  extends Omit<AxiosRequestConfig, "data"> {
+export interface RequestOptions<T = any> extends Omit<
+  AxiosRequestConfig,
+  "data"
+> {
   data?: any;
   schema?: ZodType<T, any, any>;
   signal?: AbortSignal;
