@@ -1,0 +1,47 @@
+[project]
+name = "api"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+
+dependencies = [
+    "alembic>=1.18.4",
+    "alembic-postgresql-enum>=1.10.0",
+    "bcrypt>=5.0.0",
+    "fastapi-injector>=0.9.0",
+    "fastapi[standard]>=0.136.0",
+    "jinja2>=3.1.6",
+    "mjml>=0.12.0",
+    "psycopg2-binary>=2.9.12",
+    "pydantic-settings>=2.14.0",
+    "pyjwt>=2.12.1",
+    "python-dotenv>=1.2.2",
+    "pyhamcrest>=2.1.0",
+    "pytest>=8.4.2",
+    "pytest-cov>=7.0.0",
+    "sqlalchemy>=2.0.49",
+    "sqlmodel>=0.0.38",
+    "testcontainers[postgres]>=4.13.2",
+]
+
+[tool.pytest.ini_options]
+pythonpath = [".."]
+
+[tool.ty.environment]
+python = ".venv/bin/python"
+root = [".."]
+
+[tool.coverage.run]
+omit = [
+    "tests/*",
+    "*/tests/*",
+    "migrations/*",
+    "*/migrations/*"
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15.11",
+    "ty>=0.0.32",
+]

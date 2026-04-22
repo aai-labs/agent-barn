@@ -1,0 +1,59 @@
+from datetime import datetime
+from uuid import UUID
+
+import sqlalchemy as sa
+from fastapi import Query
+from pydantic import BaseModel as PydanticBaseModel
+from pydantic import ConfigDict
+from sqlmodel import CheckConstraint, Field
+
+from api.infrastructure.postgres.models import BaseModel
+
+
+class Organization(BaseModel, table=True):
+    __tablename__: str = "organization"
+
+    name: str = Field(nullable=False, min_length=3, max_length=255)
+    description: str | None = Field(default=None, nullable=True)
+    is_default: bool = Field(
+        default=False, nullable=False, sa_column_kwargs={"server_default": "false"}
+    )
+
+    __table_args__ = (
+        sa.Index("ix_organization_name", "name"),
+        CheckConstraint("length(name) >= 3", name="check_name_length_min"),
+        CheckConstraint("length(name) <= 255", name="check_name_length_max"),
+    )
+
+
+class OrganizationRead(PydanticBaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    created_at: datetime
+    updated_at: datetime
+    name: str
+    description: str | None = None
+    is_default: bool
+    owner_email: str | None = None
+    owner_name: str | None = None
+
+
+class OrganizationUpdate(PydanticBaseModel):
+    name: str | None = Field(min_length=3, max_length=255, default=None)
+    description: str | None = None
+
+
+class OrganizationCreate(PydanticBaseModel):
+    name: str = Field(min_length=3, max_length=255)
+    description: str | None = Field(default=None, nullable=True)
+
+
+class OrganizationFilter(PydanticBaseModel):
+    search: str | None = Field(default=None)
+
+
+def get_organization_filter(
+    search: str | None = Query(default=None),
+) -> OrganizationFilter:
+    return OrganizationFilter(search=search)
