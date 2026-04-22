@@ -81,3 +81,29 @@ def test_any_user_can_create_organization():
                 assert_that(creator_org_user, is_not(none()))
                 assert_that(creator_org_user.role, equal_to(OrganizationRole.OWNER))
                 assert_that(super_admin_org_user, is_(none()))
+
+
+def test_super_admin_create_organization_returns_bad_request():
+    super_user_id = uuid7()
+    with given(
+        [
+            prepare_injector(),
+            prepare_api_server(),
+            create_test_client(),
+            database_repo_is_ready(),
+            database_is_clean(),
+            there_is_a_user(
+                id=super_user_id, is_superuser=True, email="super-create@example.com"
+            ),
+            there_is_an_access_token_for_user(user_id=super_user_id),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        access_token = context.access_token
+
+        create_response = client.post(
+            "/api/v1/organizations",
+            json={"name": "Super Admin Org", "description": "Created by super admin"},
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        assert_that(create_response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))

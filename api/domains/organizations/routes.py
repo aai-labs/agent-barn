@@ -44,16 +44,15 @@ def get_organizations(
     )
 
 
-@org_router.post(
-    "", response_model=OrganizationRead, status_code=status.HTTP_201_CREATED
-)
+@org_router.post("", response_model=OrganizationRead, status_code=status.HTTP_201_CREATED)
 def create_organization(
     organization_create: OrganizationCreate,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     organization_service: Annotated[OrganizationService, Injected(OrganizationService)],
 ):
     return organization_service.create_organization(
-        organization_create=organization_create, context=context
+        organization_create=organization_create,
+        context=context,
     )
 
 
@@ -64,9 +63,7 @@ def update_organization(
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     organization_service: Annotated[OrganizationService, Injected(OrganizationService)],
 ):
-    return organization_service.update_organization(
-        organization_id, organization_update, context
-    )
+    return organization_service.update_organization(organization_id, organization_update, context)
 
 
 @org_router.delete("/{organization_id}", status_code=status.HTTP_204_NO_CONTENT)

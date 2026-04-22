@@ -55,6 +55,12 @@ class OrganizationService:
     def create_organization(
         self, organization_create: OrganizationCreate, context: CurrentUserContext
     ) -> OrganizationRead:
+        if context.user.is_superuser:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Super admins cannot create organizations directly.",
+            )
+
         organization = Organization(**organization_create.model_dump())
         organization = self.organization_repository.save(organization)
 
@@ -114,7 +120,9 @@ class OrganizationService:
         return organization_read
 
     def delete_organization(
-        self, organization_id: UUID, context: CurrentUserContext
+        self,
+        organization_id: UUID,
+        context: CurrentUserContext,
     ) -> None:
         self._ensure_can_manage_organization(context)
         organization = self.organization_repository.get(organization_id)
