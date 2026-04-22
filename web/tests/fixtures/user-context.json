@@ -1,0 +1,10 @@
+{
+  "id": "019db657-3269-75a0-90f1-decb91b987d6",
+  "created_at": "2026-04-22T17:57:41.097969Z",
+  "updated_at": "2026-04-22T17:57:41.097975Z",
+  "full_name": "Super User",
+  "email": "admin@aai-labs.com",
+  "is_superuser": true,
+  "email_verified_at": null,
+  "organization_users": []
+}
