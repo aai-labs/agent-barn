@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Building2, LayoutDashboard, Settings } from "lucide-react";
+import { Building, Building2, LayoutDashboard, Users } from "lucide-react";
 import Link from "next/link";
 
 import { NavMain } from "@/components/nav-main";
@@ -17,23 +17,31 @@ import {
 import { useCurrentUser } from "@/auth/providers/user-context-provider";
 import { useOrganizationContext } from "@/organizations/providers/organization-provider";
 
-const navMain = [
-  {
-    title: "Dashboard",
-    url: "/dashboard",
-    icon: LayoutDashboard,
-  },
-  {
-    title: "Settings",
-    url: "/dashboard",
-    icon: Settings,
-  },
-];
-
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const { user } = useCurrentUser();
   const { organizations, selectedOrganization, setOrganization } =
     useOrganizationContext();
+  const navMain = [
+    {
+      title: "Dashboard",
+      url: "/dashboard",
+      icon: LayoutDashboard,
+    },
+    ...(user.isSuperuser
+      ? [
+          {
+            title: "Users",
+            url: "/dashboard/users",
+            icon: Users,
+          },
+          {
+            title: "Organizations",
+            url: "/dashboard/organizations",
+            icon: Building,
+          },
+        ]
+      : []),
+  ];
 
   const mappedOrganizations = organizations.map((organization) => ({
     id: organization.id,
