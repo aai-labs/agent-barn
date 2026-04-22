@@ -58,6 +58,13 @@ export function LoginForm({
     });
   };
 
+  const onFormKeyDown = (event: React.KeyboardEvent<HTMLFormElement>) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      void handleSubmit(onSubmit)();
+    }
+  };
+
   return (
     <div className={cn("flex flex-col gap-6", className)} {...props}>
       <Card>
@@ -66,7 +73,7 @@ export function LoginForm({
           <CardDescription>Enter your credentials to continue.</CardDescription>
         </CardHeader>
         <CardContent>
-          <form onSubmit={handleSubmit(onSubmit)}>
+          <form onSubmit={handleSubmit(onSubmit)} onKeyDown={onFormKeyDown}>
             <FieldGroup>
               <Field data-invalid={!!errors.email}>
                 <FieldLabel htmlFor="email">Email</FieldLabel>
