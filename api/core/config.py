@@ -1,4 +1,3 @@
-import os
 from functools import lru_cache
 
 from dotenv import load_dotenv
@@ -24,9 +23,4 @@ class Config(BaseSettings):
 @lru_cache
 def get_config() -> Config:
     config = Config()  # ty: ignore[missing-argument]
-    if os.environ.get("ENVIRONMENT", "") == "test":
-        config.db_connection_url = PostgresDsn(
-            os.environ.get("TEST_DB_CONNECTION_URL", "")
-        )
-
     return config

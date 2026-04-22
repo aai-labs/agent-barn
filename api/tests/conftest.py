@@ -33,7 +33,6 @@ def setup_test_database():
 
     with PostgresContainer(postgres_image, driver="psycopg2") as postgres:
         connection_url = postgres.get_connection_url()
-        os.environ["TEST_DB_CONNECTION_URL"] = connection_url
         os.environ["DB_CONNECTION_URL"] = connection_url
 
         get_config.cache_clear()
