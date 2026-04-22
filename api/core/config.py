@@ -1,23 +1,32 @@
 from functools import lru_cache
+from pathlib import Path
 
 from dotenv import load_dotenv
 from pydantic import PostgresDsn
 from pydantic_settings import BaseSettings
 
-load_dotenv()
+ROOT_ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
+load_dotenv(ROOT_ENV_PATH, override=False)
 
 
 class Config(BaseSettings):
     db_connection_url: PostgresDsn
     secret_signing_key: str
     super_user_credentials: str
-    email_server_credential: str
-    email_smtp_server: str
+    email_server_credential: str | None = None
+    email_smtp_server: str | None = None
 
     environment: str = "local"
     web_app_url: str = "http://localhost:3000"
     access_token_expire_minutes: int | None = None
     refresh_token_expire_days: int | None = None
+
+    @property
+    def is_email_delivery_enabled(self) -> bool:
+        return bool(
+            (self.email_server_credential or "").strip()
+            and (self.email_smtp_server or "").strip()
+        )
 
 
 @lru_cache

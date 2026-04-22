@@ -14,7 +14,8 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 logger.addHandler(logging.StreamHandler())
 
-load_dotenv()
+ROOT_ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
+load_dotenv(ROOT_ENV_PATH, override=False)
 os.environ["ENVIRONMENT"] = "test"
 os.environ.setdefault("SECRET_SIGNING_KEY", "test-secret-key")
 os.environ.setdefault("SUPER_USER_CREDENTIALS", "admin@example.com:StrongPass123")

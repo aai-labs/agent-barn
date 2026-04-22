@@ -10,7 +10,6 @@ from mjml import mjml_to_html
 
 from api.infrastructure.email.exceptions import (
     EmailRenderingException,
-    EmailSendingException,
 )
 from api.infrastructure.email.models import EmailTemplate, EmailTemplateAttribute
 from api.infrastructure.email.client import EmailClient
@@ -26,6 +25,18 @@ logger = logging.getLogger(__name__)
 class EmailService:
     config: Config
     client: EmailClient
+
+    def _email_enabled_or_log(self, action: str, receiver_email: str) -> bool:
+        if self.config.is_email_delivery_enabled:
+            return True
+
+        logger.error(
+            "Email delivery is disabled: action=%s recipient=%s reason=%s",
+            action,
+            receiver_email,
+            "EMAIL_SERVER_CREDENTIAL or EMAIL_SMTP_SERVER is missing",
+        )
+        return False
 
     def create_email(self, email_template: EmailTemplate) -> Email:
         mjml_template = read_template(email_template.file_name)
@@ -54,12 +65,16 @@ class EmailService:
         return result.html
 
     def send(self, email: Email):
+        if not self._email_enabled_or_log(action="send", receiver_email=email.to_email):
+            return False
+
         try:
             self.client.send(email)
+            return True
         except Exception:
             msg = "Unable to send email"
             logger.error(f"{msg} : {traceback.format_exc()}")
-            raise EmailSendingException(email=email.to_email, message=msg)
+            return False
 
     def send_password_reset_email(
         self,
@@ -67,6 +82,12 @@ class EmailService:
         password_reset_link: str,
         receiver_name: str | None = None,
     ):
+        if not self._email_enabled_or_log(
+            action="send_password_reset_email",
+            receiver_email=receiver_email,
+        ):
+            return False
+
         try:
             email_template = EmailTemplate(
                 file_name="password-reset-template.mjml",
@@ -87,10 +108,11 @@ class EmailService:
 
             email = self.create_email(email_template)
             self.client.send(email)
+            return True
         except Exception:
             msg = f"Unable to send password reset email to {receiver_email}"
             logger.error(f"{msg} : {traceback.format_exc()}")
-            raise EmailSendingException(email=receiver_email, message=msg)
+            return False
 
     def send_user_invite_email(
         self,
@@ -98,6 +120,12 @@ class EmailService:
         set_password_link: str,
         receiver_name: str | None = None,
     ):
+        if not self._email_enabled_or_log(
+            action="send_user_invite_email",
+            receiver_email=receiver_email,
+        ):
+            return False
+
         try:
             email_template = EmailTemplate(
                 file_name="user-invite-template.mjml",
@@ -118,10 +146,11 @@ class EmailService:
 
             email = self.create_email(email_template)
             self.client.send(email)
+            return True
         except Exception:
             msg = f"Unable to send account invite email to {receiver_email}"
             logger.error(f"{msg} : {traceback.format_exc()}")
-            raise EmailSendingException(email=receiver_email, message=msg)
+            return False
 
     def send_email_verification_email(
         self,
@@ -129,6 +158,12 @@ class EmailService:
         verification_link: str,
         receiver_name: str | None = None,
     ):
+        if not self._email_enabled_or_log(
+            action="send_email_verification_email",
+            receiver_email=receiver_email,
+        ):
+            return False
+
         try:
             email_template = EmailTemplate(
                 file_name="email-verification-template.mjml",
@@ -149,16 +184,23 @@ class EmailService:
 
             email = self.create_email(email_template)
             self.client.send(email)
+            return True
         except Exception:
             msg = f"Unable to send verification email to {receiver_email}"
             logger.error(f"{msg} : {traceback.format_exc()}")
-            raise EmailSendingException(email=receiver_email, message=msg)
+            return False
 
     def send_user_deletion_email(
         self,
         receiver_email: str,
         receiver_name: str | None = None,
     ):
+        if not self._email_enabled_or_log(
+            action="send_user_deletion_email",
+            receiver_email=receiver_email,
+        ):
+            return False
+
         try:
             email_template = EmailTemplate(
                 file_name="user-deletion-template.mjml",
@@ -175,10 +217,11 @@ class EmailService:
 
             email = self.create_email(email_template)
             self.client.send(email)
+            return True
         except Exception:
             msg = f"Unable to send account deletion email to {receiver_email}"
             logger.error(f"{msg} : {traceback.format_exc()}")
-            raise EmailSendingException(email=receiver_email, message=msg)
+            return False
 
 
 def read_template(template_filename):

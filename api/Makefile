@@ -10,8 +10,6 @@ makemigrations:
 	@read -p "Enter migration message: " message; \
 	uv run alembic revision --autogenerate -m "$$message"
 
-auto-migrations: makemigrations
-
 migrate:
 	uv run alembic upgrade head
 

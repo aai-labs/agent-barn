@@ -9,8 +9,11 @@ from email.utils import formataddr
 
 from injector import inject, singleton
 
-from api.infrastructure.email.models import Email
 from api.core.config import Config
+from api.infrastructure.email.logging_utils import (
+    log_email_delivery_disabled_warning,
+)
+from api.infrastructure.email.models import Email
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -24,16 +27,30 @@ class EmailClient:
     config: Config
 
     def send(self, email: Email) -> Email:
+        smtp_server = (self.config.email_smtp_server or "").strip()
+        credential = (self.config.email_server_credential or "").strip()
+
+        if not smtp_server or not credential:
+            log_email_delivery_disabled_warning(logger)
+            raise RuntimeError(
+                "Email delivery is disabled: EMAIL_SERVER_CREDENTIAL and EMAIL_SMTP_SERVER must both be set."
+            )
+
+        if ":" not in credential:
+            raise RuntimeError("Invalid EMAIL_SERVER_CREDENTIAL format. Expected '<email>:<password>'.")
+
+        acc_email, acc_password = credential.split(":", 1)
+        if not acc_email or not acc_password:
+            raise RuntimeError("Invalid EMAIL_SERVER_CREDENTIAL value. Email and password are both required.")
+
         last_exception: Exception | None = None
         strategies: list[tuple[Callable[[], smtplib.SMTP], bool]] = [
             (
-                lambda: smtplib.SMTP_SSL(self.config.email_smtp_server, port=465),
+                lambda: smtplib.SMTP_SSL(smtp_server, port=465),
                 False,
             ),
-            (lambda: smtplib.SMTP(self.config.email_smtp_server), True),
+            (lambda: smtplib.SMTP(smtp_server), True),
         ]
-
-        acc_email, acc_password = self.config.email_server_credential.split(":")
 
         for create_client, use_starttls in strategies:
             try:
@@ -61,11 +78,7 @@ class EmailClient:
             email.to_email,
             email.subject,
             f"All SMTP strategies failed for {email.to_email}",
-            exc_info=(
-                (type(last_exception), last_exception, last_exception.__traceback__)
-                if last_exception
-                else None
-            ),
+            exc_info=((type(last_exception), last_exception, last_exception.__traceback__) if last_exception else None),
         )
         raise exc
 

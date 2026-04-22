@@ -2,25 +2,30 @@ import logging
 import traceback
 from contextlib import asynccontextmanager
 
-from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi_injector import attach_injector
 from injector import Injector
 
+from api.core.config import get_config
 from api.core.utils import create_injector
 from api.domains.auth.routes import auth_router
 from api.domains.organizations.routes import org_router
 from api.domains.users.routes import users_router
 from api.domains.users.service import UserService
-
-load_dotenv()
+from api.infrastructure.email.logging_utils import (
+    log_email_delivery_disabled_warning,
+)
 
 logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    config = get_config()
+    if not config.is_email_delivery_enabled:
+        log_email_delivery_disabled_warning(logger)
+
     injector = create_injector()
     user_service = injector.get(UserService)
 
