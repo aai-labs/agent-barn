@@ -25,7 +25,10 @@ def test_super_admin_can_list_all_users():
             database_repo_is_ready(),
             database_is_clean(),
             there_is_a_user(
-                id=super_id, email="super-list-users@example.com", is_superuser=True
+                id=super_id,
+                email="super-list-users@example.com",
+                is_superuser=True,
+                email_verified=False,
             ),
             there_is_a_user(email="user-a@example.com"),
             there_is_a_user(email="user-b@example.com"),
