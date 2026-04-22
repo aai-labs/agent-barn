@@ -53,6 +53,7 @@ def build_user_service() -> tuple[
         refresh_token_repository=cast(RefreshTokenRepository, refresh_token_repository),
         config=config,
     )
+    organization_user_service.find_by_user_id.return_value = []
     return (
         service,
         user_repository,
@@ -64,7 +65,12 @@ def build_user_service() -> tuple[
 
 def test_ensure_default_superuser_returns_existing_user():
     service, user_repository, _, _, _ = build_user_service()
-    existing = User(email="admin@example.com", hashed_password="hash")
+    existing = User(
+        email="admin@example.com",
+        hashed_password="hash",
+        full_name="Super User",
+        email_verified_at=None,
+    )
     user_repository.get_by_email.return_value = existing
 
     result = service.ensure_default_superuser()
@@ -85,7 +91,7 @@ def test_ensure_default_superuser_creates_when_missing():
     user_repository.save.assert_called_once()
 
 
-def test_create_superuser_sets_superuser_and_verified_fields():
+def test_create_superuser_sets_superuser_and_no_verified_timestamp():
     service, user_repository, _, _, _ = build_user_service()
     user_repository.save.side_effect = lambda user: user
 
@@ -94,7 +100,7 @@ def test_create_superuser_sets_superuser_and_verified_fields():
     )
 
     assert_that(user.is_superuser, equal_to(True))
-    assert user.email_verified_at is not None
+    assert user.email_verified_at is None
 
 
 def test_to_user_read_with_organization_fetches_memberships():

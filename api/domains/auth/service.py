@@ -124,7 +124,6 @@ class AuthService:
                 email=email,
                 full_name=full_name,
                 hashed_password=hashed_password,
-                email_verified_at=datetime.now(timezone.utc),
             )
             organization = Organization(name=self._default_organization_name(full_name))
 

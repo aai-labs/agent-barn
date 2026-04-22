@@ -74,7 +74,7 @@ def test_i_can_signup_and_user_is_created():
                 assert_that(payload["access_token"], is_not(none()))
                 assert_that(payload["refresh_token"], is_not(none()))
 
-            with then("a verified user should exist"):
+            with then("a user should exist with no email verification timestamp"):
                 user = user_repository.get_by_email("signup@example.com")
                 assert_that(user, is_not(none()))
-                assert_that(user.email_verified_at, is_not(none()))
+                assert_that(user.email_verified_at, none())

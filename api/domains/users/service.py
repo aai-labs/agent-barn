@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from uuid import UUID, uuid7
 
 from fastapi import HTTPException, status
@@ -45,7 +44,6 @@ class UserService:
         user = User(
             **user_data.model_dump(),
             hashed_password=hash_text(password),
-            email_verified_at=datetime.now(timezone.utc),
         )
         return self.user_repository.save(user)
 
