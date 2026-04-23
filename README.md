@@ -24,7 +24,7 @@ API is served under `/api/v1` and frontend requests to `/api/*` are proxied to b
 - [uv](https://github.com/astral-sh/uv)
 - Node.js `>=20`
 - [pnpm](https://pnpm.io/)
-- Docker (optional, for full local stack)
+- Docker (required for Postgres)
 
 ## Setup
 
@@ -39,6 +39,23 @@ Environment:
 
 - API reads env from repo root `.env`
 - Optional test env file: `.env.spec`
+
+## First-Time Run (Required)
+
+Postgres is run via Docker for this project. Before starting API/web for the first time:
+
+```bash
+make db-up
+make migrate
+```
+
+Then choose how to run API/web:
+
+1. Run API + web directly on host:
+   - API: `make dev-api`
+   - Web: `make dev-web`
+2. Run full stack in Docker (db + api + web):
+   - `make up`
 
 ## Run Locally
 

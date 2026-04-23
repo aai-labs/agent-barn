@@ -1,26 +1,26 @@
 COMPOSE := docker compose -f compose.yml
 
 .PHONY: \
-	dev-api dev-web migrate rollback rollabck makemigrations test-api test-ui lint-ui coverage check-api fix-api \
+	dev-api dev-web migrate rollback makemigrations test-api test-web lint-web coverage check-api fix-api test check fix \
 	up down restart logs build clean db-up db-down db-logs db-restart
 
 # Non-docker commands
 
 dev-api:
-	cd api && uv run fastapi dev main.py --host 0.0.0.0 --port 8000
+	cd api && uv run python -m fastapi dev main.py --host 0.0.0.0 --port 8000
 
 dev-web:
 	cd web && pnpm dev
 
 migrate:
-	cd api && uv run alembic upgrade head
+	cd api && uv run python -m alembic upgrade head
 
 rollback:
-	cd api && uv run alembic downgrade -1
+	cd api && uv run python -m alembic downgrade -1
 
 makemigrations:
 	@cd api && read -p "Enter migration message: " message; \
-	uv run alembic revision --autogenerate -m "$$message"
+	uv run python -m alembic revision --autogenerate -m "$$message"
 
 test-api:
 	cd api && uv run python -m pytest tests -v
