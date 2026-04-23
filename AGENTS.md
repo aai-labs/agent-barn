@@ -1,0 +1,464 @@
+# AGENTS.md
+
+This file is the shared working agreement for AI/code agents contributing to this monorepo.
+
+## Purpose
+
+Write code that fits the established architecture and conventions so changes stay maintainable, testable, and predictable.
+
+This repository contains:
+
+- `api/`: FastAPI + SQLModel/SQLAlchemy + Alembic + injector + pytest + Ruff + uv.
+- `web/`: Next.js App Router + React + TypeScript + TanStack Query + Zustand + Zod + Playwright + pnpm.
+
+API routes are mounted under `/api/v1`.
+
+## Rule Language
+
+- `MUST`: mandatory; do not deviate unless user explicitly requests it.
+- `SHOULD`: strong default; deviate only with a clear reason.
+- `MAY`: optional and situational.
+
+## Core Commands
+
+Run from repo root unless noted.
+
+### Install Dependencies
+
+- API: `cd api && uv sync`
+- Web: `cd web && pnpm install`
+
+### Local Development
+
+- API dev server: `make dev-api`
+- Web dev server: `make dev-web`
+- Full docker stack: `make up`
+- Stop stack: `make down`
+- DB only: `make db-up`
+
+### API Migrations
+
+- Apply latest: `make migrate`
+- Roll back one: `make rollback`
+- Create migration: `make makemigrations`
+
+### Tests
+
+- API tests: `make test-api`
+- API coverage: `make coverage`
+- Web tests: `make test-web`
+- Web headed/debug (from `web/`):
+  - `pnpm test:watch`
+  - `pnpm test:debug`
+
+### Lint / Type / Checks
+
+- API checks: `make check-api`
+- API autofix: `make fix-api`
+- Web lint: `make lint-web`
+- Web type check: `cd web && pnpm -s tsc --noEmit`
+
+Agents MUST prefer `make` targets when available.
+
+## Repository Structure
+
+### API
+
+- `api/domains/<domain>/models.py`: domain/request/response models.
+- `api/domains/<domain>/repository.py`: persistence/query logic.
+- `api/domains/<domain>/service.py`: business logic and orchestration.
+- `api/domains/<domain>/routes.py`: route handlers and dependency wiring.
+- `api/infrastructure/`: shared infra (postgres delegate, email, app wiring).
+- `api/migrations/versions/`: Alembic migrations.
+- `api/tests/`: unit + integration + helpers.
+
+### Web
+
+- `web/src/app/`: App Router routes and layouts.
+- `web/src/features/<feature>/`: feature-first domain code.
+- `web/src/auth/`: auth-specific domain logic.
+- `web/src/shared/api/`: API client/interceptors/errors.
+- `web/src/shared/query-keys.ts`: query key factory.
+- `web/tests/e2e/`: Playwright specs.
+- `web/tests/pages/`: page objects and test helpers.
+
+## Creating New Domains (Required Playbook)
+
+### API: New Domain
+
+Agents MUST create API domain code under `api/domains/<domain>/` with this baseline:
+
+```text
+api/domains/<domain>/
+  models.py
+  repository.py
+  service.py
+  routes.py
+```
+
+Agents SHOULD only add extra files when needed (`exceptions.py`, builders, utilities).
+
+Workflow for a new API domain:
+
+1. Add request/response/domain models in `models.py`.
+2. Add persistence/query methods in `repository.py`.
+3. Add business rules and orchestration in `service.py`.
+4. Add HTTP handlers in `routes.py`.
+5. Register router in `api/api_app.py`.
+6. Add migration if schema changed.
+7. Add unit/integration tests.
+
+API layering rules:
+
+- Routes MUST stay thin (parse/deps/delegate/return).
+- Services MUST own business rules and permission-sensitive logic.
+- Repositories MUST own query and persistence details.
+- Services MUST NOT embed SQL/query composition.
+- Routes MUST NOT contain business workflows.
+
+API coding style for new domains:
+
+- File names MUST follow existing pattern: `models.py`, `repository.py`, `service.py`, `routes.py`.
+- Public service/repository methods MUST include explicit type hints.
+- Domain error translation SHOULD happen in services (not in routes).
+- New abstractions SHOULD match nearby domain conventions before introducing a new pattern.
+
+### Web: New Domain
+
+Agents MUST create frontend feature code under `web/src/features/<feature>/`.
+
+Recommended baseline:
+
+```text
+web/src/features/<feature>/
+  schemas.ts
+  hooks/
+    use-<feature>-query.ts
+    use-<feature>-actions.ts
+  components/
+    <feature>-grid.tsx
+  utils.ts
+```
+
+Optional when needed:
+
+- `providers/`
+- `stores/`
+- `constants.ts`
+- `index.ts` (barrel export)
+
+Workflow for a new web feature domain:
+
+1. Add Zod schemas and inferred types in `schemas.ts`.
+2. Add or extend query keys in `web/src/shared/query-keys.ts`.
+3. Implement hooks with the shared API client.
+4. Implement domain UI components.
+5. Wire route usage under `web/src/app/...`.
+6. Add/update Playwright tests.
+
+Web boundaries:
+
+- Feature logic MUST live in `web/src/features/*`.
+- Shared folders SHOULD only contain reusable cross-domain concerns.
+- Agents MUST NOT bypass `web/src/shared/api` for normal app API calls.
+
+Web coding style for new domains:
+
+- File names SHOULD be `kebab-case`.
+- React components MUST use `PascalCase`; hooks MUST use `use...` naming.
+- Import order SHOULD be: external packages, `@/*` aliases, then relative imports.
+- Hooks SHOULD return domain-friendly fields (`item`, `isLoadingItem`, `error`) instead of raw query objects when possible.
+
+## API Conventions
+
+### Architecture and DI
+
+- Route handlers MUST be thin.
+- Business logic MUST be in services.
+- Query/persistence logic MUST be in repositories.
+- Agents MUST reuse DI (`injector`, `fastapi-injector`) and existing wiring patterns.
+- Agents MUST reuse `PostgresRepositoryDelegate` unless custom transaction control is required.
+- New routers MUST be registered through `api/api_app.py`.
+
+### HTTP Semantics
+
+- `200` for reads/updates with body.
+- `201` for creates.
+- `204` for deletes/actions without body.
+- `400` for business precondition failures.
+- `401` for unauthenticated.
+- `403` for unauthorized.
+- `404` for missing/not visible.
+- `409` for state/uniqueness conflicts.
+- `422` SHOULD be schema-driven via FastAPI/Pydantic.
+
+Agents MUST avoid ad hoc success payloads like `{"status": "ok"}` when `204` is appropriate.
+
+### Models and Schema Rules
+
+- DB models and API DTOs MUST stay separate.
+- Names SHOULD follow `*Create`, `*Update`, `*Read`, `*Filter`.
+- Internal-only fields MUST NOT leak in response models.
+- Partial update flows MUST use `exclude_unset=True` semantics.
+- Mutable defaults MUST use `default_factory`.
+
+### API Coding Style
+
+- Type hints MUST be explicit on public service/repository methods.
+- Agents MUST follow Ruff formatting/lint rules.
+- Functions SHOULD be focused and domain-oriented.
+- Broad refactors SHOULD be avoided unless requested.
+
+## Web Conventions
+
+### Component and Routing Style
+
+- Server Components SHOULD be default in `app/`.
+- `"use client"` MUST only be added when needed (hooks/browser APIs/events/form/query hooks).
+- Internal imports MUST use `@/*` alias where practical.
+- Existing UI primitives SHOULD be reused before creating new ones.
+
+### Zod and Types
+
+- Schemas MUST live near domain code.
+- Schema + inferred type MUST be exported from same file.
+- Important API responses MUST be Zod-validated.
+- Agents MUST avoid duplicating interfaces that mirror schema-inferred types.
+
+### API Client Rules
+
+- Agents MUST use `web/src/shared/api` client.
+- Agents MUST NOT introduce ad hoc `fetch` wrappers or new axios instances for app API calls.
+- Request/response camelCase/snake_case transformations SHOULD rely on existing client behavior.
+
+### Query and Mutation Rules
+
+- Query keys MUST use centralized helper patterns.
+- Agents MUST NOT scatter literal ad hoc query keys.
+- Mutations MUST invalidate affected list/detail keys.
+- Hooks MUST use `enabled` guards when required params/context can be missing.
+- `useInfiniteQuery` SHOULD be preferred for progressive “load more” UIs.
+
+### React Rules
+
+- `useEffect` SHOULD NOT be used for derived render data.
+- User-triggered flows MUST happen in handlers/mutation callbacks, not effect chains.
+- Route-level loading SHOULD use `loading.tsx`.
+- Subtree loading SHOULD use local `Suspense` boundaries.
+
+## Important Examples
+
+### Web: Query Key + API Client + Zod Hook
+
+```ts
+import { useQuery } from "@tanstack/react-query";
+
+import { api } from "@/shared/api";
+import { createQueryKeyStructure } from "@/shared/query-keys";
+import {
+  organizationSchema,
+  type Organization,
+} from "@/features/organizations/schemas";
+
+export const organizationKey = createQueryKeyStructure("organization");
+
+export function useOrganization(organizationId?: string) {
+  const query = useQuery({
+    queryKey: organizationKey.detail(organizationId ?? ""),
+    queryFn: () =>
+      api.get<Organization>(`/api/v1/organizations/${organizationId}`, {
+        schema: organizationSchema,
+      }),
+    enabled: !!organizationId,
+  });
+
+  return {
+    organization: query.data?.data ?? null,
+    isLoadingOrganization: query.isLoading,
+    error: query.error,
+  };
+}
+```
+
+### Web: Mutation + Invalidation Pattern
+
+```ts
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+
+import { api } from "@/shared/api";
+import { organizationKey } from "@/shared/query-keys";
+
+export function useOrganizationActions() {
+  const queryClient = useQueryClient();
+
+  const updateOrganization = useMutation({
+    mutationFn: ({
+      organizationId,
+      payload,
+    }: {
+      organizationId: string;
+      payload: Record<string, unknown>;
+    }) => api.patch(`/api/v1/organizations/${organizationId}`, payload),
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: organizationKey.lists() });
+      queryClient.invalidateQueries({
+        queryKey: organizationKey.detail(variables.organizationId),
+      });
+    },
+  });
+
+  return { updateOrganization };
+}
+```
+
+### API: Route-Service-Repository Separation
+
+```py
+# routes.py
+@router.get("/{organization_id}", response_model=OrganizationRead)
+def get_organization(
+    organization_id: UUID,
+    current_user: User = Depends(get_current_user()),
+    service: OrganizationService = Injected(OrganizationService),
+) -> OrganizationRead:
+    return service.get_organization(organization_id=organization_id, actor=current_user)
+
+# service.py
+def get_organization(self, organization_id: UUID, actor: User) -> OrganizationRead:
+    organization = self.repository.find_by_id(organization_id)
+    if organization is None:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    self._assert_can_view(actor, organization)
+    return OrganizationRead.model_validate(organization)
+
+# repository.py
+def find_by_id(self, organization_id: UUID) -> OrganizationModel | None:
+    with Session(self.delegate.engine) as session:
+        return session.get(OrganizationModel, organization_id)
+```
+
+### API: Unit Test Style (given/when/then)
+
+```py
+def test_super_admin_create_organization_returns_bad_request():
+    with given([...]) as context:
+        client = context.client
+        access_token = context.access_token
+
+        with when("super admin tries to create an organization"):
+            response = client.post(
+                "/api/v1/organizations",
+                json={"name": "Super Admin Org", "description": "Created by super admin"},
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
+
+            with then("request is rejected with bad request"):
+                assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+```
+
+### API: Integration Test Shape
+
+```py
+def test_get_organization_requires_auth():
+    with given(
+        [
+            prepare_injector(),
+            prepare_api_server(),
+            create_test_client(),
+            database_repo_is_ready(),
+            database_is_clean(),
+        ]
+    ) as context:
+        client = context.client
+
+        with when("I request an organization without auth"):
+            response = client.get(
+                "/api/v1/organizations/11111111-1111-1111-1111-111111111111"
+            )
+
+            with then("request is rejected with unauthorized"):
+                assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
+```
+
+### Web: Playwright Spec + Page Object Pattern
+
+```ts
+import { test, expect } from "@playwright/test";
+
+import { LoginPage } from "../pages/login-page.po";
+import { DataSupport } from "../pages/data-support/data-support.po";
+
+test("user can log in", async ({ page }) => {
+  const loginPage = new LoginPage(page);
+  const dataSupport = new DataSupport(page);
+
+  await dataSupport.auth.interceptLoginRequest();
+  await loginPage.goto();
+  await loginPage.login("user@example.com", "password123");
+
+  await expect(page).toHaveURL(/dashboard/);
+});
+```
+
+## Testing Requirements
+
+### API
+
+- New behavior MUST include tests for:
+  - happy path,
+  - permission/auth failures,
+  - key validation failures,
+  - not-found/conflict behaviors.
+- Schema changes MUST include migration coverage and migration file.
+
+### Web
+
+- Changed UI behavior MUST include/update Playwright coverage where regression risk is non-trivial.
+- Selectors/interactions SHOULD stay in page objects.
+- Mock setup SHOULD stay in shared test support helpers.
+- Assertions SHOULD stay in spec files.
+
+## Standard Feature Workflow
+
+### API Feature
+
+1. Update `models.py`.
+2. Add/update repository methods.
+3. Add/update service logic and authorization.
+4. Add/update routes.
+5. Register router if needed.
+6. Add migration if schema changed.
+7. Add/update tests.
+8. Run `make check-api` and `make test-api`.
+
+### Web Feature
+
+1. Add/update `schemas.ts` and inferred types.
+2. Add/update query keys.
+3. Add/update query/mutation hooks.
+4. Build/update feature UI.
+5. Wire route/page usage in `src/app`.
+6. Add/update Playwright coverage.
+7. Run `make lint-web`, `pnpm -s tsc --noEmit`, and relevant tests.
+
+## Review Guidance
+
+When asked to review code, prioritize in this order:
+
+1. Correctness and regressions.
+2. Data contract and schema safety.
+3. Query key and invalidation correctness.
+4. Auth and permission behavior.
+5. Loading and async UX behavior.
+6. Test coverage gaps.
+
+Do not lead with style-only feedback unless it impacts correctness or maintainability.
+
+## Definition of Done
+
+- Behavior covers happy path and key edge cases.
+- Validation and authorization are correct.
+- Tests for changed behavior are added/updated and passing.
+- Lint/type/check commands pass for touched areas.
+- Migrations are included for DB schema changes.
+- No unrelated refactors or style churn.
