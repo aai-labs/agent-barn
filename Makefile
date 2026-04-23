@@ -25,10 +25,10 @@ makemigrations:
 test-api:
 	cd api && uv run python -m pytest tests -v
 
-test-ui:
+test-web:
 	cd web && pnpm test
 
-lint-ui:
+lint-web:
 	cd web && pnpm lint
 
 coverage:

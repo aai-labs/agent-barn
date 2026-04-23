@@ -18,7 +18,7 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "@/components/ui/sidebar";
-import { CreateOrganizationDialog } from "@/organizations/components/create-organization-dialog";
+import { CreateOrganizationDialog } from "@/features/organizations/components/create-organization-dialog";
 
 export function OrganizationSwitcher({
   organizations,

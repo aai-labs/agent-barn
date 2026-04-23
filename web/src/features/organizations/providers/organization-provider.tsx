@@ -4,8 +4,8 @@ import { createContext, type ReactNode, useContext, useMemo } from "react";
 
 import { AuthLoadingFallback } from "@/auth/components/auth-loading-fallback";
 import { useCurrentUser } from "@/auth/providers/user-context-provider";
-import { useOrgStore } from "@/organizations/stores/org-store";
-import { useOrgStoreHydrated } from "@/organizations/stores/use-org-store-hydrated";
+import { useOrgStore } from "@/features/organizations/stores/org-store";
+import { useOrgStoreHydrated } from "@/features/organizations/stores/use-org-store-hydrated";
 
 import type { Organization } from "../schemas";
 

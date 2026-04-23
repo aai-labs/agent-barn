@@ -7,8 +7,8 @@ import { PUBLIC_PATHS } from "@/auth/constants";
 import { SessionExpirationHandler } from "@/auth/providers/session-expiration-handler";
 import { useAuthStore } from "@/auth/providers/auth-store";
 import { UserContextProvider } from "@/auth/providers/user-context-provider";
-import { OrganizationProvider } from "@/organizations/providers/organization-provider";
-import { initStoreSync } from "@/organizations/stores/init-store-sync";
+import { OrganizationProvider } from "@/features/organizations/providers/organization-provider";
+import { initStoreSync } from "@/features/organizations/stores/init-store-sync";
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const pathname = usePathname() ?? "";

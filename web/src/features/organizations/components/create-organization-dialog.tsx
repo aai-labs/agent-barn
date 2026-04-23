@@ -20,11 +20,11 @@ import {
   FieldLabel,
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { useOrganizationActions } from "@/organizations/hooks/use-organization-actions";
+import { useOrganizationActions } from "@/features/organizations/hooks/use-organization-actions";
 import {
   OrganizationCreate,
   OrganizationCreateSchema,
-} from "@/organizations/schemas";
+} from "@/features/organizations/schemas";
 
 export function CreateOrganizationDialog({
   open,

@@ -1,5 +1,5 @@
 import * as z from "zod";
-import { OrganizationSchema } from "@/organizations/schemas";
+import { OrganizationSchema } from "@/features/organizations/schemas";
 
 export const strongPasswordSchema = z
   .string()

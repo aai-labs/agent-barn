@@ -16,7 +16,7 @@ import {
   SidebarRail,
 } from "@/components/ui/sidebar";
 import { useCurrentUser } from "@/auth/providers/user-context-provider";
-import { useOrganizationContext } from "@/organizations/providers/organization-provider";
+import { useOrganizationContext } from "@/features/organizations/providers/organization-provider";
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const { user } = useCurrentUser();
