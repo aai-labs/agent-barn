@@ -7,6 +7,34 @@ Monorepo starter with:
 
 API is served under `/api/v1` and frontend requests to `/api/*` are proxied to backend.
 
+## Features Included
+
+- Authentication:
+  - Sign up and login
+  - Access + refresh token flow (refresh token cookie support)
+  - Current-user profile read/update (`/auth/me`)
+  - Change password
+  - Forgot/reset password endpoints
+  - Logout
+- Users:
+  - Paginated user listing (super admin only)
+  - User deletion (super admin only)
+- Organizations:
+  - Create, list (paginated), get, update, and delete organizations
+  - Organization filtering support
+  - Organization switcher UI in dashboard
+- Authorization and role-aware UX:
+  - Super-admin-gated pages/components (users and organizations admin screens)
+  - Different dashboard experience for super admins vs regular users
+- Frontend foundations:
+  - App Router auth pages (`/login`, `/signup`)
+  - Protected dashboard shell with sidebar navigation
+  - TanStack Query + centralized query-key patterns + Zod schemas
+- Backend foundations:
+  - Versioned API routing under `/api/v1`
+  - Health endpoint (`/api/v1/health`)
+  - Startup bootstrap for default superuser and demo seed data
+
 ## Project Structure
 
 ```text
