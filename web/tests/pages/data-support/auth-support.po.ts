@@ -20,7 +20,7 @@ export class AuthSupport extends BaseInterceptor {
     tokenType?: string;
     detail?: string;
   } = {}) {
-    await this.page.route("/api/v1/auth/login", async (route) => {
+    await this.page.route("**/api/v1/auth/login", async (route) => {
       if (route.request().method() !== "POST") {
         await route.fallback();
         return;
@@ -62,7 +62,7 @@ export class AuthSupport extends BaseInterceptor {
     status?: number;
     detail?: string;
   } = {}) {
-    await this.page.route("/api/v1/auth/signup", async (route) => {
+    await this.page.route("**/api/v1/auth/signup", async (route) => {
       if (route.request().method() !== "POST") {
         await route.fallback();
         return;
@@ -90,7 +90,7 @@ export class AuthSupport extends BaseInterceptor {
   }
 
   async interceptLogoutRequest() {
-    await this.page.route("/api/v1/auth/logout", async (route) => {
+    await this.page.route("**/api/v1/auth/logout", async (route) => {
       if (route.request().method() !== "POST") {
         await route.fallback();
         return;
@@ -114,7 +114,7 @@ export class AuthSupport extends BaseInterceptor {
     tokenType?: string;
     expiresAt?: number;
   } = {}) {
-    await this.page.route("/api/v1/auth/refresh", async (route) => {
+    await this.page.route("**/api/v1/auth/refresh", async (route) => {
       if (route.request().method() !== "POST") {
         await route.fallback();
         return;

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import type { QueryObserverResult } from "@tanstack/react-query";
 
 import { AuthLoadingFallback } from "@/auth/components/auth-loading-fallback";
+import { AppErrorState } from "@/components/app-error-state";
 import { ApiResult } from "@/shared/api/types";
 
 import type { CurrentUserContext } from "../schemas";
@@ -46,7 +47,18 @@ export function UserContextProvider({ children }: { children: ReactNode }) {
   }
 
   if (isError || !userContext) {
-    return <AuthLoadingFallback message="Unable to load account context." />;
+    return (
+      <AppErrorState
+        error={error}
+        title="We couldn't load your account"
+        description="Your session is valid, but we couldn't load the account context."
+        onRetry={() => {
+          void refetch();
+        }}
+        retryLabel="Retry account"
+        className="min-h-svh"
+      />
+    );
   }
 
   return (

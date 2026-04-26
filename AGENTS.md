@@ -215,6 +215,8 @@ Agents MUST avoid ad hoc success payloads like `{"status": "ok"}` when `204` is 
 
 - Server Components SHOULD be default in `app/`.
 - `"use client"` MUST only be added when needed (hooks/browser APIs/events/form/query hooks).
+- Route-level failures for page-blocking requests SHOULD be handled with App Router `error.tsx` boundaries at the appropriate segment.
+- Component-owned async data SHOULD render explicit inline error states instead of silently falling back to empty/loading UI forever.
 - Internal imports MUST use `@/*` alias where practical.
 - Existing UI primitives SHOULD be reused before creating new ones.
 
@@ -237,6 +239,8 @@ Agents MUST avoid ad hoc success payloads like `{"status": "ok"}` when `204` is 
 - Agents MUST NOT scatter literal ad hoc query keys.
 - Mutations MUST invalidate affected list/detail keys.
 - Hooks MUST use `enabled` guards when required params/context can be missing.
+- Initial page-blocking fetches SHOULD fail at the route or segment layer when the page cannot render meaningfully without the data.
+- Follow-up query failures after a page has rendered SHOULD usually stay in component state with retry affordances, not escalate to full-page crashes.
 - `useInfiniteQuery` SHOULD be preferred for progressive “load more” UIs.
 
 ### React Rules
@@ -245,6 +249,7 @@ Agents MUST avoid ad hoc success payloads like `{"status": "ok"}` when `204` is 
 - User-triggered flows MUST happen in handlers/mutation callbacks, not effect chains.
 - Route-level loading SHOULD use `loading.tsx`.
 - Subtree loading SHOULD use local `Suspense` boundaries.
+- Error UI SHOULD distinguish auth/permission failures from general network/server failures when the API client exposes that information.
 
 ## Important Examples
 
@@ -308,6 +313,65 @@ export function useOrganizationActions() {
   });
 
   return { updateOrganization };
+}
+```
+
+### Web: App Router Error Boundary Pattern
+
+```tsx
+// app/dashboard/error.tsx
+"use client";
+
+import { RouteErrorState } from "@/components/route-error-state";
+
+export default function DashboardError({
+  error,
+  reset,
+}: {
+  error: Error & { digest?: string };
+  reset: () => void;
+}) {
+  return (
+    <RouteErrorState
+      error={error}
+      reset={reset}
+      title="We couldn't load this dashboard page"
+      description="A page-level request failed before the dashboard content could load."
+    />
+  );
+}
+```
+
+### Web: Component-Level Query Error + Retry Pattern
+
+```tsx
+"use client";
+
+import { AppErrorState } from "@/components/app-error-state";
+import { useInfiniteUsers } from "@/features/users/hooks/use-infinite-users";
+
+export function UsersGrid() {
+  const { users, isLoading, error, refetch } = useInfiniteUsers();
+
+  if (isLoading) {
+    return <div>Loading users...</div>;
+  }
+
+  if (error) {
+    return (
+      <AppErrorState
+        error={error}
+        title="We couldn't load users"
+        description="The users list is unavailable right now."
+        onRetry={() => {
+          void refetch();
+        }}
+        retryLabel="Retry users"
+      />
+    );
+  }
+
+  return <div>{users.length} users loaded</div>;
 }
 ```
 

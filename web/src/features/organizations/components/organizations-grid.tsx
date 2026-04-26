@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Building, Loader2, Search, UserRound } from "lucide-react";
 import { useDebouncedValue } from "@tanstack/react-pacer";
 
+import { AppErrorState } from "@/components/app-error-state";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -43,8 +44,10 @@ export function OrganizationsGrid() {
     total,
     hasNextPage,
     fetchNextPage,
+    error,
     isFetchingNextPage,
     isLoading,
+    refetch,
   } = useInfiniteOrganizations({ search: debouncedSearch });
 
   return (
@@ -80,6 +83,17 @@ export function OrganizationsGrid() {
             <LoadingCard key={index} />
           ))}
         </div>
+      ) : error ? (
+        <AppErrorState
+          error={error}
+          title="We couldn't load organizations"
+          description="The organizations list is unavailable right now."
+          onRetry={() => {
+            void refetch();
+          }}
+          retryLabel="Retry organizations"
+          className="min-h-[240px] p-0"
+        />
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {organizations.map((organization) => (

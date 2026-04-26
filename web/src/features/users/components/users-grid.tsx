@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Loader2, Search, Shield, UserRound } from "lucide-react";
 import { useDebouncedValue } from "@tanstack/react-pacer";
 
+import { AppErrorState } from "@/components/app-error-state";
 import {
   Card,
   CardContent,
@@ -50,8 +51,10 @@ export function UsersGrid() {
     total,
     hasNextPage,
     fetchNextPage,
+    error,
     isFetchingNextPage,
     isLoading,
+    refetch,
   } = useInfiniteUsers({ search: debouncedSearch });
 
   return (
@@ -85,6 +88,17 @@ export function UsersGrid() {
             <LoadingCard key={index} />
           ))}
         </div>
+      ) : error ? (
+        <AppErrorState
+          error={error}
+          title="We couldn't load users"
+          description="The users list is unavailable right now."
+          onRetry={() => {
+            void refetch();
+          }}
+          retryLabel="Retry users"
+          className="min-h-[240px] p-0"
+        />
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {users.map((user) => (
