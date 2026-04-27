@@ -215,6 +215,8 @@ Agents MUST avoid ad hoc success payloads like `{"status": "ok"}` when `204` is 
 
 - Server Components SHOULD be default in `app/`.
 - `"use client"` MUST only be added when needed (hooks/browser APIs/events/form/query hooks).
+- Route-level loading for page-blocking navigation SHOULD use App Router `loading.tsx` at the appropriate segment.
+- Route-level loading SHOULD represent router-owned waits, not unrelated client-only state that happens after the page has already rendered.
 - Route-level failures for page-blocking requests SHOULD be handled with App Router `error.tsx` boundaries at the appropriate segment.
 - Component-owned async data SHOULD render explicit inline error states instead of silently falling back to empty/loading UI forever.
 - Internal imports MUST use `@/*` alias where practical.
@@ -240,6 +242,8 @@ Agents MUST avoid ad hoc success payloads like `{"status": "ok"}` when `204` is 
 - Mutations MUST invalidate affected list/detail keys.
 - Hooks MUST use `enabled` guards when required params/context can be missing.
 - Initial page-blocking fetches SHOULD fail at the route or segment layer when the page cannot render meaningfully without the data.
+- Initial page-blocking fetches SHOULD also have a matching route-level loading state, not just a later component skeleton.
+- Follow-up refetch/search/pagination work SHOULD usually keep its loading state local to the component instead of taking over the whole page.
 - Follow-up query failures after a page has rendered SHOULD usually stay in component state with retry affordances, not escalate to full-page crashes.
 - `useInfiniteQuery` SHOULD be preferred for progressive “load more” UIs.
 
@@ -249,6 +253,7 @@ Agents MUST avoid ad hoc success payloads like `{"status": "ok"}` when `204` is 
 - User-triggered flows MUST happen in handlers/mutation callbacks, not effect chains.
 - Route-level loading SHOULD use `loading.tsx`.
 - Subtree loading SHOULD use local `Suspense` boundaries.
+- Client-provider fallbacks SHOULD be reserved for client-owned waits such as store hydration or post-render query state, not as a substitute for missing route loading.
 - Error UI SHOULD distinguish auth/permission failures from general network/server failures when the API client exposes that information.
 
 ## Important Examples
@@ -339,6 +344,41 @@ export default function DashboardError({
       description="A page-level request failed before the dashboard content could load."
     />
   );
+}
+```
+
+### Web: App Router Loading Pattern
+
+```tsx
+// app/dashboard/loading.tsx
+import { DashboardRouteLoading } from "@/dashboard/components/dashboard-route-loading";
+
+export default function DashboardLoading() {
+  return (
+    <DashboardRouteLoading
+      title="Loading dashboard"
+      description="Preparing your dashboard view."
+    />
+  );
+}
+```
+
+### Web: Component-Level Query Loading Pattern
+
+```tsx
+"use client";
+
+import { UsersGridSkeleton } from "@/features/users/components/users-grid-skeleton";
+import { useInfiniteUsers } from "@/features/users/hooks/use-infinite-users";
+
+export function UsersGrid() {
+  const { users, isLoading } = useInfiniteUsers();
+
+  if (isLoading) {
+    return <UsersGridSkeleton />;
+  }
+
+  return <div>{users.length} users loaded</div>;
 }
 ```
 
