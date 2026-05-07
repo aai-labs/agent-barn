@@ -1,11 +1,13 @@
 import logging
 import traceback
 from contextlib import asynccontextmanager
+from typing import Annotated
 
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi_injector import attach_injector
+from fastapi_injector import attach_injector, Injected
 from injector import Injector
+from sqlmodel import Session, select
 
 from api.core.config import get_config
 from api.core.utils import create_injector
@@ -16,7 +18,7 @@ from api.domains.users.service import UserService
 from api.infrastructure.email.logging_utils import (
     log_email_delivery_disabled_warning,
 )
-from api.tools.demo_seed import seed_demo_data
+from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
 logger = logging.getLogger(__name__)
 
@@ -32,12 +34,6 @@ async def lifespan(_: FastAPI):
 
     try:
         user_service.ensure_default_superuser()
-
-        """
-        Seed demo data after ensuring the default superuser exists
-        YOU CAN SAFELY REMOVE THIS AND DELETE THE `demo_seed.py` FILE
-        """
-        seed_demo_data(injector)
     except Exception:
         logger.error("Error during startup bootstrap: %s", traceback.format_exc())
         raise HTTPException(
@@ -56,8 +52,16 @@ def create_app(injector: Injector | None = None):
     subapi = FastAPI()
 
     @subapi.get("/health")
-    async def health_v1():
-        return {"status": "ok"}
+    async def health_v1(db: Annotated[PostgresRepositoryDelegate, Injected(PostgresRepositoryDelegate)]):
+        try:
+            with Session(db.engine) as session:
+                session.exec(select(1))
+            return {"status": "ok", "db": "connected"}
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"status": "error", "db": "disconnected"}
+            )
 
     app_v1.mount("/api/v1", subapi)
 
