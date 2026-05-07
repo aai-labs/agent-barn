@@ -7,7 +7,6 @@ from fastapi_injector import Injected
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import get_current_user
 from api.domains.organizations.models import (
-    OrganizationCreate,
     OrganizationFilter,
     OrganizationRead,
     OrganizationUpdate,
@@ -41,20 +40,6 @@ def get_organizations(
         org_filter=filters,
         page_size=page_size,
         page=page,
-    )
-
-
-@org_router.post(
-    "", response_model=OrganizationRead, status_code=status.HTTP_201_CREATED
-)
-def create_organization(
-    organization_create: OrganizationCreate,
-    context: Annotated[CurrentUserContext, Depends(get_current_user())],
-    organization_service: Annotated[OrganizationService, Injected(OrganizationService)],
-):
-    return organization_service.create_organization(
-        organization_create=organization_create,
-        context=context,
     )
 
 

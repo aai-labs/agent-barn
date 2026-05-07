@@ -15,6 +15,8 @@ from api.domains.auth.routes import auth_router
 from api.domains.organizations.routes import org_router
 from api.domains.users.routes import users_router
 from api.domains.users.service import UserService
+from api.domains.organizations.service import OrganizationService
+from api.domains.auth.utils import set_default_org_id
 from api.infrastructure.email.logging_utils import (
     log_email_delivery_disabled_warning,
 )
@@ -34,6 +36,10 @@ async def lifespan(_: FastAPI):
 
     try:
         user_service.ensure_default_superuser()
+
+        org_service = injector.get(OrganizationService)
+        default_org = org_service.ensure_default_organization()
+        set_default_org_id(default_org.id)
     except Exception:
         logger.error("Error during startup bootstrap: %s", traceback.format_exc())
         raise HTTPException(
