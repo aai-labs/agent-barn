@@ -33,17 +33,17 @@ services:
       EMAIL_SERVER_CREDENTIAL: ${EMAIL_SERVER_CREDENTIAL-}
       EMAIL_SMTP_SERVER: ${EMAIL_SMTP_SERVER-}
       ENVIRONMENT: ${ENVIRONMENT:?ENVIRONMENT is required}
-      WEB_APP_URL: ${WEB_APP_URL:?WEB_APP_URL is required}
+      UI_APP_URL: ${UI_APP_URL:?UI_APP_URL is required}
     ports:
       - "${API_PORT:?API_PORT is required}:8000"
 
-  web:
+  ui:
     build:
-      context: ./web
+      context: ./ui
       dockerfile: Dockerfile
       args:
         NEXT_PUBLIC_BACKEND_URL: http://api:8000
-    container_name: aai_web
+    container_name: aai_ui
     restart: unless-stopped
     depends_on:
       api:
