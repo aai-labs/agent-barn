@@ -5,10 +5,12 @@ export class LoginPage {
 
   async goto() {
     await this.page.goto("/login");
+    await this.page.waitForLoadState("networkidle");
   }
 
   async login(email: string, password: string) {
     await this.emailField().fill(email);
+    await this.emailField().blur();
     await this.passwordField().fill(password);
     await this.submitAction().click();
   }
