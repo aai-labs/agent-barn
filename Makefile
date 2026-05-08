@@ -1,7 +1,7 @@
 COMPOSE := docker compose -f compose.yml
 
 .PHONY: \
-	dev-api dev-web migrate rollback makemigrations test-api test-web lint-web coverage check-api fix-api test check fix \
+	dev-api dev-ui migrate rollback makemigrations test-api test-ui lint-ui coverage check-api fix-api test check fix \
 	up down restart logs build clean db-up db-down db-logs db-restart
 
 # Non-docker commands
@@ -9,8 +9,8 @@ COMPOSE := docker compose -f compose.yml
 dev-api:
 	cd api && uv run python -m fastapi dev main.py --host 0.0.0.0 --port 8000
 
-dev-web:
-	cd web && pnpm dev
+dev-ui:
+	cd ui && pnpm dev
 
 migrate:
 	cd api && uv run python -m alembic upgrade head
@@ -25,11 +25,11 @@ makemigrations:
 test-api:
 	cd api && uv run python -m pytest tests -v
 
-test-web:
-	cd web && pnpm test
+test-ui:
+	cd ui && pnpm test
 
-lint-web:
-	cd web && pnpm lint
+lint-ui:
+	cd ui && pnpm lint
 
 coverage:
 	cd api && uv run python -m pytest tests -v --cov=api --cov-report=term-missing --cov-report=xml

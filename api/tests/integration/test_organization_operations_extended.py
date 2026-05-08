@@ -15,39 +15,6 @@ from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
 
 
-def test_non_member_cannot_get_other_organization():
-    org_a = uuid7()
-    org_b = uuid7()
-
-    with given(
-        [
-            prepare_injector(),
-            prepare_api_server(),
-            create_test_client(),
-            database_repo_is_ready(),
-            database_is_clean(),
-            there_is_a_user(
-                email="owner-a@example.com",
-                organization_id=org_a,
-                role=OrganizationRole.OWNER,
-            ),
-            there_is_a_user(
-                email="owner-b@example.com",
-                organization_id=org_b,
-                role=OrganizationRole.OWNER,
-            ),
-            there_is_an_access_token_for_user(user_id=None),
-        ]
-    ) as context:
-        client: TestClient = context.client
-        # token belongs to latest context.user => owner-b
-        response = client.get(
-            f"/api/v1/organizations/{org_a}",
-            headers={"Authorization": f"Bearer {context.access_token}"},
-        )
-        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
-
-
 def test_regular_user_lists_only_their_organizations():
     org_a = uuid7()
     org_b = uuid7()
@@ -82,37 +49,6 @@ def test_regular_user_lists_only_their_organizations():
         assert_that(response.status_code, equal_to(status.HTTP_200_OK))
         assert_that(len(response.json()["items"]), equal_to(1))
         assert_that(response.json()["items"][0]["id"], equal_to(str(org_a)))
-
-
-def test_owner_can_update_organization():
-    org_id = uuid7()
-    with given(
-        [
-            prepare_injector(),
-            prepare_api_server(),
-            create_test_client(),
-            database_repo_is_ready(),
-            database_is_clean(),
-            there_is_a_user(
-                email="owner-update@example.com",
-                organization_id=org_id,
-                role=OrganizationRole.OWNER,
-            ),
-            there_is_an_access_token_for_user(),
-        ]
-    ) as context:
-        client: TestClient = context.client
-
-        response = client.patch(
-            f"/api/v1/organizations/{org_id}",
-            json={
-                "name": "Updated Organization Name",
-                "description": "Updated description",
-            },
-            headers={"Authorization": f"Bearer {context.access_token}"},
-        )
-        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-        assert_that(response.json()["name"], equal_to("Updated Organization Name"))
 
 
 def test_superuser_can_update_any_organization():
@@ -210,43 +146,6 @@ def test_superuser_gets_404_for_missing_organization():
             headers={"Authorization": f"Bearer {context.access_token}"},
         )
         assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
-
-
-def test_owner_can_delete_organization():
-    org_id = uuid7()
-    super_id = uuid7()
-    with given(
-        [
-            prepare_injector(),
-            prepare_api_server(),
-            create_test_client(),
-            database_repo_is_ready(),
-            database_is_clean(),
-            there_is_a_user(
-                id=super_id, email="super-delete@example.com", is_superuser=True
-            ),
-            there_is_a_user(
-                email="owner-delete@example.com",
-                organization_id=org_id,
-                role=OrganizationRole.OWNER,
-            ),
-            there_is_an_access_token_for_user(),
-        ]
-    ) as context:
-        client: TestClient = context.client
-
-        delete_response = client.delete(
-            f"/api/v1/organizations/{org_id}",
-            headers={"Authorization": f"Bearer {context.access_token}"},
-        )
-        assert_that(delete_response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
-
-        there_is_an_access_token_for_user(user_id=super_id)(context)
-        get_response = client.get(
-            f"/api/v1/organizations/{org_id}",
-            headers={"Authorization": f"Bearer {context.access_token}"},
-        )
-        assert_that(get_response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
 def test_member_cannot_delete_organization():

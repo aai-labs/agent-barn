@@ -5,7 +5,7 @@ POSTGRES_PORT=5432
 
 API_PORT=8000
 ENVIRONMENT=local
-WEB_APP_URL=http://localhost:3000
+UI_APP_URL=http://localhost:3000
 
 SECRET_SIGNING_KEY=replace_with_a_secure_random_value
 SUPER_USER_CREDENTIALS=admin@example.com:replace_with_secure_password

@@ -1,12 +1,11 @@
 "use client";
 
 import * as React from "react";
-import { Building, Building2, LayoutDashboard, Users } from "lucide-react";
+import { Building, LayoutDashboard, Users } from "lucide-react";
 import Link from "next/link";
 
 import { NavMain } from "@/components/nav-main";
 import { NavUser } from "@/components/nav-user";
-import { OrganizationSwitcher } from "@/components/org-switcher";
 import { SuperAdminOrganizationBadge } from "@/components/super-admin-organization-badge";
 import {
   Sidebar,
@@ -16,12 +15,9 @@ import {
   SidebarRail,
 } from "@/components/ui/sidebar";
 import { useCurrentUser } from "@/auth/providers/user-context-provider";
-import { useOrganizationContext } from "@/features/organizations/providers/organization-provider";
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const { user } = useCurrentUser();
-  const { organizations, selectedOrganization, setOrganization } =
-    useOrganizationContext();
   const navMain = [
     {
       title: "Dashboard",
@@ -44,32 +40,10 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       : []),
   ];
 
-  const mappedOrganizations = organizations.map((organization) => ({
-    id: organization.id,
-    name: organization.name,
-    logo: Building2,
-    isDefault: organization.isDefault,
-  }));
-
   return (
     <Sidebar collapsible="icon" {...props}>
       <SidebarHeader>
-        {user.isSuperuser ? (
-          <SuperAdminOrganizationBadge />
-        ) : (
-          <OrganizationSwitcher
-            organizations={mappedOrganizations}
-            selectedOrganizationId={selectedOrganization?.id ?? null}
-            onOrganizationSelect={(organizationId) => {
-              const organization = organizations.find(
-                (item) => item.id === organizationId,
-              );
-              if (organization) {
-                setOrganization(organization);
-              }
-            }}
-          />
-        )}
+        <SuperAdminOrganizationBadge />
       </SidebarHeader>
       <SidebarContent>
         <NavMain items={navMain} LinkComponent={Link} />
