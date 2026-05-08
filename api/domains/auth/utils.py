@@ -2,7 +2,7 @@ import uuid
 from typing import Annotated, Callable
 
 import jwt
-from fastapi import Depends, HTTPException, Request
+from fastapi import Depends, Request
 from fastapi.security import OAuth2PasswordBearer
 from fastapi_injector import Injected
 from injector import inject
@@ -23,9 +23,11 @@ from api.domains.users.repository import UserRepository
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 _default_org_id: uuid.UUID | None = None
 
+
 def set_default_org_id(org_id: uuid.UUID) -> None:
     global _default_org_id
     _default_org_id = org_id
+
 
 def get_organization_id(request: Request) -> uuid.UUID | None:
     return _default_org_id

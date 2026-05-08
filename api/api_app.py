@@ -58,7 +58,9 @@ def create_app(injector: Injector | None = None):
     subapi = FastAPI()
 
     @subapi.get("/health")
-    async def health_v1(db: Annotated[PostgresRepositoryDelegate, Injected(PostgresRepositoryDelegate)]):
+    async def health_v1(
+        db: Annotated[PostgresRepositoryDelegate, Injected(PostgresRepositoryDelegate)],
+    ):
         try:
             with Session(db.engine) as session:
                 session.exec(select(1))
@@ -66,7 +68,7 @@ def create_app(injector: Injector | None = None):
         except Exception:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail={"status": "error", "db": "disconnected"}
+                detail={"status": "error", "db": "disconnected"},
             )
 
     app_v1.mount("/api/v1", subapi)

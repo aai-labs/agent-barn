@@ -7,7 +7,6 @@ from injector import inject, singleton
 from api.domains.auth.models import CurrentUserContext
 from api.domains.organizations.models import (
     Organization,
-    OrganizationCreate,
     OrganizationFilter,
     OrganizationRead,
     OrganizationUpdate,
@@ -15,7 +14,6 @@ from api.domains.organizations.models import (
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.users.organization_users.models import (
     OrganizationRole,
-    OrganizationUser,
 )
 from api.domains.users.organization_users.service import OrganizationUserService
 from api.infrastructure.shared.models import PaginatedItems, Pagination

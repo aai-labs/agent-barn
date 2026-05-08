@@ -70,7 +70,7 @@ class OrganizationRepository:
             )
 
         return query
-    
+
     def find_default(self) -> Organization | None:
         return self.delegate.find_one(Organization, is_default=True)
 
