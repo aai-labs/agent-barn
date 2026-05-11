@@ -1,0 +1,53 @@
+name: API CI
+
+on:
+  push:
+    paths:
+      - api/**
+      - Makefile
+      - .github/workflows/api-ci.yml
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.14"
+          enable-cache: true
+      - name: Install dependencies
+        working-directory: api
+        run: uv sync --frozen
+      - run: make check-api
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.14"
+          enable-cache: true
+      - name: Install dependencies
+        working-directory: api
+        run: uv sync --frozen
+      - run: make test-api
+
+  build:
+    name: Build
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: api/Dockerfile
+          push: false
+          tags: agentfarm-api:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
