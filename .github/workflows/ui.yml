@@ -1,0 +1,100 @@
+name: UI
+
+on:
+  push:
+    paths:
+      - ui/**
+      - Makefile
+      - .github/workflows/ui.yml
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+      - name: Install dependencies
+        working-directory: ui
+        run: pnpm install --frozen-lockfile
+      - run: make lint-ui
+      - run: make check-ui
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+      - name: Install dependencies
+        working-directory: ui
+        run: pnpm install --frozen-lockfile
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('ui/pnpm-lock.yaml') }}
+      - name: Install Playwright browsers
+        working-directory: ui
+        run: pnpm exec playwright install --with-deps chromium
+      - run: make test-ui
+
+  build:
+    name: Build
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: ui
+          file: ui/Dockerfile
+          push: false
+          tags: agentfarm-ui:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  publish:
+    name: Publish
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read version
+        id: version
+        run: echo "tag=$(cat ui/VERSION)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.REGISTRY_URL }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: ui
+          file: ui/Dockerfile
+          push: true
+          tags: |
+            ${{ secrets.REGISTRY_URL }}/agentfarm-ui:${{ steps.version.outputs.tag }}
+            ${{ secrets.REGISTRY_URL }}/agentfarm-ui:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

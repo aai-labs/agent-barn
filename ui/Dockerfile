@@ -2,14 +2,14 @@ FROM node:24-alpine AS base
 
 FROM base AS deps
 RUN apk add --no-cache libc6-compat
-RUN npm install -g pnpm
+RUN npm install -g pnpm@9
 WORKDIR /app
 COPY package.json pnpm-lock.yaml* ./
 RUN pnpm install --frozen-lockfile
 RUN pnpm add sharp
 
 FROM base AS builder
-RUN npm install -g pnpm
+RUN npm install -g pnpm@9
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
