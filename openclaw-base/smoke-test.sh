@@ -23,16 +23,14 @@ check rg             rg --version
 check curl           curl --version
 check tini           tini -h
 
-printf 'checking chromium ... '
-python3 - <<'PYEOF' >/dev/null 2>&1 || { echo FAILED; exit 1; }
+check chromium python3 -c "
 from playwright.sync_api import sync_playwright
 with sync_playwright() as p:
     b = p.chromium.launch()
     pg = b.new_page()
-    pg.goto("data:text/html,ok")
+    pg.goto('data:text/html,ok')
     b.close()
-PYEOF
-echo ok
+"
 
 if command -v aws    >/dev/null 2>&1; then check aws    aws --version;  fi
 if command -v gcloud >/dev/null 2>&1; then check gcloud gcloud version; fi
