@@ -9,7 +9,7 @@ from pydantic import PostgresDsn
 
 from api.core.config import Config
 from api.domains.auth.repository import RefreshTokenRepository
-from api.domains.organizations.models import OrganizationCreate, OrganizationUpdate
+from api.domains.organizations.models import OrganizationUpdate
 from api.domains.organizations.service import OrganizationService
 from api.domains.users.models import User
 from api.domains.users.organization_users.repository import OrganizationUserRepository
@@ -114,24 +114,6 @@ def test_organization_service_update_not_found_raises_404():
     assert_that(
         calling(org_service.update_organization).with_args(
             uuid7(), OrganizationUpdate(name="new"), context
-        ),
-        raises(HTTPException),
-    )
-
-
-def test_organization_service_create_raises_500_when_read_missing():
-    repo = Mock()
-    created_org = SimpleNamespace(id=uuid7())
-    repo.save.return_value = created_org
-    repo.get_read.return_value = None
-    org_service = OrganizationService(
-        organization_repository=repo, user_organization_service=Mock()
-    )
-
-    context = SimpleNamespace(user=SimpleNamespace(id=uuid7(), is_superuser=False))
-    assert_that(
-        calling(org_service.create_organization).with_args(
-            OrganizationCreate(name="Org"), context
         ),
         raises(HTTPException),
     )

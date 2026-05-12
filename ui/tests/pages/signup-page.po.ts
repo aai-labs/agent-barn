@@ -5,6 +5,7 @@ export class SignupPage {
 
   async goto() {
     await this.page.goto("/signup");
+    await this.page.waitForLoadState("networkidle");
   }
 
   async signup(fullName: string, email: string, password: string) {

@@ -7,7 +7,6 @@ from injector import inject, singleton
 from api.domains.auth.models import CurrentUserContext
 from api.domains.organizations.models import (
     Organization,
-    OrganizationCreate,
     OrganizationFilter,
     OrganizationRead,
     OrganizationUpdate,
@@ -15,7 +14,6 @@ from api.domains.organizations.models import (
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.users.organization_users.models import (
     OrganizationRole,
-    OrganizationUser,
 )
 from api.domains.users.organization_users.service import OrganizationUserService
 from api.infrastructure.shared.models import PaginatedItems, Pagination
@@ -37,6 +35,13 @@ class OrganizationService:
             )
         return organization
 
+    def ensure_default_organization(self) -> Organization:
+        existing = self.organization_repository.find_default()
+        if existing:
+            return existing
+        org = Organization(name="default", is_default=True)
+        return self.organization_repository.save(org)
+
     def get_paginated_organizations(
         self,
         context: CurrentUserContext,
@@ -51,34 +56,6 @@ class OrganizationService:
             organization_filter=org_filter,
             user_id=user_id,
         )
-
-    def create_organization(
-        self, organization_create: OrganizationCreate, context: CurrentUserContext
-    ) -> OrganizationRead:
-        if context.user.is_superuser:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Super admins cannot create organizations directly.",
-            )
-
-        organization = Organization(**organization_create.model_dump())
-        organization = self.organization_repository.save(organization)
-
-        self.user_organization_service.create_user_organization(
-            OrganizationUser(
-                user_id=context.user.id,
-                organization_id=organization.id,
-                role=OrganizationRole.OWNER,
-            )
-        )
-
-        organization_read = self.organization_repository.get_read(organization.id)
-        if not organization_read:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to load organization",
-            )
-        return organization_read
 
     def _ensure_can_manage_organization(self, context: CurrentUserContext) -> None:
         if context.user.is_superuser:

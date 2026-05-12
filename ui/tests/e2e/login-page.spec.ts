@@ -5,6 +5,7 @@ import { DataSupport } from "../pages/data-support/data-support.po";
 import { LoginPage } from "../pages/login-page.po";
 
 test.describe("Login Page", () => {
+  test.describe.configure({ mode: "serial" });
   let loginPage: LoginPage;
   let dataSupportPage: DataSupport;
 
@@ -17,6 +18,7 @@ test.describe("Login Page", () => {
     await dataSupportPage.auth.interceptLogoutRequest();
     await dataSupportPage.auth.interceptLoginRequest();
     await dataSupportPage.users.interceptGetUserContextRequest();
+    await dataSupportPage.users.interceptGetOrganizationsRequest();
 
     await loginPage.goto();
   });

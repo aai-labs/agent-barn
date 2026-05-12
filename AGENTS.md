@@ -9,7 +9,7 @@ Write code that fits the established architecture and conventions so changes sta
 This repository contains:
 
 - `api/`: FastAPI + SQLModel/SQLAlchemy + Alembic + injector + pytest + Ruff + uv.
-- `web/`: Next.js App Router + React + TypeScript + TanStack Query + Zustand + Zod + Playwright + pnpm.
+- `ui/`: Next.js App Router + React + TypeScript + TanStack Query + Zustand + Zod + Playwright + pnpm.
 
 API routes are mounted under `/api/v1`.
 
@@ -26,12 +26,12 @@ Run from repo root unless noted.
 ### Install Dependencies
 
 - API: `cd api && uv sync`
-- Web: `cd web && pnpm install`
+- UI: `cd ui && pnpm install`
 
 ### Local Development
 
 - API dev server: `make dev-api`
-- Web dev server: `make dev-web`
+- UI dev server: `make dev-ui`
 - Full docker stack: `make up`
 - Stop stack: `make down`
 - DB only: `make db-up`
@@ -46,8 +46,8 @@ Run from repo root unless noted.
 
 - API tests: `make test-api`
 - API coverage: `make coverage`
-- Web tests: `make test-web`
-- Web headed/debug (from `web/`):
+- UI tests: `make test-ui`
+- UI headed/debug (from `ui/`):
   - `pnpm test:watch`
   - `pnpm test:debug`
 
@@ -55,8 +55,8 @@ Run from repo root unless noted.
 
 - API checks: `make check-api`
 - API autofix: `make fix-api`
-- Web lint: `make lint-web`
-- Web type check: `cd web && pnpm -s tsc --noEmit`
+- UI lint: `make lint-ui`
+- UI type check: `cd ui && pnpm -s tsc --noEmit`
 
 Agents MUST prefer `make` targets when available.
 
@@ -72,15 +72,15 @@ Agents MUST prefer `make` targets when available.
 - `api/migrations/versions/`: Alembic migrations.
 - `api/tests/`: unit + integration + helpers.
 
-### Web
+### UI
 
-- `web/src/app/`: App Router routes and layouts.
-- `web/src/features/<feature>/`: feature-first domain code.
-- `web/src/auth/`: auth-specific domain logic.
-- `web/src/shared/api/`: API client/interceptors/errors.
-- `web/src/shared/query-keys.ts`: query key factory.
-- `web/tests/e2e/`: Playwright specs.
-- `web/tests/pages/`: page objects and test helpers.
+- `ui/src/app/`: App Router routes and layouts.
+- `ui/src/features/<feature>/`: feature-first domain code.
+- `ui/src/auth/`: auth-specific domain logic.
+- `ui/src/shared/api/`: API client/interceptors/errors.
+- `ui/src/shared/query-keys.ts`: query key factory.
+- `ui/tests/e2e/`: Playwright specs.
+- `ui/tests/pages/`: page objects and test helpers.
 
 ## Creating New Domains (Required Playbook)
 
@@ -123,14 +123,14 @@ API coding style for new domains:
 - Domain error translation SHOULD happen in services (not in routes).
 - New abstractions SHOULD match nearby domain conventions before introducing a new pattern.
 
-### Web: New Domain
+### UI: New Domain
 
-Agents MUST create frontend feature code under `web/src/features/<feature>/`.
+Agents MUST create frontend feature code under `ui/src/features/<feature>/`.
 
 Recommended baseline:
 
 ```text
-web/src/features/<feature>/
+ui/src/features/<feature>/
   schemas.ts
   hooks/
     use-<feature>-query.ts
@@ -147,22 +147,22 @@ Optional when needed:
 - `constants.ts`
 - `index.ts` (barrel export)
 
-Workflow for a new web feature domain:
+Workflow for a new ui feature domain:
 
 1. Add Zod schemas and inferred types in `schemas.ts`.
-2. Add or extend query keys in `web/src/shared/query-keys.ts`.
+2. Add or extend query keys in `ui/src/shared/query-keys.ts`.
 3. Implement hooks with the shared API client.
 4. Implement domain UI components.
-5. Wire route usage under `web/src/app/...`.
+5. Wire route usage under `ui/src/app/...`.
 6. Add/update Playwright tests.
 
-Web boundaries:
+UI boundaries:
 
-- Feature logic MUST live in `web/src/features/*`.
+- Feature logic MUST live in `ui/src/features/*`.
 - Shared folders SHOULD only contain reusable cross-domain concerns.
-- Agents MUST NOT bypass `web/src/shared/api` for normal app API calls.
+- Agents MUST NOT bypass `ui/src/shared/api` for normal app API calls.
 
-Web coding style for new domains:
+UI coding style for new domains:
 
 - File names SHOULD be `kebab-case`.
 - React components MUST use `PascalCase`; hooks MUST use `use...` naming.
@@ -209,7 +209,7 @@ Agents MUST avoid ad hoc success payloads like `{"status": "ok"}` when `204` is 
 - Functions SHOULD be focused and domain-oriented.
 - Broad refactors SHOULD be avoided unless requested.
 
-## Web Conventions
+## UI Conventions
 
 ### Component and Routing Style
 
@@ -231,7 +231,7 @@ Agents MUST avoid ad hoc success payloads like `{"status": "ok"}` when `204` is 
 
 ### API Client Rules
 
-- Agents MUST use `web/src/shared/api` client.
+- Agents MUST use `ui/src/shared/api` client.
 - Agents MUST NOT introduce ad hoc `fetch` wrappers or new axios instances for app API calls.
 - Request/response camelCase/snake_case transformations SHOULD rely on existing client behavior.
 
@@ -258,7 +258,7 @@ Agents MUST avoid ad hoc success payloads like `{"status": "ok"}` when `204` is 
 
 ## Important Examples
 
-### Web: Query Key + API Client + Zod Hook
+### UI: Query Key + API Client + Zod Hook
 
 ```ts
 import { useQuery } from "@tanstack/react-query";
@@ -290,7 +290,7 @@ export function useOrganization(organizationId?: string) {
 }
 ```
 
-### Web: Mutation + Invalidation Pattern
+### UI: Mutation + Invalidation Pattern
 
 ```ts
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -321,7 +321,7 @@ export function useOrganizationActions() {
 }
 ```
 
-### Web: App Router Error Boundary Pattern
+### UI: App Router Error Boundary Pattern
 
 ```tsx
 // app/dashboard/error.tsx
@@ -347,7 +347,7 @@ export default function DashboardError({
 }
 ```
 
-### Web: App Router Loading Pattern
+### UI: App Router Loading Pattern
 
 ```tsx
 // app/dashboard/loading.tsx
@@ -363,7 +363,7 @@ export default function DashboardLoading() {
 }
 ```
 
-### Web: Component-Level Query Loading Pattern
+### UI: Component-Level Query Loading Pattern
 
 ```tsx
 "use client";
@@ -382,7 +382,7 @@ export function UsersGrid() {
 }
 ```
 
-### Web: Component-Level Query Error + Retry Pattern
+### UI: Component-Level Query Error + Retry Pattern
 
 ```tsx
 "use client";
@@ -484,7 +484,7 @@ def test_get_organization_requires_auth():
                 assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
 ```
 
-### Web: Playwright Spec + Page Object Pattern
+### UI: Playwright Spec + Page Object Pattern
 
 ```ts
 import { test, expect } from "@playwright/test";
@@ -515,7 +515,7 @@ test("user can log in", async ({ page }) => {
   - not-found/conflict behaviors.
 - Schema changes MUST include migration coverage and migration file.
 
-### Web
+### UI
 
 - Changed UI behavior MUST include/update Playwright coverage where regression risk is non-trivial.
 - Selectors/interactions SHOULD stay in page objects.
@@ -535,7 +535,7 @@ test("user can log in", async ({ page }) => {
 7. Add/update tests.
 8. Run `make check-api` and `make test-api`.
 
-### Web Feature
+### UI Feature
 
 1. Add/update `schemas.ts` and inferred types.
 2. Add/update query keys.
@@ -543,7 +543,7 @@ test("user can log in", async ({ page }) => {
 4. Build/update feature UI.
 5. Wire route/page usage in `src/app`.
 6. Add/update Playwright coverage.
-7. Run `make lint-web`, `pnpm -s tsc --noEmit`, and relevant tests.
+7. Run `make lint-ui`, `pnpm -s tsc --noEmit`, and relevant tests.
 
 ## Review Guidance
 

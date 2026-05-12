@@ -4,7 +4,6 @@ from typing import cast
 from uuid import uuid7
 
 import jwt
-from fastapi import HTTPException
 from hamcrest import assert_that, calling, equal_to, raises
 
 from api.domains.auth.exceptions import (
@@ -12,7 +11,7 @@ from api.domains.auth.exceptions import (
     EmailNotVerifiedException,
     ForbiddenException,
 )
-from api.domains.auth.utils import get_authenticated_user, get_organization_id
+from api.domains.auth.utils import get_authenticated_user
 from api.core.config import Config
 from api.domains.users.models import User
 from api.domains.users.repository import UserRepository
@@ -149,8 +148,3 @@ def test_get_authenticated_user_rejects_invalid_token_type():
         ),
         raises(CredentialsException),
     )
-
-
-def test_get_organization_id_raises_on_invalid_uuid():
-    request = SimpleNamespace(path_params={"organization_id": "not-a-uuid"})
-    assert_that(calling(get_organization_id).with_args(request), raises(HTTPException))

@@ -4,6 +4,7 @@ import { DataSupport } from "../pages/data-support/data-support.po";
 import { SignupPage } from "../pages/signup-page.po";
 
 test.describe("Signup Page", () => {
+  test.describe.configure({ mode: "serial" });
   let signupPage: SignupPage;
   let dataSupportPage: DataSupport;
 
@@ -16,6 +17,7 @@ test.describe("Signup Page", () => {
     await dataSupportPage.auth.interceptLogoutRequest();
     await dataSupportPage.auth.interceptSignupRequest();
     await dataSupportPage.users.interceptGetUserContextRequest();
+    await dataSupportPage.users.interceptGetOrganizationsRequest();
 
     await signupPage.goto();
   });

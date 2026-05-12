@@ -1,9 +1,9 @@
-# AAI Labs Starter: Next.js + FastAPI
+# Agent Farm
 
-Monorepo starter with:
+Monorepo with:
 
 - `api/`: FastAPI, SQLModel/SQLAlchemy, Alembic, Injector DI, pytest
-- `web/`: Next.js App Router, React, TypeScript, TanStack Query, Playwright
+- `ui/`: Next.js App Router, React, TypeScript, TanStack Query, Playwright
 
 API is served under `/api/v1` and frontend requests to `/api/*` are proxied to backend.
 
@@ -25,9 +25,9 @@ Users:
 
 Organizations:
 
-- Create, list (paginated), get, update, and delete organizations
+- Single default organization
+- List, get, update, and delete organizations
 - Organization filtering support
-- Organization switcher UI in dashboard
 
 Authorization and role-aware UX:
 
@@ -43,15 +43,15 @@ Frontend foundations:
 Backend foundations:
 
 - Versioned API routing under `/api/v1`
-- Health endpoint (`/api/v1/health`)
-- Startup bootstrap for default superuser and demo seed data
+- Health endpoint (`/api/v1/health`) checks connectivity to db
+- Startup bootstrap for default superuser and default organization
 
 ## Project Structure
 
 ```text
 .
 ├── api/
-├── web/
+├── ui/
 ├── compose.yml
 ├── Makefile
 └── AGENTS.md
@@ -71,7 +71,7 @@ Install dependencies:
 
 ```bash
 cd api && uv sync
-cd ../web && pnpm install
+cd ../ui && pnpm install
 ```
 
 Environment:
@@ -81,19 +81,19 @@ Environment:
 
 ## First-Time Run (Required)
 
-Postgres is run via Docker for this project. Before starting API/web for the first time:
+Postgres is run via Docker for this project. Before starting API/UI for the first time:
 
 ```bash
 make db-up
 make migrate
 ```
 
-Then choose how to run API/web:
+Then choose how to run API/UI:
 
-1. Run API + web directly on host:
+1. Run API + UI directly on host:
    - API: `make dev-api`
-   - Web: `make dev-web`
-2. Run full stack in Docker (db + api + web):
+   - UI: `make dev-ui`
+2. Run full stack in Docker (db + api + ui):
    - `make up`
 
 ## Run Locally
@@ -101,9 +101,9 @@ Then choose how to run API/web:
 From repo root:
 
 - API: `make dev-api`
-- Web: `make dev-web`
+- UI: `make dev-ui`
 
-With Docker (db + api + web):
+With Docker (db + api + ui):
 
 - Start: `make up`
 - Stop: `make down`
@@ -119,11 +119,11 @@ With Docker (db + api + web):
 
 - API tests: `make test-api`
 - API coverage: `make coverage`
-- Web tests: `make test-web`
-- Web E2E headed/debug:
+- UI tests: `make test-ui`
+- UI E2E headed/debug:
 
 ```bash
-cd web
+cd ui
 pnpm test:watch
 pnpm test:debug
 ```
@@ -132,11 +132,11 @@ pnpm test:debug
 
 - API checks: `make check-api`
 - API auto-fix: `make fix-api`
-- Web lint: `make lint-web`
-- Web typecheck:
+- UI lint: `make lint-ui`
+- UI typecheck:
 
 ```bash
-cd web
+cd ui
 pnpm -s tsc --noEmit
 ```
 
@@ -144,7 +144,7 @@ pnpm -s tsc --noEmit
 
 See [AGENTS.md](./AGENTS.md) for detailed implementation standards, including:
 
-- how to create new API and Web domains
+- how to create new API and UI domains
 - architecture boundaries (routes/services/repositories)
 - query key and API client patterns
 - testing patterns and examples
