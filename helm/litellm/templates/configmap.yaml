@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "litellm.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    model_list:
+      - model_name: {{ .Values.model.name }}
+        litellm_params:
+          model: openrouter/{{ .Values.model.openrouterModel }}
+          api_key: os.environ/OPENROUTER_API_KEY
+          api_base: https://openrouter.ai/api/v1
+
+    general_settings:
+      master_key: os.environ/LITELLM_MASTER_KEY
+      store_model_in_db: false

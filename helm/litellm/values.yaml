@@ -1,0 +1,25 @@
+image:
+  repository: ghcr.io/berriai/litellm
+  tag: main-v1.83.14-stable.patch.3
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+
+# Name of the pre-existing k8s Secret containing:
+#   LITELLM_MASTER_KEY, OPENROUTER_API_KEY, DATABASE_URL
+secretName: litellm
+
+model:
+  name: gpt-5-mini
+  openrouterModel: openai/gpt-5-mini
+
+service:
+  port: 4000
+
+resources:
+  requests:
+    memory: 512Mi
+    cpu: 200m
+  limits:
+    memory: 1Gi
+    cpu: 1000m
