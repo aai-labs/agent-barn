@@ -11,10 +11,37 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Verify component workflows are green
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          REPO="${{ github.repository }}"
+          SHA="${{ github.sha }}"
+
+          check_workflow() {
+            local workflow=$1
+            local conclusion
+            conclusion=$(gh api "repos/$REPO/actions/workflows/$workflow/runs" \
+              -f head_sha="$SHA" \
+              -f per_page=1 \
+              --jq '.workflow_runs[0].conclusion // "not_found"')
+
+            if [ "$conclusion" != "success" ] && [ "$conclusion" != "not_found" ]; then
+              echo "::error::$workflow failed on $SHA (got: $conclusion)"
+              return 1
+            fi
+            echo "$workflow: success"
+          }
+
+          check_workflow "api.yml"
+          check_workflow "ui.yml"
+          check_workflow "openclaw-base.yml"
+
       - name: Read image versions
         run: |
           echo "API_IMAGE_TAG=$(cat api/VERSION)" >> $GITHUB_ENV
           echo "UI_IMAGE_TAG=$(cat ui/VERSION)" >> $GITHUB_ENV
+          echo "OPENCLAW_IMAGE_TAG=$(cat openclaw-base/VERSION)" >> $GITHUB_ENV
 
       - name: Install Helm
         run: |
@@ -53,6 +80,18 @@ jobs:
             -f ui/Dockerfile \
             ui/
           docker push '${{ secrets.REGISTRY_URL }}/agentfarm-ui:${{ env.UI_IMAGE_TAG }}'
+
+      - name: Build, smoke test, and push openclaw-base image
+        run: |
+          docker build \
+            -t '${{ secrets.REGISTRY_URL }}/agentfarm-openclaw-base:${{ env.OPENCLAW_IMAGE_TAG }}' \
+            -f openclaw-base/Dockerfile \
+            openclaw-base/
+          docker run --rm \
+            -v "${{ github.workspace }}/openclaw-base/smoke-test.sh:/smoke-test.sh:ro" \
+            '${{ secrets.REGISTRY_URL }}/agentfarm-openclaw-base:${{ env.OPENCLAW_IMAGE_TAG }}' \
+            /bin/sh /smoke-test.sh
+          docker push '${{ secrets.REGISTRY_URL }}/agentfarm-openclaw-base:${{ env.OPENCLAW_IMAGE_TAG }}'
 
       - name: Set up SSH tunnel to k3s
         run: |
