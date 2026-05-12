@@ -1,0 +1,23 @@
+image:
+  repository: postgres
+  tag: "18"
+  pullPolicy: IfNotPresent
+
+# Name of the pre-existing k8s Secret containing:
+#   POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB
+secretName: postgres-app
+
+storage:
+  size: 5Gi
+  storageClass: local-path
+
+service:
+  port: 5432
+
+resources:
+  requests:
+    memory: 256Mi
+    cpu: 100m
+  limits:
+    memory: 512Mi
+    cpu: 500m

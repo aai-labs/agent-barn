@@ -1,0 +1,86 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-litellm-key-script
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation
+data:
+  generate_key.py: |
+    #!/usr/bin/env python3
+    import urllib.request
+    import urllib.error
+    import json
+    import base64
+    import time
+    import os
+    import ssl
+
+    LITELLM_URL = "http://litellm:4000"
+    MASTER_KEY = os.environ["LITELLM_MASTER_KEY"]
+    SECRET_NAME = "litellm-api-key"
+
+    print("Waiting for LiteLLM to accept connections...", flush=True)
+    for i in range(30):
+        try:
+            req = urllib.request.Request(
+                f"{LITELLM_URL}/key/generate",
+                data=json.dumps({"duration": None, "key_alias": "agentfarm-api"}).encode(),
+                headers={
+                    "Authorization": f"Bearer {MASTER_KEY}",
+                    "Content-Type": "application/json",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=10) as r:
+                api_key = json.loads(r.read())["key"]
+                print(f"Key generated successfully", flush=True)
+                break
+        except Exception as e:
+            print(f"  attempt {i + 1}/30: {e}", flush=True)
+            time.sleep(10)
+    else:
+        raise SystemExit("LiteLLM did not become ready after 5 minutes")
+
+    sa_token = open("/var/run/secrets/kubernetes.io/serviceaccount/token").read().strip()
+    namespace = open("/var/run/secrets/kubernetes.io/serviceaccount/namespace").read().strip()
+    ctx = ssl.create_default_context(
+        cafile="/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+    )
+
+    secret_body = json.dumps({
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "metadata": {"name": SECRET_NAME, "namespace": namespace},
+        "data": {"LITELLM_API_KEY": base64.b64encode(api_key.encode()).decode()},
+    }).encode()
+
+    headers = {
+        "Authorization": f"Bearer {sa_token}",
+        "Content-Type": "application/json",
+    }
+    apiserver = "https://kubernetes.default.svc"
+
+    try:
+        req = urllib.request.Request(
+            f"{apiserver}/api/v1/namespaces/{namespace}/secrets",
+            data=secret_body,
+            headers=headers,
+            method="POST",
+        )
+        urllib.request.urlopen(req, context=ctx)
+        print(f"Secret '{SECRET_NAME}' created", flush=True)
+    except urllib.error.HTTPError as e:
+        if e.code == 409:
+            req = urllib.request.Request(
+                f"{apiserver}/api/v1/namespaces/{namespace}/secrets/{SECRET_NAME}",
+                data=secret_body,
+                headers=headers,
+                method="PUT",
+            )
+            urllib.request.urlopen(req, context=ctx)
+            print(f"Secret '{SECRET_NAME}' updated", flush=True)
+        else:
+            raise

@@ -1,0 +1,122 @@
+name: Deploy to k3s
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify component workflows are green
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          REPO="${{ github.repository }}"
+          SHA="${{ github.sha }}"
+
+          check_workflow() {
+            local workflow=$1
+            local conclusion
+            conclusion=$(gh api "repos/$REPO/actions/workflows/$workflow/runs" \
+              -f head_sha="$SHA" \
+              -f per_page=1 \
+              --jq '.workflow_runs[0].conclusion // "not_found"')
+
+            if [ "$conclusion" != "success" ] && [ "$conclusion" != "not_found" ]; then
+              echo "::error::$workflow failed on $SHA (got: $conclusion)"
+              return 1
+            fi
+            echo "$workflow: success"
+          }
+
+          check_workflow "api.yml"
+          check_workflow "ui.yml"
+          check_workflow "openclaw-base.yml"
+
+      - name: Read image versions
+        run: |
+          echo "API_IMAGE_TAG=$(cat api/VERSION)" >> $GITHUB_ENV
+          echo "UI_IMAGE_TAG=$(cat ui/VERSION)" >> $GITHUB_ENV
+          echo "OPENCLAW_IMAGE_TAG=$(cat openclaw-base/VERSION)" >> $GITHUB_ENV
+
+      - name: Install Helm
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+      - name: Install Helmfile
+        run: |
+          HELMFILE_VERSION=0.171.0
+          curl -fsSL \
+            https://github.com/helmfile/helmfile/releases/download/v${HELMFILE_VERSION}/helmfile_${HELMFILE_VERSION}_linux_amd64.tar.gz \
+            | tar -xz -C /usr/local/bin helmfile
+
+      - name: Install helm-diff plugin
+        run: helm plugin install https://github.com/databus23/helm-diff
+
+      - name: Log in to registry
+        run: |
+          printf '%s' '${{ secrets.REGISTRY_PASSWORD }}' \
+            | docker login '${{ secrets.REGISTRY_URL }}' \
+              --username '${{ secrets.REGISTRY_USERNAME }}' \
+              --password-stdin
+
+      - name: Build and push API image
+        run: |
+          docker build \
+            -t '${{ secrets.REGISTRY_URL }}/agentfarm-api:${{ env.API_IMAGE_TAG }}' \
+            -f api/Dockerfile \
+            .
+          docker push '${{ secrets.REGISTRY_URL }}/agentfarm-api:${{ env.API_IMAGE_TAG }}'
+
+      - name: Build and push UI image
+        run: |
+          docker build \
+            --build-arg NEXT_PUBLIC_BACKEND_URL=https://api.agent-farm.k8s.aai-labs.com \
+            -t '${{ secrets.REGISTRY_URL }}/agentfarm-ui:${{ env.UI_IMAGE_TAG }}' \
+            -f ui/Dockerfile \
+            ui/
+          docker push '${{ secrets.REGISTRY_URL }}/agentfarm-ui:${{ env.UI_IMAGE_TAG }}'
+
+      - name: Build, smoke test, and push openclaw-base image
+        run: |
+          docker build \
+            -t '${{ secrets.REGISTRY_URL }}/agentfarm-openclaw-base:${{ env.OPENCLAW_IMAGE_TAG }}' \
+            -f openclaw-base/Dockerfile \
+            openclaw-base/
+          docker run --rm \
+            -v "${{ github.workspace }}/openclaw-base/smoke-test.sh:/smoke-test.sh:ro" \
+            '${{ secrets.REGISTRY_URL }}/agentfarm-openclaw-base:${{ env.OPENCLAW_IMAGE_TAG }}' \
+            /bin/sh /smoke-test.sh
+          docker push '${{ secrets.REGISTRY_URL }}/agentfarm-openclaw-base:${{ env.OPENCLAW_IMAGE_TAG }}'
+
+      - name: Set up SSH tunnel to k3s
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' '${{ secrets.BASTION_SSH_KEY }}' > ~/.ssh/bastion_ed25519
+          chmod 600 ~/.ssh/bastion_ed25519
+          ssh -fN \
+            -i ~/.ssh/bastion_ed25519 \
+            -o StrictHostKeyChecking=no \
+            -o ExitOnForwardFailure=yes \
+            -o ServerAliveInterval=60 \
+            -o ServerAliveCountMax=3 \
+            -L 6443:10.100.0.11:6443 \
+            bastion@k8s.aai-labs.com
+          sleep 3
+
+      - name: Set up kubeconfig
+        run: |
+          mkdir -p ~/.kube
+          printf '%s' '${{ secrets.KUBECONFIG_B64 }}' | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      - name: Helmfile sync
+        env:
+          KUBECONFIG: /home/runner/.kube/config
+          API_IMAGE_TAG: ${{ env.API_IMAGE_TAG }}
+          UI_IMAGE_TAG: ${{ env.UI_IMAGE_TAG }}
+        run: helmfile sync --wait

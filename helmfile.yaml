@@ -1,0 +1,52 @@
+releases:
+  - name: postgres-app
+    namespace: agent-farm
+    chart: ./helm/postgres
+    labels:
+      name: postgres-app
+    values:
+      - secretName: postgres-app
+        storage:
+          size: 5Gi
+
+  - name: postgres-litellm
+    namespace: agent-farm
+    chart: ./helm/postgres
+    labels:
+      name: postgres-litellm
+    values:
+      - secretName: postgres-litellm
+        storage:
+          size: 2Gi
+
+  - name: litellm
+    namespace: agent-farm
+    chart: ./helm/litellm
+    labels:
+      name: litellm
+    needs:
+      - agent-farm/postgres-app
+      - agent-farm/postgres-litellm
+
+  - name: agentfarm-api
+    namespace: agent-farm
+    chart: ./helm/agentfarm-api
+    labels:
+      name: agentfarm-api
+    set:
+      - name: image.tag
+        value: {{ env "API_IMAGE_TAG" | default "latest" }}
+    needs:
+      - agent-farm/postgres-app
+      - agent-farm/litellm
+
+  - name: agentfarm-ui
+    namespace: agent-farm
+    chart: ./helm/agentfarm-ui
+    labels:
+      name: agentfarm-ui
+    set:
+      - name: image.tag
+        value: {{ env "UI_IMAGE_TAG" | default "latest" }}
+    needs:
+      - agent-farm/agentfarm-api

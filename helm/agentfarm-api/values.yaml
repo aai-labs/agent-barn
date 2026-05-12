@@ -1,0 +1,35 @@
+image:
+  repository: registry.k8s.aai-labs.com/agentfarm-api
+  tag: latest
+  pullPolicy: Always
+
+replicaCount: 1
+
+# Pre-existing k8s Secret: DB_CONNECTION_URL, SECRET_SIGNING_KEY,
+# SUPER_USER_CREDENTIALS, ENVIRONMENT, WEB_APP_URL
+secretName: agentfarm-api
+
+# Secret written by the pre-install hook Job: LITELLM_API_KEY
+litellmApiKeySecretName: litellm-api-key
+
+# Pre-existing litellm Secret (used by hook Job to call /key/generate)
+litellmSecretName: litellm
+
+imagePullSecrets:
+  - name: registry-pull-secret
+
+service:
+  port: 8000
+
+ingress:
+  host: api.agent-farm.k8s.aai-labs.com
+  clusterIssuer: letsencrypt-prod
+  tlsSecretName: agentfarm-api-tls
+
+resources:
+  requests:
+    memory: 256Mi
+    cpu: 100m
+  limits:
+    memory: 512Mi
+    cpu: 500m

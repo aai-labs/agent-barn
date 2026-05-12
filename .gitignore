@@ -117,3 +117,9 @@ playwright-report/
 .vscode/
 
 .pnpm-store
+
+
+# local creds for k3s, etc.
+miscellaneous/
+
+CLAUDE.md

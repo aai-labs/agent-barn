@@ -1,0 +1,4 @@
+apiVersion: v2
+name: litellm
+description: LiteLLM proxy for agent-farm
+version: 0.1.0
