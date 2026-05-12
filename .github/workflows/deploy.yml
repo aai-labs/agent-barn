@@ -75,7 +75,7 @@ jobs:
       - name: Build and push UI image
         run: |
           docker build \
-            --build-arg NEXT_PUBLIC_BACKEND_URL=http://agentfarm-api:8000 \
+            --build-arg NEXT_PUBLIC_BACKEND_URL=https://api.agent-farm.k8s.aai-labs.com \
             -t '${{ secrets.REGISTRY_URL }}/agentfarm-ui:${{ env.UI_IMAGE_TAG }}' \
             -f ui/Dockerfile \
             ui/

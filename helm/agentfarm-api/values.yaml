@@ -21,6 +21,11 @@ imagePullSecrets:
 service:
   port: 8000
 
+ingress:
+  host: api.agent-farm.k8s.aai-labs.com
+  clusterIssuer: letsencrypt-prod
+  tlsSecretName: agentfarm-api-tls
+
 resources:
   requests:
     memory: 256Mi
