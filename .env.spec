@@ -13,3 +13,8 @@ SUPER_USER_CREDENTIALS=admin@example.com:replace_with_secure_password
 # Optional: if unset, email delivery is disabled and send attempts are logged.
 EMAIL_SERVER_CREDENTIAL=
 EMAIL_SMTP_SERVER=
+
+# Kubernetes client
+# Path to kubeconfig file. If unset, tries in-cluster auth then ~/.kube/config.
+K8S_KUBECONFIG_PATH=
+K8S_NAMESPACE=agent-farm
