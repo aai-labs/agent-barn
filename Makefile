@@ -23,7 +23,10 @@ makemigrations:
 	uv run python -m alembic revision --autogenerate -m "$$message"
 
 test-api:
-	cd api && uv run python -m pytest tests -v
+	cd api && uv run python -m pytest tests --ignore=tests/integration/test_kubernetes_client.py -v
+
+test-api-k8s:
+	cd api && uv run python -m pytest tests/integration/test_kubernetes_client.py -v
 
 test-ui:
 	cd ui && pnpm test

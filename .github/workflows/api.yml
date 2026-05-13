@@ -34,17 +34,45 @@ jobs:
       - name: Install dependencies
         working-directory: api
         run: uv sync --frozen
+      - run: make test-api
+
+  test-k8s:
+    name: Test k8s integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.14"
+          enable-cache: true
+      - name: Install dependencies
+        working-directory: api
+        run: uv sync --frozen
+      - name: Open SSH tunnel to k3s
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' '${{ secrets.BASTION_SSH_KEY }}' > ~/.ssh/bastion_ed25519
+          chmod 600 ~/.ssh/bastion_ed25519
+          ssh -fN \
+            -i ~/.ssh/bastion_ed25519 \
+            -o StrictHostKeyChecking=no \
+            -o ExitOnForwardFailure=yes \
+            -o ServerAliveInterval=60 \
+            -o ServerAliveCountMax=3 \
+            -L 6443:10.100.0.11:6443 \
+            bastion@k8s.aai-labs.com
+          sleep 3
       - name: Write KubeConfig
-        run: echo "${{ secrets.KUBECONFIG_B64 }}" | base64 -d > $RUNNER_TEMP/kubeconfig
-      - name: Run tests
+        run: printf '%s' '${{ secrets.KUBECONFIG_B64 }}' | base64 -d > $RUNNER_TEMP/kubeconfig
+      - name: Run k8s integration tests
         env:
           K8S_KUBECONFIG_PATH: ${{ runner.temp }}/kubeconfig
           K8S_NAMESPACE: agent-farm
-        run: make test-api
+        run: make test-api-k8s
 
   build:
     name: Build
-    needs: [lint, test]
+    needs: [lint, test, test-k8s]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
