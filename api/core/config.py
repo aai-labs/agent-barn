@@ -21,6 +21,9 @@ class Config(BaseSettings):
     access_token_expire_minutes: int | None = None
     refresh_token_expire_days: int | None = None
 
+    k8s_kubeconfig_path: str | None = None
+    k8s_namespace: str = "agent-farm"
+
     @property
     def is_email_delivery_enabled(self) -> bool:
         return bool(
