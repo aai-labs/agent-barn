@@ -62,6 +62,8 @@ jobs:
             -L 6443:10.100.0.11:6443 \
             bastion@k8s.aai-labs.com
           sleep 3
+          CLUSTER_NAME="$(kubectl config view -o jsonpath='{.clusters[0].name}')"
+          kubectl config set-cluster "$CLUSTER_NAME" --server=https://localhost:6443
       - name: Write KubeConfig
         run: printf '%s' '${{ secrets.KUBECONFIG_B64 }}' | base64 -d > $RUNNER_TEMP/kubeconfig
       - name: Run k8s integration tests
