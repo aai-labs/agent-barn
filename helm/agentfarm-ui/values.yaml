@@ -13,7 +13,7 @@ service:
 
 ingress:
   host: agent-farm.k8s.aai-labs.com
-  clusterIssuer: letsencrypt-prod
+  clusterIssuer: letsencrypt-http01
   tlsSecretName: agentfarm-ui-tls
 
 resources:
