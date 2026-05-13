@@ -44,10 +44,12 @@ class _FakeCoreApi:
 
 def _make_client(apps_api=None, core_api=None) -> KubernetesClient:
     config = SimpleNamespace(k8s_kubeconfig_path=None, k8s_namespace="agent-farm")
-    with patch("kubernetes.config.load_incluster_config"), \
-         patch("kubernetes.config.load_kube_config"), \
-         patch("kubernetes.client.AppsV1Api"), \
-         patch("kubernetes.client.CoreV1Api"):
+    with (
+        patch("kubernetes.config.load_incluster_config"),
+        patch("kubernetes.config.load_kube_config"),
+        patch("kubernetes.client.AppsV1Api"),
+        patch("kubernetes.client.CoreV1Api"),
+    ):
         c = KubernetesClient(cast(Config, config))
     c._apps_v1 = apps_api or _FakeAppsApi()
     c._core_v1 = core_api or _FakeCoreApi()
@@ -63,9 +65,13 @@ def test_create_deployment_returns_created_resource():
 
 def test_create_deployment_returns_existing_on_conflict():
     existing = V1Deployment(metadata=V1ObjectMeta(name="dep"))
-    api = _FakeAppsApi(resource=existing, raises_on={"create": ApiException(status=409)})
+    api = _FakeAppsApi(
+        resource=existing, raises_on={"create": ApiException(status=409)}
+    )
     k8s = _make_client(apps_api=api)
-    result = k8s.create_deployment("agent-farm", V1Deployment(metadata=V1ObjectMeta(name="dep")))
+    result = k8s.create_deployment(
+        "agent-farm", V1Deployment(metadata=V1ObjectMeta(name="dep"))
+    )
     assert_that(result, equal_to(existing))
 
 
