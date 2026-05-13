@@ -3,7 +3,13 @@ from typing import cast
 from unittest.mock import patch
 
 from hamcrest import assert_that, calling, equal_to, none, not_none, raises
-from kubernetes.client import V1Deployment, V1ObjectMeta, V1Service
+from kubernetes.client import (
+    AppsV1Api,
+    CoreV1Api,
+    V1Deployment,
+    V1ObjectMeta,
+    V1Service,
+)
 from kubernetes.client.exceptions import ApiException
 
 from api.core.config import Config
@@ -51,8 +57,8 @@ def _make_client(apps_api=None, core_api=None) -> KubernetesClient:
         patch("kubernetes.client.CoreV1Api"),
     ):
         c = KubernetesClient(cast(Config, config))
-    c._apps_v1 = apps_api or _FakeAppsApi()
-    c._core_v1 = core_api or _FakeCoreApi()
+    c._apps_v1 = cast(AppsV1Api, apps_api or _FakeAppsApi())
+    c._core_v1 = cast(CoreV1Api, core_api or _FakeCoreApi())
     return c
 
 
