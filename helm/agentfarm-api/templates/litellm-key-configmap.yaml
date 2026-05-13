@@ -21,28 +21,49 @@ data:
     LITELLM_URL = "http://litellm:4000"
     MASTER_KEY = os.environ["LITELLM_MASTER_KEY"]
     SECRET_NAME = "litellm-api-key"
+    KEY_ALIAS = "agentfarm-api"
+    LITELLM_HEADERS = {
+        "Authorization": f"Bearer {MASTER_KEY}",
+        "Content-Type": "application/json",
+    }
 
     print("Waiting for LiteLLM to accept connections...", flush=True)
     for i in range(30):
         try:
-            req = urllib.request.Request(
-                f"{LITELLM_URL}/key/generate",
-                data=json.dumps({"duration": None, "key_alias": "agentfarm-api"}).encode(),
-                headers={
-                    "Authorization": f"Bearer {MASTER_KEY}",
-                    "Content-Type": "application/json",
-                },
-                method="POST",
-            )
-            with urllib.request.urlopen(req, timeout=10) as r:
-                api_key = json.loads(r.read())["key"]
-                print(f"Key generated successfully", flush=True)
-                break
+            urllib.request.urlopen(
+                f"{LITELLM_URL}/health/readiness", timeout=10
+            ).read()
+            print("LiteLLM is ready", flush=True)
+            break
         except Exception as e:
             print(f"  attempt {i + 1}/30: {e}", flush=True)
             time.sleep(10)
     else:
         raise SystemExit("LiteLLM did not become ready after 5 minutes")
+
+    # Delete any existing key with our alias so re-runs of this Job succeed
+    # (LiteLLM requires unique aliases across all keys).
+    try:
+        urllib.request.urlopen(urllib.request.Request(
+            f"{LITELLM_URL}/key/delete",
+            data=json.dumps({"key_aliases": [KEY_ALIAS]}).encode(),
+            headers=LITELLM_HEADERS,
+            method="POST",
+        ), timeout=10).read()
+        print(f"Deleted any existing key with alias '{KEY_ALIAS}'", flush=True)
+    except urllib.error.HTTPError as e:
+        if e.code not in (400, 404):
+            raise
+        print(f"No existing key to delete (HTTP {e.code})", flush=True)
+
+    resp = urllib.request.urlopen(urllib.request.Request(
+        f"{LITELLM_URL}/key/generate",
+        data=json.dumps({"duration": None, "key_alias": KEY_ALIAS}).encode(),
+        headers=LITELLM_HEADERS,
+        method="POST",
+    ), timeout=10)
+    api_key = json.loads(resp.read())["key"]
+    print("Key generated successfully", flush=True)
 
     sa_token = open("/var/run/secrets/kubernetes.io/serviceaccount/token").read().strip()
     namespace = open("/var/run/secrets/kubernetes.io/serviceaccount/namespace").read().strip()

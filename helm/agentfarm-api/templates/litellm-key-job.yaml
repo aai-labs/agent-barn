@@ -17,7 +17,8 @@ spec:
         {{- include "agentfarm-api.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: litellm-key-job
     spec:
-      serviceAccountName: {{ .Release.Name }}
+      serviceAccountName: agent-farm-user
+      automountServiceAccountToken: true
       restartPolicy: Never
       containers:
         - name: generate-key
