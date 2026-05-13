@@ -28,8 +28,6 @@ spec:
           envFrom:
             - secretRef:
                 name: {{ .Values.secretName }}
-            - secretRef:
-                name: {{ .Values.litellmApiKeySecretName }}
           readinessProbe:
             httpGet:
               path: /api/v1/health

@@ -1,3 +1,6 @@
+helmDefaults:
+  createNamespace: false
+
 releases:
   - name: postgres-app
     namespace: agent-farm
