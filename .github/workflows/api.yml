@@ -34,7 +34,13 @@ jobs:
       - name: Install dependencies
         working-directory: api
         run: uv sync --frozen
-      - run: make test-api
+      - name: Write KubeConfig
+        run: echo "${{ secrets.KUBECONFIG_B64 }}" | base64 -d > $RUNNER_TEMP/kubeconfig
+      - name: Run tests
+        env:
+          K8S_KUBECONFIG_PATH: ${{ runner.temp }}/kubeconfig
+          K8S_NAMESPACE: agent-farm
+        run: make test-api
 
   build:
     name: Build
