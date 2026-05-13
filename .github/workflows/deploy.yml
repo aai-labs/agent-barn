@@ -24,9 +24,7 @@ jobs:
           check_workflow() {
             local workflow=$1
             local conclusion
-            conclusion=$(gh api "repos/$REPO/actions/workflows/$workflow/runs" \
-              -f head_sha="$SHA" \
-              -f per_page=1 \
+            conclusion=$(gh api "repos/$REPO/actions/workflows/$workflow/runs?head_sha=$SHA&per_page=1" \
               --jq '.workflow_runs[0].conclusion // "not_found"')
 
             if [ "$conclusion" != "success" ] && [ "$conclusion" != "not_found" ]; then
