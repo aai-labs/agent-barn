@@ -53,6 +53,7 @@ jobs:
           mkdir -p ~/.ssh
           printf '%s\n' '${{ secrets.BASTION_SSH_KEY }}' > ~/.ssh/bastion_ed25519
           chmod 600 ~/.ssh/bastion_ed25519
+          printf '%s' '${{ secrets.KUBECONFIG_B64 }}' | base64 -d > $RUNNER_TEMP/kubeconfig
           ssh -fN \
             -i ~/.ssh/bastion_ed25519 \
             -o StrictHostKeyChecking=no \
@@ -63,9 +64,7 @@ jobs:
             bastion@k8s.aai-labs.com
           sleep 3
           CLUSTER_NAME="$(kubectl config view -o jsonpath='{.clusters[0].name}')"
-          kubectl config set-cluster "$CLUSTER_NAME" --server=https://localhost:6443
-      - name: Write KubeConfig
-        run: printf '%s' '${{ secrets.KUBECONFIG_B64 }}' | base64 -d > $RUNNER_TEMP/kubeconfig
+          KUBECONFIG=$RUNNER_TEMP/kubeconfig kubectl config set-cluster "$CLUSTER_NAME" --server=https://localhost:6443
       - name: Run k8s integration tests
         env:
           K8S_KUBECONFIG_PATH: ${{ runner.temp }}/kubeconfig
