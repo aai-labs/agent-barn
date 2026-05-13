@@ -53,12 +53,7 @@ jobs:
           mkdir -p ~/.ssh
           printf '%s\n' '${{ secrets.BASTION_SSH_KEY }}' > ~/.ssh/bastion_ed25519
           chmod 600 ~/.ssh/bastion_ed25519
-          ssh -fN \
-            -i ~/.ssh/bastion_ed25519 \
-            -o StrictHostKeyChecking=no \
-            -o ExitOnForwardFailure=yes \
-            -o ServerAliveInterval=60 \
-            -o ServerAliveCountMax=3 \
+          ssh -o StrictHostKeyChecking=no -fN \
             -L 6443:10.100.0.11:6443 \
             bastion@k8s.aai-labs.com
           sleep 3
