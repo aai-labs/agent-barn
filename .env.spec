@@ -18,3 +18,10 @@ EMAIL_SMTP_SERVER=
 # Path to kubeconfig file. If unset, tries in-cluster auth then ~/.kube/config.
 K8S_KUBECONFIG_PATH=
 K8S_NAMESPACE=agent-farm
+
+# Agents
+# Full image ref for agent pods, e.g. {REGISTRY_URL}/agentfarm-openclaw-base:{VERSION}
+AGENT_IMAGE=
+# Fernet key for encrypting Slack tokens at rest. Generate with:
+#   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+AGENT_TOKEN_ENCRYPTION_KEY=

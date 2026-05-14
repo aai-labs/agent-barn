@@ -24,6 +24,9 @@ class Config(BaseSettings):
     k8s_kubeconfig_path: str | None = None
     k8s_namespace: str = "agent-farm"
 
+    agent_image: str = ""
+    agent_token_encryption_key: str = ""
+
     @property
     def is_email_delivery_enabled(self) -> bool:
         return bool(

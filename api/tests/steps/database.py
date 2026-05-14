@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 
+from api.domains.agents.models import Agent, AgentTemplate
 from api.domains.auth.models import PasswordResetToken, RefreshToken
 from api.domains.auth.repository import (
     PasswordResetTokenRepository,
@@ -54,6 +55,8 @@ def database_is_clean():
     def step(context):
         delegate: PostgresRepositoryDelegate = context.postgres_delegate
 
+        delegate.delete_all(Agent)
+        delegate.delete_all(AgentTemplate)
         delegate.delete_all(RefreshToken)
         delegate.delete_all(PasswordResetToken)
         delegate.delete_all(OrganizationUser)
