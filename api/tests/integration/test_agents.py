@@ -390,6 +390,7 @@ def test_delete_agent_soft_deletes():
                 agent = session.exec(
                     select(Agent).where(col(Agent.id) == agent_id)
                 ).first()
+            assert agent is not None
             assert_that(agent.deleted_at, is_not(none()))
 
 

@@ -71,8 +71,11 @@ class AgentRepository:
                 items=items,
             )
 
-    def get_template(self, template_id: UUID) -> AgentTemplate | None:
-        return self.delegate.find_by_id(AgentTemplate, template_id)
+    def get_template(self, template_id: UUID) -> AgentTemplate:
+        template = self.delegate.find_by_id(AgentTemplate, template_id)
+        if template is None:
+            raise RuntimeError(f"AgentTemplate {template_id} not found")
+        return template
 
     def save_template(self, template: AgentTemplate) -> AgentTemplate:
         self.delegate.save(template)
