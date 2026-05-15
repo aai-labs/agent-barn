@@ -214,12 +214,20 @@ class AgentService:
                     namespace=ns,
                     slack_bot_token=bot_token,
                     slack_app_token=app_token,
+                    litellm_api_key=self.config.litellm_api_key,
                 ),
             )
             self.k8s.create_pvc(ns, build_pvc(agent.id, org_id, ns))
             self.k8s.create_service(ns, build_service(agent.id, org_id, ns))
             self.k8s.create_deployment(
-                ns, build_deployment(agent.id, org_id, ns, self.config.agent_image)
+                ns,
+                build_deployment(
+                    agent.id,
+                    org_id,
+                    ns,
+                    self.config.agent_image,
+                    self.config.agent_image_pull_secret,
+                ),
             )
         except Exception:
             agent.status = AgentStatus.ERROR

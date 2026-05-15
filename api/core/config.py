@@ -26,6 +26,8 @@ class Config(BaseSettings):
 
     agent_image: str = ""
     agent_token_encryption_key: str = ""
+    litellm_api_key: str = ""
+    agent_image_pull_secret: str = ""
 
     @property
     def is_email_delivery_enabled(self) -> bool:

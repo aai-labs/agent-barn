@@ -25,3 +25,6 @@ AGENT_IMAGE=
 # Fernet key for encrypting Slack tokens at rest. Generate with:
 #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 AGENT_TOKEN_ENCRYPTION_KEY=
+# Name of the k8s imagePullSecret for the agent container image registry.
+# Example: registry-pull-secret
+AGENT_IMAGE_PULL_SECRET=

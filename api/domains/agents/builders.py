@@ -49,6 +49,7 @@ def build_secret(
     namespace: str,
     slack_bot_token: str,
     slack_app_token: str,
+    litellm_api_key: str,
 ) -> client.V1Secret:
     return client.V1Secret(
         metadata=client.V1ObjectMeta(
@@ -59,6 +60,7 @@ def build_secret(
         string_data={
             "SLACK_BOT_TOKEN": slack_bot_token,
             "SLACK_APP_TOKEN": slack_app_token,
+            "LITELLM_API_KEY": litellm_api_key,
         },
     )
 
@@ -106,6 +108,7 @@ def build_deployment(
     org_id: UUID,
     namespace: str,
     image: str,
+    image_pull_secret: str = "",
 ) -> client.V1Deployment:
     name = _resource_name(agent_id)
     labels = _labels(agent_id, org_id)
@@ -122,6 +125,11 @@ def build_deployment(
             template=client.V1PodTemplateSpec(
                 metadata=client.V1ObjectMeta(labels=labels),
                 spec=client.V1PodSpec(
+                    image_pull_secrets=(
+                        [client.V1LocalObjectReference(name=image_pull_secret)]
+                        if image_pull_secret
+                        else None
+                    ),
                     containers=[
                         client.V1Container(
                             name="agent",
