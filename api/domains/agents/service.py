@@ -215,6 +215,7 @@ class AgentService:
                     slack_bot_token=bot_token,
                     slack_app_token=app_token,
                     litellm_api_key=self.config.litellm_api_key,
+                    litellm_base_url=self.config.litellm_base_url,
                 ),
             )
             self.k8s.create_pvc(ns, build_pvc(agent.id, org_id, ns))

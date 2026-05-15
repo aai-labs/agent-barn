@@ -50,6 +50,7 @@ def build_secret(
     slack_bot_token: str,
     slack_app_token: str,
     litellm_api_key: str,
+    litellm_base_url: str,
 ) -> client.V1Secret:
     return client.V1Secret(
         metadata=client.V1ObjectMeta(
@@ -61,6 +62,8 @@ def build_secret(
             "SLACK_BOT_TOKEN": slack_bot_token,
             "SLACK_APP_TOKEN": slack_app_token,
             "LITELLM_API_KEY": litellm_api_key,
+            "OPENAI_API_KEY": litellm_api_key,
+            "OPENAI_BASE_URL": litellm_base_url,
         },
     )
 
@@ -134,6 +137,7 @@ def build_deployment(
                         client.V1Container(
                             name="agent",
                             image=image,
+                            command=["openclaw", "gateway", "--allow-unconfigured"],
                             env_from=[
                                 client.V1EnvFromSource(
                                     secret_ref=client.V1SecretEnvSource(name=name)

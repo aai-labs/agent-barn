@@ -28,3 +28,5 @@ AGENT_TOKEN_ENCRYPTION_KEY=
 # Name of the k8s imagePullSecret for the agent container image registry.
 # Example: registry-pull-secret
 AGENT_IMAGE_PULL_SECRET=
+# LiteLLM proxy URL for agent pods. Example: http://litellm.agent-farm.svc.cluster.local:4000
+LITELLM_BASE_URL=
