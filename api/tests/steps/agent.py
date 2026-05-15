@@ -19,11 +19,13 @@ from api.domains.agents.repository import AgentRepository
 from api.domains.auth.utils import set_default_org_id
 from api.infrastructure.crypto import encrypt_token
 from api.infrastructure.kubernetes.client import KubernetesClient
+from api.infrastructure.litellm.client import LiteLLMClient
 from api.tests.core.givenpy import LambdaWith
 
 TEST_ENCRYPTION_KEY: str = Fernet.generate_key().decode()
 TEST_SLACK_BOT_TOKEN = "xoxb-test-bot-token"
 TEST_SLACK_APP_TOKEN = "xapp-1-test-app-token"
+FAKE_LITELLM_KEY = "sk-fake-litellm-key-for-tests"
 
 
 class MockK8sModule(Module):
@@ -31,6 +33,16 @@ class MockK8sModule(Module):
     @singleton
     def provide_k8s(self) -> KubernetesClient:
         return cast(KubernetesClient, MagicMock(spec=KubernetesClient))
+
+
+class MockLiteLLMModule(Module):
+    @provider
+    @singleton
+    def provide_litellm(self) -> LiteLLMClient:
+        mock = cast(LiteLLMClient, MagicMock(spec=LiteLLMClient))
+        mock.generate_key.return_value = FAKE_LITELLM_KEY
+        mock.delete_key.return_value = None
+        return mock
 
 
 def there_is_an_agent(
@@ -66,6 +78,7 @@ def there_is_an_agent(
             slack_app_token_encrypted=encrypt_token(
                 TEST_SLACK_APP_TOKEN, TEST_ENCRYPTION_KEY
             ),
+            litellm_key_encrypted=encrypt_token(FAKE_LITELLM_KEY, TEST_ENCRYPTION_KEY),
             status=status,
             template_id=template.id,
             template_version=template.version,

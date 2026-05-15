@@ -25,6 +25,7 @@ dependencies = [
     "sqlmodel>=0.0.38",
     "testcontainers[postgres]>=4.13.2",
     "kubernetes>=31.0.0",
+    "httpx>=0.27.0",
 ]
 
 [tool.pytest.ini_options]

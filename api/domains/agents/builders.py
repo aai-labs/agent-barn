@@ -150,7 +150,7 @@ def build_deployment(
                                 ),
                                 client.V1VolumeMount(
                                     name="data",
-                                    mount_path="/app/data",
+                                    mount_path="/home/node/.openclaw",
                                 ),
                             ],
                         )

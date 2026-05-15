@@ -1,11 +1,15 @@
 import datetime
+import logging
 from dataclasses import dataclass
 from uuid import UUID
+
+logger = logging.getLogger(__name__)
 
 from fastapi import HTTPException, status
 from injector import inject, singleton
 
 from api.core.config import Config
+from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
 from api.domains.agents.builders import (
     build_config_map,
     build_deployment,
@@ -56,6 +60,7 @@ _MD_FIELDS = frozenset(
 class AgentService:
     repository: AgentRepository
     k8s: KubernetesClient
+    litellm: LiteLLMClient
     config: Config
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
@@ -73,6 +78,31 @@ class AgentService:
     def create_agent(self, data: AgentCreate, context: CurrentUserContext) -> AgentRead:
         org_id = self._org_id(context)
 
+        agent = Agent(
+            organization_id=org_id,
+            name=data.name,
+            slack_bot_token_encrypted=encrypt_token(
+                data.slack_bot_token, self.config.agent_token_encryption_key
+            ),
+            slack_app_token_encrypted=encrypt_token(
+                data.slack_app_token, self.config.agent_token_encryption_key
+            ),
+            template_id=None,  # type: ignore[arg-type]
+            template_version=0,
+        )
+
+        if self.config.litellm_base_url and self.config.litellm_secret_name:
+            try:
+                litellm_key = self.litellm.generate_key(str(agent.id))
+                agent.litellm_key_encrypted = encrypt_token(
+                    litellm_key, self.config.agent_token_encryption_key
+                )
+            except LiteLLMError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="LiteLLM key generation failed; cannot create agent.",
+                ) from exc
+
         template = AgentTemplate(
             organization_id=org_id,
             version=1,
@@ -87,18 +117,8 @@ class AgentService:
         )
         self.repository.save_template(template)
 
-        agent = Agent(
-            organization_id=org_id,
-            name=data.name,
-            slack_bot_token_encrypted=encrypt_token(
-                data.slack_bot_token, self.config.agent_token_encryption_key
-            ),
-            slack_app_token_encrypted=encrypt_token(
-                data.slack_app_token, self.config.agent_token_encryption_key
-            ),
-            template_id=template.id,
-            template_version=template.version,
-        )
+        agent.template_id = template.id
+        agent.template_version = template.version
         self.repository.save(agent)
 
         return AgentRead.model_validate(agent)
@@ -186,6 +206,11 @@ class AgentService:
         )
 
         name = f"agent-{agent.id}"
+        litellm_key = (
+            decrypt_token(agent.litellm_key_encrypted, self.config.agent_token_encryption_key)
+            if agent.litellm_key_encrypted
+            else ""
+        )
 
         try:
             self.k8s.delete_config_map(name, ns)
@@ -214,8 +239,8 @@ class AgentService:
                     namespace=ns,
                     slack_bot_token=bot_token,
                     slack_app_token=app_token,
-                    litellm_api_key=self.config.litellm_api_key,
-                    litellm_base_url=self.config.litellm_base_url,
+                    litellm_api_key=litellm_key,
+                    litellm_base_url=self.config.agent_litellm_base_url,
                 ),
             )
             self.k8s.create_pvc(ns, build_pvc(agent.id, org_id, ns))
@@ -272,3 +297,12 @@ class AgentService:
 
         agent.deleted_at = datetime.datetime.now(datetime.timezone.utc)
         self.repository.save(agent)
+
+        if agent.litellm_key_encrypted:
+            try:
+                plaintext_key = decrypt_token(
+                    agent.litellm_key_encrypted, self.config.agent_token_encryption_key
+                )
+                self.litellm.delete_key(plaintext_key)
+            except Exception:
+                logger.warning("Could not revoke LiteLLM key for agent %s", agent_id)

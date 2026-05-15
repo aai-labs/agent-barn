@@ -50,6 +50,7 @@ class Agent(BaseModel, table=True):
     name: str = SqlField(nullable=False, max_length=255)
     slack_bot_token_encrypted: str = SqlField(nullable=False)
     slack_app_token_encrypted: str = SqlField(nullable=False)
+    litellm_key_encrypted: str = SqlField(nullable=False, default="")
     status: AgentStatus = SqlField(
         default=AgentStatus.STOPPED,
         sa_column=Column(Enum(AgentStatus), nullable=False, server_default="STOPPED"),

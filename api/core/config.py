@@ -28,6 +28,8 @@ class Config(BaseSettings):
     agent_token_encryption_key: str = ""
     litellm_api_key: str = ""
     litellm_base_url: str = ""
+    litellm_secret_name: str = "litellm"
+    agent_litellm_base_url: str = ""
     agent_image_pull_secret: str = ""
 
     @property

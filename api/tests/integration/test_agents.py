@@ -5,6 +5,7 @@ from starlette.testclient import TestClient
 from api.domains.agents.models import AgentStatus
 from api.domains.agents.repository import AgentRepository
 from api.infrastructure.kubernetes.client import KubernetesClient
+from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
     create_test_client,
@@ -13,8 +14,10 @@ from api.tests.core.modules import (
     set_env_variable,
 )
 from api.tests.steps.agent import (
+    FAKE_LITELLM_KEY,
     TEST_ENCRYPTION_KEY,
     MockK8sModule,
+    MockLiteLLMModule,
     there_is_an_agent,
     use_org_for_auth,
 )
@@ -34,8 +37,12 @@ _VALID_CREATE = {
 }
 
 _GIVEN = [
-    set_env_variable({"AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY}),
-    prepare_injector(modules=[MockK8sModule()]),
+    set_env_variable({
+        "AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY,
+        "LITELLM_BASE_URL": "http://litellm:4000",
+        "LITELLM_SECRET_NAME": "litellm",
+    }),
+    prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
     prepare_api_server(),
     create_test_client(),
     database_repo_is_ready(),
@@ -460,3 +467,78 @@ def test_delete_agent_no_auth_returns_401():
 
         with then("it returns 401"):
             assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
+
+
+def test_create_agent_calls_litellm_generate_key():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        litellm: LiteLLMClient = context.injector.get(LiteLLMClient)
+
+        with when("I create an agent"):
+            response = client.post(_BASE, json=_VALID_CREATE, headers=_auth(context))
+
+        with then("LiteLLM generate_key was called once"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            litellm.generate_key.assert_called_once()
+
+
+def test_create_agent_litellm_failure_returns_503():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        litellm: LiteLLMClient = context.injector.get(LiteLLMClient)
+        litellm.generate_key.side_effect = LiteLLMError("down")
+
+        with when("I create an agent but LiteLLM is down"):
+            response = client.post(_BASE, json=_VALID_CREATE, headers=_auth(context))
+
+        with then("it returns 503 and no agent was saved"):
+            assert_that(response.status_code, equal_to(status.HTTP_503_SERVICE_UNAVAILABLE))
+            repository: AgentRepository = context.injector.get(AgentRepository)
+            from api.infrastructure.shared.models import Pagination
+            agents = repository.find_all_active(
+                context.organization.id, None, Pagination(page=1, page_size=10)
+            )
+            assert_that(agents.total, equal_to(0))
+
+
+def test_start_agent_injects_per_agent_key():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+
+        with when("I start the agent"):
+            response = client.post(
+                f"{_BASE}/{context.agent.id}/start", headers=_auth(context)
+            )
+
+        with then("the secret is created with the per-agent LiteLLM key"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            call_kwargs = k8s.create_secret.call_args
+            secret = call_kwargs.args[1]
+            assert_that(secret.string_data["OPENAI_API_KEY"], equal_to(FAKE_LITELLM_KEY))
+
+
+def test_delete_agent_calls_litellm_delete_key():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        litellm: LiteLLMClient = context.injector.get(LiteLLMClient)
+
+        with when("I delete the agent"):
+            response = client.delete(f"{_BASE}/{context.agent.id}", headers=_auth(context))
+
+        with then("LiteLLM delete_key was called once"):
+            assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+            litellm.delete_key.assert_called_once_with(FAKE_LITELLM_KEY)
+
+
+def test_delete_agent_litellm_failure_still_returns_204():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        litellm: LiteLLMClient = context.injector.get(LiteLLMClient)
+        litellm.delete_key.side_effect = Exception("timeout")
+
+        with when("I delete the agent but LiteLLM key revocation fails"):
+            response = client.delete(f"{_BASE}/{context.agent.id}", headers=_auth(context))
+
+        with then("it still returns 204"):
+            assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
