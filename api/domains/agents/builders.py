@@ -62,8 +62,7 @@ def build_secret(
             "SLACK_BOT_TOKEN": slack_bot_token,
             "SLACK_APP_TOKEN": slack_app_token,
             "LITELLM_API_KEY": litellm_api_key,
-            "OPENAI_API_KEY": litellm_api_key,
-            "OPENAI_BASE_URL": litellm_base_url,
+            "LITELLM_BASE_URL": litellm_base_url,
         },
     )
 

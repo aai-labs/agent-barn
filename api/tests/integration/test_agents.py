@@ -515,7 +515,7 @@ def test_start_agent_injects_per_agent_key():
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             call_kwargs = k8s.create_secret.call_args
             secret = call_kwargs.args[1]
-            assert_that(secret.string_data["OPENAI_API_KEY"], equal_to(FAKE_LITELLM_KEY))
+            assert_that(secret.string_data["LITELLM_API_KEY"], equal_to(FAKE_LITELLM_KEY))
 
 
 def test_delete_agent_calls_litellm_delete_key():

@@ -206,3 +206,97 @@ and resets it to None on teardown, preventing state from leaking into other test
 - [ ] Run migration: `kubectl exec -n agent-farm deploy/agentfarm-api -- python -m alembic upgrade head`
 - [ ] Verify existing ServiceAccount Role covers: ConfigMaps, Secrets, Services, PVCs, Deployments (create/get/delete)
 - [ ] Smoke test: create agent → start → `kubectl get pods -n agent-farm` → stop → delete
+
+---
+
+## Local Dev: How to Launch and Test a Bot
+
+### Prerequisites
+
+- Port-forward to LiteLLM: `kubectl port-forward -n agent-farm deploy/litellm 4000:4000` (keep open in a separate terminal)
+- API running locally with these `.env` values set:
+  - `LITELLM_BASE_URL=http://localhost:4000` (API uses this for key generation via port-forward)
+  - `AGENT_LITELLM_BASE_URL=http://litellm:4000` (injected into pods as LITELLM_BASE_URL)
+  - `LITELLM_SECRET_NAME=litellm`
+  - `AGENT_TOKEN_ENCRYPTION_KEY=<your-fernet-key>`
+  - `AGENT_IMAGE=<registry-url>/agentfarm-openclaw-base:<version>`
+
+### Step 1 — Create the agent
+
+`POST /api/v1/agents` with body:
+```json
+{
+  "name": "My Agent",
+  "slack_bot_token": "xoxb-...",
+  "slack_app_token": "xapp-...",
+  "soul_md": "# Soul\n\nYour agent soul.",
+  "identity_md": "# Identity\n\nYour agent identity."
+}
+```
+Note the `id` from the 201 response.
+
+### Step 2 — Start the agent
+
+`POST /api/v1/agents/{id}/start` — expect 200 with `status: "RUNNING"`.
+
+### Step 3 — Wait for pod to be ready
+
+```
+kubectl get pods -n agent-farm -w
+```
+Wait until the agent pod shows `1/1 Running`.
+
+### Step 4 — Configure the LiteLLM provider in openclaw
+
+The pod needs to know where LiteLLM is and what model to use. Run these commands (replace `{id}` with your agent UUID):
+
+```powershell
+# Write the provider config
+kubectl exec -n agent-farm deploy/agent-{id} -- node -e "require('fs').writeFileSync('/tmp/p.json', JSON.stringify({models:{providers:{litellm:{baseUrl:'http://litellm:4000',models:[{id:'gpt-5-mini',name:'gpt-5-mini'}]}}}}))"
+
+# Apply it
+kubectl exec -n agent-farm deploy/agent-{id} -- openclaw config patch --file /tmp/p.json
+
+# Set litellm as the model provider
+kubectl exec -n agent-farm deploy/agent-{id} -- openclaw models set litellm/gpt-5-mini
+```
+
+### Step 5 — Restart the pod to apply config
+
+```
+kubectl rollout restart deploy/agent-{id} -n agent-farm
+```
+Wait for the new pod to be `1/1 Running`.
+
+### Step 6 — Approve Slack pairing
+
+Send a DM to the bot in Slack. It will reply with a pairing code. Approve it:
+
+```
+kubectl exec -n agent-farm deploy/agent-{id} -- openclaw pairing approve slack <code>
+```
+
+### Step 7 — Test
+
+Send another message in the DM. The bot should respond. Monitor with:
+
+```
+kubectl logs -n agent-farm deploy/agent-{id} -f
+```
+
+### Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `401 Incorrect API key` | Request going to OpenAI instead of LiteLLM | Check model is `litellm/gpt-5-mini`, verify provider baseUrl config |
+| `Unknown model: litellm/gpt-5-mini` | Provider config not applied or pod not restarted | Re-run Step 4 + Step 5 |
+| No response, no logs after message | Bot not in channel or pairing not approved | `/invite @botname` in channel; check DM for pairing prompt |
+| `Something went wrong` in Slack | Check pod logs for specific error | `kubectl logs deploy/agent-{id} -n agent-farm --tail=20` |
+| LiteLLM crash-looping | LiteLLM's own Postgres (`postgres-litellm`) is down | Check `kubectl get pods -n agent-farm \| grep postgres` |
+| Pod `ImagePullBackOff` | Registry credentials issue | Verify `AGENT_IMAGE_PULL_SECRET` is set and the secret exists in namespace |
+
+### Notes
+
+- The PVC is mounted at `/home/node/.openclaw` — all openclaw config (pairing approvals, model settings, provider config) persists across pod restarts.
+- Steps 4-6 are only needed once per agent. After initial setup, stop/start preserves the config.
+- The model name (`gpt-5-mini`) must match what's configured in LiteLLM's `model_list`. Check available models: `curl -H "Authorization: Bearer <master-key>" http://localhost:4000/models`
