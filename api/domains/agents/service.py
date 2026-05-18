@@ -91,7 +91,7 @@ class AgentService:
                 data.slack_app_token, self.config.agent_token_encryption_key
             ),
             model=data.model or "",
-            template_id=None,  # type: ignore[arg-type, invalid-argument-type]
+            template_id=None,  # ty: ignore[invalid-argument-type]
             template_version=0,
         )
 

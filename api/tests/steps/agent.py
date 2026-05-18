@@ -1,5 +1,5 @@
 import datetime
-from typing import cast
+from typing import Any
 from unittest.mock import MagicMock
 from uuid import UUID
 
@@ -32,16 +32,17 @@ class MockK8sModule(Module):
     @provider
     @singleton
     def provide_k8s(self) -> KubernetesClient:
-        return cast(KubernetesClient, MagicMock(spec=KubernetesClient))
+        mock: Any = MagicMock(spec=KubernetesClient)
+        return mock
 
 
 class MockLiteLLMModule(Module):
     @provider
     @singleton
     def provide_litellm(self) -> LiteLLMClient:
-        mock = cast(LiteLLMClient, MagicMock(spec=LiteLLMClient))
-        mock.generate_key.return_value = FAKE_LITELLM_KEY  # type: ignore[unresolved-attribute]
-        mock.delete_key.return_value = None  # type: ignore[unresolved-attribute]
+        mock: Any = MagicMock(spec=LiteLLMClient)
+        mock.generate_key.return_value = FAKE_LITELLM_KEY
+        mock.delete_key.return_value = None
         return mock
 
 
