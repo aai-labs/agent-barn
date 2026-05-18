@@ -1,18 +1,8 @@
 "use client";
 
-import { AlertCircle } from "lucide-react";
-
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { getErrorDisplay } from "@/shared/api/error/get-error-display";
+import { AlertCircleIcon } from "@/components/icons";
 
 type AppErrorStateProps = {
   error?: unknown;
@@ -36,6 +26,8 @@ export function AppErrorState({
     description: description ?? "Please try again in a moment.",
   });
 
+  const errorMessage = error instanceof Error ? error.message : display.description;
+
   return (
     <div
       className={cn(
@@ -43,26 +35,35 @@ export function AppErrorState({
         className,
       )}
     >
-      <Card className="w-full max-w-xl">
-        <CardHeader>
-          <CardTitle>{title ?? display.title}</CardTitle>
-          <CardDescription>{description ?? display.description}</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <Alert variant="destructive">
-            <AlertCircle className="size-4" />
-            <AlertTitle>Request failed</AlertTitle>
-            <AlertDescription>
-              {error instanceof Error ? error.message : display.description}
-            </AlertDescription>
-          </Alert>
-          {onRetry ? (
-            <div className="flex justify-start">
-              <Button onClick={onRetry}>{retryLabel}</Button>
+      <div className="af-card w-full max-w-xl px-6 py-6">
+        <div className="font-semibold text-[16px] mb-1" style={{ color: "var(--ink)" }}>
+          {title ?? display.title}
+        </div>
+        <div className="text-[13.5px] mb-5" style={{ color: "var(--ink-3)" }}>
+          {description ?? display.description}
+        </div>
+
+        <div
+          className="flex items-start gap-3 rounded-xl px-4 py-3.5 mb-5"
+          style={{ background: "var(--err-soft)", border: "1px solid var(--err)", borderColor: "color-mix(in srgb, var(--err) 30%, transparent)" }}
+        >
+          <AlertCircleIcon size={15} style={{ color: "var(--err)", flexShrink: 0, marginTop: 1 }} />
+          <div>
+            <div className="font-medium text-[13px] mb-0.5" style={{ color: "var(--err)" }}>
+              Request failed
             </div>
-          ) : null}
-        </CardContent>
-      </Card>
+            <div className="text-[12.5px] leading-[1.5]" style={{ color: "var(--err)" }}>
+              {errorMessage}
+            </div>
+          </div>
+        </div>
+
+        {onRetry && (
+          <button className="af-btn" onClick={onRetry}>
+            {retryLabel}
+          </button>
+        )}
+      </div>
     </div>
   );
 }

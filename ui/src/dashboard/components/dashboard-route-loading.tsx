@@ -1,18 +1,11 @@
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/skeleton";
-
 function LoadingCard() {
   return (
-    <Card className="animate-pulse">
-      <CardHeader>
-        <Skeleton className="h-5 w-40" />
-        <Skeleton className="h-4 w-56" />
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <Skeleton className="h-4 w-full" />
-        <Skeleton className="h-4 w-5/6" />
-      </CardContent>
-    </Card>
+    <div className="af-card px-5 py-[18px] animate-pulse">
+      <div className="h-[15px] w-40 rounded-md mb-1.5" style={{ background: "var(--bg-soft)" }} />
+      <div className="h-[13px] w-56 rounded-md mb-4" style={{ background: "var(--bg-soft)" }} />
+      <div className="h-[13px] w-full rounded-md mb-2" style={{ background: "var(--bg-soft)" }} />
+      <div className="h-[13px] w-5/6 rounded-md" style={{ background: "var(--bg-soft)" }} />
+    </div>
   );
 }
 
@@ -24,10 +17,10 @@ export function DashboardRouteLoading({
   description?: string;
 }) {
   return (
-    <div className="space-y-6 p-4 pt-2 md:p-6 md:pt-2">
-      <div className="space-y-2">
-        <Skeleton className="h-7 w-52" />
-        <Skeleton className="h-4 w-80 max-w-full" />
+    <div className="max-w-[1200px] mx-auto px-10 pt-9 pb-24">
+      <div className="animate-pulse mb-8">
+        <div className="h-7 w-52 rounded-md mb-2" style={{ background: "var(--bg-soft)" }} />
+        <div className="h-4 w-80 max-w-full rounded-md" style={{ background: "var(--bg-soft)" }} />
       </div>
 
       <div className="sr-only" aria-live="polite">

@@ -1,38 +1,23 @@
 "use client";
 
 import { useState } from "react";
-import { Building, Loader2, Search, UserRound } from "lucide-react";
+import { Building, Loader2, UserRound } from "lucide-react";
 import { useDebouncedValue } from "@tanstack/react-pacer";
 
 import { AppErrorState } from "@/components/app-error-state";
-import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
+import { ListPageHeader } from "@/components/list-page-header";
 
 import { useInfiniteOrganizations } from "../hooks/use-infinite-organizations";
 
 function LoadingCard() {
   return (
-    <Card className="animate-pulse">
-      <CardHeader>
-        <div className="h-5 w-40 rounded-md bg-muted" />
-        <div className="h-4 w-52 rounded-md bg-muted" />
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <div className="h-4 w-36 rounded-md bg-muted" />
-        <div className="h-4 w-28 rounded-md bg-muted" />
-      </CardContent>
-      <CardFooter>
-        <div className="h-4 w-48 rounded-md bg-muted" />
-      </CardFooter>
-    </Card>
+    <div className="af-card px-5 py-[18px] animate-pulse">
+      <div className="h-[15px] w-40 rounded-md mb-1.5" style={{ background: "var(--bg-soft)" }} />
+      <div className="h-[13px] w-56 rounded-md mb-4" style={{ background: "var(--bg-soft)" }} />
+      <div className="h-[13px] w-36 rounded-md mb-2" style={{ background: "var(--bg-soft)" }} />
+      <div className="h-[13px] w-44 rounded-md mb-5" style={{ background: "var(--bg-soft)" }} />
+      <div className="h-[12px] w-48 rounded-md" style={{ background: "var(--bg-soft)" }} />
+    </div>
   );
 }
 
@@ -51,106 +36,80 @@ export function OrganizationsGrid() {
   } = useInfiniteOrganizations({ search: debouncedSearch });
 
   return (
-    <div className="space-y-5 p-4 pt-2 md:p-6 md:pt-2">
-      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight">
-            Organizations
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            Super admin view of all organizations.
-          </p>
-        </div>
-        <div className="relative w-full md:w-80">
-          <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            className="pl-8"
-            placeholder="Search by name, owner, or description"
-            aria-label="Search organizations"
-          />
-        </div>
-      </div>
-
-      <p className="text-sm text-muted-foreground">
-        {total} {total === 1 ? "organization" : "organizations"}
-      </p>
+    <div className="max-w-[1200px] mx-auto px-10 pt-9 pb-24">
+      <ListPageHeader
+        title="Organizations"
+        description="Super admin view of all organizations."
+        count={total}
+        noun="organization"
+        search={search}
+        onSearch={setSearch}
+        searchPlaceholder="Search by name, owner, or description"
+      />
 
       {isLoading ? (
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-          {Array.from({ length: 6 }).map((_, index) => (
-            <LoadingCard key={index} />
-          ))}
+        <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))" }}>
+          {Array.from({ length: 6 }).map((_, i) => <LoadingCard key={i} />)}
         </div>
       ) : error ? (
         <AppErrorState
           error={error}
           title="We couldn't load organizations"
           description="The organizations list is unavailable right now."
-          onRetry={() => {
-            void refetch();
-          }}
+          onRetry={() => { void refetch(); }}
           retryLabel="Retry organizations"
           className="min-h-[240px] p-0"
         />
       ) : (
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-          {organizations.map((organization) => (
-            <Card key={organization.id}>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Building className="size-4 text-muted-foreground" />
-                  <span>{organization.name}</span>
-                </CardTitle>
-                <CardDescription>
-                  {organization.description || "No description"}
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-1 text-sm text-muted-foreground">
-                <div className="flex items-center gap-2">
-                  <UserRound className="size-4" />
-                  <span>{organization.ownerName || "No owner name"}</span>
-                </div>
-                <div>{organization.ownerEmail || "No owner email"}</div>
-              </CardContent>
-              <CardFooter>
-                <p className="text-xs text-muted-foreground">
-                  Created: {new Date(organization.createdAt).toLocaleString()}
-                </p>
-              </CardFooter>
-            </Card>
+        <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))" }}>
+          {organizations.map((org) => (
+            <div key={org.id} className="af-card af-card-hover px-5 py-[18px]">
+              <div className="flex items-center gap-2 mb-1">
+                <Building width={14} height={14} style={{ color: "var(--ink-4)", flexShrink: 0 }} />
+                <span className="font-semibold text-[14.5px] truncate" style={{ color: "var(--ink)" }}>
+                  {org.name}
+                </span>
+              </div>
+              <div className="text-[13px] mb-4 leading-[1.45]" style={{ color: "var(--ink-3)" }}>
+                {org.description || "No description"}
+              </div>
+              <div className="flex items-center gap-1.5 text-[12.5px] mb-1" style={{ color: "var(--ink-3)" }}>
+                <UserRound width={12} height={12} style={{ flexShrink: 0 }} />
+                {org.ownerName || "No owner name"}
+              </div>
+              <div className="text-[12.5px] mb-3.5" style={{ color: "var(--ink-3)" }}>
+                {org.ownerEmail || "No owner email"}
+              </div>
+              <div
+                className="text-[12px] pt-3"
+                style={{ borderTop: "1px solid var(--line)", color: "var(--ink-4)" }}
+              >
+                Created: {new Date(org.createdAt).toLocaleString()}
+              </div>
+            </div>
           ))}
         </div>
       )}
 
-      {!isLoading && organizations.length === 0 ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>No organizations found</CardTitle>
-            <CardDescription>Try a different search term.</CardDescription>
-          </CardHeader>
-        </Card>
-      ) : null}
-
-      {hasNextPage ? (
-        <div className="flex justify-center pb-4">
-          <Button
-            variant="outline"
-            onClick={() => fetchNextPage()}
-            disabled={isFetchingNextPage}
-          >
-            {isFetchingNextPage ? (
-              <>
-                <Loader2 className="size-4 animate-spin" />
-                Loading more
-              </>
-            ) : (
-              "Load more organizations"
-            )}
-          </Button>
+      {!isLoading && organizations.length === 0 && (
+        <div
+          className="flex flex-col items-center justify-center text-center py-16 rounded-2xl"
+          style={{ border: "1px dashed var(--line-strong)" }}
+        >
+          <div className="font-medium text-[15px] mb-1" style={{ color: "var(--ink)" }}>No organizations found</div>
+          <div className="text-[13.5px]" style={{ color: "var(--ink-3)" }}>Try a different search term.</div>
         </div>
-      ) : null}
+      )}
+
+      {hasNextPage && (
+        <div className="flex justify-center mt-6">
+          <button className="af-btn" onClick={() => fetchNextPage()} disabled={isFetchingNextPage}>
+            {isFetchingNextPage
+              ? <><Loader2 width={14} height={14} className="animate-spin" /> Loading more</>
+              : "Load more organizations"}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

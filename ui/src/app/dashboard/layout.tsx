@@ -1,30 +1,28 @@
-import type { ReactNode } from "react";
+"use client";
 
-import { AppSidebar } from "@/components/app-sidebar";
-import { Separator } from "@/components/ui/separator";
-import {
-  SidebarInset,
-  SidebarProvider,
-  SidebarTrigger,
-} from "@/components/ui/sidebar";
+import { useState } from "react";
+import type { ReactNode } from "react";
+import { TopNav } from "@/components/top-nav";
+import { HireDialog } from "@/features/agents/components/hire-dialog";
+import { toast } from "sonner";
 
 export default function DashboardLayout({ children }: { children: ReactNode }) {
+  const [hireOpen, setHireOpen] = useState(false);
+
   return (
-    <SidebarProvider>
-      <AppSidebar />
-      <SidebarInset>
-        <header className="flex h-16 shrink-0 items-center gap-2 transition-[width,height] ease-linear group-has-data-[collapsible=icon]/sidebar-wrapper:h-12">
-          <div className="flex items-center gap-2 px-4">
-            <SidebarTrigger className="-ml-1" />
-            <Separator
-              orientation="vertical"
-              className="mr-2 data-[orientation=vertical]:h-4"
-            />
-            <div>AAI Labs Starter Kit</div>
-          </div>
-        </header>
-        {children}
-      </SidebarInset>
-    </SidebarProvider>
+    <div className="min-h-screen flex flex-col" style={{ background: "var(--bg)" }}>
+      <TopNav onHire={() => setHireOpen(true)} />
+      <main className="flex-1 overflow-y-auto">{children}</main>
+
+      {hireOpen && (
+        <HireDialog
+          onClose={() => setHireOpen(false)}
+          onHired={({ name }) => {
+            setHireOpen(false);
+            toast.success(`${name} is in Slack and ready to roll.`);
+          }}
+        />
+      )}
+    </div>
   );
 }

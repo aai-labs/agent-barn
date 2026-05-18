@@ -19,8 +19,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "AAI Labs Starter Web Application",
-  description: "AAI Labs Starter Web Application",
+  title: "Agent Farm",
+  description: "Manage your AI agent workforce.",
 };
 
 export default function RootLayout({

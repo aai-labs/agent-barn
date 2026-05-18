@@ -6,30 +6,10 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 
-import { cn } from "@/lib/utils";
 import { useAuthActions } from "@/auth/hooks/use-auth-actions";
 import { SignupFormData, SignupFormSchema } from "@/auth/schemas";
-import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import {
-  Field,
-  FieldDescription,
-  FieldError,
-  FieldGroup,
-  FieldLabel,
-} from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
 
-export function SignupForm({
-  className,
-  ...props
-}: React.ComponentProps<"div">) {
+export function SignupForm() {
   const router = useRouter();
   const { signup, isSigningUp } = useAuthActions();
   const {
@@ -38,12 +18,7 @@ export function SignupForm({
     formState: { errors },
   } = useForm<SignupFormData>({
     resolver: zodResolver(SignupFormSchema),
-    defaultValues: {
-      fullName: "",
-      email: "",
-      password: "",
-      confirmPassword: "",
-    },
+    defaultValues: { fullName: "", email: "", password: "", confirmPassword: "" },
   });
 
   const onSubmit = (values: SignupFormData) => {
@@ -62,83 +37,129 @@ export function SignupForm({
   };
 
   return (
-    <div className={cn("flex flex-col gap-6", className)} {...props}>
-      <Card>
-        <CardHeader className="text-center">
-          <CardTitle className="text-xl">Create your account</CardTitle>
-          <CardDescription>Enter your details to get started.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={handleSubmit(onSubmit)}>
-            <FieldGroup>
-              <Field data-invalid={!!errors.fullName}>
-                <FieldLabel htmlFor="name">Full Name</FieldLabel>
-                <Input
-                  id="name"
-                  type="text"
-                  placeholder="John Doe"
-                  aria-invalid={!!errors.fullName}
-                  {...register("fullName")}
-                />
-                <FieldError errors={[errors.fullName]} />
-              </Field>
-              <Field data-invalid={!!errors.email}>
-                <FieldLabel htmlFor="email">Email</FieldLabel>
-                <Input
-                  id="email"
-                  type="email"
-                  placeholder="m@example.com"
-                  aria-invalid={!!errors.email}
-                  {...register("email")}
-                />
-                <FieldError errors={[errors.email]} />
-              </Field>
-              <Field
-                data-invalid={!!errors.password || !!errors.confirmPassword}
-              >
-                <Field data-invalid={!!errors.password}>
-                  <FieldLabel htmlFor="password">Password</FieldLabel>
-                  <Input
-                    id="password"
-                    type="password"
-                    aria-invalid={!!errors.password}
-                    {...register("password")}
-                  />
-                  <FieldError errors={[errors.password]} />
-                </Field>
-                <Field data-invalid={!!errors.confirmPassword}>
-                  <FieldLabel htmlFor="confirm-password">
-                    Confirm Password
-                  </FieldLabel>
-                  <Input
-                    id="confirm-password"
-                    type="password"
-                    aria-invalid={!!errors.confirmPassword}
-                    {...register("confirmPassword")}
-                  />
-                  <FieldError errors={[errors.confirmPassword]} />
-                </Field>
-                <FieldDescription>
-                  Must be at least 8 characters long.
-                </FieldDescription>
-              </Field>
-              <Field>
-                <Button type="submit" disabled={isSigningUp}>
-                  {isSigningUp ? "Creating account..." : "Create Account"}
-                </Button>
-                <FieldDescription className="text-center">
-                  Already have an account? <Link href="/login">Sign in</Link>
-                </FieldDescription>
-              </Field>
-            </FieldGroup>
-          </form>
-        </CardContent>
-      </Card>
-      <FieldDescription className="px-6 text-center">
-        By clicking continue, you agree to our{" "}
-        <Link href="#">Terms of Service</Link> and{" "}
-        <Link href="#">Privacy Policy</Link>.
-      </FieldDescription>
+    <div className="w-full max-w-sm">
+      <div
+        className="rounded-2xl px-8 py-9"
+        style={{ background: "var(--bg-elev)", border: "1px solid var(--line)", boxShadow: "var(--shadow)" }}
+      >
+        <div className="text-center mb-7">
+          <div
+            className="w-9 h-9 rounded-xl grid place-items-center font-mono text-[14px] font-semibold text-white mx-auto mb-4"
+            style={{ background: "var(--ink)" }}
+          >
+            AF
+          </div>
+          <h1 className="text-[22px] font-semibold tracking-tight m-0 mb-1" style={{ color: "var(--ink)" }}>
+            Create your account
+          </h1>
+          <p className="text-[13.5px] m-0" style={{ color: "var(--ink-3)" }}>
+            Enter your details to get started.
+          </p>
+        </div>
+
+        <form onSubmit={handleSubmit(onSubmit)}>
+          <div className="flex flex-col gap-4">
+            <div>
+              <label className="block font-medium text-[13.5px] mb-1.5" style={{ color: "var(--ink)" }}>
+                Full name
+              </label>
+              <input
+                id="name"
+                type="text"
+                placeholder="Jane Doe"
+                className="af-input"
+                aria-invalid={!!errors.fullName}
+                {...register("fullName")}
+              />
+              {errors.fullName && (
+                <p className="text-[12.5px] mt-1" style={{ color: "var(--err)" }}>
+                  {errors.fullName.message}
+                </p>
+              )}
+            </div>
+
+            <div>
+              <label className="block font-medium text-[13.5px] mb-1.5" style={{ color: "var(--ink)" }}>
+                Email
+              </label>
+              <input
+                id="email"
+                type="email"
+                placeholder="you@example.com"
+                className="af-input"
+                aria-invalid={!!errors.email}
+                {...register("email")}
+              />
+              {errors.email && (
+                <p className="text-[12.5px] mt-1" style={{ color: "var(--err)" }}>
+                  {errors.email.message}
+                </p>
+              )}
+            </div>
+
+            <div>
+              <label className="block font-medium text-[13.5px] mb-1.5" style={{ color: "var(--ink)" }}>
+                Password
+              </label>
+              <input
+                id="password"
+                type="password"
+                className="af-input"
+                aria-invalid={!!errors.password}
+                {...register("password")}
+              />
+              {errors.password && (
+                <p className="text-[12.5px] mt-1" style={{ color: "var(--err)" }}>
+                  {errors.password.message}
+                </p>
+              )}
+            </div>
+
+            <div>
+              <label className="block font-medium text-[13.5px] mb-1.5" style={{ color: "var(--ink)" }}>
+                Confirm password
+              </label>
+              <input
+                id="confirm-password"
+                type="password"
+                className="af-input"
+                aria-invalid={!!errors.confirmPassword}
+                {...register("confirmPassword")}
+              />
+              {errors.confirmPassword && (
+                <p className="text-[12.5px] mt-1" style={{ color: "var(--err)" }}>
+                  {errors.confirmPassword.message}
+                </p>
+              )}
+              <p className="text-[12.5px] mt-1.5" style={{ color: "var(--ink-4)" }}>
+                Must be at least 8 characters.
+              </p>
+            </div>
+
+            <button
+              type="submit"
+              disabled={isSigningUp}
+              className="af-btn af-btn-primary af-btn-lg w-full justify-center mt-1"
+            >
+              {isSigningUp ? "Creating account…" : "Create account"}
+            </button>
+          </div>
+        </form>
+
+        <p className="text-center text-[13px] mt-5 m-0" style={{ color: "var(--ink-3)" }}>
+          Already have an account?{" "}
+          <Link href="/login" style={{ color: "var(--ink)", fontWeight: 500 }}>
+            Log in
+          </Link>
+        </p>
+      </div>
+
+      <p className="text-center text-[12.5px] mt-5 px-4" style={{ color: "var(--ink-4)" }}>
+        By continuing, you agree to our{" "}
+        <Link href="#" style={{ color: "var(--ink-3)" }}>Terms of Service</Link>
+        {" "}and{" "}
+        <Link href="#" style={{ color: "var(--ink-3)" }}>Privacy Policy</Link>.
+      </p>
     </div>
   );
 }
