@@ -34,6 +34,6 @@ export class LoginPage {
   }
 
   submitAction(): Locator {
-    return this.page.getByRole("button", { name: /login/i });
+    return this.page.getByRole("button", { name: /log in/i });
   }
 }
