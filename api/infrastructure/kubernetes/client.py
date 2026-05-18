@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from dataclasses import dataclass, field
 
 from injector import inject, singleton
@@ -184,3 +185,40 @@ class KubernetesClient:
         return self._core_v1.list_namespaced_config_map(
             namespace, label_selector=label_selector
         ).items
+
+    def get_pod_name_for_deployment(
+        self, deployment_name: str, namespace: str
+    ) -> str | None:
+        pods = self._core_v1.list_namespaced_pod(
+            namespace, label_selector=f"app={deployment_name}"
+        )
+        for pod in pods.items:
+            if pod.status.phase == "Running":
+                return pod.metadata.name
+        return None
+
+    def exec_command(self, pod_name: str, namespace: str, command: list[str]) -> str:
+        kubectl_args = ["kubectl", "exec", pod_name, "-n", namespace, "--"]
+        if self.config.k8s_kubeconfig_path:
+            kubectl_args = [
+                "kubectl",
+                "--kubeconfig",
+                self.config.k8s_kubeconfig_path,
+                "exec",
+                pod_name,
+                "-n",
+                namespace,
+                "--",
+            ]
+        result = subprocess.run(
+            [*kubectl_args, *command],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                result.stderr.strip()
+                or f"kubectl exec failed with code {result.returncode}"
+            )
+        return result.stdout

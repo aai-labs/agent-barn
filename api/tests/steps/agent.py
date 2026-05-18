@@ -50,6 +50,7 @@ def there_is_an_agent(
     status: AgentStatus = AgentStatus.STOPPED,
     deleted: bool = False,
     organization_id: UUID | None = None,
+    model: str = "",
 ):
     def step(context):
         org_id = organization_id or context.organization.id
@@ -79,6 +80,7 @@ def there_is_an_agent(
                 TEST_SLACK_APP_TOKEN, TEST_ENCRYPTION_KEY
             ),
             litellm_key_encrypted=encrypt_token(FAKE_LITELLM_KEY, TEST_ENCRYPTION_KEY),
+            model=model,
             status=status,
             template_id=template.id,
             template_version=template.version,
@@ -88,6 +90,10 @@ def there_is_an_agent(
             agent.deleted_at = datetime.datetime.now(datetime.timezone.utc)
 
         repository.save(agent)
+
+        template.agent_id = agent.id
+        repository.save_template(template)
+
         context.agent = agent
 
     return step

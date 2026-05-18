@@ -20,10 +20,16 @@ class AgentStatus(str, enum.Enum):
 class AgentTemplate(BaseModel, table=True):
     __tablename__: str = "agent_template"
 
-    __table_args__ = (sa.Index("ix_agent_template_organization_id", "organization_id"),)
+    __table_args__ = (
+        sa.Index("ix_agent_template_organization_id", "organization_id"),
+        sa.Index("ix_agent_template_agent_version", "agent_id", "version"),
+    )
 
     organization_id: UUID = SqlField(
         foreign_key="organization.id", nullable=False, ondelete="CASCADE"
+    )
+    agent_id: UUID | None = SqlField(
+        default=None, foreign_key="agent.id", nullable=True
     )
     version: int = SqlField(nullable=False)
     soul_md: str = SqlField(nullable=False)
@@ -64,6 +70,7 @@ class Agent(BaseModel, table=True):
         foreign_key="agent_template.id", nullable=False, ondelete="RESTRICT"
     )
     template_version: int = SqlField(nullable=False)
+    model: str = SqlField(nullable=False, default="")
 
 
 class AgentCreate(PydanticBaseModel):
@@ -78,6 +85,7 @@ class AgentCreate(PydanticBaseModel):
     boot_md: str | None = None
     bootstrap_md: str | None = None
     heartbeat_md: str | None = None
+    model: str | None = None
 
 
 class AgentUpdate(PydanticBaseModel):
@@ -92,6 +100,7 @@ class AgentUpdate(PydanticBaseModel):
     boot_md: str | None = None
     bootstrap_md: str | None = None
     heartbeat_md: str | None = None
+    model: str | None = None
 
 
 class AgentRead(PydanticBaseModel):
@@ -103,8 +112,32 @@ class AgentRead(PydanticBaseModel):
     organization_id: UUID
     template_id: UUID
     template_version: int
+    model: str
     created_at: datetime
     updated_at: datetime
+
+
+class AgentTemplateRead(PydanticBaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    organization_id: UUID
+    version: int
+    soul_md: str
+    identity_md: str
+    user_md: str
+    tools_md: str
+    agents_md: str
+    boot_md: str
+    bootstrap_md: str
+    heartbeat_md: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class PairRequest(PydanticBaseModel):
+    platform: str = Field(min_length=1)
+    code: str = Field(min_length=1)
 
 
 class AgentFilter(PydanticBaseModel):

@@ -1,3 +1,4 @@
+import json
 from uuid import UUID
 
 from kubernetes import client
@@ -9,6 +10,59 @@ def _resource_name(agent_id: UUID) -> str:
 
 def _labels(agent_id: UUID, org_id: UUID) -> dict[str, str]:
     return {"app": _resource_name(agent_id), "org-id": str(org_id)}
+
+
+INIT_OPENCLAW_JS = """\
+const fs = require('fs');
+const path = require('path');
+
+const OVERLAY_PATH = '/app/config/openclaw-config-overlay.json';
+const CONFIG_PATH = path.join(process.env.HOME || '/home/node', '.openclaw', 'openclaw.json');
+
+function deepMerge(base, overlay) {
+  const result = Object.assign({}, base);
+  for (const [key, val] of Object.entries(overlay)) {
+    result[key] = (val && typeof val === 'object' && !Array.isArray(val)
+      && result[key] && typeof result[key] === 'object' && !Array.isArray(result[key]))
+      ? deepMerge(result[key], val)
+      : val;
+  }
+  return result;
+}
+
+let overlay;
+try { overlay = JSON.parse(fs.readFileSync(OVERLAY_PATH, 'utf8')); }
+catch { console.log('[init-openclaw] No overlay found, skipping'); process.exit(0); }
+
+let config = {};
+try { config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')); } catch {}
+
+const merged = deepMerge(config, overlay);
+fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
+fs.writeFileSync(CONFIG_PATH, JSON.stringify(merged, null, 2));
+console.log('[init-openclaw] Config merged successfully');
+"""
+
+
+def build_openclaw_config_overlay(model: str, litellm_base_url: str) -> dict:
+    provider, _, model_name = model.partition("/")
+    return {
+        "models": {
+            "providers": {
+                provider: {
+                    "baseUrl": litellm_base_url,
+                    "models": [{"id": model_name, "name": model_name}],
+                }
+            }
+        },
+        "agents": {
+            "defaults": {
+                "model": {
+                    "primary": model,
+                }
+            }
+        },
+    }
 
 
 def build_config_map(
@@ -23,23 +77,28 @@ def build_config_map(
     boot_md: str,
     bootstrap_md: str,
     heartbeat_md: str,
+    openclaw_config_overlay: dict | None = None,
 ) -> client.V1ConfigMap:
+    data = {
+        "SOUL.md": soul_md,
+        "IDENTITY.md": identity_md,
+        "USER.md": user_md,
+        "TOOLS.md": tools_md,
+        "AGENTS.md": agents_md,
+        "BOOT.md": boot_md,
+        "BOOTSTRAP.md": bootstrap_md,
+        "HEARTBEAT.md": heartbeat_md,
+    }
+    if openclaw_config_overlay is not None:
+        data["openclaw-config-overlay.json"] = json.dumps(openclaw_config_overlay)
+        data["init-openclaw.js"] = INIT_OPENCLAW_JS
     return client.V1ConfigMap(
         metadata=client.V1ObjectMeta(
             name=_resource_name(agent_id),
             namespace=namespace,
             labels=_labels(agent_id, org_id),
         ),
-        data={
-            "SOUL.md": soul_md,
-            "IDENTITY.md": identity_md,
-            "USER.md": user_md,
-            "TOOLS.md": tools_md,
-            "AGENTS.md": agents_md,
-            "BOOT.md": boot_md,
-            "BOOTSTRAP.md": bootstrap_md,
-            "HEARTBEAT.md": heartbeat_md,
-        },
+        data=data,
     )
 
 
@@ -136,7 +195,11 @@ def build_deployment(
                         client.V1Container(
                             name="agent",
                             image=image,
-                            command=["openclaw", "gateway", "--allow-unconfigured"],
+                            command=[
+                                "sh",
+                                "-c",
+                                "node /app/config/init-openclaw.js && exec openclaw gateway --allow-unconfigured",
+                            ],
                             env_from=[
                                 client.V1EnvFromSource(
                                     secret_ref=client.V1SecretEnvSource(name=name)

@@ -12,7 +12,7 @@ in the `agent-farm` namespace. The API manages both the database state and the k
 | # | Requirement |
 |---|---|
 | R1 | `POST /v1/agents` creates an agent DB record (status=STOPPED). No k8s resources created. |
-| R2 | `POST /v1/agents/{id}/start` provisions all 5 k8s resources and sets status=RUNNING. |
+| R2 | `POST /v1/agents/{id}/start` provisions all 5 k8s resources and sets status=RUNNING. Auto-configures openclaw (model + LiteLLM provider) via config overlay — no manual kubectl exec needed. |
 | R3 | `POST /v1/agents/{id}/stop` deletes only the Deployment. Sets status=STOPPED. Service/PVC/ConfigMap/Secret persist. |
 | R4 | `GET /v1/agents` returns paginated active agents for the org. Supports `?status=` filter. |
 | R5 | `GET /v1/agents/{id}` returns a single active agent. |
@@ -23,14 +23,27 @@ in the `agent-farm` namespace. The API manages both the database state and the k
 | R10 | All endpoints are scoped to the org resolved from the current session. |
 | R11 | Slack tokens encrypted at rest (Fernet). Never returned in API responses. |
 | R12 | K8s operations are idempotent. |
+| R13 | `POST /v1/agents/{id}/pair` approves Slack pairing via API (no kubectl exec needed). |
+| R14 | `GET /v1/agents/{id}/template/{version}` returns a specific historical template version. |
+| R15 | Per-agent LiteLLM virtual key generated on create, injected on start, revoked on delete. |
+| R16 | Per-agent `model` field. Falls back to `Config.agent_default_model` when empty. |
 
 ---
 
 ## Architecture Decisions
 
 ### Two-table design
-- `agent_template` — versioned snapshot of 8 `.md` files. New row created on every PATCH that touches `.md` fields. Old versions retained for history.
-- `agent` — live state record. Holds status, encrypted tokens, FK to current template.
+- `agent_template` — versioned snapshot of 8 `.md` files. New row created on every PATCH that touches `.md` fields. Old versions retained for history. Has `agent_id` FK back to the agent for historical version lookup.
+- `agent` — live state record. Holds status, encrypted tokens, per-agent model, FK to current template.
+
+### Auto-configuration (no manual kubectl)
+On `start_agent`, the API builds an openclaw config overlay in Python (`build_openclaw_config_overlay`) containing the LiteLLM provider URL and agent model. This JSON is included in the ConfigMap alongside a tiny init script (`init-openclaw.js`) that deep-merges the overlay into the PVC config at pod startup. The container command runs the init script before starting the gateway: `sh -c "node /app/config/init-openclaw.js && exec openclaw gateway --allow-unconfigured"`.
+
+### Pairing via API
+`POST /v1/agents/{id}/pair` runs `kubectl exec` (via subprocess) inside the agent pod to approve Slack pairing. Uses subprocess instead of the Python k8s client's websocket exec because the `agent-farm-user` SA has `create` but not `get` on `pods/exec`, and WebSocket always initiates with HTTP GET.
+
+### Per-agent LiteLLM keys
+Each agent gets its own LiteLLM virtual key generated via `/key/generate`. The key is encrypted and stored in the DB. On start, it's decrypted and injected into the pod's k8s Secret as `LITELLM_API_KEY`. On delete, the key is revoked (best-effort).
 
 ### Agent lifecycle state machine
 ```
@@ -75,27 +88,32 @@ Default strings for the 6 optional `.md` files (USER, TOOLS, AGENTS, BOOT, BOOTS
 
 ### `api/domains/agents/models.py`
 - `AgentStatus` enum: STOPPED, RUNNING, ERROR
-- `AgentTemplate` SQLModel table: organization_id, version, 8 md fields
-- `Agent` SQLModel table: organization_id, name, encrypted tokens, status, deleted_at, template FK
-- `AgentCreate`: soul_md + identity_md required (min_length=1), others optional
-- `AgentUpdate`: all fields optional
-- `AgentRead`: no token fields
+- `AgentTemplate` SQLModel table: organization_id, agent_id (nullable FK back to agent), version, 8 md fields. Index on (agent_id, version) for historical lookups.
+- `Agent` SQLModel table: organization_id, name, encrypted tokens (slack + litellm), status, deleted_at, template FK, model
+- `AgentCreate`: soul_md + identity_md required (min_length=1), others optional, model optional
+- `AgentUpdate`: all fields optional, including model
+- `AgentRead`: no token fields, includes model
+- `AgentTemplateRead`: all md fields + id, version, organization_id, timestamps
+- `PairRequest`: platform + code (both required)
 - `AgentFilter` + `get_agent_filter` FastAPI dependency
 
 ### `api/domains/agents/builders.py`
-Five pure functions returning k8s manifests:
+Five manifest builders + two auto-config helpers:
 | Function | Resource | Notes |
 |---|---|---|
-| `build_config_map` | V1ConfigMap | data keys: SOUL.md … HEARTBEAT.md |
-| `build_secret` | V1Secret | string_data: SLACK_BOT_TOKEN, SLACK_APP_TOKEN |
+| `build_config_map` | V1ConfigMap | data keys: SOUL.md … HEARTBEAT.md + `openclaw-config-overlay.json` + `init-openclaw.js` |
+| `build_secret` | V1Secret | string_data: SLACK_BOT_TOKEN, SLACK_APP_TOKEN, LITELLM_API_KEY |
 | `build_pvc` | V1PersistentVolumeClaim | ReadWriteOnce, 1Gi |
 | `build_service` | V1Service | ClusterIP, port 80 → targetPort 8080 |
-| `build_deployment` | V1Deployment | 1 replica; envFrom Secret; ConfigMap→/app/config, PVC→/app/data |
+| `build_deployment` | V1Deployment | 1 replica; envFrom Secret; ConfigMap→/app/config, PVC→/app/data; runs init script before gateway |
+| `build_openclaw_config_overlay` | dict | Builds overlay JSON with LiteLLM provider URL + model config |
+| `INIT_OPENCLAW_JS` | string constant | Tiny JS script that deep-merges overlay into PVC config at pod startup |
 
 ### `api/domains/agents/repository.py`
 - `get_active(agent_id, org_id)` — returns None if soft-deleted
 - `find_all_active(org_id, agent_filter, pagination)` — uses `func.count()` for total, optional status filter
 - `get_template(template_id)` / `save_template(template)` / `save(agent)`
+- `get_template_by_agent_and_version(agent_id, version, org_id)` — queries by agent_id + version for historical lookup
 
 ### `api/domains/agents/service.py`
 Business logic layer. Key decisions:
@@ -110,7 +128,16 @@ have a Deployment running even though status is not RUNNING. `_delete_ignoring_n
 the case where a resource doesn't exist (404 silently ignored).
 
 ### `api/domains/agents/routes.py`
-Seven thin handlers. All use `Depends(get_current_user())`.
+Nine thin handlers. All use `Depends(get_current_user())`:
+- `POST /agents` — create agent
+- `GET /agents` — list agents (paginated, filterable)
+- `GET /agents/{id}` — get single agent
+- `GET /agents/{id}/template/{version}` — get historical template version
+- `PATCH /agents/{id}` — partial update
+- `DELETE /agents/{id}` — soft delete + k8s teardown
+- `POST /agents/{id}/start` — provision k8s resources
+- `POST /agents/{id}/stop` — delete deployment only
+- `POST /agents/{id}/pair` — approve Slack pairing
 
 ### `api/migrations/versions/b4e7f91c2d38_add_agent_tables.py`
 - `down_revision = "8f3c2a7d9b10"`
@@ -125,7 +152,13 @@ Seven thin handlers. All use `Depends(get_current_user())`.
 - `use_org_for_auth()` — scoped step that sets `_default_org_id` for the test's org and resets it to None on teardown (via `LambdaWith`)
 
 ### `api/tests/integration/test_agents.py`
-21 integration tests covering all endpoints and error cases.
+45 integration tests covering all endpoints and error cases, including:
+- CRUD operations (create, get, list, patch, delete)
+- Lifecycle (start, stop)
+- LiteLLM key generation/revocation
+- Per-agent model + config overlay
+- Pairing endpoint (success, stopped agent, no pod, no auth)
+- Template fetch (success, missing version, deleted agent, no auth)
 
 ---
 
@@ -136,6 +169,9 @@ Added:
 ```python
 agent_image: str = ""
 agent_token_encryption_key: str = ""
+agent_default_model: str = "litellm/gpt-5-mini"
+agent_image_pull_secret: str = ""
+agent_litellm_base_url: str = ""
 ```
 
 ### `api/pyproject.toml`
@@ -144,12 +180,29 @@ Added `"cryptography>=44.0.0"` to dependencies.
 ### `api/api_app.py`
 Registered `agents_router` on the sub-api.
 
+### `api/infrastructure/kubernetes/client.py`
+Added `get_pod_name_for_deployment(deployment_name, namespace)` — finds the first Running pod for a deployment by label selector.
+Added `exec_command(pod_name, namespace, command)` — runs `kubectl exec` via subprocess (uses SPDY/POST, compatible with SA that has `create` on `pods/exec`).
+
+### `api/infrastructure/litellm/client.py` (new)
+`LiteLLMClient` — reads LiteLLM master key from k8s secret, generates per-agent virtual keys via `/key/generate`, revokes via `/key/delete`.
+
+### `api/Dockerfile`
+Added kubectl binary installation (required for pairing endpoint's `exec_command`).
+
 ### `.env.spec`
-Added `AGENT_IMAGE` and `AGENT_TOKEN_ENCRYPTION_KEY` entries with comments.
+Added entries: `AGENT_IMAGE`, `AGENT_TOKEN_ENCRYPTION_KEY`, `AGENT_DEFAULT_MODEL`, `AGENT_IMAGE_PULL_SECRET`, `LITELLM_SECRET_NAME`.
 
 ### `api/tests/steps/database.py`
-Added `delegate.delete_all(Agent)` and `delegate.delete_all(AgentTemplate)` to `database_is_clean()`.
-Agent must be deleted before AgentTemplate due to the RESTRICT FK.
+Agent and AgentTemplate cleanup uses `TRUNCATE agent_template, agent CASCADE` to handle the circular FK (agent.template_id → agent_template, agent_template.agent_id → agent).
+
+### Migrations
+| File | Description |
+|---|---|
+| `b4e7f91c2d38_add_agent_tables.py` | Creates agentstatus enum, agent_template table, agent table |
+| `c5f2a1e8d047_add_litellm_key_to_agent.py` | Adds litellm_key_encrypted column |
+| `d8a3f12b4c59_add_model_to_agent.py` | Adds model column |
+| `e9b4f23c5a71_add_agent_id_to_agent_template.py` | Adds agent_id FK + index to agent_template, backfills from agent.template_id |
 
 ---
 
@@ -201,11 +254,15 @@ and resets it to None on teardown, preventing state from leaking into other test
 
 ## Deployment Checklist
 
-- [ ] Add `AGENT_TOKEN_ENCRYPTION_KEY` to the `agentfarm-api` k8s Secret
+- [ ] Add `AGENT_TOKEN_ENCRYPTION_KEY` to the `agentfarm-api` k8s Secret (Fernet key, generate with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`)
 - [ ] Add `AGENT_IMAGE` to the `agentfarm-api` k8s Secret
+- [ ] Add `AGENT_IMAGE_PULL_SECRET=registry-pull-secret` to the `agentfarm-api` k8s Secret
+- [ ] Ensure `LITELLM_BASE_URL` and `LITELLM_SECRET_NAME` are set in the `agentfarm-api` k8s Secret
+- [ ] Ensure kubectl binary is available in the API container (added via Dockerfile)
+- [ ] Ensure the `agent-farm-user` kubeconfig secret is mounted and `K8S_KUBECONFIG_PATH` points to it
 - [ ] Run migration: `kubectl exec -n agent-farm deploy/agentfarm-api -- python -m alembic upgrade head`
-- [ ] Verify existing ServiceAccount Role covers: ConfigMaps, Secrets, Services, PVCs, Deployments (create/get/delete)
-- [ ] Smoke test: create agent → start → `kubectl get pods -n agent-farm` → stop → delete
+- [ ] Verify existing ServiceAccount Role covers: ConfigMaps, Secrets, Services, PVCs, Deployments (create/get/delete), Pods (list), Pods/exec (create)
+- [ ] Smoke test: create agent → start → `kubectl get pods -n agent-farm` → pair via API → stop → delete
 
 ---
 
@@ -230,53 +287,45 @@ and resets it to None on teardown, preventing state from leaking into other test
   "slack_bot_token": "xoxb-...",
   "slack_app_token": "xapp-...",
   "soul_md": "# Soul\n\nYour agent soul.",
-  "identity_md": "# Identity\n\nYour agent identity."
+  "identity_md": "# Identity\n\nYour agent identity.",
+  "model": "litellm/gpt-5-mini"
 }
 ```
-Note the `id` from the 201 response.
+Note the `id` from the 201 response. The `model` field is optional — if omitted, the agent uses
+the global default from `AGENT_DEFAULT_MODEL` (currently `litellm/gpt-5-mini`).
 
 ### Step 2 — Start the agent
 
 `POST /api/v1/agents/{id}/start` — expect 200 with `status: "RUNNING"`.
+
+This automatically:
+- Generates and injects per-agent LiteLLM key into the pod Secret
+- Builds the openclaw config overlay (LiteLLM provider URL + model) and includes it in the ConfigMap
+- Runs the init script (`init-openclaw.js`) on pod startup to merge the overlay into openclaw config
+- No manual `kubectl exec` needed for LiteLLM config or model setup
 
 ### Step 3 — Wait for pod to be ready
 
 ```
 kubectl get pods -n agent-farm -w
 ```
-Wait until the agent pod shows `1/1 Running`.
+Wait until the agent pod shows `1/1 Running`. Check pod logs for `[init-openclaw] Config merged successfully`.
 
-### Step 4 — Configure the LiteLLM provider in openclaw
+### Step 4 — Approve Slack pairing
 
-The pod needs to know where LiteLLM is and what model to use. Run these commands (replace `{id}` with your agent UUID):
-
-```powershell
-# Write the provider config
-kubectl exec -n agent-farm deploy/agent-{id} -- node -e "require('fs').writeFileSync('/tmp/p.json', JSON.stringify({models:{providers:{litellm:{baseUrl:'http://litellm:4000',models:[{id:'gpt-5-mini',name:'gpt-5-mini'}]}}}}))"
-
-# Apply it
-kubectl exec -n agent-farm deploy/agent-{id} -- openclaw config patch --file /tmp/p.json
-
-# Set litellm as the model provider
-kubectl exec -n agent-farm deploy/agent-{id} -- openclaw models set litellm/gpt-5-mini
-```
-
-### Step 5 — Restart the pod to apply config
+Send a DM to the bot in Slack. It will reply with a pairing code. Approve it via the API:
 
 ```
-kubectl rollout restart deploy/agent-{id} -n agent-farm
-```
-Wait for the new pod to be `1/1 Running`.
-
-### Step 6 — Approve Slack pairing
-
-Send a DM to the bot in Slack. It will reply with a pairing code. Approve it:
-
-```
-kubectl exec -n agent-farm deploy/agent-{id} -- openclaw pairing approve slack <code>
+POST /api/v1/agents/{id}/pair
+{
+  "platform": "slack",
+  "code": "<pairing-code>"
+}
 ```
 
-### Step 7 — Test
+Expect 200 with `{"message": "Pairing approved"}` (or similar output from openclaw).
+
+### Step 5 — Test
 
 Send another message in the DM. The bot should respond. Monitor with:
 
@@ -284,16 +333,29 @@ Send another message in the DM. The bot should respond. Monitor with:
 kubectl logs -n agent-farm deploy/agent-{id} -f
 ```
 
+### Fetching template history
+
+To retrieve a specific historical version of an agent's template:
+
+```
+GET /api/v1/agents/{id}/template/{version}
+```
+
+Returns the full template content (all 8 `.md` fields) for that version. Version 1 is the original
+template from agent creation. Each PATCH that changes `.md` fields creates a new version.
+
 ### Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `401 Incorrect API key` | Request going to OpenAI instead of LiteLLM | Check model is `litellm/gpt-5-mini`, verify provider baseUrl config |
-| `Unknown model: litellm/gpt-5-mini` | Provider config not applied or pod not restarted | Re-run Step 4 + Step 5 |
+| `401 Incorrect API key` | Request going to OpenAI instead of LiteLLM | Check agent `model` field is `litellm/gpt-5-mini`, check pod logs for init script output |
+| `[init-openclaw] No overlay found` | ConfigMap missing overlay | Stop and re-start the agent to recreate ConfigMap |
 | No response, no logs after message | Bot not in channel or pairing not approved | `/invite @botname` in channel; check DM for pairing prompt |
 | `Something went wrong` in Slack | Check pod logs for specific error | `kubectl logs deploy/agent-{id} -n agent-farm --tail=20` |
 | LiteLLM crash-looping | LiteLLM's own Postgres (`postgres-litellm`) is down | Check `kubectl get pods -n agent-farm \| grep postgres` |
 | Pod `ImagePullBackOff` | Registry credentials issue | Verify `AGENT_IMAGE_PULL_SECRET` is set and the secret exists in namespace |
+| Pairing endpoint returns 409 | Agent not running or no running pod found | Verify agent status is RUNNING and pod is `1/1 Running` |
+| Pairing endpoint returns 500 | kubectl exec failed inside API container | Check API logs; verify kubectl binary is installed in API container and kubeconfig is mounted |
 
 ### Notes
 

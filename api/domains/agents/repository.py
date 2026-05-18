@@ -71,6 +71,18 @@ class AgentRepository:
                 items=items,
             )
 
+    def get_template_by_agent_and_version(
+        self, agent_id: UUID, version: int, org_id: UUID
+    ) -> AgentTemplate | None:
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(AgentTemplate)
+                .where(col(AgentTemplate.agent_id) == agent_id)
+                .where(col(AgentTemplate.version) == version)
+                .where(col(AgentTemplate.organization_id) == org_id)
+            )
+            return session.exec(query).first()
+
     def get_template(self, template_id: UUID) -> AgentTemplate:
         template = self.delegate.find_by_id(AgentTemplate, template_id)
         if template is None:

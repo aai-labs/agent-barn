@@ -8,7 +8,9 @@ from api.domains.agents.models import (
     AgentCreate,
     AgentFilter,
     AgentRead,
+    AgentTemplateRead,
     AgentUpdate,
+    PairRequest,
     get_agent_filter,
 )
 from api.domains.agents.service import AgentService
@@ -52,6 +54,16 @@ def get_agent(
     return service.get_agent(agent_id, context)
 
 
+@agents_router.get("/{agent_id}/template/{version}", response_model=AgentTemplateRead)
+def get_agent_template(
+    agent_id: UUID,
+    version: int,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentService, Injected(AgentService)],
+):
+    return service.get_agent_template(agent_id, version, context)
+
+
 @agents_router.patch("/{agent_id}", response_model=AgentRead)
 def update_agent(
     agent_id: UUID,
@@ -88,3 +100,14 @@ def stop_agent(
     service: Annotated[AgentService, Injected(AgentService)],
 ):
     return service.stop_agent(agent_id, context)
+
+
+@agents_router.post("/{agent_id}/pair")
+def pair_agent(
+    agent_id: UUID,
+    data: PairRequest,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentService, Injected(AgentService)],
+):
+    output = service.pair_agent(agent_id, data, context)
+    return {"message": output}

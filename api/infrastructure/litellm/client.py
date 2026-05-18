@@ -23,9 +23,13 @@ class LiteLLMClient:
     config: Config
 
     def _master_key(self) -> str:
-        secret = self.k8s.get_secret(self.config.litellm_secret_name, self.config.k8s_namespace)
+        secret = self.k8s.get_secret(
+            self.config.litellm_secret_name, self.config.k8s_namespace
+        )
         if not secret or not secret.data:
-            raise LiteLLMError(f"Secret '{self.config.litellm_secret_name}' not found or empty")
+            raise LiteLLMError(
+                f"Secret '{self.config.litellm_secret_name}' not found or empty"
+            )
         raw = secret.data.get("LITELLM_MASTER_KEY", "")
         if not raw:
             raise LiteLLMError("LITELLM_MASTER_KEY not found in litellm secret")

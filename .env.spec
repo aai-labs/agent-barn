@@ -34,3 +34,5 @@ LITELLM_BASE_URL=
 AGENT_LITELLM_BASE_URL=
 # Name of the k8s Secret containing LITELLM_MASTER_KEY. Defaults to "litellm".
 LITELLM_SECRET_NAME=litellm
+# Default model for openclaw agents when agent.model is not set. Format: provider/model-name
+AGENT_DEFAULT_MODEL=litellm/gpt-5-mini
