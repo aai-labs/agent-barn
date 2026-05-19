@@ -30,6 +30,15 @@ spec:
                 name: {{ .Values.secretName }}
             - secretRef:
                 name: {{ .Values.litellmApiKeySecretName }}
+          env:
+            - name: K8S_KUBECONFIG_PATH
+              value: /etc/kubeconfig/kubeconfig
+            - name: AGENT_IMAGE
+              value: "{{ .Values.openclawImage.repository }}:{{ .Values.openclawImage.tag }}"
+          volumeMounts:
+            - name: kubeconfig
+              mountPath: /etc/kubeconfig
+              readOnly: true
           readinessProbe:
             httpGet:
               path: /api/v1/health
@@ -45,3 +54,7 @@ spec:
             periodSeconds: 15
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: kubeconfig
+          secret:
+            secretName: {{ .Values.kubeconfigSecretName }}

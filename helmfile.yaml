@@ -39,6 +39,8 @@ releases:
     set:
       - name: image.tag
         value: {{ env "API_IMAGE_TAG" | default "latest" }}
+      - name: openclawImage.tag
+        value: {{ env "OPENCLAW_IMAGE_TAG" | default "latest" }}
     needs:
       - agent-farm/postgres-app
       - agent-farm/litellm
