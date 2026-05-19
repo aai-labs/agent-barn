@@ -1,45 +1,28 @@
 "use client";
 
 import { useState } from "react";
-import { Loader2, Search, Shield, UserRound } from "lucide-react";
+import { Loader2, Shield, UserRound } from "lucide-react";
 import { useDebouncedValue } from "@tanstack/react-pacer";
 
 import { AppErrorState } from "@/components/app-error-state";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
+import { ListPageHeader } from "@/components/list-page-header";
 
 import { useInfiniteUsers } from "../hooks/use-infinite-users";
 
 function formatDate(date: string | null | undefined) {
-  if (!date) {
-    return "Not verified";
-  }
+  if (!date) return "Not verified";
   return new Date(date).toLocaleString();
 }
 
 function LoadingCard() {
   return (
-    <Card className="animate-pulse">
-      <CardHeader>
-        <div className="h-5 w-40 rounded-md bg-muted" />
-        <div className="h-4 w-56 rounded-md bg-muted" />
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <div className="h-4 w-28 rounded-md bg-muted" />
-        <div className="h-4 w-36 rounded-md bg-muted" />
-      </CardContent>
-      <CardFooter>
-        <div className="h-4 w-32 rounded-md bg-muted" />
-      </CardFooter>
-    </Card>
+    <div className="af-card px-5 py-[18px] animate-pulse">
+      <div className="h-[15px] w-36 rounded-md mb-1.5" style={{ background: "var(--bg-soft)" }} />
+      <div className="h-[13px] w-52 rounded-md mb-4" style={{ background: "var(--bg-soft)" }} />
+      <div className="h-[13px] w-28 rounded-md mb-2" style={{ background: "var(--bg-soft)" }} />
+      <div className="h-[13px] w-40 rounded-md mb-5" style={{ background: "var(--bg-soft)" }} />
+      <div className="h-[12px] w-44 rounded-md" style={{ background: "var(--bg-soft)" }} />
+    </div>
   );
 }
 
@@ -58,104 +41,80 @@ export function UsersGrid() {
   } = useInfiniteUsers({ search: debouncedSearch });
 
   return (
-    <div className="space-y-5 p-4 pt-2 md:p-6 md:pt-2">
-      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight">Users</h1>
-          <p className="text-sm text-muted-foreground">
-            Super admin view of all users.
-          </p>
-        </div>
-        <div className="relative w-full md:w-80">
-          <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            className="pl-8"
-            placeholder="Search by name or email"
-            aria-label="Search users"
-          />
-        </div>
-      </div>
-
-      <p className="text-sm text-muted-foreground">
-        {total} {total === 1 ? "user" : "users"}
-      </p>
+    <div className="max-w-[1200px] mx-auto px-10 pt-9 pb-24">
+      <ListPageHeader
+        title="Users"
+        description="Super admin view of all users."
+        count={total}
+        noun="user"
+        search={search}
+        onSearch={setSearch}
+        searchPlaceholder="Search by name or email"
+      />
 
       {isLoading ? (
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-          {Array.from({ length: 6 }).map((_, index) => (
-            <LoadingCard key={index} />
-          ))}
+        <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))" }}>
+          {Array.from({ length: 6 }).map((_, i) => <LoadingCard key={i} />)}
         </div>
       ) : error ? (
         <AppErrorState
           error={error}
           title="We couldn't load users"
           description="The users list is unavailable right now."
-          onRetry={() => {
-            void refetch();
-          }}
+          onRetry={() => { void refetch(); }}
           retryLabel="Retry users"
           className="min-h-[240px] p-0"
         />
       ) : (
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))" }}>
           {users.map((user) => (
-            <Card key={user.id}>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <UserRound className="size-4 text-muted-foreground" />
-                  <span>
-                    {user.fullName || (user.isSuperuser ? "Super User" : "Unnamed user")}
-                  </span>
-                </CardTitle>
-                <CardDescription>{user.email}</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-1 text-sm text-muted-foreground">
-                <div className="flex items-center gap-2">
-                  <Shield className="size-4" />
-                  <span>{user.isSuperuser ? "Super admin" : "User"}</span>
-                </div>
-                <div>Created: {formatDate(user.createdAt)}</div>
-              </CardContent>
-              <CardFooter>
-                <p className="text-xs text-muted-foreground">
-                  Email verified: {formatDate(user.emailVerifiedAt)}
-                </p>
-              </CardFooter>
-            </Card>
+            <div key={user.id} className="af-card af-card-hover px-5 py-[18px]">
+              <div className="flex items-center gap-2 mb-1">
+                <UserRound width={14} height={14} style={{ color: "var(--ink-4)", flexShrink: 0 }} />
+                <span className="font-semibold text-[14.5px] truncate" style={{ color: "var(--ink)" }}>
+                  {user.fullName || (user.isSuperuser ? "Super User" : "Unnamed user")}
+                </span>
+              </div>
+              <div className="text-[13px] mb-4 truncate" style={{ color: "var(--ink-3)" }}>
+                {user.email}
+              </div>
+              <div className="flex items-center gap-1.5 text-[12.5px] mb-1.5" style={{ color: "var(--ink-3)" }}>
+                <Shield width={12} height={12} style={{ flexShrink: 0 }} />
+                {user.isSuperuser ? "Super admin" : "User"}
+              </div>
+              <div className="text-[12.5px] mb-3.5" style={{ color: "var(--ink-3)" }}>
+                Created: {formatDate(user.createdAt)}
+              </div>
+              <div
+                className="text-[12px] pt-3"
+                style={{ borderTop: "1px solid var(--line)", color: "var(--ink-4)" }}
+              >
+                Email verified: {formatDate(user.emailVerifiedAt)}
+              </div>
+            </div>
           ))}
         </div>
       )}
 
-      {!isLoading && users.length === 0 ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>No users found</CardTitle>
-            <CardDescription>Try a different search term.</CardDescription>
-          </CardHeader>
-        </Card>
-      ) : null}
-
-      {hasNextPage ? (
-        <div className="flex justify-center pb-4">
-          <Button
-            variant="outline"
-            onClick={() => fetchNextPage()}
-            disabled={isFetchingNextPage}
-          >
-            {isFetchingNextPage ? (
-              <>
-                <Loader2 className="size-4 animate-spin" />
-                Loading more
-              </>
-            ) : (
-              "Load more users"
-            )}
-          </Button>
+      {!isLoading && users.length === 0 && (
+        <div
+          className="flex flex-col items-center justify-center text-center py-16 rounded-2xl"
+          style={{ border: "1px dashed var(--line-strong)" }}
+        >
+          <div className="font-medium text-[15px] mb-1" style={{ color: "var(--ink)" }}>No users found</div>
+          <div className="text-[13.5px]" style={{ color: "var(--ink-3)" }}>Try a different search term.</div>
         </div>
-      ) : null}
+      )}
+
+      {hasNextPage && (
+        <div className="flex justify-center mt-6">
+          <button className="af-btn" onClick={() => fetchNextPage()} disabled={isFetchingNextPage}>
+            {isFetchingNextPage
+              ? <><Loader2 width={14} height={14} className="animate-spin" /> Loading more</>
+              : "Load more users"}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

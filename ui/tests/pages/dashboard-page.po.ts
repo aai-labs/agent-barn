@@ -8,7 +8,7 @@ export class DashboardPage {
   }
 
   heading(): Locator {
-    return this.page.getByRole("heading", { name: "Dashboard" });
+    return this.page.getByRole("heading", { name: "Your team" });
   }
 
   async gotoUsers() {

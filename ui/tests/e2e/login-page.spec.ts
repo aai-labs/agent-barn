@@ -38,7 +38,7 @@ test.describe("Login Page", () => {
 
     await page.waitForURL("/dashboard");
     await expect(
-      page.getByRole("heading", { name: "Dashboard" }),
+      page.getByRole("heading", { name: /your team/i }),
     ).toBeVisible();
   });
 
@@ -50,7 +50,7 @@ test.describe("Login Page", () => {
 
     await page.waitForURL("/dashboard");
     await expect(
-      page.getByRole("heading", { name: "Dashboard" }),
+      page.getByRole("heading", { name: /your team/i }),
     ).toBeVisible();
   });
 

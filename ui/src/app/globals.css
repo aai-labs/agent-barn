@@ -48,73 +48,69 @@
   --radius-4xl: calc(var(--radius) * 2.6);
 }
 
+/* ─── Agent Farm design tokens (warm cream palette) ──────────────── */
 :root {
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
+  /* shadcn vars — mapped to warm palette */
+  --card: #ffffff;
+  --card-foreground: #1a1815;
+  --popover: #ffffff;
+  --popover-foreground: #1a1815;
+  --primary: #1a1815;
+  --primary-foreground: #fbfaf8;
+  --secondary: #f4f2ee;
+  --secondary-foreground: #1a1815;
+  --muted: #f4f2ee;
+  --muted-foreground: #6a655c;
+  --accent: #f4f2ee;
+  --accent-foreground: #1a1815;
+  --destructive: #b42318;
+  --border: #e7e4dc;
+  --input: #e7e4dc;
+  --ring: #97928a;
+  --chart-1: #4f46e5;
+  --chart-2: #0d9488;
+  --chart-3: #b45309;
+  --chart-4: #be185d;
+  --chart-5: #7c2d12;
   --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-}
+  --sidebar: #f4f2ee;
+  --sidebar-foreground: #1a1815;
+  --sidebar-primary: #1a1815;
+  --sidebar-primary-foreground: #fbfaf8;
+  --sidebar-accent: #ebe9e3;
+  --sidebar-accent-foreground: #1a1815;
+  --sidebar-border: #e7e4dc;
+  --sidebar-ring: #97928a;
+  --background: #fbfaf8;
+  --foreground: #1a1815;
 
-.dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  /* Agent Farm custom tokens */
+  --bg:            #fbfaf8;
+  --bg-elev:       #ffffff;
+  --bg-soft:       #f4f2ee;
+  --bg-sunken:     #ebe9e3;
+  --line:          #e7e4dc;
+  --line-strong:   #d4d0c4;
+  --ink:           #1a1815;
+  --ink-2:         #36322c;
+  --ink-3:         #6a655c;
+  --ink-4:         #97928a;
+  --ink-5:         #c4beb2;
+
+  --accent-color:  #4338ca;
+  --accent-soft:   #ece9ff;
+  --accent-ink:    #2a2294;
+
+  --ok:            #15803d;
+  --ok-soft:       #e1f3e7;
+  --warn:          #b45309;
+  --warn-soft:     #fcefda;
+  --err:           #b42318;
+  --err-soft:      #fbe2dd;
+
+  --shadow-sm:     0 1px 0 rgba(20,16,10,.03), 0 1px 2px rgba(20,16,10,.04);
+  --shadow:        0 1px 0 rgba(20,16,10,.03), 0 4px 14px rgba(20,16,10,.06);
+  --shadow-pop:    0 20px 60px rgba(20,16,10,.16), 0 2px 6px rgba(20,16,10,.06);
 }
 
 @layer base {
@@ -123,8 +119,228 @@
   }
   body {
     @apply bg-background text-foreground;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    font-feature-settings: "ss01", "cv11";
+    font-size: 14.5px;
+    line-height: 1.55;
   }
   html {
     @apply font-sans;
   }
+  button {
+    cursor: default;
+  }
+}
+
+/* ─── Agent Farm utility classes ─────────────────────────────────── */
+
+.af-card {
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  transition: border-color .15s, box-shadow .15s;
+}
+
+.af-card-hover:hover {
+  border-color: var(--line-strong);
+  box-shadow: var(--shadow);
+}
+
+.af-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg-elev);
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--ink-2);
+  white-space: nowrap;
+  transition: background .12s, border-color .12s;
+  cursor: default;
+}
+.af-btn:hover {
+  background: var(--bg-soft);
+}
+.af-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+.af-btn-primary {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--bg-elev);
+}
+.af-btn-primary:hover {
+  background: var(--ink-2);
+  border-color: var(--ink-2);
+}
+
+.af-btn-ghost {
+  border-color: transparent;
+  background: transparent;
+  color: var(--ink-3);
+}
+.af-btn-ghost:hover {
+  color: var(--ink);
+  background: var(--bg-soft);
+}
+
+.af-btn-lg {
+  padding: 11px 20px;
+  font-size: 14.5px;
+}
+.af-btn-lg svg {
+  width: 16px;
+  height: 16px;
+}
+
+.af-btn-sm {
+  padding: 5px 11px;
+  font-size: 12.5px;
+}
+
+.af-btn-icon {
+  padding: 7px;
+  width: 32px;
+  height: 32px;
+  justify-content: center;
+}
+
+.af-input,
+.af-select {
+  appearance: none;
+  border: 1px solid var(--line-strong);
+  background: var(--bg-elev);
+  border-radius: 8px;
+  padding: 9px 12px;
+  font-size: 14px;
+  color: var(--ink);
+  width: 100%;
+  outline: none;
+  transition: border-color .12s, box-shadow .12s;
+  font-family: inherit;
+}
+.af-input:focus,
+.af-select:focus {
+  border-color: var(--ink);
+  box-shadow: 0 0 0 3px var(--bg-sunken);
+}
+
+.af-input-lg {
+  padding: 13px 16px;
+  font-size: 16px;
+  border-radius: 12px;
+}
+
+/* Agent page tab */
+.ap-tab {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 12px 16px;
+  font-size: 14px;
+  color: var(--ink-3);
+  font-weight: 500;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  cursor: default;
+  transition: color .12s;
+}
+.ap-tab:hover {
+  color: var(--ink);
+}
+.ap-tab[data-active="true"] {
+  color: var(--ink);
+  font-weight: 600;
+}
+.ap-tab[data-active="true"]::after {
+  content: '';
+  position: absolute;
+  bottom: -1px;
+  left: 16px;
+  right: 16px;
+  height: 2px;
+  background: var(--ink);
+  border-radius: 2px 2px 0 0;
+}
+
+/* Config drawer tab */
+.af-drawer-tab {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 10px 12px;
+  font-size: 13px;
+  color: var(--ink-3);
+  font-weight: 500;
+  position: relative;
+  white-space: nowrap;
+  cursor: default;
+}
+.af-drawer-tab:hover {
+  color: var(--ink);
+}
+.af-drawer-tab[data-active="true"] {
+  color: var(--ink);
+  font-weight: 600;
+}
+.af-drawer-tab[data-active="true"]::after {
+  content: '';
+  position: absolute;
+  bottom: -1px;
+  left: 12px;
+  right: 12px;
+  height: 2px;
+  background: var(--ink);
+}
+
+/* Simple background hover — use instead of inline onMouseEnter/Leave */
+.af-hover-bg {
+  transition: background .12s;
+}
+.af-hover-bg:hover {
+  background: var(--bg-soft);
+}
+
+/* Hide scrollbar while keeping scroll behavior */
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Drawer slide-in animation */
+.af-drawer-panel {
+  animation: af-drawer-in .25s cubic-bezier(.2,.7,.2,1);
+}
+@keyframes af-drawer-in {
+  from { transform: translateX(40px); opacity: 0; }
+  to   { transform: translateX(0); opacity: 1; }
+}
+
+/* Animated status dot */
+.af-dot-pulse {
+  animation: af-pulse 2s infinite;
+}
+@keyframes af-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 currentColor; opacity: 1; }
+  50%       { box-shadow: 0 0 0 4px rgba(0,0,0,0); opacity: .6; }
+}
+
+/* Typing animation */
+.af-bounce {
+  animation: af-bounce 1.2s infinite;
+  opacity: .3;
+}
+@keyframes af-bounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: .3; }
+  30%            { transform: translateY(-3px); opacity: 1; }
 }
