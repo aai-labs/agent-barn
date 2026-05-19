@@ -24,6 +24,15 @@ class Config(BaseSettings):
     k8s_kubeconfig_path: str | None = None
     k8s_namespace: str = "agent-farm"
 
+    agent_image: str = ""
+    agent_token_encryption_key: str = ""
+    litellm_api_key: str = ""
+    litellm_base_url: str = ""
+    litellm_secret_name: str = "litellm"
+    agent_litellm_base_url: str = ""
+    agent_image_pull_secret: str = ""
+    agent_default_model: str = "litellm/gpt-5-mini"
+
     @property
     def is_email_delivery_enabled(self) -> bool:
         return bool(

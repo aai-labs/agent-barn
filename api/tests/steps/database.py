@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 
+from sqlalchemy import text
+
 from api.domains.auth.models import PasswordResetToken, RefreshToken
 from api.domains.auth.repository import (
     PasswordResetTokenRepository,
@@ -54,6 +56,9 @@ def database_is_clean():
     def step(context):
         delegate: PostgresRepositoryDelegate = context.postgres_delegate
 
+        with delegate.engine.connect() as conn:
+            conn.execute(text("TRUNCATE agent_template, agent CASCADE"))
+            conn.commit()
         delegate.delete_all(RefreshToken)
         delegate.delete_all(PasswordResetToken)
         delegate.delete_all(OrganizationUser)

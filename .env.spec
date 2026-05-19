@@ -18,3 +18,21 @@ EMAIL_SMTP_SERVER=
 # Path to kubeconfig file. If unset, tries in-cluster auth then ~/.kube/config.
 K8S_KUBECONFIG_PATH=
 K8S_NAMESPACE=agent-farm
+
+# Agents
+# Full image ref for agent pods, e.g. {REGISTRY_URL}/agentfarm-openclaw-base:{VERSION}
+AGENT_IMAGE=
+# Fernet key for encrypting Slack tokens at rest. Generate with:
+#   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+AGENT_TOKEN_ENCRYPTION_KEY=
+# Name of the k8s imagePullSecret for the agent container image registry.
+# Example: registry-pull-secret
+AGENT_IMAGE_PULL_SECRET=
+# LiteLLM proxy URL used by the API for key generation. Example: http://localhost:4000 (local port-forward)
+LITELLM_BASE_URL=
+# LiteLLM proxy URL injected into agent pods as LITELLM_BASE_URL. Example: http://litellm:4000
+AGENT_LITELLM_BASE_URL=
+# Name of the k8s Secret containing LITELLM_MASTER_KEY. Defaults to "litellm".
+LITELLM_SECRET_NAME=litellm
+# Default model for openclaw agents when agent.model is not set. Format: provider/model-name
+AGENT_DEFAULT_MODEL=litellm/gpt-5-mini

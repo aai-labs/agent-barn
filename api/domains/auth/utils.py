@@ -24,7 +24,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 _default_org_id: uuid.UUID | None = None
 
 
-def set_default_org_id(org_id: uuid.UUID) -> None:
+def set_default_org_id(org_id: uuid.UUID | None) -> None:
     global _default_org_id
     _default_org_id = org_id
 

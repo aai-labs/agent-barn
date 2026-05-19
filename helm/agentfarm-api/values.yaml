@@ -3,6 +3,10 @@ image:
   tag: latest
   pullPolicy: Always
 
+openclawImage:
+  repository: registry.k8s.aai-labs.com/agentfarm-openclaw-base
+  tag: latest
+
 replicaCount: 1
 
 # Pre-existing k8s Secret: DB_CONNECTION_URL, SECRET_SIGNING_KEY,
@@ -14,6 +18,9 @@ litellmApiKeySecretName: litellm-api-key
 
 # Pre-existing litellm Secret (used by hook Job to call /key/generate)
 litellmSecretName: litellm
+
+# Pre-existing kubeconfig Secret for kubectl exec into agent pods
+kubeconfigSecretName: agent-farm-user-kubeconfig
 
 imagePullSecrets:
   - name: registry-pull-secret

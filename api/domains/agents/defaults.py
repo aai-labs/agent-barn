@@ -1,0 +1,6 @@
+DEFAULT_USER_MD = "# User\n\nNo specific user context configured."
+DEFAULT_TOOLS_MD = "# Tools\n\nNo tools configured."
+DEFAULT_AGENTS_MD = "# Agents\n\nNo agent relationships configured."
+DEFAULT_BOOT_MD = "# Boot\n\nDefault boot sequence."
+DEFAULT_BOOTSTRAP_MD = "# Bootstrap\n\nDefault bootstrap configuration."
+DEFAULT_HEARTBEAT_MD = "# Heartbeat\n\nDefault heartbeat configuration."

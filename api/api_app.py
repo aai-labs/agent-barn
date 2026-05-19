@@ -11,12 +11,18 @@ from sqlmodel import Session, select
 
 from api.core.config import get_config
 from api.core.utils import create_injector
+from api.domains.agents.routes import agents_router
 from api.domains.auth.routes import auth_router
 from api.domains.organizations.routes import org_router
 from api.domains.users.routes import users_router
 from api.domains.users.service import UserService
 from api.domains.organizations.service import OrganizationService
 from api.domains.auth.utils import set_default_org_id
+from api.domains.users.organization_users.models import (
+    OrganizationRole,
+    OrganizationUser,
+)
+from api.domains.users.organization_users.repository import OrganizationUserRepository
 from api.infrastructure.email.logging_utils import (
     log_email_delivery_disabled_warning,
 )
@@ -35,11 +41,23 @@ async def lifespan(_: FastAPI):
     user_service = injector.get(UserService)
 
     try:
-        user_service.ensure_default_superuser()
+        superuser = user_service.ensure_default_superuser()
 
         org_service = injector.get(OrganizationService)
         default_org = org_service.ensure_default_organization()
         set_default_org_id(default_org.id)
+
+        org_user_repo = injector.get(OrganizationUserRepository)
+        if not org_user_repo.get_by_user_id_and_organization_id(
+            superuser.id, default_org.id
+        ):
+            org_user_repo.save(
+                OrganizationUser(
+                    user_id=superuser.id,
+                    organization_id=default_org.id,
+                    role=OrganizationRole.OWNER,
+                )
+            )
     except Exception:
         logger.error("Error during startup bootstrap: %s", traceback.format_exc())
         raise HTTPException(
@@ -73,6 +91,7 @@ def create_app(injector: Injector | None = None):
 
     app_v1.mount("/api/v1", subapi)
 
+    subapi.include_router(agents_router)
     subapi.include_router(auth_router)
     subapi.include_router(org_router)
     subapi.include_router(users_router)
