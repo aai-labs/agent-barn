@@ -62,6 +62,19 @@ def build_openclaw_config_overlay(model: str, litellm_base_url: str) -> dict:
                 }
             }
         },
+        "channels": {
+            "slack": {
+                "mode": "socket",
+                "webhookPath": "/slack/events",
+                "userTokenReadOnly": True,
+                "groupPolicy": "open",
+                "dmPolicy": "open",
+                "allowFrom": ["*"],
+            }
+        },
+        "bindings": [
+            {"type": "route", "agentId": "main", "match": {"channel": "slack"}}
+        ],
     }
 
 
