@@ -36,10 +36,8 @@ function deepMerge(base, overlay) {
 fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
 for (const file of fs.readdirSync(TEMPLATE_DIR)) {
   if (!file.endsWith('.md')) continue;
-  const dest = path.join(WORKSPACE_DIR, file);
-  if (fs.existsSync(dest)) continue;
-  fs.copyFileSync(path.join(TEMPLATE_DIR, file), dest);
-  console.log(`[init-openclaw] Seeded workspace/${file}`);
+  fs.copyFileSync(path.join(TEMPLATE_DIR, file), path.join(WORKSPACE_DIR, file));
+  console.log(`[init-openclaw] Copied workspace/${file}`);
 }
 
 let overlay;
