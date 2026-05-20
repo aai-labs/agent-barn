@@ -1,6 +1,7 @@
 "use client";
 
 import type { Agent } from "../schemas";
+import { useAgentHealth } from "../hooks/use-agent-health";
 import { AgentAvatar } from "./agent-avatar";
 import { StatusLine } from "./status-line";
 
@@ -10,6 +11,8 @@ interface AgentCardProps {
 }
 
 export function AgentCard({ agent, onOpen }: AgentCardProps) {
+  const { health } = useAgentHealth(agent.id, agent.status === "RUNNING");
+
   return (
     <div
       className="af-card af-card-hover flex flex-col gap-5 p-5.5 pb-4.5 cursor-default min-h-[14.375rem]"
@@ -30,7 +33,7 @@ export function AgentCard({ agent, onOpen }: AgentCardProps) {
       </div>
 
       <div className="flex-1">
-        <StatusLine status={agent.status} />
+        <StatusLine status={agent.status} health={health} />
       </div>
 
       <div

@@ -1,7 +1,12 @@
 import { createQueryKeyStructure } from "@/shared/query-keys";
 
 export const AGENTS_PAGE_SIZE = 50;
-export const agentsKey = createQueryKeyStructure("agents");
+const _agentsKeyBase = createQueryKeyStructure("agents");
+
+export const agentsKey = {
+  ..._agentsKeyBase,
+  health: (id: string) => [..._agentsKeyBase.detail(id), "health"] as const,
+};
 
 const AGENT_COLORS = [
   ["#4f46e5", "#7c3aed"],

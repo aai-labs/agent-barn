@@ -28,6 +28,7 @@ from api.domains.agents.models import (
     Agent,
     AgentCreate,
     AgentFilter,
+    AgentHealthRead,
     AgentRead,
     AgentStatus,
     AgentTemplate,
@@ -376,3 +377,26 @@ class AgentService:
             ) from exc
 
         return output
+
+    def get_agent_health(
+        self, agent_id: UUID, context: CurrentUserContext
+    ) -> AgentHealthRead:
+        org_id = self._org_id(context)
+        agent = self._get_active_or_404(agent_id, org_id)
+
+        if agent.status != AgentStatus.RUNNING:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Agent {agent_id} is not running",
+            )
+
+        name = f"agent-{agent_id}"
+        ns = self.config.k8s_namespace
+        try:
+            data = self.k8s.fetch_agent_healthz(name, ns)
+            return AgentHealthRead.model_validate(data)
+        except RuntimeError:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"status": "error", "reason": "unreachable"},
+            )

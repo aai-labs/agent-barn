@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from fastapi import status
 from hamcrest import assert_that, equal_to, has_key, is_not, none
 from starlette.testclient import TestClient
@@ -651,12 +653,11 @@ def test_start_agent_deployment_runs_init_script():
                 f"{_BASE}/{context.agent.id}/start", headers=_auth(context)
             )
 
-        with then("the Deployment command runs the init script"):
+        with then("the Deployment command runs start.sh"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             deployment = k8s.create_deployment.call_args.args[1]
             command = deployment.spec.template.spec.containers[0].command
-            assert_that(command[0], equal_to("sh"))
-            assert "node /app/config/init-openclaw.js" in command[2]
+            assert_that(command, equal_to(["sh", "/app/config/start.sh"]))
 
 
 def test_start_agent_uses_default_model_when_empty():
@@ -859,3 +860,56 @@ def test_start_agent_configmap_and_overlay_are_correct():
             assert_that(
                 config_map.data["IDENTITY.md"], equal_to("# Identity\n\nTest identity.")
             )
+
+
+def test_get_agent_healthz_returns_ok_when_healthy():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        client: TestClient = context.client
+        agent_id = context.agent.id
+
+        with when("the pod /healthz returns healthy"):
+            with patch.object(
+                context.injector.get(KubernetesClient),
+                "fetch_agent_healthz",
+                return_value={"status": "ok"},
+            ):
+                response = client.get(
+                    f"{_BASE}/{agent_id}/healthz", headers=_auth(context)
+                )
+
+        with then("the API returns 200 with status ok"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["status"], equal_to("ok"))
+
+
+def test_get_agent_healthz_returns_503_when_pod_unreachable():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        client: TestClient = context.client
+        agent_id = context.agent.id
+
+        with when("the pod is unreachable"):
+            with patch.object(
+                context.injector.get(KubernetesClient),
+                "fetch_agent_healthz",
+                side_effect=RuntimeError("connection refused"),
+            ):
+                response = client.get(
+                    f"{_BASE}/{agent_id}/healthz", headers=_auth(context)
+                )
+
+        with then("the API returns 503"):
+            assert_that(
+                response.status_code, equal_to(status.HTTP_503_SERVICE_UNAVAILABLE)
+            )
+
+
+def test_get_agent_healthz_returns_409_when_agent_not_running():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        client: TestClient = context.client
+        agent_id = context.agent.id
+
+        with when("the agent is stopped"):
+            response = client.get(f"{_BASE}/{agent_id}/healthz", headers=_auth(context))
+
+        with then("the API returns 409"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))

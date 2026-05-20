@@ -53,6 +53,75 @@ fs.writeFileSync(CONFIG_PATH, JSON.stringify(merged, null, 2));
 console.log('[init-openclaw] Config merged successfully');
 """
 
+HEALTHZ_SERVER_JS = """\
+const http = require('http');
+const { execFile } = require('child_process');
+
+const PORT = 8081;
+const CACHE_TTL_MS = 10_000;
+
+let cache = null;
+let refreshing = false;
+
+function refresh() {
+  if (refreshing) return;
+  refreshing = true;
+  execFile('openclaw', ['health', '--json'], { timeout: 15_000 }, (err, stdout) => {
+    refreshing = false;
+    if (err) {
+      cache = { ok: false, reason: err.message };
+      return;
+    }
+    try {
+      const d = JSON.parse(stdout);
+      if (!d.ok) { cache = { ok: false, reason: 'gateway not ok' }; return; }
+      const order = d.channelOrder || [];
+      if (!order.length) { cache = { ok: false, reason: 'no channels configured' }; return; }
+      for (const ch of order) {
+        if (!d.channels[ch]?.connected) {
+          cache = { ok: false, reason: `channel ${ch} not connected` };
+          return;
+        }
+      }
+      cache = { ok: true };
+    } catch {
+      cache = { ok: false, reason: 'failed to parse health output' };
+    }
+  });
+}
+
+refresh();
+setInterval(refresh, CACHE_TTL_MS);
+
+const server = http.createServer((req, res) => {
+  if (req.method !== 'GET' || req.url !== '/healthz') {
+    res.writeHead(404);
+    res.end();
+    return;
+  }
+  if (!cache) {
+    res.writeHead(503, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: 'starting' }));
+    return;
+  }
+  const body = cache.ok ? { status: 'ok' } : { status: 'error', reason: cache.reason };
+  res.writeHead(cache.ok ? 200 : 500, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(body));
+});
+
+process.on('SIGTERM', () => server.close(() => process.exit(0)));
+
+server.listen(PORT, () => console.log(`[healthz] listening on :${PORT}`));
+"""
+
+START_SH = """\
+#!/bin/sh
+set -e
+node /app/config/init-openclaw.js
+node /app/config/healthz-server.js &
+exec openclaw gateway --allow-unconfigured
+"""
+
 
 def build_openclaw_config_overlay(model: str, litellm_base_url: str) -> dict:
     provider, _, model_name = model.partition("/")
@@ -115,6 +184,8 @@ def build_config_map(
     if openclaw_config_overlay is not None:
         data["openclaw-config-overlay.json"] = json.dumps(openclaw_config_overlay)
         data["init-openclaw.js"] = INIT_OPENCLAW_JS
+        data["healthz-server.js"] = HEALTHZ_SERVER_JS
+        data["start.sh"] = START_SH
     return client.V1ConfigMap(
         metadata=client.V1ObjectMeta(
             name=_resource_name(agent_id),
@@ -182,7 +253,10 @@ def build_service(
         ),
         spec=client.V1ServiceSpec(
             selector={"app": _resource_name(agent_id)},
-            ports=[client.V1ServicePort(port=80, target_port=8080)],
+            ports=[
+                client.V1ServicePort(port=80, target_port=8080, name="gateway"),
+                client.V1ServicePort(port=8081, target_port=8081, name="healthz"),
+            ],
         ),
     )
 
@@ -218,11 +292,16 @@ def build_deployment(
                         client.V1Container(
                             name="agent",
                             image=image,
-                            command=[
-                                "sh",
-                                "-c",
-                                "node /app/config/init-openclaw.js && exec openclaw gateway --allow-unconfigured",
-                            ],
+                            command=["sh", "/app/config/start.sh"],
+                            readiness_probe=client.V1Probe(
+                                http_get=client.V1HTTPGetAction(
+                                    path="/healthz",
+                                    port=8081,
+                                ),
+                                initial_delay_seconds=30,
+                                period_seconds=15,
+                                failure_threshold=6,
+                            ),
                             env_from=[
                                 client.V1EnvFromSource(
                                     secret_ref=client.V1SecretEnvSource(name=name)

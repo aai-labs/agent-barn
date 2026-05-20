@@ -144,6 +144,11 @@ class AgentFilter(PydanticBaseModel):
     status: AgentStatus | None = None
 
 
+class AgentHealthRead(PydanticBaseModel):
+    status: str
+    reason: str | None = None
+
+
 def get_agent_filter(
     status: AgentStatus | None = Query(default=None),
 ) -> AgentFilter:
