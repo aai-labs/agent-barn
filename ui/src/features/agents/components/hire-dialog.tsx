@@ -1,22 +1,18 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { TEMPLATE_FILES } from "../data";
+import { useState, useEffect, useRef } from "react";
 import { XIcon, CheckIcon } from "@/components/icons";
+import { useCreateAgent } from "../hooks/use-create-agent";
+import { DialogShell } from "./hire-dialog-primitives";
+import {
+  ROLES, MODELS, RoleId, WizardStep, pickDefaults,
+  RoleStep, SlackChoiceStep, BotBuilderStep, SlackTokensStep, DetailsStep,
+} from "./hire-dialog-steps";
 
 interface HireDialogProps {
   onClose: () => void;
   onHired: (info: { name: string; role: string }) => void;
 }
-
-const ROLES = [
-  { id: "default", template_id: "t_default", title: "General Purpose", emoji: "🤖", tagline: "Answers questions, handles tasks, reduces day-to-day friction.", suggested: "Aria" },
-  { id: "code-reviewer", template_id: "t_reviewer", title: "PR Reviewer", emoji: "⚙️", tagline: "Reads diffs, comments on style, security, and tests.", suggested: "Halo" },
-  { id: "analyst", template_id: "t_analyst", title: "Data Analyst", emoji: "📊", tagline: "Answers questions over BigQuery & Sheets, returns charts.", suggested: "Lyra" },
-  { id: "sales-research", template_id: "t_sales", title: "Sales Research", emoji: "📈", tagline: "Enriches leads, drafts outbound, summarises calls.", suggested: "Vega" },
-] as const;
-
-type RoleId = (typeof ROLES)[number]["id"];
 
 const PROVISION_STEPS = [
   { at: 14, text: "Resolved template" },
@@ -27,25 +23,50 @@ const PROVISION_STEPS = [
   { at: 96, text: "", isPending: true },
 ];
 
-function pickDefaults(roleId: RoleId) {
-  const role = ROLES.find((r) => r.id === roleId)!;
-  const tpl = TEMPLATE_FILES[role.template_id] ?? {};
-  return { name: role.suggested, soulMd: tpl.soul_md ?? "", identityMd: tpl.identity_md ?? "", userMd: tpl.user_md ?? "", toolsMd: tpl.tools_md ?? "" };
+function stepOrdinal(step: WizardStep, setupNewBot: boolean): string {
+  const seq: WizardStep[] = setupNewBot
+    ? ["role", "slack-choice", "bot-builder", "slack-tokens", "details"]
+    : ["role", "slack-choice", "slack-tokens", "details"];
+  return `step ${seq.indexOf(step) + 1} of ${seq.length}`;
+}
+
+function stepTitle(step: WizardStep): string {
+  switch (step) {
+    case "role": return "What kind of teammate do you need?";
+    case "slack-choice": return "Set up your Slack app";
+    case "bot-builder": return "Build your Slack bot";
+    case "slack-tokens": return "Connect Slack";
+    case "details": return "A few details and we'll get them set up.";
+  }
 }
 
 export function HireDialog({ onClose, onHired }: HireDialogProps) {
-  const [step, setStep] = useState(0);
+  const createAgent = useCreateAgent();
+
+  const [step, setStep] = useState<WizardStep>("role");
   const [pick, setPick] = useState<RoleId>("default");
   const defaults = pickDefaults("default");
   const [name, setName] = useState<string>(defaults.name);
+  const [model, setModel] = useState<string>(MODELS[0].value);
+  const [setupNewBot, setSetupNewBot] = useState(false);
+  const [botName, setBotName] = useState<string>(defaults.botName);
+  const [botDescription, setBotDescription] = useState<string>(defaults.botDescription);
+  const [botColor, setBotColor] = useState("#4A154B");
   const [slackAppToken, setSlackAppToken] = useState("");
   const [slackBotToken, setSlackBotToken] = useState("");
+  const [showAppToken, setShowAppToken] = useState(false);
+  const [showBotToken, setShowBotToken] = useState(false);
+  const [tokenError, setTokenError] = useState<string | null>(null);
   const [soulMd, setSoulMd] = useState(defaults.soulMd);
   const [identityMd, setIdentityMd] = useState(defaults.identityMd);
   const [userMd, setUserMd] = useState(defaults.userMd);
   const [toolsMd, setToolsMd] = useState(defaults.toolsMd);
   const [provisioning, setProvisioning] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [provisionError, setProvisionError] = useState<string | null>(null);
+
+  const progressRef = useRef(0);
+  const apiDoneRef = useRef(false);
 
   const selected = ROLES.find((r) => r.id === pick)!;
 
@@ -53,23 +74,57 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
     const d = pickDefaults(roleId);
     setPick(roleId);
     setName(d.name);
+    setBotName(d.botName);
+    setBotDescription(d.botDescription);
     setSoulMd(d.soulMd);
     setIdentityMd(d.identityMd);
     setUserMd(d.userMd);
     setToolsMd(d.toolsMd);
   }
 
+  function handleBack() {
+    if (step === "details") setStep("slack-tokens");
+    else if (step === "slack-tokens") setStep(setupNewBot ? "bot-builder" : "slack-choice");
+    else if (step === "bot-builder") setStep("slack-choice");
+    else if (step === "slack-choice") setStep("role");
+  }
+
+  function handleContinueFromTokens() {
+    if (!slackAppToken.trim() || !slackBotToken.trim()) {
+      setTokenError("Both tokens are required to continue.");
+      return;
+    }
+    setStep("details");
+  }
+
+  async function startHiring() {
+    setProvisioning(true);
+    setProvisionError(null);
+    progressRef.current = 0;
+    apiDoneRef.current = false;
+
+    try {
+      await createAgent.mutateAsync({
+        name, model, slackBotToken, slackAppToken,
+        soulMd, identityMd, userMd, toolsMd,
+      });
+      apiDoneRef.current = true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Something went wrong. Please try again.";
+      setProvisionError(msg);
+    }
+  }
+
   useEffect(() => {
     if (!provisioning) return;
-    let v = 0;
     const id = setInterval(() => {
-      v += 8 + Math.random() * 12;
-      if (v >= 100) {
-        v = 100;
+      const cap = apiDoneRef.current ? 100 : 88;
+      progressRef.current = Math.min(progressRef.current + 8 + Math.random() * 12, cap);
+      setProgress(progressRef.current);
+      if (progressRef.current >= 100) {
         clearInterval(id);
         setTimeout(() => onHired({ name, role: selected.title }), 500);
       }
-      setProgress(v);
     }, 240);
     return () => clearInterval(id);
   }, [provisioning]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -82,7 +137,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
           <h2 className="text-2xl font-semibold tracking-tight mb-2" style={{ color: "var(--ink)" }}>
             Hiring {name}…
           </h2>
-          <p className="text-[14px] mb-8" style={{ color: "var(--ink-3)" }}>
+          <p className="text-sm mb-8" style={{ color: "var(--ink-3)" }}>
             A few moments — provisioning, installing skills, connecting to Slack.
           </p>
           <div className="w-full max-w-sm mb-8">
@@ -99,10 +154,13 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
               const pending = s.isPending && done && progress < 100;
               const text = s.isPending ? `${name} said hello in Slack` : s.text;
               return (
-                <div key={i} className="flex items-center gap-3 text-[13.5px]">
+                <div key={i} className="flex items-center gap-3 text-[0.844rem]">
                   <div className="w-5 h-5 flex-shrink-0 grid place-items-center">
                     {pending ? (
-                      <div className="w-4 h-4 rounded-full border-2 border-t-transparent animate-spin" style={{ borderColor: "var(--ink-3)", borderTopColor: "transparent" }} />
+                      <div
+                        className="w-4 h-4 rounded-full border-2 border-t-transparent animate-spin"
+                        style={{ borderColor: "var(--ink-3)", borderTopColor: "transparent" }}
+                      />
                     ) : done ? (
                       <CheckIcon style={{ color: "var(--ok)" }} />
                     ) : (
@@ -114,6 +172,22 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
               );
             })}
           </div>
+
+          {provisionError && (
+            <div
+              className="mt-6 w-full max-w-sm rounded-xl px-4 py-3 text-sm text-left"
+              style={{ background: "var(--err-soft, #fef2f2)", color: "var(--err)" }}
+            >
+              <div className="font-semibold mb-1">Something went wrong</div>
+              <div className="text-[0.8125rem]">{provisionError}</div>
+              <button
+                className="af-btn af-btn-sm mt-3"
+                onClick={() => { setProvisioning(false); setProvisionError(null); }}
+              >
+                Go back
+              </button>
+            </div>
+          )}
         </div>
       </DialogShell>
     );
@@ -126,11 +200,11 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
         style={{ borderBottom: "1px solid var(--line)" }}
       >
         <div>
-          <div className="text-[12px] uppercase tracking-[0.08em] font-semibold mb-1" style={{ color: "var(--ink-3)" }}>
-            Hire · step {step + 1} of 2
+          <div className="text-xs uppercase tracking-[0.08em] font-semibold mb-1" style={{ color: "var(--ink-3)" }}>
+            Hire · {stepOrdinal(step, setupNewBot)}
           </div>
           <h2 className="text-xl font-semibold tracking-tight m-0" style={{ color: "var(--ink)" }}>
-            {step === 0 ? "What kind of teammate do you need?" : "A few details and we'll get them set up."}
+            {stepTitle(step)}
           </h2>
         </div>
         <button className="af-btn af-btn-ghost af-btn-icon" onClick={onClose}>
@@ -139,111 +213,37 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
       </header>
 
       <div className="flex-1 overflow-y-auto p-6">
-        {step === 0 && (
-          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
-            {ROLES.map((r) => (
-              <div
-                key={r.id}
-                className="flex flex-col gap-2 p-4 rounded-2xl cursor-default transition-colors"
-                style={{
-                  border: pick === r.id ? "1.5px solid var(--ink)" : "1.5px solid var(--line)",
-                  background: pick === r.id ? "var(--bg-soft)" : "var(--bg-elev)",
-                }}
-                onClick={() => handlePickRole(r.id)}
-              >
-                <div className="text-2xl">{r.emoji}</div>
-                <div className="font-semibold text-[13.5px]" style={{ color: "var(--ink)" }}>{r.title}</div>
-                <div className="text-[12.5px] leading-[1.4]" style={{ color: "var(--ink-3)" }}>{r.tagline}</div>
-              </div>
-            ))}
-          </div>
+        {step === "role" && <RoleStep pick={pick} onPick={handlePickRole} />}
+        {step === "slack-choice" && <SlackChoiceStep setupNewBot={setupNewBot} onChange={setSetupNewBot} />}
+        {step === "bot-builder" && (
+          <BotBuilderStep
+            botName={botName} onBotNameChange={setBotName}
+            botDescription={botDescription} onBotDescriptionChange={setBotDescription}
+            botColor={botColor} onBotColorChange={setBotColor}
+          />
         )}
-
-        {step === 1 && (
-          <div className="flex flex-col gap-5">
-            <div
-              className="flex items-center gap-3 p-4 rounded-2xl"
-              style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
-            >
-              <div className="text-2xl">{selected.emoji}</div>
-              <div className="flex-1">
-                <div className="font-semibold text-[14px]" style={{ color: "var(--ink)" }}>{selected.title}</div>
-                <div className="text-[13px]" style={{ color: "var(--ink-3)" }}>{selected.tagline}</div>
-              </div>
-              <button className="af-btn af-btn-sm af-btn-ghost" onClick={() => setStep(0)}>Change</button>
-            </div>
-
-            <FormField label="Name them" hint={`Suggested: ${selected.suggested}`}>
-              <input
-                className="af-input af-input-lg"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder={selected.suggested}
-              />
-            </FormField>
-
-            <div
-              className="flex flex-col gap-3.5 p-4 rounded-2xl"
-              style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
-            >
-              <div>
-                <div className="font-semibold text-[13.5px] mb-0.5" style={{ color: "var(--ink)" }}>
-                  Slack connection
-                </div>
-                <div className="text-[12.5px]" style={{ color: "var(--ink-3)" }}>
-                  These credentials stay encrypted in the key vault. The agent only sees fake placeholders.
-                </div>
-              </div>
-
-              <FormField label="App-level token" hint="Starts with xapp- · required for Socket Mode">
-                <input
-                  className="af-input font-mono text-[13px]"
-                  type="password"
-                  value={slackAppToken}
-                  onChange={(e) => setSlackAppToken(e.target.value)}
-                  placeholder="xapp-1-…"
-                  autoComplete="off"
-                />
-              </FormField>
-
-              <FormField label="Bot token" hint="Starts with xoxb- · required for API calls">
-                <input
-                  className="af-input font-mono text-[13px]"
-                  type="password"
-                  value={slackBotToken}
-                  onChange={(e) => setSlackBotToken(e.target.value)}
-                  placeholder="xoxb-…"
-                  autoComplete="off"
-                />
-              </FormField>
-            </div>
-
-            <details className="rounded-2xl overflow-hidden" style={{ border: "1px solid var(--line)" }}>
-              <summary
-                className="px-4 py-3 text-[13.5px] font-medium cursor-default"
-                style={{ color: "var(--ink-2)", background: "var(--bg-elev)" }}
-              >
-                Review configuration files
-              </summary>
-              <div className="p-4 flex flex-col gap-4" style={{ background: "var(--bg-soft)" }}>
-                <div className="text-[12.5px] leading-[1.5]" style={{ color: "var(--ink-3)" }}>
-                  Pre-populated from the <span className="font-mono">{selected.id}</span> template. Edit before hiring to customise.
-                </div>
-                <FormField label="soul.md" hint="Core purpose and values — required">
-                  <textarea className="af-input font-mono text-[12.5px] leading-[1.65] resize-none" rows={7} value={soulMd} onChange={(e) => setSoulMd(e.target.value)} />
-                </FormField>
-                <FormField label="identity.md" hint="Voice, tone, and hard boundaries — required">
-                  <textarea className="af-input font-mono text-[12.5px] leading-[1.65] resize-none" rows={7} value={identityMd} onChange={(e) => setIdentityMd(e.target.value)} />
-                </FormField>
-                <FormField label="user.md" hint="Who this agent talks to">
-                  <textarea className="af-input font-mono text-[12.5px] leading-[1.65] resize-none" rows={5} value={userMd} onChange={(e) => setUserMd(e.target.value)} />
-                </FormField>
-                <FormField label="tools.md" hint="Available tools">
-                  <textarea className="af-input font-mono text-[12.5px] leading-[1.65] resize-none" rows={5} value={toolsMd} onChange={(e) => setToolsMd(e.target.value)} />
-                </FormField>
-              </div>
-            </details>
-          </div>
+        {step === "slack-tokens" && (
+          <SlackTokensStep
+            slackAppToken={slackAppToken}
+            onAppTokenChange={(v) => { setSlackAppToken(v); setTokenError(null); }}
+            slackBotToken={slackBotToken}
+            onBotTokenChange={(v) => { setSlackBotToken(v); setTokenError(null); }}
+            showAppToken={showAppToken} onToggleAppToken={() => setShowAppToken((v) => !v)}
+            showBotToken={showBotToken} onToggleBotToken={() => setShowBotToken((v) => !v)}
+            error={tokenError}
+          />
+        )}
+        {step === "details" && (
+          <DetailsStep
+            selected={selected}
+            name={name} onNameChange={setName}
+            model={model} onModelChange={setModel}
+            soulMd={soulMd} onSoulMdChange={setSoulMd}
+            identityMd={identityMd} onIdentityMdChange={setIdentityMd}
+            userMd={userMd} onUserMdChange={setUserMd}
+            toolsMd={toolsMd} onToolsMdChange={setToolsMd}
+            onChangeRole={() => setStep("role")}
+          />
         )}
       </div>
 
@@ -251,19 +251,40 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
         className="px-6 py-4 flex items-center justify-between flex-shrink-0"
         style={{ borderTop: "1px solid var(--line)" }}
       >
-        {step === 0 ? (
+        {step === "role" ? (
           <button className="af-btn af-btn-ghost" onClick={onClose}>Cancel</button>
         ) : (
-          <button className="af-btn" onClick={() => setStep(0)}>Back</button>
+          <button className="af-btn" onClick={handleBack}>Back</button>
         )}
-        {step === 0 ? (
-          <button className="af-btn af-btn-primary af-btn-lg" onClick={() => setStep(1)}>
+
+        {step === "role" && (
+          <button className="af-btn af-btn-primary af-btn-lg" onClick={() => setStep("slack-choice")}>
             Continue
           </button>
-        ) : (
+        )}
+        {step === "slack-choice" && (
           <button
             className="af-btn af-btn-primary af-btn-lg"
-            onClick={() => setProvisioning(true)}
+            onClick={() => setStep(setupNewBot ? "bot-builder" : "slack-tokens")}
+          >
+            Continue
+          </button>
+        )}
+        {step === "bot-builder" && (
+          <button className="af-btn af-btn-primary af-btn-lg" onClick={() => setStep("slack-tokens")}>
+            Continue
+          </button>
+        )}
+        {step === "slack-tokens" && (
+          <button className="af-btn af-btn-primary af-btn-lg" onClick={handleContinueFromTokens}>
+            Continue
+          </button>
+        )}
+        {step === "details" && (
+          <button
+            className="af-btn af-btn-primary af-btn-lg"
+            disabled={!name.trim()}
+            onClick={() => { void startHiring(); }}
           >
             Hire {name}
           </button>
@@ -272,52 +293,3 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
     </DialogShell>
   );
 }
-
-function DialogShell({
-  children,
-  shadeClick,
-}: {
-  children: React.ReactNode;
-  shadeClick: (() => void) | undefined;
-}) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div
-        className="absolute inset-0"
-        style={{ background: "rgba(20,16,10,.4)" }}
-        onClick={shadeClick}
-      />
-      <div
-        className="relative flex flex-col w-full max-w-2xl max-h-[90vh] rounded-2xl shadow-2xl"
-        style={{ background: "var(--bg-elev)" }}
-      >
-        {children}
-      </div>
-    </div>
-  );
-}
-
-function FormField({
-  label,
-  hint,
-  children,
-}: {
-  label: string;
-  hint?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="flex flex-col gap-1.5">
-      <label className="font-medium text-[13.5px]" style={{ color: "var(--ink)" }}>
-        {label}
-      </label>
-      {children}
-      {hint && (
-        <span className="text-[12px]" style={{ color: "var(--ink-4)" }}>
-          {hint}
-        </span>
-      )}
-    </div>
-  );
-}
-

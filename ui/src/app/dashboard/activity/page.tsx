@@ -2,27 +2,27 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { AGENTS, ACTIVITY } from "@/features/agents/data";
+import { useAgents } from "@/features/agents/hooks/use-agents";
 import type { ActivityEvent } from "@/features/agents/types";
 import { AgentAvatar } from "@/features/agents/components/agent-avatar";
 
 type GroupedEvents = { label: string; events: (ActivityEvent & { id: string })[] }[];
 
 let evCounter = 0;
-const EVENT_SAMPLES = [
-  { agent: "maya", text: "Replied in #eng-standups", channel: "#eng-standups", tone: "info" as const },
-  { agent: "rex", text: "Approved PR #4822 in auth-svc", channel: "github · auth-svc", tone: "ok" as const },
-  { agent: "orin", text: "Ran a query against weekly_retention_v3", channel: "bigquery", tone: "info" as const },
-  { agent: "finch", text: "Enriched a lead from LinkedIn", channel: "hubspot", tone: "info" as const },
-  { agent: "atlas", text: "Drafted release notes for v4.19", channel: "github · web", tone: "info" as const },
-  { agent: "nova", text: "Created JIRA SUP-1145 from a Slack DM", channel: "jira", tone: "info" as const },
-  { agent: "maya", text: "DM'd Raj — gentle standup nudge", channel: "slack-dm", tone: "info" as const },
+const EVENT_SAMPLES: Omit<ActivityEvent & { id: string }, "id">[] = [
+  { t: "now", icon: "slack", agent: "maya", text: "Replied in #eng-standups", channel: "#eng-standups", tone: "info" },
+  { t: "now", icon: "github", agent: "rex", text: "Approved PR #4822 in auth-svc", channel: "github · auth-svc", tone: "ok" },
+  { t: "now", icon: "data", agent: "orin", text: "Ran a query against weekly_retention_v3", channel: "bigquery", tone: "info" },
+  { t: "now", icon: "browser", agent: "finch", text: "Enriched a lead from LinkedIn", channel: "hubspot", tone: "info" },
+  { t: "now", icon: "github", agent: "atlas", text: "Drafted release notes for v4.19", channel: "github · web", tone: "info" },
+  { t: "now", icon: "jira", agent: "nova", text: "Created JIRA SUP-1145 from a Slack DM", channel: "jira", tone: "info" },
+  { t: "now", icon: "slack", agent: "maya", text: "DM'd Raj — gentle standup nudge", channel: "slack-dm", tone: "info" },
 ];
 
 function makeEvent(): ActivityEvent & { id: string } {
   evCounter++;
   const s = EVENT_SAMPLES[Math.floor(Math.random() * EVENT_SAMPLES.length)];
-  return { id: "ev_" + evCounter, t: "now", icon: "activity", ...s };
+  return { id: "ev_" + evCounter, ...s, t: "now" };
 }
 
 function ageStep(t: string): string {
@@ -60,8 +60,9 @@ function groupEvents(events: (ActivityEvent & { id: string })[]): GroupedEvents 
 
 export default function ActivityPage() {
   const router = useRouter();
-  const [events, setEvents] = useState<(ActivityEvent & { id: string })[]>(
-    ACTIVITY.map((e, i) => ({ ...e, id: "init_" + i }))
+  const { agents } = useAgents();
+  const [events, setEvents] = useState<(ActivityEvent & { id: string })[]>(() =>
+    EVENT_SAMPLES.map((e, i) => ({ ...e, id: "init_" + i }))
   );
   const [filterAgent, setFilterAgent] = useState("all");
 
@@ -80,24 +81,24 @@ export default function ActivityPage() {
   const groups = groupEvents(filtered);
 
   return (
-    <div className="max-w-[1200px] mx-auto px-10 pt-9 pb-24">
+    <div className="max-w-[75rem] mx-auto px-10 pt-9 pb-24">
       <div className="flex items-start justify-between mb-8">
         <div>
-          <h1 className="text-[36px] font-semibold tracking-[-0.028em] m-0 leading-[1.15]" style={{ color: "var(--ink)" }}>
+          <h1 className="text-4xl font-semibold tracking-[-0.028em] m-0 leading-[1.15]" style={{ color: "var(--ink)" }}>
             Activity
           </h1>
-          <p className="text-[16px] mt-1.5 max-w-[640px]" style={{ color: "var(--ink-3)" }}>
+          <p className="text-base mt-1.5 max-w-[40rem]" style={{ color: "var(--ink-3)" }}>
             A live feed of everything your AI team is doing — across all surfaces, in plain English.
           </p>
         </div>
         <select
           className="af-select"
-          style={{ width: "auto", fontSize: 13.5, padding: "8px 12px" }}
+          style={{ width: "auto", fontSize: "0.844rem", padding: "0.5rem 0.75rem" }}
           value={filterAgent}
           onChange={(e) => setFilterAgent(e.target.value)}
         >
           <option value="all">Everyone</option>
-          {AGENTS.map((a) => (
+          {agents.map((a) => (
             <option key={a.id} value={a.name.toLowerCase()}>
               {a.name}
             </option>
@@ -109,16 +110,15 @@ export default function ActivityPage() {
         {groups.map((g, gi) => (
           <div key={gi}>
             <div
-              className="text-[12px] uppercase tracking-[0.08em] font-semibold mb-3"
+              className="text-xs uppercase tracking-[0.08em] font-semibold mb-3"
               style={{ color: "var(--ink-4)" }}
             >
               {g.label}
             </div>
-            <div
-              className="af-card overflow-hidden"
-            >
+            <div className="af-card overflow-hidden">
               {g.events.map((e, i) => {
-                const a = AGENTS.find((x) => x.name.toLowerCase() === e.agent) ?? AGENTS[0];
+                const realAgent = agents.find((a) => a.name.toLowerCase() === e.agent);
+                const avatarAgent = realAgent ?? { id: e.agent, name: e.agent };
                 const isNew = i === 0 && gi === 0;
                 return (
                   <div
@@ -128,7 +128,7 @@ export default function ActivityPage() {
                       borderBottom: i < g.events.length - 1 ? "1px solid var(--line)" : undefined,
                       background: isNew ? "var(--bg-soft)" : undefined,
                     }}
-                    onClick={() => router.push(`/dashboard/agents/${a.id}`)}
+                    onClick={() => realAgent && router.push(`/dashboard/agents/${realAgent.id}`)}
                     onMouseEnter={(el) => {
                       (el.currentTarget as HTMLElement).style.background = "var(--bg-soft)";
                     }}
@@ -138,16 +138,16 @@ export default function ActivityPage() {
                         : "transparent";
                     }}
                   >
-                    <AgentAvatar agent={a} size="sm" />
+                    <AgentAvatar agent={avatarAgent} size="sm" />
                     <div className="flex-1 min-w-0">
-                      <div className="text-[14px]" style={{ color: "var(--ink)" }}>
-                        <b className="font-semibold">{a.name}</b>{" "}
+                      <div className="text-sm" style={{ color: "var(--ink)" }}>
+                        <b className="font-semibold">{realAgent?.name ?? e.agent}</b>{" "}
                         {e.text.charAt(0).toLowerCase() + e.text.slice(1)}
                       </div>
                       <div className="flex items-center gap-2 mt-0.5">
-                        <span className="text-[12px]" style={{ color: "var(--ink-4)" }}>{e.t}</span>
+                        <span className="text-xs" style={{ color: "var(--ink-4)" }}>{e.t}</span>
                         <span style={{ color: "var(--ink-5)" }}>·</span>
-                        <span className="font-mono text-[12px]" style={{ color: "var(--ink-4)" }}>
+                        <span className="font-mono text-xs" style={{ color: "var(--ink-4)" }}>
                           {e.channel}
                         </span>
                       </div>

@@ -15,12 +15,42 @@ test.describe("Dashboard Page", () => {
 
     await dataSupportPage.auth.interceptRefreshRequest();
     await dataSupportPage.users.interceptGetUserContextRequest();
+    await dataSupportPage.agents.interceptGetAgentsRequest();
   });
 
-  test("should load dashboard", async () => {
+  test("should load dashboard with agent cards", async ({ page }) => {
     await dashboardPage.goto();
 
     await expect(dashboardPage.heading()).toBeVisible();
+    await expect(page.getByText("Maya")).toBeVisible();
+  });
+
+  test("shows running and idle counts", async ({ page }) => {
+    await dashboardPage.goto();
+
+    await expect(page.getByText(/working now/)).toBeVisible();
+  });
+
+  test("shows empty state when no agents", async ({ page }) => {
+    await dataSupportPage.agents.interceptGetAgentsRequest({
+      body: { page: 1, page_size: 50, total: 0, items: [] },
+    });
+
+    await dashboardPage.goto();
+
+    await expect(page.getByText("No agents yet")).toBeVisible();
+  });
+
+  test("shows error state when agents fail to load", async ({ page }) => {
+    await dataSupportPage.agents.interceptGetAgentsRequest({
+      status: 500,
+      detail: "Agents service unavailable",
+    });
+
+    await dashboardPage.goto();
+
+    await expect(page.getByText("We couldn't load your agents")).toBeVisible();
+    await expect(page.getByText("Agents service unavailable")).toBeVisible();
   });
 
   test("shows an account error state when user context fails", async ({

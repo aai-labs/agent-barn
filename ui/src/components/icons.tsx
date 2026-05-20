@@ -75,6 +75,14 @@ export function PauseIcon(p: IconProps) {
   return <Svg {...p}><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></Svg>;
 }
 
+export function PlayIcon(p: IconProps) {
+  return <Svg {...p}><polygon points="6 3 20 12 6 21 6 3"/></Svg>;
+}
+
+export function LinkIcon(p: IconProps) {
+  return <Svg {...p}><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></Svg>;
+}
+
 export function SearchIcon(p: IconProps) {
   return <Svg {...p}><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></Svg>;
 }
@@ -85,6 +93,10 @@ export function ShieldIcon({ size = 13, ...p }: IconProps) {
 
 export function EyeIcon({ size = 13, ...p }: IconProps) {
   return <Svg size={size} {...p}><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></Svg>;
+}
+
+export function EyeOffIcon({ size = 13, ...p }: IconProps) {
+  return <Svg size={size} {...p}><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></Svg>;
 }
 
 export function ServerIcon({ size = 13, ...p }: IconProps) {

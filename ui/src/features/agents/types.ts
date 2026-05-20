@@ -1,28 +1,3 @@
-export interface Agent {
-  id: string;
-  name: string;
-  templateVersion: number;
-  status: "STOPPED" | "RUNNING" | "ERROR";
-  surface: string[];
-  organization_id: string;
-  template_id: string;
-  createdAt: string;
-  updated_at: string;
-  activity: string;
-  activityType: string;
-  tokensToday: number;
-  costToday: number;
-  costMonth: number;
-  convsToday: number;
-  toolCallsToday: number;
-  uptime: string;
-  cpu: number;
-  mem: number;
-  skills: string[];
-  spark: number[];
-  color: string;
-  initials: string;
-}
 
 export interface AgentTemplate {
   id: string;

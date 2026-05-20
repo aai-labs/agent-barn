@@ -1,4 +1,4 @@
-import type { Agent } from "../types";
+import type { Agent } from "../schemas";
 
 interface StatusLineProps {
   status: Agent["status"];

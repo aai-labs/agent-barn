@@ -3,7 +3,7 @@ import { Locator, Page } from "@playwright/test";
 export class AgentDetailPage {
   constructor(private page: Page) {}
 
-  async goto(agentId = "ag_01") {
+  async goto(agentId = "33333333-3333-4333-8333-333333333333") {
     await this.page.goto(`/dashboard/agents/${agentId}`);
   }
 
