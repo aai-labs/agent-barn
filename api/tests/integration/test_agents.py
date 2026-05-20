@@ -824,7 +824,9 @@ def test_start_agent_configmap_and_overlay_are_correct():
         config_map = k8s.create_config_map.call_args.args[1]
         overlay = json.loads(config_map.data["openclaw-config-overlay.json"])
 
-        with then("the overlay configures the slack channel with open group/dm policies"):
+        with then(
+            "the overlay configures the slack channel with open group/dm policies"
+        ):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             slack = overlay["channels"]["slack"]
             assert_that(slack["mode"], equal_to("socket"))
