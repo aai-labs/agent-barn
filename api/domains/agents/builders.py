@@ -16,8 +16,11 @@ INIT_OPENCLAW_JS = """\
 const fs = require('fs');
 const path = require('path');
 
-const OVERLAY_PATH = '/app/config/openclaw-config-overlay.json';
-const CONFIG_PATH = path.join(process.env.HOME || '/home/node', '.openclaw', 'openclaw.json');
+const HOME = process.env.HOME || '/home/node';
+const TEMPLATE_DIR = '/app/config';
+const WORKSPACE_DIR = path.join(HOME, '.openclaw', 'workspace');
+const OVERLAY_PATH = path.join(TEMPLATE_DIR, 'openclaw-config-overlay.json');
+const CONFIG_PATH = path.join(HOME, '.openclaw', 'openclaw.json');
 
 function deepMerge(base, overlay) {
   const result = Object.assign({}, base);
@@ -28,6 +31,15 @@ function deepMerge(base, overlay) {
       : val;
   }
   return result;
+}
+
+fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
+for (const file of fs.readdirSync(TEMPLATE_DIR)) {
+  if (!file.endsWith('.md')) continue;
+  const dest = path.join(WORKSPACE_DIR, file);
+  if (fs.existsSync(dest)) continue;
+  fs.copyFileSync(path.join(TEMPLATE_DIR, file), dest);
+  console.log(`[init-openclaw] Seeded workspace/${file}`);
 }
 
 let overlay;
