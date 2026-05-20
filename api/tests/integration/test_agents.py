@@ -807,3 +807,55 @@ def test_get_agent_template_no_auth_returns_401():
 
         with then("it returns 401"):
             assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
+
+
+def test_start_agent_configmap_and_overlay_are_correct():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+
+        with when("I start the agent"):
+            response = client.post(
+                f"{_BASE}/{context.agent.id}/start", headers=_auth(context)
+            )
+
+        import json
+
+        config_map = k8s.create_config_map.call_args.args[1]
+        overlay = json.loads(config_map.data["openclaw-config-overlay.json"])
+
+        with then(
+            "the overlay configures the slack channel with open group/dm policies"
+        ):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            slack = overlay["channels"]["slack"]
+            assert_that(slack["mode"], equal_to("socket"))
+            assert_that(slack["groupPolicy"], equal_to("open"))
+            assert_that(slack["dmPolicy"], equal_to("open"))
+            assert_that(slack["userTokenReadOnly"], equal_to(True))
+
+        with then("the overlay routes the slack channel to the main agent"):
+            bindings = overlay["bindings"]
+            assert_that(len(bindings), equal_to(1))
+            assert_that(bindings[0]["type"], equal_to("route"))
+            assert_that(bindings[0]["agentId"], equal_to("main"))
+            assert_that(bindings[0]["match"]["channel"], equal_to("slack"))
+
+        with then("the ConfigMap contains all 8 template markdown files"):
+            for key in (
+                "SOUL.md",
+                "IDENTITY.md",
+                "USER.md",
+                "TOOLS.md",
+                "AGENTS.md",
+                "BOOT.md",
+                "BOOTSTRAP.md",
+                "HEARTBEAT.md",
+            ):
+                assert_that(config_map.data, has_key(key))
+
+        with then("soul_md and identity_md in the ConfigMap match the template"):
+            assert_that(config_map.data["SOUL.md"], equal_to("# Soul\n\nTest soul."))
+            assert_that(
+                config_map.data["IDENTITY.md"], equal_to("# Identity\n\nTest identity.")
+            )

@@ -16,8 +16,11 @@ INIT_OPENCLAW_JS = """\
 const fs = require('fs');
 const path = require('path');
 
-const OVERLAY_PATH = '/app/config/openclaw-config-overlay.json';
-const CONFIG_PATH = path.join(process.env.HOME || '/home/node', '.openclaw', 'openclaw.json');
+const HOME = process.env.HOME || '/home/node';
+const TEMPLATE_DIR = '/app/config';
+const WORKSPACE_DIR = path.join(HOME, '.openclaw', 'workspace');
+const OVERLAY_PATH = path.join(TEMPLATE_DIR, 'openclaw-config-overlay.json');
+const CONFIG_PATH = path.join(HOME, '.openclaw', 'openclaw.json');
 
 function deepMerge(base, overlay) {
   const result = Object.assign({}, base);
@@ -28,6 +31,13 @@ function deepMerge(base, overlay) {
       : val;
   }
   return result;
+}
+
+fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
+for (const file of fs.readdirSync(TEMPLATE_DIR)) {
+  if (!file.endsWith('.md')) continue;
+  fs.copyFileSync(path.join(TEMPLATE_DIR, file), path.join(WORKSPACE_DIR, file));
+  console.log(`[init-openclaw] Copied workspace/${file}`);
 }
 
 let overlay;
@@ -62,6 +72,19 @@ def build_openclaw_config_overlay(model: str, litellm_base_url: str) -> dict:
                 }
             }
         },
+        "channels": {
+            "slack": {
+                "mode": "socket",
+                "webhookPath": "/slack/events",
+                "userTokenReadOnly": True,
+                "groupPolicy": "open",
+                "dmPolicy": "open",
+                "allowFrom": ["*"],
+            }
+        },
+        "bindings": [
+            {"type": "route", "agentId": "main", "match": {"channel": "slack"}}
+        ],
     }
 
 
