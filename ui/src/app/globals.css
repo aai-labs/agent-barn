@@ -275,11 +275,12 @@
   appearance: none;
   background: transparent;
   border: 0;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
   padding: 10px 12px;
   font-size: 13px;
   color: var(--ink-3);
   font-weight: 500;
-  position: relative;
   white-space: nowrap;
   cursor: default;
 }
@@ -288,16 +289,7 @@
 }
 .af-drawer-tab[data-active="true"] {
   color: var(--ink);
-  font-weight: 600;
-}
-.af-drawer-tab[data-active="true"]::after {
-  content: '';
-  position: absolute;
-  bottom: -1px;
-  left: 12px;
-  right: 12px;
-  height: 2px;
-  background: var(--ink);
+  border-bottom-color: var(--ink);
 }
 
 /* Simple background hover — use instead of inline onMouseEnter/Leave */

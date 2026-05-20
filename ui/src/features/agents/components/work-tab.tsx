@@ -1,5 +1,5 @@
-import type { Agent } from "../types";
-import { fmtCost, fmtTokens } from "../data";
+/* eslint-disable @typescript-eslint/no-unused-vars */
+import type { Agent } from "../schemas";
 
 interface WorkTabProps {
   agent: Agent;
@@ -15,51 +15,8 @@ const workItems = [
   { t: "May 9", what: "Helped Sara reschedule a 1:1", where: "Google Cal", icon: "calendar" },
 ];
 
-export function WorkTab({ agent }: WorkTabProps) {
+export function WorkTab({ agent: _ }: WorkTabProps) {
   return <ComingSoon />;
-
-  return (
-    <div>
-      <div className="grid gap-3.5 mb-6" style={{ gridTemplateColumns: "1fr 1fr 1fr" }}>
-        <StatBox label="Today" primary={`${agent.convsToday} conversations`} sub={`${agent.toolCallsToday} tool calls`} />
-        <StatBox label="This week" primary="142 conversations" sub="824 tool calls" />
-        <StatBox label="Spend" primary={fmtCost(agent.costMonth)} sub={`${fmtTokens(agent.tokensToday * 15)} tokens · last 30d`} />
-      </div>
-
-      <div className="af-card overflow-hidden">
-        <div
-          className="px-5 py-3.5 font-semibold text-[14.5px]"
-          style={{ borderBottom: "1px solid var(--line)", color: "var(--ink)" }}
-        >
-          Recent work
-        </div>
-        {workItems.map((w, i) => (
-          <div
-            key={i}
-            className="grid items-center gap-3.5 px-5 py-3.5"
-            style={{
-              gridTemplateColumns: "32px 1fr 100px",
-              borderBottom: i < workItems.length - 1 ? "1px solid var(--line)" : undefined,
-            }}
-          >
-            <div
-              className="w-8 h-8 rounded-lg grid place-items-center flex-shrink-0"
-              style={{ background: "var(--bg-soft)", color: "var(--ink-3)" }}
-            >
-              <WorkIcon icon={w.icon} />
-            </div>
-            <div>
-              <div className="text-[14px]" style={{ color: "var(--ink)" }}>{w.what}</div>
-              <div className="text-[12.5px] mt-0.5" style={{ color: "var(--ink-3)" }}>{w.where}</div>
-            </div>
-            <div className="text-[12.5px] text-right" style={{ color: "var(--ink-4)" }}>
-              {w.t}
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
 }
 
 function StatBox({ label, primary, sub }: { label: string; primary: string; sub: string }) {

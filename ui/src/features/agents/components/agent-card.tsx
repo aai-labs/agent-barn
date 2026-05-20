@@ -1,7 +1,6 @@
 "use client";
 
-import type { Agent } from "../types";
-import { fmtCost, getTemplate } from "../data";
+import type { Agent } from "../schemas";
 import { AgentAvatar } from "./agent-avatar";
 import { StatusLine } from "./status-line";
 
@@ -13,29 +12,25 @@ interface AgentCardProps {
 export function AgentCard({ agent, onOpen }: AgentCardProps) {
   return (
     <div
-      className="af-card af-card-hover flex flex-col gap-5 p-[22px] pb-[18px] cursor-default min-h-[230px]"
+      className="af-card af-card-hover flex flex-col gap-5 p-5.5 pb-4.5 cursor-default min-h-[14.375rem]"
       onClick={() => onOpen(agent)}
     >
       <div className="flex items-center gap-4">
         <AgentAvatar agent={agent} size="lg" />
         <div className="flex-1 min-w-0">
-          <div className="font-semibold text-[19px] tracking-tight" style={{ color: "var(--ink)" }}>
+          <div className="font-semibold text-[1.1875rem] tracking-tight" style={{ color: "var(--ink)" }}>
             {agent.name}
           </div>
-          <div className="text-[13.5px] mt-0.5 font-mono" style={{ color: "var(--ink-3)" }}>
-            {getTemplate(agent.template_id)?.slug ?? agent.template_id}
-          </div>
+          {agent.model && (
+            <div className="text-[0.844rem] mt-0.5 font-mono truncate" style={{ color: "var(--ink-3)" }}>
+              {agent.model}
+            </div>
+          )}
         </div>
       </div>
 
-      <div className="flex-1 flex flex-col gap-2">
+      <div className="flex-1">
         <StatusLine status={agent.status} />
-        <div
-          className="text-[14px] leading-[1.45] line-clamp-2"
-          style={{ color: "var(--ink-2)" }}
-        >
-          {agent.activity}
-        </div>
       </div>
 
       <div
@@ -51,11 +46,8 @@ export function AgentCard({ agent, onOpen }: AgentCardProps) {
         >
           Open
         </button>
-        <div className="flex items-baseline gap-1.5 text-[13px]">
-          <span style={{ color: "var(--ink-4)", fontSize: 12 }}>today</span>
-          <span className="font-mono tabular-nums" style={{ color: "var(--ink)" }}>
-            {fmtCost(agent.costToday)}
-          </span>
+        <div className="text-xs tabular-nums" style={{ color: "var(--ink-4)" }}>
+          {new Date(agent.createdAt).toLocaleDateString()}
         </div>
       </div>
     </div>

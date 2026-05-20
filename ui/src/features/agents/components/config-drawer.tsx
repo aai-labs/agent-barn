@@ -1,33 +1,135 @@
 "use client";
 
-import { useState } from "react";
-import type { Agent } from "../types";
-import { SKILLS, TEMPLATE_FILES, getTemplate } from "../data";
-import { PlusIcon, XIcon, LockIcon, SlackIcon } from "@/components/icons";
+import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
+import type { Agent } from "../schemas";
+import { useAgentTemplate } from "../hooks/use-agent-template";
+import { useUpdateAgent } from "../hooks/use-update-agent";
+import { useDeleteAgent } from "../hooks/use-delete-agent";
+import { XIcon, PlusIcon, SlackIcon } from "@/components/icons";
+import { TokenInput } from "./hire-dialog-primitives";
+import { MODELS } from "./hire-dialog-steps";
 
 interface ConfigDrawerProps {
   agent: Agent;
   onClose: () => void;
 }
 
-const TABS = [
-  ["personality", "Personality"],
-  ["channels", "Channels"],
-  ["skills", "Skills"],
-  ["secrets", "Keys"],
-  ["k8s", "Infrastructure"],
-  ["danger", "Danger zone"],
-] as const;
+const TABS: [string, string, boolean][] = [
+  ["personality", "Personality", true],
+  ["secrets", "Keys", true],
+  ["channels", "Channels", false],
+  ["skills", "Skills", false],
+  ["k8s", "Infrastructure", false],
+  ["danger", "Danger zone", true],
+];
 
-type TabKey = (typeof TABS)[number][0];
+type TabKey = "personality" | "channels" | "skills" | "secrets" | "k8s" | "danger";
+
+type TemplateFiles = {
+  soul_md: string;
+  identity_md: string;
+  user_md: string;
+  tools_md: string;
+  agents_md: string;
+  boot_md: string;
+  bootstrap_md: string;
+  heartbeat_md: string;
+};
+
+const FILE_KEYS: (keyof TemplateFiles)[] = [
+  "soul_md",
+  "identity_md",
+  "user_md",
+  "tools_md",
+  "agents_md",
+  "boot_md",
+  "bootstrap_md",
+  "heartbeat_md",
+];
 
 export function ConfigDrawer({ agent, onClose }: ConfigDrawerProps) {
+  const router = useRouter();
+  const { template, isLoading: templateLoading, error: templateError, refetch: refetchTemplate } = useAgentTemplate(agent.id, agent.templateVersion);
+  const updateAgent = useUpdateAgent();
+  const deleteAgent = useDeleteAgent();
+
   const [tab, setTab] = useState<TabKey>("personality");
   const [retireConfirm, setRetireConfirm] = useState(false);
-  const templateFiles = TEMPLATE_FILES[agent.template_id] ?? {};
-  const fileKeys = Object.keys(templateFiles);
-  const [file, setFile] = useState(fileKeys[0] ?? "soul_md");
-  const [files, setFiles] = useState<Record<string, string>>(templateFiles);
+  const [name, setName] = useState(agent.name);
+  const [model, setModel] = useState(agent.model);
+  const [file, setFile] = useState<keyof TemplateFiles>("soul_md");
+  const [files, setFiles] = useState<Partial<TemplateFiles>>({});
+  const [saved, setSaved] = useState(false);
+  const [slackAppToken, setSlackAppToken] = useState("");
+  const [slackBotToken, setSlackBotToken] = useState("");
+  const [showAppToken, setShowAppToken] = useState(false);
+  const [showBotToken, setShowBotToken] = useState(false);
+  const [savedTokens, setSavedTokens] = useState(false);
+
+  useEffect(() => {
+    if (template) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setFiles({
+        soul_md: template.soulMd,
+        identity_md: template.identityMd,
+        user_md: template.userMd,
+        tools_md: template.toolsMd,
+        agents_md: template.agentsMd,
+        boot_md: template.bootMd,
+        bootstrap_md: template.bootstrapMd,
+        heartbeat_md: template.heartbeatMd,
+      });
+    }
+  }, [template]);
+
+  const isRunning = agent.status === "RUNNING";
+
+  async function handleSave() {
+    try {
+      await updateAgent.mutateAsync({
+        agentId: agent.id,
+        name,
+        model,
+        soulMd: files.soul_md,
+        identityMd: files.identity_md,
+        userMd: files.user_md,
+        toolsMd: files.tools_md,
+        agentsMd: files.agents_md,
+        bootMd: files.boot_md,
+        bootstrapMd: files.bootstrap_md,
+        heartbeatMd: files.heartbeat_md,
+      });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch {
+      // error displayed via updateAgent.error
+    }
+  }
+
+  async function handleSaveTokens() {
+    try {
+      await updateAgent.mutateAsync({
+        agentId: agent.id,
+        ...(slackAppToken.trim() ? { slackAppToken } : {}),
+        ...(slackBotToken.trim() ? { slackBotToken } : {}),
+      });
+      setSavedTokens(true);
+      setTimeout(() => setSavedTokens(false), 2000);
+    } catch {
+      // error displayed via updateAgent.error
+    }
+  }
+
+  async function handleRetire() {
+    try {
+      await deleteAgent.mutateAsync(agent.id);
+      onClose();
+      router.push("/dashboard");
+    } catch {
+      // error displayed via deleteAgent.error
+    }
+  }
 
   return (
     <div className="fixed inset-0 z-50">
@@ -38,12 +140,12 @@ export function ConfigDrawer({ agent, onClose }: ConfigDrawerProps) {
       />
       <aside
         className="absolute top-0 right-0 bottom-0 flex flex-col af-drawer-panel"
-        style={{ width: "min(580px, 95vw)", background: "var(--bg)", boxShadow: "var(--shadow-pop)" }}
+        style={{ width: "min(36.25rem, 95vw)", background: "var(--bg)", boxShadow: "var(--shadow-pop)" }}
       >
-        <header className="px-[26px] pt-[22px] pb-3.5 flex items-start justify-between">
+        <header className="px-6.5 pt-5.5 pb-3.5 flex items-start justify-between">
           <div>
             <div
-              className="text-[12px] uppercase tracking-[0.08em] font-semibold mb-1"
+              className="text-xs uppercase tracking-[0.08em] font-semibold mb-1"
               style={{ color: "var(--ink-3)" }}
             >
               {agent.name} · configuration
@@ -58,66 +160,148 @@ export function ConfigDrawer({ agent, onClose }: ConfigDrawerProps) {
         </header>
 
         <nav
-          className="flex gap-0.5 px-[18px] pt-1 overflow-x-auto flex-shrink-0 no-scrollbar"
+          className="flex gap-0.5 px-4.5 pt-1 overflow-x-auto flex-shrink-0 no-scrollbar"
           style={{ borderBottom: "1px solid var(--line)" }}
         >
-          {TABS.map(([k, l]) => (
+          {TABS.map(([k, l, enabled]) => (
             <button
               key={k}
               className="af-drawer-tab"
               data-active={tab === k}
-              onClick={() => setTab(k)}
+              disabled={!enabled}
+              onClick={() => enabled && setTab(k as TabKey)}
+              style={!enabled ? { opacity: 0.35, cursor: "default" } : undefined}
             >
               {l}
             </button>
           ))}
         </nav>
 
-        <div className="flex-1 overflow-y-auto px-[26px] py-[22px]">
+        <div className="flex-1 overflow-y-auto px-6.5 py-5.5 flex flex-col">
           {tab === "personality" && (
-            <div>
-              <Hint>
-                {agent.name}&apos;s personality is defined by markdown files inherited from{" "}
-                <span className="font-mono">{getTemplate(agent.template_id)?.slug ?? agent.template_id}@{agent.templateVersion}</span>. Edit below to customise per-agent.
-              </Hint>
-              <div className="flex flex-wrap gap-1 mb-3">
-                {fileKeys.map((k) => (
-                  <button
-                    key={k}
-                    className="font-mono text-[12px] px-2.5 py-[5px] rounded-[7px] border"
-                    style={{
-                      background: k === file ? "var(--bg-elev)" : "transparent",
-                      borderColor: k === file ? "var(--line)" : "transparent",
-                      color: k === file ? "var(--ink)" : "var(--ink-3)",
-                      fontWeight: k === file ? 500 : 400,
-                    }}
-                    onClick={() => setFile(k)}
+            <div className="flex flex-col flex-1">
+              <div className="flex flex-col gap-3.5 mb-5">
+                <div className="flex flex-col gap-1.5">
+                  <label className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>Name</label>
+                  <input
+                    className="af-input"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    disabled={isRunning}
+                  />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <label className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>Model</label>
+                  <select
+                    className="af-input"
+                    value={model}
+                    onChange={(e) => setModel(e.target.value)}
+                    disabled={isRunning}
                   >
-                    {k.replace("_md", ".md")}
-                  </button>
-                ))}
+                    {MODELS.map((m) => (
+                      <option key={m.value} value={m.value}>{m.label}</option>
+                    ))}
+                  </select>
+                </div>
               </div>
-              <textarea
-                className="w-full rounded-xl font-mono text-[12.5px] leading-[1.65] resize-none p-4"
-                style={{
-                  background: "var(--bg-elev)",
-                  border: "1px solid var(--line)",
-                  color: "var(--ink-2)",
-                  outline: "none",
-                  minHeight: 280,
-                }}
-                value={files[file] ?? ""}
-                onChange={(e) => setFiles((prev) => ({ ...prev, [file]: e.target.value }))}
-              />
-              <div className="flex gap-2 mt-3.5">
-                <button className="af-btn af-btn-sm">Save changes</button>
-                <button
-                  className="af-btn af-btn-sm af-btn-ghost"
-                  onClick={() => setFiles(templateFiles)}
+              <Hint>
+                {agent.name}&apos;s personality is defined by markdown files.{" "}
+                {isRunning ? (
+                  <span style={{ color: "var(--warn, #b45309)" }}>
+                    Stop the agent before editing its configuration.
+                  </span>
+                ) : (
+                  "Edit below to customise per-agent."
+                )}
+              </Hint>
+
+              {templateLoading ? (
+                <div className="flex flex-col gap-2 animate-pulse">
+                  <div className="h-4 w-24 rounded-md" style={{ background: "var(--bg-soft)" }} />
+                  <div className="h-44 rounded-xl" style={{ background: "var(--bg-soft)" }} />
+                </div>
+              ) : templateError ? (
+                <div
+                  className="flex flex-col items-start gap-2 rounded-xl px-4 py-3.5 text-[0.8125rem]"
+                  style={{ background: "var(--err-soft, #fef2f2)", color: "var(--err)" }}
                 >
-                  Reset to template
-                </button>
-              </div>
+                  <div className="font-semibold">Failed to load configuration files</div>
+                  <div style={{ color: "var(--err)", opacity: 0.8 }}>
+                    {templateError instanceof Error ? templateError.message : "An error occurred."}
+                  </div>
+                  <button className="af-btn af-btn-sm mt-1" onClick={() => { void refetchTemplate(); }}>
+                    Retry
+                  </button>
+                </div>
+              ) : (
+                <div className="flex flex-col flex-1">
+                  <div className="flex flex-wrap gap-1 mb-3">
+                    {FILE_KEYS.map((k) => (
+                      <button
+                        key={k}
+                        className="font-mono text-xs px-2.5 py-1.25 rounded-[0.4375rem] border"
+                        style={{
+                          background: k === file ? "var(--bg-elev)" : "transparent",
+                          borderColor: k === file ? "var(--line)" : "transparent",
+                          color: k === file ? "var(--ink)" : "var(--ink-3)",
+                          fontWeight: k === file ? 500 : 400,
+                        }}
+                        onClick={() => setFile(k)}
+                      >
+                        {k.replace("_md", ".md")}
+                      </button>
+                    ))}
+                  </div>
+                  <textarea
+                    className="w-full rounded-xl font-mono text-[0.781rem] leading-[1.65] resize-none p-4 flex-1"
+                    style={{
+                      background: "var(--bg-elev)",
+                      border: "1px solid var(--line)",
+                      color: "var(--ink-2)",
+                      outline: "none",
+                      minHeight: "10rem",
+                    }}
+                    value={files[file] ?? ""}
+                    disabled={isRunning}
+                    onChange={(e) => setFiles((prev) => ({ ...prev, [file]: e.target.value }))}
+                  />
+                  <div className="flex gap-2 mt-3.5 items-center">
+                    <button
+                      className="af-btn af-btn-sm"
+                      disabled={isRunning || updateAgent.isPending}
+                      title={isRunning ? "Stop the agent before saving changes" : undefined}
+                      onClick={() => { void handleSave(); }}
+                    >
+                      {updateAgent.isPending ? "Saving…" : saved ? "Saved!" : "Save changes"}
+                    </button>
+                    <button
+                      className="af-btn af-btn-sm af-btn-ghost"
+                      disabled={isRunning}
+                      onClick={() => {
+                        if (template) {
+                          setFiles({
+                            soul_md: template.soulMd,
+                            identity_md: template.identityMd,
+                            user_md: template.userMd,
+                            tools_md: template.toolsMd,
+                            agents_md: template.agentsMd,
+                            boot_md: template.bootMd,
+                            bootstrap_md: template.bootstrapMd,
+                            heartbeat_md: template.heartbeatMd,
+                          });
+                        }
+                      }}
+                    >
+                      Reset to template
+                    </button>
+                    {updateAgent.error && (
+                      <span className="text-xs" style={{ color: "var(--err)" }}>
+                        {updateAgent.error instanceof Error ? updateAgent.error.message : "Save failed"}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -127,7 +311,7 @@ export function ConfigDrawer({ agent, onClose }: ConfigDrawerProps) {
               <CfgRow key="#general">
                 <SlackIcon style={{ color: "var(--ink-3)", flexShrink: 0 }} />
                 <span className="font-mono">#general</span>
-                <span className="ml-auto text-[12px]" style={{ color: "var(--ink-4)" }}>
+                <span className="ml-auto text-xs" style={{ color: "var(--ink-4)" }}>
                   read &amp; write
                 </span>
                 <button className="af-btn af-btn-sm af-btn-ghost">Remove</button>
@@ -139,55 +323,58 @@ export function ConfigDrawer({ agent, onClose }: ConfigDrawerProps) {
           )}
 
           {tab === "skills" && (
-            <div>
-              <Hint>Tools {agent.name} can call. All vetted and routed through the egress proxy.</Hint>
-              {agent.skills.map((s) => {
-                const skill = SKILLS.find((x) => x.id === s);
-                return (
-                  <CfgRow key={s}>
-                    <div className="flex-1 min-w-0">
-                      <div className="font-medium">{skill?.name ?? s}</div>
-                      <div className="text-[12.5px]" style={{ color: "var(--ink-4)" }}>
-                        {skill?.desc ?? ""}
-                      </div>
-                    </div>
-                    <button className="af-btn af-btn-sm af-btn-ghost">Disable</button>
-                  </CfgRow>
-                );
-              })}
-              <button className="af-btn af-btn-sm mt-3">
-                <PlusIcon /> Install skill
-              </button>
+            <div
+              className="flex flex-col items-center justify-center text-center py-14 rounded-2xl"
+              style={{ border: "1px dashed var(--line-strong)" }}
+            >
+              <div className="text-2xl mb-2">🚧</div>
+              <div className="font-medium text-sm mb-1" style={{ color: "var(--ink)" }}>Coming soon</div>
+              <div className="text-[0.8125rem]" style={{ color: "var(--ink-3)" }}>Skill management will appear here soon.</div>
             </div>
           )}
 
           {tab === "secrets" && (
-            <div>
+            <div className="flex flex-col gap-4">
               <Hint>
-                <LockIcon style={{ flexShrink: 0, marginTop: 1 }} /> {agent.name} only holds fake keys. The egress proxy swaps in real keys at request time and logs every swap.
+                Tokens are write-only — leave a field blank to keep the existing value.
               </Hint>
-              <div className="flex flex-col gap-2.5">
-                {[
-                  ["Slack", "xoxb-fake-a91…", "2s ago"],
-                  ["Atlassian", "jira-fake-b12…", "31s ago"],
-                  ["Google Calendar", "gcal-fake-7c8…", "6m ago"],
-                ].map(([n, k, t]) => (
-                  <div
-                    key={n}
-                    className="grid items-center gap-3.5 px-3.5 py-3 rounded-xl"
-                    style={{
-                      gridTemplateColumns: "1fr auto auto",
-                      border: "1px solid var(--line)",
-                    }}
-                  >
-                    <div>
-                      <div className="font-medium">{n}</div>
-                      <div className="font-mono text-[12px]" style={{ color: "var(--ink-4)" }}>{k}</div>
-                    </div>
-                    <div className="text-[12px]" style={{ color: "var(--ink-4)" }}>used {t}</div>
-                    <button className="af-btn af-btn-sm">Rotate</button>
-                  </div>
-                ))}
+              <div className="flex flex-col gap-3.5">
+                <div className="flex flex-col gap-1.5">
+                  <label className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>App-level token</label>
+                  <TokenInput
+                    value={slackAppToken}
+                    onChange={setSlackAppToken}
+                    visible={showAppToken}
+                    onToggle={() => setShowAppToken((v) => !v)}
+                    placeholder="xapp-1-… (leave blank to keep existing)"
+                  />
+                  <span className="text-xs" style={{ color: "var(--ink-4)" }}>Starts with xapp- · required for Socket Mode</span>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <label className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>Bot token</label>
+                  <TokenInput
+                    value={slackBotToken}
+                    onChange={setSlackBotToken}
+                    visible={showBotToken}
+                    onToggle={() => setShowBotToken((v) => !v)}
+                    placeholder="xoxb-… (leave blank to keep existing)"
+                  />
+                  <span className="text-xs" style={{ color: "var(--ink-4)" }}>Starts with xoxb- · required for API calls</span>
+                </div>
+              </div>
+              <div className="flex gap-2 items-center">
+                <button
+                  className="af-btn af-btn-sm"
+                  disabled={updateAgent.isPending || (!slackAppToken.trim() && !slackBotToken.trim())}
+                  onClick={() => { void handleSaveTokens(); }}
+                >
+                  {updateAgent.isPending ? "Saving…" : savedTokens ? "Saved!" : "Save tokens"}
+                </button>
+                {updateAgent.error && (
+                  <span className="text-xs" style={{ color: "var(--err)" }}>
+                    {updateAgent.error instanceof Error ? updateAgent.error.message : "Save failed"}
+                  </span>
+                )}
               </div>
             </div>
           )}
@@ -210,9 +397,9 @@ export function ConfigDrawer({ agent, onClose }: ConfigDrawerProps) {
                   className="px-3.5 py-3 rounded-xl mb-1.5"
                   style={{ border: "1px solid var(--line)" }}
                 >
-                  <div className="font-mono text-[11.5px]" style={{ color: "var(--ink-4)" }}>{kind}</div>
-                  <div className="font-mono text-[13px] font-medium" style={{ color: "var(--ink)" }}>{name}</div>
-                  <div className="text-[12.5px]" style={{ color: "var(--ink-3)" }}>{status}</div>
+                  <div className="font-mono text-[0.719rem]" style={{ color: "var(--ink-4)" }}>{kind}</div>
+                  <div className="font-mono text-[0.8125rem] font-medium" style={{ color: "var(--ink)" }}>{name}</div>
+                  <div className="text-[0.781rem]" style={{ color: "var(--ink-3)" }}>{status}</div>
                 </div>
               ))}
             </div>
@@ -232,7 +419,7 @@ export function ConfigDrawer({ agent, onClose }: ConfigDrawerProps) {
                   Retire agent
                 </button>
               </div>
-              <div className="text-[12px] mt-2.5 leading-[1.5]" style={{ color: "var(--ink-4)" }}>
+              <div className="text-xs mt-2.5 leading-[1.5]" style={{ color: "var(--ink-4)" }}>
                 Retiring permanently deletes all pods, volumes, and configuration.
               </div>
             </div>
@@ -251,10 +438,10 @@ export function ConfigDrawer({ agent, onClose }: ConfigDrawerProps) {
             className="relative w-full max-w-sm rounded-2xl p-6 shadow-2xl"
             style={{ background: "var(--bg-elev)", border: "1px solid var(--line)" }}
           >
-            <h3 className="text-[17px] font-semibold tracking-tight mb-1.5" style={{ color: "var(--ink)" }}>
+            <h3 className="text-[1.0625rem] font-semibold tracking-tight mb-1.5" style={{ color: "var(--ink)" }}>
               Retire {agent.name}?
             </h3>
-            <p className="text-[13.5px] leading-[1.55] mb-6" style={{ color: "var(--ink-3)" }}>
+            <p className="text-[0.844rem] leading-[1.55] mb-6" style={{ color: "var(--ink-3)" }}>
               This will permanently delete {agent.name}&apos;s pods, volumes, and configuration. This cannot be undone.
             </p>
             <div className="flex gap-2 justify-end">
@@ -263,11 +450,18 @@ export function ConfigDrawer({ agent, onClose }: ConfigDrawerProps) {
               </button>
               <button
                 className="af-btn"
+                disabled={deleteAgent.isPending}
                 style={{ background: "var(--err)", borderColor: "var(--err)", color: "#fff" }}
+                onClick={() => { void handleRetire(); }}
               >
-                Retire agent
+                {deleteAgent.isPending ? "Retiring…" : "Retire agent"}
               </button>
             </div>
+            {deleteAgent.error && (
+              <p className="text-xs mt-3" style={{ color: "var(--err)" }}>
+                {deleteAgent.error instanceof Error ? deleteAgent.error.message : "Retire failed"}
+              </p>
+            )}
           </div>
         </div>
       )}
@@ -278,7 +472,7 @@ export function ConfigDrawer({ agent, onClose }: ConfigDrawerProps) {
 function Hint({ children }: { children: React.ReactNode }) {
   return (
     <div
-      className="text-[13px] rounded-xl px-3.5 py-3 mb-[18px] leading-[1.5] flex items-start gap-1.5"
+      className="text-[0.8125rem] rounded-xl px-3.5 py-3 mb-4.5 leading-[1.5] flex items-start gap-1.5"
       style={{ background: "var(--bg-soft)", color: "var(--ink-3)" }}
     >
       {children}
@@ -289,11 +483,10 @@ function Hint({ children }: { children: React.ReactNode }) {
 function CfgRow({ children }: { children: React.ReactNode }) {
   return (
     <div
-      className="flex items-center gap-2.5 px-3.5 py-[11px] text-[13.5px]"
+      className="flex items-center gap-2.5 px-3.5 py-[0.6875rem] text-[0.844rem]"
       style={{ borderBottom: "1px solid var(--line)" }}
     >
       {children}
     </div>
   );
 }
-
