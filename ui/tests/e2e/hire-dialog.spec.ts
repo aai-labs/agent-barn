@@ -19,7 +19,7 @@ test.describe("Hire Dialog", () => {
     await dataSupportPage.agents.interceptGetAgentsRequest();
 
     await dashboardPage.goto();
-    await page.getByRole("button", { name: /hire a teammate/i }).click();
+    await page.getByRole("button", { name: /hire agent/i }).click();
   });
 
   test("should open the hire dialog on step 1", async ({ page }) => {
@@ -65,6 +65,8 @@ test.describe("Hire Dialog", () => {
     await page.getByRole("button", { name: /continue/i }).click();
     await page.getByText("I already have a Slack app").click();
     await page.getByRole("button", { name: /continue/i }).click();
+    await page.getByPlaceholder(/xapp-/i).fill("xapp-1-test");
+    await page.getByPlaceholder(/xoxb-/i).fill("xoxb-test");
     await page.getByRole("button", { name: /continue/i }).click();
 
     await expect(page.getByText("A few details and we'll get them set up.")).toBeVisible();
@@ -75,6 +77,8 @@ test.describe("Hire Dialog", () => {
     await page.getByRole("button", { name: /continue/i }).click();
     await page.getByText("I already have a Slack app").click();
     await page.getByRole("button", { name: /continue/i }).click();
+    await page.getByPlaceholder(/xapp-/i).fill("xapp-1-test");
+    await page.getByPlaceholder(/xoxb-/i).fill("xoxb-test");
     await page.getByRole("button", { name: /continue/i }).click();
 
     await expect(page.getByRole("combobox", { name: /model/i })).toBeVisible();

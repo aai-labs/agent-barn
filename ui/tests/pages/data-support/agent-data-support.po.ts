@@ -44,7 +44,7 @@ export class AgentDataSupport {
     detail?: string;
     body?: unknown;
   } = {}) {
-    await this.page.route("**/api/v1/agents", async (route) => {
+    await this.page.route("**/api/v1/agents*", async (route) => {
       if (route.request().method() !== "GET") {
         await route.fallback();
         return;

@@ -423,6 +423,7 @@ export function DetailsStep({
       <FormField label="Model">
         <select
           className="af-input"
+          aria-label="Model"
           value={model}
           onChange={(e) => onModelChange(e.target.value)}
         >

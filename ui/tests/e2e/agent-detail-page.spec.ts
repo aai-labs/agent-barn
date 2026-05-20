@@ -62,13 +62,13 @@ test.describe("Agent Detail Page", () => {
     await expect(page.getByRole("button", { name: /pause/i })).toBeVisible();
   });
 
-  test("shows Resume button when agent is STOPPED", async ({ page }) => {
+  test("shows Start button when agent is STOPPED", async ({ page }) => {
     await dataSupportPage.agents.interceptGetAgentRequest({
       body: { ...mockAgent, status: "STOPPED" },
     });
     await agentDetailPage.goto(MOCK_AGENT_ID);
 
-    await expect(page.getByRole("button", { name: /resume/i })).toBeVisible();
+    await expect(page.getByRole("button", { name: /start/i })).toBeVisible();
     await expect(page.getByRole("button", { name: /pause/i })).not.toBeVisible();
   });
 
@@ -76,17 +76,17 @@ test.describe("Agent Detail Page", () => {
     await dataSupportPage.agents.interceptStopAgentRequest();
 
     await page.getByRole("button", { name: /pause/i }).click();
-    await expect(page.getByRole("button", { name: /resume/i })).toBeVisible();
+    await expect(page.getByRole("button", { name: /start/i })).toBeVisible();
   });
 
-  test("Resume button starts agent and updates status", async ({ page }) => {
+  test("Start button starts agent and updates status", async ({ page }) => {
     await dataSupportPage.agents.interceptGetAgentRequest({
       body: { ...mockAgent, status: "STOPPED" },
     });
     await dataSupportPage.agents.interceptStartAgentRequest();
     await agentDetailPage.goto(MOCK_AGENT_ID);
 
-    await page.getByRole("button", { name: /resume/i }).click();
+    await page.getByRole("button", { name: /start/i }).click();
     await expect(page.getByRole("button", { name: /pause/i })).toBeVisible();
   });
 
@@ -106,7 +106,7 @@ test.describe("Agent Detail Page", () => {
     await page.getByRole("button", { name: /pair/i }).click();
     await expect(page.getByText(`Pair Maya`)).toBeVisible();
 
-    await page.getByPlaceholder(/paste the code/i).fill("test-oauth-code");
+    await page.getByPlaceholder(/enter the code/i).fill("test-oauth-code");
     await page.getByRole("button", { name: /connect/i }).click();
 
     await expect(page.getByText(`Pair Maya`)).not.toBeVisible();
