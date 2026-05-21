@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import http.client
+import json
 import subprocess
 from dataclasses import dataclass, field
 
@@ -222,3 +224,15 @@ class KubernetesClient:
                 or f"kubectl exec failed with code {result.returncode}"
             )
         return result.stdout
+
+    def fetch_agent_healthz(self, service_name: str, namespace: str) -> dict:
+        host = f"{service_name}.{namespace}"
+        try:
+            conn = http.client.HTTPConnection(host, 8081, timeout=5)
+            conn.request("GET", "/healthz")
+            response = conn.getresponse()
+            return json.loads(response.read())
+        except Exception as exc:
+            raise RuntimeError(
+                f"healthz unreachable for {service_name}: {exc}"
+            ) from exc

@@ -7,6 +7,7 @@ from fastapi_injector import Injected
 from api.domains.agents.models import (
     AgentCreate,
     AgentFilter,
+    AgentHealthRead,
     AgentRead,
     AgentTemplateRead,
     AgentUpdate,
@@ -100,6 +101,15 @@ def stop_agent(
     service: Annotated[AgentService, Injected(AgentService)],
 ):
     return service.stop_agent(agent_id, context)
+
+
+@agents_router.get("/{agent_id}/healthz", response_model=AgentHealthRead)
+def get_agent_healthz(
+    agent_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentService, Injected(AgentService)],
+):
+    return service.get_agent_health(agent_id, context)
 
 
 @agents_router.post("/{agent_id}/pair")

@@ -35,6 +35,12 @@ export const PaginatedAgentsSchema = z.object({
   items: z.array(AgentSchema),
 });
 
+export const AgentHealthSchema = z.object({
+  status: z.enum(["ok", "error", "starting"]),
+  reason: z.string().optional(),
+});
+
 export type Agent = z.infer<typeof AgentSchema>;
+export type AgentHealth = z.infer<typeof AgentHealthSchema>;
 export type AgentTemplateRead = z.infer<typeof AgentTemplateReadSchema>;
 export type PaginatedAgents = z.infer<typeof PaginatedAgentsSchema>;
