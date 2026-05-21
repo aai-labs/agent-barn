@@ -38,7 +38,7 @@ from api.domains.agents.models import (
 )
 from api.domains.agents.repository import AgentRepository
 from api.domains.auth.models import CurrentUserContext
-from api.domains.conversations.service import ConversationService
+from api.domains.conversations.service import ConversationSyncService
 from api.infrastructure.crypto import decrypt_token, encrypt_token
 from api.infrastructure.kubernetes.client import KubernetesClient
 from api.infrastructure.shared.models import PaginatedItems, Pagination
@@ -67,7 +67,7 @@ class AgentService:
     k8s: KubernetesClient
     litellm: LiteLLMClient
     config: Config
-    conversation_service: ConversationService
+    conversation_sync_service: ConversationSyncService
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
@@ -314,7 +314,7 @@ class AgentService:
             )
 
         try:
-            self.conversation_service.sync(agent_id)
+            self.conversation_sync_service.sync_all_channels(agent_id)
         except Exception as e:
             logger.warning(
                 "Conversation sync before stop failed for agent %s: %s", agent_id, e

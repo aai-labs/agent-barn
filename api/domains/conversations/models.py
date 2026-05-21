@@ -49,24 +49,29 @@ class ConversationMessageRead(PydanticBaseModel):
 
     id: UUID
     direction: MessageDirection
+    thread_id: str | None
     sender_id: str | None
     sender_name: str | None
     content: str
     occurred_at: datetime
 
 
-class ConversationSessionRead(PydanticBaseModel):
-    session_key: str
-    channel_id: str
-    thread_id: str | None
-    messages: list[ConversationMessageRead]
-
-
 class ConversationChannelRead(PydanticBaseModel):
     channel_id: str
     channel_name: str | None
-    sessions: list[ConversationSessionRead]
 
 
-class ConversationsRead(PydanticBaseModel):
-    channels: list[ConversationChannelRead]
+class ConversationsFilter(PydanticBaseModel):
+    from_date: datetime | None = None
+    to_date: datetime | None = None
+
+
+class ConversationsCursor(PydanticBaseModel):
+    before_occurred_at: datetime | None = None
+    before_id: UUID | None = None
+
+
+class ConversationMessagesPage(PydanticBaseModel):
+    messages: list[ConversationMessageRead]
+    has_more: bool
+    next_cursor: ConversationsCursor | None

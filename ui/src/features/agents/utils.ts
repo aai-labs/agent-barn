@@ -1,11 +1,30 @@
 import { createQueryKeyStructure } from "@/shared/query-keys";
 
 export const AGENTS_PAGE_SIZE = 50;
+export const CONVERSATION_MESSAGES_PAGE_SIZE = 6;
 const _agentsKeyBase = createQueryKeyStructure("agents");
+
+export type ConversationsFiltersKey = {
+  fromDate: string;
+  toDate: string;
+};
 
 export const agentsKey = {
   ..._agentsKeyBase,
   health: (id: string) => [..._agentsKeyBase.detail(id), "health"] as const,
+  conversationChannels: (agentId: string) =>
+    [..._agentsKeyBase.detail(agentId), "conversation-channels"] as const,
+  conversationMessages: (
+    agentId: string,
+    channelId: string,
+    filters: ConversationsFiltersKey,
+  ) =>
+    [
+      ..._agentsKeyBase.detail(agentId),
+      "conversation-messages",
+      channelId,
+      filters,
+    ] as const,
 };
 
 const AGENT_COLORS = [
