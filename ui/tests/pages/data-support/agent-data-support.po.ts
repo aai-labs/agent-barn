@@ -16,6 +16,19 @@ export const mockAgent = {
   updated_at: "2026-05-14T09:14:00Z",
 };
 
+export const mockToolCall = {
+  id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  agent_id: MOCK_AGENT_ID,
+  session_id: "session-abc",
+  tool_name: "read",
+  arguments: { path: "/repo/config.yaml" },
+  result: [{ type: "text", text: "db_host: postgres" }],
+  status: "SUCCESS",
+  occurred_at: "2026-05-21T10:00:00Z",
+  completed_at: "2026-05-21T10:00:01Z",
+  duration_ms: 1000,
+};
+
 export const mockAgentTemplate = {
   id: MOCK_TEMPLATE_ID,
   organization_id: MOCK_ORG_ID,
@@ -256,6 +269,42 @@ export class AgentDataSupport {
           status,
           contentType: "application/json",
           body: JSON.stringify(status >= 400 ? { detail } : { message }),
+        });
+      },
+    );
+  }
+
+  async interceptGetToolCallsRequest({
+    agentId = MOCK_AGENT_ID,
+    status = 200,
+    detail = "Unable to load tool calls",
+    body,
+  }: {
+    agentId?: string;
+    status?: number;
+    detail?: string;
+    body?: unknown;
+  } = {}) {
+    await this.page.route(
+      `**/api/v1/agents/${agentId}/tool-calls*`,
+      async (route) => {
+        if (route.request().method() !== "GET") {
+          await route.fallback();
+          return;
+        }
+        await route.fulfill({
+          status,
+          contentType: "application/json",
+          body: JSON.stringify(
+            status >= 400
+              ? { detail }
+              : (body ?? {
+                  page: 1,
+                  page_size: 20,
+                  total: 1,
+                  items: [mockToolCall],
+                }),
+          ),
         });
       },
     );
