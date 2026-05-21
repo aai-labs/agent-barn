@@ -36,7 +36,7 @@ export const PaginatedAgentsSchema = z.object({
 });
 
 export const AgentHealthSchema = z.object({
-  status: z.enum(["ok", "error", "starting"]),
+  status: z.enum(["ok", "error", "starting", "initializing", "crashed"]),
   reason: z.string().nullish(),
 });
 

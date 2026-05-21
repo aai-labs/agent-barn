@@ -392,6 +392,13 @@ class AgentService:
 
         name = f"agent-{agent_id}"
         ns = self.config.k8s_namespace
+
+        pod_status = self.k8s.get_pod_readiness(name, ns)
+        if pod_status == "crashed":
+            return AgentHealthRead(status="crashed")
+        if pod_status != "ready":
+            return AgentHealthRead(status="initializing")
+
         try:
             data = self.k8s.fetch_agent_healthz(name, ns)
             return AgentHealthRead.model_validate(data)

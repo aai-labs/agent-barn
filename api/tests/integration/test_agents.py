@@ -870,12 +870,17 @@ def test_get_agent_healthz_returns_ok_when_healthy():
         with when("the pod /healthz returns healthy"):
             with patch.object(
                 context.injector.get(KubernetesClient),
-                "fetch_agent_healthz",
-                return_value={"status": "ok"},
+                "get_pod_readiness",
+                return_value="ready",
             ):
-                response = client.get(
-                    f"{_BASE}/{agent_id}/healthz", headers=_auth(context)
-                )
+                with patch.object(
+                    context.injector.get(KubernetesClient),
+                    "fetch_agent_healthz",
+                    return_value={"status": "ok"},
+                ):
+                    response = client.get(
+                        f"{_BASE}/{agent_id}/healthz", headers=_auth(context)
+                    )
 
         with then("the API returns 200 with status ok"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
@@ -890,17 +895,62 @@ def test_get_agent_healthz_returns_503_when_pod_unreachable():
         with when("the pod is unreachable"):
             with patch.object(
                 context.injector.get(KubernetesClient),
-                "fetch_agent_healthz",
-                side_effect=RuntimeError("connection refused"),
+                "get_pod_readiness",
+                return_value="ready",
             ):
-                response = client.get(
-                    f"{_BASE}/{agent_id}/healthz", headers=_auth(context)
-                )
+                with patch.object(
+                    context.injector.get(KubernetesClient),
+                    "fetch_agent_healthz",
+                    side_effect=RuntimeError("connection refused"),
+                ):
+                    response = client.get(
+                        f"{_BASE}/{agent_id}/healthz", headers=_auth(context)
+                    )
 
         with then("the API returns 503"):
             assert_that(
                 response.status_code, equal_to(status.HTTP_503_SERVICE_UNAVAILABLE)
             )
+
+
+def test_get_agent_healthz_returns_initializing_when_pod_not_ready():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        client: TestClient = context.client
+        agent_id = context.agent.id
+
+        with when("the pod is running but not yet ready"):
+            with patch.object(
+                context.injector.get(KubernetesClient),
+                "get_pod_readiness",
+                return_value="initializing",
+            ):
+                response = client.get(
+                    f"{_BASE}/{agent_id}/healthz", headers=_auth(context)
+                )
+
+        with then("the API returns 200 with status initializing"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["status"], equal_to("initializing"))
+
+
+def test_get_agent_healthz_returns_crashed_when_pod_has_crashed():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        client: TestClient = context.client
+        agent_id = context.agent.id
+
+        with when("the pod is in CrashLoopBackOff"):
+            with patch.object(
+                context.injector.get(KubernetesClient),
+                "get_pod_readiness",
+                return_value="crashed",
+            ):
+                response = client.get(
+                    f"{_BASE}/{agent_id}/healthz", headers=_auth(context)
+                )
+
+        with then("the API returns 200 with status crashed"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["status"], equal_to("crashed"))
 
 
 def test_get_agent_healthz_returns_409_when_agent_not_running():
