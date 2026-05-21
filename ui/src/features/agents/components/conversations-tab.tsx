@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import type { Agent, ConversationChannel, ConversationMessage } from "../schemas";
 import {
@@ -90,7 +90,7 @@ export function ConversationsTab({ agent }: ConversationsTabProps) {
   return (
     <div
       className="flex rounded-2xl overflow-hidden"
-      style={{ border: "1px solid var(--line-strong)", minHeight: 480 }}
+      style={{ border: "1px solid var(--line-strong)", height: 600 }}
     >
       <ChannelSidebar
         channels={channels}
@@ -187,7 +187,6 @@ function MessagePanel({
   }, [data]);
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const topSentinelRef = useRef<HTMLDivElement | null>(null);
   const initialScrolledRef = useRef(false);
   const preservedScrollHeightRef = useRef<number | null>(null);
 
@@ -205,29 +204,11 @@ function MessagePanel({
     }
   }, [allMessages.length]);
 
-  const requestOlder = useCallback(() => {
+  function loadEarlier() {
     const el = scrollRef.current;
-    if (!el) return;
-    if (!hasNextPage || isFetchingNextPage) return;
-    preservedScrollHeightRef.current = el.scrollHeight;
+    if (el) preservedScrollHeightRef.current = el.scrollHeight;
     fetchNextPage();
-  }, [fetchNextPage, hasNextPage, isFetchingNextPage]);
-
-  useEffect(() => {
-    const sentinel = topSentinelRef.current;
-    const root = scrollRef.current;
-    if (!sentinel || !root) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          if (entry.isIntersecting) requestOlder();
-        }
-      },
-      { root, threshold: 0, rootMargin: "100px 0px 0px 0px" },
-    );
-    observer.observe(sentinel);
-    return () => observer.disconnect();
-  }, [requestOlder]);
+  }
 
   const threadIds = useMemo(() => {
     const ids = new Set<string>();
@@ -288,13 +269,22 @@ function MessagePanel({
         className="flex-1 overflow-y-auto px-5 py-4 flex flex-col gap-1"
         style={{ minHeight: 0 }}
       >
-        <div ref={topSentinelRef} />
-        {isFetchingNextPage && (
-          <div
-            className="text-center text-[0.75rem] py-2"
-            style={{ color: "var(--ink-3)" }}
-          >
-            Loading earlier conversations…
+        {hasNextPage && (
+          <div className="flex justify-center py-2">
+            <button
+              onClick={loadEarlier}
+              disabled={isFetchingNextPage}
+              className="text-[0.75rem] px-4 py-1.5 rounded-lg transition-colors"
+              style={{
+                color: "var(--ink)",
+                border: "1px solid var(--line-strong)",
+                background: "var(--bg-soft)",
+                opacity: isFetchingNextPage ? 0.6 : 1,
+                cursor: isFetchingNextPage ? "default" : "pointer",
+              }}
+            >
+              {isFetchingNextPage ? "Fetching…" : "Load earlier conversations"}
+            </button>
           </div>
         )}
         {!hasNextPage && allMessages.length > 0 && (
