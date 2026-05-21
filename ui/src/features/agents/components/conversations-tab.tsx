@@ -36,12 +36,6 @@ export function ConversationsTab({ agent }: ConversationsTabProps) {
   );
 
   useEffect(() => {
-    if (!selectedChannel && channels.length > 0) {
-      setSelectedChannel(channels[0].channelId);
-    }
-  }, [channels, selectedChannel]);
-
-  useEffect(() => {
     writeChannelToUrl(selectedChannel);
   }, [selectedChannel]);
 
