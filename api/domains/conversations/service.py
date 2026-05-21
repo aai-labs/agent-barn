@@ -1,5 +1,7 @@
+import json
 import logging
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -28,6 +30,21 @@ _SESSIONS_PATH = "/home/node/.openclaw/agents/main/sessions/sessions.json"
 _SESSION_DIR = "/home/node/.openclaw/agents/main/sessions"
 
 
+def _slack_session_uuids(sessions_json: str) -> list[str]:
+    try:
+        sessions = json.loads(sessions_json)
+    except json.JSONDecodeError:
+        return []
+    uuids: list[str] = []
+    for key, data in sessions.items():
+        if not key.startswith("agent:main:slack:channel:"):
+            continue
+        uuid = (data or {}).get("sessionId")
+        if uuid:
+            uuids.append(uuid)
+    return uuids
+
+
 @inject
 @singleton
 @dataclass
@@ -36,6 +53,15 @@ class ConversationService:
     agent_repository: AgentRepository
     k8s: KubernetesClient
     config: Config
+
+    def _safe_read_jsonl(self, pod_name: str, ns: str, session_uuid: str) -> str:
+        try:
+            return self.k8s.exec_command(
+                pod_name, ns, ["cat", f"{_SESSION_DIR}/{session_uuid}.jsonl"]
+            )
+        except Exception as e:
+            logger.warning("Failed to read JSONL for session %s: %s", session_uuid, e)
+            return ""
 
     def sync(self, agent_id: UUID) -> None:
         ns = self.config.k8s_namespace
@@ -49,10 +75,22 @@ class ConversationService:
 
         sessions_json = self.k8s.exec_command(pod_name, ns, ["cat", _SESSIONS_PATH])
 
+        session_uuids = _slack_session_uuids(sessions_json)
+        jsonl_cache: dict[str, str] = {}
+        if session_uuids:
+            with ThreadPoolExecutor(max_workers=min(8, len(session_uuids))) as pool:
+                jsonl_cache = dict(
+                    zip(
+                        session_uuids,
+                        pool.map(
+                            lambda uuid: self._safe_read_jsonl(pod_name, ns, uuid),
+                            session_uuids,
+                        ),
+                    )
+                )
+
         def get_jsonl(session_uuid: str) -> str:
-            return self.k8s.exec_command(
-                pod_name, ns, ["cat", f"{_SESSION_DIR}/{session_uuid}.jsonl"]
-            )
+            return jsonl_cache.get(session_uuid, "")
 
         user_map: dict[str, str] = {}
         channel_map: dict[str, str] = {}
