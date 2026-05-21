@@ -37,7 +37,7 @@ export const PaginatedAgentsSchema = z.object({
 
 export const AgentHealthSchema = z.object({
   status: z.enum(["ok", "error", "starting"]),
-  reason: z.string().optional(),
+  reason: z.string().nullish(),
 });
 
 export type Agent = z.infer<typeof AgentSchema>;
