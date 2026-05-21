@@ -1,5 +1,7 @@
+import datetime
 import logging
-from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 from uuid import UUID
 
@@ -13,6 +15,7 @@ from api.infrastructure.kubernetes.client import KubernetesClient
 logger = logging.getLogger(__name__)
 
 _SESSIONS_DIR = "/home/node/.openclaw/agents/main/sessions"
+_MIN_SYNC_INTERVAL_SECONDS = 4
 
 
 @inject
@@ -22,9 +25,20 @@ class ToolCallSyncService:
     k8s: KubernetesClient
     repository: ToolCallRepository
     config: Config
+    _executor: ThreadPoolExecutor = field(
+        default_factory=lambda: ThreadPoolExecutor(max_workers=8), init=False
+    )
 
-    def sync_agent(self, agent_id: UUID, org_id: UUID) -> None:
-        """Pull new tool calls from the agent pod. Swallows all errors."""
+    def sync_agent(self, agent_id: UUID, org_id: UUID, *, force: bool = False) -> None:
+        """Pull new tool calls from the agent pod. Blocks until complete. Swallows all errors."""
+        if not force:
+            last_synced = self.repository.get_most_recent_sync_time(agent_id)
+            if last_synced is not None:
+                age = (
+                    datetime.datetime.now(datetime.timezone.utc) - last_synced
+                ).total_seconds()
+                if age < _MIN_SYNC_INTERVAL_SECONDS:
+                    return
         try:
             self._do_sync(agent_id, org_id)
         except Exception:
@@ -54,13 +68,28 @@ class ToolCallSyncService:
             logger.debug("Could not list session files for agent %s", agent_id)
             return
 
-        for file_path in (p.strip() for p in ls_output.splitlines() if p.strip()):
-            try:
-                self._sync_file(agent_id, org_id, pod_name, ns, file_path)
-            except Exception:
-                logger.warning(
-                    "Failed to sync %s for agent %s", file_path, agent_id, exc_info=True
-                )
+        files = [p.strip() for p in ls_output.splitlines() if p.strip()]
+        list(
+            self._executor.map(
+                lambda f: self._sync_file_safe(agent_id, org_id, pod_name, ns, f),
+                files,
+            )
+        )
+
+    def _sync_file_safe(
+        self,
+        agent_id: UUID,
+        org_id: UUID,
+        pod_name: str,
+        ns: str,
+        file_path: str,
+    ) -> None:
+        try:
+            self._sync_file(agent_id, org_id, pod_name, ns, file_path)
+        except Exception:
+            logger.warning(
+                "Failed to sync %s for agent %s", file_path, agent_id, exc_info=True
+            )
 
     def _sync_file(
         self,

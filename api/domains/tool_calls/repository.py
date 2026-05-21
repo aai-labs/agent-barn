@@ -165,5 +165,13 @@ class ToolCallRepository:
             existing.last_synced_at = now
             session.add(existing)
 
+    def get_most_recent_sync_time(self, agent_id: UUID) -> datetime.datetime | None:
+        with Session(self.delegate.engine) as session:
+            return session.exec(
+                select(func.max(col(ToolCallSyncState.last_synced_at))).where(
+                    col(ToolCallSyncState.agent_id) == agent_id
+                )
+            ).first()
+
     def get_session(self) -> Session:
         return Session(self.delegate.engine)

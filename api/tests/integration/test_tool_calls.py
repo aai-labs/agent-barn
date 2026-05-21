@@ -3,6 +3,7 @@ import uuid
 from fastapi import status
 from hamcrest import assert_that, equal_to, has_length
 
+from api.domains.tool_calls.sync_service import ToolCallSyncService
 from api.infrastructure.kubernetes.client import KubernetesClient
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
@@ -56,6 +57,15 @@ _SESSION_FILE = "/home/node/.openclaw/agents/main/sessions/session-abc.jsonl"
 
 def _auth(context) -> dict:
     return {"Authorization": f"Bearer {context.access_token}"}
+
+
+def _seed(context, *exec_side_effects) -> None:
+    """Set up k8s mock and synchronously run a full sync for the test agent."""
+    k8s: KubernetesClient = context.injector.get(KubernetesClient)
+    k8s.get_pod_name_for_deployment.return_value = "agent-pod"
+    k8s.exec_command.side_effect = list(exec_side_effects)
+    sync_service: ToolCallSyncService = context.injector.get(ToolCallSyncService)
+    sync_service.sync_agent(context.agent.id, context.organization.id, force=True)
 
 
 def test_list_tool_calls_no_auth_returns_401():
@@ -115,11 +125,9 @@ def test_list_tool_calls_exec_failure_returns_200_empty():
 
 def test_list_tool_calls_syncs_from_pod_and_returns_results():
     with given([*_GIVEN, there_is_an_agent()]) as context:
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
-        k8s.get_pod_name_for_deployment.return_value = "agent-pod"
-        k8s.exec_command.side_effect = [_SESSION_FILE + "\n", _SIMPLE_JSONL]
+        _seed(context, _SESSION_FILE + "\n", _SIMPLE_JSONL)
 
-        with when("I request tool calls and pod has JSONL data"):
+        with when("I request tool calls"):
             response = context.client.get(
                 f"{_BASE}/{context.agent.id}/tool-calls", headers=_auth(context)
             )
@@ -135,18 +143,15 @@ def test_list_tool_calls_syncs_from_pod_and_returns_results():
 
 
 def test_list_tool_calls_pending_when_no_result():
-    # JSONL with a tool call but no matching toolResult
     jsonl_no_result = (
         '{"type":"message","id":"a1","message":{"role":"assistant","content":[{"type":"toolCall",'
         '"id":"call_pending1","name":"bash","arguments":{"command":"sleep 10"}}],"timestamp":1748000000000}}\n'
     )
 
     with given([*_GIVEN, there_is_an_agent()]) as context:
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
-        k8s.get_pod_name_for_deployment.return_value = "agent-pod"
-        k8s.exec_command.side_effect = [_SESSION_FILE + "\n", jsonl_no_result]
+        _seed(context, _SESSION_FILE + "\n", jsonl_no_result)
 
-        with when("I request tool calls and the result hasn't arrived yet"):
+        with when("I request tool calls before the result has arrived"):
             response = context.client.get(
                 f"{_BASE}/{context.agent.id}/tool-calls", headers=_auth(context)
             )
@@ -167,9 +172,7 @@ def test_list_tool_calls_filter_by_tool_name():
     )
 
     with given([*_GIVEN, there_is_an_agent()]) as context:
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
-        k8s.get_pod_name_for_deployment.return_value = "agent-pod"
-        k8s.exec_command.side_effect = [_SESSION_FILE + "\n", read_jsonl]
+        _seed(context, _SESSION_FILE + "\n", read_jsonl)
 
         with when("I filter tool calls by tool_name=read"):
             response = context.client.get(
@@ -186,9 +189,7 @@ def test_list_tool_calls_filter_by_tool_name():
 
 def test_list_tool_calls_filter_by_status():
     with given([*_GIVEN, there_is_an_agent()]) as context:
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
-        k8s.get_pod_name_for_deployment.return_value = "agent-pod"
-        k8s.exec_command.side_effect = [_SESSION_FILE + "\n", _SIMPLE_JSONL]
+        _seed(context, _SESSION_FILE + "\n", _SIMPLE_JSONL)
 
         with when("I filter by status=PENDING"):
             response = context.client.get(
@@ -202,7 +203,6 @@ def test_list_tool_calls_filter_by_status():
 
 
 def test_list_tool_calls_pagination():
-    # Two tool calls in one JSONL, request page 1 with size 1
     two_calls_jsonl = (
         '{"type":"message","id":"a1","message":{"role":"assistant","content":[{"type":"toolCall",'
         '"id":"call_1","name":"read","arguments":{}}],"timestamp":1748000000000}}\n'
@@ -211,9 +211,7 @@ def test_list_tool_calls_pagination():
     )
 
     with given([*_GIVEN, there_is_an_agent()]) as context:
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
-        k8s.get_pod_name_for_deployment.return_value = "agent-pod"
-        k8s.exec_command.side_effect = [_SESSION_FILE + "\n", two_calls_jsonl]
+        _seed(context, _SESSION_FILE + "\n", two_calls_jsonl)
 
         with when("I request page 1 with size 1"):
             response = context.client.get(
@@ -229,34 +227,20 @@ def test_list_tool_calls_pagination():
 
 
 def test_list_tool_calls_second_sync_reads_only_new_bytes():
+    first_call_jsonl = (
+        '{"type":"message","id":"a1","message":{"role":"assistant","content":[{"type":"toolCall",'
+        '"id":"call_first","name":"read","arguments":{}}],"timestamp":1748000000000}}\n'
+    )
+    second_call_jsonl = (
+        '{"type":"message","id":"a2","message":{"role":"assistant","content":[{"type":"toolCall",'
+        '"id":"call_second","name":"write","arguments":{}}],"timestamp":1748000001000}}\n'
+    )
+
     with given([*_GIVEN, there_is_an_agent()]) as context:
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
-        k8s.get_pod_name_for_deployment.return_value = "agent-pod"
+        _seed(context, _SESSION_FILE + "\n", first_call_jsonl)
+        _seed(context, _SESSION_FILE + "\n", second_call_jsonl)
 
-        first_call_jsonl = (
-            '{"type":"message","id":"a1","message":{"role":"assistant","content":[{"type":"toolCall",'
-            '"id":"call_first","name":"read","arguments":{}}],"timestamp":1748000000000}}\n'
-        )
-        second_call_jsonl = (
-            '{"type":"message","id":"a2","message":{"role":"assistant","content":[{"type":"toolCall",'
-            '"id":"call_second","name":"write","arguments":{}}],"timestamp":1748000001000}}\n'
-        )
-
-        k8s.exec_command.side_effect = [_SESSION_FILE + "\n", first_call_jsonl]
-
-        with when("I make an initial request to seed the database"):
-            seed_response = context.client.get(
-                f"{_BASE}/{context.agent.id}/tool-calls", headers=_auth(context)
-            )
-
-        with then("the first call is stored"):
-            assert_that(seed_response.status_code, equal_to(status.HTTP_200_OK))
-            assert_that(seed_response.json()["total"], equal_to(1))
-
-        # Second request: same session file, tail returns only the new bytes
-        k8s.exec_command.side_effect = [_SESSION_FILE + "\n", second_call_jsonl]
-
-        with when("I request tool calls a second time with new data"):
+        with when("I request tool calls after two syncs"):
             response = context.client.get(
                 f"{_BASE}/{context.agent.id}/tool-calls", headers=_auth(context)
             )

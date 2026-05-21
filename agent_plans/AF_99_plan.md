@@ -14,7 +14,7 @@ The producer side of Epic 4 (`AF-26` plugin, `AF-27` ingest endpoint) is not bui
 |---|---|
 | Producer | None. Openclaw already writes tool calls to JSONL transcripts on each agent's PVC. No plugin, no ingest endpoint, no agent-pod outbound calls. |
 | Transport from pod to awm-api | Existing `KubernetesClient.exec_command` (subprocess to `kubectl exec`). Tried switching to the in-process Python SDK but the API SA only has `create pods/exec` (SPDY POST), not `get pods/exec` (websocket GET). RBAC isn't managed in this repo. Deferred to a follow-up that adds Role + RoleBinding to the helm chart. |
-| Sync trigger | Lazy on-demand. Every `GET /agents/{id}/tool-calls` triggers a best-effort sync, then queries Postgres. No cron, no scheduler, no background worker. |
+| Sync trigger | Background fire-and-forget. `GET /agents/{id}/tool-calls` submits a sync task to a `ThreadPoolExecutor` (max 4 workers) and immediately returns Postgres results without waiting. Rate-limited to one sync per 4 seconds per agent (`_MIN_SYNC_INTERVAL_SECONDS`). `force=True` bypasses the rate limit — used by `stop_agent` (must flush before pod deletion) and integration tests. |
 | Sync granularity | Incremental — per-(agent, session-file) byte offset stored in `tool_call_sync_state`. First sync per agent is slow (reads everything); subsequent syncs read only new bytes. |
 | Sync failures | Swallowed. If the pod is unreachable or exec fails, we still serve whatever's already in Postgres. The route never 5xx's because of a sync failure. |
 | Storage | Postgres `tool_call` table. JSONL data from openclaw is projected into a query-optimized row per tool call. |
@@ -107,19 +107,27 @@ Mapping from openclaw JSONL → our `tool_call` row:
 ### Sync flow (per `GET /agents/{id}/tool-calls` request)
 
 ```
-1. AgentService loads agent (org-scoped); if not RUNNING, skip to step 6.
-2. ToolCallSyncService.sync(agent):
-   a. List session JSONL files in pod:
-        find /home/node/.openclaw/agents -name '*.jsonl' -not -name '*.trajectory.jsonl'
-   b. For each file, look up tool_call_sync_state row.
-   c. Exec: tail -c +<offset+1> <file>   (reads bytes from last offset onward)
-   d. Parse new lines:
-        - For each toolCall: upsert with status=PENDING (ON CONFLICT DO NOTHING).
-        - For each toolResult: UPDATE WHERE external_id = toolCallId, set result/status/completed_at/duration_ms.
-   e. Update tool_call_sync_state with new byte offset.
-3. If sync raises, log and continue — do not fail the request.
-4. Repository query: filtered + paginated SELECT from tool_call WHERE agent_id = ?.
-5. Return PaginatedItems[ToolCallRead].
+1. ToolCallService.list_tool_calls():
+   a. Submit ToolCallSyncService.sync_agent(agent_id, org_id) to a background ThreadPoolExecutor.
+   b. Immediately query Postgres (filtered + paginated SELECT from tool_call WHERE agent_id = ?).
+   c. Return PaginatedItems[ToolCallRead] — caller never waits for sync.
+
+2. ToolCallSyncService.sync_agent() [background thread]:
+   a. Rate-limit check: if last_synced_at < 4 s ago, skip (prevents pile-up from 5 s UI poll).
+   b. Resolve pod name via KubernetesClient. If no pod, return.
+   c. List session JSONL files in pod:
+        find /home/node/.openclaw/agents/main/sessions -name '*.jsonl' -not -name '*.trajectory.jsonl'
+   d. Dispatch one thread per file (inner ThreadPoolExecutor, max 8 workers):
+        For each file:
+          i.  Look up tool_call_sync_state; get byte offset (default 0).
+          ii. Exec: tail -c +<offset+1> <file>   (reads new bytes only).
+          iii. Parse lines (toolCall → upsert PENDING; toolResult → UPDATE to SUCCESS/ERROR).
+          iv. In one DB transaction: flush tool_call rows + advance sync offset. COMMIT.
+   e. If sync raises at any level, log warning and swallow — never propagates to the HTTP response.
+
+3. AgentService.stop_agent() [forced sync]:
+   a. Calls sync_agent(agent_id, org_id, force=True) synchronously before deleting the deployment.
+   b. force=True bypasses the rate-limit check so the final flush always runs.
 ```
 
 ### Domain layout (matches existing pattern)
@@ -128,11 +136,14 @@ Mapping from openclaw JSONL → our `tool_call` row:
 api/domains/tool_calls/
   __init__.py
   models.py        — DB models, enums, Pydantic request/response schemas, filter dependency
-  repository.py    — query layer (filters, pagination, sync state)
-  service.py       — orchestrates sync + query
-  routes.py        — FastAPI handler (one GET endpoint)
-  parser.py        — pure functions: parse openclaw JSONL → ToolCall rows
+  repository.py    — query layer (filters, pagination, sync state, get_most_recent_sync_time)
+  service.py       — background sync submission + Postgres query (routes call this only)
+  sync_service.py  — orchestrates kubectl exec, JSONL parsing, DB writes, rate limiting
+  routes.py        — FastAPI handler (one GET endpoint; imports AgentService + ToolCallService only)
+  jsonl_parser.py  — pure functions: parse openclaw JSONL → ToolCall rows
 ```
+
+**Architecture constraint**: routes may only import services. Cross-module imports must only be services — never repositories, models, or other internals from another domain.
 
 ### `KubernetesClient`
 
@@ -363,8 +374,8 @@ Mock `GET /api/v1/agents/{id}/tool-calls` via Playwright route. Cover:
 
 ## Out of scope (deferred to follow-ups)
 
-- Background / cron sync. Lazy is fine for v0.
-- Sync on agent lifecycle events (`start_agent`/`stop_agent`). Optional follow-up for pruning protection.
+- Cron / scheduled background sync. The current background sync is per-request and rate-limited; it does not run while the UI is closed.
+- Sync on `start_agent`. Deferred; `stop_agent` already forces a final sync before pod deletion.
 - Cross-agent / fleet-wide tool-call search.
 - Conversation replay (covered by AF-29).
 - WebSocket streaming.

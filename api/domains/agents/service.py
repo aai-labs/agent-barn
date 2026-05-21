@@ -313,7 +313,7 @@ class AgentService:
                 detail=f"Agent {agent_id} is not running",
             )
 
-        self.sync_service.sync_agent(agent.id, org_id)
+        self.sync_service.sync_agent(agent.id, org_id, force=True)
         self.k8s.delete_deployment(f"agent-{agent.id}", self.config.k8s_namespace)
 
         agent.status = AgentStatus.STOPPED
