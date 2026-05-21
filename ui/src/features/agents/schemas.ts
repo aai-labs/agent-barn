@@ -40,7 +40,37 @@ export const AgentHealthSchema = z.object({
   reason: z.string().optional(),
 });
 
+export const ConversationMessageSchema = z.object({
+  id: z.string().uuid(),
+  direction: z.enum(["INBOUND", "OUTBOUND"]),
+  senderId: z.string().nullable(),
+  senderName: z.string().nullable(),
+  content: z.string(),
+  occurredAt: z.string(),
+});
+
+export const ConversationSessionSchema = z.object({
+  sessionKey: z.string(),
+  channelId: z.string(),
+  threadId: z.string().nullable(),
+  messages: z.array(ConversationMessageSchema),
+});
+
+export const ConversationChannelSchema = z.object({
+  channelId: z.string(),
+  channelName: z.string().nullable(),
+  sessions: z.array(ConversationSessionSchema),
+});
+
+export const ConversationsReadSchema = z.object({
+  channels: z.array(ConversationChannelSchema),
+});
+
 export type Agent = z.infer<typeof AgentSchema>;
 export type AgentHealth = z.infer<typeof AgentHealthSchema>;
 export type AgentTemplateRead = z.infer<typeof AgentTemplateReadSchema>;
 export type PaginatedAgents = z.infer<typeof PaginatedAgentsSchema>;
+export type ConversationMessage = z.infer<typeof ConversationMessageSchema>;
+export type ConversationSession = z.infer<typeof ConversationSessionSchema>;
+export type ConversationChannel = z.infer<typeof ConversationChannelSchema>;
+export type ConversationsRead = z.infer<typeof ConversationsReadSchema>;

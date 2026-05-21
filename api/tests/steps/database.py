@@ -57,7 +57,7 @@ def database_is_clean():
         delegate: PostgresRepositoryDelegate = context.postgres_delegate
 
         with delegate.engine.connect() as conn:
-            conn.execute(text("TRUNCATE agent_template, agent CASCADE"))
+            conn.execute(text("TRUNCATE agent_chat_message, agent_template, agent CASCADE"))
             conn.commit()
         delegate.delete_all(RefreshToken)
         delegate.delete_all(PasswordResetToken)
