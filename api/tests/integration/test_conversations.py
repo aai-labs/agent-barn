@@ -1,9 +1,6 @@
 """Integration tests for GET /agents/{id}/conversations."""
 
 import json
-from unittest.mock import MagicMock, patch
-from uuid import UUID
-
 from fastapi import status
 from hamcrest import assert_that, equal_to, has_length
 from starlette.testclient import TestClient
