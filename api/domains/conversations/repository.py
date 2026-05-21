@@ -41,9 +41,7 @@ class ConversationRepository:
             stmt = (
                 insert(AgentChatMessage)
                 .values(rows)
-                .on_conflict_do_nothing(
-                    constraint="uq_agent_chat_message_agent_msg"
-                )
+                .on_conflict_do_nothing(constraint="uq_agent_chat_message_agent_msg")
             )
             session.exec(stmt)  # type: ignore[call-overload]
             session.commit()

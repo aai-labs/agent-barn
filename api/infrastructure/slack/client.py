@@ -14,7 +14,9 @@ class SlackClient:
 
     def _get(self, method: str, params: dict) -> dict:
         url = f"{_BASE}/{method}?{urlencode(params)}"
-        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {self._token}"})
+        req = urllib.request.Request(
+            url, headers={"Authorization": f"Bearer {self._token}"}
+        )
         with urllib.request.urlopen(req, timeout=15) as resp:
             return json.loads(resp.read())
 
@@ -69,7 +71,11 @@ class SlackClient:
                 if not uid:
                     continue
                 profile = user.get("profile", {})
-                name = profile.get("display_name") or profile.get("real_name") or user.get("name", uid)
+                name = (
+                    profile.get("display_name")
+                    or profile.get("real_name")
+                    or user.get("name", uid)
+                )
                 result[uid] = name
             cursor = data.get("response_metadata", {}).get("next_cursor", "")
             if not cursor:

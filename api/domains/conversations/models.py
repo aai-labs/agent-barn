@@ -18,12 +18,16 @@ class AgentChatMessage(BaseModel, table=True):
     __tablename__: str = "agent_chat_message"
 
     __table_args__ = (
-        sa.UniqueConstraint("agent_id", "openclaw_msg_id", name="uq_agent_chat_message_agent_msg"),
+        sa.UniqueConstraint(
+            "agent_id", "openclaw_msg_id", name="uq_agent_chat_message_agent_msg"
+        ),
         sa.Index("ix_agent_chat_message_agent_channel", "agent_id", "channel_id"),
         sa.Index("ix_agent_chat_message_agent_session", "agent_id", "session_key"),
     )
 
-    agent_id: UUID = SqlField(foreign_key="agent.id", nullable=False, ondelete="CASCADE")
+    agent_id: UUID = SqlField(
+        foreign_key="agent.id", nullable=False, ondelete="CASCADE"
+    )
     openclaw_msg_id: str = SqlField(nullable=False)
     session_key: str = SqlField(nullable=False)
     channel_id: str = SqlField(nullable=False)

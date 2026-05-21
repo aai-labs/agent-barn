@@ -37,7 +37,9 @@ def upgrade() -> None:
         sa.Column("thread_id", sa.Text(), nullable=True),
         sa.Column(
             "direction",
-            postgresql.ENUM("INBOUND", "OUTBOUND", name="messagedirection", create_type=False),
+            postgresql.ENUM(
+                "INBOUND", "OUTBOUND", name="messagedirection", create_type=False
+            ),
             nullable=False,
         ),
         sa.Column("sender_id", sa.Text(), nullable=True),
@@ -45,14 +47,28 @@ def upgrade() -> None:
         sa.Column("occurred_at", sa.DateTime(timezone=True), nullable=False),
         sa.ForeignKeyConstraint(["agent_id"], ["agent.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("agent_id", "openclaw_msg_id", name="uq_agent_chat_message_agent_msg"),
+        sa.UniqueConstraint(
+            "agent_id", "openclaw_msg_id", name="uq_agent_chat_message_agent_msg"
+        ),
     )
-    op.create_index("ix_agent_chat_message_agent_channel", "agent_chat_message", ["agent_id", "channel_id"])
-    op.create_index("ix_agent_chat_message_agent_session", "agent_chat_message", ["agent_id", "session_key"])
+    op.create_index(
+        "ix_agent_chat_message_agent_channel",
+        "agent_chat_message",
+        ["agent_id", "channel_id"],
+    )
+    op.create_index(
+        "ix_agent_chat_message_agent_session",
+        "agent_chat_message",
+        ["agent_id", "session_key"],
+    )
 
 
 def downgrade() -> None:
-    op.drop_index("ix_agent_chat_message_agent_session", table_name="agent_chat_message")
-    op.drop_index("ix_agent_chat_message_agent_channel", table_name="agent_chat_message")
+    op.drop_index(
+        "ix_agent_chat_message_agent_session", table_name="agent_chat_message"
+    )
+    op.drop_index(
+        "ix_agent_chat_message_agent_channel", table_name="agent_chat_message"
+    )
     op.drop_table("agent_chat_message")
     message_direction_enum.drop(op.get_bind(), checkfirst=True)

@@ -118,8 +118,18 @@ def test_get_conversations_stopped_agent_returns_persisted_messages():
 def test_get_conversations_groups_by_channel():
     with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
         client: TestClient = context.client
-        _seed_message(context, direction=MessageDirection.INBOUND, channel_id="CAAA", content="ch1")
-        _seed_message(context, direction=MessageDirection.OUTBOUND, channel_id="CBBB", content="ch2")
+        _seed_message(
+            context,
+            direction=MessageDirection.INBOUND,
+            channel_id="CAAA",
+            content="ch1",
+        )
+        _seed_message(
+            context,
+            direction=MessageDirection.OUTBOUND,
+            channel_id="CBBB",
+            content="ch2",
+        )
 
         with when("I get conversations with two channels"):
             response = client.get(
@@ -217,7 +227,10 @@ def test_get_conversations_running_agent_sync_failure_still_returns_200():
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             channels = response.json()["channels"]
             assert_that(channels, has_length(1))
-            assert_that(channels[0]["sessions"][0]["messages"][0]["content"], equal_to("Old cached message"))
+            assert_that(
+                channels[0]["sessions"][0]["messages"][0]["content"],
+                equal_to("Old cached message"),
+            )
 
 
 def test_get_conversations_unknown_agent_returns_404():

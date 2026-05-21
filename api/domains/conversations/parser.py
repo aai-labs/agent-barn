@@ -34,9 +34,7 @@ def _parse_iso(ts_str: str) -> datetime:
 
 
 def _resolve_mentions(text: str, user_map: dict[str, str]) -> str:
-    return _MENTION_RE.sub(
-        lambda m: f"@{user_map.get(m.group(1), m.group(1))}", text
-    )
+    return _MENTION_RE.sub(lambda m: f"@{user_map.get(m.group(1), m.group(1))}", text)
 
 
 def _parse_jsonl(
@@ -65,14 +63,22 @@ def _parse_jsonl(
             continue
 
         # --- INBOUND ---
-        if line_type == "custom_message" and line.get("customType") == "openclaw.runtime-context":
+        if (
+            line_type == "custom_message"
+            and line.get("customType") == "openclaw.runtime-context"
+        ):
             content_raw = line.get("content", "")
             # Only first line of content carries the Slack message header
             first_line = content_raw.split("\n")[0]
             m = _INBOUND_RE.search(first_line)
             if not m:
                 continue
-            ts_str, _raw_channel, sender_id, text = m.group(1), m.group(2), m.group(3), m.group(4).strip()
+            ts_str, _raw_channel, sender_id, text = (
+                m.group(1),
+                m.group(2),
+                m.group(3),
+                m.group(4).strip(),
+            )
             try:
                 occurred_at = _parse_occurred_at(ts_str)
             except ValueError:
@@ -168,7 +174,9 @@ def parse_sessions(
             continue
 
         origin = session_data.get("origin") or {}
-        channel_id = (origin.get("nativeChannelId") or session_data.get("groupId") or "").upper()
+        channel_id = (
+            origin.get("nativeChannelId") or session_data.get("groupId") or ""
+        ).upper()
         if not channel_id:
             continue
         thread_id: str | None = origin.get("threadId") or None
@@ -179,7 +187,15 @@ def parse_sessions(
             logger.warning("Failed to read JSONL for session %s: %s", session_uuid, e)
             continue
 
-        messages = _parse_jsonl(agent_id, session_key, channel_id, thread_id, jsonl_text, user_map, channel_map)
+        messages = _parse_jsonl(
+            agent_id,
+            session_key,
+            channel_id,
+            thread_id,
+            jsonl_text,
+            user_map,
+            channel_map,
+        )
         all_messages.extend(messages)
 
     return all_messages

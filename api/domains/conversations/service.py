@@ -42,7 +42,9 @@ class ConversationService:
         deployment_name = f"agent-{agent_id}"
         pod_name = self.k8s.get_pod_name_for_deployment(deployment_name, ns)
         if not pod_name:
-            logger.info("No running pod for agent %s — skipping conversation sync", agent_id)
+            logger.info(
+                "No running pod for agent %s — skipping conversation sync", agent_id
+            )
             return
 
         sessions_json = self.k8s.exec_command(pod_name, ns, ["cat", _SESSIONS_PATH])
@@ -58,19 +60,26 @@ class ConversationService:
         if agent and self.config.agent_token_encryption_key:
             try:
                 bot_token = decrypt_token(
-                    agent.slack_bot_token_encrypted, self.config.agent_token_encryption_key
+                    agent.slack_bot_token_encrypted,
+                    self.config.agent_token_encryption_key,
                 )
                 slack = SlackClient(bot_token)
                 channel_map = slack.get_channel_map()
                 user_map = slack.get_user_map()
                 logger.info(
                     "Fetched %d channels and %d users from Slack for agent %s",
-                    len(channel_map), len(user_map), agent_id,
+                    len(channel_map),
+                    len(user_map),
+                    agent_id,
                 )
             except Exception as e:
-                logger.warning("Failed to fetch Slack maps for agent %s: %s", agent_id, e)
+                logger.warning(
+                    "Failed to fetch Slack maps for agent %s: %s", agent_id, e
+                )
 
-        messages = parse_sessions(agent_id, sessions_json, get_jsonl, user_map, channel_map)
+        messages = parse_sessions(
+            agent_id, sessions_json, get_jsonl, user_map, channel_map
+        )
         self.repository.upsert_messages(messages)
         logger.info("Synced %d messages for agent %s", len(messages), agent_id)
 
@@ -123,15 +132,15 @@ def _build_response(messages: list[AgentChatMessage]) -> ConversationsRead:
                     session_key=session_key,
                     channel_id=channel_id,
                     thread_id=thread_id,
-                    messages=[
-                        ConversationMessageRead.model_validate(m) for m in msgs
-                    ],
+                    messages=[ConversationMessageRead.model_validate(m) for m in msgs],
                 )
             )
-        channels.append(ConversationChannelRead(
-            channel_id=channel_id,
-            channel_name=channel_names.get(channel_id),
-            sessions=sessions,
-        ))
+        channels.append(
+            ConversationChannelRead(
+                channel_id=channel_id,
+                channel_name=channel_names.get(channel_id),
+                sessions=sessions,
+            )
+        )
 
     return ConversationsRead(channels=channels)

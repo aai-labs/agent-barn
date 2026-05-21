@@ -316,7 +316,9 @@ class AgentService:
         try:
             self.conversation_service.sync(agent_id)
         except Exception as e:
-            logger.warning("Conversation sync before stop failed for agent %s: %s", agent_id, e)
+            logger.warning(
+                "Conversation sync before stop failed for agent %s: %s", agent_id, e
+            )
 
         self.k8s.delete_deployment(f"agent-{agent.id}", self.config.k8s_namespace)
 
