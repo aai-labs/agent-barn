@@ -39,7 +39,9 @@ class AgentChatMessage(BaseModel, table=True):
     sender_name: str | None = SqlField(default=None, nullable=True)
     channel_name: str | None = SqlField(default=None, nullable=True)
     content: str = SqlField(nullable=False)
-    occurred_at: datetime = SqlField(nullable=False, sa_type=sa.DateTime(timezone=True))
+    occurred_at: datetime = SqlField(
+        sa_column=Column(sa.DateTime(timezone=True), nullable=False)
+    )
 
 
 class ConversationMessageRead(PydanticBaseModel):
