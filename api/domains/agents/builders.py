@@ -69,23 +69,25 @@ function refresh() {
   execFile('openclaw', ['health', '--json'], { timeout: 15_000 }, (err, stdout) => {
     refreshing = false;
     if (err) {
-      cache = { ok: false, reason: err.message };
+      cache = { ok: false, everConnected: false, reason: err.message };
       return;
     }
     try {
       const d = JSON.parse(stdout);
-      if (!d.ok) { cache = { ok: false, reason: 'gateway not ok' }; return; }
       const order = d.channelOrder || [];
-      if (!order.length) { cache = { ok: false, reason: 'no channels configured' }; return; }
+      if (!order.length) { cache = { ok: false, everConnected: false, reason: 'no channels configured' }; return; }
       for (const ch of order) {
-        if (!d.channels[ch]?.connected) {
-          cache = { ok: false, reason: `channel ${ch} not connected` };
+        const channel = d.channels[ch];
+        if (channel?.healthState !== 'healthy') {
+          const everConnected = typeof channel?.lastConnectedAt === 'number';
+          const hasError = channel?.lastError != null;
+          cache = { ok: false, everConnected: everConnected || hasError, reason: channel?.lastError || 'channel ' + ch + ' not connected' };
           return;
         }
       }
       cache = { ok: true };
     } catch {
-      cache = { ok: false, reason: 'failed to parse health output' };
+      cache = { ok: false, everConnected: false, reason: 'failed to parse health output' };
     }
   });
 }
@@ -94,31 +96,49 @@ refresh();
 setInterval(refresh, CACHE_TTL_MS);
 
 const server = http.createServer((req, res) => {
-  if (req.method !== 'GET' || req.url !== '/healthz') {
-    res.writeHead(404);
-    res.end();
+  if (req.method !== 'GET') { res.writeHead(404); res.end(); return; }
+
+  if (req.url === '/ready') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ready: true }));
     return;
   }
-  if (!cache) {
+
+  if (req.url === '/healthz') {
+    if (!cache) {
+      res.writeHead(503, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'starting' }));
+      return;
+    }
+    if (cache.ok) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'ok' }));
+      return;
+    }
+    if (cache.everConnected) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'error', reason: cache.reason }));
+      return;
+    }
     res.writeHead(503, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: 'starting' }));
+    res.end(JSON.stringify({ status: 'starting', reason: cache.reason }));
     return;
   }
-  const body = cache.ok ? { status: 'ok' } : { status: 'error', reason: cache.reason };
-  res.writeHead(cache.ok ? 200 : 500, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify(body));
+
+  res.writeHead(404);
+  res.end();
 });
 
 process.on('SIGTERM', () => server.close(() => process.exit(0)));
 
-server.listen(PORT, () => console.log(`[healthz] listening on :${PORT}`));
+server.listen(PORT, () => console.log('[healthz] listening on :' + PORT));
 """
 
 START_SH = """\
 #!/bin/sh
 set -e
-node /app/config/init-openclaw.js
 node /app/config/healthz-server.js &
+node /app/config/init-openclaw.js
 exec openclaw gateway --allow-unconfigured
 """
 
@@ -295,7 +315,7 @@ def build_deployment(
                             command=["sh", "/app/config/start.sh"],
                             readiness_probe=client.V1Probe(
                                 http_get=client.V1HTTPGetAction(
-                                    path="/healthz",
+                                    path="/ready",
                                     port=8081,
                                 ),
                                 initial_delay_seconds=30,
