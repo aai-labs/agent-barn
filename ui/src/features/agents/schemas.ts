@@ -40,7 +40,31 @@ export const AgentHealthSchema = z.object({
   reason: z.string().nullish(),
 });
 
+export const ToolCallStatusSchema = z.enum(["PENDING", "SUCCESS", "ERROR"]);
+
+export const ToolCallSchema = z.object({
+  id: z.string().uuid(),
+  agentId: z.string().uuid(),
+  sessionId: z.string(),
+  toolName: z.string(),
+  arguments: z.record(z.string(), z.unknown()),
+  result: z.unknown().nullable(),
+  status: ToolCallStatusSchema,
+  occurredAt: z.string(),
+  completedAt: z.string().nullable(),
+  durationMs: z.number().int().nullable(),
+});
+
+export const PaginatedToolCallsSchema = z.object({
+  page: z.number().int().min(1),
+  pageSize: z.number().int().min(1),
+  total: z.number().int().min(0),
+  items: z.array(ToolCallSchema),
+});
+
 export type Agent = z.infer<typeof AgentSchema>;
 export type AgentHealth = z.infer<typeof AgentHealthSchema>;
 export type AgentTemplateRead = z.infer<typeof AgentTemplateReadSchema>;
 export type PaginatedAgents = z.infer<typeof PaginatedAgentsSchema>;
+export type ToolCall = z.infer<typeof ToolCallSchema>;
+export type PaginatedToolCalls = z.infer<typeof PaginatedToolCallsSchema>;
