@@ -199,11 +199,21 @@ class KubernetesClient:
                 return pod.metadata.name
         return None
 
+    _TERMINAL_WAITING_REASONS = {
+        "CrashLoopBackOff",
+        "ImagePullBackOff",
+        "ErrImagePull",
+        "CreateContainerConfigError",
+        "CreateContainerError",
+    }
+
     def get_pod_readiness(self, deployment_name: str, namespace: str) -> str | None:
         pods = self._core_v1.list_namespaced_pod(
             namespace, label_selector=f"app={deployment_name}"
         )
         for pod in pods.items:
+            if pod.status.phase == "Failed":
+                return "crashed"
             if pod.status.phase in ("Pending", "Running"):
                 conditions = pod.status.conditions or []
                 if any(c.type == "Ready" and c.status == "True" for c in conditions):
@@ -212,7 +222,7 @@ class KubernetesClient:
                 if any(
                     cs.state
                     and cs.state.waiting
-                    and cs.state.waiting.reason == "CrashLoopBackOff"
+                    and cs.state.waiting.reason in self._TERMINAL_WAITING_REASONS
                     for cs in container_statuses
                 ):
                     return "crashed"
