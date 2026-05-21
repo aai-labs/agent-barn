@@ -34,6 +34,7 @@ def upgrade() -> None:
         sa.Column("openclaw_msg_id", sa.Text(), nullable=False),
         sa.Column("session_key", sa.Text(), nullable=False),
         sa.Column("channel_id", sa.Text(), nullable=False),
+        sa.Column("channel_name", sa.Text(), nullable=True),
         sa.Column("thread_id", sa.Text(), nullable=True),
         sa.Column(
             "direction",
@@ -43,6 +44,7 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.Column("sender_id", sa.Text(), nullable=True),
+        sa.Column("sender_name", sa.Text(), nullable=True),
         sa.Column("content", sa.Text(), nullable=False),
         sa.Column("occurred_at", sa.DateTime(timezone=True), nullable=False),
         sa.ForeignKeyConstraint(["agent_id"], ["agent.id"], ondelete="CASCADE"),
