@@ -38,10 +38,15 @@ class ConversationRepository:
                 }
                 for m in messages
             ]
-            stmt = (
-                insert(AgentChatMessage)
-                .values(rows)
-                .on_conflict_do_nothing(constraint="uq_agent_chat_message_agent_msg")
+            stmt = insert(AgentChatMessage).values(rows)
+            stmt = stmt.on_conflict_do_update(
+                constraint="uq_agent_chat_message_agent_msg",
+                set_={
+                    "sender_name": stmt.excluded.sender_name,
+                    "channel_name": stmt.excluded.channel_name,
+                    "content": stmt.excluded.content,
+                    "updated_at": stmt.excluded.updated_at,
+                },
             )
             session.exec(stmt)  # type: ignore[call-overload]
             session.commit()
