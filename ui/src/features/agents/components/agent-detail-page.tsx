@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useAgent } from "../hooks/use-agent";
+import { useAgentHealth } from "../hooks/use-agent-health";
 import { useStartAgent } from "../hooks/use-start-agent";
 import { useStopAgent } from "../hooks/use-stop-agent";
 import { usePairAgent } from "../hooks/use-pair-agent";
@@ -38,6 +39,7 @@ function HeaderSkeleton() {
 
 export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   const { agent, isLoading, error, refetch } = useAgent(agentId);
+  const { health } = useAgentHealth(agentId, agent?.status === "RUNNING");
   const stopAgent = useStopAgent();
   const startAgent = useStartAgent();
   const [tab, setTab] = useState<Tab>("conversations");
@@ -94,7 +96,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
                   </div>
                 )}
                 <div className="mt-2">
-                  <StatusLine status={agent.status} />
+                  <StatusLine status={agent.status} health={health} />
                 </div>
               </div>
               <div className="flex gap-2">
