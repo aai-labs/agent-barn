@@ -6,6 +6,8 @@ from urllib.parse import urlencode
 logger = logging.getLogger(__name__)
 
 _BASE = "https://slack.com/api"
+_PAGE_SIZE = 200
+_MAX_SEARCH_PAGES = 5
 
 
 class SlackClient:
@@ -81,3 +83,81 @@ class SlackClient:
             if not cursor:
                 break
         return result
+
+    def search_channels(self, search: str | None = None, limit: int = 50) -> list[dict]:
+        # When no search, return the first page only. With search, scan up to MAX_PAGES
+        # so big workspaces don't time out — search may miss matches past the ceiling.
+        max_pages = _MAX_SEARCH_PAGES if search else 1
+        q = search.lower() if search else None
+        matches: list[dict] = []
+        cursor = ""
+        for _ in range(max_pages):
+            params: dict = {
+                "limit": _PAGE_SIZE,
+                "exclude_archived": "true",
+                "types": "public_channel,private_channel",
+            }
+            if cursor:
+                params["cursor"] = cursor
+            try:
+                data = self._get("conversations.list", params)
+            except Exception as e:
+                logger.warning("conversations.list request failed: %s", e)
+                break
+            if not data.get("ok"):
+                logger.warning("conversations.list error: %s", data.get("error"))
+                break
+            for ch in data.get("channels", []):
+                entry = {"id": ch.get("id", ""), "name": ch.get("name", "")}
+                if (
+                    q
+                    and q not in entry["id"].lower()
+                    and q not in entry["name"].lower()
+                ):
+                    continue
+                matches.append(entry)
+                if len(matches) >= limit:
+                    return matches
+            cursor = data.get("response_metadata", {}).get("next_cursor", "")
+            if not cursor:
+                break
+        return matches
+
+    def search_users(self, search: str | None = None, limit: int = 50) -> list[dict]:
+        max_pages = _MAX_SEARCH_PAGES if search else 1
+        q = search.lower() if search else None
+        matches: list[dict] = []
+        cursor = ""
+        for _ in range(max_pages):
+            params: dict = {"limit": _PAGE_SIZE}
+            if cursor:
+                params["cursor"] = cursor
+            try:
+                data = self._get("users.list", params)
+            except Exception as e:
+                logger.warning("users.list request failed: %s", e)
+                break
+            if not data.get("ok"):
+                logger.warning("users.list error: %s", data.get("error"))
+                break
+            for u in data.get("members", []):
+                if u.get("deleted") or u.get("is_bot"):
+                    continue
+                entry = {
+                    "id": u.get("id", ""),
+                    "name": u.get("name", ""),
+                    "real_name": u.get("real_name", ""),
+                }
+                if q and not (
+                    q in entry["id"].lower()
+                    or q in entry["name"].lower()
+                    or q in entry["real_name"].lower()
+                ):
+                    continue
+                matches.append(entry)
+                if len(matches) >= limit:
+                    return matches
+            cursor = data.get("response_metadata", {}).get("next_cursor", "")
+            if not cursor:
+                break
+        return matches
