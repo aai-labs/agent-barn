@@ -8,6 +8,7 @@ from sqlmodel import SQLModel
 
 import api.domains.auth.models  # noqa: F401
 import api.domains.organizations.models  # noqa: F401
+import api.domains.tool_calls.models  # noqa: F401
 import api.domains.users.organization_users.models  # noqa: F401
 import api.domains.users.models  # noqa: F401
 from api.core.config import get_config

@@ -14,6 +14,7 @@ from api.core.utils import create_injector
 from api.domains.agents.routes import agents_router
 from api.domains.auth.routes import auth_router
 from api.domains.organizations.routes import org_router
+from api.domains.tool_calls.routes import tool_calls_router
 from api.domains.users.routes import users_router
 from api.domains.users.service import UserService
 from api.domains.organizations.service import OrganizationService
@@ -94,6 +95,7 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(agents_router)
     subapi.include_router(auth_router)
     subapi.include_router(org_router)
+    subapi.include_router(tool_calls_router)
     subapi.include_router(users_router)
 
     attach_injector(app_v1, injector)

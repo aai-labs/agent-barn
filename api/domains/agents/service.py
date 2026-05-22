@@ -38,6 +38,7 @@ from api.domains.agents.models import (
 )
 from api.domains.agents.repository import AgentRepository
 from api.domains.auth.models import CurrentUserContext
+from api.domains.tool_calls.sync_service import ToolCallSyncService
 from api.infrastructure.crypto import decrypt_token, encrypt_token
 from api.infrastructure.kubernetes.client import KubernetesClient
 from api.infrastructure.shared.models import PaginatedItems, Pagination
@@ -66,6 +67,7 @@ class AgentService:
     k8s: KubernetesClient
     litellm: LiteLLMClient
     config: Config
+    sync_service: ToolCallSyncService
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
@@ -311,6 +313,7 @@ class AgentService:
                 detail=f"Agent {agent_id} is not running",
             )
 
+        self.sync_service.sync_agent(agent.id, org_id, force=True)
         self.k8s.delete_deployment(f"agent-{agent.id}", self.config.k8s_namespace)
 
         agent.status = AgentStatus.STOPPED

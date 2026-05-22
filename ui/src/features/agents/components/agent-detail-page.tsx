@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useAgent } from "../hooks/use-agent";
 import { useAgentHealth } from "../hooks/use-agent-health";
 import { useStartAgent } from "../hooks/use-start-agent";
@@ -13,6 +14,7 @@ import { toastError } from "@/shared/toast";
 import { AgentAvatar } from "./agent-avatar";
 import { StatusLine } from "./status-line";
 import { ConversationsTab } from "./conversations-tab";
+import { ToolCallsTab } from "./tool-calls-tab";
 import { WorkTab } from "./work-tab";
 import { AboutTab } from "./about-tab";
 import { ConfigDrawer } from "./config-drawer";
@@ -22,7 +24,8 @@ interface AgentDetailPageProps {
   agentId: string;
 }
 
-type Tab = "conversations" | "work" | "about";
+type Tab = "conversations" | "tool-calls" | "work" | "about";
+const VALID_TABS: Tab[] = ["conversations", "tool-calls", "work", "about"];
 
 function HeaderSkeleton() {
   return (
@@ -42,12 +45,16 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   const { health } = useAgentHealth(agentId, agent?.status === "RUNNING");
   const stopAgent = useStopAgent();
   const startAgent = useStartAgent();
-  const [tab, setTab] = useState<Tab>("conversations");
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const rawTab = searchParams.get("tab");
+  const tab: Tab = VALID_TABS.includes(rawTab as Tab) ? (rawTab as Tab) : "conversations";
   const [configOpen, setConfigOpen] = useState(false);
   const [pairOpen, setPairOpen] = useState(false);
 
   const tabs: [Tab, string][] = [
     ["conversations", "Conversations"],
+    ["tool-calls", "Tool calls"],
     ["work", "Work"],
     ["about", "About"],
   ];
@@ -138,7 +145,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
                   key={k}
                   className="ap-tab"
                   data-active={tab === k}
-                  onClick={() => setTab(k)}
+                  onClick={() => router.replace(`?tab=${k}`, { scroll: false })}
                 >
                   {l}
                 </button>
@@ -146,6 +153,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
             </div>
 
             {tab === "conversations" && <ConversationsTab agent={agent} />}
+            {tab === "tool-calls" && <ToolCallsTab agent={agent} />}
             {tab === "work" && <WorkTab agent={agent} />}
             {tab === "about" && <AboutTab agent={agent} onConfigure={() => setConfigOpen(true)} />}
           </>

@@ -26,4 +26,12 @@ export class AgentDetailPage {
   hireButton(): Locator {
     return this.page.getByRole("button", { name: /hire agent/i });
   }
+
+  toolCallsTab(): Locator {
+    return this.page.getByRole("button", { name: /tool calls/i });
+  }
+
+  toolCallRow(toolName: string): Locator {
+    return this.page.getByRole("row").filter({ hasText: toolName });
+  }
 }
