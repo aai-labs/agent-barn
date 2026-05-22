@@ -38,6 +38,7 @@ from api.domains.agents.models import (
 )
 from api.domains.agents.repository import AgentRepository
 from api.domains.auth.models import CurrentUserContext
+from api.domains.conversations.service import ConversationSyncService
 from api.domains.tool_calls.sync_service import ToolCallSyncService
 from api.infrastructure.crypto import decrypt_token, encrypt_token
 from api.infrastructure.kubernetes.client import KubernetesClient
@@ -67,6 +68,7 @@ class AgentService:
     k8s: KubernetesClient
     litellm: LiteLLMClient
     config: Config
+    conversation_sync_service: ConversationSyncService
     sync_service: ToolCallSyncService
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
@@ -311,6 +313,13 @@ class AgentService:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Agent {agent_id} is not running",
+            )
+
+        try:
+            self.conversation_sync_service.sync_all_channels(agent_id)
+        except Exception as e:
+            logger.warning(
+                "Conversation sync before stop failed for agent %s: %s", agent_id, e
             )
 
         self.sync_service.sync_agent(agent.id, org_id, force=True)

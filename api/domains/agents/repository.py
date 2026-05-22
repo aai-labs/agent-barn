@@ -16,6 +16,15 @@ from api.infrastructure.shared.models import PaginatedItems, Pagination
 class AgentRepository:
     delegate: PostgresRepositoryDelegate
 
+    def get_by_id(self, agent_id: UUID) -> Agent | None:
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(Agent)
+                .where(col(Agent.id) == agent_id)
+                .where(col(Agent.deleted_at).is_(None))
+            )
+            return session.exec(query).first()
+
     def get_active(self, agent_id: UUID, org_id: UUID) -> Agent | None:
         with Session(self.delegate.engine) as session:
             query = (

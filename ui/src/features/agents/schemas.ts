@@ -62,9 +62,39 @@ export const PaginatedToolCallsSchema = z.object({
   items: z.array(ToolCallSchema),
 });
 
+export const ConversationMessageSchema = z.object({
+  id: z.string().uuid(),
+  direction: z.enum(["INBOUND", "OUTBOUND"]),
+  threadId: z.string().nullable(),
+  senderId: z.string().nullable(),
+  senderName: z.string().nullable(),
+  content: z.string(),
+  occurredAt: z.string(),
+});
+
+export const ConversationChannelSchema = z.object({
+  channelId: z.string(),
+  channelName: z.string().nullable(),
+});
+
+export const ConversationsCursorSchema = z.object({
+  beforeOccurredAt: z.string().nullable(),
+  beforeId: z.string().uuid().nullable(),
+});
+
+export const ConversationMessagesPageSchema = z.object({
+  messages: z.array(ConversationMessageSchema),
+  hasMore: z.boolean(),
+  nextCursor: ConversationsCursorSchema.nullable(),
+});
+
 export type Agent = z.infer<typeof AgentSchema>;
 export type AgentHealth = z.infer<typeof AgentHealthSchema>;
 export type AgentTemplateRead = z.infer<typeof AgentTemplateReadSchema>;
 export type PaginatedAgents = z.infer<typeof PaginatedAgentsSchema>;
+export type ConversationMessage = z.infer<typeof ConversationMessageSchema>;
+export type ConversationChannel = z.infer<typeof ConversationChannelSchema>;
+export type ConversationsCursor = z.infer<typeof ConversationsCursorSchema>;
+export type ConversationMessagesPage = z.infer<typeof ConversationMessagesPageSchema>;
 export type ToolCall = z.infer<typeof ToolCallSchema>;
 export type PaginatedToolCalls = z.infer<typeof PaginatedToolCallsSchema>;
