@@ -77,10 +77,15 @@ export function SlackConfigPanel({ agent, onSaved }: SlackConfigPanelProps) {
     <div className="flex flex-col gap-5">
       <section className="flex flex-col gap-3">
         <div className="flex flex-col gap-1.5">
-          <label className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>
+          <label
+            htmlFor="slack-group-policy"
+            className="font-medium text-[0.844rem]"
+            style={{ color: "var(--ink)" }}
+          >
             Channel access
           </label>
           <select
+            id="slack-group-policy"
             className="af-input"
             value={groupPolicy}
             disabled={isRunning}
@@ -162,10 +167,15 @@ export function SlackConfigPanel({ agent, onSaved }: SlackConfigPanelProps) {
 
       <section className="flex flex-col gap-3">
         <div className="flex flex-col gap-1.5">
-          <label className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>
+          <label
+            htmlFor="slack-dm-policy"
+            className="font-medium text-[0.844rem]"
+            style={{ color: "var(--ink)" }}
+          >
             Direct messages
           </label>
           <select
+            id="slack-dm-policy"
             className="af-input"
             value={dmPolicy}
             disabled={isRunning}

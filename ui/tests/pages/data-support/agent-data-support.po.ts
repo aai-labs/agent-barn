@@ -278,6 +278,92 @@ export class AgentDataSupport {
     );
   }
 
+  async interceptUpdateAgentRequest({
+    agentId = MOCK_AGENT_ID,
+    status = 200,
+    detail = "Unable to update agent",
+    body,
+  }: {
+    agentId?: string;
+    status?: number;
+    detail?: string;
+    body?: unknown;
+  } = {}) {
+    await this.page.route(`**/api/v1/agents/${agentId}`, async (route) => {
+      if (route.request().method() !== "PATCH") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status,
+        contentType: "application/json",
+        body: JSON.stringify(
+          status >= 400 ? { detail } : (body ?? { ...mockAgent, id: agentId }),
+        ),
+      });
+    });
+  }
+
+  async interceptSlackChannelsRequest({
+    agentId = MOCK_AGENT_ID,
+    status = 200,
+    body,
+  }: {
+    agentId?: string;
+    status?: number;
+    body?: unknown;
+  } = {}) {
+    await this.page.route(
+      `**/api/v1/agents/${agentId}/slack/channels*`,
+      async (route) => {
+        if (route.request().method() !== "GET") {
+          await route.fallback();
+          return;
+        }
+        await route.fulfill({
+          status,
+          contentType: "application/json",
+          body: JSON.stringify(
+            body ?? [
+              { id: "C001", name: "general" },
+              { id: "C002", name: "engineering" },
+            ],
+          ),
+        });
+      },
+    );
+  }
+
+  async interceptSlackUsersRequest({
+    agentId = MOCK_AGENT_ID,
+    status = 200,
+    body,
+  }: {
+    agentId?: string;
+    status?: number;
+    body?: unknown;
+  } = {}) {
+    await this.page.route(
+      `**/api/v1/agents/${agentId}/slack/users*`,
+      async (route) => {
+        if (route.request().method() !== "GET") {
+          await route.fallback();
+          return;
+        }
+        await route.fulfill({
+          status,
+          contentType: "application/json",
+          body: JSON.stringify(
+            body ?? [
+              { id: "U001", name: "alice", real_name: "Alice Smith" },
+              { id: "U002", name: "bob", real_name: "Bob Jones" },
+            ],
+          ),
+        });
+      },
+    );
+  }
+
   async interceptGetToolCallsRequest({
     agentId = MOCK_AGENT_ID,
     status = 200,

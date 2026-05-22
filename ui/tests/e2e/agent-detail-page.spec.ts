@@ -202,3 +202,69 @@ test.describe("Agent Detail Page — Tool calls tab", () => {
     await expect(agentDetailPage.toolCallRow("write").getByText("Error")).toBeVisible();
   });
 });
+
+test.describe("Agent Detail Page — Channels tab", () => {
+  test.describe.configure({ mode: "serial" });
+  let agentDetailPage: AgentDetailPage;
+  let dataSupportPage: DataSupport;
+
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  test.beforeEach(async ({ page }) => {
+    agentDetailPage = new AgentDetailPage(page);
+    dataSupportPage = new DataSupport(page);
+
+    await dataSupportPage.auth.interceptRefreshRequest();
+    await dataSupportPage.users.interceptGetUserContextRequest();
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, status: "STOPPED" },
+    });
+    await dataSupportPage.agents.interceptGetAgentTemplateRequest();
+    await dataSupportPage.agents.interceptSlackChannelsRequest();
+    await dataSupportPage.agents.interceptSlackUsersRequest();
+    await dataSupportPage.agents.interceptUpdateAgentRequest();
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.configureButton().click();
+    await agentDetailPage.channelsTab().click();
+  });
+
+  test("shows group and DM policy dropdowns with the agent's current values", async () => {
+    await expect(agentDetailPage.groupPolicySelect()).toHaveValue("allowlist");
+    await expect(agentDetailPage.dmPolicySelect()).toHaveValue("off");
+  });
+
+  test("switching DM policy to pairing clears the user list and shows the note", async ({
+    page,
+  }) => {
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: {
+        ...mockAgent,
+        status: "STOPPED",
+        slack_dm_policy: "allowlist",
+        slack_dm_user_ids: ["U001"],
+      },
+    });
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.configureButton().click();
+    await agentDetailPage.channelsTab().click();
+
+    await agentDetailPage.dmPolicySelect().selectOption("pairing");
+
+    await expect(
+      page.getByText(/all users will need to pair to gain access/i),
+    ).toBeVisible();
+  });
+
+  test("focusing the channel search shows mocked channels in the dropdown", async ({
+    page,
+  }) => {
+    await agentDetailPage.groupPolicySelect().selectOption("allowlist");
+    await agentDetailPage.channelSearchInput().focus();
+
+    await expect(page.getByRole("button", { name: /#general/ })).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: /#engineering/ }),
+    ).toBeVisible();
+  });
+});
