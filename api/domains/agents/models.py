@@ -17,6 +17,18 @@ class AgentStatus(str, enum.Enum):
     ERROR = "ERROR"
 
 
+class SlackGroupPolicy(str, enum.Enum):
+    OPEN = "open"
+    ALLOWLIST = "allowlist"
+
+
+class SlackDmPolicy(str, enum.Enum):
+    OFF = "off"
+    OPEN = "open"
+    ALLOWLIST = "allowlist"
+    PAIRING = "pairing"
+
+
 class AgentTemplate(BaseModel, table=True):
     __tablename__: str = "agent_template"
 
@@ -71,6 +83,22 @@ class Agent(BaseModel, table=True):
     )
     template_version: int = SqlField(nullable=False)
     model: str = SqlField(nullable=False, default="")
+    slack_channel_ids: list[str] = SqlField(
+        default_factory=list,
+        sa_column=Column(sa.JSON(), nullable=True, server_default="[]"),
+    )
+    slack_dm_user_ids: list[str] = SqlField(
+        default_factory=list,
+        sa_column=Column(sa.JSON(), nullable=True, server_default="[]"),
+    )
+    slack_group_policy: SlackGroupPolicy = SqlField(
+        default=SlackGroupPolicy.ALLOWLIST,
+        sa_column=Column(sa.String(), nullable=True, server_default="open"),
+    )
+    slack_dm_policy: SlackDmPolicy = SqlField(
+        default=SlackDmPolicy.OFF,
+        sa_column=Column(sa.String(), nullable=True, server_default="open"),
+    )
 
 
 class AgentCreate(PydanticBaseModel):
@@ -86,6 +114,10 @@ class AgentCreate(PydanticBaseModel):
     bootstrap_md: str | None = None
     heartbeat_md: str | None = None
     model: str | None = None
+    slack_channel_ids: list[str] = Field(default_factory=list)
+    slack_dm_user_ids: list[str] = Field(default_factory=list)
+    slack_group_policy: SlackGroupPolicy = SlackGroupPolicy.ALLOWLIST
+    slack_dm_policy: SlackDmPolicy = SlackDmPolicy.OFF
 
 
 class AgentUpdate(PydanticBaseModel):
@@ -101,6 +133,10 @@ class AgentUpdate(PydanticBaseModel):
     bootstrap_md: str | None = None
     heartbeat_md: str | None = None
     model: str | None = None
+    slack_channel_ids: list[str] | None = None
+    slack_dm_user_ids: list[str] | None = None
+    slack_group_policy: SlackGroupPolicy | None = None
+    slack_dm_policy: SlackDmPolicy | None = None
 
 
 class AgentRead(PydanticBaseModel):
@@ -113,6 +149,10 @@ class AgentRead(PydanticBaseModel):
     template_id: UUID
     template_version: int
     model: str
+    slack_channel_ids: list[str]
+    slack_dm_user_ids: list[str]
+    slack_group_policy: SlackGroupPolicy
+    slack_dm_policy: SlackDmPolicy
     created_at: datetime
     updated_at: datetime
 

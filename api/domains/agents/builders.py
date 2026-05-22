@@ -22,6 +22,26 @@ const WORKSPACE_DIR = path.join(HOME, '.openclaw', 'workspace');
 const OVERLAY_PATH = path.join(TEMPLATE_DIR, 'openclaw-config-overlay.json');
 const CONFIG_PATH = path.join(HOME, '.openclaw', 'openclaw.json');
 
+// These paths are replaced wholesale from the overlay rather than deep-merged,
+// so that removals (e.g. removing a channel or DM user) take effect on restart.
+const REPLACE_PATHS = [
+  ['channels', 'slack', 'channels'],
+  ['channels', 'slack', 'allowFrom'],
+];
+
+function getPath(obj, parts) {
+  return parts.reduce((cur, key) => (cur && typeof cur === 'object' ? cur[key] : undefined), obj);
+}
+
+function setPath(obj, parts, value) {
+  const last = parts[parts.length - 1];
+  const parent = parts.slice(0, -1).reduce((cur, key) => {
+    if (!cur[key] || typeof cur[key] !== 'object') cur[key] = {};
+    return cur[key];
+  }, obj);
+  parent[last] = value;
+}
+
 function deepMerge(base, overlay) {
   const result = Object.assign({}, base);
   for (const [key, val] of Object.entries(overlay)) {
@@ -48,9 +68,29 @@ let config = {};
 try { config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')); } catch {}
 
 const merged = deepMerge(config, overlay);
+
+for (const parts of REPLACE_PATHS) {
+  const overlayVal = getPath(overlay, parts);
+  if (overlayVal !== undefined) setPath(merged, parts, overlayVal);
+}
+
 fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
 fs.writeFileSync(CONFIG_PATH, JSON.stringify(merged, null, 2));
 console.log('[init-openclaw] Config merged successfully');
+
+// Overwrite Slack allowFrom credentials so the configured allowlist wins over stale runtime state.
+// openclaw writes paired users to slack-default-allowFrom.json (wrapped) at runtime; we mirror both here.
+const allowFrom = getPath(overlay, ['channels', 'slack', 'allowFrom']);
+if (allowFrom !== undefined) {
+  const credDir = path.join(HOME, '.openclaw', 'credentials');
+  fs.mkdirSync(credDir, { recursive: true });
+  fs.writeFileSync(path.join(credDir, 'slack-allowFrom.json'), JSON.stringify(allowFrom, null, 2));
+  fs.writeFileSync(
+    path.join(credDir, 'slack-default-allowFrom.json'),
+    JSON.stringify({ version: 1, allowFrom }, null, 2),
+  );
+  console.log('[init-openclaw] Synced slack allowFrom credentials');
+}
 """
 
 HEALTHZ_SERVER_JS = """\
@@ -143,8 +183,37 @@ exec openclaw gateway --allow-unconfigured
 """
 
 
-def build_openclaw_config_overlay(model: str, litellm_base_url: str) -> dict:
+def build_openclaw_config_overlay(
+    model: str,
+    litellm_base_url: str,
+    slack_channel_ids: list[str] | None = None,
+    slack_dm_user_ids: list[str] | None = None,
+    slack_group_policy: str = "open",
+    slack_dm_policy: str = "open",
+) -> dict:
     provider, _, model_name = model.partition("/")
+
+    channel_ids = slack_channel_ids or []
+    dm_user_ids = slack_dm_user_ids or []
+
+    if slack_dm_policy == "off":
+        openclaw_dm_policy = "allowlist"
+        allow_from = []
+        direct_reply_mode = "off"
+    elif slack_dm_policy == "open":
+        openclaw_dm_policy = "open"
+        allow_from = ["*"]
+        direct_reply_mode = "all"
+    else:
+        openclaw_dm_policy = slack_dm_policy
+        allow_from = dm_user_ids
+        direct_reply_mode = "all"
+
+    channels_config: dict = {
+        channel_id: {"enabled": True, "requireMention": False}
+        for channel_id in channel_ids
+    }
+
     return {
         "models": {
             "providers": {
@@ -163,17 +232,51 @@ def build_openclaw_config_overlay(model: str, litellm_base_url: str) -> dict:
         },
         "channels": {
             "slack": {
+                "enabled": True,
                 "mode": "socket",
                 "webhookPath": "/slack/events",
                 "userTokenReadOnly": True,
-                "groupPolicy": "open",
-                "dmPolicy": "open",
-                "allowFrom": ["*"],
+                "groupPolicy": slack_group_policy,
+                "dmPolicy": openclaw_dm_policy,
+                "allowFrom": allow_from,
+                "replyToModeByChatType": {
+                    "direct": direct_reply_mode,
+                    "group": "all",
+                    "channel": "all",
+                },
+                "streaming": {
+                    "mode": "partial",
+                    "nativeTransport": True,
+                },
+                "channels": channels_config,
             }
         },
         "bindings": [
             {"type": "route", "agentId": "main", "match": {"channel": "slack"}}
         ],
+        "tools": {"profile": "full"},
+        "memory": {"backend": "builtin"},
+        "plugins": {
+            "allow": ["memory-core", "active-memory"],
+            "slots": {"memory": "memory-core"},
+            "entries": {
+                "memory-core": {"enabled": True},
+                "active-memory": {
+                    "enabled": True,
+                    "config": {
+                        "agents": ["main"],
+                        "allowedChatTypes": ["direct", "group", "channel"],
+                        "modelFallbackPolicy": "default-remote",
+                        "queryMode": "recent",
+                        "promptStyle": "balanced",
+                        "timeoutMs": 15000,
+                        "maxSummaryChars": 220,
+                        "persistTranscripts": False,
+                        "logging": True,
+                    },
+                },
+            },
+        },
     }
 
 

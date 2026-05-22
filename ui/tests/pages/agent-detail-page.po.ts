@@ -34,4 +34,22 @@ export class AgentDetailPage {
   toolCallRow(toolName: string): Locator {
     return this.page.getByRole("row").filter({ hasText: toolName });
   }
+
+  channelsTab(): Locator {
+    return this.page.getByRole("button", { name: /^channels$/i });
+  }
+
+  groupPolicySelect(): Locator {
+    return this.page.locator("aside").getByLabel(/channel access/i);
+  }
+
+  dmPolicySelect(): Locator {
+    return this.page.locator("aside").getByLabel(/direct messages/i);
+  }
+
+  channelSearchInput(): Locator {
+    return this.page
+      .locator("aside")
+      .getByPlaceholder(/search channels|loading channels/i);
+  }
 }

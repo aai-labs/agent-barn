@@ -21,6 +21,10 @@ export type UpdateAgentData = {
   bootMd?: string;
   bootstrapMd?: string;
   heartbeatMd?: string;
+  slackChannelIds?: string[];
+  slackDmUserIds?: string[];
+  slackGroupPolicy?: "open" | "allowlist";
+  slackDmPolicy?: "off" | "open" | "allowlist" | "pairing";
 };
 
 export function useUpdateAgent() {

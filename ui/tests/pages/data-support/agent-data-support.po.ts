@@ -12,6 +12,10 @@ export const mockAgent = {
   template_id: MOCK_TEMPLATE_ID,
   template_version: 1,
   model: "litellm/gpt-5-mini",
+  slack_channel_ids: [],
+  slack_dm_user_ids: [],
+  slack_group_policy: "allowlist",
+  slack_dm_policy: "off",
   created_at: "2026-03-14T00:00:00Z",
   updated_at: "2026-05-14T09:14:00Z",
 };
@@ -269,6 +273,92 @@ export class AgentDataSupport {
           status,
           contentType: "application/json",
           body: JSON.stringify(status >= 400 ? { detail } : { message }),
+        });
+      },
+    );
+  }
+
+  async interceptUpdateAgentRequest({
+    agentId = MOCK_AGENT_ID,
+    status = 200,
+    detail = "Unable to update agent",
+    body,
+  }: {
+    agentId?: string;
+    status?: number;
+    detail?: string;
+    body?: unknown;
+  } = {}) {
+    await this.page.route(`**/api/v1/agents/${agentId}`, async (route) => {
+      if (route.request().method() !== "PATCH") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status,
+        contentType: "application/json",
+        body: JSON.stringify(
+          status >= 400 ? { detail } : (body ?? { ...mockAgent, id: agentId }),
+        ),
+      });
+    });
+  }
+
+  async interceptSlackChannelsRequest({
+    agentId = MOCK_AGENT_ID,
+    status = 200,
+    body,
+  }: {
+    agentId?: string;
+    status?: number;
+    body?: unknown;
+  } = {}) {
+    await this.page.route(
+      `**/api/v1/agents/${agentId}/slack/channels*`,
+      async (route) => {
+        if (route.request().method() !== "GET") {
+          await route.fallback();
+          return;
+        }
+        await route.fulfill({
+          status,
+          contentType: "application/json",
+          body: JSON.stringify(
+            body ?? [
+              { id: "C001", name: "general" },
+              { id: "C002", name: "engineering" },
+            ],
+          ),
+        });
+      },
+    );
+  }
+
+  async interceptSlackUsersRequest({
+    agentId = MOCK_AGENT_ID,
+    status = 200,
+    body,
+  }: {
+    agentId?: string;
+    status?: number;
+    body?: unknown;
+  } = {}) {
+    await this.page.route(
+      `**/api/v1/agents/${agentId}/slack/users*`,
+      async (route) => {
+        if (route.request().method() !== "GET") {
+          await route.fallback();
+          return;
+        }
+        await route.fulfill({
+          status,
+          contentType: "application/json",
+          body: JSON.stringify(
+            body ?? [
+              { id: "U001", name: "alice", real_name: "Alice Smith" },
+              { id: "U002", name: "bob", real_name: "Bob Jones" },
+            ],
+          ),
         });
       },
     );

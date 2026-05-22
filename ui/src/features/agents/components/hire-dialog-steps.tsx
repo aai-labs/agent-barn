@@ -372,6 +372,10 @@ export function DetailsStep({
   onNameChange,
   model,
   onModelChange,
+  slackGroupPolicy,
+  onSlackGroupPolicyChange,
+  slackDmPolicy,
+  onSlackDmPolicyChange,
   soulMd,
   onSoulMdChange,
   identityMd,
@@ -387,6 +391,10 @@ export function DetailsStep({
   onNameChange: (v: string) => void;
   model: string;
   onModelChange: (v: string) => void;
+  slackGroupPolicy: string;
+  onSlackGroupPolicyChange: (v: string) => void;
+  slackDmPolicy: string;
+  onSlackDmPolicyChange: (v: string) => void;
   soulMd: string;
   onSoulMdChange: (v: string) => void;
   identityMd: string;
@@ -430,6 +438,30 @@ export function DetailsStep({
           {MODELS.map((m) => (
             <option key={m.value} value={m.value}>{m.label}</option>
           ))}
+        </select>
+      </FormField>
+
+      <FormField label="Channel access" hint="You can add specific channels after hiring">
+        <select
+          className="af-input"
+          value={slackGroupPolicy}
+          onChange={(e) => onSlackGroupPolicyChange(e.target.value)}
+        >
+          <option value="allowlist">Allowlist — only allowed channels</option>
+          <option value="open">Open — respond in any channel</option>
+        </select>
+      </FormField>
+
+      <FormField label="Direct messages">
+        <select
+          className="af-input"
+          value={slackDmPolicy}
+          onChange={(e) => onSlackDmPolicyChange(e.target.value)}
+        >
+          <option value="off">Off — ignore direct messages</option>
+          <option value="pairing">Pairing — users must pair first</option>
+          <option value="allowlist">Allowlist — only allowed users</option>
+          <option value="open">Open — anyone can DM</option>
         </select>
       </FormField>
 
