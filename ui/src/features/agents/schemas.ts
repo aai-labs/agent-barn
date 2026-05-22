@@ -8,6 +8,10 @@ export const AgentSchema = z.object({
   templateId: z.string().uuid(),
   templateVersion: z.number().int(),
   model: z.string(),
+  slackChannelIds: z.array(z.string()),
+  slackDmUserIds: z.array(z.string()),
+  slackGroupPolicy: z.enum(["open", "allowlist"]),
+  slackDmPolicy: z.enum(["off", "open", "allowlist", "pairing"]),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -88,6 +92,17 @@ export const ConversationMessagesPageSchema = z.object({
   nextCursor: ConversationsCursorSchema.nullable(),
 });
 
+export const SlackChannelSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+});
+
+export const SlackUserSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  realName: z.string(),
+});
+
 export type Agent = z.infer<typeof AgentSchema>;
 export type AgentHealth = z.infer<typeof AgentHealthSchema>;
 export type AgentTemplateRead = z.infer<typeof AgentTemplateReadSchema>;
@@ -98,3 +113,5 @@ export type ConversationsCursor = z.infer<typeof ConversationsCursorSchema>;
 export type ConversationMessagesPage = z.infer<typeof ConversationMessagesPageSchema>;
 export type ToolCall = z.infer<typeof ToolCallSchema>;
 export type PaginatedToolCalls = z.infer<typeof PaginatedToolCallsSchema>;
+export type SlackChannel = z.infer<typeof SlackChannelSchema>;
+export type SlackUser = z.infer<typeof SlackUserSchema>;

@@ -12,6 +12,10 @@ export const mockAgent = {
   template_id: MOCK_TEMPLATE_ID,
   template_version: 1,
   model: "litellm/gpt-5-mini",
+  slack_channel_ids: [],
+  slack_dm_user_ids: [],
+  slack_group_policy: "allowlist",
+  slack_dm_policy: "off",
   created_at: "2026-03-14T00:00:00Z",
   updated_at: "2026-05-14T09:14:00Z",
 };

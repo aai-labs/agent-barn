@@ -83,12 +83,14 @@ export function TokenInput({
   visible,
   onToggle,
   placeholder,
+  disabled,
 }: {
   value: string;
   onChange: (v: string) => void;
   visible: boolean;
   onToggle: () => void;
   placeholder?: string;
+  disabled?: boolean;
 }) {
   return (
     <div className="relative">
@@ -99,6 +101,7 @@ export function TokenInput({
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         autoComplete="off"
+        disabled={disabled}
       />
       <button
         type="button"

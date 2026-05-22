@@ -20,6 +20,8 @@ export type CreateAgentData = {
   bootstrapMd?: string;
   heartbeatMd?: string;
   model?: string;
+  slackGroupPolicy?: "open" | "allowlist";
+  slackDmPolicy?: "off" | "open" | "allowlist" | "pairing";
 };
 
 export function useCreateAgent() {

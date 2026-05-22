@@ -26,6 +26,8 @@ export const agentsKey = {
       channelId,
       filters,
     ] as const,
+  slackChannels: (id: string) => [..._agentsKeyBase.detail(id), "slack-channels"] as const,
+  slackUsers: (id: string) => [..._agentsKeyBase.detail(id), "slack-users"] as const,
 };
 
 export const toolCallsKey = createQueryKeyStructure("tool-calls");
