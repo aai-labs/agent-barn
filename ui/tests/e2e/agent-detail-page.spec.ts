@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-import { MOCK_AGENT_ID, mockAgent } from "../pages/data-support/agent-data-support.po";
+import { MOCK_AGENT_ID, mockAgent, mockToolCall } from "../pages/data-support/agent-data-support.po";
 import { DataSupport } from "../pages/data-support/data-support.po";
 import { AgentDetailPage } from "../pages/agent-detail-page.po";
 
@@ -110,5 +110,95 @@ test.describe("Agent Detail Page", () => {
     await page.getByRole("button", { name: /connect/i }).click();
 
     await expect(page.getByText(`Pair Maya`)).not.toBeVisible();
+  });
+});
+
+test.describe("Agent Detail Page — Tool calls tab", () => {
+  test.describe.configure({ mode: "serial" });
+  let agentDetailPage: AgentDetailPage;
+  let dataSupportPage: DataSupport;
+
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  test.beforeEach(async ({ page }) => {
+    agentDetailPage = new AgentDetailPage(page);
+    dataSupportPage = new DataSupport(page);
+
+    await dataSupportPage.auth.interceptRefreshRequest();
+    await dataSupportPage.users.interceptGetUserContextRequest();
+    await dataSupportPage.agents.interceptGetAgentRequest();
+    await dataSupportPage.agents.interceptGetAgentTemplateRequest();
+    await dataSupportPage.agents.interceptGetToolCallsRequest();
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+  });
+
+  test("clicking the tab switches to tool calls view", async ({ page }) => {
+    await agentDetailPage.toolCallsTab().click();
+
+    await expect(page).toHaveURL(/tab=tool-calls/);
+    await expect(page.getByRole("columnheader", { name: /tool/i })).toBeVisible();
+  });
+
+  test("renders tool calls returned by the API", async ({ page }) => {
+    await agentDetailPage.toolCallsTab().click();
+
+    const row = agentDetailPage.toolCallRow("read");
+    await expect(row).toBeVisible();
+    await expect(row.getByText("Success")).toBeVisible();
+    await expect(row.getByText("1.0 s")).toBeVisible();
+  });
+
+  test("shows empty state when there are no tool calls", async ({ page }) => {
+    await dataSupportPage.agents.interceptGetToolCallsRequest({
+      body: { page: 1, page_size: 20, total: 0, items: [] },
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.toolCallsTab().click();
+
+    await expect(page.getByText("No tool calls yet")).toBeVisible();
+  });
+
+  test("expanding a row reveals arguments JSON", async ({ page }) => {
+    await agentDetailPage.toolCallsTab().click();
+
+    await agentDetailPage.toolCallRow("read").click();
+
+    await expect(page.getByText("Arguments")).toBeVisible();
+    await expect(page.getByText(/config\.yaml/)).toBeVisible();
+  });
+
+  test("filtering by tool name shows only matching calls", async ({ page }) => {
+    await dataSupportPage.agents.interceptGetToolCallsRequest({
+      body: { page: 1, page_size: 20, total: 0, items: [] },
+    });
+
+    await agentDetailPage.toolCallsTab().click();
+    await page.getByPlaceholder(/filter by tool name/i).fill("bash");
+
+    await expect(page.getByText("No tool calls match your filters")).toBeVisible();
+  });
+
+  test("direct navigation to ?tab=tool-calls lands on the correct tab", async ({ page }) => {
+    await page.goto(`/dashboard/agents/${MOCK_AGENT_ID}?tab=tool-calls`);
+
+    await expect(page.getByRole("columnheader", { name: /tool/i })).toBeVisible();
+    await expect(agentDetailPage.toolCallRow("read")).toBeVisible();
+  });
+
+  test("status badge renders for PENDING and ERROR tool calls", async ({ page }) => {
+    const pendingCall = { ...mockToolCall, id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", tool_name: "bash", status: "PENDING", result: null, completed_at: null, duration_ms: null };
+    const errorCall = { ...mockToolCall, id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", tool_name: "write", status: "ERROR" };
+
+    await dataSupportPage.agents.interceptGetToolCallsRequest({
+      body: { page: 1, page_size: 20, total: 2, items: [pendingCall, errorCall] },
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.toolCallsTab().click();
+
+    await expect(agentDetailPage.toolCallRow("bash").getByText("Pending")).toBeVisible();
+    await expect(agentDetailPage.toolCallRow("write").getByText("Error")).toBeVisible();
   });
 });

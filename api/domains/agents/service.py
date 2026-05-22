@@ -39,6 +39,7 @@ from api.domains.agents.models import (
 from api.domains.agents.repository import AgentRepository
 from api.domains.auth.models import CurrentUserContext
 from api.domains.conversations.service import ConversationSyncService
+from api.domains.tool_calls.sync_service import ToolCallSyncService
 from api.infrastructure.crypto import decrypt_token, encrypt_token
 from api.infrastructure.kubernetes.client import KubernetesClient
 from api.infrastructure.shared.models import PaginatedItems, Pagination
@@ -68,6 +69,7 @@ class AgentService:
     litellm: LiteLLMClient
     config: Config
     conversation_sync_service: ConversationSyncService
+    sync_service: ToolCallSyncService
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
@@ -320,6 +322,7 @@ class AgentService:
                 "Conversation sync before stop failed for agent %s: %s", agent_id, e
             )
 
+        self.sync_service.sync_agent(agent.id, org_id, force=True)
         self.k8s.delete_deployment(f"agent-{agent.id}", self.config.k8s_namespace)
 
         agent.status = AgentStatus.STOPPED
@@ -401,6 +404,13 @@ class AgentService:
 
         name = f"agent-{agent_id}"
         ns = self.config.k8s_namespace
+
+        pod_status = self.k8s.get_pod_readiness(name, ns)
+        if pod_status == "crashed":
+            return AgentHealthRead(status="crashed")
+        if pod_status != "ready":
+            return AgentHealthRead(status="initializing")
+
         try:
             data = self.k8s.fetch_agent_healthz(name, ns)
             return AgentHealthRead.model_validate(data)
