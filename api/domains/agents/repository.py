@@ -5,7 +5,13 @@ from injector import inject, singleton
 from sqlalchemy import func
 from sqlmodel import Session, col, select
 
-from api.domains.agents.models import Agent, AgentFilter, AgentRead, AgentTemplate
+from api.domains.agents.models import (
+    Agent,
+    AgentFilter,
+    AgentSlackConfig,
+    AgentTeamsConfig,
+    AgentTemplate,
+)
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
@@ -40,7 +46,7 @@ class AgentRepository:
         org_id: UUID,
         agent_filter: AgentFilter,
         pagination: Pagination,
-    ) -> PaginatedItems[AgentRead]:
+    ) -> tuple[list[Agent], int]:
         with Session(self.delegate.engine) as session:
             query = (
                 select(Agent)
@@ -69,16 +75,58 @@ class AgentRepository:
                 pagination.size
             )
 
-            items = [
-                AgentRead.model_validate(agent) for agent in session.exec(query).all()
-            ]
+            agents = list(session.exec(query).all())
+            return agents, total
 
-            return PaginatedItems(
-                page=pagination.page,
-                page_size=pagination.size,
-                total=total,
-                items=items,
+    # --- Slack config ---
+
+    def get_slack_config(self, agent_id: UUID) -> AgentSlackConfig | None:
+        with Session(self.delegate.engine) as session:
+            query = select(AgentSlackConfig).where(
+                col(AgentSlackConfig.agent_id) == agent_id
             )
+            return session.exec(query).first()
+
+    def save_slack_config(self, config: AgentSlackConfig) -> AgentSlackConfig:
+        self.delegate.save(config)
+        return config
+
+    def get_slack_configs_for_agents(
+        self, agent_ids: list[UUID]
+    ) -> dict[UUID, AgentSlackConfig]:
+        if not agent_ids:
+            return {}
+        with Session(self.delegate.engine) as session:
+            query = select(AgentSlackConfig).where(
+                col(AgentSlackConfig.agent_id).in_(agent_ids)
+            )
+            return {c.agent_id: c for c in session.exec(query).all()}
+
+    # --- Teams config ---
+
+    def get_teams_config(self, agent_id: UUID) -> AgentTeamsConfig | None:
+        with Session(self.delegate.engine) as session:
+            query = select(AgentTeamsConfig).where(
+                col(AgentTeamsConfig.agent_id) == agent_id
+            )
+            return session.exec(query).first()
+
+    def save_teams_config(self, config: AgentTeamsConfig) -> AgentTeamsConfig:
+        self.delegate.save(config)
+        return config
+
+    def get_teams_configs_for_agents(
+        self, agent_ids: list[UUID]
+    ) -> dict[UUID, AgentTeamsConfig]:
+        if not agent_ids:
+            return {}
+        with Session(self.delegate.engine) as session:
+            query = select(AgentTeamsConfig).where(
+                col(AgentTeamsConfig.agent_id).in_(agent_ids)
+            )
+            return {c.agent_id: c for c in session.exec(query).all()}
+
+    # --- Templates ---
 
     def get_template_by_agent_and_version(
         self, agent_id: UUID, version: int, org_id: UUID

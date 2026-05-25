@@ -21,8 +21,20 @@ _INBOUND_RE = re.compile(
     r"Slack message in #(\S+) from (\w+): (.+)",
     re.DOTALL,
 )
+# Exact format may differ at runtime — adjust regex after inspecting live Teams JSONL output.
+_INBOUND_TEAMS_RE = re.compile(
+    r"\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC)\] "
+    r"Teams message in (.+?) from (\S+): (.+)",
+    re.DOTALL,
+)
 _MENTION_RE = re.compile(r"<@(U\w+)>")
 _TS_FMT = "%Y-%m-%d %H:%M:%S UTC"
+
+_SESSION_PREFIXES = (
+    "agent:main:slack:channel:",
+    "agent:main:msteams:channel:",
+    "agent:main:msteams:group:",
+)
 
 
 def _parse_occurred_at(ts_str: str) -> datetime:
@@ -68,9 +80,8 @@ def _parse_jsonl(
             and line.get("customType") == "openclaw.runtime-context"
         ):
             content_raw = line.get("content", "")
-            # Only first line of content carries the Slack message header
             first_line = content_raw.split("\n")[0]
-            m = _INBOUND_RE.search(first_line)
+            m = _INBOUND_RE.search(first_line) or _INBOUND_TEAMS_RE.search(first_line)
             if not m:
                 continue
             ts_str, _raw_channel, sender_id, text = (
@@ -122,7 +133,7 @@ def _parse_jsonl(
                 continue
             try:
                 occurred_at = _parse_iso(line.get("timestamp", ""))
-            except ValueError, TypeError:
+            except (ValueError, TypeError):
                 continue
             messages.append(
                 AgentChatMessage(
@@ -150,7 +161,7 @@ def parse_sessions(
     channel_map: dict[str, str] | None = None,
 ) -> list[AgentChatMessage]:
     """
-    Parse all Slack sessions for an agent.
+    Parse all platform sessions for an agent.
 
     sessions_json: text content of sessions.json from the pod
     get_jsonl: callable(session_uuid) -> JSONL text for that session
@@ -166,7 +177,7 @@ def parse_sessions(
     all_messages: list[AgentChatMessage] = []
 
     for session_key, session_data in sessions.items():
-        if not session_key.startswith("agent:main:slack:channel:"):
+        if not any(session_key.startswith(p) for p in _SESSION_PREFIXES):
             continue
 
         session_uuid = session_data.get("sessionId")

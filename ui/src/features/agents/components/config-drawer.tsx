@@ -16,16 +16,19 @@ interface ConfigDrawerProps {
   onClose: () => void;
 }
 
-const TABS: [string, string, boolean][] = [
-  ["personality", "Personality", true],
-  ["secrets", "Keys", true],
-  ["channels", "Channels", true],
-  ["skills", "Skills", false],
-  ["k8s", "Infrastructure", false],
-  ["danger", "Danger zone", true],
-];
+function getTabs(platform: "slack" | "teams"): [string, string, boolean][] {
+  return [
+    ["personality", "Personality", true],
+    ["secrets", "Keys", true],
+    ...(platform === "slack" ? [["channels", "Channels", true] as [string, string, boolean]] : []),
+    ...(platform === "teams" ? [["endpoint", "Endpoint", true] as [string, string, boolean]] : []),
+    ["skills", "Skills", false],
+    ["k8s", "Infrastructure", false],
+    ["danger", "Danger zone", true],
+  ];
+}
 
-type TabKey = "personality" | "channels" | "skills" | "secrets" | "k8s" | "danger";
+type TabKey = "personality" | "channels" | "endpoint" | "skills" | "secrets" | "k8s" | "danger";
 
 type TemplateFiles = {
   soul_md: string;
@@ -66,7 +69,13 @@ export function ConfigDrawer({ agent, onClose }: ConfigDrawerProps) {
   const [slackBotToken, setSlackBotToken] = useState("");
   const [showAppToken, setShowAppToken] = useState(false);
   const [showBotToken, setShowBotToken] = useState(false);
+  const [teamsAppId, setTeamsAppId] = useState("");
+  const [teamsAppPassword, setTeamsAppPassword] = useState("");
+  const [showTeamsAppPassword, setShowTeamsAppPassword] = useState(false);
+  const [teamsTenantId, setTeamsTenantId] = useState("");
   const [savedTokens, setSavedTokens] = useState(false);
+
+  const tabs = getTabs(agent.platform);
 
   useEffect(() => {
     if (template) {
@@ -110,11 +119,20 @@ export function ConfigDrawer({ agent, onClose }: ConfigDrawerProps) {
 
   async function handleSaveTokens() {
     try {
-      await updateAgent.mutateAsync({
-        agentId: agent.id,
-        ...(slackAppToken.trim() ? { slackAppToken } : {}),
-        ...(slackBotToken.trim() ? { slackBotToken } : {}),
-      });
+      if (agent.platform === "teams") {
+        await updateAgent.mutateAsync({
+          agentId: agent.id,
+          ...(teamsAppId.trim() ? { teamsAppId } : {}),
+          ...(teamsAppPassword.trim() ? { teamsAppPassword } : {}),
+          ...(teamsTenantId.trim() ? { teamsTenantId } : {}),
+        });
+      } else {
+        await updateAgent.mutateAsync({
+          agentId: agent.id,
+          ...(slackAppToken.trim() ? { slackAppToken } : {}),
+          ...(slackBotToken.trim() ? { slackBotToken } : {}),
+        });
+      }
       setSavedTokens(true);
       setTimeout(() => setSavedTokens(false), 2000);
     } catch {
@@ -164,7 +182,7 @@ export function ConfigDrawer({ agent, onClose }: ConfigDrawerProps) {
           className="flex gap-0.5 px-4.5 pt-1 overflow-x-auto flex-shrink-0 no-scrollbar"
           style={{ borderBottom: "1px solid var(--line)" }}
         >
-          {TABS.map(([k, l, enabled]) => (
+          {tabs.map(([k, l, enabled]) => (
             <button
               key={k}
               className="af-drawer-tab"
@@ -326,7 +344,7 @@ export function ConfigDrawer({ agent, onClose }: ConfigDrawerProps) {
             </div>
           )}
 
-          {tab === "secrets" && (
+          {tab === "secrets" && agent.platform === "slack" && (
             <div className="flex flex-col gap-4">
               <Hint>
                 Tokens are write-only — leave a field blank to keep the existing value.
@@ -374,6 +392,88 @@ export function ConfigDrawer({ agent, onClose }: ConfigDrawerProps) {
             </div>
           )}
 
+          {tab === "secrets" && agent.platform === "teams" && (
+            <div className="flex flex-col gap-4">
+              <Hint>
+                Credentials are write-only — leave a field blank to keep the existing value.
+              </Hint>
+              <div className="flex flex-col gap-3.5">
+                <div className="flex flex-col gap-1.5">
+                  <label className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>App (client) ID</label>
+                  <input
+                    className="af-input font-mono text-[0.8125rem]"
+                    value={teamsAppId}
+                    onChange={(e) => setTeamsAppId(e.target.value)}
+                    placeholder="Leave blank to keep existing"
+                    disabled={isRunning}
+                  />
+                  <span className="text-xs" style={{ color: "var(--ink-4)" }}>From your Azure Bot registration</span>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <label className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>App password (client secret)</label>
+                  <TokenInput
+                    value={teamsAppPassword}
+                    onChange={setTeamsAppPassword}
+                    visible={showTeamsAppPassword}
+                    onToggle={() => setShowTeamsAppPassword((v) => !v)}
+                    placeholder="Leave blank to keep existing"
+                    disabled={isRunning}
+                  />
+                  <span className="text-xs" style={{ color: "var(--ink-4)" }}>Created in Azure App Registration → Certificates &amp; secrets</span>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <label className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>Tenant ID</label>
+                  <input
+                    className="af-input font-mono text-[0.8125rem]"
+                    value={teamsTenantId}
+                    onChange={(e) => setTeamsTenantId(e.target.value)}
+                    placeholder="Leave blank to keep existing"
+                    disabled={isRunning}
+                  />
+                  <span className="text-xs" style={{ color: "var(--ink-4)" }}>Found in Azure Portal → Azure Active Directory → Overview</span>
+                </div>
+              </div>
+              <div className="flex gap-2 items-center">
+                <button
+                  className="af-btn af-btn-sm"
+                  disabled={isRunning || updateAgent.isPending || (!teamsAppId.trim() && !teamsAppPassword.trim() && !teamsTenantId.trim())}
+                  onClick={() => { void handleSaveTokens(); }}
+                >
+                  {updateAgent.isPending ? "Saving…" : savedTokens ? "Saved!" : "Save credentials"}
+                </button>
+                {updateAgent.error && (
+                  <span className="text-xs" style={{ color: "var(--err)" }}>
+                    {updateAgent.error instanceof Error ? updateAgent.error.message : "Save failed"}
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+
+          {tab === "endpoint" && (
+            <div>
+              <Hint>
+                This is the messaging endpoint URL. Configure it in your Azure Bot registration under Configuration.
+              </Hint>
+              {agent.webhookUrl && (
+                <div
+                  className="flex items-center gap-2 p-4 rounded-xl font-mono text-sm"
+                  style={{ background: "var(--bg-soft)", border: "1px solid var(--line)" }}
+                >
+                  <span className="flex-1 break-all" style={{ color: "var(--ink-2)" }}>
+                    {agent.webhookUrl}
+                  </span>
+                  <button
+                    className="af-btn af-btn-sm flex-shrink-0"
+                    onClick={() => void navigator.clipboard.writeText(agent.webhookUrl!)}
+                  >
+                    Copy
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
           {tab === "k8s" && (
             <div>
               <Hint>
@@ -381,10 +481,10 @@ export function ConfigDrawer({ agent, onClose }: ConfigDrawerProps) {
               </Hint>
               {[
                 ["Deployment", `agent-${agent.id}`, "1/1 ready"],
-                ["Service", `agent-${agent.id}-svc`, "ClusterIP · :8080"],
+                ["Service", `agent-${agent.id}-svc`, agent.platform === "teams" ? "ClusterIP · :8080, :3978" : "ClusterIP · :8080"],
                 ["PersistentVolumeClaim", `agent-${agent.id}-workspace`, "Bound · 10Gi"],
                 ["ConfigMap", `agent-${agent.id}-config`, "8 keys"],
-                ["Secret", `agent-${agent.id}-secret`, "4 keys · encrypted"],
+                ["Secret", `agent-${agent.id}-secret`, agent.platform === "teams" ? "5 keys · encrypted" : "4 keys · encrypted"],
                 ["NetworkPolicy", `agent-${agent.id}-egress`, "proxy + litellm only"],
               ].map(([kind, name, status]) => (
                 <div

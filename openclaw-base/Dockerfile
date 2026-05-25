@@ -47,4 +47,6 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 USER node
 
+RUN openclaw plugins install @openclaw/msteams
+
 ENTRYPOINT ["/usr/bin/tini", "--"]

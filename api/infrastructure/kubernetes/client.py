@@ -266,3 +266,19 @@ class KubernetesClient:
             raise RuntimeError(
                 f"healthz unreachable for {service_name}: {exc}"
             ) from exc
+
+    def proxy_to_agent(
+        self,
+        service_name: str,
+        namespace: str,
+        port: int,
+        path: str,
+        method: str,
+        body: bytes,
+        headers: dict[str, str],
+    ) -> tuple[int, bytes, dict[str, str]]:
+        host = f"{service_name}.{namespace}"
+        conn = http.client.HTTPConnection(host, port, timeout=30)
+        conn.request(method, path, body=body, headers=headers)
+        resp = conn.getresponse()
+        return resp.status, resp.read(), dict(resp.getheaders())
