@@ -47,6 +47,14 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 USER node
 
-RUN openclaw plugins install @openclaw/msteams
+RUN openclaw plugins install @openclaw/msteams@2026.5.7
+
+USER root
+
+RUN mkdir -p /opt/openclaw-preinstalled && \
+    cp -a /home/node/.openclaw/npm /opt/openclaw-preinstalled/npm && \
+    chown -R node:node /opt/openclaw-preinstalled
+
+USER node
 
 ENTRYPOINT ["/usr/bin/tini", "--"]

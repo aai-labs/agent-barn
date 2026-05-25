@@ -21,6 +21,8 @@ const TEMPLATE_DIR = '/app/config';
 const WORKSPACE_DIR = path.join(HOME, '.openclaw', 'workspace');
 const OVERLAY_PATH = path.join(TEMPLATE_DIR, 'openclaw-config-overlay.json');
 const CONFIG_PATH = path.join(HOME, '.openclaw', 'openclaw.json');
+const PREINSTALLED_NPM_DIR = '/opt/openclaw-preinstalled/npm';
+const RUNTIME_NPM_DIR = path.join(HOME, '.openclaw', 'npm');
 
 // These paths are replaced wholesale from the overlay rather than deep-merged,
 // so that removals (e.g. removing a channel or DM user) take effect on restart.
@@ -53,6 +55,10 @@ function deepMerge(base, overlay) {
   }
   return result;
 }
+
+fs.mkdirSync(path.dirname(RUNTIME_NPM_DIR), { recursive: true });
+fs.cpSync(PREINSTALLED_NPM_DIR, RUNTIME_NPM_DIR, { recursive: true, force: true });
+console.log('[init-openclaw] Restored preinstalled OpenClaw npm plugins');
 
 fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
 for (const file of fs.readdirSync(TEMPLATE_DIR)) {
@@ -311,6 +317,10 @@ def build_openclaw_config_overlay_teams(
         "channels": {
             "msteams": {
                 "enabled": True,
+                "dmPolicy": "open",
+                "allowFrom": ["*"],
+                "groupPolicy": "open",
+                "streaming": {"mode": "off"},
                 "webhook": {"port": 3978, "path": "/api/messages"},
             }
         },
