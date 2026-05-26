@@ -28,9 +28,6 @@ from api.domains.agents.models import AgentPlatform
 from api.tests.steps.agent import (
     FAKE_LITELLM_KEY,
     TEST_ENCRYPTION_KEY,
-    TEST_TEAMS_APP_ID,
-    TEST_TEAMS_APP_PASSWORD,
-    TEST_TEAMS_TENANT_ID,
     MockK8sModule,
     MockLiteLLMModule,
     there_is_an_agent,
@@ -1369,9 +1366,7 @@ def test_create_slack_agent_missing_tokens_returns_422():
 
 
 def test_start_teams_agent_creates_correct_k8s_resources():
-    with given(
-        [*_GIVEN, there_is_an_agent(platform=AgentPlatform.TEAMS)]
-    ) as context:
+    with given([*_GIVEN, there_is_an_agent(platform=AgentPlatform.TEAMS)]) as context:
         client: TestClient = context.client
         k8s: KubernetesClient = context.injector.get(KubernetesClient)
 
@@ -1405,9 +1400,7 @@ def test_teams_webhook_relay_proxies_to_pod():
     with given(
         [
             *_GIVEN,
-            there_is_an_agent(
-                status=AgentStatus.RUNNING, platform=AgentPlatform.TEAMS
-            ),
+            there_is_an_agent(status=AgentStatus.RUNNING, platform=AgentPlatform.TEAMS),
         ]
     ) as context:
         client: TestClient = context.client
@@ -1431,9 +1424,7 @@ def test_teams_webhook_relay_proxies_to_pod():
 
 
 def test_teams_webhook_relay_returns_404_for_slack_agent():
-    with given(
-        [*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]
-    ) as context:
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
         client: TestClient = context.client
 
         with when("I POST to the Teams webhook for a Slack agent"):
@@ -1451,9 +1442,7 @@ def test_teams_webhook_relay_returns_503_for_stopped_agent():
     with given(
         [
             *_GIVEN,
-            there_is_an_agent(
-                status=AgentStatus.STOPPED, platform=AgentPlatform.TEAMS
-            ),
+            there_is_an_agent(status=AgentStatus.STOPPED, platform=AgentPlatform.TEAMS),
         ]
     ) as context:
         client: TestClient = context.client
@@ -1472,9 +1461,7 @@ def test_teams_webhook_relay_returns_503_for_stopped_agent():
 
 
 def test_update_teams_agent_rejects_slack_fields():
-    with given(
-        [*_GIVEN, there_is_an_agent(platform=AgentPlatform.TEAMS)]
-    ) as context:
+    with given([*_GIVEN, there_is_an_agent(platform=AgentPlatform.TEAMS)]) as context:
         client: TestClient = context.client
 
         with when("I patch a Teams agent with Slack-specific fields"):
@@ -1494,9 +1481,7 @@ def test_pair_teams_agent_returns_400():
     with given(
         [
             *_GIVEN,
-            there_is_an_agent(
-                status=AgentStatus.RUNNING, platform=AgentPlatform.TEAMS
-            ),
+            there_is_an_agent(status=AgentStatus.RUNNING, platform=AgentPlatform.TEAMS),
         ]
     ) as context:
         client: TestClient = context.client

@@ -8,6 +8,7 @@ import {
   ROLES, MODELS, RoleId, WizardStep, pickDefaults,
   RoleStep, PlatformChoiceStep, SlackChoiceStep, BotBuilderStep, SlackTokensStep,
   TeamsBotBuilderStep, TeamsCredentialsStep, DetailsStep,
+  downloadTeamsAppPackage, generateTeamsManifest,
 } from "./hire-dialog-steps";
 import { SlackConfigPanel } from "./slack-config-panel";
 import type { Agent } from "../schemas";
@@ -28,7 +29,7 @@ const PROVISION_STEPS = [
 
 function getSteps(platform: "slack" | "teams", setupNewBot: boolean): WizardStep[] {
   if (platform === "teams") {
-    return ["role", "platform-choice", "teams-bot-builder", "teams-credentials", "details"];
+    return ["role", "platform-choice", "teams-credentials", "teams-bot-builder", "details"];
   }
   return setupNewBot
     ? ["role", "platform-choice", "slack-choice", "bot-builder", "slack-tokens", "details"]
@@ -104,6 +105,11 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
     setToolsMd(d.toolsMd);
   }
 
+  function handleTeamsBotNameChange(value: string) {
+    setBotName(value);
+    setName(value);
+  }
+
   function handleBack() {
     const steps = getSteps(platform, setupNewBot);
     const idx = steps.indexOf(step);
@@ -164,6 +170,8 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
 
   if (!provisioning && createdAgent) {
     if (platform === "teams") {
+      const teamsManifest = generateTeamsManifest(teamsAppId, botName, botDescription, botColor);
+
       return (
         <DialogShell shadeClick={undefined}>
           <header
@@ -202,6 +210,23 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
                 </button>
               </div>
             )}
+            <div
+              className="mt-5 rounded-xl p-4"
+              style={{ background: "var(--bg-soft)", border: "1px solid var(--line)" }}
+            >
+              <div className="font-semibold text-[0.844rem] mb-1" style={{ color: "var(--ink)" }}>
+                Teams app package
+              </div>
+              <p className="text-[0.8125rem] mb-3 leading-[1.5]" style={{ color: "var(--ink-3)" }}>
+                Download the ready-to-upload package if you still need to add this bot to Teams.
+              </p>
+              <button
+                className="af-btn af-btn-sm"
+                onClick={() => { void downloadTeamsAppPackage(teamsManifest, botName); }}
+              >
+                Download Teams app package
+              </button>
+            </div>
           </div>
           <footer
             className="px-6 py-4 flex items-center justify-end flex-shrink-0"
@@ -368,13 +393,15 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
         {step === "teams-bot-builder" && (
           <TeamsBotBuilderStep
             teamsAppId={teamsAppId} onTeamsAppIdChange={setTeamsAppId}
-            botName={botName} onBotNameChange={setBotName}
+            botName={botName} onBotNameChange={handleTeamsBotNameChange}
             botDescription={botDescription} onBotDescriptionChange={setBotDescription}
             botColor={botColor} onBotColorChange={setBotColor}
           />
         )}
         {step === "teams-credentials" && (
           <TeamsCredentialsStep
+            teamsAppId={teamsAppId}
+            onAppIdChange={(v) => { setTeamsAppId(v); setTeamsTokenError(null); }}
             teamsAppPassword={teamsAppPassword}
             onAppPasswordChange={(v) => { setTeamsAppPassword(v); setTeamsTokenError(null); }}
             showAppPassword={showTeamsAppPassword}
@@ -419,7 +446,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
         {step === "platform-choice" && (
           <button
             className="af-btn af-btn-primary af-btn-lg"
-            onClick={() => setStep(platform === "teams" ? "teams-bot-builder" : "slack-choice")}
+            onClick={() => setStep(platform === "teams" ? "teams-credentials" : "slack-choice")}
           >
             Continue
           </button>
@@ -443,7 +470,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
           </button>
         )}
         {step === "teams-bot-builder" && (
-          <button className="af-btn af-btn-primary af-btn-lg" onClick={() => setStep("teams-credentials")}>
+          <button className="af-btn af-btn-primary af-btn-lg" onClick={() => setStep("details")}>
             Continue
           </button>
         )}

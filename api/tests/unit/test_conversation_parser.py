@@ -312,9 +312,7 @@ def test_handles_both_slack_and_teams_sessions():
     messages = parse_sessions(
         _AGENT_ID,
         mixed_sessions,
-        _make_get_jsonl(
-            {"aaaa-bbbb": _INBOUND_LINE, "tttt-uuuu": _TEAMS_INBOUND_LINE}
-        ),
+        _make_get_jsonl({"aaaa-bbbb": _INBOUND_LINE, "tttt-uuuu": _TEAMS_INBOUND_LINE}),
     )
 
     assert len(messages) == 2

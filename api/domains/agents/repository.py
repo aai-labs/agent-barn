@@ -13,7 +13,7 @@ from api.domains.agents.models import (
     AgentTemplate,
 )
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
-from api.infrastructure.shared.models import PaginatedItems, Pagination
+from api.infrastructure.shared.models import Pagination
 
 
 @inject

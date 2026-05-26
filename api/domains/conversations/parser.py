@@ -133,7 +133,7 @@ def _parse_jsonl(
                 continue
             try:
                 occurred_at = _parse_iso(line.get("timestamp", ""))
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 continue
             messages.append(
                 AgentChatMessage(

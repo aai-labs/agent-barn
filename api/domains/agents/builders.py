@@ -473,9 +473,7 @@ def build_service(
         client.V1ServicePort(port=8081, target_port=8081, name="healthz"),
     ]
     if include_webhook_port:
-        ports.append(
-            client.V1ServicePort(port=3978, target_port=3978, name="webhook")
-        )
+        ports.append(client.V1ServicePort(port=3978, target_port=3978, name="webhook"))
     return client.V1Service(
         metadata=client.V1ObjectMeta(
             name=_resource_name(agent_id),

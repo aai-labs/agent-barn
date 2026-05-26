@@ -112,9 +112,7 @@ def there_is_an_agent(
         elif platform == AgentPlatform.TEAMS:
             teams_config = AgentTeamsConfig(
                 agent_id=agent.id,
-                app_id_encrypted=encrypt_token(
-                    TEST_TEAMS_APP_ID, TEST_ENCRYPTION_KEY
-                ),
+                app_id_encrypted=encrypt_token(TEST_TEAMS_APP_ID, TEST_ENCRYPTION_KEY),
                 app_password_encrypted=encrypt_token(
                     TEST_TEAMS_APP_PASSWORD, TEST_ENCRYPTION_KEY
                 ),

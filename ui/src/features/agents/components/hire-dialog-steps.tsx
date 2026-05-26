@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import JSZip from "jszip";
 import { TEMPLATE_FILES } from "../data";
 import { ChoiceCard, FormField, NextStep, TokenInput } from "./hire-dialog-primitives";
 
@@ -25,6 +26,41 @@ export type WizardStep =
 export const MODELS = [{ value: "litellm/gpt-5-mini", label: "GPT-5 mini" }] as const;
 
 export const BOT_COLOR_PRESETS = ["#4A154B", "#1264A3", "#2BAC76", "#E8912D", "#CC4400"];
+const TEAMS_DEVELOPER_NAME = "Agent Farm";
+const TEAMS_DEVELOPER_WEBSITE_URL = "https://example.com";
+const TEAMS_PRIVACY_URL = "https://example.com/privacy";
+const TEAMS_TERMS_URL = "https://example.com/terms";
+
+async function fetchAsset(path: string): Promise<Blob> {
+  const response = await fetch(path);
+  if (!response.ok) throw new Error(`Unable to load ${path}`);
+  return response.blob();
+}
+
+function safeFilePrefix(name: string): string {
+  const normalized = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-");
+  return normalized.replace(/^-+|-+$/g, "") || "teams-app";
+}
+
+export async function downloadTeamsAppPackage(manifest: string, botName: string): Promise<void> {
+  const zip = new JSZip();
+  const [colorIcon, outlineIcon] = await Promise.all([
+    fetchAsset("/teams-icon-color.png"),
+    fetchAsset("/teams-icon-outline.png"),
+  ]);
+
+  zip.file("manifest.json", manifest);
+  zip.file("color.png", colorIcon);
+  zip.file("outline.png", outlineIcon);
+
+  const blob = await zip.generateAsync({ type: "blob" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${safeFilePrefix(botName)}-teams-app.zip`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
 
 export function pickDefaults(roleId: RoleId) {
   const role = ROLES.find((r) => r.id === roleId)!;
@@ -228,7 +264,7 @@ export function BotBuilderStep({
       <div>
         <div className="flex items-center justify-between mb-2">
           <span className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>
-            Generated manifest
+            Teams app package
           </span>
           <div className="flex gap-1.5">
             <button className="af-btn af-btn-sm" onClick={copyManifest}>
@@ -399,7 +435,7 @@ export function PlatformChoiceStep({
   );
 }
 
-function generateTeamsManifest(
+export function generateTeamsManifest(
   appId: string,
   botName: string,
   botDescription: string,
@@ -413,7 +449,13 @@ function generateTeamsManifest(
       version: "1.0.0",
       id: appId || "{{YOUR_APP_ID}}",
       packageName: "com.agentfarm.bot",
-      name: { short: botName, full: `${botName} — Agent Farm` },
+      developer: {
+        name: "Agent Farm",
+        websiteUrl: "https://agent-farm.k8s.aai-labs.com",
+        privacyUrl: "https://agent-farm.k8s.aai-labs.com",
+        termsOfUseUrl: "https://agent-farm.k8s.aai-labs.com",
+      },
+      name: { short: botName, full: `${botName} - Agent Farm` },
       description: {
         short: botDescription,
         full: `${botDescription}\n\nPowered by Agent Farm.`,
@@ -465,14 +507,8 @@ export function TeamsBotBuilderStep({
     });
   }
 
-  function downloadManifest() {
-    const blob = new Blob([manifest], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${botName.toLowerCase().replace(/\s+/g, "-")}-teams-manifest.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+  function downloadPackage() {
+    void downloadTeamsAppPackage(manifest, botName);
   }
 
   return (
@@ -539,8 +575,8 @@ export function TeamsBotBuilderStep({
             <button className="af-btn af-btn-sm" onClick={copyManifest}>
               {copied ? "Copied!" : "Copy"}
             </button>
-            <button className="af-btn af-btn-sm" onClick={downloadManifest}>
-              Download
+            <button className="af-btn af-btn-sm" onClick={downloadPackage}>
+              Download Teams app package
             </button>
           </div>
         </div>
@@ -564,32 +600,17 @@ export function TeamsBotBuilderStep({
         <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
           What to do next
         </div>
-        <NextStep n={1} label="Create an Azure Bot resource">
-          Go to the{" "}
-          <a
-            href="https://portal.azure.com/#create/Microsoft.AzureBot"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline"
-            style={{ color: "var(--ink-2)" }}
-          >
-            Azure Portal ↗
-          </a>
-          {" "}→ Create a resource → search &quot;Azure Bot&quot;. Note the App ID and create a client secret.
+        <NextStep n={1} label="Download the Teams app package">
+          Use the download above after you review the manifest details. The zip is ready to upload.
         </NextStep>
-        <NextStep n={2} label="Enable the Teams channel">
-          In your Bot resource, go to <b>Channels</b> and enable <b>Microsoft Teams</b>.
+        <NextStep n={2} label="Upload to Teams">
+          In Teams, go to <b>Apps</b>, open <b>Manage your apps</b>, choose <b>Upload a custom app</b>, and upload the zip.
         </NextStep>
-        <NextStep n={3} label="Create the Teams app package">
-          Download the manifest above and place it in a zip file alongside a{" "}
-          <span className="font-mono text-xs">color.png</span> (192×192) and{" "}
-          <span className="font-mono text-xs">outline.png</span> (32×32) icon.
+        <NextStep n={3} label="Publish or approve if prompted">
+          If your tenant requires admin review, publish or approve the submitted app in Teams admin center.
         </NextStep>
-        <NextStep n={4} label="Upload to Teams">
-          In Teams, go to <b>Apps</b> → <b>Manage your apps</b> → <b>Upload a custom app</b> and upload the zip.
-        </NextStep>
-        <NextStep n={5} label="Come back and enter your credentials">
-          You&apos;ll paste the App Password and Tenant ID on the next screen.
+        <NextStep n={4} label="Install and test">
+          Open the app in Teams and send a message after the agent is hired and the messaging endpoint is configured.
         </NextStep>
       </div>
     </div>
@@ -597,6 +618,8 @@ export function TeamsBotBuilderStep({
 }
 
 export function TeamsCredentialsStep({
+  teamsAppId,
+  onAppIdChange,
   teamsAppPassword,
   onAppPasswordChange,
   showAppPassword,
@@ -605,6 +628,8 @@ export function TeamsCredentialsStep({
   onTenantIdChange,
   error,
 }: {
+  teamsAppId: string;
+  onAppIdChange: (v: string) => void;
   teamsAppPassword: string;
   onAppPasswordChange: (v: string) => void;
   showAppPassword: boolean;
@@ -627,6 +652,15 @@ export function TeamsCredentialsStep({
             These stay encrypted in the key vault. The agent only sees fake placeholders.
           </div>
         </div>
+
+        <FormField label="App (client) ID" hint="From your Azure Bot registration — found under Configuration">
+          <input
+            className="af-input font-mono text-[0.8125rem]"
+            value={teamsAppId}
+            onChange={(e) => onAppIdChange(e.target.value)}
+            placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+          />
+        </FormField>
 
         <FormField label="App password (client secret)" hint="Created in Azure App Registration → Certificates & secrets">
           <TokenInput
@@ -652,6 +686,41 @@ export function TeamsCredentialsStep({
             {error}
           </div>
         )}
+      </div>
+
+      <div
+        className="flex flex-col gap-3 rounded-2xl p-4"
+        style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
+      >
+        <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
+          What to do next
+        </div>
+        <NextStep n={1} label="Create an Azure Bot resource">
+          Go to the{" "}
+          <a
+            href="https://portal.azure.com/#create/Microsoft.AzureBot"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline"
+            style={{ color: "var(--ink-2)" }}
+          >
+            Azure Portal →
+          </a>
+          {" "}and create an Azure Bot resource.
+        </NextStep>
+        <NextStep n={2} label="Copy the App ID">
+          In the Bot resource, open <b>Configuration</b> and copy the Microsoft App ID.
+        </NextStep>
+        <NextStep n={3} label="Create an app password">
+          Open the linked app registration, go to <b>Certificates &amp; secrets</b>, and create a new client secret.
+          Copy the secret value before leaving the page.
+        </NextStep>
+        <NextStep n={4} label="Copy the Tenant ID">
+          In Azure, open <b>Microsoft Entra ID</b> → <b>Overview</b> and copy the Tenant ID.
+        </NextStep>
+        <NextStep n={5} label="Enable the Teams channel">
+          In your Bot resource, go to <b>Channels</b> and enable <b>Microsoft Teams</b>.
+        </NextStep>
       </div>
     </div>
   );

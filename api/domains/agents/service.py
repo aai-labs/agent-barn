@@ -118,14 +118,10 @@ class AgentService:
         teams_config: AgentTeamsConfig | None = None,
     ) -> AgentRead:
         slack_config_read = (
-            AgentSlackConfigRead.model_validate(slack_config)
-            if slack_config
-            else None
+            AgentSlackConfigRead.model_validate(slack_config) if slack_config else None
         )
         teams_config_read = (
-            AgentTeamsConfigRead.model_validate(teams_config)
-            if teams_config
-            else None
+            AgentTeamsConfigRead.model_validate(teams_config) if teams_config else None
         )
         webhook_url = (
             f"{self.config.api_external_url}/api/v1/webhooks/teams/{agent.id}/messages"
@@ -209,10 +205,12 @@ class AgentService:
             slack_config = AgentSlackConfig(
                 agent_id=agent.id,
                 bot_token_encrypted=encrypt_token(
-                    data.slack_bot_token, self.config.agent_token_encryption_key  # type: ignore[arg-type]
+                    data.slack_bot_token,
+                    self.config.agent_token_encryption_key,  # type: ignore[arg-type]
                 ),
                 app_token_encrypted=encrypt_token(
-                    data.slack_app_token, self.config.agent_token_encryption_key  # type: ignore[arg-type]
+                    data.slack_app_token,
+                    self.config.agent_token_encryption_key,  # type: ignore[arg-type]
                 ),
                 channel_ids=data.slack_channel_ids,
                 dm_user_ids=data.slack_dm_user_ids,
@@ -224,10 +222,12 @@ class AgentService:
             teams_config = AgentTeamsConfig(
                 agent_id=agent.id,
                 app_id_encrypted=encrypt_token(
-                    data.teams_app_id, self.config.agent_token_encryption_key  # type: ignore[arg-type]
+                    data.teams_app_id,
+                    self.config.agent_token_encryption_key,  # type: ignore[arg-type]
                 ),
                 app_password_encrypted=encrypt_token(
-                    data.teams_app_password, self.config.agent_token_encryption_key  # type: ignore[arg-type]
+                    data.teams_app_password,
+                    self.config.agent_token_encryption_key,  # type: ignore[arg-type]
                 ),
                 tenant_id=data.teams_tenant_id,  # type: ignore[arg-type]
             )
@@ -262,7 +262,9 @@ class AgentService:
         context: CurrentUserContext,
     ) -> PaginatedItems[AgentRead]:
         org_id = self._org_id(context)
-        agents, total = self.repository.find_all_active(org_id, agent_filter, pagination)
+        agents, total = self.repository.find_all_active(
+            org_id, agent_filter, pagination
+        )
 
         agent_ids = [a.id for a in agents]
         slack_configs = self.repository.get_slack_configs_for_agents(agent_ids)
@@ -298,12 +300,16 @@ class AgentService:
 
         updated = data.model_dump(exclude_unset=True)
 
-        if agent.platform == AgentPlatform.TEAMS and (_SLACK_CONFIG_FIELDS & updated.keys()):
+        if agent.platform == AgentPlatform.TEAMS and (
+            _SLACK_CONFIG_FIELDS & updated.keys()
+        ):
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="Cannot set Slack fields on a Teams agent",
             )
-        if agent.platform == AgentPlatform.SLACK and (_TEAMS_CONFIG_FIELDS & updated.keys()):
+        if agent.platform == AgentPlatform.SLACK and (
+            _TEAMS_CONFIG_FIELDS & updated.keys()
+        ):
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="Cannot set Teams fields on a Slack agent",
@@ -335,16 +341,20 @@ class AgentService:
             agent.model = updated["model"]
 
         # Slack config updates
-        if agent.platform == AgentPlatform.SLACK and (_SLACK_CONFIG_FIELDS & updated.keys()):
+        if agent.platform == AgentPlatform.SLACK and (
+            _SLACK_CONFIG_FIELDS & updated.keys()
+        ):
             slack_config = self.repository.get_slack_config(agent.id)
             if slack_config:
                 if "slack_bot_token" in updated:
                     slack_config.bot_token_encrypted = encrypt_token(
-                        updated["slack_bot_token"], self.config.agent_token_encryption_key
+                        updated["slack_bot_token"],
+                        self.config.agent_token_encryption_key,
                     )
                 if "slack_app_token" in updated:
                     slack_config.app_token_encrypted = encrypt_token(
-                        updated["slack_app_token"], self.config.agent_token_encryption_key
+                        updated["slack_app_token"],
+                        self.config.agent_token_encryption_key,
                     )
                 if "slack_channel_ids" in updated:
                     slack_config.channel_ids = updated["slack_channel_ids"]
@@ -357,7 +367,9 @@ class AgentService:
                 self.repository.save_slack_config(slack_config)
 
         # Teams config updates
-        if agent.platform == AgentPlatform.TEAMS and (_TEAMS_CONFIG_FIELDS & updated.keys()):
+        if agent.platform == AgentPlatform.TEAMS and (
+            _TEAMS_CONFIG_FIELDS & updated.keys()
+        ):
             teams_config = self.repository.get_teams_config(agent.id)
             if teams_config:
                 if "teams_app_id" in updated:
@@ -366,7 +378,8 @@ class AgentService:
                     )
                 if "teams_app_password" in updated:
                     teams_config.app_password_encrypted = encrypt_token(
-                        updated["teams_app_password"], self.config.agent_token_encryption_key
+                        updated["teams_app_password"],
+                        self.config.agent_token_encryption_key,
                     )
                 if "teams_tenant_id" in updated:
                     teams_config.tenant_id = updated["teams_tenant_id"]
@@ -440,7 +453,8 @@ class AgentService:
                 teams_config.app_id_encrypted, self.config.agent_token_encryption_key
             )
             app_password = decrypt_token(
-                teams_config.app_password_encrypted, self.config.agent_token_encryption_key
+                teams_config.app_password_encrypted,
+                self.config.agent_token_encryption_key,
             )
             overlay = build_openclaw_config_overlay_teams(
                 effective_model,
