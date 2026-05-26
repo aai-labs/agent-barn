@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from uuid import UUID
 
 from injector import inject, singleton
@@ -90,26 +89,22 @@ class ConversationRepository:
         cursor: ConversationsCursor,
         page_size: int,
     ) -> tuple[list[AgentChatMessage], ConversationsCursor | None]:
-        """Fetch a page of channel-level messages + their thread replies.
+        """Fetch a page of messages for a channel.
 
         Returns messages ordered occurred_at ASC for direct UI append.
-        next_cursor is None if there are no older channel-level messages.
+        Pages flat by occurred_at — channel-root and thread-reply messages are
+        treated uniformly so threads remain visible even when no top-level
+        @-mention exists.
         """
         with Session(self.delegate.engine) as session:
-            base_filters = [
+            filters = [
                 col(AgentChatMessage.agent_id) == agent_id,
                 col(AgentChatMessage.channel_id) == channel_id,
             ]
             if filter.from_date is not None:
-                base_filters.append(
-                    col(AgentChatMessage.occurred_at) >= filter.from_date
-                )
+                filters.append(col(AgentChatMessage.occurred_at) >= filter.from_date)
             if filter.to_date is not None:
-                base_filters.append(col(AgentChatMessage.occurred_at) < filter.to_date)
-
-            channel_filters = list(base_filters) + [
-                col(AgentChatMessage.thread_id).is_(None)
-            ]
+                filters.append(col(AgentChatMessage.occurred_at) < filter.to_date)
             if cursor.before_occurred_at is not None:
                 tiebreaker = (
                     col(AgentChatMessage.occurred_at) < cursor.before_occurred_at
@@ -123,25 +118,25 @@ class ConversationRepository:
                             col(AgentChatMessage.id) < cursor.before_id,
                         ),
                     )
-                channel_filters.append(tiebreaker)
+                filters.append(tiebreaker)
 
-            channel_query = (
+            query = (
                 select(AgentChatMessage)
-                .where(*channel_filters)
+                .where(*filters)
                 .order_by(
                     col(AgentChatMessage.occurred_at).desc(),
                     col(AgentChatMessage.id).desc(),
                 )
                 .limit(page_size + 1)
             )
-            channel_msgs_desc = list(session.exec(channel_query).all())
+            msgs_desc = list(session.exec(query).all())
 
-            has_more = len(channel_msgs_desc) > page_size
-            channel_msgs_desc = channel_msgs_desc[:page_size]
-            if not channel_msgs_desc:
+            has_more = len(msgs_desc) > page_size
+            msgs_desc = msgs_desc[:page_size]
+            if not msgs_desc:
                 return [], None
 
-            oldest = channel_msgs_desc[-1]
+            oldest = msgs_desc[-1]
             next_cursor: ConversationsCursor | None = (
                 ConversationsCursor(
                     before_occurred_at=oldest.occurred_at, before_id=oldest.id
@@ -149,21 +144,5 @@ class ConversationRepository:
                 if has_more
                 else None
             )
-
-            window_start = oldest.occurred_at
-            window_end = (
-                cursor.before_occurred_at
-                if cursor.before_occurred_at is not None
-                else datetime(9999, 12, 31, tzinfo=timezone.utc)
-            )
-            thread_filters = list(base_filters) + [
-                col(AgentChatMessage.thread_id).is_not(None),
-                col(AgentChatMessage.occurred_at) >= window_start,
-                col(AgentChatMessage.occurred_at) < window_end,
-            ]
-            thread_query = select(AgentChatMessage).where(*thread_filters)
-            thread_msgs = list(session.exec(thread_query).all())
-
-            merged = channel_msgs_desc + thread_msgs
-            merged.sort(key=lambda m: (m.occurred_at, m.id))
-            return merged, next_cursor
+            msgs_desc.reverse()
+            return msgs_desc, next_cursor

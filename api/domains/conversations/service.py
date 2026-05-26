@@ -102,6 +102,26 @@ def _distinct_pod_conversations(
     return sorted((cid, ctype, name) for cid, (ctype, name) in seen.items())
 
 
+def _session_file_map(sessions_json: str) -> dict[str, str]:
+    """Returns {session_uuid: sessionFile} from sessions.json.
+
+    Falls back to '<_SESSION_DIR>/<uuid>.jsonl' for entries without sessionFile.
+    """
+    try:
+        sessions = json.loads(sessions_json)
+    except json.JSONDecodeError:
+        return {}
+    out: dict[str, str] = {}
+    for data in sessions.values():
+        if not isinstance(data, dict):
+            continue
+        uuid = data.get("sessionId")
+        if not uuid:
+            continue
+        out[uuid] = data.get("sessionFile") or f"{_SESSION_DIR}/{uuid}.jsonl"
+    return out
+
+
 def _dm_session(
     sessions_json: str, target_channel_id: str | None = None
 ) -> tuple[str, str] | None:
@@ -150,13 +170,11 @@ class ConversationSyncService:
         ),
     )
 
-    def _safe_read_jsonl(self, pod_name: str, ns: str, session_uuid: str) -> str:
+    def _safe_read_jsonl(self, pod_name: str, ns: str, file_path: str) -> str:
         try:
-            return self.k8s.exec_command(
-                pod_name, ns, ["cat", f"{_SESSION_DIR}/{session_uuid}.jsonl"]
-            )
+            return self.k8s.exec_command(pod_name, ns, ["cat", file_path])
         except Exception as e:
-            logger.warning("Failed to read JSONL for session %s: %s", session_uuid, e)
+            logger.warning("Failed to read JSONL at %s: %s", file_path, e)
             return ""
 
     def _slack_maps(self, agent_id: UUID) -> tuple[dict[str, str], dict[str, str]]:
@@ -196,6 +214,10 @@ class ConversationSyncService:
     ) -> int:
         if not session_uuids:
             return 0
+        path_map = _session_file_map(sessions_json)
+        paths = [
+            path_map.get(u) or f"{_SESSION_DIR}/{u}.jsonl" for u in session_uuids
+        ]
         jsonl_cache: dict[str, str] = {}
         with ThreadPoolExecutor(
             max_workers=min(_PER_CHANNEL_READ_MAX_WORKERS, len(session_uuids))
@@ -204,8 +226,8 @@ class ConversationSyncService:
                 zip(
                     session_uuids,
                     pool.map(
-                        lambda uuid: self._safe_read_jsonl(pod_name, ns, uuid),
-                        session_uuids,
+                        lambda p: self._safe_read_jsonl(pod_name, ns, p),
+                        paths,
                     ),
                 )
             )
