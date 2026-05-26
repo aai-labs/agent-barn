@@ -8,6 +8,7 @@ from sqlmodel import Session, and_, col, or_, select
 
 from api.domains.conversations.models import (
     AgentChatMessage,
+    ConversationType,
     ConversationsCursor,
     ConversationsFilter,
 )
@@ -35,6 +36,7 @@ class ConversationRepository:
                     "channel_id": m.channel_id,
                     "thread_id": m.thread_id,
                     "direction": m.direction,
+                    "conversation_type": m.conversation_type,
                     "sender_id": m.sender_id,
                     "sender_name": m.sender_name,
                     "channel_name": m.channel_name,
@@ -56,16 +58,19 @@ class ConversationRepository:
             session.exec(stmt)  # type: ignore[call-overload]
             session.commit()
 
-    def distinct_channels(self, agent_id: UUID) -> list[tuple[str, str | None]]:
-        """Returns DISTINCT (channel_id, channel_name) pairs for an agent.
+    def distinct_channels(
+        self, agent_id: UUID
+    ) -> list[tuple[str, str | None, ConversationType]]:
+        """Returns DISTINCT (channel_id, channel_name, conversation_type) per agent.
 
-        Picks the latest non-null channel_name per channel.
+        Picks the latest non-null channel_name per channel_id.
         """
         with Session(self.delegate.engine) as session:
             query = (
                 select(
                     AgentChatMessage.channel_id,
                     AgentChatMessage.channel_name,
+                    AgentChatMessage.conversation_type,
                 )
                 .where(col(AgentChatMessage.agent_id) == agent_id)
                 .order_by(
@@ -75,7 +80,7 @@ class ConversationRepository:
                 .distinct(col(AgentChatMessage.channel_id))
             )
             rows = session.exec(query).all()
-            return [(r[0], r[1]) for r in rows]
+            return [(r[0], r[1], r[2]) for r in rows]
 
     def find_channel_page(
         self,

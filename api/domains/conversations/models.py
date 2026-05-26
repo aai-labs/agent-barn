@@ -14,6 +14,11 @@ class MessageDirection(str, enum.Enum):
     OUTBOUND = "OUTBOUND"
 
 
+class ConversationType(str, enum.Enum):
+    CHANNEL = "CHANNEL"
+    DM = "DM"
+
+
 class AgentChatMessage(BaseModel, table=True):
     __tablename__: str = "agent_chat_message"
 
@@ -34,6 +39,12 @@ class AgentChatMessage(BaseModel, table=True):
     thread_id: str | None = SqlField(default=None, nullable=True)
     direction: MessageDirection = SqlField(
         sa_column=Column(Enum(MessageDirection), nullable=False)
+    )
+    conversation_type: ConversationType = SqlField(
+        default=ConversationType.CHANNEL,
+        sa_column=Column(
+            Enum(ConversationType), nullable=False, server_default="CHANNEL"
+        ),
     )
     sender_id: str | None = SqlField(default=None, nullable=True)
     sender_name: str | None = SqlField(default=None, nullable=True)
@@ -57,8 +68,11 @@ class ConversationMessageRead(PydanticBaseModel):
 
 
 class ConversationChannelRead(PydanticBaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     channel_id: str
     channel_name: str | None
+    conversation_type: ConversationType = ConversationType.CHANNEL
 
 
 class ConversationsFilter(PydanticBaseModel):

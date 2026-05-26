@@ -17,6 +17,7 @@ from api.domains.conversations.models import (
     ConversationChannelRead,
     ConversationMessageRead,
     ConversationMessagesPage,
+    ConversationType,
     ConversationsCursor,
     ConversationsFilter,
 )
@@ -66,13 +67,19 @@ def _channel_sessions(
     return out
 
 
-def _distinct_pod_channels(sessions_json: str) -> list[str]:
-    """Returns distinct uppercase channel_ids referenced in sessions.json."""
+def _distinct_pod_conversations(
+    sessions_json: str,
+) -> list[tuple[str, ConversationType, str | None]]:
+    """Returns distinct (channel_id, conversation_type, display_name) triples.
+
+    display_name is None for channels (resolved later via Slack API) and the
+    sender name from origin.label / origin.sender for DMs.
+    """
     try:
         sessions = json.loads(sessions_json)
     except json.JSONDecodeError:
         return []
-    seen: set[str] = set()
+    seen: dict[str, tuple[ConversationType, str | None]] = {}
     for key, data in sessions.items():
         if not key.startswith("agent:main:slack:channel:"):
             continue
@@ -81,8 +88,46 @@ def _distinct_pod_channels(sessions_json: str) -> list[str]:
             "groupId"
         )
         if native:
-            seen.add(native.upper())
-    return sorted(seen)
+            seen[native.upper()] = (ConversationType.CHANNEL, None)
+    dm_data = sessions.get("agent:main:main") or {}
+    origin = dm_data.get("origin") or {}
+    if (
+        dm_data.get("chatType") == "direct"
+        and origin.get("provider") == "slack"
+    ):
+        native = origin.get("nativeChannelId")
+        if native:
+            display_name = origin.get("label") or origin.get("sender") or None
+            seen[native.upper()] = (ConversationType.DM, display_name)
+    return sorted((cid, ctype, name) for cid, (ctype, name) in seen.items())
+
+
+def _dm_session(
+    sessions_json: str, target_channel_id: str | None = None
+) -> tuple[str, str] | None:
+    """Returns (session_key, session_uuid) for the DM session if present.
+
+    If target_channel_id is provided, only matches if nativeChannelId matches.
+    """
+    try:
+        sessions = json.loads(sessions_json)
+    except json.JSONDecodeError:
+        return None
+    data = sessions.get("agent:main:main") or {}
+    if data.get("chatType") != "direct":
+        return None
+    origin = data.get("origin") or {}
+    if origin.get("provider") != "slack":
+        return None
+    native = origin.get("nativeChannelId")
+    if not native:
+        return None
+    if target_channel_id is not None and native.upper() != target_channel_id.upper():
+        return None
+    session_uuid = data.get("sessionId")
+    if not session_uuid:
+        return None
+    return ("agent:main:main", session_uuid)
 
 
 @inject
@@ -196,6 +241,9 @@ class ConversationSyncService:
         if not sessions_json:
             return
         targets = _channel_sessions(sessions_json, channel_id)
+        dm_target = _dm_session(sessions_json, channel_id)
+        if dm_target:
+            targets.append(dm_target)
         session_uuids = [uid for _, uid in targets]
         n = self._sync_session_subset(
             agent_id, pod_name, ns, sessions_json, session_uuids
@@ -235,9 +283,10 @@ class ConversationSyncService:
         sessions_json = self._read_sessions_json(pod_name, ns)
         if not sessions_json:
             return
-        channel_ids = _distinct_pod_channels(sessions_json)
-        if not channel_ids:
+        conversations = _distinct_pod_conversations(sessions_json)
+        if not conversations:
             return
+        conversation_ids = [conv[0] for conv in conversations]
 
         def _one(cid: str) -> None:
             try:
@@ -248,9 +297,9 @@ class ConversationSyncService:
                 )
 
         with ThreadPoolExecutor(
-            max_workers=min(_STOP_SYNC_MAX_WORKERS, len(channel_ids))
+            max_workers=min(_STOP_SYNC_MAX_WORKERS, len(conversation_ids))
         ) as pool:
-            list(pool.map(_one, channel_ids))
+            list(pool.map(_one, conversation_ids))
 
 
 @inject
@@ -274,7 +323,9 @@ class ConversationService:
             )
 
         db_channels = self.repository.distinct_channels(agent_id)
-        merged: dict[str, str | None] = {cid: name for cid, name in db_channels}
+        merged: dict[str, tuple[str | None, ConversationType]] = {
+            cid: (name, ctype) for cid, name, ctype in db_channels
+        }
 
         if agent.status == AgentStatus.RUNNING:
             try:
@@ -282,23 +333,26 @@ class ConversationService:
                 if pod_name:
                     sessions_json = self.sync_service._read_sessions_json(pod_name, ns)
                     if sessions_json:
-                        pod_channel_ids = _distinct_pod_channels(sessions_json)
+                        pod_conversations = _distinct_pod_conversations(sessions_json)
                         slack_channel_map: dict[str, str] = {}
-                        if pod_channel_ids:
-                            _user_map, slack_channel_map = (
-                                self.sync_service._slack_maps(agent_id)
+                        if pod_conversations:
+                            _, slack_channel_map = self.sync_service._slack_maps(
+                                agent_id
                             )
-                        for cid in pod_channel_ids:
-                            if cid not in merged or merged[cid] is None:
-                                merged[cid] = slack_channel_map.get(cid)
+                        for cid, ctype, pod_name in pod_conversations:
+                            if cid not in merged or merged[cid][0] is None:
+                                name = slack_channel_map.get(cid) or pod_name
+                                merged[cid] = (name, ctype)
             except Exception as e:
                 logger.warning(
                     "list_channels: pod read failed for agent %s: %s", agent_id, e
                 )
 
         return [
-            ConversationChannelRead(channel_id=cid, channel_name=name)
-            for cid, name in sorted(merged.items())
+            ConversationChannelRead(
+                channel_id=cid, channel_name=name, conversation_type=ctype
+            )
+            for cid, (name, ctype) in sorted(merged.items())
         ]
 
     def list_messages(

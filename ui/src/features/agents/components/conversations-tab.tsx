@@ -13,6 +13,9 @@ interface ConversationsTabProps {
 }
 
 function channelLabel(ch: ConversationChannel): string {
+  if (ch.conversationType === "DM") {
+    return ch.channelName ?? ch.channelId;
+  }
   return `#${ch.channelName ?? ch.channelId.toLowerCase()}`;
 }
 
@@ -81,13 +84,17 @@ export function ConversationsTab({ agent }: ConversationsTabProps) {
   const activeChannel =
     channels.find((c) => c.channelId === selectedChannel) ?? channels[0];
 
+  const channelConvos = channels.filter((c) => c.conversationType === "CHANNEL");
+  const dmConvos = channels.filter((c) => c.conversationType === "DM");
+
   return (
     <div
       className="flex rounded-2xl overflow-hidden"
       style={{ border: "1px solid var(--line-strong)", height: 600 }}
     >
-      <ChannelSidebar
-        channels={channels}
+      <ConversationSidebar
+        channelConvos={channelConvos}
+        dmConvos={dmConvos}
         activeChannelId={activeChannel.channelId}
         onSelect={setSelectedChannel}
       />
@@ -101,43 +108,62 @@ export function ConversationsTab({ agent }: ConversationsTabProps) {
   );
 }
 
-function ChannelSidebar({
-  channels,
+function ConversationSidebar({
+  channelConvos,
+  dmConvos,
   activeChannelId,
   onSelect,
 }: {
-  channels: ConversationChannel[];
+  channelConvos: ConversationChannel[];
+  dmConvos: ConversationChannel[];
   activeChannelId: string;
   onSelect: (id: string) => void;
 }) {
+  function SidebarItem({ ch }: { ch: ConversationChannel }) {
+    const active = ch.channelId === activeChannelId;
+    return (
+      <button
+        key={ch.channelId}
+        onClick={() => onSelect(ch.channelId)}
+        className="w-full text-left px-4 py-2 text-[0.844rem] font-medium transition-colors"
+        style={{
+          color: active ? "var(--ink)" : "var(--ink-3)",
+          background: active ? "var(--bg)" : "transparent",
+          borderLeft: active ? "2px solid var(--accent, #4f46e5)" : "2px solid transparent",
+        }}
+      >
+        {channelLabel(ch)}
+      </button>
+    );
+  }
+
   return (
     <div
       className="w-44 flex-shrink-0 flex flex-col overflow-y-auto"
       style={{ borderRight: "1px solid var(--line-strong)", background: "var(--bg-soft)" }}
     >
-      <div
-        className="px-4 py-3 text-[0.75rem] uppercase tracking-[0.08em] font-semibold"
-        style={{ color: "var(--ink-3)" }}
-      >
-        Channels
-      </div>
-      {channels.map((ch) => {
-        const active = ch.channelId === activeChannelId;
-        return (
-          <button
-            key={ch.channelId}
-            onClick={() => onSelect(ch.channelId)}
-            className="w-full text-left px-4 py-2 text-[0.844rem] font-medium transition-colors"
-            style={{
-              color: active ? "var(--ink)" : "var(--ink-3)",
-              background: active ? "var(--bg)" : "transparent",
-              borderLeft: active ? "2px solid var(--accent, #4f46e5)" : "2px solid transparent",
-            }}
+      {channelConvos.length > 0 && (
+        <>
+          <div
+            className="px-4 py-3 text-[0.75rem] uppercase tracking-[0.08em] font-semibold"
+            style={{ color: "var(--ink-3)" }}
           >
-            {channelLabel(ch)}
-          </button>
-        );
-      })}
+            Channels
+          </div>
+          {channelConvos.map((ch) => <SidebarItem key={ch.channelId} ch={ch} />)}
+        </>
+      )}
+      {dmConvos.length > 0 && (
+        <>
+          <div
+            className="px-4 py-3 text-[0.75rem] uppercase tracking-[0.08em] font-semibold"
+            style={{ color: "var(--ink-3)", marginTop: channelConvos.length > 0 ? "0.25rem" : 0 }}
+          >
+            Direct Messages
+          </div>
+          {dmConvos.map((ch) => <SidebarItem key={ch.channelId} ch={ch} />)}
+        </>
+      )}
     </div>
   );
 }

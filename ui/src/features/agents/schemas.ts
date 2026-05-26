@@ -53,6 +53,7 @@ export const ConversationMessageSchema = z.object({
 export const ConversationChannelSchema = z.object({
   channelId: z.string(),
   channelName: z.string().nullable(),
+  conversationType: z.enum(["CHANNEL", "DM"]),
 });
 
 export const ConversationsCursorSchema = z.object({
