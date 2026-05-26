@@ -356,9 +356,9 @@ class ConversationService:
                             _, slack_channel_map = self.sync_service._slack_maps(
                                 agent_id
                             )
-                        for cid, ctype, pod_name in pod_conversations:
+                        for cid, ctype, display_name in pod_conversations:
                             if cid not in merged or merged[cid][0] is None:
-                                name = slack_channel_map.get(cid) or pod_name
+                                name = slack_channel_map.get(cid) or display_name
                                 merged[cid] = (name, ctype)
             except Exception as e:
                 logger.warning(
