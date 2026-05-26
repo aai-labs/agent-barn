@@ -23,7 +23,7 @@ export function useAgentHealth(agentId: string, enabled: boolean) {
   });
 
   return {
-    health: query.isError ? { status: "error" as const } : (query.data ?? null),
+    health: query.data ?? (query.isError ? { status: "error" as const } : null),
     isLoadingHealth: query.isPending,
   };
 }

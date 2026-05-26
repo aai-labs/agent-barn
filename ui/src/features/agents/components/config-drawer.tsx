@@ -6,9 +6,10 @@ import type { Agent } from "../schemas";
 import { useAgentTemplate } from "../hooks/use-agent-template";
 import { useUpdateAgent } from "../hooks/use-update-agent";
 import { useDeleteAgent } from "../hooks/use-delete-agent";
-import { XIcon, PlusIcon, SlackIcon } from "@/components/icons";
+import { XIcon } from "@/components/icons";
 import { TokenInput } from "./hire-dialog-primitives";
 import { MODELS } from "./hire-dialog-steps";
+import { SlackConfigPanel } from "./slack-config-panel";
 
 interface ConfigDrawerProps {
   agent: Agent;
@@ -18,7 +19,7 @@ interface ConfigDrawerProps {
 const TABS: [string, string, boolean][] = [
   ["personality", "Personality", true],
   ["secrets", "Keys", true],
-  ["channels", "Channels", false],
+  ["channels", "Channels", true],
   ["skills", "Skills", false],
   ["k8s", "Infrastructure", false],
   ["danger", "Danger zone", true],
@@ -177,6 +178,15 @@ export function ConfigDrawer({ agent, onClose }: ConfigDrawerProps) {
           ))}
         </nav>
 
+        {isRunning && (
+          <div
+            className="px-6.5 py-2.5 text-[0.8125rem] flex-shrink-0"
+            style={{ background: "var(--bg-soft)", borderBottom: "1px solid var(--line)", color: "var(--ink-3)" }}
+          >
+            Agent is running — stop it before making changes.
+          </div>
+        )}
+
         <div className="flex-1 overflow-y-auto px-6.5 py-5.5 flex flex-col">
           {tab === "personality" && (
             <div className="flex flex-col flex-1">
@@ -205,14 +215,7 @@ export function ConfigDrawer({ agent, onClose }: ConfigDrawerProps) {
                 </div>
               </div>
               <Hint>
-                {agent.name}&apos;s personality is defined by markdown files.{" "}
-                {isRunning ? (
-                  <span style={{ color: "var(--warn, #b45309)" }}>
-                    Stop the agent before editing its configuration.
-                  </span>
-                ) : (
-                  "Edit below to customise per-agent."
-                )}
+                {agent.name}&apos;s personality is defined by markdown files. Edit below to customise per-agent.
               </Hint>
 
               {templateLoading ? (
@@ -307,18 +310,8 @@ export function ConfigDrawer({ agent, onClose }: ConfigDrawerProps) {
 
           {tab === "channels" && (
             <div>
-              <Hint>Channels {agent.name} is allowed to read and write in.</Hint>
-              <CfgRow key="#general">
-                <SlackIcon style={{ color: "var(--ink-3)", flexShrink: 0 }} />
-                <span className="font-mono">#general</span>
-                <span className="ml-auto text-xs" style={{ color: "var(--ink-4)" }}>
-                  read &amp; write
-                </span>
-                <button className="af-btn af-btn-sm af-btn-ghost">Remove</button>
-              </CfgRow>
-              <button className="af-btn af-btn-sm mt-3">
-                <PlusIcon /> Add channel
-              </button>
+              <Hint>Configure which Slack channels and users {agent.name} can interact with.</Hint>
+              <SlackConfigPanel agent={agent} />
             </div>
           )}
 
@@ -347,6 +340,7 @@ export function ConfigDrawer({ agent, onClose }: ConfigDrawerProps) {
                     visible={showAppToken}
                     onToggle={() => setShowAppToken((v) => !v)}
                     placeholder="xapp-1-… (leave blank to keep existing)"
+                    disabled={isRunning}
                   />
                   <span className="text-xs" style={{ color: "var(--ink-4)" }}>Starts with xapp- · required for Socket Mode</span>
                 </div>
@@ -358,6 +352,7 @@ export function ConfigDrawer({ agent, onClose }: ConfigDrawerProps) {
                     visible={showBotToken}
                     onToggle={() => setShowBotToken((v) => !v)}
                     placeholder="xoxb-… (leave blank to keep existing)"
+                    disabled={isRunning}
                   />
                   <span className="text-xs" style={{ color: "var(--ink-4)" }}>Starts with xoxb- · required for API calls</span>
                 </div>
@@ -365,7 +360,7 @@ export function ConfigDrawer({ agent, onClose }: ConfigDrawerProps) {
               <div className="flex gap-2 items-center">
                 <button
                   className="af-btn af-btn-sm"
-                  disabled={updateAgent.isPending || (!slackAppToken.trim() && !slackBotToken.trim())}
+                  disabled={isRunning || updateAgent.isPending || (!slackAppToken.trim() && !slackBotToken.trim())}
                   onClick={() => { void handleSaveTokens(); }}
                 >
                   {updateAgent.isPending ? "Saving…" : savedTokens ? "Saved!" : "Save tokens"}
@@ -480,13 +475,3 @@ function Hint({ children }: { children: React.ReactNode }) {
   );
 }
 
-function CfgRow({ children }: { children: React.ReactNode }) {
-  return (
-    <div
-      className="flex items-center gap-2.5 px-3.5 py-[0.6875rem] text-[0.844rem]"
-      style={{ borderBottom: "1px solid var(--line)" }}
-    >
-      {children}
-    </div>
-  );
-}

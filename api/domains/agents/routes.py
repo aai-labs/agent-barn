@@ -121,3 +121,23 @@ def pair_agent(
 ):
     output = service.pair_agent(agent_id, data, context)
     return {"message": output}
+
+
+@agents_router.get("/{agent_id}/slack/channels")
+def list_slack_channels(
+    agent_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentService, Injected(AgentService)],
+    search: Annotated[str | None, Query()] = None,
+):
+    return service.list_slack_channels(agent_id, context, search=search)
+
+
+@agents_router.get("/{agent_id}/slack/users")
+def list_slack_users(
+    agent_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentService, Injected(AgentService)],
+    search: Annotated[str | None, Query()] = None,
+):
+    return service.list_slack_users(agent_id, context, search=search)

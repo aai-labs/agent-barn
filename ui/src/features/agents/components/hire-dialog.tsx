@@ -8,6 +8,8 @@ import {
   ROLES, MODELS, RoleId, WizardStep, pickDefaults,
   RoleStep, SlackChoiceStep, BotBuilderStep, SlackTokensStep, DetailsStep,
 } from "./hire-dialog-steps";
+import { SlackConfigPanel } from "./slack-config-panel";
+import type { Agent } from "../schemas";
 
 interface HireDialogProps {
   onClose: () => void;
@@ -57,6 +59,8 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   const [showAppToken, setShowAppToken] = useState(false);
   const [showBotToken, setShowBotToken] = useState(false);
   const [tokenError, setTokenError] = useState<string | null>(null);
+  const [slackGroupPolicy, setSlackGroupPolicy] = useState<"open" | "allowlist">("allowlist");
+  const [slackDmPolicy, setSlackDmPolicy] = useState<"off" | "open" | "allowlist" | "pairing">("off");
   const [soulMd, setSoulMd] = useState(defaults.soulMd);
   const [identityMd, setIdentityMd] = useState(defaults.identityMd);
   const [userMd, setUserMd] = useState(defaults.userMd);
@@ -64,6 +68,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   const [provisioning, setProvisioning] = useState(false);
   const [progress, setProgress] = useState(0);
   const [provisionError, setProvisionError] = useState<string | null>(null);
+  const [createdAgent, setCreatedAgent] = useState<Agent | null>(null);
 
   const progressRef = useRef(0);
   const apiDoneRef = useRef(false);
@@ -104,10 +109,12 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
     apiDoneRef.current = false;
 
     try {
-      await createAgent.mutateAsync({
+      const agent = await createAgent.mutateAsync({
         name, model, slackBotToken, slackAppToken,
         soulMd, identityMd, userMd, toolsMd,
+        slackGroupPolicy, slackDmPolicy,
       });
+      setCreatedAgent(agent);
       apiDoneRef.current = true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Something went wrong. Please try again.";
@@ -123,11 +130,54 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
       setProgress(progressRef.current);
       if (progressRef.current >= 100) {
         clearInterval(id);
-        setTimeout(() => onHired({ name, role: selected.title }), 500);
+        setTimeout(() => setProvisioning(false), 500);
       }
     }, 240);
     return () => clearInterval(id);
-  }, [provisioning]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [provisioning]);
+
+  if (!provisioning && createdAgent) {
+    return (
+      <DialogShell shadeClick={undefined}>
+        <header
+          className="px-6 pt-6 pb-4 flex items-start justify-between"
+          style={{ borderBottom: "1px solid var(--line)" }}
+        >
+          <div>
+            <div className="text-xs uppercase tracking-[0.08em] font-semibold mb-1" style={{ color: "var(--ink-3)" }}>
+              {name} · configure Slack
+            </div>
+            <h2 className="text-xl font-semibold tracking-tight m-0" style={{ color: "var(--ink)" }}>
+              Set up Slack access
+            </h2>
+          </div>
+          <button className="af-btn af-btn-ghost af-btn-icon" onClick={() => onHired({ name, role: selected.title })}>
+            <XIcon />
+          </button>
+        </header>
+        <div className="flex-1 overflow-y-auto p-6">
+          <p className="text-[0.8125rem] mb-5 leading-[1.5]" style={{ color: "var(--ink-3)" }}>
+            {name} is hired! Configure which channels and users they can access, or skip to do this later from their settings.
+          </p>
+          <SlackConfigPanel
+            agent={createdAgent}
+            onSaved={() => onHired({ name, role: selected.title })}
+          />
+        </div>
+        <footer
+          className="px-6 py-4 flex items-center justify-end flex-shrink-0"
+          style={{ borderTop: "1px solid var(--line)" }}
+        >
+          <button
+            className="af-btn af-btn-ghost"
+            onClick={() => onHired({ name, role: selected.title })}
+          >
+            Skip for now
+          </button>
+        </footer>
+      </DialogShell>
+    );
+  }
 
   if (provisioning) {
     return (
@@ -238,6 +288,8 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
             selected={selected}
             name={name} onNameChange={setName}
             model={model} onModelChange={setModel}
+            slackGroupPolicy={slackGroupPolicy} onSlackGroupPolicyChange={(v) => setSlackGroupPolicy(v as "open" | "allowlist")}
+            slackDmPolicy={slackDmPolicy} onSlackDmPolicyChange={(v) => setSlackDmPolicy(v as "off" | "open" | "allowlist" | "pairing")}
             soulMd={soulMd} onSoulMdChange={setSoulMd}
             identityMd={identityMd} onIdentityMdChange={setIdentityMd}
             userMd={userMd} onUserMdChange={setUserMd}

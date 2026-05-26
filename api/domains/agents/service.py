@@ -1,4 +1,5 @@
 import datetime
+import json
 import logging
 from dataclasses import dataclass
 from uuid import UUID
@@ -39,9 +40,11 @@ from api.domains.agents.models import (
 from api.domains.agents.repository import AgentRepository
 from api.domains.auth.models import CurrentUserContext
 from api.domains.conversations.service import ConversationSyncService
+from api.domains.tool_calls.sync_service import ToolCallSyncService
 from api.infrastructure.crypto import decrypt_token, encrypt_token
 from api.infrastructure.kubernetes.client import KubernetesClient
 from api.infrastructure.shared.models import PaginatedItems, Pagination
+from api.infrastructure.slack.client import SlackClient
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +71,7 @@ class AgentService:
     litellm: LiteLLMClient
     config: Config
     conversation_sync_service: ConversationSyncService
+    sync_service: ToolCallSyncService
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
@@ -94,6 +98,10 @@ class AgentService:
                 data.slack_app_token, self.config.agent_token_encryption_key
             ),
             model=data.model or "",
+            slack_channel_ids=data.slack_channel_ids,
+            slack_dm_user_ids=data.slack_dm_user_ids,
+            slack_group_policy=data.slack_group_policy,
+            slack_dm_policy=data.slack_dm_policy,
             template_id=None,  # ty: ignore[invalid-argument-type]
             template_version=0,
         )
@@ -211,6 +219,18 @@ class AgentService:
                 updated["slack_app_token"], self.config.agent_token_encryption_key
             )
 
+        if "slack_channel_ids" in updated:
+            agent.slack_channel_ids = updated["slack_channel_ids"]
+
+        if "slack_dm_user_ids" in updated:
+            agent.slack_dm_user_ids = updated["slack_dm_user_ids"]
+
+        if "slack_group_policy" in updated:
+            agent.slack_group_policy = updated["slack_group_policy"]
+
+        if "slack_dm_policy" in updated:
+            agent.slack_dm_policy = updated["slack_dm_policy"]
+
         self.repository.save(agent)
         return AgentRead.model_validate(agent)
 
@@ -244,7 +264,12 @@ class AgentService:
         )
         effective_model = agent.model or self.config.agent_default_model
         overlay = build_openclaw_config_overlay(
-            effective_model, self.config.agent_litellm_base_url
+            effective_model,
+            self.config.agent_litellm_base_url,
+            slack_channel_ids=agent.slack_channel_ids,
+            slack_dm_user_ids=agent.slack_dm_user_ids,
+            slack_group_policy=str(agent.slack_group_policy),
+            slack_dm_policy=str(agent.slack_dm_policy),
         )
 
         try:
@@ -320,6 +345,7 @@ class AgentService:
                 "Conversation sync before stop failed for agent %s: %s", agent_id, e
             )
 
+        self.sync_service.sync_agent(agent.id, org_id, force=True)
         self.k8s.delete_deployment(f"agent-{agent.id}", self.config.k8s_namespace)
 
         agent.status = AgentStatus.STOPPED
@@ -385,7 +411,48 @@ class AgentService:
                 detail=f"Failed to execute pairing command in agent {agent_id}",
             ) from exc
 
+        try:
+            allow_from_raw = self.k8s.exec_command(
+                pod_name,
+                ns,
+                [
+                    "cat",
+                    "/home/node/.openclaw/credentials/slack-default-allowFrom.json",
+                ],
+            )
+            paired_user_ids = json.loads(allow_from_raw).get("allowFrom", [])
+            if isinstance(paired_user_ids, list):
+                existing: set[str] = set(agent.slack_dm_user_ids or [])
+                paired: set[str] = {str(u) for u in paired_user_ids}
+                agent.slack_dm_user_ids = list(existing | paired)
+                self.repository.save(agent)
+        except Exception:
+            logger.warning(
+                "Could not sync allowFrom for agent %s after pairing", agent_id
+            )
+
         return output
+
+    def list_slack_channels(
+        self, agent_id: UUID, context: CurrentUserContext, search: str | None = None
+    ) -> list[dict]:
+        return SlackClient(self._get_bot_token(agent_id, context)).search_channels(
+            search=search
+        )
+
+    def list_slack_users(
+        self, agent_id: UUID, context: CurrentUserContext, search: str | None = None
+    ) -> list[dict]:
+        return SlackClient(self._get_bot_token(agent_id, context)).search_users(
+            search=search
+        )
+
+    def _get_bot_token(self, agent_id: UUID, context: CurrentUserContext) -> str:
+        org_id = self._org_id(context)
+        agent = self._get_active_or_404(agent_id, org_id)
+        return decrypt_token(
+            agent.slack_bot_token_encrypted, self.config.agent_token_encryption_key
+        )
 
     def get_agent_health(
         self, agent_id: UUID, context: CurrentUserContext
@@ -401,6 +468,13 @@ class AgentService:
 
         name = f"agent-{agent_id}"
         ns = self.config.k8s_namespace
+
+        pod_status = self.k8s.get_pod_readiness(name, ns)
+        if pod_status == "crashed":
+            return AgentHealthRead(status="crashed")
+        if pod_status != "ready":
+            return AgentHealthRead(status="initializing")
+
         try:
             data = self.k8s.fetch_agent_healthz(name, ns)
             return AgentHealthRead.model_validate(data)

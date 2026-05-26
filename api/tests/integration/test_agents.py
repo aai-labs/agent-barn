@@ -1,7 +1,16 @@
+import json
 from unittest.mock import patch
 
 from fastapi import status
-from hamcrest import assert_that, equal_to, has_key, is_not, none
+from hamcrest import (
+    assert_that,
+    contains_inanyorder,
+    contains_string,
+    equal_to,
+    has_key,
+    is_not,
+    none,
+)
 from starlette.testclient import TestClient
 
 from api.domains.agents.models import AgentStatus
@@ -700,7 +709,7 @@ def test_pair_agent_returns_output():
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             assert_that(response.json()["message"], equal_to("Pairing approved"))
             k8s.get_pod_name_for_deployment.assert_called_once()
-            k8s.exec_command.assert_called_once()
+            assert_that(k8s.exec_command.call_count, equal_to(2))
 
 
 def test_pair_stopped_agent_returns_409():
@@ -826,14 +835,24 @@ def test_start_agent_configmap_and_overlay_are_correct():
         overlay = json.loads(config_map.data["openclaw-config-overlay.json"])
 
         with then(
-            "the overlay configures the slack channel with open group/dm policies"
+            "the overlay configures the slack channel with default allowlist groups + DMs off"
         ):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             slack = overlay["channels"]["slack"]
             assert_that(slack["mode"], equal_to("socket"))
-            assert_that(slack["groupPolicy"], equal_to("open"))
-            assert_that(slack["dmPolicy"], equal_to("open"))
+            assert_that(slack["enabled"], equal_to(True))
+            assert_that(slack["groupPolicy"], equal_to("allowlist"))
+            assert_that(slack["dmPolicy"], equal_to("allowlist"))
             assert_that(slack["userTokenReadOnly"], equal_to(True))
+            assert_that(slack["allowFrom"], equal_to([]))
+            assert_that(
+                slack["replyToModeByChatType"],
+                equal_to({"direct": "off", "group": "all", "channel": "all"}),
+            )
+            assert_that(
+                slack["streaming"],
+                equal_to({"mode": "partial", "nativeTransport": True}),
+            )
 
         with then("the overlay routes the slack channel to the main agent"):
             bindings = overlay["bindings"]
@@ -841,6 +860,18 @@ def test_start_agent_configmap_and_overlay_are_correct():
             assert_that(bindings[0]["type"], equal_to("route"))
             assert_that(bindings[0]["agentId"], equal_to("main"))
             assert_that(bindings[0]["match"]["channel"], equal_to("slack"))
+
+        with then("tools, memory, and the core/active-memory plugins are enabled"):
+            assert_that(overlay["tools"]["profile"], equal_to("full"))
+            assert_that(overlay["memory"]["backend"], equal_to("builtin"))
+            assert_that(overlay["plugins"]["slots"]["memory"], equal_to("memory-core"))
+            assert_that(
+                overlay["plugins"]["entries"]["memory-core"]["enabled"], equal_to(True)
+            )
+            assert_that(
+                overlay["plugins"]["entries"]["active-memory"]["enabled"],
+                equal_to(True),
+            )
 
         with then("the ConfigMap contains all 8 template markdown files"):
             for key in (
@@ -870,12 +901,17 @@ def test_get_agent_healthz_returns_ok_when_healthy():
         with when("the pod /healthz returns healthy"):
             with patch.object(
                 context.injector.get(KubernetesClient),
-                "fetch_agent_healthz",
-                return_value={"status": "ok"},
+                "get_pod_readiness",
+                return_value="ready",
             ):
-                response = client.get(
-                    f"{_BASE}/{agent_id}/healthz", headers=_auth(context)
-                )
+                with patch.object(
+                    context.injector.get(KubernetesClient),
+                    "fetch_agent_healthz",
+                    return_value={"status": "ok"},
+                ):
+                    response = client.get(
+                        f"{_BASE}/{agent_id}/healthz", headers=_auth(context)
+                    )
 
         with then("the API returns 200 with status ok"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
@@ -890,17 +926,62 @@ def test_get_agent_healthz_returns_503_when_pod_unreachable():
         with when("the pod is unreachable"):
             with patch.object(
                 context.injector.get(KubernetesClient),
-                "fetch_agent_healthz",
-                side_effect=RuntimeError("connection refused"),
+                "get_pod_readiness",
+                return_value="ready",
             ):
-                response = client.get(
-                    f"{_BASE}/{agent_id}/healthz", headers=_auth(context)
-                )
+                with patch.object(
+                    context.injector.get(KubernetesClient),
+                    "fetch_agent_healthz",
+                    side_effect=RuntimeError("connection refused"),
+                ):
+                    response = client.get(
+                        f"{_BASE}/{agent_id}/healthz", headers=_auth(context)
+                    )
 
         with then("the API returns 503"):
             assert_that(
                 response.status_code, equal_to(status.HTTP_503_SERVICE_UNAVAILABLE)
             )
+
+
+def test_get_agent_healthz_returns_initializing_when_pod_not_ready():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        client: TestClient = context.client
+        agent_id = context.agent.id
+
+        with when("the pod is running but not yet ready"):
+            with patch.object(
+                context.injector.get(KubernetesClient),
+                "get_pod_readiness",
+                return_value="initializing",
+            ):
+                response = client.get(
+                    f"{_BASE}/{agent_id}/healthz", headers=_auth(context)
+                )
+
+        with then("the API returns 200 with status initializing"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["status"], equal_to("initializing"))
+
+
+def test_get_agent_healthz_returns_crashed_when_pod_has_crashed():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        client: TestClient = context.client
+        agent_id = context.agent.id
+
+        with when("the pod is in CrashLoopBackOff"):
+            with patch.object(
+                context.injector.get(KubernetesClient),
+                "get_pod_readiness",
+                return_value="crashed",
+            ):
+                response = client.get(
+                    f"{_BASE}/{agent_id}/healthz", headers=_auth(context)
+                )
+
+        with then("the API returns 200 with status crashed"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["status"], equal_to("crashed"))
 
 
 def test_get_agent_healthz_returns_409_when_agent_not_running():
@@ -913,3 +994,309 @@ def test_get_agent_healthz_returns_409_when_agent_not_running():
 
         with then("the API returns 409"):
             assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+
+
+def test_create_agent_with_slack_settings():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        payload = {
+            **_VALID_CREATE,
+            "slack_channel_ids": ["C111", "C222"],
+            "slack_dm_user_ids": ["U001"],
+            "slack_group_policy": "allowlist",
+            "slack_dm_policy": "pairing",
+        }
+
+        with when("I create an agent with Slack settings"):
+            response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("it returns 201 with the Slack settings"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            body = response.json()
+            assert_that(body["slack_channel_ids"], equal_to(["C111", "C222"]))
+            assert_that(body["slack_dm_user_ids"], equal_to(["U001"]))
+            assert_that(body["slack_group_policy"], equal_to("allowlist"))
+            assert_that(body["slack_dm_policy"], equal_to("pairing"))
+
+
+def test_create_agent_defaults_to_allowlist_groups_dms_off():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I create an agent without specifying Slack policies"):
+            response = client.post(_BASE, json=_VALID_CREATE, headers=_auth(context))
+
+        with then("it defaults to allowlist group policy and DMs off"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            body = response.json()
+            assert_that(body["slack_group_policy"], equal_to("allowlist"))
+            assert_that(body["slack_dm_policy"], equal_to("off"))
+            assert_that(body["slack_channel_ids"], equal_to([]))
+            assert_that(body["slack_dm_user_ids"], equal_to([]))
+
+
+def test_patch_agent_updates_slack_settings():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I patch the agent's Slack settings"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={
+                    "slack_channel_ids": ["C999"],
+                    "slack_dm_user_ids": ["U888"],
+                    "slack_group_policy": "open",
+                    "slack_dm_policy": "allowlist",
+                },
+                headers=_auth(context),
+            )
+
+        with then("it returns 200 with the updated Slack settings"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            body = response.json()
+            assert_that(body["slack_channel_ids"], equal_to(["C999"]))
+            assert_that(body["slack_dm_user_ids"], equal_to(["U888"]))
+            assert_that(body["slack_group_policy"], equal_to("open"))
+            assert_that(body["slack_dm_policy"], equal_to("allowlist"))
+
+
+def test_start_agent_overlay_uses_slack_settings():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+
+        client.patch(
+            f"{_BASE}/{context.agent.id}",
+            json={
+                "slack_channel_ids": ["C123"],
+                "slack_dm_user_ids": ["U456"],
+                "slack_group_policy": "allowlist",
+                "slack_dm_policy": "allowlist",
+            },
+            headers=_auth(context),
+        )
+
+        with when("I start the agent"):
+            response = client.post(
+                f"{_BASE}/{context.agent.id}/start", headers=_auth(context)
+            )
+
+        with then("the overlay reflects the Slack settings"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            overlay = json.loads(config_map.data["openclaw-config-overlay.json"])
+            slack = overlay["channels"]["slack"]
+            assert_that(slack["groupPolicy"], equal_to("allowlist"))
+            assert_that(slack["dmPolicy"], equal_to("allowlist"))
+            assert_that(slack["allowFrom"], equal_to(["U456"]))
+            assert_that(
+                slack["channels"],
+                equal_to({"C123": {"enabled": True, "requireMention": False}}),
+            )
+
+
+def test_start_agent_open_policy_sets_allow_from_wildcard():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+
+        client.patch(
+            f"{_BASE}/{context.agent.id}",
+            json={"slack_dm_policy": "open", "slack_dm_user_ids": []},
+            headers=_auth(context),
+        )
+
+        with when("I start the agent"):
+            response = client.post(
+                f"{_BASE}/{context.agent.id}/start", headers=_auth(context)
+            )
+
+        with then("allowFrom defaults to wildcard"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            overlay = json.loads(config_map.data["openclaw-config-overlay.json"])
+            assert_that(overlay["channels"]["slack"]["allowFrom"], equal_to(["*"]))
+
+
+def test_start_agent_off_dm_policy_sets_direct_reply_off():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+
+        client.patch(
+            f"{_BASE}/{context.agent.id}",
+            json={"slack_dm_policy": "off", "slack_dm_user_ids": ["U999"]},
+            headers=_auth(context),
+        )
+
+        with when("I start the agent"):
+            response = client.post(
+                f"{_BASE}/{context.agent.id}/start", headers=_auth(context)
+            )
+
+        with then("DMs are turned off in the overlay and the user list is preserved"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            overlay = json.loads(config_map.data["openclaw-config-overlay.json"])
+            slack = overlay["channels"]["slack"]
+            assert_that(slack["replyToModeByChatType"]["direct"], equal_to("off"))
+            assert_that(slack["allowFrom"], equal_to([]))
+            assert_that(slack["dmPolicy"], equal_to("allowlist"))
+
+
+def test_start_agent_allowlist_with_no_users_sets_empty_allow_from():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+
+        client.patch(
+            f"{_BASE}/{context.agent.id}",
+            json={"slack_dm_policy": "allowlist", "slack_dm_user_ids": []},
+            headers=_auth(context),
+        )
+
+        with when("I start the agent"):
+            response = client.post(
+                f"{_BASE}/{context.agent.id}/start", headers=_auth(context)
+            )
+
+        with then("allowFrom is empty — no one can DM"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            overlay = json.loads(config_map.data["openclaw-config-overlay.json"])
+            assert_that(overlay["channels"]["slack"]["allowFrom"], equal_to([]))
+
+        with then("the init script syncs slack-allowFrom.json from the overlay"):
+            init_js = config_map.data["init-openclaw.js"]
+            assert_that(init_js, contains_string("slack-allowFrom.json"))
+
+
+def test_pair_agent_syncs_dm_user_ids():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+        repository: AgentRepository = context.injector.get(AgentRepository)
+
+        k8s.get_pod_name_for_deployment.return_value = "agent-xxx-pod"
+        k8s.exec_command.side_effect = [
+            "Pairing approved",
+            json.dumps({"version": 1, "allowFrom": ["U111", "U222"]}),
+        ]
+
+        with when("I pair the agent"):
+            response = client.post(
+                f"{_BASE}/{context.agent.id}/pair",
+                json={"platform": "slack", "code": "ABCD1234"},
+                headers=_auth(context),
+            )
+
+        with then("the response is 200 and slack_dm_user_ids is updated in the DB"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            agent = repository.get_active(context.agent.id, context.organization.id)
+            assert_that(agent.slack_dm_user_ids, contains_inanyorder("U111", "U222"))
+
+
+def test_pair_agent_allow_from_read_failure_still_returns_200():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+
+        k8s.get_pod_name_for_deployment.return_value = "agent-xxx-pod"
+        k8s.exec_command.side_effect = [
+            "Pairing approved",
+            Exception("file not found"),
+        ]
+
+        with when("I pair the agent but reading allowFrom fails"):
+            response = client.post(
+                f"{_BASE}/{context.agent.id}/pair",
+                json={"platform": "slack", "code": "ABCD1234"},
+                headers=_auth(context),
+            )
+
+        with then("it still returns 200"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["message"], equal_to("Pairing approved"))
+
+
+def test_list_slack_channels_returns_filtered_list():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        client: TestClient = context.client
+
+        slack_response = {
+            "ok": True,
+            "channels": [
+                {"id": "C001", "name": "general"},
+                {"id": "C002", "name": "engineering"},
+                {"id": "C003", "name": "random"},
+            ],
+            "response_metadata": {"next_cursor": ""},
+        }
+
+        with patch("urllib.request.urlopen") as mock_urlopen:
+            mock_urlopen.return_value.__enter__.return_value.read.return_value = (
+                json.dumps(slack_response).encode()
+            )
+
+            with when("I list Slack channels with a search query"):
+                response = client.get(
+                    f"{_BASE}/{context.agent.id}/slack/channels?search=eng",
+                    headers=_auth(context),
+                )
+
+        with then("it returns only matching channels"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            results = response.json()
+            assert_that(len(results), equal_to(1))
+            assert_that(results[0]["id"], equal_to("C002"))
+            assert_that(results[0]["name"], equal_to("engineering"))
+
+
+def test_list_slack_users_excludes_bots_and_deleted():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        client: TestClient = context.client
+
+        slack_response = {
+            "ok": True,
+            "members": [
+                {
+                    "id": "U001",
+                    "name": "alice",
+                    "real_name": "Alice Smith",
+                    "deleted": False,
+                    "is_bot": False,
+                },
+                {
+                    "id": "U002",
+                    "name": "bob",
+                    "real_name": "Bob Jones",
+                    "deleted": True,
+                    "is_bot": False,
+                },
+                {
+                    "id": "U003",
+                    "name": "mybot",
+                    "real_name": "My Bot",
+                    "deleted": False,
+                    "is_bot": True,
+                },
+            ],
+            "response_metadata": {"next_cursor": ""},
+        }
+
+        with patch("urllib.request.urlopen") as mock_urlopen:
+            mock_urlopen.return_value.__enter__.return_value.read.return_value = (
+                json.dumps(slack_response).encode()
+            )
+
+            with when("I list Slack users"):
+                response = client.get(
+                    f"{_BASE}/{context.agent.id}/slack/users",
+                    headers=_auth(context),
+                )
+
+        with then("only non-deleted, non-bot users are returned"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            results = response.json()
+            assert_that(len(results), equal_to(1))
+            assert_that(results[0]["id"], equal_to("U001"))

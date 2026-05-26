@@ -2,6 +2,7 @@ import { createQueryKeyStructure } from "@/shared/query-keys";
 
 export const AGENTS_PAGE_SIZE = 50;
 export const CONVERSATION_MESSAGES_PAGE_SIZE = 6;
+export const TOOL_CALLS_PAGE_SIZE = 20;
 const _agentsKeyBase = createQueryKeyStructure("agents");
 
 export type ConversationsFiltersKey = {
@@ -12,7 +13,7 @@ export type ConversationsFiltersKey = {
 export const agentsKey = {
   ..._agentsKeyBase,
   health: (id: string) => [..._agentsKeyBase.detail(id), "health"] as const,
-  conversationChannels: (agentId: string) =>
+    conversationChannels: (agentId: string) =>
     [..._agentsKeyBase.detail(agentId), "conversation-channels"] as const,
   conversationMessages: (
     agentId: string,
@@ -25,7 +26,11 @@ export const agentsKey = {
       channelId,
       filters,
     ] as const,
+  slackChannels: (id: string) => [..._agentsKeyBase.detail(id), "slack-channels"] as const,
+  slackUsers: (id: string) => [..._agentsKeyBase.detail(id), "slack-users"] as const,
 };
+
+export const toolCallsKey = createQueryKeyStructure("tool-calls");
 
 const AGENT_COLORS = [
   ["#4f46e5", "#7c3aed"],

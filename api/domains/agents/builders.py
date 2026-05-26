@@ -22,6 +22,26 @@ const WORKSPACE_DIR = path.join(HOME, '.openclaw', 'workspace');
 const OVERLAY_PATH = path.join(TEMPLATE_DIR, 'openclaw-config-overlay.json');
 const CONFIG_PATH = path.join(HOME, '.openclaw', 'openclaw.json');
 
+// These paths are replaced wholesale from the overlay rather than deep-merged,
+// so that removals (e.g. removing a channel or DM user) take effect on restart.
+const REPLACE_PATHS = [
+  ['channels', 'slack', 'channels'],
+  ['channels', 'slack', 'allowFrom'],
+];
+
+function getPath(obj, parts) {
+  return parts.reduce((cur, key) => (cur && typeof cur === 'object' ? cur[key] : undefined), obj);
+}
+
+function setPath(obj, parts, value) {
+  const last = parts[parts.length - 1];
+  const parent = parts.slice(0, -1).reduce((cur, key) => {
+    if (!cur[key] || typeof cur[key] !== 'object') cur[key] = {};
+    return cur[key];
+  }, obj);
+  parent[last] = value;
+}
+
 function deepMerge(base, overlay) {
   const result = Object.assign({}, base);
   for (const [key, val] of Object.entries(overlay)) {
@@ -48,9 +68,29 @@ let config = {};
 try { config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')); } catch {}
 
 const merged = deepMerge(config, overlay);
+
+for (const parts of REPLACE_PATHS) {
+  const overlayVal = getPath(overlay, parts);
+  if (overlayVal !== undefined) setPath(merged, parts, overlayVal);
+}
+
 fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
 fs.writeFileSync(CONFIG_PATH, JSON.stringify(merged, null, 2));
 console.log('[init-openclaw] Config merged successfully');
+
+// Overwrite Slack allowFrom credentials so the configured allowlist wins over stale runtime state.
+// openclaw writes paired users to slack-default-allowFrom.json (wrapped) at runtime; we mirror both here.
+const allowFrom = getPath(overlay, ['channels', 'slack', 'allowFrom']);
+if (allowFrom !== undefined) {
+  const credDir = path.join(HOME, '.openclaw', 'credentials');
+  fs.mkdirSync(credDir, { recursive: true });
+  fs.writeFileSync(path.join(credDir, 'slack-allowFrom.json'), JSON.stringify(allowFrom, null, 2));
+  fs.writeFileSync(
+    path.join(credDir, 'slack-default-allowFrom.json'),
+    JSON.stringify({ version: 1, allowFrom }, null, 2),
+  );
+  console.log('[init-openclaw] Synced slack allowFrom credentials');
+}
 """
 
 HEALTHZ_SERVER_JS = """\
@@ -69,23 +109,25 @@ function refresh() {
   execFile('openclaw', ['health', '--json'], { timeout: 15_000 }, (err, stdout) => {
     refreshing = false;
     if (err) {
-      cache = { ok: false, reason: err.message };
+      cache = { ok: false, everConnected: false, reason: err.message };
       return;
     }
     try {
       const d = JSON.parse(stdout);
-      if (!d.ok) { cache = { ok: false, reason: 'gateway not ok' }; return; }
       const order = d.channelOrder || [];
-      if (!order.length) { cache = { ok: false, reason: 'no channels configured' }; return; }
+      if (!order.length) { cache = { ok: false, everConnected: false, reason: 'no channels configured' }; return; }
       for (const ch of order) {
-        if (!d.channels[ch]?.connected) {
-          cache = { ok: false, reason: `channel ${ch} not connected` };
+        const channel = d.channels[ch];
+        if (channel?.healthState !== 'healthy') {
+          const everConnected = typeof channel?.lastConnectedAt === 'number';
+          const hasError = channel?.lastError != null;
+          cache = { ok: false, everConnected: everConnected || hasError, reason: channel?.lastError || 'channel ' + ch + ' not connected' };
           return;
         }
       }
       cache = { ok: true };
     } catch {
-      cache = { ok: false, reason: 'failed to parse health output' };
+      cache = { ok: false, everConnected: false, reason: 'failed to parse health output' };
     }
   });
 }
@@ -94,37 +136,84 @@ refresh();
 setInterval(refresh, CACHE_TTL_MS);
 
 const server = http.createServer((req, res) => {
-  if (req.method !== 'GET' || req.url !== '/healthz') {
-    res.writeHead(404);
-    res.end();
+  if (req.method !== 'GET') { res.writeHead(404); res.end(); return; }
+
+  if (req.url === '/ready') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ready: true }));
     return;
   }
-  if (!cache) {
+
+  if (req.url === '/healthz') {
+    if (!cache) {
+      res.writeHead(503, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'starting' }));
+      return;
+    }
+    if (cache.ok) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'ok' }));
+      return;
+    }
+    if (cache.everConnected) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'error', reason: cache.reason }));
+      return;
+    }
     res.writeHead(503, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: 'starting' }));
+    res.end(JSON.stringify({ status: 'starting', reason: cache.reason }));
     return;
   }
-  const body = cache.ok ? { status: 'ok' } : { status: 'error', reason: cache.reason };
-  res.writeHead(cache.ok ? 200 : 500, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify(body));
+
+  res.writeHead(404);
+  res.end();
 });
 
 process.on('SIGTERM', () => server.close(() => process.exit(0)));
 
-server.listen(PORT, () => console.log(`[healthz] listening on :${PORT}`));
+server.listen(PORT, () => console.log('[healthz] listening on :' + PORT));
 """
 
 START_SH = """\
 #!/bin/sh
 set -e
-node /app/config/init-openclaw.js
 node /app/config/healthz-server.js &
+node /app/config/init-openclaw.js
 exec openclaw gateway --allow-unconfigured
 """
 
 
-def build_openclaw_config_overlay(model: str, litellm_base_url: str) -> dict:
+def build_openclaw_config_overlay(
+    model: str,
+    litellm_base_url: str,
+    slack_channel_ids: list[str] | None = None,
+    slack_dm_user_ids: list[str] | None = None,
+    slack_group_policy: str = "open",
+    slack_dm_policy: str = "open",
+) -> dict:
     provider, _, model_name = model.partition("/")
+
+    channel_ids = slack_channel_ids or []
+    dm_user_ids = slack_dm_user_ids or []
+
+    if slack_dm_policy == "off":
+        openclaw_dm_policy = "allowlist"
+        allow_from = []
+        direct_reply_mode = "off"
+    elif slack_dm_policy == "open":
+        openclaw_dm_policy = "open"
+        allow_from = ["*"]
+        direct_reply_mode = "all"
+    else:
+        openclaw_dm_policy = slack_dm_policy
+        allow_from = dm_user_ids
+        direct_reply_mode = "all"
+
+    channels_config: dict = {
+        channel_id: {"enabled": True, "requireMention": False}
+        for channel_id in channel_ids
+    }
+
     return {
         "models": {
             "providers": {
@@ -143,17 +232,51 @@ def build_openclaw_config_overlay(model: str, litellm_base_url: str) -> dict:
         },
         "channels": {
             "slack": {
+                "enabled": True,
                 "mode": "socket",
                 "webhookPath": "/slack/events",
                 "userTokenReadOnly": True,
-                "groupPolicy": "open",
-                "dmPolicy": "open",
-                "allowFrom": ["*"],
+                "groupPolicy": slack_group_policy,
+                "dmPolicy": openclaw_dm_policy,
+                "allowFrom": allow_from,
+                "replyToModeByChatType": {
+                    "direct": direct_reply_mode,
+                    "group": "all",
+                    "channel": "all",
+                },
+                "streaming": {
+                    "mode": "partial",
+                    "nativeTransport": True,
+                },
+                "channels": channels_config,
             }
         },
         "bindings": [
             {"type": "route", "agentId": "main", "match": {"channel": "slack"}}
         ],
+        "tools": {"profile": "full"},
+        "memory": {"backend": "builtin"},
+        "plugins": {
+            "allow": ["memory-core", "active-memory"],
+            "slots": {"memory": "memory-core"},
+            "entries": {
+                "memory-core": {"enabled": True},
+                "active-memory": {
+                    "enabled": True,
+                    "config": {
+                        "agents": ["main"],
+                        "allowedChatTypes": ["direct", "group", "channel"],
+                        "modelFallbackPolicy": "default-remote",
+                        "queryMode": "recent",
+                        "promptStyle": "balanced",
+                        "timeoutMs": 15000,
+                        "maxSummaryChars": 220,
+                        "persistTranscripts": False,
+                        "logging": True,
+                    },
+                },
+            },
+        },
     }
 
 
@@ -295,7 +418,7 @@ def build_deployment(
                             command=["sh", "/app/config/start.sh"],
                             readiness_probe=client.V1Probe(
                                 http_get=client.V1HTTPGetAction(
-                                    path="/healthz",
+                                    path="/ready",
                                     port=8081,
                                 ),
                                 initial_delay_seconds=30,

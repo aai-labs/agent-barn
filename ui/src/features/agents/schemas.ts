@@ -8,6 +8,10 @@ export const AgentSchema = z.object({
   templateId: z.string().uuid(),
   templateVersion: z.number().int(),
   model: z.string(),
+  slackChannelIds: z.array(z.string()),
+  slackDmUserIds: z.array(z.string()),
+  slackGroupPolicy: z.enum(["open", "allowlist"]),
+  slackDmPolicy: z.enum(["off", "open", "allowlist", "pairing"]),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -36,8 +40,30 @@ export const PaginatedAgentsSchema = z.object({
 });
 
 export const AgentHealthSchema = z.object({
-  status: z.enum(["ok", "error", "starting"]),
-  reason: z.string().optional(),
+  status: z.enum(["ok", "error", "starting", "initializing", "crashed"]),
+  reason: z.string().nullish(),
+});
+
+export const ToolCallStatusSchema = z.enum(["PENDING", "SUCCESS", "ERROR"]);
+
+export const ToolCallSchema = z.object({
+  id: z.string().uuid(),
+  agentId: z.string().uuid(),
+  sessionId: z.string(),
+  toolName: z.string(),
+  arguments: z.record(z.string(), z.unknown()),
+  result: z.unknown().nullable(),
+  status: ToolCallStatusSchema,
+  occurredAt: z.string(),
+  completedAt: z.string().nullable(),
+  durationMs: z.number().int().nullable(),
+});
+
+export const PaginatedToolCallsSchema = z.object({
+  page: z.number().int().min(1),
+  pageSize: z.number().int().min(1),
+  total: z.number().int().min(0),
+  items: z.array(ToolCallSchema),
 });
 
 export const ConversationMessageSchema = z.object({
@@ -67,6 +93,17 @@ export const ConversationMessagesPageSchema = z.object({
   nextCursor: ConversationsCursorSchema.nullable(),
 });
 
+export const SlackChannelSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+});
+
+export const SlackUserSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  realName: z.string(),
+});
+
 export type Agent = z.infer<typeof AgentSchema>;
 export type AgentHealth = z.infer<typeof AgentHealthSchema>;
 export type AgentTemplateRead = z.infer<typeof AgentTemplateReadSchema>;
@@ -75,3 +112,7 @@ export type ConversationMessage = z.infer<typeof ConversationMessageSchema>;
 export type ConversationChannel = z.infer<typeof ConversationChannelSchema>;
 export type ConversationsCursor = z.infer<typeof ConversationsCursorSchema>;
 export type ConversationMessagesPage = z.infer<typeof ConversationMessagesPageSchema>;
+export type ToolCall = z.infer<typeof ToolCallSchema>;
+export type PaginatedToolCalls = z.infer<typeof PaginatedToolCallsSchema>;
+export type SlackChannel = z.infer<typeof SlackChannelSchema>;
+export type SlackUser = z.infer<typeof SlackUserSchema>;

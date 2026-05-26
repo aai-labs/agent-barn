@@ -1,7 +1,7 @@
 """add agent_chat_message table
 
 Revision ID: f2c8a14e9b37
-Revises: e9b4f23c5a71
+Revises: f0c9d4a5e1b2
 Create Date: 2026-05-21
 
 """
@@ -13,7 +13,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "f2c8a14e9b37"
-down_revision: Union[str, None] = "e9b4f23c5a71"
+down_revision: Union[str, None] = "f0c9d4a5e1b2"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

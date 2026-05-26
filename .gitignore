@@ -123,3 +123,5 @@ playwright-report/
 miscellaneous/
 
 CLAUDE.md
+
+kubeconfig.yaml
