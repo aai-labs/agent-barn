@@ -682,9 +682,7 @@ def test_start_agent_init_script_does_not_copy_whole_openclaw_npm_tree():
             assert_that(
                 init_js,
                 is_not(
-                    contains_string(
-                        "fs.cpSync(PREINSTALLED_NPM_DIR, RUNTIME_NPM_DIR"
-                    )
+                    contains_string("fs.cpSync(PREINSTALLED_NPM_DIR, RUNTIME_NPM_DIR")
                 ),
             )
             assert_that(
@@ -1420,9 +1418,7 @@ def test_start_teams_agent_creates_correct_k8s_resources():
             assert_that(init_js, contains_string("PREINSTALLED_MSTEAMS_DIR"))
             assert_that(
                 init_js,
-                contains_string(
-                    "Restored preinstalled Microsoft Teams npm plugin"
-                ),
+                contains_string("Restored preinstalled Microsoft Teams npm plugin"),
             )
             assert_that(init_js, contains_string("package.json"))
             assert_that(init_js, contains_string("package-lock.json"))
