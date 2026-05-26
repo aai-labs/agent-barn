@@ -202,6 +202,8 @@ class AgentService:
         teams_config = None
 
         if data.platform == AgentPlatform.SLACK:
+            assert data.slack_bot_token is not None
+            assert data.slack_app_token is not None
             slack_config = AgentSlackConfig(
                 agent_id=agent.id,
                 bot_token_encrypted=encrypt_token(
@@ -219,6 +221,9 @@ class AgentService:
             )
             self.repository.save_slack_config(slack_config)
         elif data.platform == AgentPlatform.TEAMS:
+            assert data.teams_app_id is not None
+            assert data.teams_app_password is not None
+            assert data.teams_tenant_id is not None
             teams_config = AgentTeamsConfig(
                 agent_id=agent.id,
                 app_id_encrypted=encrypt_token(
@@ -229,7 +234,7 @@ class AgentService:
                     data.teams_app_password,
                     self.config.agent_token_encryption_key,  # type: ignore[arg-type]
                 ),
-                tenant_id=data.teams_tenant_id,  # type: ignore[arg-type]
+                tenant_id=data.teams_tenant_id,
             )
             self.repository.save_teams_config(teams_config)
 

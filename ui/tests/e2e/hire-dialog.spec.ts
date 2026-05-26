@@ -111,7 +111,7 @@ test.describe("Hire Dialog", () => {
     await expect(page.getByText("Connect to Azure")).toBeVisible();
     await expect(page.getByText(/step 3 of 5/i)).toBeVisible();
     await expect(page.getByText("Azure credentials")).toBeVisible();
-    await expect(page.getByText("Create an Azure Bot resource")).toBeVisible();
+    await expect(page.getByText("Create an Azure Bot resource", { exact: true })).toBeVisible();
 
     await page.getByRole("button", { name: /continue/i }).click();
     await expect(
@@ -129,13 +129,18 @@ test.describe("Hire Dialog", () => {
 
     await expect(page.getByText("Build your Teams bot")).toBeVisible();
     await expect(page.getByText(/step 4 of 5/i)).toBeVisible();
-    await expect(page.getByText("Teams app package")).toBeVisible();
+    await page.getByPlaceholder("Aria").fill("Sam");
+    await expect(page.getByText("Teams app package", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: /download teams app package/i })).toBeVisible();
     await expect(page.getByText('"developer"')).toBeVisible();
     await expect(page.getByText('"botId"')).toBeVisible();
     await expect(page.getByText('"color": "color.png"')).toBeVisible();
     await expect(page.getByText('"outline": "outline.png"')).toBeVisible();
     await expect(page.getByText("Upload to Teams")).toBeVisible();
+
+    await page.getByRole("button", { name: /continue/i }).click();
+    await expect(page.getByText("A few details and we'll get them set up.")).toBeVisible();
+    await expect(page.getByLabel("Name them")).toHaveValue("Sam");
   });
 
   test("should close the hire dialog", async ({ page }) => {

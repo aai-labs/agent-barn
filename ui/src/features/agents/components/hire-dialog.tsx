@@ -129,7 +129,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
       setTeamsTokenError("App ID, App Password, and Tenant ID are all required.");
       return;
     }
-    setStep("details");
+    setStep("teams-bot-builder");
   }
 
   async function startHiring() {

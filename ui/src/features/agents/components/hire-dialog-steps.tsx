@@ -264,7 +264,7 @@ export function BotBuilderStep({
       <div>
         <div className="flex items-center justify-between mb-2">
           <span className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>
-            Teams app package
+            Generated manifest
           </span>
           <div className="flex gap-1.5">
             <button className="af-btn af-btn-sm" onClick={copyManifest}>
@@ -569,7 +569,7 @@ export function TeamsBotBuilderStep({
       <div>
         <div className="flex items-center justify-between mb-2">
           <span className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>
-            Generated manifest
+            Teams app package
           </span>
           <div className="flex gap-1.5">
             <button className="af-btn af-btn-sm" onClick={copyManifest}>
@@ -784,6 +784,7 @@ export function DetailsStep({
       <FormField label="Name them" hint={`Suggested: ${selected.suggested}`}>
         <input
           className="af-input af-input-lg"
+          aria-label="Name them"
           value={name}
           onChange={(e) => onNameChange(e.target.value)}
           placeholder={selected.suggested}
