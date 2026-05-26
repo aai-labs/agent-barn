@@ -665,6 +665,36 @@ def test_start_agent_configmap_has_init_script():
             assert_that(config_map.data, has_key("init-openclaw.js"))
 
 
+def test_start_agent_init_script_does_not_copy_whole_openclaw_npm_tree():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+
+        with when("I start a Slack agent"):
+            response = client.post(
+                f"{_BASE}/{context.agent.id}/start", headers=_auth(context)
+            )
+
+        with then("the init script does not restore Teams plugins for every agent"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            init_js = config_map.data["init-openclaw.js"]
+            assert_that(
+                init_js,
+                is_not(
+                    contains_string(
+                        "fs.cpSync(PREINSTALLED_NPM_DIR, RUNTIME_NPM_DIR"
+                    )
+                ),
+            )
+            assert_that(
+                init_js,
+                contains_string(
+                    "getPath(overlay, ['channels', 'msteams', 'enabled']) !== true"
+                ),
+            )
+
+
 def test_start_agent_deployment_runs_init_script():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         client: TestClient = context.client
@@ -1386,6 +1416,16 @@ def test_start_teams_agent_creates_correct_k8s_resources():
             overlay = json.loads(config_map.data["openclaw-config-overlay.json"])
             assert_that(overlay["channels"], has_key("msteams"))
             assert_that(overlay["channels"]["msteams"]["enabled"], equal_to(True))
+            init_js = config_map.data["init-openclaw.js"]
+            assert_that(init_js, contains_string("PREINSTALLED_MSTEAMS_DIR"))
+            assert_that(
+                init_js,
+                contains_string(
+                    "Restored preinstalled Microsoft Teams npm plugin"
+                ),
+            )
+            assert_that(init_js, contains_string("package.json"))
+            assert_that(init_js, contains_string("package-lock.json"))
 
             service = k8s.create_service.call_args.args[1]
             ports_by_name = {

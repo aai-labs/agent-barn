@@ -45,14 +45,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         rm -rf /var/lib/apt/lists/*; \
     fi
 
-USER node
-
-RUN openclaw plugins install @openclaw/msteams@2026.5.7
-
-USER root
-
-RUN mkdir -p /opt/openclaw-preinstalled && \
-    cp -a /home/node/.openclaw/npm /opt/openclaw-preinstalled/npm && \
+RUN mkdir -p /opt/openclaw-preinstalled/npm && \
+    npm install --prefix /opt/openclaw-preinstalled/npm @openclaw/msteams@2026.5.7 && \
     chown -R node:node /opt/openclaw-preinstalled
 
 USER node

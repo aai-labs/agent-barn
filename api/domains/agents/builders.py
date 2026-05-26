@@ -23,6 +23,9 @@ const OVERLAY_PATH = path.join(TEMPLATE_DIR, 'openclaw-config-overlay.json');
 const CONFIG_PATH = path.join(HOME, '.openclaw', 'openclaw.json');
 const PREINSTALLED_NPM_DIR = '/opt/openclaw-preinstalled/npm';
 const RUNTIME_NPM_DIR = path.join(HOME, '.openclaw', 'npm');
+const PREINSTALLED_NODE_MODULES_DIR = path.join(PREINSTALLED_NPM_DIR, 'node_modules');
+const PREINSTALLED_MSTEAMS_DIR = path.join(PREINSTALLED_NODE_MODULES_DIR, '@openclaw', 'msteams');
+const RUNTIME_NODE_MODULES_DIR = path.join(RUNTIME_NPM_DIR, 'node_modules');
 
 // These paths are replaced wholesale from the overlay rather than deep-merged,
 // so that removals (e.g. removing a channel or DM user) take effect on restart.
@@ -56,9 +59,47 @@ function deepMerge(base, overlay) {
   return result;
 }
 
-fs.mkdirSync(path.dirname(RUNTIME_NPM_DIR), { recursive: true });
-fs.cpSync(PREINSTALLED_NPM_DIR, RUNTIME_NPM_DIR, { recursive: true, force: true });
-console.log('[init-openclaw] Restored preinstalled OpenClaw npm plugins');
+function isPathInside(child, parent) {
+  const relative = path.relative(parent, child);
+  return relative === '' || (!!relative && !relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function realpathOrResolved(filePath) {
+  try { return fs.realpathSync(filePath); }
+  catch { return path.resolve(filePath); }
+}
+
+function restorePreinstalledMsteamsPlugin(overlay) {
+  if (getPath(overlay, ['channels', 'msteams', 'enabled']) !== true) return;
+  if (!fs.existsSync(PREINSTALLED_MSTEAMS_DIR)) {
+    console.log('[init-openclaw] Preinstalled msteams plugin missing, skipping restore');
+    return;
+  }
+
+  const sourceReal = realpathOrResolved(PREINSTALLED_NODE_MODULES_DIR);
+  const destReal = realpathOrResolved(RUNTIME_NODE_MODULES_DIR);
+  if (isPathInside(destReal, sourceReal) || isPathInside(sourceReal, destReal)) {
+    console.log('[init-openclaw] Skipping msteams restore: source/destination overlap');
+    return;
+  }
+
+  if (fs.existsSync(RUNTIME_NPM_DIR) && fs.lstatSync(RUNTIME_NPM_DIR).isSymbolicLink()) {
+    console.log('[init-openclaw] Skipping msteams restore: runtime npm path is a symlink');
+    return;
+  }
+
+  fs.mkdirSync(RUNTIME_NPM_DIR, { recursive: true });
+  for (const metadataFile of ['package.json', 'package-lock.json']) {
+    const sourceFile = path.join(PREINSTALLED_NPM_DIR, metadataFile);
+    if (fs.existsSync(sourceFile)) {
+      fs.copyFileSync(sourceFile, path.join(RUNTIME_NPM_DIR, metadataFile));
+    }
+  }
+
+  fs.mkdirSync(RUNTIME_NODE_MODULES_DIR, { recursive: true });
+  fs.cpSync(PREINSTALLED_NODE_MODULES_DIR, RUNTIME_NODE_MODULES_DIR, { recursive: true, force: true });
+  console.log('[init-openclaw] Restored preinstalled Microsoft Teams npm plugin');
+}
 
 fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
 for (const file of fs.readdirSync(TEMPLATE_DIR)) {
@@ -70,6 +111,8 @@ for (const file of fs.readdirSync(TEMPLATE_DIR)) {
 let overlay;
 try { overlay = JSON.parse(fs.readFileSync(OVERLAY_PATH, 'utf8')); }
 catch { console.log('[init-openclaw] No overlay found, skipping'); process.exit(0); }
+
+restorePreinstalledMsteamsPlugin(overlay);
 
 let config = {};
 try { config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')); } catch {}
