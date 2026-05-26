@@ -208,10 +208,10 @@ _DM_CUSTOM_MESSAGE = json.dumps(
         "type": "custom_message",
         "customType": "openclaw.runtime-context",
         "content": (
-            'System (untrusted): [2026-05-25 08:11:30 UTC] Slack DM from samuel: Hello! Are you there?\n'
-            'System (untrusted): [2026-05-25 08:20:45 UTC] Slack DM from samuel: Hi buddy\n'
-            '\n'
-            'Conversation info (untrusted metadata):\n'
+            "System (untrusted): [2026-05-25 08:11:30 UTC] Slack DM from samuel: Hello! Are you there?\n"
+            "System (untrusted): [2026-05-25 08:20:45 UTC] Slack DM from samuel: Hi buddy\n"
+            "\n"
+            "Conversation info (untrusted metadata):\n"
             '{"chat_id":"user:U0B4ZA25F5Y","message_id":"mid-001","sender_id":"U0B4ZA25F5Y","sender":"samuel"}'
         ),
     }
@@ -241,8 +241,10 @@ def test_dm_parse_inbound_messages():
     )
 
     inbound = [
-        m for m in messages
-        if m.direction == MessageDirection.INBOUND and m.conversation_type == ConversationType.DM
+        m
+        for m in messages
+        if m.direction == MessageDirection.INBOUND
+        and m.conversation_type == ConversationType.DM
     ]
     assert len(inbound) == 2
     assert inbound[0].content == "Hello! Are you there?"
@@ -261,8 +263,10 @@ def test_dm_parse_outbound_message():
     )
 
     outbound = [
-        m for m in messages
-        if m.direction == MessageDirection.OUTBOUND and m.conversation_type == ConversationType.DM
+        m
+        for m in messages
+        if m.direction == MessageDirection.OUTBOUND
+        and m.conversation_type == ConversationType.DM
     ]
     assert len(outbound) == 1
     assert outbound[0].content == "Hey Sam, I'm here!"
@@ -278,11 +282,19 @@ def test_dm_inbound_msg_ids_are_stable():
     )
 
     inbound = [
-        m for m in messages
-        if m.direction == MessageDirection.INBOUND and m.conversation_type == ConversationType.DM
+        m
+        for m in messages
+        if m.direction == MessageDirection.INBOUND
+        and m.conversation_type == ConversationType.DM
     ]
-    assert inbound[0].openclaw_msg_id == f"dm:{_DM_NATIVE_CHANNEL_ID}:2026-05-25 08:11:30 UTC"
-    assert inbound[1].openclaw_msg_id == f"dm:{_DM_NATIVE_CHANNEL_ID}:2026-05-25 08:20:45 UTC"
+    assert (
+        inbound[0].openclaw_msg_id
+        == f"dm:{_DM_NATIVE_CHANNEL_ID}:2026-05-25 08:11:30 UTC"
+    )
+    assert (
+        inbound[1].openclaw_msg_id
+        == f"dm:{_DM_NATIVE_CHANNEL_ID}:2026-05-25 08:20:45 UTC"
+    )
 
 
 def test_dm_session_does_not_affect_channel_messages():
@@ -292,7 +304,9 @@ def test_dm_session_does_not_affect_channel_messages():
         _make_get_jsonl({"aaaa-bbbb": _CHANNEL_JSONL, "dddd-eeee": _DM_JSONL}),
     )
 
-    channel_msgs = [m for m in messages if m.conversation_type == ConversationType.CHANNEL]
+    channel_msgs = [
+        m for m in messages if m.conversation_type == ConversationType.CHANNEL
+    ]
     dm_msgs = [m for m in messages if m.conversation_type == ConversationType.DM]
     assert len(channel_msgs) == 2  # 1 inbound + 1 outbound from channel
     assert len(dm_msgs) == 3  # 2 inbound + 1 outbound from DM

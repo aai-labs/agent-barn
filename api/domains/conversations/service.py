@@ -91,10 +91,7 @@ def _distinct_pod_conversations(
             seen[native.upper()] = (ConversationType.CHANNEL, None)
     dm_data = sessions.get("agent:main:main") or {}
     origin = dm_data.get("origin") or {}
-    if (
-        dm_data.get("chatType") == "direct"
-        and origin.get("provider") == "slack"
-    ):
+    if dm_data.get("chatType") == "direct" and origin.get("provider") == "slack":
         native = origin.get("nativeChannelId")
         if native:
             display_name = origin.get("label") or origin.get("sender") or None
@@ -215,9 +212,7 @@ class ConversationSyncService:
         if not session_uuids:
             return 0
         path_map = _session_file_map(sessions_json)
-        paths = [
-            path_map.get(u) or f"{_SESSION_DIR}/{u}.jsonl" for u in session_uuids
-        ]
+        paths = [path_map.get(u) or f"{_SESSION_DIR}/{u}.jsonl" for u in session_uuids]
         jsonl_cache: dict[str, str] = {}
         with ThreadPoolExecutor(
             max_workers=min(_PER_CHANNEL_READ_MAX_WORKERS, len(session_uuids))

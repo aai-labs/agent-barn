@@ -133,7 +133,7 @@ def _parse_jsonl(
                 continue
             try:
                 occurred_at = _parse_iso(line.get("timestamp", ""))
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 continue
             messages.append(
                 AgentChatMessage(
@@ -182,7 +182,11 @@ def _parse_dm_jsonl(
             custom_messages.append(line)
         elif line_type == "message":
             msg = line.get("message", {})
-            if isinstance(msg, dict) and msg.get("role") == "assistant" and line.get("id"):
+            if (
+                isinstance(msg, dict)
+                and msg.get("role") == "assistant"
+                and line.get("id")
+            ):
                 outbound_lines.append(line)
 
     messages: list[AgentChatMessage] = []
@@ -204,7 +208,11 @@ def _parse_dm_jsonl(
             m = _DM_INBOUND_RE.match(line_text.strip())
             if not m:
                 continue
-            ts_str, sender_name, text = m.group(1), m.group(2).strip(), m.group(3).strip()
+            ts_str, sender_name, text = (
+                m.group(1),
+                m.group(2).strip(),
+                m.group(3).strip(),
+            )
             msg_id = f"dm:{conversation_id}:{ts_str}"
             if msg_id in seen_msg_ids:
                 continue
@@ -254,7 +262,7 @@ def _parse_dm_jsonl(
             continue
         try:
             occurred_at = _parse_iso(line.get("timestamp", ""))
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             continue
         messages.append(
             AgentChatMessage(
