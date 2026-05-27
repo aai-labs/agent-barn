@@ -28,6 +28,8 @@ imagePullSecrets:
 service:
   port: 8000
 
+apiExternalUrl: "https://api.agent-farm.k8s.aai-labs.com"
+
 ingress:
   host: api.agent-farm.k8s.aai-labs.com
   clusterIssuer: letsencrypt-http01
