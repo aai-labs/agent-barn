@@ -14,7 +14,14 @@ from api.domains.agents.defaults import (
     DEFAULT_TOOLS_MD,
     DEFAULT_USER_MD,
 )
-from api.domains.agents.models import Agent, AgentStatus, AgentTemplate
+from api.domains.agents.models import (
+    Agent,
+    AgentPlatform,
+    AgentSlackConfig,
+    AgentStatus,
+    AgentTeamsConfig,
+    AgentTemplate,
+)
 from api.domains.agents.repository import AgentRepository
 from api.domains.auth.utils import set_default_org_id
 from api.infrastructure.crypto import encrypt_token
@@ -25,6 +32,9 @@ from api.tests.core.givenpy import LambdaWith
 TEST_ENCRYPTION_KEY: str = Fernet.generate_key().decode()
 TEST_SLACK_BOT_TOKEN = "xoxb-test-bot-token"
 TEST_SLACK_APP_TOKEN = "xapp-1-test-app-token"
+TEST_TEAMS_APP_ID = "test-teams-app-id"
+TEST_TEAMS_APP_PASSWORD = "test-teams-app-password"
+TEST_TEAMS_TENANT_ID = "test-tenant-id"
 FAKE_LITELLM_KEY = "sk-fake-litellm-key-for-tests"
 
 
@@ -52,6 +62,7 @@ def there_is_an_agent(
     deleted: bool = False,
     organization_id: UUID | None = None,
     model: str = "",
+    platform: AgentPlatform = AgentPlatform.SLACK,
 ):
     def step(context):
         org_id = organization_id or context.organization.id
@@ -74,15 +85,10 @@ def there_is_an_agent(
         agent = Agent(
             organization_id=org_id,
             name=name,
-            slack_bot_token_encrypted=encrypt_token(
-                TEST_SLACK_BOT_TOKEN, TEST_ENCRYPTION_KEY
-            ),
-            slack_app_token_encrypted=encrypt_token(
-                TEST_SLACK_APP_TOKEN, TEST_ENCRYPTION_KEY
-            ),
             litellm_key_encrypted=encrypt_token(FAKE_LITELLM_KEY, TEST_ENCRYPTION_KEY),
             model=model,
             status=status,
+            platform=platform,
             template_id=template.id,
             template_version=template.version,
         )
@@ -91,6 +97,28 @@ def there_is_an_agent(
             agent.deleted_at = datetime.datetime.now(datetime.timezone.utc)
 
         repository.save(agent)
+
+        if platform == AgentPlatform.SLACK:
+            slack_config = AgentSlackConfig(
+                agent_id=agent.id,
+                bot_token_encrypted=encrypt_token(
+                    TEST_SLACK_BOT_TOKEN, TEST_ENCRYPTION_KEY
+                ),
+                app_token_encrypted=encrypt_token(
+                    TEST_SLACK_APP_TOKEN, TEST_ENCRYPTION_KEY
+                ),
+            )
+            repository.save_slack_config(slack_config)
+        elif platform == AgentPlatform.TEAMS:
+            teams_config = AgentTeamsConfig(
+                agent_id=agent.id,
+                app_id_encrypted=encrypt_token(TEST_TEAMS_APP_ID, TEST_ENCRYPTION_KEY),
+                app_password_encrypted=encrypt_token(
+                    TEST_TEAMS_APP_PASSWORD, TEST_ENCRYPTION_KEY
+                ),
+                tenant_id=TEST_TEAMS_TENANT_ID,
+            )
+            repository.save_teams_config(teams_config)
 
         template.agent_id = agent.id
         repository.save_template(template)

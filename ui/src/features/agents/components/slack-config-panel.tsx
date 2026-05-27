@@ -19,10 +19,10 @@ export function SlackConfigPanel({ agent, onSaved }: SlackConfigPanelProps) {
 
   const isRunning = agent.status === "RUNNING";
 
-  const [channelIds, setChannelIds] = useState<string[]>(agent.slackChannelIds);
-  const [userIds, setUserIds] = useState<string[]>(agent.slackDmUserIds);
-  const [groupPolicy, setGroupPolicy] = useState<"open" | "allowlist">(agent.slackGroupPolicy);
-  const [dmPolicy, setDmPolicy] = useState<"off" | "open" | "allowlist" | "pairing">(agent.slackDmPolicy);
+  const [channelIds, setChannelIds] = useState<string[]>(agent.slackConfig?.channelIds ?? []);
+  const [userIds, setUserIds] = useState<string[]>(agent.slackConfig?.dmUserIds ?? []);
+  const [groupPolicy, setGroupPolicy] = useState<"open" | "allowlist">(agent.slackConfig?.groupPolicy ?? "open");
+  const [dmPolicy, setDmPolicy] = useState<"off" | "open" | "allowlist" | "pairing">(agent.slackConfig?.dmPolicy ?? "off");
   const [userListCleared, setUserListCleared] = useState(false);
   const [channelSearch, setChannelSearch] = useState("");
   const [userSearch, setUserSearch] = useState("");

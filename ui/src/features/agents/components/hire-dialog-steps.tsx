@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import JSZip from "jszip";
 import { TEMPLATE_FILES } from "../data";
 import { ChoiceCard, FormField, NextStep, TokenInput } from "./hire-dialog-primitives";
 
@@ -12,11 +13,54 @@ export const ROLES = [
 ] as const;
 
 export type RoleId = (typeof ROLES)[number]["id"];
-export type WizardStep = "role" | "slack-choice" | "bot-builder" | "slack-tokens" | "details";
+export type WizardStep =
+  | "role"
+  | "platform-choice"
+  | "slack-choice"
+  | "bot-builder"
+  | "slack-tokens"
+  | "teams-bot-builder"
+  | "teams-credentials"
+  | "details";
 
 export const MODELS = [{ value: "litellm/qwen3.6-plus", label: "Qwen3.6 Plus" }, { value: "litellm/gpt-5-mini", label: "GPT-5 mini" }] as const;
 
 export const BOT_COLOR_PRESETS = ["#4A154B", "#1264A3", "#2BAC76", "#E8912D", "#CC4400"];
+const TEAMS_DEVELOPER_NAME = "Agent Farm";
+const TEAMS_DEVELOPER_WEBSITE_URL = "https://example.com";
+const TEAMS_PRIVACY_URL = "https://example.com/privacy";
+const TEAMS_TERMS_URL = "https://example.com/terms";
+
+async function fetchAsset(path: string): Promise<Blob> {
+  const response = await fetch(path);
+  if (!response.ok) throw new Error(`Unable to load ${path}`);
+  return response.blob();
+}
+
+function safeFilePrefix(name: string): string {
+  const normalized = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-");
+  return normalized.replace(/^-+|-+$/g, "") || "teams-app";
+}
+
+export async function downloadTeamsAppPackage(manifest: string, botName: string): Promise<void> {
+  const zip = new JSZip();
+  const [colorIcon, outlineIcon] = await Promise.all([
+    fetchAsset("/teams-icon-color.png"),
+    fetchAsset("/teams-icon-outline.png"),
+  ]);
+
+  zip.file("manifest.json", manifest);
+  zip.file("color.png", colorIcon);
+  zip.file("outline.png", outlineIcon);
+
+  const blob = await zip.generateAsync({ type: "blob" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${safeFilePrefix(botName)}-teams-app.zip`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
 
 export function pickDefaults(roleId: RoleId) {
   const role = ROLES.find((r) => r.id === roleId)!;
@@ -366,8 +410,325 @@ export function SlackTokensStep({
   );
 }
 
+export function PlatformChoiceStep({
+  platform,
+  onChange,
+}: {
+  platform: "slack" | "teams";
+  onChange: (v: "slack" | "teams") => void;
+}) {
+  return (
+    <div className="flex flex-col gap-3">
+      <ChoiceCard
+        selected={platform === "slack"}
+        onClick={() => onChange("slack")}
+        title="Slack"
+        description="Connect via Socket Mode with a bot and app-level token."
+      />
+      <ChoiceCard
+        selected={platform === "teams"}
+        onClick={() => onChange("teams")}
+        title="Microsoft Teams"
+        description="Connect via Azure Bot Framework with a webhook endpoint."
+      />
+    </div>
+  );
+}
+
+export function generateTeamsManifest(
+  appId: string,
+  botName: string,
+  botDescription: string,
+  accentColor: string,
+): string {
+  return JSON.stringify(
+    {
+      $schema:
+        "https://developer.microsoft.com/en-us/json-schemas/teams/v1.13/MicrosoftTeams.schema.json",
+      manifestVersion: "1.13",
+      version: "1.0.0",
+      id: appId || "{{YOUR_APP_ID}}",
+      packageName: "com.agentfarm.bot",
+      developer: {
+        name: "Agent Farm",
+        websiteUrl: "https://agent-farm.k8s.aai-labs.com",
+        privacyUrl: "https://agent-farm.k8s.aai-labs.com",
+        termsOfUseUrl: "https://agent-farm.k8s.aai-labs.com",
+      },
+      name: { short: botName, full: `${botName} - Agent Farm` },
+      description: {
+        short: botDescription,
+        full: `${botDescription}\n\nPowered by Agent Farm.`,
+      },
+      icons: { color: "color.png", outline: "outline.png" },
+      accentColor,
+      bots: [
+        {
+          botId: appId || "{{YOUR_APP_ID}}",
+          scopes: ["personal", "team", "groupchat"],
+          supportsFiles: false,
+          isNotificationOnly: false,
+        },
+      ],
+      permissions: ["identity", "messageTeamMembers"],
+      validDomains: [],
+    },
+    null,
+    2,
+  );
+}
+
+export function TeamsBotBuilderStep({
+  teamsAppId,
+  onTeamsAppIdChange,
+  botName,
+  onBotNameChange,
+  botDescription,
+  onBotDescriptionChange,
+  botColor,
+  onBotColorChange,
+}: {
+  teamsAppId: string;
+  onTeamsAppIdChange: (v: string) => void;
+  botName: string;
+  onBotNameChange: (v: string) => void;
+  botDescription: string;
+  onBotDescriptionChange: (v: string) => void;
+  botColor: string;
+  onBotColorChange: (v: string) => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  const manifest = generateTeamsManifest(teamsAppId, botName, botDescription, botColor);
+
+  function copyManifest() {
+    void navigator.clipboard.writeText(manifest).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }
+
+  function downloadPackage() {
+    void downloadTeamsAppPackage(manifest, botName);
+  }
+
+  return (
+    <div className="flex flex-col gap-5">
+      <FormField label="App (client) ID" hint="From your Azure Bot registration — found under Configuration">
+        <input
+          className="af-input font-mono text-[0.8125rem]"
+          value={teamsAppId}
+          onChange={(e) => onTeamsAppIdChange(e.target.value)}
+          placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+        />
+      </FormField>
+
+      <FormField label="Bot display name" hint="Shown in Teams — can be changed later">
+        <input
+          className="af-input"
+          value={botName}
+          onChange={(e) => onBotNameChange(e.target.value)}
+          placeholder="Aria"
+        />
+      </FormField>
+
+      <FormField label="Description" hint="Short summary shown in the Teams app directory">
+        <input
+          className="af-input"
+          value={botDescription}
+          onChange={(e) => onBotDescriptionChange(e.target.value)}
+          placeholder="Handles tasks and reduces day-to-day friction."
+        />
+      </FormField>
+
+      <FormField label="Accent color" hint="Used in the Teams app icon background">
+        <div className="flex items-center gap-2.5 flex-wrap">
+          {BOT_COLOR_PRESETS.map((c) => (
+            <button
+              key={c}
+              className="w-7 h-7 rounded-full border-2 transition-all"
+              style={{
+                background: c,
+                borderColor: botColor === c ? "var(--ink)" : "transparent",
+                outline: botColor === c ? "2px solid var(--bg-elev)" : "none",
+                outlineOffset: "-3px",
+              }}
+              onClick={() => onBotColorChange(c)}
+              aria-label={c}
+            />
+          ))}
+          <input
+            className="af-input font-mono w-28"
+            value={botColor}
+            onChange={(e) => onBotColorChange(e.target.value)}
+            placeholder="#4A154B"
+            maxLength={7}
+          />
+        </div>
+      </FormField>
+
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <span className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>
+            Teams app package
+          </span>
+          <div className="flex gap-1.5">
+            <button className="af-btn af-btn-sm" onClick={copyManifest}>
+              {copied ? "Copied!" : "Copy"}
+            </button>
+            <button className="af-btn af-btn-sm" onClick={downloadPackage}>
+              Download Teams app package
+            </button>
+          </div>
+        </div>
+        <pre
+          className="rounded-xl font-mono text-[0.719rem] leading-[1.6] p-4 overflow-x-auto"
+          style={{
+            background: "var(--bg-elev)",
+            border: "1px solid var(--line)",
+            color: "var(--ink-2)",
+            maxHeight: "14rem",
+          }}
+        >
+          {manifest}
+        </pre>
+      </div>
+
+      <div
+        className="flex flex-col gap-3 rounded-2xl p-4"
+        style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
+      >
+        <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
+          What to do next
+        </div>
+        <NextStep n={1} label="Download the Teams app package">
+          Use the download above after you review the manifest details. The zip is ready to upload.
+        </NextStep>
+        <NextStep n={2} label="Upload to Teams">
+          In Teams, go to <b>Apps</b>, open <b>Manage your apps</b>, choose <b>Upload a custom app</b>, and upload the zip.
+        </NextStep>
+        <NextStep n={3} label="Publish or approve if prompted">
+          If your tenant requires admin review, publish or approve the submitted app in Teams admin center.
+        </NextStep>
+        <NextStep n={4} label="Install and test">
+          Open the app in Teams and send a message after the agent is hired and the messaging endpoint is configured.
+        </NextStep>
+      </div>
+    </div>
+  );
+}
+
+export function TeamsCredentialsStep({
+  teamsAppId,
+  onAppIdChange,
+  teamsAppPassword,
+  onAppPasswordChange,
+  showAppPassword,
+  onToggleAppPassword,
+  teamsTenantId,
+  onTenantIdChange,
+  error,
+}: {
+  teamsAppId: string;
+  onAppIdChange: (v: string) => void;
+  teamsAppPassword: string;
+  onAppPasswordChange: (v: string) => void;
+  showAppPassword: boolean;
+  onToggleAppPassword: () => void;
+  teamsTenantId: string;
+  onTenantIdChange: (v: string) => void;
+  error: string | null;
+}) {
+  return (
+    <div className="flex flex-col gap-5">
+      <div
+        className="flex flex-col gap-3.5 p-4 rounded-2xl"
+        style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
+      >
+        <div>
+          <div className="font-semibold text-[0.844rem] mb-0.5" style={{ color: "var(--ink)" }}>
+            Azure credentials
+          </div>
+          <div className="text-[0.781rem]" style={{ color: "var(--ink-3)" }}>
+            These stay encrypted in the key vault. The agent only sees fake placeholders.
+          </div>
+        </div>
+
+        <FormField label="App (client) ID" hint="From your Azure Bot registration — found under Configuration">
+          <input
+            className="af-input font-mono text-[0.8125rem]"
+            value={teamsAppId}
+            onChange={(e) => onAppIdChange(e.target.value)}
+            placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+          />
+        </FormField>
+
+        <FormField label="App password (client secret)" hint="Created in Azure App Registration → Certificates & secrets">
+          <TokenInput
+            value={teamsAppPassword}
+            onChange={onAppPasswordChange}
+            visible={showAppPassword}
+            onToggle={onToggleAppPassword}
+            placeholder="Client secret value"
+          />
+        </FormField>
+
+        <FormField label="Tenant ID" hint="Found in Azure Portal → Azure Active Directory → Overview">
+          <input
+            className="af-input font-mono text-[0.8125rem]"
+            value={teamsTenantId}
+            onChange={(e) => onTenantIdChange(e.target.value)}
+            placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+          />
+        </FormField>
+
+        {error && (
+          <div className="text-[0.8125rem]" style={{ color: "var(--err)" }}>
+            {error}
+          </div>
+        )}
+      </div>
+
+      <div
+        className="flex flex-col gap-3 rounded-2xl p-4"
+        style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
+      >
+        <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
+          What to do next
+        </div>
+        <NextStep n={1} label="Create an Azure Bot resource">
+          Go to the{" "}
+          <a
+            href="https://portal.azure.com/#create/Microsoft.AzureBot"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline"
+            style={{ color: "var(--ink-2)" }}
+          >
+            Azure Portal →
+          </a>
+          {" "}and create an Azure Bot resource.
+        </NextStep>
+        <NextStep n={2} label="Copy the App ID">
+          In the Bot resource, open <b>Configuration</b> and copy the Microsoft App ID.
+        </NextStep>
+        <NextStep n={3} label="Create an app password">
+          Open the linked app registration, go to <b>Certificates &amp; secrets</b>, and create a new client secret.
+          Copy the secret value before leaving the page.
+        </NextStep>
+        <NextStep n={4} label="Copy the Tenant ID">
+          In Azure, open <b>Microsoft Entra ID</b> → <b>Overview</b> and copy the Tenant ID.
+        </NextStep>
+        <NextStep n={5} label="Enable the Teams channel">
+          In your Bot resource, go to <b>Channels</b> and enable <b>Microsoft Teams</b>.
+        </NextStep>
+      </div>
+    </div>
+  );
+}
+
 export function DetailsStep({
   selected,
+  platform,
   name,
   onNameChange,
   model,
@@ -387,6 +748,7 @@ export function DetailsStep({
   onChangeRole,
 }: {
   selected: (typeof ROLES)[number];
+  platform: "slack" | "teams";
   name: string;
   onNameChange: (v: string) => void;
   model: string;
@@ -422,6 +784,7 @@ export function DetailsStep({
       <FormField label="Name them" hint={`Suggested: ${selected.suggested}`}>
         <input
           className="af-input af-input-lg"
+          aria-label="Name them"
           value={name}
           onChange={(e) => onNameChange(e.target.value)}
           placeholder={selected.suggested}
@@ -441,29 +804,33 @@ export function DetailsStep({
         </select>
       </FormField>
 
-      <FormField label="Channel access" hint="You can add specific channels after hiring">
-        <select
-          className="af-input"
-          value={slackGroupPolicy}
-          onChange={(e) => onSlackGroupPolicyChange(e.target.value)}
-        >
-          <option value="allowlist">Allowlist — only allowed channels</option>
-          <option value="open">Open — respond in any channel</option>
-        </select>
-      </FormField>
+      {platform === "slack" && (
+        <>
+          <FormField label="Channel access" hint="You can add specific channels after hiring">
+            <select
+              className="af-input"
+              value={slackGroupPolicy}
+              onChange={(e) => onSlackGroupPolicyChange(e.target.value)}
+            >
+              <option value="allowlist">Allowlist — only allowed channels</option>
+              <option value="open">Open — respond in any channel</option>
+            </select>
+          </FormField>
 
-      <FormField label="Direct messages">
-        <select
-          className="af-input"
-          value={slackDmPolicy}
-          onChange={(e) => onSlackDmPolicyChange(e.target.value)}
-        >
-          <option value="off">Off — ignore direct messages</option>
-          <option value="pairing">Pairing — users must pair first</option>
-          <option value="allowlist">Allowlist — only allowed users</option>
-          <option value="open">Open — anyone can DM</option>
-        </select>
-      </FormField>
+          <FormField label="Direct messages">
+            <select
+              className="af-input"
+              value={slackDmPolicy}
+              onChange={(e) => onSlackDmPolicyChange(e.target.value)}
+            >
+              <option value="off">Off — ignore direct messages</option>
+              <option value="pairing">Pairing — users must pair first</option>
+              <option value="allowlist">Allowlist — only allowed users</option>
+              <option value="open">Open — anyone can DM</option>
+            </select>
+          </FormField>
+        </>
+      )}
 
       <details className="rounded-2xl overflow-hidden" style={{ border: "1px solid var(--line)" }}>
         <summary

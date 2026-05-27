@@ -12,6 +12,7 @@ from sqlmodel import Session, select
 from api.core.config import get_config
 from api.core.utils import create_injector
 from api.domains.agents.routes import agents_router
+from api.domains.agents.webhook_routes import webhook_router
 from api.domains.auth.routes import auth_router
 from api.domains.conversations.routes import conversations_router
 from api.domains.organizations.routes import org_router
@@ -94,6 +95,7 @@ def create_app(injector: Injector | None = None):
     app_v1.mount("/api/v1", subapi)
 
     subapi.include_router(agents_router)
+    subapi.include_router(webhook_router)
     subapi.include_router(auth_router)
     subapi.include_router(conversations_router)
     subapi.include_router(org_router)
