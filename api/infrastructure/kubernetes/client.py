@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import http.client
 import json
+import socket
 import subprocess
+import time
 from dataclasses import dataclass, field
 
 from injector import inject, singleton
@@ -230,18 +232,7 @@ class KubernetesClient:
         return None
 
     def exec_command(self, pod_name: str, namespace: str, command: list[str]) -> str:
-        kubectl_args = ["kubectl", "exec", pod_name, "-n", namespace, "--"]
-        if self.config.k8s_kubeconfig_path:
-            kubectl_args = [
-                "kubectl",
-                "--kubeconfig",
-                self.config.k8s_kubeconfig_path,
-                "exec",
-                pod_name,
-                "-n",
-                namespace,
-                "--",
-            ]
+        kubectl_args = self._kubectl_args(["exec", pod_name, "-n", namespace, "--"])
         result = subprocess.run(
             [*kubectl_args, *command],
             capture_output=True,
@@ -255,6 +246,16 @@ class KubernetesClient:
             )
         return result.stdout
 
+    def _kubectl_args(self, args: list[str]) -> list[str]:
+        if self.config.k8s_kubeconfig_path:
+            return [
+                "kubectl",
+                "--kubeconfig",
+                self.config.k8s_kubeconfig_path,
+                *args,
+            ]
+        return ["kubectl", *args]
+
     def fetch_agent_healthz(self, service_name: str, namespace: str) -> dict:
         host = f"{service_name}.{namespace}"
         try:
@@ -266,3 +267,96 @@ class KubernetesClient:
             raise RuntimeError(
                 f"healthz unreachable for {service_name}: {exc}"
             ) from exc
+
+    def proxy_to_agent(
+        self,
+        service_name: str,
+        namespace: str,
+        port: int,
+        path: str,
+        method: str,
+        body: bytes,
+        headers: dict[str, str],
+    ) -> tuple[int, bytes, dict[str, str]]:
+        host = f"{service_name}.{namespace}"
+        try:
+            conn = http.client.HTTPConnection(host, port, timeout=30)
+            conn.request(method, path, body=body, headers=headers)
+            resp = conn.getresponse()
+            return resp.status, resp.read(), dict(resp.getheaders())
+        except OSError:
+            return self._proxy_to_agent_via_port_forward(
+                service_name, namespace, port, path, method, body, headers
+            )
+
+    def _proxy_to_agent_via_port_forward(
+        self,
+        service_name: str,
+        namespace: str,
+        port: int,
+        path: str,
+        method: str,
+        body: bytes,
+        headers: dict[str, str],
+    ) -> tuple[int, bytes, dict[str, str]]:
+        pod_name = self.get_pod_name_for_deployment(service_name, namespace)
+        if not pod_name:
+            raise RuntimeError(f"No running pod found for {service_name}")
+
+        local_port = self._free_local_port()
+        kubectl_args = self._kubectl_args(
+            [
+                "port-forward",
+                f"pod/{pod_name}",
+                "-n",
+                namespace,
+                f"{local_port}:{port}",
+            ]
+        )
+        process = subprocess.Popen(
+            kubectl_args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            self._wait_for_local_port(local_port, process)
+            conn = http.client.HTTPConnection("127.0.0.1", local_port, timeout=30)
+            conn.request(method, path, body=body, headers=headers)
+            resp = conn.getresponse()
+            return resp.status, resp.read(), dict(resp.getheaders())
+        finally:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+
+    @staticmethod
+    def _free_local_port() -> int:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            return sock.getsockname()[1]
+
+    @staticmethod
+    def _wait_for_local_port(
+        port: int, process: subprocess.Popen, timeout: float = 10
+    ) -> None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if process.poll() is not None:
+                stdout, stderr = process.communicate()
+                raise RuntimeError(
+                    stderr.strip()
+                    or stdout.strip()
+                    or f"kubectl port-forward exited with code {process.returncode}"
+                )
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.settimeout(0.25)
+                try:
+                    sock.connect(("127.0.0.1", port))
+                    return
+                except OSError:
+                    time.sleep(0.1)
+        raise RuntimeError(f"kubectl port-forward did not open localhost:{port}")

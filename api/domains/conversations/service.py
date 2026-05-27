@@ -10,7 +10,7 @@ from fastapi import HTTPException, status
 from injector import inject, singleton
 
 from api.core.config import Config
-from api.domains.agents.models import AgentStatus
+from api.domains.agents.models import AgentPlatform, AgentStatus
 from api.domains.agents.repository import AgentRepository
 from api.domains.conversations.models import (
     AgentChatMessage,
@@ -36,10 +36,17 @@ _PER_CHANNEL_READ_MAX_WORKERS = 8
 _FIRE_AND_FORGET_MAX_WORKERS = 4
 
 
+_SESSION_PREFIXES = (
+    "agent:main:slack:channel:",
+    "agent:main:msteams:channel:",
+    "agent:main:msteams:group:",
+)
+
+
 def _channel_sessions(
     sessions_json: str, target_channel_id: str | None
 ) -> list[tuple[str, str]]:
-    """Returns [(session_key, session_uuid)] for slack sessions.
+    """Returns [(session_key, session_uuid)] for platform sessions.
 
     If target_channel_id is provided, filters to only sessions matching it
     (case-insensitive on the channel_id).
@@ -51,7 +58,7 @@ def _channel_sessions(
     target_upper = target_channel_id.upper() if target_channel_id else None
     out: list[tuple[str, str]] = []
     for key, data in sessions.items():
-        if not key.startswith("agent:main:slack:channel:"):
+        if not any(key.startswith(p) for p in _SESSION_PREFIXES):
             continue
         data = data or {}
         if target_upper is not None:
@@ -74,7 +81,7 @@ def _distinct_pod_channels(sessions_json: str) -> list[str]:
         return []
     seen: set[str] = set()
     for key, data in sessions.items():
-        if not key.startswith("agent:main:slack:channel:"):
+        if not any(key.startswith(p) for p in _SESSION_PREFIXES):
             continue
         data = data or {}
         native = (data.get("origin") or {}).get("nativeChannelId") or data.get(
@@ -114,13 +121,18 @@ class ConversationSyncService:
             logger.warning("Failed to read JSONL for session %s: %s", session_uuid, e)
             return ""
 
-    def _slack_maps(self, agent_id: UUID) -> tuple[dict[str, str], dict[str, str]]:
+    def _platform_maps(self, agent_id: UUID) -> tuple[dict[str, str], dict[str, str]]:
         agent = self.agent_repository.get_by_id(agent_id)
         if not (agent and self.config.agent_token_encryption_key):
             return {}, {}
+        if agent.platform == AgentPlatform.TEAMS:
+            return {}, {}
         try:
+            slack_config = self.agent_repository.get_slack_config(agent_id)
+            if not slack_config:
+                return {}, {}
             bot_token = decrypt_token(
-                agent.slack_bot_token_encrypted,
+                slack_config.bot_token_encrypted,
                 self.config.agent_token_encryption_key,
             )
             slack = SlackClient(bot_token)
@@ -168,7 +180,7 @@ class ConversationSyncService:
         def get_jsonl(session_uuid: str) -> str:
             return jsonl_cache.get(session_uuid, "")
 
-        user_map, channel_map = self._slack_maps(agent_id)
+        user_map, channel_map = self._platform_maps(agent_id)
         messages = parse_sessions(
             agent_id, sessions_json, get_jsonl, user_map, channel_map
         )
@@ -286,7 +298,7 @@ class ConversationService:
                         slack_channel_map: dict[str, str] = {}
                         if pod_channel_ids:
                             _user_map, slack_channel_map = (
-                                self.sync_service._slack_maps(agent_id)
+                                self.sync_service._platform_maps(agent_id)
                             )
                         for cid in pod_channel_ids:
                             if cid not in merged or merged[cid] is None:

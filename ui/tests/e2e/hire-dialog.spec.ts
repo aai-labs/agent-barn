@@ -27,32 +27,38 @@ test.describe("Hire Dialog", () => {
     await expect(page.getByText(/step 1 of/i)).toBeVisible();
   });
 
-  test("should advance to Slack choice step", async ({ page }) => {
+  test("should advance to platform choice step", async ({ page }) => {
     await page.getByRole("button", { name: /continue/i }).click();
 
-    await expect(page.getByText("Set up your Slack app")).toBeVisible();
+    await expect(page.getByText("Choose your platform")).toBeVisible();
     await expect(page.getByText(/step 2 of/i)).toBeVisible();
   });
 
   test("should skip bot builder when choosing existing app", async ({ page }) => {
     await page.getByRole("button", { name: /continue/i }).click();
+    await page.getByText("Slack").click();
+    await page.getByRole("button", { name: /continue/i }).click();
     await page.getByText("I already have a Slack app").click();
     await page.getByRole("button", { name: /continue/i }).click();
 
     await expect(page.getByText("Connect Slack")).toBeVisible();
-    await expect(page.getByText(/step 3 of 4/i)).toBeVisible();
+    await expect(page.getByText(/step 4 of 5/i)).toBeVisible();
   });
 
   test("should go through bot builder when choosing new bot", async ({ page }) => {
+    await page.getByRole("button", { name: /continue/i }).click();
+    await page.getByText("Slack").click();
     await page.getByRole("button", { name: /continue/i }).click();
     await page.getByText("Set up a new Slack bot").click();
     await page.getByRole("button", { name: /continue/i }).click();
 
     await expect(page.getByText("Build your Slack bot")).toBeVisible();
-    await expect(page.getByText(/step 3 of 5/i)).toBeVisible();
+    await expect(page.getByText(/step 4 of 6/i)).toBeVisible();
   });
 
   test("should show manifest in bot builder step", async ({ page }) => {
+    await page.getByRole("button", { name: /continue/i }).click();
+    await page.getByText("Slack").click();
     await page.getByRole("button", { name: /continue/i }).click();
     await page.getByText("Set up a new Slack bot").click();
     await page.getByRole("button", { name: /continue/i }).click();
@@ -63,6 +69,8 @@ test.describe("Hire Dialog", () => {
 
   test("should advance to details step (path: skip bot builder)", async ({ page }) => {
     await page.getByRole("button", { name: /continue/i }).click();
+    await page.getByText("Slack").click();
+    await page.getByRole("button", { name: /continue/i }).click();
     await page.getByText("I already have a Slack app").click();
     await page.getByRole("button", { name: /continue/i }).click();
     await page.getByPlaceholder(/xapp-/i).fill("xapp-1-test");
@@ -70,10 +78,12 @@ test.describe("Hire Dialog", () => {
     await page.getByRole("button", { name: /continue/i }).click();
 
     await expect(page.getByText("A few details and we'll get them set up.")).toBeVisible();
-    await expect(page.getByText(/step 4 of 4/i)).toBeVisible();
+    await expect(page.getByText(/step 5 of 5/i)).toBeVisible();
   });
 
   test("should show model dropdown with one option", async ({ page }) => {
+    await page.getByRole("button", { name: /continue/i }).click();
+    await page.getByText("Slack").click();
     await page.getByRole("button", { name: /continue/i }).click();
     await page.getByText("I already have a Slack app").click();
     await page.getByRole("button", { name: /continue/i }).click();
@@ -87,10 +97,50 @@ test.describe("Hire Dialog", () => {
 
   test("should navigate back through steps", async ({ page }) => {
     await page.getByRole("button", { name: /continue/i }).click();
-    await expect(page.getByText("Set up your Slack app")).toBeVisible();
+    await expect(page.getByText("Choose your platform")).toBeVisible();
 
     await page.getByRole("button", { name: /back/i }).click();
     await expect(page.getByText("What kind of teammate do you need?")).toBeVisible();
+  });
+
+  test("should collect Teams credentials before package generation", async ({ page }) => {
+    await page.getByRole("button", { name: /continue/i }).click();
+    await page.getByText("Microsoft Teams").click();
+    await page.getByRole("button", { name: /continue/i }).click();
+
+    await expect(page.getByText("Connect to Azure")).toBeVisible();
+    await expect(page.getByText(/step 3 of 5/i)).toBeVisible();
+    await expect(page.getByText("Azure credentials")).toBeVisible();
+    await expect(page.getByText("Create an Azure Bot resource", { exact: true })).toBeVisible();
+
+    await page.getByRole("button", { name: /continue/i }).click();
+    await expect(
+      page.getByText("App ID, App Password, and Tenant ID are all required."),
+    ).toBeVisible();
+
+    await page.getByPlaceholder(/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx/i).nth(0).fill(
+      "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    );
+    await page.getByPlaceholder("Client secret value").fill("secret-value");
+    await page.getByPlaceholder(/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx/i).nth(1).fill(
+      "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    );
+    await page.getByRole("button", { name: /continue/i }).click();
+
+    await expect(page.getByText("Build your Teams bot")).toBeVisible();
+    await expect(page.getByText(/step 4 of 5/i)).toBeVisible();
+    await page.getByPlaceholder("Aria").fill("Sam");
+    await expect(page.getByText("Teams app package", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: /download teams app package/i })).toBeVisible();
+    await expect(page.getByText('"developer"')).toBeVisible();
+    await expect(page.getByText('"botId"')).toBeVisible();
+    await expect(page.getByText('"color": "color.png"')).toBeVisible();
+    await expect(page.getByText('"outline": "outline.png"')).toBeVisible();
+    await expect(page.getByText("Upload to Teams")).toBeVisible();
+
+    await page.getByRole("button", { name: /continue/i }).click();
+    await expect(page.getByText("A few details and we'll get them set up.")).toBeVisible();
+    await expect(page.getByLabel("Name them")).toHaveValue("Sam");
   });
 
   test("should close the hire dialog", async ({ page }) => {

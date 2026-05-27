@@ -24,6 +24,7 @@ from api.tests.core.modules import (
     prepare_injector,
     set_env_variable,
 )
+from api.domains.agents.models import AgentPlatform
 from api.tests.steps.agent import (
     FAKE_LITELLM_KEY,
     TEST_ENCRYPTION_KEY,
@@ -41,8 +42,19 @@ _BASE = "/api/v1/agents"
 
 _VALID_CREATE = {
     "name": "My Agent",
+    "platform": "slack",
     "slack_bot_token": "xoxb-real-bot-token",
     "slack_app_token": "xapp-1-real-app-token",
+    "soul_md": "# Soul\n\nThe agent's soul.",
+    "identity_md": "# Identity\n\nThe agent's identity.",
+}
+
+_VALID_CREATE_TEAMS = {
+    "name": "My Teams Agent",
+    "platform": "teams",
+    "teams_app_id": "test-app-id-000",
+    "teams_app_password": "test-app-password-000",
+    "teams_tenant_id": "test-tenant-000",
     "soul_md": "# Soul\n\nThe agent's soul.",
     "identity_md": "# Identity\n\nThe agent's identity.",
 }
@@ -55,6 +67,7 @@ _GIVEN = [
             "LITELLM_SECRET_NAME": "litellm",
             "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
             "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
+            "API_EXTERNAL_URL": "https://api.test.com",
         }
     ),
     prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
@@ -514,10 +527,10 @@ def test_create_agent_litellm_failure_returns_503():
             from api.domains.agents.models import AgentFilter
             from api.infrastructure.shared.models import Pagination
 
-            agents = repository.find_all_active(
+            _, total = repository.find_all_active(
                 context.organization.id, AgentFilter(), Pagination(page=1, size=10)
             )
-            assert_that(agents.total, equal_to(0))
+            assert_that(total, equal_to(0))
 
 
 def test_start_agent_injects_per_agent_key():
@@ -650,6 +663,34 @@ def test_start_agent_configmap_has_init_script():
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             config_map = k8s.create_config_map.call_args.args[1]
             assert_that(config_map.data, has_key("init-openclaw.js"))
+
+
+def test_start_agent_init_script_does_not_copy_whole_openclaw_npm_tree():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+
+        with when("I start a Slack agent"):
+            response = client.post(
+                f"{_BASE}/{context.agent.id}/start", headers=_auth(context)
+            )
+
+        with then("the init script does not restore Teams plugins for every agent"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            init_js = config_map.data["init-openclaw.js"]
+            assert_that(
+                init_js,
+                is_not(
+                    contains_string("fs.cpSync(PREINSTALLED_NPM_DIR, RUNTIME_NPM_DIR")
+                ),
+            )
+            assert_that(
+                init_js,
+                contains_string(
+                    "getPath(overlay, ['channels', 'msteams', 'enabled']) !== true"
+                ),
+            )
 
 
 def test_start_agent_deployment_runs_init_script():
@@ -1013,10 +1054,10 @@ def test_create_agent_with_slack_settings():
         with then("it returns 201 with the Slack settings"):
             assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             body = response.json()
-            assert_that(body["slack_channel_ids"], equal_to(["C111", "C222"]))
-            assert_that(body["slack_dm_user_ids"], equal_to(["U001"]))
-            assert_that(body["slack_group_policy"], equal_to("allowlist"))
-            assert_that(body["slack_dm_policy"], equal_to("pairing"))
+            assert_that(body["slack_config"]["channel_ids"], equal_to(["C111", "C222"]))
+            assert_that(body["slack_config"]["dm_user_ids"], equal_to(["U001"]))
+            assert_that(body["slack_config"]["group_policy"], equal_to("allowlist"))
+            assert_that(body["slack_config"]["dm_policy"], equal_to("pairing"))
 
 
 def test_create_agent_defaults_to_allowlist_groups_dms_off():
@@ -1029,10 +1070,10 @@ def test_create_agent_defaults_to_allowlist_groups_dms_off():
         with then("it defaults to allowlist group policy and DMs off"):
             assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             body = response.json()
-            assert_that(body["slack_group_policy"], equal_to("allowlist"))
-            assert_that(body["slack_dm_policy"], equal_to("off"))
-            assert_that(body["slack_channel_ids"], equal_to([]))
-            assert_that(body["slack_dm_user_ids"], equal_to([]))
+            assert_that(body["slack_config"]["group_policy"], equal_to("allowlist"))
+            assert_that(body["slack_config"]["dm_policy"], equal_to("off"))
+            assert_that(body["slack_config"]["channel_ids"], equal_to([]))
+            assert_that(body["slack_config"]["dm_user_ids"], equal_to([]))
 
 
 def test_patch_agent_updates_slack_settings():
@@ -1054,10 +1095,10 @@ def test_patch_agent_updates_slack_settings():
         with then("it returns 200 with the updated Slack settings"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             body = response.json()
-            assert_that(body["slack_channel_ids"], equal_to(["C999"]))
-            assert_that(body["slack_dm_user_ids"], equal_to(["U888"]))
-            assert_that(body["slack_group_policy"], equal_to("open"))
-            assert_that(body["slack_dm_policy"], equal_to("allowlist"))
+            assert_that(body["slack_config"]["channel_ids"], equal_to(["C999"]))
+            assert_that(body["slack_config"]["dm_user_ids"], equal_to(["U888"]))
+            assert_that(body["slack_config"]["group_policy"], equal_to("open"))
+            assert_that(body["slack_config"]["dm_policy"], equal_to("allowlist"))
 
 
 def test_start_agent_overlay_uses_slack_settings():
@@ -1190,10 +1231,10 @@ def test_pair_agent_syncs_dm_user_ids():
                 headers=_auth(context),
             )
 
-        with then("the response is 200 and slack_dm_user_ids is updated in the DB"):
+        with then("the response is 200 and dm_user_ids is updated in the DB"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            agent = repository.get_active(context.agent.id, context.organization.id)
-            assert_that(agent.slack_dm_user_ids, contains_inanyorder("U111", "U222"))
+            slack_config = repository.get_slack_config(context.agent.id)
+            assert_that(slack_config.dm_user_ids, contains_inanyorder("U111", "U222"))
 
 
 def test_pair_agent_allow_from_read_failure_still_returns_200():
@@ -1300,3 +1341,193 @@ def test_list_slack_users_excludes_bots_and_deleted():
             results = response.json()
             assert_that(len(results), equal_to(1))
             assert_that(results[0]["id"], equal_to("U001"))
+
+
+def test_create_teams_agent_returns_201():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I create a Teams agent with valid data"):
+            response = client.post(
+                _BASE, json=_VALID_CREATE_TEAMS, headers=_auth(context)
+            )
+
+        with then("it returns 201 with platform teams and webhook_url"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            body = response.json()
+            assert_that(body["name"], equal_to("My Teams Agent"))
+            assert_that(body["platform"], equal_to("teams"))
+            assert_that(body["teams_config"]["tenant_id"], equal_to("test-tenant-000"))
+            assert_that(body, has_key("webhook_url"))
+            assert_that(body["webhook_url"], contains_string("/webhooks/teams/"))
+            assert_that(body["slack_config"], none())
+
+
+def test_create_teams_agent_missing_credentials_returns_422():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        payload = {**_VALID_CREATE_TEAMS}
+        del payload["teams_app_password"]
+
+        with when("I create a Teams agent without app_password"):
+            response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("it returns 422"):
+            assert_that(
+                response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY)
+            )
+
+
+def test_create_slack_agent_missing_tokens_returns_422():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        payload = {**_VALID_CREATE}
+        del payload["slack_bot_token"]
+
+        with when("I create a Slack agent without bot_token"):
+            response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("it returns 422"):
+            assert_that(
+                response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY)
+            )
+
+
+def test_start_teams_agent_creates_correct_k8s_resources():
+    with given([*_GIVEN, there_is_an_agent(platform=AgentPlatform.TEAMS)]) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+
+        with when("I start a Teams agent"):
+            response = client.post(
+                f"{_BASE}/{context.agent.id}/start", headers=_auth(context)
+            )
+
+        with then("it returns 200 and K8s resources have Teams config"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            secret = k8s.create_secret.call_args.args[1]
+            assert_that(secret.string_data, has_key("MSTEAMS_APP_ID"))
+            assert_that(secret.string_data, has_key("MSTEAMS_APP_PASSWORD"))
+            assert_that(secret.string_data, has_key("MSTEAMS_TENANT_ID"))
+
+            config_map = k8s.create_config_map.call_args.args[1]
+            overlay = json.loads(config_map.data["openclaw-config-overlay.json"])
+            assert_that(overlay["channels"], has_key("msteams"))
+            assert_that(overlay["channels"]["msteams"]["enabled"], equal_to(True))
+            init_js = config_map.data["init-openclaw.js"]
+            assert_that(init_js, contains_string("PREINSTALLED_MSTEAMS_DIR"))
+            assert_that(
+                init_js,
+                contains_string("Restored preinstalled Microsoft Teams npm plugin"),
+            )
+            assert_that(init_js, contains_string("package.json"))
+            assert_that(init_js, contains_string("package-lock.json"))
+
+            service = k8s.create_service.call_args.args[1]
+            ports_by_name = {
+                p.name: (p.port, p.target_port) for p in service.spec.ports
+            }
+            assert_that(ports_by_name["gateway"], equal_to((80, 8080)))
+            assert_that(ports_by_name["healthz"], equal_to((8081, 8081)))
+            assert_that(ports_by_name["webhook"], equal_to((3978, 3978)))
+
+
+def test_teams_webhook_relay_proxies_to_pod():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(status=AgentStatus.RUNNING, platform=AgentPlatform.TEAMS),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+        k8s.proxy_to_agent.return_value = (
+            200,
+            b'{"status":"ok"}',
+            {"content-type": "application/json"},
+        )
+
+        with when("I POST to the Teams webhook"):
+            response = client.post(
+                f"/api/v1/webhooks/teams/{context.agent.id}/messages",
+                content=b'{"type":"message"}',
+                headers={"Content-Type": "application/json"},
+            )
+
+        with then("it proxies to the pod and returns the response"):
+            assert_that(response.status_code, equal_to(200))
+            k8s.proxy_to_agent.assert_called_once()
+
+
+def test_teams_webhook_relay_returns_404_for_slack_agent():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        client: TestClient = context.client
+
+        with when("I POST to the Teams webhook for a Slack agent"):
+            response = client.post(
+                f"/api/v1/webhooks/teams/{context.agent.id}/messages",
+                content=b'{"type":"message"}',
+                headers={"Content-Type": "application/json"},
+            )
+
+        with then("it returns 404"):
+            assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_teams_webhook_relay_returns_503_for_stopped_agent():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(status=AgentStatus.STOPPED, platform=AgentPlatform.TEAMS),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("I POST to the Teams webhook for a stopped agent"):
+            response = client.post(
+                f"/api/v1/webhooks/teams/{context.agent.id}/messages",
+                content=b'{"type":"message"}',
+                headers={"Content-Type": "application/json"},
+            )
+
+        with then("it returns 503"):
+            assert_that(
+                response.status_code, equal_to(status.HTTP_503_SERVICE_UNAVAILABLE)
+            )
+
+
+def test_update_teams_agent_rejects_slack_fields():
+    with given([*_GIVEN, there_is_an_agent(platform=AgentPlatform.TEAMS)]) as context:
+        client: TestClient = context.client
+
+        with when("I patch a Teams agent with Slack-specific fields"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"slack_bot_token": "xoxb-should-fail"},
+                headers=_auth(context),
+            )
+
+        with then("it returns 422"):
+            assert_that(
+                response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY)
+            )
+
+
+def test_pair_teams_agent_returns_400():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(status=AgentStatus.RUNNING, platform=AgentPlatform.TEAMS),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("I pair a Teams agent"):
+            response = client.post(
+                f"{_BASE}/{context.agent.id}/pair",
+                json={"platform": "slack", "code": "abc123"},
+                headers=_auth(context),
+            )
+
+        with then("it returns 400"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))

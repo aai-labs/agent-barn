@@ -241,8 +241,11 @@ test.describe("Agent Detail Page — Channels tab", () => {
       body: {
         ...mockAgent,
         status: "STOPPED",
-        slack_dm_policy: "allowlist",
-        slack_dm_user_ids: ["U001"],
+        slack_config: {
+          ...mockAgent.slack_config,
+          dm_policy: "allowlist",
+          dm_user_ids: ["U001"],
+        },
       },
     });
     await agentDetailPage.goto(MOCK_AGENT_ID);
