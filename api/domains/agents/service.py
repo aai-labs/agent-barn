@@ -139,7 +139,7 @@ class AgentService:
         template.agent_id = agent.id
         self.repository.save_template(template)
 
-        return AgentRead.model_validate(agent)
+        return self.start_agent(agent.id, context)
 
     def get_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
         org_id = self._org_id(context)

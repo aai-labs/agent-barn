@@ -14,7 +14,7 @@ export const ROLES = [
 export type RoleId = (typeof ROLES)[number]["id"];
 export type WizardStep = "role" | "slack-choice" | "bot-builder" | "slack-tokens" | "details";
 
-export const MODELS = [{ value: "litellm/gpt-5-mini", label: "GPT-5 mini" }] as const;
+export const MODELS = [{ value: "litellm/qwen3.6-plus", label: "Qwen3.6 Plus" }, { value: "litellm/gpt-5-mini", label: "GPT-5 mini" }] as const;
 
 export const BOT_COLOR_PRESETS = ["#4A154B", "#1264A3", "#2BAC76", "#E8912D", "#CC4400"];
 

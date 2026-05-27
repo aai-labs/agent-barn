@@ -31,7 +31,7 @@ class Config(BaseSettings):
     litellm_secret_name: str = "litellm"
     agent_litellm_base_url: str = ""
     agent_image_pull_secret: str = ""
-    agent_default_model: str = "litellm/gpt-5-mini"
+    agent_default_model: str = "litellm/qwen3.6-plus"
 
     @property
     def is_email_delivery_enabled(self) -> bool:
