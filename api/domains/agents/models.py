@@ -31,7 +31,6 @@ class SlackDmPolicy(str, enum.Enum):
     OFF = "off"
     OPEN = "open"
     ALLOWLIST = "allowlist"
-    PAIRING = "pairing"
 
 
 class AgentTemplate(BaseModel, table=True):

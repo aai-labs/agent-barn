@@ -4,7 +4,7 @@ export const AgentSlackConfigSchema = z.object({
   channelIds: z.array(z.string()),
   dmUserIds: z.array(z.string()),
   groupPolicy: z.enum(["open", "allowlist"]),
-  dmPolicy: z.enum(["off", "open", "allowlist", "pairing"]),
+  dmPolicy: z.enum(["off", "open", "allowlist"]),
 });
 
 export const AgentTeamsConfigSchema = z.object({

@@ -73,7 +73,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   const [showBotToken, setShowBotToken] = useState(false);
   const [tokenError, setTokenError] = useState<string | null>(null);
   const [slackGroupPolicy, setSlackGroupPolicy] = useState<"open" | "allowlist">("allowlist");
-  const [slackDmPolicy, setSlackDmPolicy] = useState<"off" | "open" | "allowlist" | "pairing">("off");
+  const [slackDmPolicy, setSlackDmPolicy] = useState<"off" | "open" | "allowlist">("off");
   const [teamsAppId, setTeamsAppId] = useState("");
   const [teamsAppPassword, setTeamsAppPassword] = useState("");
   const [showTeamsAppPassword, setShowTeamsAppPassword] = useState(false);
@@ -418,7 +418,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
             name={name} onNameChange={setName}
             model={model} onModelChange={setModel}
             slackGroupPolicy={slackGroupPolicy} onSlackGroupPolicyChange={(v) => setSlackGroupPolicy(v as "open" | "allowlist")}
-            slackDmPolicy={slackDmPolicy} onSlackDmPolicyChange={(v) => setSlackDmPolicy(v as "off" | "open" | "allowlist" | "pairing")}
+            slackDmPolicy={slackDmPolicy} onSlackDmPolicyChange={(v) => setSlackDmPolicy(v as "off" | "open" | "allowlist")}
             soulMd={soulMd} onSoulMdChange={setSoulMd}
             identityMd={identityMd} onIdentityMdChange={setIdentityMd}
             userMd={userMd} onUserMdChange={setUserMd}

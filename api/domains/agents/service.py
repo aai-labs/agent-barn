@@ -581,10 +581,10 @@ class AgentService:
         org_id = self._org_id(context)
         agent = self._get_active_or_404(agent_id, org_id)
 
-        if agent.platform != AgentPlatform.SLACK:
+        if agent.platform in (AgentPlatform.SLACK, AgentPlatform.TEAMS):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Pairing is only supported for Slack agents",
+                detail="Pairing is not supported for this platform",
             )
 
         if agent.status != AgentStatus.RUNNING:

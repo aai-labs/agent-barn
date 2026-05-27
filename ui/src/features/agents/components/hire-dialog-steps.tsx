@@ -824,7 +824,6 @@ export function DetailsStep({
               onChange={(e) => onSlackDmPolicyChange(e.target.value)}
             >
               <option value="off">Off — ignore direct messages</option>
-              <option value="pairing">Pairing — users must pair first</option>
               <option value="allowlist">Allowlist — only allowed users</option>
               <option value="open">Open — anyone can DM</option>
             </select>

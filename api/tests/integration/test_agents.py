@@ -1045,7 +1045,7 @@ def test_create_agent_with_slack_settings():
             "slack_channel_ids": ["C111", "C222"],
             "slack_dm_user_ids": ["U001"],
             "slack_group_policy": "allowlist",
-            "slack_dm_policy": "pairing",
+            "slack_dm_policy": "allowlist",
         }
 
         with when("I create an agent with Slack settings"):
@@ -1057,7 +1057,7 @@ def test_create_agent_with_slack_settings():
             assert_that(body["slack_config"]["channel_ids"], equal_to(["C111", "C222"]))
             assert_that(body["slack_config"]["dm_user_ids"], equal_to(["U001"]))
             assert_that(body["slack_config"]["group_policy"], equal_to("allowlist"))
-            assert_that(body["slack_config"]["dm_policy"], equal_to("pairing"))
+            assert_that(body["slack_config"]["dm_policy"], equal_to("allowlist"))
 
 
 def test_create_agent_defaults_to_allowlist_groups_dms_off():

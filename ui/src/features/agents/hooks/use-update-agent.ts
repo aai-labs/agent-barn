@@ -24,7 +24,7 @@ export type UpdateAgentData = {
   slackChannelIds?: string[];
   slackDmUserIds?: string[];
   slackGroupPolicy?: "open" | "allowlist";
-  slackDmPolicy?: "off" | "open" | "allowlist" | "pairing";
+  slackDmPolicy?: "off" | "open" | "allowlist";
   teamsAppId?: string;
   teamsAppPassword?: string;
   teamsTenantId?: string;

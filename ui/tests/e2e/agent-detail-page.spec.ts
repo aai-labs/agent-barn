@@ -234,30 +234,6 @@ test.describe("Agent Detail Page — Channels tab", () => {
     await expect(agentDetailPage.dmPolicySelect()).toHaveValue("off");
   });
 
-  test("switching DM policy to pairing clears the user list and shows the note", async ({
-    page,
-  }) => {
-    await dataSupportPage.agents.interceptGetAgentRequest({
-      body: {
-        ...mockAgent,
-        status: "STOPPED",
-        slack_config: {
-          ...mockAgent.slack_config,
-          dm_policy: "allowlist",
-          dm_user_ids: ["U001"],
-        },
-      },
-    });
-    await agentDetailPage.goto(MOCK_AGENT_ID);
-    await agentDetailPage.configureButton().click();
-    await agentDetailPage.channelsTab().click();
-
-    await agentDetailPage.dmPolicySelect().selectOption("pairing");
-
-    await expect(
-      page.getByText(/all users will need to pair to gain access/i),
-    ).toBeVisible();
-  });
 
   test("focusing the channel search shows mocked channels in the dropdown", async ({
     page,
