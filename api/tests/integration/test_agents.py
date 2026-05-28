@@ -4,7 +4,6 @@ from unittest.mock import patch
 from fastapi import status
 from hamcrest import (
     assert_that,
-    contains_inanyorder,
     contains_string,
     equal_to,
     has_key,
