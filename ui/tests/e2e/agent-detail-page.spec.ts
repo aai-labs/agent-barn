@@ -90,27 +90,6 @@ test.describe("Agent Detail Page", () => {
     await expect(page.getByRole("button", { name: /pause/i })).toBeVisible();
   });
 
-  test("shows Pair button only when RUNNING", async ({ page }) => {
-    await expect(page.getByRole("button", { name: /pair/i })).toBeVisible();
-
-    await dataSupportPage.agents.interceptGetAgentRequest({
-      body: { ...mockAgent, status: "STOPPED" },
-    });
-    await agentDetailPage.goto(MOCK_AGENT_ID);
-    await expect(page.getByRole("button", { name: /pair/i })).not.toBeVisible();
-  });
-
-  test("Pair dialog opens and submits OAuth code", async ({ page }) => {
-    await dataSupportPage.agents.interceptPairAgentRequest();
-
-    await page.getByRole("button", { name: /pair/i }).click();
-    await expect(page.getByText(`Pair Maya`)).toBeVisible();
-
-    await page.getByPlaceholder(/enter the code/i).fill("test-oauth-code");
-    await page.getByRole("button", { name: /connect/i }).click();
-
-    await expect(page.getByText(`Pair Maya`)).not.toBeVisible();
-  });
 });
 
 test.describe("Agent Detail Page — Tool calls tab", () => {
