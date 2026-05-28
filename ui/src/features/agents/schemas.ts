@@ -90,6 +90,7 @@ export const ConversationMessageSchema = z.object({
 export const ConversationChannelSchema = z.object({
   channelId: z.string(),
   channelName: z.string().nullable(),
+  conversationType: z.enum(["CHANNEL", "DM"]),
 });
 
 export const ConversationsCursorSchema = z.object({
@@ -99,6 +100,17 @@ export const ConversationsCursorSchema = z.object({
 
 export const ConversationMessagesPageSchema = z.object({
   messages: z.array(ConversationMessageSchema),
+  hasMore: z.boolean(),
+  nextCursor: ConversationsCursorSchema.nullable(),
+});
+
+export const ConversationThreadSchema = z.object({
+  root: ConversationMessageSchema,
+  replies: z.array(ConversationMessageSchema),
+});
+
+export const ConversationThreadsPageSchema = z.object({
+  threads: z.array(ConversationThreadSchema),
   hasMore: z.boolean(),
   nextCursor: ConversationsCursorSchema.nullable(),
 });
@@ -124,6 +136,8 @@ export type ConversationMessage = z.infer<typeof ConversationMessageSchema>;
 export type ConversationChannel = z.infer<typeof ConversationChannelSchema>;
 export type ConversationsCursor = z.infer<typeof ConversationsCursorSchema>;
 export type ConversationMessagesPage = z.infer<typeof ConversationMessagesPageSchema>;
+export type ConversationThread = z.infer<typeof ConversationThreadSchema>;
+export type ConversationThreadsPage = z.infer<typeof ConversationThreadsPageSchema>;
 export type ToolCall = z.infer<typeof ToolCallSchema>;
 export type PaginatedToolCalls = z.infer<typeof PaginatedToolCallsSchema>;
 export type SlackChannel = z.infer<typeof SlackChannelSchema>;

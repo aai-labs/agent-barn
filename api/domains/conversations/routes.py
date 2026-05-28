@@ -9,7 +9,7 @@ from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.routes import get_current_user
 from api.domains.conversations.models import (
     ConversationChannelRead,
-    ConversationMessagesPage,
+    ConversationThreadsPage,
     ConversationsCursor,
     ConversationsFilter,
 )
@@ -49,7 +49,7 @@ def list_channels(
 
 @conversations_router.get(
     "/{agent_id}/conversations/channels/{channel_id}/messages",
-    response_model=ConversationMessagesPage,
+    response_model=ConversationThreadsPage,
 )
 def list_channel_messages(
     agent_id: UUID,
@@ -59,9 +59,9 @@ def list_channel_messages(
     filter: Annotated[ConversationsFilter, Depends(get_conversations_filter)],
     cursor: Annotated[ConversationsCursor, Depends(get_conversations_cursor)],
     page_size: int = Query(default=6, ge=1, le=100),
-) -> ConversationMessagesPage:
+) -> ConversationThreadsPage:
     org_id = context.require_current_user_organization().organization_id
-    return service.list_messages(
+    return service.list_threads(
         agent_id=agent_id,
         org_id=org_id,
         channel_id=channel_id,

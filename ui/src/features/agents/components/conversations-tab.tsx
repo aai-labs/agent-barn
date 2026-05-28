@@ -2,7 +2,7 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import type { Agent, ConversationChannel, ConversationMessage } from "../schemas";
+import type { Agent, ConversationChannel, ConversationMessage, ConversationThread } from "../schemas";
 import {
   useChannelMessages,
   useConversationChannels,
@@ -13,6 +13,9 @@ interface ConversationsTabProps {
 }
 
 function channelLabel(ch: ConversationChannel): string {
+  if (ch.conversationType === "DM") {
+    return ch.channelName ?? ch.channelId;
+  }
   return `#${ch.channelName ?? ch.channelId.toLowerCase()}`;
 }
 
@@ -81,13 +84,17 @@ export function ConversationsTab({ agent }: ConversationsTabProps) {
   const activeChannel =
     channels.find((c) => c.channelId === selectedChannel) ?? channels[0];
 
+  const channelConvos = channels.filter((c) => c.conversationType === "CHANNEL");
+  const dmConvos = channels.filter((c) => c.conversationType === "DM");
+
   return (
     <div
       className="flex rounded-2xl overflow-hidden"
       style={{ border: "1px solid var(--line-strong)", height: 600 }}
     >
-      <ChannelSidebar
-        channels={channels}
+      <ConversationSidebar
+        channelConvos={channelConvos}
+        dmConvos={dmConvos}
         activeChannelId={activeChannel.channelId}
         onSelect={setSelectedChannel}
       />
@@ -101,43 +108,62 @@ export function ConversationsTab({ agent }: ConversationsTabProps) {
   );
 }
 
-function ChannelSidebar({
-  channels,
+function ConversationSidebar({
+  channelConvos,
+  dmConvos,
   activeChannelId,
   onSelect,
 }: {
-  channels: ConversationChannel[];
+  channelConvos: ConversationChannel[];
+  dmConvos: ConversationChannel[];
   activeChannelId: string;
   onSelect: (id: string) => void;
 }) {
+  function SidebarItem({ ch }: { ch: ConversationChannel }) {
+    const active = ch.channelId === activeChannelId;
+    return (
+      <button
+        key={ch.channelId}
+        onClick={() => onSelect(ch.channelId)}
+        className="w-full text-left px-4 py-2 text-[0.844rem] font-medium transition-colors"
+        style={{
+          color: active ? "var(--ink)" : "var(--ink-3)",
+          background: active ? "var(--bg)" : "transparent",
+          borderLeft: active ? "2px solid var(--accent, #4f46e5)" : "2px solid transparent",
+        }}
+      >
+        {channelLabel(ch)}
+      </button>
+    );
+  }
+
   return (
     <div
       className="w-44 flex-shrink-0 flex flex-col overflow-y-auto"
       style={{ borderRight: "1px solid var(--line-strong)", background: "var(--bg-soft)" }}
     >
-      <div
-        className="px-4 py-3 text-[0.75rem] uppercase tracking-[0.08em] font-semibold"
-        style={{ color: "var(--ink-3)" }}
-      >
-        Channels
-      </div>
-      {channels.map((ch) => {
-        const active = ch.channelId === activeChannelId;
-        return (
-          <button
-            key={ch.channelId}
-            onClick={() => onSelect(ch.channelId)}
-            className="w-full text-left px-4 py-2 text-[0.844rem] font-medium transition-colors"
-            style={{
-              color: active ? "var(--ink)" : "var(--ink-3)",
-              background: active ? "var(--bg)" : "transparent",
-              borderLeft: active ? "2px solid var(--accent, #4f46e5)" : "2px solid transparent",
-            }}
+      {channelConvos.length > 0 && (
+        <>
+          <div
+            className="px-4 py-3 text-[0.75rem] uppercase tracking-[0.08em] font-semibold"
+            style={{ color: "var(--ink-3)" }}
           >
-            {channelLabel(ch)}
-          </button>
-        );
-      })}
+            Channels
+          </div>
+          {channelConvos.map((ch) => <SidebarItem key={ch.channelId} ch={ch} />)}
+        </>
+      )}
+      {dmConvos.length > 0 && (
+        <>
+          <div
+            className="px-4 py-3 text-[0.75rem] uppercase tracking-[0.08em] font-semibold"
+            style={{ color: "var(--ink-3)", marginTop: channelConvos.length > 0 ? "0.25rem" : 0 }}
+          >
+            Direct Messages
+          </div>
+          {dmConvos.map((ch) => <SidebarItem key={ch.channelId} ch={ch} />)}
+        </>
+      )}
     </div>
   );
 }
@@ -174,10 +200,10 @@ function MessagePanel({
     error,
   } = useChannelMessages(agentId, channel.channelId, filters);
 
-  const allMessages: ConversationMessage[] = useMemo(() => {
+  const allThreads: ConversationThread[] = useMemo(() => {
     if (!data) return [];
     const oldestFirst = [...data.pages].reverse();
-    return oldestFirst.flatMap((p) => p.messages);
+    return oldestFirst.flatMap((p) => p.threads);
   }, [data]);
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -192,36 +218,17 @@ function MessagePanel({
       preservedScrollHeightRef.current = null;
       return;
     }
-    if (!initialScrolledRef.current && allMessages.length > 0) {
+    if (!initialScrolledRef.current && allThreads.length > 0) {
       el.scrollTop = el.scrollHeight;
       initialScrolledRef.current = true;
     }
-  }, [allMessages.length]);
+  }, [allThreads.length]);
 
   function loadEarlier() {
     const el = scrollRef.current;
     if (el) preservedScrollHeightRef.current = el.scrollHeight;
     fetchNextPage();
   }
-
-  const threadIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const m of allMessages) if (m.threadId !== null) ids.add(m.id);
-    return ids;
-  }, [allMessages]);
-
-  const channelMessages = allMessages.filter((m) => !threadIds.has(m.id));
-  const threadsByRoot = useMemo(() => {
-    const map = new Map<string, ConversationMessage[]>();
-    for (const m of allMessages) {
-      if (m.threadId !== null) {
-        const arr = map.get(m.threadId) ?? [];
-        arr.push(m);
-        map.set(m.threadId, arr);
-      }
-    }
-    return map;
-  }, [allMessages]);
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden" style={{ background: "var(--bg)" }}>
@@ -281,7 +288,7 @@ function MessagePanel({
             </button>
           </div>
         )}
-        {!hasNextPage && allMessages.length > 0 && (
+        {!hasNextPage && allThreads.length > 0 && (
           <div
             className="text-center text-[0.7rem] py-2"
             style={{ color: "var(--ink-3)" }}
@@ -301,49 +308,24 @@ function MessagePanel({
             ))}
           </div>
         )}
-        {!isLoading && allMessages.length === 0 && (
+        {!isLoading && allThreads.length === 0 && (
           <div className="text-center text-[0.844rem] py-12" style={{ color: "var(--ink-3)" }}>
             No messages in this range.
           </div>
         )}
-        {channelMessages.map((msg) => {
-          const matchingThread = findThreadForChannelMessage(
-            msg,
-            threadsByRoot,
-          );
-          return (
-            <div key={msg.id}>
-              <MessageRow message={msg} agentName={agentName} />
-              {matchingThread && matchingThread.length > 0 && (
-                <ThreadBlock messages={matchingThread} agentName={agentName} />
-              )}
-            </div>
-          );
-        })}
+        {allThreads.map((thread) => (
+          <div key={thread.root.id}>
+            <MessageRow message={thread.root} agentName={agentName} />
+            {thread.replies.length > 0 && (
+              <ThreadBlock messages={thread.replies} agentName={agentName} />
+            )}
+          </div>
+        ))}
       </div>
     </div>
   );
 }
 
-function findThreadForChannelMessage(
-  channelMsg: ConversationMessage,
-  threadsByRoot: Map<string, ConversationMessage[]>,
-): ConversationMessage[] | null {
-  const channelTs = new Date(channelMsg.occurredAt).getTime() / 1000;
-  let best: { id: string; delta: number } | null = null;
-  for (const threadId of threadsByRoot.keys()) {
-    const threadTs = parseFloat(threadId);
-    if (Number.isNaN(threadTs)) continue;
-    const delta = Math.abs(threadTs - channelTs);
-    if (delta <= 5 && (best === null || delta < best.delta)) {
-      best = { id: threadId, delta };
-    }
-  }
-  if (!best) return null;
-  return [...(threadsByRoot.get(best.id) ?? [])].sort(
-    (a, b) => new Date(a.occurredAt).getTime() - new Date(b.occurredAt).getTime(),
-  );
-}
 
 function MessageRow({
   message,

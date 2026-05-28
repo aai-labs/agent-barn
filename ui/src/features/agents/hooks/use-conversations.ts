@@ -7,8 +7,8 @@ import { api } from "@/shared/api";
 import {
   ConversationChannel,
   ConversationChannelSchema,
-  ConversationMessagesPage,
-  ConversationMessagesPageSchema,
+  ConversationThreadsPage,
+  ConversationThreadsPageSchema,
   ConversationsCursor,
 } from "../schemas";
 import {
@@ -61,9 +61,9 @@ export function useChannelMessages(
       if (pageParam?.beforeId) {
         params.set("before_id", pageParam.beforeId);
       }
-      const response = await api.get<ConversationMessagesPage>(
+      const response = await api.get<ConversationThreadsPage>(
         `/api/v1/agents/${agentId}/conversations/channels/${channelId}/messages?${params.toString()}`,
-        { schema: ConversationMessagesPageSchema },
+        { schema: ConversationThreadsPageSchema },
       );
       return response.data;
     },
