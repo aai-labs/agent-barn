@@ -456,6 +456,209 @@ def test_skips_non_msteams_non_slack_sessions():
     assert "tttt-uuuu" in called
 
 
+# --- Thread de-fragmentation tests ---
+
+# One Slack thread (root 1779951815.019809) that openclaw split across three
+# sessions because the agent replied with non-root threadIds:
+#   - root session: holds inbound runtime-context (message_id -> topic_id) and
+#     the outbound toolCall/toolResult pairs that reveal posted message ts.
+#   - poke session: threadId 1779951866.292209 (== an inbound message_id).
+#   - bump session: threadId 1779951960.995039 (== a posted message ts).
+_ROOT = "1779951815.019809"
+_FRAG_CHANNEL = "C0B4ZA29S0J"
+
+_FRAG_ROOT_KEY = f"agent:main:slack:channel:c0b4za29s0j:thread:{_ROOT}"
+_FRAG_POKE_KEY = "agent:main:slack:channel:c0b4za29s0j:thread:1779951866.292209"
+_FRAG_BUMP_KEY = "agent:main:slack:channel:c0b4za29s0j:thread:1779951960.995039"
+
+_FRAG_SESSIONS_JSON = json.dumps(
+    {
+        _FRAG_ROOT_KEY: {
+            "sessionId": "root-uuid",
+            "chatType": "channel",
+            "groupId": "c0b4za29s0j",
+            "origin": {"nativeChannelId": _FRAG_CHANNEL, "threadId": _ROOT},
+        },
+        _FRAG_POKE_KEY: {
+            "sessionId": "poke-uuid",
+            "chatType": "channel",
+            "groupId": "c0b4za29s0j",
+            "origin": {"threadId": "1779951866.292209"},
+        },
+        _FRAG_BUMP_KEY: {
+            "sessionId": "bump-uuid",
+            "chatType": "channel",
+            "groupId": "c0b4za29s0j",
+            "origin": {"threadId": "1779951960.995039"},
+        },
+    }
+)
+
+
+def _frag_inbound(message_id: str, ts_str: str, text: str, root: str = _ROOT) -> str:
+    return json.dumps(
+        {
+            "id": f"in-{message_id}",
+            "type": "custom_message",
+            "customType": "openclaw.runtime-context",
+            "content": (
+                f"System (untrusted): [{ts_str}] Slack message in #social from samuel: {text}\n\n"
+                "Conversation info (untrusted metadata):\n"
+                "```json\n"
+                + json.dumps(
+                    {
+                        "message_id": message_id,
+                        "reply_to_id": root,
+                        "topic_id": root,
+                    }
+                )
+                + "\n```"
+            ),
+        }
+    )
+
+
+def _frag_toolcall(call_id: str, thread_id: str, text: str) -> str:
+    return json.dumps(
+        {
+            "id": f"tc-{call_id}",
+            "type": "message",
+            "timestamp": "2026-05-28T07:04:08.732Z",
+            "message": {
+                "role": "assistant",
+                "model": "gpt-5-mini",
+                "content": [
+                    {
+                        "type": "toolCall",
+                        "id": call_id,
+                        "name": "message",
+                        "arguments": {
+                            "action": "send",
+                            "channel": "slack",
+                            "threadId": thread_id,
+                            "message": text,
+                        },
+                    }
+                ],
+            },
+        }
+    )
+
+
+def _frag_toolresult(call_id: str, posted_id: str) -> str:
+    return json.dumps(
+        {
+            "id": f"tr-{call_id}",
+            "type": "message",
+            "timestamp": "2026-05-28T07:04:09.271Z",
+            "message": {
+                "role": "toolResult",
+                "toolCallId": call_id,
+                "toolName": "message",
+                "details": {"ok": True, "result": {"messageId": posted_id}},
+            },
+        }
+    )
+
+
+def _frag_delivery(msg_id: str, ts: str, text: str) -> str:
+    return json.dumps(
+        {
+            "id": msg_id,
+            "type": "message",
+            "timestamp": ts,
+            "message": {
+                "role": "assistant",
+                "model": "delivery-mirror",
+                "content": [{"type": "text", "text": text}],
+            },
+        }
+    )
+
+
+# Root session: inbound metadata + the tool call/result pairs that link the
+# fragmented threadIds back to the root.
+_FRAG_ROOT_JSONL = "\n".join(
+    [
+        _frag_inbound(_ROOT, "2026-05-28 07:03:41 UTC", "hey aria"),
+        _frag_delivery("d-hey", "2026-05-28T07:04:09.237Z", "Hey Samuel!"),
+        _frag_inbound(
+            "1779951866.292209", "2026-05-28 07:04:28 UTC", "let's talk sth fun"
+        ),
+        _frag_delivery("d-love", "2026-05-28T07:04:54.355Z", "Love that"),
+        # poke posted with threadId == the "let's talk" inbound message id
+        _frag_toolcall("call-poke", "1779951866.292209", "(poke) Any pick?"),
+        _frag_toolresult("call-poke", "1779951902.283469"),
+        # quick-one posted to the root, Slack assigns ts 1779951960.995039
+        _frag_toolcall("call-quick", _ROOT, "Quick one"),
+        _frag_toolresult("call-quick", "1779951960.995039"),
+        # bump posted with threadId == the quick-one post ts
+        _frag_toolcall("call-bump", "1779951960.995039", "If anyone else"),
+        _frag_toolresult("call-bump", "1779951969.812249"),
+    ]
+)
+_FRAG_POKE_JSONL = _frag_delivery(
+    "d-poke", "2026-05-28T07:05:02.601Z", "(poke) Any pick?"
+)
+_FRAG_BUMP_JSONL = _frag_delivery(
+    "d-bump", "2026-05-28T07:06:10.202Z", "If anyone else"
+)
+
+
+def test_fragmented_thread_collapses_to_single_root():
+    messages = parse_sessions(
+        _AGENT_ID,
+        _FRAG_SESSIONS_JSON,
+        _make_get_jsonl(
+            {
+                "root-uuid": _FRAG_ROOT_JSONL,
+                "poke-uuid": _FRAG_POKE_JSONL,
+                "bump-uuid": _FRAG_BUMP_JSONL,
+            }
+        ),
+    )
+
+    assert messages, "expected parsed messages"
+    thread_ids = {m.thread_id for m in messages}
+    assert thread_ids == {_ROOT}, (
+        f"all messages should resolve to the root thread, got {thread_ids}"
+    )
+
+
+def test_distinct_real_threads_are_not_merged():
+    """A genuinely separate thread (different topic_id) must stay separate."""
+    other_root = "1779999999.000001"
+    other_key = f"agent:main:slack:channel:c0b4za29s0j:thread:{other_root}"
+    sessions = json.loads(_FRAG_SESSIONS_JSON)
+    sessions[other_key] = {
+        "sessionId": "other-uuid",
+        "chatType": "channel",
+        "groupId": "c0b4za29s0j",
+        "origin": {"nativeChannelId": _FRAG_CHANNEL, "threadId": other_root},
+    }
+    other_jsonl = _frag_inbound(
+        other_root, "2026-05-28 09:00:00 UTC", "new topic", root=other_root
+    )
+
+    messages = parse_sessions(
+        _AGENT_ID,
+        json.dumps(sessions),
+        _make_get_jsonl(
+            {
+                "root-uuid": _FRAG_ROOT_JSONL,
+                "poke-uuid": _FRAG_POKE_JSONL,
+                "bump-uuid": _FRAG_BUMP_JSONL,
+                "other-uuid": other_jsonl,
+            }
+        ),
+    )
+
+    thread_ids = {m.thread_id for m in messages}
+    assert thread_ids == {_ROOT, other_root}, (
+        f"distinct threads must remain separate, got {thread_ids}"
+    )
+
+
 def test_handles_both_slack_and_teams_sessions():
     mixed_sessions = json.dumps(
         {

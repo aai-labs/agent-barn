@@ -89,3 +89,14 @@ class ConversationMessagesPage(PydanticBaseModel):
     messages: list[ConversationMessageRead]
     has_more: bool
     next_cursor: ConversationsCursor | None
+
+
+class ConversationThreadRead(PydanticBaseModel):
+    root: ConversationMessageRead
+    replies: list[ConversationMessageRead]
+
+
+class ConversationThreadsPage(PydanticBaseModel):
+    threads: list[ConversationThreadRead]
+    has_more: bool
+    next_cursor: ConversationsCursor | None

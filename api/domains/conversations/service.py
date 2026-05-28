@@ -16,7 +16,8 @@ from api.domains.conversations.models import (
     AgentChatMessage,
     ConversationChannelRead,
     ConversationMessageRead,
-    ConversationMessagesPage,
+    ConversationThreadRead,
+    ConversationThreadsPage,
     ConversationType,
     ConversationsCursor,
     ConversationsFilter,
@@ -154,6 +155,41 @@ def _dm_session(
     return ("agent:main:main", session_uuid)
 
 
+def _dm_thread_sessions(
+    sessions_json: str, target_channel_id: str | None = None
+) -> list[tuple[str, str]]:
+    """Returns [(session_key, session_uuid)] for agent:main:main:thread:* sessions.
+
+    Only returns sessions belonging to the DM channel identified by agent:main:main.
+    If target_channel_id is given, filters to that channel.
+    """
+    try:
+        sessions = json.loads(sessions_json)
+    except json.JSONDecodeError:
+        return []
+    dm_data = sessions.get("agent:main:main") or {}
+    if dm_data.get("chatType") != "direct":
+        return []
+    origin = dm_data.get("origin") or {}
+    if origin.get("provider") != "slack":
+        return []
+    dm_channel_id = origin.get("nativeChannelId")
+    if not dm_channel_id:
+        return []
+    if target_channel_id is not None and dm_channel_id.upper() != target_channel_id.upper():
+        return []
+    prefix = "agent:main:main:thread:"
+    out: list[tuple[str, str]] = []
+    for key, data in sessions.items():
+        if not key.startswith(prefix):
+            continue
+        data = data or {}
+        session_uuid = data.get("sessionId")
+        if session_uuid:
+            out.append((key, session_uuid))
+    return out
+
+
 @inject
 @singleton
 @dataclass
@@ -273,6 +309,11 @@ class ConversationSyncService:
         dm_target = _dm_session(sessions_json, channel_id)
         if dm_target:
             targets.append(dm_target)
+        existing_uuids = {uid for _, uid in targets}
+        for key, uid in _dm_thread_sessions(sessions_json, channel_id):
+            if uid not in existing_uuids:
+                targets.append((key, uid))
+                existing_uuids.add(uid)
         session_uuids = [uid for _, uid in targets]
         n = self._sync_session_subset(
             agent_id, pod_name, ns, sessions_json, session_uuids
@@ -331,6 +372,116 @@ class ConversationSyncService:
             list(pool.map(_one, conversation_ids))
 
 
+def _group_into_threads(
+    messages: list[AgentChatMessage],
+    cursor: ConversationsCursor,
+    page_size: int,
+) -> tuple[list[ConversationThreadRead], bool, ConversationsCursor | None]:
+    """Group flat messages into thread pages, paginated by root-message count.
+
+    Handles two cases:
+    - Messages with thread_id=None are potential standalone roots.
+    - Messages with a non-None thread_id are grouped by that value. Within each
+      group the earliest message (or a thread_id=None message within 5s of the
+      Slack ts float) is the root.  Any None-group messages that fall between
+      that root and the first non-None reply are also included as replies (handles
+      the DM case where the agent's first response is stored with thread_id=None).
+    """
+    by_thread: dict[str | None, list[AgentChatMessage]] = {}
+    for m in messages:
+        by_thread.setdefault(m.thread_id, []).append(m)
+
+    null_msgs = sorted(by_thread.pop(None, []), key=lambda m: (m.occurred_at, m.id))
+    used_null_ids: set = set()
+
+    raw_threads: list[tuple[AgentChatMessage, list[AgentChatMessage]]] = []
+
+    for tid, msgs in by_thread.items():
+        try:
+            tid_f = float(tid)  # type: ignore[arg-type]
+        except (ValueError, TypeError):
+            continue
+
+        msgs_sorted = sorted(msgs, key=lambda m: (m.occurred_at, m.id))
+
+        # Try to find a null-group message as the root (within 5s of Slack ts).
+        root: AgentChatMessage | None = None
+        for nm in null_msgs:
+            if nm.id in used_null_ids:
+                continue
+            if abs(nm.occurred_at.timestamp() - tid_f) <= 5.0:
+                root = nm
+                used_null_ids.add(nm.id)
+                break
+
+        # Collect null-group messages between the root and the first non-null
+        # reply (e.g. the agent's first DM response stored with thread_id=None).
+        extra_null_replies: list[AgentChatMessage] = []
+        if root is not None:
+            first_reply_ts = msgs_sorted[0].occurred_at if msgs_sorted else None
+            for nm in null_msgs:
+                if nm.id in used_null_ids:
+                    continue
+                if nm.occurred_at > root.occurred_at and (
+                    first_reply_ts is None or nm.occurred_at <= first_reply_ts
+                ):
+                    extra_null_replies.append(nm)
+                    used_null_ids.add(nm.id)
+
+        if root is None:
+            # No null candidate: first message in the group is the root.
+            root = msgs_sorted[0]
+            replies = msgs_sorted[1:]
+        else:
+            replies = extra_null_replies + msgs_sorted
+
+        replies.sort(key=lambda m: (m.occurred_at, m.id))
+        raw_threads.append((root, replies))
+
+    # Remaining null messages are standalone threads (e.g. plain DM messages).
+    for nm in null_msgs:
+        if nm.id not in used_null_ids:
+            raw_threads.append((nm, []))
+
+    # Sort all threads newest-first for cursor pagination.
+    raw_threads.sort(key=lambda t: (t[0].occurred_at, t[0].id), reverse=True)
+
+    if cursor.before_occurred_at is not None:
+        before_ts = cursor.before_occurred_at
+        before_id = cursor.before_id
+        if before_id is not None:
+            raw_threads = [
+                t for t in raw_threads
+                if t[0].occurred_at < before_ts
+                or (t[0].occurred_at == before_ts and t[0].id < before_id)
+            ]
+        else:
+            raw_threads = [t for t in raw_threads if t[0].occurred_at < before_ts]
+
+    has_more = len(raw_threads) > page_size
+    page_threads = raw_threads[:page_size]
+
+    # Return threads in oldest-first display order within the page.
+    threads: list[ConversationThreadRead] = []
+    for root, replies in reversed(page_threads):
+        threads.append(
+            ConversationThreadRead(
+                root=ConversationMessageRead.model_validate(root),
+                replies=[ConversationMessageRead.model_validate(r) for r in replies],
+            )
+        )
+
+    next_cursor: ConversationsCursor | None = None
+    if has_more and page_threads:
+        oldest_root = page_threads[-1][0]
+        next_cursor = ConversationsCursor(
+            before_occurred_at=oldest_root.occurred_at,
+            before_id=oldest_root.id,
+        )
+
+    return threads, has_more, next_cursor
+
+
 @inject
 @singleton
 @dataclass
@@ -384,7 +535,7 @@ class ConversationService:
             for cid, (name, ctype) in sorted(merged.items())
         ]
 
-    def list_messages(
+    def list_threads(
         self,
         agent_id: UUID,
         org_id: UUID,
@@ -392,7 +543,7 @@ class ConversationService:
         filter: ConversationsFilter,
         cursor: ConversationsCursor,
         page_size: int,
-    ) -> ConversationMessagesPage:
+    ) -> ConversationThreadsPage:
         agent = self.agent_repository.get_active(agent_id, org_id)
         if not agent:
             raise HTTPException(
@@ -403,16 +554,15 @@ class ConversationService:
         if agent.status == AgentStatus.RUNNING:
             self.sync_service.submit_sync_channel(agent_id, channel_id)
 
-        messages, next_cursor = self.repository.find_channel_page(
+        messages = self.repository.find_all_channel_messages(
             agent_id=agent_id,
             channel_id=channel_id.upper(),
             filter=filter,
-            cursor=cursor,
-            page_size=page_size,
         )
-        return ConversationMessagesPage(
-            messages=[ConversationMessageRead.model_validate(m) for m in messages],
-            has_more=next_cursor is not None,
+        threads, has_more, next_cursor = _group_into_threads(messages, cursor, page_size)
+        return ConversationThreadsPage(
+            threads=threads,
+            has_more=has_more,
             next_cursor=next_cursor,
         )
 

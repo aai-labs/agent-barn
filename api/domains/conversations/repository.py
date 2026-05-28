@@ -48,6 +48,7 @@ class ConversationRepository:
             stmt = stmt.on_conflict_do_update(
                 constraint="uq_agent_chat_message_agent_msg",
                 set_={
+                    "thread_id": stmt.excluded.thread_id,
                     "sender_name": stmt.excluded.sender_name,
                     "channel_name": stmt.excluded.channel_name,
                     "content": stmt.excluded.content,
@@ -146,3 +147,29 @@ class ConversationRepository:
             )
             msgs_desc.reverse()
             return msgs_desc, next_cursor
+
+    def find_all_channel_messages(
+        self,
+        agent_id: UUID,
+        channel_id: str,
+        filter: ConversationsFilter,
+    ) -> list[AgentChatMessage]:
+        """Return all messages for a channel in the filter range, ordered occurred_at ASC."""
+        with Session(self.delegate.engine) as session:
+            filters = [
+                col(AgentChatMessage.agent_id) == agent_id,
+                col(AgentChatMessage.channel_id) == channel_id,
+            ]
+            if filter.from_date is not None:
+                filters.append(col(AgentChatMessage.occurred_at) >= filter.from_date)
+            if filter.to_date is not None:
+                filters.append(col(AgentChatMessage.occurred_at) < filter.to_date)
+            query = (
+                select(AgentChatMessage)
+                .where(*filters)
+                .order_by(
+                    col(AgentChatMessage.occurred_at).asc(),
+                    col(AgentChatMessage.id).asc(),
+                )
+            )
+            return list(session.exec(query).all())
