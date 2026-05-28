@@ -84,18 +84,18 @@ def _auth(context) -> dict:
     return {"Authorization": f"Bearer {context.access_token}"}
 
 
-def test_create_agent_returns_201_and_starts_agent():
+def test_create_slack_agent_returns_201_stopped():
     with given(_GIVEN) as context:
         client: TestClient = context.client
 
-        with when("I create an agent with valid data"):
+        with when("I create a Slack agent with valid data"):
             response = client.post(_BASE, json=_VALID_CREATE, headers=_auth(context))
 
-        with then("it returns 201 with the agent"):
+        with then("it returns 201 with status stopped"):
             assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             body = response.json()
             assert_that(body["name"], equal_to("My Agent"))
-            assert_that(body["status"], equal_to(AgentStatus.RUNNING.value))
+            assert_that(body["status"], equal_to(AgentStatus.STOPPED.value))
             assert_that(body, is_not(has_key("slack_bot_token")))
             assert_that(body, is_not(has_key("slack_app_token")))
 
@@ -1256,7 +1256,7 @@ def test_list_slack_users_excludes_bots_and_deleted():
             assert_that(results[0]["id"], equal_to("U001"))
 
 
-def test_create_teams_agent_returns_201():
+def test_create_teams_agent_returns_201_and_starts_agent():
     with given(_GIVEN) as context:
         client: TestClient = context.client
 
@@ -1265,11 +1265,12 @@ def test_create_teams_agent_returns_201():
                 _BASE, json=_VALID_CREATE_TEAMS, headers=_auth(context)
             )
 
-        with then("it returns 201 with platform teams and webhook_url"):
+        with then("it returns 201 with status running and webhook_url"):
             assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             body = response.json()
             assert_that(body["name"], equal_to("My Teams Agent"))
             assert_that(body["platform"], equal_to("teams"))
+            assert_that(body["status"], equal_to(AgentStatus.RUNNING.value))
             assert_that(body["teams_config"]["tenant_id"], equal_to("test-tenant-000"))
             assert_that(body, has_key("webhook_url"))
             assert_that(body["webhook_url"], contains_string("/webhooks/teams/"))

@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { XIcon, CheckIcon } from "@/components/icons";
 import { useCreateAgent } from "../hooks/use-create-agent";
+import { useStartAgent } from "../hooks/use-start-agent";
 import { DialogShell } from "./hire-dialog-primitives";
 import {
   ROLES, MODELS, RoleId, WizardStep, pickDefaults,
@@ -56,6 +57,7 @@ function stepTitle(step: WizardStep): string {
 
 export function HireDialog({ onClose, onHired }: HireDialogProps) {
   const createAgent = useCreateAgent();
+  const startAgent = useStartAgent();
 
   const [step, setStep] = useState<WizardStep>("role");
   const [pick, setPick] = useState<RoleId>("default");
@@ -267,7 +269,11 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
           </p>
           <SlackConfigPanel
             agent={createdAgent}
-            onSaved={() => onHired({ name, role: selected.title })}
+            onSaved={() => {
+              void startAgent.mutateAsync(createdAgent.id).then(() => {
+                onHired({ name, role: selected.title });
+              });
+            }}
           />
         </div>
         <footer
@@ -276,7 +282,11 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
         >
           <button
             className="af-btn af-btn-ghost"
-            onClick={() => onHired({ name, role: selected.title })}
+            onClick={() => {
+              void startAgent.mutateAsync(createdAgent.id).then(() => {
+                onHired({ name, role: selected.title });
+              });
+            }}
           >
             Skip for now
           </button>
