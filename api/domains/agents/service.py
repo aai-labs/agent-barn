@@ -1,5 +1,4 @@
 import datetime
-import json
 import logging
 from dataclasses import dataclass
 from uuid import UUID
@@ -615,28 +614,6 @@ class AgentService:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to execute pairing command in agent {agent_id}",
             ) from exc
-
-        try:
-            allow_from_raw = self.k8s.exec_command(
-                pod_name,
-                ns,
-                [
-                    "cat",
-                    "/home/node/.openclaw/credentials/slack-default-allowFrom.json",
-                ],
-            )
-            paired_user_ids = json.loads(allow_from_raw).get("allowFrom", [])
-            if isinstance(paired_user_ids, list):
-                slack_config = self.repository.get_slack_config(agent.id)
-                if slack_config:
-                    existing: set[str] = set(slack_config.dm_user_ids or [])
-                    paired: set[str] = {str(u) for u in paired_user_ids}
-                    slack_config.dm_user_ids = list(existing | paired)
-                    self.repository.save_slack_config(slack_config)
-        except Exception:
-            logger.warning(
-                "Could not sync allowFrom for agent %s after pairing", agent_id
-            )
 
         return output
 

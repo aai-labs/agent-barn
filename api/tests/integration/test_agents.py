@@ -732,58 +732,19 @@ def test_start_agent_uses_default_model_when_empty():
             )
 
 
-def test_pair_agent_returns_output():
+def test_pair_slack_agent_returns_400():
     with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
         client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
-        k8s.get_pod_name_for_deployment.return_value = "agent-xxx-pod"
-        k8s.exec_command.return_value = "Pairing approved"
 
-        with when("I pair a running agent"):
+        with when("I pair a Slack agent"):
             response = client.post(
                 f"{_BASE}/{context.agent.id}/pair",
                 json={"platform": "slack", "code": "abc123"},
                 headers=_auth(context),
             )
 
-        with then("it returns 200 with the command output"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            assert_that(response.json()["message"], equal_to("Pairing approved"))
-            k8s.get_pod_name_for_deployment.assert_called_once()
-            assert_that(k8s.exec_command.call_count, equal_to(2))
-
-
-def test_pair_stopped_agent_returns_409():
-    with given([*_GIVEN, there_is_an_agent()]) as context:
-        client: TestClient = context.client
-
-        with when("I pair a stopped agent"):
-            response = client.post(
-                f"{_BASE}/{context.agent.id}/pair",
-                json={"platform": "slack", "code": "abc123"},
-                headers=_auth(context),
-            )
-
-        with then("it returns 409"):
-            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
-
-
-def test_pair_agent_no_pod_returns_409():
-    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
-        client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
-        k8s.get_pod_name_for_deployment.return_value = None
-
-        with when("I pair a running agent with no pod"):
-            response = client.post(
-                f"{_BASE}/{context.agent.id}/pair",
-                json={"platform": "slack", "code": "abc123"},
-                headers=_auth(context),
-            )
-
-        with then("it returns 409 and exec was not called"):
-            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
-            k8s.exec_command.assert_not_called()
+        with then("it returns 400"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
 
 
 def test_pair_agent_no_auth_returns_401():
@@ -1210,54 +1171,6 @@ def test_start_agent_allowlist_with_no_users_sets_empty_allow_from():
         with then("the init script syncs slack-allowFrom.json from the overlay"):
             init_js = config_map.data["init-openclaw.js"]
             assert_that(init_js, contains_string("slack-allowFrom.json"))
-
-
-def test_pair_agent_syncs_dm_user_ids():
-    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
-        client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
-        repository: AgentRepository = context.injector.get(AgentRepository)
-
-        k8s.get_pod_name_for_deployment.return_value = "agent-xxx-pod"
-        k8s.exec_command.side_effect = [
-            "Pairing approved",
-            json.dumps({"version": 1, "allowFrom": ["U111", "U222"]}),
-        ]
-
-        with when("I pair the agent"):
-            response = client.post(
-                f"{_BASE}/{context.agent.id}/pair",
-                json={"platform": "slack", "code": "ABCD1234"},
-                headers=_auth(context),
-            )
-
-        with then("the response is 200 and dm_user_ids is updated in the DB"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            slack_config = repository.get_slack_config(context.agent.id)
-            assert_that(slack_config.dm_user_ids, contains_inanyorder("U111", "U222"))
-
-
-def test_pair_agent_allow_from_read_failure_still_returns_200():
-    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
-        client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
-
-        k8s.get_pod_name_for_deployment.return_value = "agent-xxx-pod"
-        k8s.exec_command.side_effect = [
-            "Pairing approved",
-            Exception("file not found"),
-        ]
-
-        with when("I pair the agent but reading allowFrom fails"):
-            response = client.post(
-                f"{_BASE}/{context.agent.id}/pair",
-                json={"platform": "slack", "code": "ABCD1234"},
-                headers=_auth(context),
-            )
-
-        with then("it still returns 200"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            assert_that(response.json()["message"], equal_to("Pairing approved"))
 
 
 def test_list_slack_channels_returns_filtered_list():
