@@ -374,7 +374,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
         {step === "slack-choice" && <SlackChoiceStep setupNewBot={setupNewBot} onChange={setSetupNewBot} />}
         {step === "bot-builder" && (
           <BotBuilderStep
-            botName={botName} onBotNameChange={setBotName}
+            botName={botName} onBotNameChange={(v) => { setBotName(v); setName(v); }}
             botDescription={botDescription} onBotDescriptionChange={setBotDescription}
             botColor={botColor} onBotColorChange={setBotColor}
           />
