@@ -381,7 +381,11 @@ def _parse_dm_jsonl(
             continue
         # Find first text block — DM thread responses may lead with a thinking block.
         block = next(
-            (b for b in content_blocks if isinstance(b, dict) and b.get("type") == "text"),
+            (
+                b
+                for b in content_blocks
+                if isinstance(b, dict) and b.get("type") == "text"
+            ),
             None,
         )
         if block is None:
@@ -510,7 +514,7 @@ def parse_sessions(
         for thread_session_key, thread_session_data in sessions.items():
             if not thread_session_key.startswith(_dm_thread_prefix):
                 continue
-            thread_ts = thread_session_key[len(_dm_thread_prefix):]
+            thread_ts = thread_session_key[len(_dm_thread_prefix) :]
             if not isinstance(thread_session_data, dict):
                 continue
             thread_uuid = thread_session_data.get("sessionId")

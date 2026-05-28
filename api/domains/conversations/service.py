@@ -176,7 +176,10 @@ def _dm_thread_sessions(
     dm_channel_id = origin.get("nativeChannelId")
     if not dm_channel_id:
         return []
-    if target_channel_id is not None and dm_channel_id.upper() != target_channel_id.upper():
+    if (
+        target_channel_id is not None
+        and dm_channel_id.upper() != target_channel_id.upper()
+    ):
         return []
     prefix = "agent:main:main:thread:"
     out: list[tuple[str, str]] = []
@@ -399,7 +402,7 @@ def _group_into_threads(
     for tid, msgs in by_thread.items():
         try:
             tid_f = float(tid)  # type: ignore[arg-type]
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             continue
 
         msgs_sorted = sorted(msgs, key=lambda m: (m.occurred_at, m.id))
@@ -451,7 +454,8 @@ def _group_into_threads(
         before_id = cursor.before_id
         if before_id is not None:
             raw_threads = [
-                t for t in raw_threads
+                t
+                for t in raw_threads
                 if t[0].occurred_at < before_ts
                 or (t[0].occurred_at == before_ts and t[0].id < before_id)
             ]
@@ -559,7 +563,9 @@ class ConversationService:
             channel_id=channel_id.upper(),
             filter=filter,
         )
-        threads, has_more, next_cursor = _group_into_threads(messages, cursor, page_size)
+        threads, has_more, next_cursor = _group_into_threads(
+            messages, cursor, page_size
+        )
         return ConversationThreadsPage(
             threads=threads,
             has_more=has_more,
