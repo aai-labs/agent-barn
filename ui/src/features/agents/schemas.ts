@@ -1,17 +1,28 @@
 import { z } from "zod";
 
+export const AgentSlackConfigSchema = z.object({
+  channelIds: z.array(z.string()),
+  dmUserIds: z.array(z.string()),
+  groupPolicy: z.enum(["open", "allowlist"]),
+  dmPolicy: z.enum(["off", "open", "allowlist", "pairing"]),
+});
+
+export const AgentTeamsConfigSchema = z.object({
+  tenantId: z.string(),
+});
+
 export const AgentSchema = z.object({
   id: z.string().uuid(),
   name: z.string(),
   status: z.enum(["STOPPED", "RUNNING", "ERROR"]),
+  platform: z.enum(["slack", "teams"]),
   organizationId: z.string().uuid(),
   templateId: z.string().uuid(),
   templateVersion: z.number().int(),
   model: z.string(),
-  slackChannelIds: z.array(z.string()),
-  slackDmUserIds: z.array(z.string()),
-  slackGroupPolicy: z.enum(["open", "allowlist"]),
-  slackDmPolicy: z.enum(["off", "open", "allowlist", "pairing"]),
+  slackConfig: AgentSlackConfigSchema.nullable().optional(),
+  teamsConfig: AgentTeamsConfigSchema.nullable().optional(),
+  webhookUrl: z.string().nullable().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -105,6 +116,8 @@ export const SlackUserSchema = z.object({
 });
 
 export type Agent = z.infer<typeof AgentSchema>;
+export type AgentSlackConfig = z.infer<typeof AgentSlackConfigSchema>;
+export type AgentTeamsConfig = z.infer<typeof AgentTeamsConfigSchema>;
 export type AgentHealth = z.infer<typeof AgentHealthSchema>;
 export type AgentTemplateRead = z.infer<typeof AgentTemplateReadSchema>;
 export type PaginatedAgents = z.infer<typeof PaginatedAgentsSchema>;

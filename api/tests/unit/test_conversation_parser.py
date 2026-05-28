@@ -352,3 +352,131 @@ def test_parse_sessions_skips_lines_with_missing_id():
         _make_get_jsonl({"aaaa-bbbb": line_no_id, "cccc-dddd": ""}),
     )
     assert messages == []
+
+
+# --- Teams parser tests ---
+
+_TEAMS_CHANNEL_SESSION_KEY = "agent:main:msteams:channel:conv123"
+_TEAMS_GROUP_SESSION_KEY = "agent:main:msteams:group:group456"
+
+_TEAMS_SESSIONS_JSON = json.dumps(
+    {
+        _TEAMS_CHANNEL_SESSION_KEY: {
+            "sessionId": "tttt-uuuu",
+            "chatType": "channel",
+            "groupId": "conv123",
+            "origin": {"nativeChannelId": "CONV123", "threadId": None},
+        },
+        _TEAMS_GROUP_SESSION_KEY: {
+            "sessionId": "vvvv-wwww",
+            "groupId": "group456",
+            "origin": {"nativeChannelId": "GROUP456", "threadId": None},
+        },
+    }
+)
+
+_TEAMS_INBOUND_LINE = json.dumps(
+    {
+        "id": "teams-msg-001",
+        "type": "custom_message",
+        "customType": "openclaw.runtime-context",
+        "content": "[2025-05-01 14:00:00 UTC] Teams message in General from user@tenant: Hello from Teams!",
+    }
+)
+
+_TEAMS_OUTBOUND_LINE = json.dumps(
+    {
+        "id": "teams-msg-002",
+        "type": "message",
+        "timestamp": "2025-05-01T14:00:05Z",
+        "message": {
+            "role": "assistant",
+            "model": "delivery-mirror",
+            "content": [{"type": "text", "text": "Hi from the bot!"}],
+        },
+    }
+)
+
+
+def test_parses_teams_inbound_message():
+    messages = parse_sessions(
+        _AGENT_ID,
+        _TEAMS_SESSIONS_JSON,
+        _make_get_jsonl({"tttt-uuuu": _TEAMS_INBOUND_LINE, "vvvv-wwww": ""}),
+    )
+
+    inbound = [m for m in messages if m.direction == MessageDirection.INBOUND]
+    assert len(inbound) == 1
+    assert inbound[0].content == "Hello from Teams!"
+    assert inbound[0].sender_id == "user@tenant"
+    assert inbound[0].channel_id == "CONV123"
+    assert inbound[0].openclaw_msg_id == "teams-msg-001"
+
+
+def test_parses_teams_outbound_message():
+    messages = parse_sessions(
+        _AGENT_ID,
+        _TEAMS_SESSIONS_JSON,
+        _make_get_jsonl(
+            {
+                "tttt-uuuu": "\n".join([_TEAMS_INBOUND_LINE, _TEAMS_OUTBOUND_LINE]),
+                "vvvv-wwww": "",
+            }
+        ),
+    )
+
+    outbound = [m for m in messages if m.direction == MessageDirection.OUTBOUND]
+    assert len(outbound) == 1
+    assert outbound[0].content == "Hi from the bot!"
+    assert outbound[0].openclaw_msg_id == "teams-msg-002"
+
+
+def test_skips_non_msteams_non_slack_sessions():
+    sessions_with_unknown = json.dumps(
+        {
+            "agent:main:discord:channel:xyz": {
+                "sessionId": "xxxx-yyyy",
+                "origin": {"nativeChannelId": "CXYZ"},
+            },
+            _TEAMS_CHANNEL_SESSION_KEY: {
+                "sessionId": "tttt-uuuu",
+                "origin": {"nativeChannelId": "CONV123", "threadId": None},
+            },
+        }
+    )
+
+    called = []
+
+    def get_jsonl(session_uuid: str) -> str:
+        called.append(session_uuid)
+        return _TEAMS_INBOUND_LINE
+
+    parse_sessions(_AGENT_ID, sessions_with_unknown, get_jsonl)
+    assert "xxxx-yyyy" not in called
+    assert "tttt-uuuu" in called
+
+
+def test_handles_both_slack_and_teams_sessions():
+    mixed_sessions = json.dumps(
+        {
+            _CHANNEL_SESSION_KEY: {
+                "sessionId": "aaaa-bbbb",
+                "origin": {"nativeChannelId": "C0B4W57JVEZ", "threadId": None},
+            },
+            _TEAMS_CHANNEL_SESSION_KEY: {
+                "sessionId": "tttt-uuuu",
+                "origin": {"nativeChannelId": "CONV123", "threadId": None},
+            },
+        }
+    )
+
+    messages = parse_sessions(
+        _AGENT_ID,
+        mixed_sessions,
+        _make_get_jsonl({"aaaa-bbbb": _INBOUND_LINE, "tttt-uuuu": _TEAMS_INBOUND_LINE}),
+    )
+
+    assert len(messages) == 2
+    contents = {m.content for m in messages}
+    assert "Hello agent!" in contents
+    assert "Hello from Teams!" in contents

@@ -9,8 +9,17 @@ import { agentsKey } from "../utils";
 
 export type CreateAgentData = {
   name: string;
-  slackBotToken: string;
-  slackAppToken: string;
+  platform: "slack" | "teams";
+  // Slack (required when platform=slack)
+  slackBotToken?: string;
+  slackAppToken?: string;
+  slackGroupPolicy?: "open" | "allowlist";
+  slackDmPolicy?: "off" | "open" | "allowlist" | "pairing";
+  // Teams (required when platform=teams)
+  teamsAppId?: string;
+  teamsAppPassword?: string;
+  teamsTenantId?: string;
+  // Template
   soulMd: string;
   identityMd: string;
   userMd?: string;
@@ -20,8 +29,6 @@ export type CreateAgentData = {
   bootstrapMd?: string;
   heartbeatMd?: string;
   model?: string;
-  slackGroupPolicy?: "open" | "allowlist";
-  slackDmPolicy?: "off" | "open" | "allowlist" | "pairing";
 };
 
 export function useCreateAgent() {

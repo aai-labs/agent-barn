@@ -21,12 +21,18 @@ const TEMPLATE_DIR = '/app/config';
 const WORKSPACE_DIR = path.join(HOME, '.openclaw', 'workspace');
 const OVERLAY_PATH = path.join(TEMPLATE_DIR, 'openclaw-config-overlay.json');
 const CONFIG_PATH = path.join(HOME, '.openclaw', 'openclaw.json');
+const PREINSTALLED_NPM_DIR = '/opt/openclaw-preinstalled/npm';
+const RUNTIME_NPM_DIR = path.join(HOME, '.openclaw', 'npm');
+const PREINSTALLED_NODE_MODULES_DIR = path.join(PREINSTALLED_NPM_DIR, 'node_modules');
+const PREINSTALLED_MSTEAMS_DIR = path.join(PREINSTALLED_NODE_MODULES_DIR, '@openclaw', 'msteams');
+const RUNTIME_NODE_MODULES_DIR = path.join(RUNTIME_NPM_DIR, 'node_modules');
 
 // These paths are replaced wholesale from the overlay rather than deep-merged,
 // so that removals (e.g. removing a channel or DM user) take effect on restart.
 const REPLACE_PATHS = [
   ['channels', 'slack', 'channels'],
   ['channels', 'slack', 'allowFrom'],
+  ['channels', 'msteams', 'allowFrom'],
 ];
 
 function getPath(obj, parts) {
@@ -53,6 +59,48 @@ function deepMerge(base, overlay) {
   return result;
 }
 
+function isPathInside(child, parent) {
+  const relative = path.relative(parent, child);
+  return relative === '' || (!!relative && !relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function realpathOrResolved(filePath) {
+  try { return fs.realpathSync(filePath); }
+  catch { return path.resolve(filePath); }
+}
+
+function restorePreinstalledMsteamsPlugin(overlay) {
+  if (getPath(overlay, ['channels', 'msteams', 'enabled']) !== true) return;
+  if (!fs.existsSync(PREINSTALLED_MSTEAMS_DIR)) {
+    console.log('[init-openclaw] Preinstalled msteams plugin missing, skipping restore');
+    return;
+  }
+
+  const sourceReal = realpathOrResolved(PREINSTALLED_NODE_MODULES_DIR);
+  const destReal = realpathOrResolved(RUNTIME_NODE_MODULES_DIR);
+  if (isPathInside(destReal, sourceReal) || isPathInside(sourceReal, destReal)) {
+    console.log('[init-openclaw] Skipping msteams restore: source/destination overlap');
+    return;
+  }
+
+  if (fs.existsSync(RUNTIME_NPM_DIR) && fs.lstatSync(RUNTIME_NPM_DIR).isSymbolicLink()) {
+    console.log('[init-openclaw] Skipping msteams restore: runtime npm path is a symlink');
+    return;
+  }
+
+  fs.mkdirSync(RUNTIME_NPM_DIR, { recursive: true });
+  for (const metadataFile of ['package.json', 'package-lock.json']) {
+    const sourceFile = path.join(PREINSTALLED_NPM_DIR, metadataFile);
+    if (fs.existsSync(sourceFile)) {
+      fs.copyFileSync(sourceFile, path.join(RUNTIME_NPM_DIR, metadataFile));
+    }
+  }
+
+  fs.mkdirSync(RUNTIME_NODE_MODULES_DIR, { recursive: true });
+  fs.cpSync(PREINSTALLED_NODE_MODULES_DIR, RUNTIME_NODE_MODULES_DIR, { recursive: true, force: true });
+  console.log('[init-openclaw] Restored preinstalled Microsoft Teams npm plugin');
+}
+
 fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
 for (const file of fs.readdirSync(TEMPLATE_DIR)) {
   if (!file.endsWith('.md')) continue;
@@ -63,6 +111,8 @@ for (const file of fs.readdirSync(TEMPLATE_DIR)) {
 let overlay;
 try { overlay = JSON.parse(fs.readFileSync(OVERLAY_PATH, 'utf8')); }
 catch { console.log('[init-openclaw] No overlay found, skipping'); process.exit(0); }
+
+restorePreinstalledMsteamsPlugin(overlay);
 
 let config = {};
 try { config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')); } catch {}
@@ -78,18 +128,23 @@ fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
 fs.writeFileSync(CONFIG_PATH, JSON.stringify(merged, null, 2));
 console.log('[init-openclaw] Config merged successfully');
 
-// Overwrite Slack allowFrom credentials so the configured allowlist wins over stale runtime state.
-// openclaw writes paired users to slack-default-allowFrom.json (wrapped) at runtime; we mirror both here.
-const allowFrom = getPath(overlay, ['channels', 'slack', 'allowFrom']);
-if (allowFrom !== undefined) {
-  const credDir = path.join(HOME, '.openclaw', 'credentials');
-  fs.mkdirSync(credDir, { recursive: true });
-  fs.writeFileSync(path.join(credDir, 'slack-allowFrom.json'), JSON.stringify(allowFrom, null, 2));
-  fs.writeFileSync(
-    path.join(credDir, 'slack-default-allowFrom.json'),
-    JSON.stringify({ version: 1, allowFrom }, null, 2),
-  );
-  console.log('[init-openclaw] Synced slack allowFrom credentials');
+// Overwrite allowFrom credentials so the configured allowlist wins over stale runtime state.
+// openclaw writes paired users to <channel>-default-allowFrom.json (wrapped) at runtime; we mirror both here.
+for (const [channel, allowFile, defaultAllowFile] of [
+  ['slack', 'slack-allowFrom.json', 'slack-default-allowFrom.json'],
+  ['msteams', 'msteams-allowFrom.json', 'msteams-default-allowFrom.json'],
+]) {
+  const af = getPath(overlay, ['channels', channel, 'allowFrom']);
+  if (af !== undefined) {
+    const credDir = path.join(HOME, '.openclaw', 'credentials');
+    fs.mkdirSync(credDir, { recursive: true });
+    fs.writeFileSync(path.join(credDir, allowFile), JSON.stringify(af, null, 2));
+    fs.writeFileSync(
+      path.join(credDir, defaultAllowFile),
+      JSON.stringify({ version: 1, allowFrom: af }, null, 2),
+    );
+    console.log('[init-openclaw] Synced ' + channel + ' allowFrom credentials');
+  }
 }
 """
 
@@ -280,6 +335,67 @@ def build_openclaw_config_overlay(
     }
 
 
+def build_openclaw_config_overlay_teams(
+    model: str,
+    litellm_base_url: str,
+) -> dict:
+    provider, _, model_name = model.partition("/")
+
+    return {
+        "models": {
+            "providers": {
+                provider: {
+                    "baseUrl": litellm_base_url,
+                    "models": [{"id": model_name, "name": model_name}],
+                }
+            }
+        },
+        "agents": {
+            "defaults": {
+                "model": {
+                    "primary": model,
+                }
+            }
+        },
+        "channels": {
+            "msteams": {
+                "enabled": True,
+                "dmPolicy": "open",
+                "allowFrom": ["*"],
+                "groupPolicy": "open",
+                "streaming": {"mode": "off"},
+                "webhook": {"port": 3978, "path": "/api/messages"},
+            }
+        },
+        "bindings": [
+            {"type": "route", "agentId": "main", "match": {"channel": "msteams"}}
+        ],
+        "tools": {"profile": "full"},
+        "memory": {"backend": "builtin"},
+        "plugins": {
+            "allow": ["memory-core", "active-memory"],
+            "slots": {"memory": "memory-core"},
+            "entries": {
+                "memory-core": {"enabled": True},
+                "active-memory": {
+                    "enabled": True,
+                    "config": {
+                        "agents": ["main"],
+                        "allowedChatTypes": ["direct", "group", "channel"],
+                        "modelFallbackPolicy": "default-remote",
+                        "queryMode": "recent",
+                        "promptStyle": "balanced",
+                        "timeoutMs": 15000,
+                        "maxSummaryChars": 220,
+                        "persistTranscripts": False,
+                        "logging": True,
+                    },
+                },
+            },
+        },
+    }
+
+
 def build_config_map(
     agent_id: UUID,
     org_id: UUID,
@@ -319,7 +435,7 @@ def build_config_map(
     )
 
 
-def build_secret(
+def build_secret_slack(
     agent_id: UUID,
     org_id: UUID,
     namespace: str,
@@ -337,6 +453,32 @@ def build_secret(
         string_data={
             "SLACK_BOT_TOKEN": slack_bot_token,
             "SLACK_APP_TOKEN": slack_app_token,
+            "LITELLM_API_KEY": litellm_api_key,
+            "LITELLM_BASE_URL": litellm_base_url,
+        },
+    )
+
+
+def build_secret_teams(
+    agent_id: UUID,
+    org_id: UUID,
+    namespace: str,
+    msteams_app_id: str,
+    msteams_app_password: str,
+    msteams_tenant_id: str,
+    litellm_api_key: str,
+    litellm_base_url: str,
+) -> client.V1Secret:
+    return client.V1Secret(
+        metadata=client.V1ObjectMeta(
+            name=_resource_name(agent_id),
+            namespace=namespace,
+            labels=_labels(agent_id, org_id),
+        ),
+        string_data={
+            "MSTEAMS_APP_ID": msteams_app_id,
+            "MSTEAMS_APP_PASSWORD": msteams_app_password,
+            "MSTEAMS_TENANT_ID": msteams_tenant_id,
             "LITELLM_API_KEY": litellm_api_key,
             "LITELLM_BASE_URL": litellm_base_url,
         },
@@ -367,7 +509,14 @@ def build_service(
     agent_id: UUID,
     org_id: UUID,
     namespace: str,
+    include_webhook_port: bool = False,
 ) -> client.V1Service:
+    ports = [
+        client.V1ServicePort(port=80, target_port=8080, name="gateway"),
+        client.V1ServicePort(port=8081, target_port=8081, name="healthz"),
+    ]
+    if include_webhook_port:
+        ports.append(client.V1ServicePort(port=3978, target_port=3978, name="webhook"))
     return client.V1Service(
         metadata=client.V1ObjectMeta(
             name=_resource_name(agent_id),
@@ -376,10 +525,7 @@ def build_service(
         ),
         spec=client.V1ServiceSpec(
             selector={"app": _resource_name(agent_id)},
-            ports=[
-                client.V1ServicePort(port=80, target_port=8080, name="gateway"),
-                client.V1ServicePort(port=8081, target_port=8081, name="healthz"),
-            ],
+            ports=ports,
         ),
     )
 

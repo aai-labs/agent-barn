@@ -45,6 +45,10 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         rm -rf /var/lib/apt/lists/*; \
     fi
 
+RUN mkdir -p /opt/openclaw-preinstalled/npm && \
+    npm install --prefix /opt/openclaw-preinstalled/npm @openclaw/msteams@2026.5.7 && \
+    chown -R node:node /opt/openclaw-preinstalled
+
 USER node
 
 ENTRYPOINT ["/usr/bin/tini", "--"]

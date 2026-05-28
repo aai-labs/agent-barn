@@ -1,7 +1,7 @@
 """add conversation_type to agent_chat_message
 
 Revision ID: 23b02ff828ac
-Revises: f2c8a14e9b37
+Revises: b2c3d4e5f6a7
 Create Date: 2026-05-25 12:26:37.122964
 
 """
@@ -13,7 +13,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "23b02ff828ac"
-down_revision: Union[str, None] = "f2c8a14e9b37"
+down_revision: Union[str, None] = "b2c3d4e5f6a7"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
