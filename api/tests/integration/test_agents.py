@@ -84,7 +84,7 @@ def _auth(context) -> dict:
     return {"Authorization": f"Bearer {context.access_token}"}
 
 
-def test_create_agent_returns_201():
+def test_create_agent_returns_201_and_starts_agent():
     with given(_GIVEN) as context:
         client: TestClient = context.client
 
@@ -95,7 +95,7 @@ def test_create_agent_returns_201():
             assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             body = response.json()
             assert_that(body["name"], equal_to("My Agent"))
-            assert_that(body["status"], equal_to(AgentStatus.STOPPED.value))
+            assert_that(body["status"], equal_to(AgentStatus.RUNNING.value))
             assert_that(body, is_not(has_key("slack_bot_token")))
             assert_that(body, is_not(has_key("slack_app_token")))
 

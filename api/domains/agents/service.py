@@ -238,7 +238,7 @@ class AgentService:
             )
             self.repository.save_teams_config(teams_config)
 
-        return self._build_agent_read(agent, slack_config, teams_config)
+        return self.start_agent(agent.id, context)
 
     def get_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
         org_id = self._org_id(context)
