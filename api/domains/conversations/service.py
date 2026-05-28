@@ -400,8 +400,10 @@ def _group_into_threads(
     raw_threads: list[tuple[AgentChatMessage, list[AgentChatMessage]]] = []
 
     for tid, msgs in by_thread.items():
+        if tid is None:
+            continue
         try:
-            tid_f = float(tid)  # type: ignore[arg-type]
+            tid_f = float(tid)
         except ValueError, TypeError:
             continue
 
