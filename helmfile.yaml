@@ -1,30 +1,7 @@
-repositories:
-  - name: jetstack
-    url: https://charts.jetstack.io
-
 helmDefaults:
   createNamespace: true
 
 releases:
-{{ if eq (env "INSTALL_CERT_MANAGER" | default "true") "true" }}
-  - name: cert-manager
-    namespace: cert-manager
-    chart: jetstack/cert-manager
-    set:
-      - name: installCRDs
-        value: "true"
-
-  - name: cluster-issuer
-    namespace: cert-manager
-    chart: ./helm/cluster-issuer
-    set:
-      - name: email
-        value: {{ env "LETSENCRYPT_EMAIL" | required "LETSENCRYPT_EMAIL is required" }}
-    needs:
-      - cert-manager/cert-manager
-{{ end }}
-
-
   - name: postgres-app
     namespace: agent-farm
     chart: ./helm/postgres
@@ -114,9 +91,6 @@ releases:
     needs:
       - agent-farm/postgres-app
       - agent-farm/litellm
-{{ if eq (env "INSTALL_CERT_MANAGER" | default "true") "true" }}
-      - cert-manager/cluster-issuer
-{{ end }}
 
   - name: agentfarm-ui
     namespace: agent-farm

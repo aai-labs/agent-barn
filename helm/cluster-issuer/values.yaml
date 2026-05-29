@@ -1,3 +1,0 @@
-email: ""
-name: letsencrypt-http01
-ingressClassName: traefik
