@@ -1,7 +1,30 @@
+repositories:
+  - name: jetstack
+    url: https://charts.jetstack.io
+
 helmDefaults:
-  createNamespace: false
+  createNamespace: true
 
 releases:
+{{ if eq (env "INSTALL_CERT_MANAGER" | default "true") "true" }}
+  - name: cert-manager
+    namespace: cert-manager
+    chart: jetstack/cert-manager
+    set:
+      - name: installCRDs
+        value: "true"
+
+  - name: cluster-issuer
+    namespace: cert-manager
+    chart: ./helm/cluster-issuer
+    set:
+      - name: email
+        value: {{ env "LETSENCRYPT_EMAIL" | required "LETSENCRYPT_EMAIL is required" }}
+    needs:
+      - cert-manager/cert-manager
+{{ end }}
+
+
   - name: postgres-app
     namespace: agent-farm
     chart: ./helm/postgres
@@ -58,6 +81,8 @@ releases:
     labels:
       name: agentfarm-api
     set:
+      - name: registryPrefix
+        value: {{ env "REGISTRY_PREFIX" | default "registry.k8s.aai-labs.com" }}
       - name: image.tag
         value: {{ env "API_IMAGE_TAG" | default "latest" }}
       - name: openclawImage.tag
@@ -75,7 +100,7 @@ releases:
       - name: webAppUrl
         value: {{ env "WEB_APP_URL" | required "WEB_APP_URL is required" }}
       - name: apiExternalUrl
-        value: {{ env "API_EXTERNAL_URL" | required "API_EXTERNAL_URL is required" }}
+        value: {{ printf "https://%s" (env "API_HOST" | required "API_HOST is required") }}
       - name: kubeconfigB64
         value: {{ env "KUBECONFIG_B64" | required "KUBECONFIG_B64 is required" }}
       - name: registry.server
@@ -84,9 +109,14 @@ releases:
         value: {{ env "REGISTRY_USERNAME" | required "REGISTRY_USERNAME is required" }}
       - name: registry.password
         value: {{ env "REGISTRY_PASSWORD" | required "REGISTRY_PASSWORD is required" }}
+      - name: ingress.host
+        value: {{ env "API_HOST" | required "API_HOST is required" }}
     needs:
       - agent-farm/postgres-app
       - agent-farm/litellm
+{{ if eq (env "INSTALL_CERT_MANAGER" | default "true") "true" }}
+      - cert-manager/cluster-issuer
+{{ end }}
 
   - name: agentfarm-ui
     namespace: agent-farm
@@ -94,7 +124,11 @@ releases:
     labels:
       name: agentfarm-ui
     set:
+      - name: registryPrefix
+        value: {{ env "REGISTRY_PREFIX" | default "registry.k8s.aai-labs.com" }}
       - name: image.tag
         value: {{ env "UI_IMAGE_TAG" | default "latest" }}
+      - name: ingress.host
+        value: {{ env "UI_HOST" | required "UI_HOST is required" }}
     needs:
       - agent-farm/agentfarm-api
