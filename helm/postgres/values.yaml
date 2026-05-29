@@ -3,9 +3,14 @@ image:
   tag: "18"
   pullPolicy: IfNotPresent
 
-# Name of the pre-existing k8s Secret containing:
+# Name of the k8s Secret containing:
 #   POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB
 secretName: postgres-app
+
+db:
+  user: ""
+  password: ""
+  name: ""
 
 storage:
   size: 5Gi

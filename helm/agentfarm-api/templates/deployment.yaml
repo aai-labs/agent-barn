@@ -37,6 +37,12 @@ spec:
               value: "{{ .Values.openclawImage.repository }}:{{ .Values.openclawImage.tag }}"
             - name: API_EXTERNAL_URL
               value: "{{ .Values.apiExternalUrl }}"
+            - name: LITELLM_BASE_URL
+              value: "{{ .Values.litellmBaseUrl }}"
+            - name: AGENT_LITELLM_BASE_URL
+              value: "{{ .Values.agentLitellmBaseUrl }}"
+            - name: AGENT_IMAGE_PULL_SECRET
+              value: "{{ .Values.agentImagePullSecret }}"
           volumeMounts:
             - name: kubeconfig
               mountPath: /etc/kubeconfig

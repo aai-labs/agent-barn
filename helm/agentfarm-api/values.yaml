@@ -9,9 +9,27 @@ openclawImage:
 
 replicaCount: 1
 
-# Pre-existing k8s Secret: DB_CONNECTION_URL, SECRET_SIGNING_KEY,
+# k8s Secret: DB_CONNECTION_URL, SECRET_SIGNING_KEY,
 # SUPER_USER_CREDENTIALS, ENVIRONMENT, WEB_APP_URL
 secretName: agentfarm-api
+
+dbConnectionUrl: ""
+secretSigningKey: ""
+superUserCredentials: ""
+agentTokenEncryptionKey: ""
+environment: ""
+webAppUrl: ""
+
+litellmBaseUrl: "http://litellm:4000"
+agentLitellmBaseUrl: "http://litellm:4000"
+
+kubeconfigB64: ""
+agentImagePullSecret: "registry-pull-secret"
+
+registry:
+  server: ""
+  username: ""
+  password: ""
 
 # Secret written by the pre-install hook Job: LITELLM_API_KEY
 litellmApiKeySecretName: litellm-api-key
@@ -19,7 +37,7 @@ litellmApiKeySecretName: litellm-api-key
 # Pre-existing litellm Secret (used by hook Job to call /key/generate)
 litellmSecretName: litellm
 
-# Pre-existing kubeconfig Secret for kubectl exec into agent pods
+#  kubeconfig Secret for kubectl exec into agent pods
 kubeconfigSecretName: agent-farm-user-kubeconfig
 
 imagePullSecrets:

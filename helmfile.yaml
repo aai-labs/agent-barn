@@ -11,6 +11,13 @@ releases:
       - secretName: postgres-app
         storage:
           size: 5Gi
+    set:
+      - name: db.user
+        value: {{ env "POSTGRES_APP_USER" | required "POSTGRES_APP_USER is required" }}
+      - name: db.password
+        value: {{ env "POSTGRES_APP_PASSWORD" | required "POSTGRES_APP_PASSWORD is required" }}
+      - name: db.name
+        value: {{ env "POSTGRES_APP_DB" | required "POSTGRES_APP_DB is required" }}
 
   - name: postgres-litellm
     namespace: agent-farm
@@ -21,12 +28,26 @@ releases:
       - secretName: postgres-litellm
         storage:
           size: 2Gi
+    set:
+      - name: db.user
+        value: {{ env "POSTGRES_LITELLM_USER" | required "POSTGRES_LITELLM_USER is required" }}
+      - name: db.password
+        value: {{ env "POSTGRES_LITELLM_PASSWORD" | required "POSTGRES_LITELLM_PASSWORD is required" }}
+      - name: db.name
+        value: {{ env "POSTGRES_LITELLM_DB" | required "POSTGRES_LITELLM_DB is required" }}
 
   - name: litellm
     namespace: agent-farm
     chart: ./helm/litellm
     labels:
       name: litellm
+    set:
+      - name: masterKey
+        value: {{ env "LITELLM_MASTER_KEY" | required "LITELLM_MASTER_KEY is required" }}
+      - name: openrouterApiKey
+        value: {{ env "OPENROUTER_API_KEY" | required "OPENROUTER_API_KEY is required" }}
+      - name: databaseUrl
+        value: {{ printf "postgresql://%s:%s@postgres-litellm:5432/%s" (env "POSTGRES_LITELLM_USER") (env "POSTGRES_LITELLM_PASSWORD") (env "POSTGRES_LITELLM_DB") }}
     needs:
       - agent-farm/postgres-app
       - agent-farm/postgres-litellm
@@ -41,6 +62,28 @@ releases:
         value: {{ env "API_IMAGE_TAG" | default "latest" }}
       - name: openclawImage.tag
         value: {{ env "OPENCLAW_IMAGE_TAG" | default "latest" }}
+      - name: dbConnectionUrl
+        value: {{ printf "postgresql://%s:%s@postgres-app:5432/%s" (env "POSTGRES_APP_USER") (env "POSTGRES_APP_PASSWORD") (env "POSTGRES_APP_DB") }}
+      - name: secretSigningKey
+        value: {{ env "SECRET_SIGNING_KEY" | required "SECRET_SIGNING_KEY is required" }}
+      - name: superUserCredentials
+        value: {{ env "SUPER_USER_CREDENTIALS" | required "SUPER_USER_CREDENTIALS is required" }}
+      - name: agentTokenEncryptionKey
+        value: {{ env "AGENT_TOKEN_ENCRYPTION_KEY" | required "AGENT_TOKEN_ENCRYPTION_KEY is required" }}
+      - name: environment
+        value: {{ env "ENVIRONMENT" | required "ENVIRONMENT is required" }}
+      - name: webAppUrl
+        value: {{ env "WEB_APP_URL" | required "WEB_APP_URL is required" }}
+      - name: apiExternalUrl
+        value: {{ env "API_EXTERNAL_URL" | required "API_EXTERNAL_URL is required" }}
+      - name: kubeconfigB64
+        value: {{ env "KUBECONFIG_B64" | required "KUBECONFIG_B64 is required" }}
+      - name: registry.server
+        value: {{ env "REGISTRY_SERVER" | required "REGISTRY_SERVER is required" }}
+      - name: registry.username
+        value: {{ env "REGISTRY_USERNAME" | required "REGISTRY_USERNAME is required" }}
+      - name: registry.password
+        value: {{ env "REGISTRY_PASSWORD" | required "REGISTRY_PASSWORD is required" }}
     needs:
       - agent-farm/postgres-app
       - agent-farm/litellm
