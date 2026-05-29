@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 
+import { mockAgent } from "../pages/data-support/agent-data-support.po";
 import { DataSupport } from "../pages/data-support/data-support.po";
 import { DashboardPage } from "../pages/dashboard-page.po";
 
@@ -81,7 +82,7 @@ test.describe("Hire Dialog", () => {
     await expect(page.getByText(/step 5 of 5/i)).toBeVisible();
   });
 
-  test("should show model dropdown with one option", async ({ page }) => {
+  test("should show model dropdown with qwen as default and gpt-5-mini as option", async ({ page }) => {
     await page.getByRole("button", { name: /continue/i }).click();
     await page.getByText("Slack").click();
     await page.getByRole("button", { name: /continue/i }).click();
@@ -92,7 +93,52 @@ test.describe("Hire Dialog", () => {
     await page.getByRole("button", { name: /continue/i }).click();
 
     await expect(page.getByRole("combobox", { name: /model/i })).toBeVisible();
+    await expect(page.getByRole("combobox", { name: /model/i })).toHaveValue("litellm/qwen3.6-plus");
+    await expect(page.getByRole("option", { name: /qwen3\.6 plus/i })).toBeAttached();
     await expect(page.getByRole("option", { name: /gpt-5 mini/i })).toBeAttached();
+  });
+
+  test("should populate agent name from slack bot name", async ({ page }) => {
+    await page.getByRole("button", { name: /continue/i }).click();
+    await page.getByText("Slack").click();
+    await page.getByRole("button", { name: /continue/i }).click();
+    await page.getByText("Set up a new Slack bot").click();
+    await page.getByRole("button", { name: /continue/i }).click();
+
+    await page.getByPlaceholder("Aria").clear();
+    await page.getByPlaceholder("Aria").fill("My Slack Bot");
+    await page.getByRole("button", { name: /continue/i }).click();
+
+    await page.getByPlaceholder(/xapp-/i).fill("xapp-1-test");
+    await page.getByPlaceholder(/xoxb-/i).fill("xoxb-test");
+    await page.getByRole("button", { name: /continue/i }).click();
+
+    await expect(page.getByLabel("Name them")).toHaveValue("My Slack Bot");
+  });
+
+  test("should show Slack config panel after hiring and call start on skip", async ({ page }) => {
+    await dataSupportPage.agents.interceptCreateAgentRequest({ body: { ...mockAgent, status: "STOPPED" } });
+    await dataSupportPage.agents.interceptStartAgentRequest({ agentId: mockAgent.id });
+    await dataSupportPage.agents.interceptSlackChannelsRequest({ agentId: mockAgent.id });
+    await dataSupportPage.agents.interceptSlackUsersRequest({ agentId: mockAgent.id });
+
+    await page.getByRole("button", { name: /continue/i }).click();
+    await page.getByText("Slack").click();
+    await page.getByRole("button", { name: /continue/i }).click();
+    await page.getByText("I already have a Slack app").click();
+    await page.getByRole("button", { name: /continue/i }).click();
+    await page.getByPlaceholder(/xapp-/i).fill("xapp-1-test");
+    await page.getByPlaceholder(/xoxb-/i).fill("xoxb-test");
+    await page.getByRole("button", { name: /continue/i }).click();
+    await page.getByRole("button", { name: "Hire Aria" }).click();
+
+    await expect(page.getByText("Set up Slack access")).toBeVisible();
+
+    const startPromise = page.waitForRequest((req) =>
+      req.url().includes("/start") && req.method() === "POST"
+    );
+    await page.getByRole("button", { name: /skip for now/i }).click();
+    await startPromise;
   });
 
   test("should navigate back through steps", async ({ page }) => {

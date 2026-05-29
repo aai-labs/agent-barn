@@ -14,7 +14,7 @@ export type CreateAgentData = {
   slackBotToken?: string;
   slackAppToken?: string;
   slackGroupPolicy?: "open" | "allowlist";
-  slackDmPolicy?: "off" | "open" | "allowlist" | "pairing";
+  slackDmPolicy?: "off" | "open" | "allowlist";
   // Teams (required when platform=teams)
   teamsAppId?: string;
   teamsAppPassword?: string;

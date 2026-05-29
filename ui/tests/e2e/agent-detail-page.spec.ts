@@ -90,27 +90,6 @@ test.describe("Agent Detail Page", () => {
     await expect(page.getByRole("button", { name: /pause/i })).toBeVisible();
   });
 
-  test("shows Pair button only when RUNNING", async ({ page }) => {
-    await expect(page.getByRole("button", { name: /pair/i })).toBeVisible();
-
-    await dataSupportPage.agents.interceptGetAgentRequest({
-      body: { ...mockAgent, status: "STOPPED" },
-    });
-    await agentDetailPage.goto(MOCK_AGENT_ID);
-    await expect(page.getByRole("button", { name: /pair/i })).not.toBeVisible();
-  });
-
-  test("Pair dialog opens and submits OAuth code", async ({ page }) => {
-    await dataSupportPage.agents.interceptPairAgentRequest();
-
-    await page.getByRole("button", { name: /pair/i }).click();
-    await expect(page.getByText(`Pair Maya`)).toBeVisible();
-
-    await page.getByPlaceholder(/enter the code/i).fill("test-oauth-code");
-    await page.getByRole("button", { name: /connect/i }).click();
-
-    await expect(page.getByText(`Pair Maya`)).not.toBeVisible();
-  });
 });
 
 test.describe("Agent Detail Page — Tool calls tab", () => {
@@ -234,30 +213,6 @@ test.describe("Agent Detail Page — Channels tab", () => {
     await expect(agentDetailPage.dmPolicySelect()).toHaveValue("off");
   });
 
-  test("switching DM policy to pairing clears the user list and shows the note", async ({
-    page,
-  }) => {
-    await dataSupportPage.agents.interceptGetAgentRequest({
-      body: {
-        ...mockAgent,
-        status: "STOPPED",
-        slack_config: {
-          ...mockAgent.slack_config,
-          dm_policy: "allowlist",
-          dm_user_ids: ["U001"],
-        },
-      },
-    });
-    await agentDetailPage.goto(MOCK_AGENT_ID);
-    await agentDetailPage.configureButton().click();
-    await agentDetailPage.channelsTab().click();
-
-    await agentDetailPage.dmPolicySelect().selectOption("pairing");
-
-    await expect(
-      page.getByText(/all users will need to pair to gain access/i),
-    ).toBeVisible();
-  });
 
   test("focusing the channel search shows mocked channels in the dropdown", async ({
     page,

@@ -22,22 +22,11 @@ export function SlackConfigPanel({ agent, onSaved }: SlackConfigPanelProps) {
   const [channelIds, setChannelIds] = useState<string[]>(agent.slackConfig?.channelIds ?? []);
   const [userIds, setUserIds] = useState<string[]>(agent.slackConfig?.dmUserIds ?? []);
   const [groupPolicy, setGroupPolicy] = useState<"open" | "allowlist">(agent.slackConfig?.groupPolicy ?? "open");
-  const [dmPolicy, setDmPolicy] = useState<"off" | "open" | "allowlist" | "pairing">(agent.slackConfig?.dmPolicy ?? "off");
-  const [userListCleared, setUserListCleared] = useState(false);
+  const [dmPolicy, setDmPolicy] = useState<"off" | "open" | "allowlist">(agent.slackConfig?.dmPolicy ?? "off");
   const [channelSearch, setChannelSearch] = useState("");
   const [userSearch, setUserSearch] = useState("");
   const [channelFocused, setChannelFocused] = useState(false);
   const [userFocused, setUserFocused] = useState(false);
-
-  function handleDmPolicyChange(v: "off" | "open" | "allowlist" | "pairing") {
-    setDmPolicy(v);
-    if (v === "pairing" && userIds.length > 0) {
-      setUserIds([]);
-      setUserListCleared(true);
-    } else {
-      setUserListCleared(false);
-    }
-  }
   const [saved, setSaved] = useState(false);
 
   const selectedChannels = channels.filter((c) => channelIds.includes(c.id));
@@ -179,22 +168,16 @@ export function SlackConfigPanel({ agent, onSaved }: SlackConfigPanelProps) {
             className="af-input"
             value={dmPolicy}
             disabled={isRunning}
-            onChange={(e) => handleDmPolicyChange(e.target.value as "off" | "open" | "allowlist" | "pairing")}
+            onChange={(e) => setDmPolicy(e.target.value as "off" | "open" | "allowlist")}
           >
             <option value="off">Off — ignore direct messages</option>
             <option value="open">Open — anyone can DM</option>
             <option value="allowlist">Allowlist — only allowed users</option>
-            <option value="pairing">Pairing — users must pair first</option>
           </select>
         </div>
 
-        {(dmPolicy === "allowlist" || dmPolicy === "pairing") && (
+        {dmPolicy === "allowlist" && (
           <div className="flex flex-col gap-2">
-            {userListCleared && (
-              <p className="text-[0.781rem] leading-[1.5]" style={{ color: "var(--ink-4)" }}>
-                User list cleared — all users will need to pair to gain access.
-              </p>
-            )}
             {selectedUsers.length > 0 && (
               <div className="flex flex-wrap gap-1.5">
                 {selectedUsers.map((u) => (
@@ -258,12 +241,6 @@ export function SlackConfigPanel({ agent, onSaved }: SlackConfigPanelProps) {
               )}
             </div>
 
-            {dmPolicy === "pairing" && (
-              <p className="text-[0.781rem] leading-[1.5]" style={{ color: "var(--ink-4)" }}>
-                Users not on this list must pair by sending{" "}
-                <span className="font-mono">pair &lt;code&gt;</span> to {agent.name} first.
-              </p>
-            )}
           </div>
         )}
       </section>

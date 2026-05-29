@@ -8,11 +8,13 @@ metadata:
 data:
   config.yaml: |
     model_list:
-      - model_name: {{ .Values.model.name }}
+      {{- range .Values.models }}
+      - model_name: {{ .name }}
         litellm_params:
-          model: openrouter/{{ .Values.model.openrouterModel }}
+          model: openrouter/{{ .openrouterModel }}
           api_key: os.environ/OPENROUTER_API_KEY
           api_base: https://openrouter.ai/api/v1
+      {{- end }}
 
     general_settings:
       master_key: os.environ/LITELLM_MASTER_KEY

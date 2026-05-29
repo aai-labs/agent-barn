@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { XIcon, CheckIcon } from "@/components/icons";
 import { useCreateAgent } from "../hooks/use-create-agent";
+import { useStartAgent } from "../hooks/use-start-agent";
 import { DialogShell } from "./hire-dialog-primitives";
 import {
   ROLES, MODELS, RoleId, WizardStep, pickDefaults,
@@ -56,6 +57,7 @@ function stepTitle(step: WizardStep): string {
 
 export function HireDialog({ onClose, onHired }: HireDialogProps) {
   const createAgent = useCreateAgent();
+  const startAgent = useStartAgent();
 
   const [step, setStep] = useState<WizardStep>("role");
   const [pick, setPick] = useState<RoleId>("default");
@@ -73,7 +75,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   const [showBotToken, setShowBotToken] = useState(false);
   const [tokenError, setTokenError] = useState<string | null>(null);
   const [slackGroupPolicy, setSlackGroupPolicy] = useState<"open" | "allowlist">("allowlist");
-  const [slackDmPolicy, setSlackDmPolicy] = useState<"off" | "open" | "allowlist" | "pairing">("off");
+  const [slackDmPolicy, setSlackDmPolicy] = useState<"off" | "open" | "allowlist">("off");
   const [teamsAppId, setTeamsAppId] = useState("");
   const [teamsAppPassword, setTeamsAppPassword] = useState("");
   const [showTeamsAppPassword, setShowTeamsAppPassword] = useState(false);
@@ -267,7 +269,11 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
           </p>
           <SlackConfigPanel
             agent={createdAgent}
-            onSaved={() => onHired({ name, role: selected.title })}
+            onSaved={() => {
+              void startAgent.mutateAsync(createdAgent.id).then(() => {
+                onHired({ name, role: selected.title });
+              });
+            }}
           />
         </div>
         <footer
@@ -276,7 +282,11 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
         >
           <button
             className="af-btn af-btn-ghost"
-            onClick={() => onHired({ name, role: selected.title })}
+            onClick={() => {
+              void startAgent.mutateAsync(createdAgent.id).then(() => {
+                onHired({ name, role: selected.title });
+              });
+            }}
           >
             Skip for now
           </button>
@@ -374,7 +384,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
         {step === "slack-choice" && <SlackChoiceStep setupNewBot={setupNewBot} onChange={setSetupNewBot} />}
         {step === "bot-builder" && (
           <BotBuilderStep
-            botName={botName} onBotNameChange={setBotName}
+            botName={botName} onBotNameChange={(v) => { setBotName(v); setName(v); }}
             botDescription={botDescription} onBotDescriptionChange={setBotDescription}
             botColor={botColor} onBotColorChange={setBotColor}
           />
@@ -418,7 +428,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
             name={name} onNameChange={setName}
             model={model} onModelChange={setModel}
             slackGroupPolicy={slackGroupPolicy} onSlackGroupPolicyChange={(v) => setSlackGroupPolicy(v as "open" | "allowlist")}
-            slackDmPolicy={slackDmPolicy} onSlackDmPolicyChange={(v) => setSlackDmPolicy(v as "off" | "open" | "allowlist" | "pairing")}
+            slackDmPolicy={slackDmPolicy} onSlackDmPolicyChange={(v) => setSlackDmPolicy(v as "off" | "open" | "allowlist")}
             soulMd={soulMd} onSoulMdChange={setSoulMd}
             identityMd={identityMd} onIdentityMdChange={setIdentityMd}
             userMd={userMd} onUserMdChange={setUserMd}

@@ -4,7 +4,6 @@ from unittest.mock import patch
 from fastapi import status
 from hamcrest import (
     assert_that,
-    contains_inanyorder,
     contains_string,
     equal_to,
     has_key,
@@ -84,14 +83,14 @@ def _auth(context) -> dict:
     return {"Authorization": f"Bearer {context.access_token}"}
 
 
-def test_create_agent_returns_201():
+def test_create_slack_agent_returns_201_stopped():
     with given(_GIVEN) as context:
         client: TestClient = context.client
 
-        with when("I create an agent with valid data"):
+        with when("I create a Slack agent with valid data"):
             response = client.post(_BASE, json=_VALID_CREATE, headers=_auth(context))
 
-        with then("it returns 201 with the agent"):
+        with then("it returns 201 with status stopped"):
             assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             body = response.json()
             assert_that(body["name"], equal_to("My Agent"))
@@ -732,58 +731,19 @@ def test_start_agent_uses_default_model_when_empty():
             )
 
 
-def test_pair_agent_returns_output():
+def test_pair_slack_agent_returns_400():
     with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
         client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
-        k8s.get_pod_name_for_deployment.return_value = "agent-xxx-pod"
-        k8s.exec_command.return_value = "Pairing approved"
 
-        with when("I pair a running agent"):
+        with when("I pair a Slack agent"):
             response = client.post(
                 f"{_BASE}/{context.agent.id}/pair",
                 json={"platform": "slack", "code": "abc123"},
                 headers=_auth(context),
             )
 
-        with then("it returns 200 with the command output"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            assert_that(response.json()["message"], equal_to("Pairing approved"))
-            k8s.get_pod_name_for_deployment.assert_called_once()
-            assert_that(k8s.exec_command.call_count, equal_to(2))
-
-
-def test_pair_stopped_agent_returns_409():
-    with given([*_GIVEN, there_is_an_agent()]) as context:
-        client: TestClient = context.client
-
-        with when("I pair a stopped agent"):
-            response = client.post(
-                f"{_BASE}/{context.agent.id}/pair",
-                json={"platform": "slack", "code": "abc123"},
-                headers=_auth(context),
-            )
-
-        with then("it returns 409"):
-            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
-
-
-def test_pair_agent_no_pod_returns_409():
-    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
-        client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
-        k8s.get_pod_name_for_deployment.return_value = None
-
-        with when("I pair a running agent with no pod"):
-            response = client.post(
-                f"{_BASE}/{context.agent.id}/pair",
-                json={"platform": "slack", "code": "abc123"},
-                headers=_auth(context),
-            )
-
-        with then("it returns 409 and exec was not called"):
-            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
-            k8s.exec_command.assert_not_called()
+        with then("it returns 400"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
 
 
 def test_pair_agent_no_auth_returns_401():
@@ -1045,7 +1005,7 @@ def test_create_agent_with_slack_settings():
             "slack_channel_ids": ["C111", "C222"],
             "slack_dm_user_ids": ["U001"],
             "slack_group_policy": "allowlist",
-            "slack_dm_policy": "pairing",
+            "slack_dm_policy": "allowlist",
         }
 
         with when("I create an agent with Slack settings"):
@@ -1057,7 +1017,7 @@ def test_create_agent_with_slack_settings():
             assert_that(body["slack_config"]["channel_ids"], equal_to(["C111", "C222"]))
             assert_that(body["slack_config"]["dm_user_ids"], equal_to(["U001"]))
             assert_that(body["slack_config"]["group_policy"], equal_to("allowlist"))
-            assert_that(body["slack_config"]["dm_policy"], equal_to("pairing"))
+            assert_that(body["slack_config"]["dm_policy"], equal_to("allowlist"))
 
 
 def test_create_agent_defaults_to_allowlist_groups_dms_off():
@@ -1212,54 +1172,6 @@ def test_start_agent_allowlist_with_no_users_sets_empty_allow_from():
             assert_that(init_js, contains_string("slack-allowFrom.json"))
 
 
-def test_pair_agent_syncs_dm_user_ids():
-    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
-        client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
-        repository: AgentRepository = context.injector.get(AgentRepository)
-
-        k8s.get_pod_name_for_deployment.return_value = "agent-xxx-pod"
-        k8s.exec_command.side_effect = [
-            "Pairing approved",
-            json.dumps({"version": 1, "allowFrom": ["U111", "U222"]}),
-        ]
-
-        with when("I pair the agent"):
-            response = client.post(
-                f"{_BASE}/{context.agent.id}/pair",
-                json={"platform": "slack", "code": "ABCD1234"},
-                headers=_auth(context),
-            )
-
-        with then("the response is 200 and dm_user_ids is updated in the DB"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            slack_config = repository.get_slack_config(context.agent.id)
-            assert_that(slack_config.dm_user_ids, contains_inanyorder("U111", "U222"))
-
-
-def test_pair_agent_allow_from_read_failure_still_returns_200():
-    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
-        client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
-
-        k8s.get_pod_name_for_deployment.return_value = "agent-xxx-pod"
-        k8s.exec_command.side_effect = [
-            "Pairing approved",
-            Exception("file not found"),
-        ]
-
-        with when("I pair the agent but reading allowFrom fails"):
-            response = client.post(
-                f"{_BASE}/{context.agent.id}/pair",
-                json={"platform": "slack", "code": "ABCD1234"},
-                headers=_auth(context),
-            )
-
-        with then("it still returns 200"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            assert_that(response.json()["message"], equal_to("Pairing approved"))
-
-
 def test_list_slack_channels_returns_filtered_list():
     with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
         client: TestClient = context.client
@@ -1343,7 +1255,7 @@ def test_list_slack_users_excludes_bots_and_deleted():
             assert_that(results[0]["id"], equal_to("U001"))
 
 
-def test_create_teams_agent_returns_201():
+def test_create_teams_agent_returns_201_and_starts_agent():
     with given(_GIVEN) as context:
         client: TestClient = context.client
 
@@ -1352,11 +1264,12 @@ def test_create_teams_agent_returns_201():
                 _BASE, json=_VALID_CREATE_TEAMS, headers=_auth(context)
             )
 
-        with then("it returns 201 with platform teams and webhook_url"):
+        with then("it returns 201 with status running and webhook_url"):
             assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             body = response.json()
             assert_that(body["name"], equal_to("My Teams Agent"))
             assert_that(body["platform"], equal_to("teams"))
+            assert_that(body["status"], equal_to(AgentStatus.RUNNING.value))
             assert_that(body["teams_config"]["tenant_id"], equal_to("test-tenant-000"))
             assert_that(body, has_key("webhook_url"))
             assert_that(body["webhook_url"], contains_string("/webhooks/teams/"))

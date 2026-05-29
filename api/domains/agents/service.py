@@ -1,5 +1,4 @@
 import datetime
-import json
 import logging
 from dataclasses import dataclass
 from uuid import UUID
@@ -238,6 +237,8 @@ class AgentService:
             )
             self.repository.save_teams_config(teams_config)
 
+        if data.platform == AgentPlatform.TEAMS:
+            return self.start_agent(agent.id, context)
         return self._build_agent_read(agent, slack_config, teams_config)
 
     def get_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
@@ -581,10 +582,10 @@ class AgentService:
         org_id = self._org_id(context)
         agent = self._get_active_or_404(agent_id, org_id)
 
-        if agent.platform != AgentPlatform.SLACK:
+        if agent.platform in (AgentPlatform.SLACK, AgentPlatform.TEAMS):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Pairing is only supported for Slack agents",
+                detail="Pairing is not supported for this platform",
             )
 
         if agent.status != AgentStatus.RUNNING:
@@ -615,28 +616,6 @@ class AgentService:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to execute pairing command in agent {agent_id}",
             ) from exc
-
-        try:
-            allow_from_raw = self.k8s.exec_command(
-                pod_name,
-                ns,
-                [
-                    "cat",
-                    "/home/node/.openclaw/credentials/slack-default-allowFrom.json",
-                ],
-            )
-            paired_user_ids = json.loads(allow_from_raw).get("allowFrom", [])
-            if isinstance(paired_user_ids, list):
-                slack_config = self.repository.get_slack_config(agent.id)
-                if slack_config:
-                    existing: set[str] = set(slack_config.dm_user_ids or [])
-                    paired: set[str] = {str(u) for u in paired_user_ids}
-                    slack_config.dm_user_ids = list(existing | paired)
-                    self.repository.save_slack_config(slack_config)
-        except Exception:
-            logger.warning(
-                "Could not sync allowFrom for agent %s after pairing", agent_id
-            )
 
         return output
 

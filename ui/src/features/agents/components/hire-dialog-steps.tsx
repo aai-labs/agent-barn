@@ -23,7 +23,7 @@ export type WizardStep =
   | "teams-credentials"
   | "details";
 
-export const MODELS = [{ value: "litellm/gpt-5-mini", label: "GPT-5 mini" }] as const;
+export const MODELS = [{ value: "litellm/qwen3.6-plus", label: "Qwen3.6 Plus" }, { value: "litellm/gpt-5-mini", label: "GPT-5 mini" }] as const;
 
 export const BOT_COLOR_PRESETS = ["#4A154B", "#1264A3", "#2BAC76", "#E8912D", "#CC4400"];
 const TEAMS_DEVELOPER_NAME = "Agent Farm";
@@ -824,7 +824,6 @@ export function DetailsStep({
               onChange={(e) => onSlackDmPolicyChange(e.target.value)}
             >
               <option value="off">Off — ignore direct messages</option>
-              <option value="pairing">Pairing — users must pair first</option>
               <option value="allowlist">Allowlist — only allowed users</option>
               <option value="open">Open — anyone can DM</option>
             </select>
