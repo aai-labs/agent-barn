@@ -76,7 +76,7 @@ jobs:
       - name: Build and push UI image
         run: |
           docker build \
-            --build-arg NEXT_PUBLIC_BACKEND_URL=${{ secrets.API_EXTERNAL_URL }} \
+            --build-arg NEXT_PUBLIC_BACKEND_URL=https://${{ secrets.API_HOST }} \
             -t '${{ secrets.REGISTRY_URL }}/agentfarm-ui:${{ env.UI_IMAGE_TAG }}' \
             -f ui/Dockerfile \
             ui/
@@ -134,7 +134,8 @@ jobs:
           AGENT_TOKEN_ENCRYPTION_KEY: ${{ secrets.AGENT_TOKEN_ENCRYPTION_KEY }}
           ENVIRONMENT: production
           WEB_APP_URL: ${{ secrets.WEB_APP_URL }}
-          API_EXTERNAL_URL: ${{ secrets.API_EXTERNAL_URL }}
+          API_HOST: ${{ secrets.API_HOST }}
+          UI_HOST: ${{ secrets.UI_HOST }}
           KUBECONFIG_B64: ${{ secrets.KUBECONFIG_B64 }}
           REGISTRY_SERVER: ${{ secrets.REGISTRY_URL }}
           REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
