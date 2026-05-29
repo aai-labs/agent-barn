@@ -3,7 +3,7 @@
 import json
 from datetime import datetime, timedelta, timezone
 from fastapi import status
-from hamcrest import assert_that, equal_to, has_length, is_in
+from hamcrest import assert_that, equal_to, has_length
 from starlette.testclient import TestClient
 
 from api.domains.agents.models import AgentStatus
@@ -221,12 +221,12 @@ def test_list_messages_returns_latest_page_first_with_default_page_size():
                 headers=_auth(context),
             )
 
-        with then("the latest 6 channel messages are returned, has_more=True"):
+        with then("the latest 6 threads are returned oldest-first, has_more=True"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             body = response.json()
-            assert_that(body["messages"], has_length(6))
-            contents = [m["content"] for m in body["messages"]]
-            # ascending order, last 6 of 10 (msg-4 .. msg-9)
+            assert_that(body["threads"], has_length(6))
+            contents = [t["root"]["content"] for t in body["threads"]]
+            # oldest-first within page, last 6 of 10 (msg-4 .. msg-9)
             assert_that(contents, equal_to([f"msg-{i}" for i in range(4, 10)]))
             assert_that(body["has_more"], equal_to(True))
             assert_that(body["next_cursor"] is not None, equal_to(True))
@@ -264,7 +264,7 @@ def test_list_messages_cursor_pagination_returns_older_page():
         with then("the older page is returned and has_more=False"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             body = response.json()
-            contents = [m["content"] for m in body["messages"]]
+            contents = [t["root"]["content"] for t in body["threads"]]
             assert_that(contents, equal_to([f"msg-{i}" for i in range(0, 4)]))
             assert_that(body["has_more"], equal_to(False))
             assert_that(body["next_cursor"] is None, equal_to(True))
@@ -295,28 +295,31 @@ def test_list_messages_date_range_filter():
 
         with then("only the in-range messages are returned"):
             body = response.json()
-            contents = [m["content"] for m in body["messages"]]
+            contents = [t["root"]["content"] for t in body["threads"]]
             assert_that(contents, equal_to(["m1", "m2", "m3"]))
 
 
 def test_list_messages_bundles_thread_messages_within_page_window():
     with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
         client: TestClient = context.client
-        base = datetime(2025, 5, 1, 12, 0, 0, tzinfo=timezone.utc)
+        # thread_id must match root's occurred_at unix ts within 5 seconds
+        root_ts = 1746100800
+        root_dt = datetime.fromtimestamp(root_ts, tz=timezone.utc)
+        thread_id = f"{root_ts}.000000"
         _seed_message(
             context,
             direction=MessageDirection.INBOUND,
             channel_id="CABC",
             content="parent",
-            occurred_at=base,
+            occurred_at=root_dt,
         )
         _seed_message(
             context,
             direction=MessageDirection.OUTBOUND,
             channel_id="CABC",
-            thread_id="1779269814.824809",
+            thread_id=thread_id,
             content="thread-reply",
-            occurred_at=base + timedelta(minutes=1),
+            occurred_at=root_dt + timedelta(minutes=1),
         )
 
         with when("I list messages for the channel"):
@@ -325,15 +328,13 @@ def test_list_messages_bundles_thread_messages_within_page_window():
                 headers=_auth(context),
             )
 
-        with then("the thread reply is included alongside the channel message"):
+        with then("thread reply is nested under the root in a single thread"):
             body = response.json()
-            contents = [m["content"] for m in body["messages"]]
-            assert_that("parent", is_in(contents))
-            assert_that("thread-reply", is_in(contents))
-            thread_msg = next(
-                m for m in body["messages"] if m["content"] == "thread-reply"
-            )
-            assert_that(thread_msg["thread_id"], equal_to("1779269814.824809"))
+            assert_that(body["threads"], has_length(1))
+            thread = body["threads"][0]
+            assert_that(thread["root"]["content"], equal_to("parent"))
+            assert_that(thread["replies"], has_length(1))
+            assert_that(thread["replies"][0]["content"], equal_to("thread-reply"))
 
 
 def test_list_messages_running_agent_submits_sync_does_not_block():
@@ -355,5 +356,5 @@ def test_list_messages_running_agent_submits_sync_does_not_block():
         with then("the cached message is returned without waiting for sync"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             body = response.json()
-            contents = [m["content"] for m in body["messages"]]
-            assert_that(contents, equal_to(["cached"]))
+            assert_that(body["threads"], has_length(1))
+            assert_that(body["threads"][0]["root"]["content"], equal_to("cached"))

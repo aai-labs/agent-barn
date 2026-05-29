@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from uuid import UUID
 
 from injector import inject, singleton
@@ -8,6 +7,7 @@ from sqlmodel import Session, and_, col, or_, select
 
 from api.domains.conversations.models import (
     AgentChatMessage,
+    ConversationType,
     ConversationsCursor,
     ConversationsFilter,
 )
@@ -35,6 +35,7 @@ class ConversationRepository:
                     "channel_id": m.channel_id,
                     "thread_id": m.thread_id,
                     "direction": m.direction,
+                    "conversation_type": m.conversation_type,
                     "sender_id": m.sender_id,
                     "sender_name": m.sender_name,
                     "channel_name": m.channel_name,
@@ -47,6 +48,7 @@ class ConversationRepository:
             stmt = stmt.on_conflict_do_update(
                 constraint="uq_agent_chat_message_agent_msg",
                 set_={
+                    "thread_id": stmt.excluded.thread_id,
                     "sender_name": stmt.excluded.sender_name,
                     "channel_name": stmt.excluded.channel_name,
                     "content": stmt.excluded.content,
@@ -56,16 +58,19 @@ class ConversationRepository:
             session.exec(stmt)  # type: ignore[call-overload]
             session.commit()
 
-    def distinct_channels(self, agent_id: UUID) -> list[tuple[str, str | None]]:
-        """Returns DISTINCT (channel_id, channel_name) pairs for an agent.
+    def distinct_channels(
+        self, agent_id: UUID
+    ) -> list[tuple[str, str | None, ConversationType]]:
+        """Returns DISTINCT (channel_id, channel_name, conversation_type) per agent.
 
-        Picks the latest non-null channel_name per channel.
+        Picks the latest non-null channel_name per channel_id.
         """
         with Session(self.delegate.engine) as session:
             query = (
                 select(
                     AgentChatMessage.channel_id,
                     AgentChatMessage.channel_name,
+                    AgentChatMessage.conversation_type,
                 )
                 .where(col(AgentChatMessage.agent_id) == agent_id)
                 .order_by(
@@ -75,7 +80,7 @@ class ConversationRepository:
                 .distinct(col(AgentChatMessage.channel_id))
             )
             rows = session.exec(query).all()
-            return [(r[0], r[1]) for r in rows]
+            return [(r[0], r[1], r[2]) for r in rows]
 
     def find_channel_page(
         self,
@@ -85,26 +90,22 @@ class ConversationRepository:
         cursor: ConversationsCursor,
         page_size: int,
     ) -> tuple[list[AgentChatMessage], ConversationsCursor | None]:
-        """Fetch a page of channel-level messages + their thread replies.
+        """Fetch a page of messages for a channel.
 
         Returns messages ordered occurred_at ASC for direct UI append.
-        next_cursor is None if there are no older channel-level messages.
+        Pages flat by occurred_at — channel-root and thread-reply messages are
+        treated uniformly so threads remain visible even when no top-level
+        @-mention exists.
         """
         with Session(self.delegate.engine) as session:
-            base_filters = [
+            filters = [
                 col(AgentChatMessage.agent_id) == agent_id,
                 col(AgentChatMessage.channel_id) == channel_id,
             ]
             if filter.from_date is not None:
-                base_filters.append(
-                    col(AgentChatMessage.occurred_at) >= filter.from_date
-                )
+                filters.append(col(AgentChatMessage.occurred_at) >= filter.from_date)
             if filter.to_date is not None:
-                base_filters.append(col(AgentChatMessage.occurred_at) < filter.to_date)
-
-            channel_filters = list(base_filters) + [
-                col(AgentChatMessage.thread_id).is_(None)
-            ]
+                filters.append(col(AgentChatMessage.occurred_at) < filter.to_date)
             if cursor.before_occurred_at is not None:
                 tiebreaker = (
                     col(AgentChatMessage.occurred_at) < cursor.before_occurred_at
@@ -118,25 +119,25 @@ class ConversationRepository:
                             col(AgentChatMessage.id) < cursor.before_id,
                         ),
                     )
-                channel_filters.append(tiebreaker)
+                filters.append(tiebreaker)
 
-            channel_query = (
+            query = (
                 select(AgentChatMessage)
-                .where(*channel_filters)
+                .where(*filters)
                 .order_by(
                     col(AgentChatMessage.occurred_at).desc(),
                     col(AgentChatMessage.id).desc(),
                 )
                 .limit(page_size + 1)
             )
-            channel_msgs_desc = list(session.exec(channel_query).all())
+            msgs_desc = list(session.exec(query).all())
 
-            has_more = len(channel_msgs_desc) > page_size
-            channel_msgs_desc = channel_msgs_desc[:page_size]
-            if not channel_msgs_desc:
+            has_more = len(msgs_desc) > page_size
+            msgs_desc = msgs_desc[:page_size]
+            if not msgs_desc:
                 return [], None
 
-            oldest = channel_msgs_desc[-1]
+            oldest = msgs_desc[-1]
             next_cursor: ConversationsCursor | None = (
                 ConversationsCursor(
                     before_occurred_at=oldest.occurred_at, before_id=oldest.id
@@ -144,21 +145,31 @@ class ConversationRepository:
                 if has_more
                 else None
             )
+            msgs_desc.reverse()
+            return msgs_desc, next_cursor
 
-            window_start = oldest.occurred_at
-            window_end = (
-                cursor.before_occurred_at
-                if cursor.before_occurred_at is not None
-                else datetime(9999, 12, 31, tzinfo=timezone.utc)
-            )
-            thread_filters = list(base_filters) + [
-                col(AgentChatMessage.thread_id).is_not(None),
-                col(AgentChatMessage.occurred_at) >= window_start,
-                col(AgentChatMessage.occurred_at) < window_end,
+    def find_all_channel_messages(
+        self,
+        agent_id: UUID,
+        channel_id: str,
+        filter: ConversationsFilter,
+    ) -> list[AgentChatMessage]:
+        """Return all messages for a channel in the filter range, ordered occurred_at ASC."""
+        with Session(self.delegate.engine) as session:
+            filters = [
+                col(AgentChatMessage.agent_id) == agent_id,
+                col(AgentChatMessage.channel_id) == channel_id,
             ]
-            thread_query = select(AgentChatMessage).where(*thread_filters)
-            thread_msgs = list(session.exec(thread_query).all())
-
-            merged = channel_msgs_desc + thread_msgs
-            merged.sort(key=lambda m: (m.occurred_at, m.id))
-            return merged, next_cursor
+            if filter.from_date is not None:
+                filters.append(col(AgentChatMessage.occurred_at) >= filter.from_date)
+            if filter.to_date is not None:
+                filters.append(col(AgentChatMessage.occurred_at) < filter.to_date)
+            query = (
+                select(AgentChatMessage)
+                .where(*filters)
+                .order_by(
+                    col(AgentChatMessage.occurred_at).asc(),
+                    col(AgentChatMessage.id).asc(),
+                )
+            )
+            return list(session.exec(query).all())
