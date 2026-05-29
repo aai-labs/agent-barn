@@ -20,7 +20,7 @@ spec:
         {{- toYaml .Values.imagePullSecrets | nindent 8 }}
       containers:
         - name: api
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: "{{ .Values.registryPrefix }}/{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: http
@@ -34,7 +34,7 @@ spec:
             - name: K8S_KUBECONFIG_PATH
               value: /etc/kubeconfig/kubeconfig
             - name: AGENT_IMAGE
-              value: "{{ .Values.openclawImage.repository }}:{{ .Values.openclawImage.tag }}"
+              value: "{{ .Values.registryPrefix }}/{{ .Values.openclawImage.repository }}:{{ .Values.openclawImage.tag }}"
             - name: API_EXTERNAL_URL
               value: "{{ .Values.apiExternalUrl }}"
             - name: LITELLM_BASE_URL

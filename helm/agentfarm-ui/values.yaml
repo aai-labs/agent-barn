@@ -1,5 +1,7 @@
+registryPrefix: "registry.k8s.aai-labs.com"
+
 image:
-  repository: registry.k8s.aai-labs.com/agentfarm-ui
+  repository: agentfarm-ui
   tag: latest
   pullPolicy: Always
 

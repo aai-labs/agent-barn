@@ -1,10 +1,12 @@
+registryPrefix: "registry.k8s.aai-labs.com"
+
 image:
-  repository: registry.k8s.aai-labs.com/agentfarm-api
+  repository: agentfarm-api
   tag: latest
   pullPolicy: Always
 
 openclawImage:
-  repository: registry.k8s.aai-labs.com/agentfarm-openclaw-base
+  repository: agentfarm-openclaw-base
   tag: latest
 
 replicaCount: 1
