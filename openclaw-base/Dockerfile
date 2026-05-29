@@ -1,4 +1,16 @@
+# syntax=docker/dockerfile:1
+FROM rust:1-slim-bookworm AS rust-build
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      git pkg-config libssl-dev ca-certificates && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+RUN --mount=type=secret,id=gh_token \
+    git clone --depth 1 \
+      "https://x-access-token:$(cat /run/secrets/gh_token)@github.com/aai-labs/agent-cli-tools.git" repo && \
+    cargo install --path repo --root /out --locked
+
 FROM node:22-bookworm-slim
+COPY --from=rust-build /out/bin/ /usr/local/bin/
 
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright \
     UV_PYTHON_INSTALL_DIR=/opt/python \
