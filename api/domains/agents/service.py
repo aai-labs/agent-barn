@@ -8,6 +8,12 @@ from injector import inject, singleton
 
 from api.core.config import Config
 from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
+from api.domains.agents.aai_cli_artifacts import (
+    build_config_toml,
+    build_env,
+    build_setup_sh,
+    provider_to_secret_name_map,
+)
 from api.domains.agents.builders import (
     build_config_map,
     build_deployment,
@@ -45,6 +51,8 @@ from api.domains.agents.models import (
     AgentTemplateRead,
     AgentUpdate,
     PairRequest,
+    SecretProvider,
+    decrypt_content,
     encrypt_content,
     validate_content,
 )
@@ -514,6 +522,26 @@ class AgentService:
                 detail=f"Unsupported platform: {agent.platform}",
             )
 
+        # aai-cli integration secrets (platform-independent). Render a config.toml profile per
+        # stored secret; for the store-based providers also run `secrets set` and inject the token
+        # value as an env var on the agent's k8s Secret.
+        agent_secrets = self.repository.get_secrets_for_agent(agent.id)
+        decrypted = {
+            SecretProvider(s.provider): decrypt_content(
+                SecretProvider(s.provider), s.content, self.config.agent_token_encryption_key
+            )
+            for s in agent_secrets
+        }
+        store = {
+            p: c
+            for p, c in decrypted.items()
+            if p.value in provider_to_secret_name_map
+        }
+        aai_config_toml = build_config_toml(decrypted) if decrypted else None
+        aai_setup_sh = build_setup_sh(list(store)) if decrypted else None
+        if store:
+            secret.string_data.update(build_env(store))
+
         try:
             self.k8s.delete_config_map(name, ns)
             self.k8s.delete_secret(name, ns)
@@ -532,6 +560,8 @@ class AgentService:
                     bootstrap_md=template.bootstrap_md,
                     heartbeat_md=template.heartbeat_md,
                     openclaw_config_overlay=overlay,
+                    aai_cli_config_toml=aai_config_toml,
+                    aai_cli_setup_sh=aai_setup_sh,
                 ),
             )
             self.k8s.create_secret(ns, secret)
