@@ -79,7 +79,7 @@ releases:
       - name: apiExternalUrl
         value: {{ printf "https://%s" (env "API_HOST" | required "API_HOST is required") | quote }}
       - name: kubeconfigB64
-        value: {{ env "KUBECONFIG_B64" | required "KUBECONFIG_B64 is required" | quote }}
+        value: {{ env "POD_KUBECONFIG_B64" | required "POD_KUBECONFIG_B64 is required" | quote }}
       - name: registry.server
         value: {{ env "REGISTRY_SERVER" | required "REGISTRY_SERVER is required" | quote }}
       - name: registry.username

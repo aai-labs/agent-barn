@@ -137,6 +137,7 @@ jobs:
           API_HOST: ${{ secrets.API_HOST }}
           UI_HOST: ${{ secrets.UI_HOST }}
           KUBECONFIG_B64: ${{ secrets.KUBECONFIG_B64 }}
+          POD_KUBECONFIG_B64: ${{ secrets.POD_KUBECONFIG_B64 }}
           REGISTRY_SERVER: ${{ secrets.REGISTRY_URL }}
           REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
           REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
