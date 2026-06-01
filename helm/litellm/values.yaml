@@ -5,9 +5,13 @@ image:
 
 replicaCount: 1
 
-# Name of the pre-existing k8s Secret containing:
+# Name of the k8s Secret containing:
 #   LITELLM_MASTER_KEY, OPENROUTER_API_KEY, DATABASE_URL
 secretName: litellm
+
+masterKey: ""
+openrouterApiKey: ""
+databaseUrl: ""
 
 models:
   - name: qwen3.6-plus
