@@ -27,12 +27,15 @@ from api.domains.agents.defaults import (
     DEFAULT_USER_MD,
 )
 from api.domains.agents.models import (
+    PROVIDER_DISPLAY_NAMES,
     Agent,
     AgentCreate,
     AgentFilter,
     AgentHealthRead,
     AgentPlatform,
     AgentRead,
+    AgentSecret,
+    AgentSecretRead,
     AgentSlackConfig,
     AgentSlackConfigRead,
     AgentStatus,
@@ -42,6 +45,8 @@ from api.domains.agents.models import (
     AgentTemplateRead,
     AgentUpdate,
     PairRequest,
+    encrypt_content,
+    validate_content,
 )
 from api.domains.agents.repository import AgentRepository
 from api.domains.auth.models import CurrentUserContext
@@ -115,6 +120,7 @@ class AgentService:
         agent: Agent,
         slack_config: AgentSlackConfig | None = None,
         teams_config: AgentTeamsConfig | None = None,
+        secrets: list[AgentSecret] | None = None,
     ) -> AgentRead:
         slack_config_read = (
             AgentSlackConfigRead.model_validate(slack_config) if slack_config else None
@@ -122,6 +128,9 @@ class AgentService:
         teams_config_read = (
             AgentTeamsConfigRead.model_validate(teams_config) if teams_config else None
         )
+        secrets_read = [
+            AgentSecretRead.model_validate(secret) for secret in (secrets or [])
+        ]
         webhook_url = (
             f"{self.config.api_external_url}/api/v1/webhooks/teams/{agent.id}/messages"
             if agent.platform == AgentPlatform.TEAMS and self.config.api_external_url
@@ -138,6 +147,7 @@ class AgentService:
             model=agent.model,
             slack_config=slack_config_read,
             teams_config=teams_config_read,
+            secrets=secrets_read,
             webhook_url=webhook_url,
             created_at=agent.created_at,
             updated_at=agent.updated_at,
@@ -150,7 +160,8 @@ class AgentService:
             slack_config = self.repository.get_slack_config(agent.id)
         elif agent.platform == AgentPlatform.TEAMS:
             teams_config = self.repository.get_teams_config(agent.id)
-        return self._build_agent_read(agent, slack_config, teams_config)
+        secrets = self.repository.get_secrets_for_agent(agent.id)
+        return self._build_agent_read(agent, slack_config, teams_config, secrets)
 
     def create_agent(self, data: AgentCreate, context: CurrentUserContext) -> AgentRead:
         org_id = self._org_id(context)
@@ -237,9 +248,27 @@ class AgentService:
             )
             self.repository.save_teams_config(teams_config)
 
+        # Integration secrets are platform-independent. Persist them before any
+        # Teams auto-start so they exist if/when the pod is later built.
+        secrets: list[AgentSecret] = []
+        for item in data.secrets:
+            content = validate_content(item.provider, item.content)
+            secrets.append(
+                self.repository.save_secret(
+                    AgentSecret(
+                        agent_id=agent.id,
+                        provider=item.provider,
+                        secret_name=PROVIDER_DISPLAY_NAMES[item.provider],
+                        content=encrypt_content(
+                            content, self.config.agent_token_encryption_key
+                        ),
+                    )
+                )
+            )
+
         if data.platform == AgentPlatform.TEAMS:
             return self.start_agent(agent.id, context)
-        return self._build_agent_read(agent, slack_config, teams_config)
+        return self._build_agent_read(agent, slack_config, teams_config, secrets)
 
     def get_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
         org_id = self._org_id(context)
@@ -275,12 +304,14 @@ class AgentService:
         agent_ids = [a.id for a in agents]
         slack_configs = self.repository.get_slack_configs_for_agents(agent_ids)
         teams_configs = self.repository.get_teams_configs_for_agents(agent_ids)
+        secrets_by_agent = self.repository.get_secrets_for_agents(agent_ids)
 
         items = [
             self._build_agent_read(
                 agent,
                 slack_configs.get(agent.id),
                 teams_configs.get(agent.id),
+                secrets_by_agent.get(agent.id, []),
             )
             for agent in agents
         ]
