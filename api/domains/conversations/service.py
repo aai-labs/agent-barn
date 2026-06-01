@@ -10,8 +10,14 @@ from fastapi import HTTPException, status
 from injector import inject, singleton
 
 from api.core.config import Config
-from api.domains.agents.models import AgentPlatform, AgentStatus
+from api.domains.agents.models import AgentPlatform, AgentStatus, AgentType
 from api.domains.agents.repository import AgentRepository
+from api.domains.conversations.hermes_parser import (
+    HERMES_SESSIONS_PATH,
+    hermes_channel_sessions,
+    hermes_distinct_conversations,
+    parse_hermes_export,
+)
 from api.domains.conversations.models import (
     AgentChatMessage,
     ConversationChannelRead,
@@ -220,6 +226,77 @@ class ConversationSyncService:
             logger.warning("Failed to read JSONL at %s: %s", file_path, e)
             return ""
 
+    def _is_hermes(self, agent_id: UUID) -> bool:
+        agent = self.agent_repository.get_by_id(agent_id)
+        return agent is not None and agent.agent_type == AgentType.HERMES
+
+    def _export_hermes_session(self, pod_name: str, ns: str, session_id: str) -> str:
+        try:
+            return self.k8s.exec_command(
+                pod_name,
+                ns,
+                ["hermes", "sessions", "export", "--session-id", session_id, "-"],
+            )
+        except Exception as e:
+            logger.warning("Failed to export hermes session %s: %s", session_id, e)
+            return ""
+
+    def _read_hermes_sessions_json(self, pod_name: str, ns: str) -> str:
+        try:
+            return self.k8s.exec_command(pod_name, ns, ["cat", HERMES_SESSIONS_PATH])
+        except Exception as e:
+            logger.warning("Failed to read hermes sessions.json: %s", e)
+            return ""
+
+    def _sync_hermes_channel(
+        self,
+        agent_id: UUID,
+        pod_name: str,
+        ns: str,
+        channel_id: str,
+    ) -> int:
+        sessions_json = self._read_hermes_sessions_json(pod_name, ns)
+        if not sessions_json:
+            return 0
+        targets = hermes_channel_sessions(sessions_json, channel_id)
+        if not targets:
+            return 0
+
+        user_map, _ = self._platform_maps(agent_id)
+        all_messages: list[AgentChatMessage] = []
+
+        import json as _json
+        try:
+            sessions_data = _json.loads(sessions_json)
+        except _json.JSONDecodeError:
+            sessions_data = {}
+
+        for session_key, session_id in targets:
+            raw = self._export_hermes_session(pod_name, ns, session_id)
+            if not raw:
+                continue
+            session_meta = sessions_data.get(session_key) or {}
+            origin = session_meta.get("origin") or {}
+            chat_type = session_meta.get("chat_type") or "channel"
+            display_name = origin.get("user_name") if chat_type == "dm" else None
+            for line in raw.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                messages = parse_hermes_export(
+                    agent_id,
+                    session_key,
+                    channel_id.upper(),
+                    chat_type,
+                    line,
+                    user_map,
+                    display_name,
+                )
+                all_messages.extend(messages)
+
+        self.repository.upsert_messages(all_messages)
+        return len(all_messages)
+
     def _platform_maps(self, agent_id: UUID) -> tuple[dict[str, str], dict[str, str]]:
         agent = self.agent_repository.get_by_id(agent_id)
         if not (agent and self.config.agent_token_encryption_key):
@@ -305,6 +382,13 @@ class ConversationSyncService:
             logger.info("No running pod for agent %s — skipping channel sync", agent_id)
             return
 
+        if self._is_hermes(agent_id):
+            n = self._sync_hermes_channel(agent_id, pod_name, ns, channel_id)
+            logger.info(
+                "Synced %d messages for hermes agent %s channel %s", n, agent_id, channel_id
+            )
+            return
+
         sessions_json = self._read_sessions_json(pod_name, ns)
         if not sessions_json:
             return
@@ -353,10 +437,14 @@ class ConversationSyncService:
         if not pod_name:
             logger.info("No pod for agent %s — skipping full sync", agent_id)
             return
-        sessions_json = self._read_sessions_json(pod_name, ns)
-        if not sessions_json:
-            return
-        conversations = _distinct_pod_conversations(sessions_json)
+
+        if self._is_hermes(agent_id):
+            sessions_json = self._read_hermes_sessions_json(pod_name, ns)
+            conversations = hermes_distinct_conversations(sessions_json) if sessions_json else []
+        else:
+            sessions_json = self._read_sessions_json(pod_name, ns)
+            conversations = _distinct_pod_conversations(sessions_json) if sessions_json else []
+
         if not conversations:
             return
         conversation_ids = [conv[0] for conv in conversations]
@@ -517,18 +605,25 @@ class ConversationService:
             try:
                 pod_name, ns = self.sync_service._pod_or_none(agent_id)
                 if pod_name:
-                    sessions_json = self.sync_service._read_sessions_json(pod_name, ns)
-                    if sessions_json:
-                        pod_conversations = _distinct_pod_conversations(sessions_json)
-                        slack_channel_map: dict[str, str] = {}
-                        if pod_conversations:
-                            _, slack_channel_map = self.sync_service._platform_maps(
-                                agent_id
-                            )
+                    if agent.agent_type == AgentType.HERMES:
+                        sessions_json = self.sync_service._read_hermes_sessions_json(pod_name, ns)
+                        pod_conversations = hermes_distinct_conversations(sessions_json) if sessions_json else []
                         for cid, ctype, display_name in pod_conversations:
                             if cid not in merged or merged[cid][0] is None:
-                                name = slack_channel_map.get(cid) or display_name
-                                merged[cid] = (name, ctype)
+                                merged[cid] = (display_name, ctype)
+                    else:
+                        sessions_json = self.sync_service._read_sessions_json(pod_name, ns)
+                        if sessions_json:
+                            pod_conversations = _distinct_pod_conversations(sessions_json)
+                            slack_channel_map: dict[str, str] = {}
+                            if pod_conversations:
+                                _, slack_channel_map = self.sync_service._platform_maps(
+                                    agent_id
+                                )
+                            for cid, ctype, display_name in pod_conversations:
+                                if cid not in merged or merged[cid][0] is None:
+                                    name = slack_channel_map.get(cid) or display_name
+                                    merged[cid] = (name, ctype)
             except Exception as e:
                 logger.warning(
                     "list_channels: pod read failed for agent %s: %s", agent_id, e

@@ -16,6 +16,7 @@ export const AgentSchema = z.object({
   name: z.string(),
   status: z.enum(["STOPPED", "RUNNING", "ERROR"]),
   platform: z.enum(["slack", "teams"]),
+  agentType: z.enum(["openclaw", "hermes"]).default("openclaw"),
   organizationId: z.string().uuid(),
   templateId: z.string().uuid(),
   templateVersion: z.number().int(),

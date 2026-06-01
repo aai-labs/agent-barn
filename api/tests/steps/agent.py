@@ -21,6 +21,7 @@ from api.domains.agents.models import (
     AgentStatus,
     AgentTeamsConfig,
     AgentTemplate,
+    AgentType,
 )
 from api.domains.agents.repository import AgentRepository
 from api.domains.auth.utils import set_default_org_id
@@ -63,6 +64,7 @@ def there_is_an_agent(
     organization_id: UUID | None = None,
     model: str = "",
     platform: AgentPlatform = AgentPlatform.SLACK,
+    agent_type: AgentType = AgentType.OPENCLAW,
 ):
     def step(context):
         org_id = organization_id or context.organization.id
@@ -89,6 +91,7 @@ def there_is_an_agent(
             model=model,
             status=status,
             platform=platform,
+            agent_type=agent_type,
             template_id=template.id,
             template_version=template.version,
         )

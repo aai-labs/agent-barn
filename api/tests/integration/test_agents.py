@@ -23,7 +23,7 @@ from api.tests.core.modules import (
     prepare_injector,
     set_env_variable,
 )
-from api.domains.agents.models import AgentPlatform
+from api.domains.agents.models import AgentPlatform, AgentType
 from api.tests.steps.agent import (
     FAKE_LITELLM_KEY,
     TEST_ENCRYPTION_KEY,
@@ -1444,3 +1444,331 @@ def test_pair_teams_agent_returns_400():
 
         with then("it returns 400"):
             assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+
+
+# ---------------------------------------------------------------------------
+# Hermes agent tests
+# ---------------------------------------------------------------------------
+
+_VALID_CREATE_HERMES = {
+    "name": "My Hermes Agent",
+    "platform": "slack",
+    "agent_type": "hermes",
+    "slack_bot_token": "xoxb-hermes-bot-token",
+    "slack_app_token": "xapp-1-hermes-app-token",
+    "soul_md": "# Soul\n\nHermes soul.",
+    "identity_md": "# Identity\n\nHermes identity.",
+}
+
+_GIVEN_WITH_HERMES_IMAGE = [
+    set_env_variable(
+        {
+            "AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY,
+            "LITELLM_BASE_URL": "http://litellm:4000",
+            "LITELLM_SECRET_NAME": "litellm",
+            "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
+            "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
+            "API_EXTERNAL_URL": "https://api.test.com",
+            "HERMES_IMAGE": "nousresearch/hermes-agent:v1.0",
+        }
+    ),
+    prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
+    prepare_api_server(),
+    create_test_client(),
+    database_repo_is_ready(),
+    database_is_clean(),
+    there_is_an_organization_with_user_and_access_token(),
+    use_org_for_auth(),
+]
+
+
+def test_create_hermes_agent_returns_201_stopped():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I create a Hermes Slack agent"):
+            response = client.post(
+                _BASE, json=_VALID_CREATE_HERMES, headers=_auth(context)
+            )
+
+        with then("it returns 201 with agent_type hermes and status stopped"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            body = response.json()
+            assert_that(body["agent_type"], equal_to("hermes"))
+            assert_that(body["platform"], equal_to("slack"))
+            assert_that(body["status"], equal_to(AgentStatus.STOPPED.value))
+
+
+def test_create_agent_defaults_to_openclaw_type():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I create a Slack agent without specifying agent_type"):
+            response = client.post(_BASE, json=_VALID_CREATE, headers=_auth(context))
+
+        with then("agent_type defaults to openclaw"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(response.json()["agent_type"], equal_to("openclaw"))
+
+
+def test_create_hermes_teams_agent_returns_422():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        payload = {
+            **_VALID_CREATE_HERMES,
+            "platform": "teams",
+            "teams_app_id": "app-id",
+            "teams_app_password": "app-pass",
+            "teams_tenant_id": "tenant-id",
+        }
+        del payload["slack_bot_token"]
+        del payload["slack_app_token"]
+
+        with when("I create a Hermes agent with Teams platform"):
+            response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("it returns 422"):
+            assert_that(
+                response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY)
+            )
+
+
+def test_create_hermes_agent_missing_slack_tokens_returns_422():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        payload = {**_VALID_CREATE_HERMES}
+        del payload["slack_bot_token"]
+
+        with when("I create a Hermes agent without slack_bot_token"):
+            response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("it returns 422"):
+            assert_that(
+                response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY)
+            )
+
+
+def test_start_hermes_agent_uses_hermes_image_and_config():
+    with given(
+        [
+            *_GIVEN_WITH_HERMES_IMAGE,
+            there_is_an_agent(agent_type=AgentType.HERMES),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+
+        with when("I start a Hermes agent"):
+            response = client.post(
+                f"{_BASE}/{context.agent.id}/start", headers=_auth(context)
+            )
+
+        with then("it returns 200 with status RUNNING"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["status"], equal_to(AgentStatus.RUNNING.value))
+
+        with then("the deployment uses the Hermes image"):
+            deployment = k8s.create_deployment.call_args.args[1]
+            assert_that(
+                deployment.spec.template.spec.containers[0].image,
+                equal_to("nousresearch/hermes-agent:v1.0"),
+            )
+
+        with then("all k8s resources were created"):
+            k8s.create_config_map.assert_called_once()
+            k8s.create_secret.assert_called_once()
+            k8s.create_pvc.assert_called_once()
+            k8s.create_service.assert_called_once()
+            k8s.create_deployment.assert_called_once()
+
+
+def test_start_hermes_agent_configmap_has_hermes_config():
+    import yaml as _yaml
+
+    with given(
+        [*_GIVEN_WITH_HERMES_IMAGE, there_is_an_agent(agent_type=AgentType.HERMES)]
+    ) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+
+        with when("I start a Hermes agent"):
+            response = client.post(
+                f"{_BASE}/{context.agent.id}/start", headers=_auth(context)
+            )
+
+        with then("the ConfigMap contains hermes-config.yaml with correct model"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            assert_that(config_map.data, has_key("hermes-config.yaml"))
+            cfg = _yaml.safe_load(config_map.data["hermes-config.yaml"])
+            assert_that(cfg["model"]["base_url"], equal_to("http://litellm:4000"))
+            assert_that(cfg["slack"]["unauthorized_dm_behavior"], equal_to("ignore"))
+            assert_that("slack-deny-dms" in cfg["plugins"]["enabled"], equal_to(True))
+            assert_that(
+                "slack-channel-allowlist" in cfg["plugins"]["enabled"], equal_to(True)
+            )
+
+        with then("the ConfigMap has start.sh, healthz sidecar, and both plugins"):
+            assert_that(config_map.data, has_key("start.sh"))
+            assert_that(config_map.data, has_key("healthz-server.py"))
+            assert_that(config_map.data, has_key("slack-deny-dms-plugin.yaml"))
+            assert_that(config_map.data, has_key("slack-deny-dms-init.py"))
+            assert_that(config_map.data, has_key("slack-channel-allowlist-plugin.yaml"))
+            assert_that(config_map.data, has_key("slack-channel-allowlist-init.py"))
+
+        with then("SOUL.md has the bootloader footer appended"):
+            soul = config_map.data["SOUL.md"]
+            assert_that(soul, contains_string("# Soul\n\nTest soul."))
+            assert_that(soul, contains_string("/workspace/IDENTITY.md"))
+
+        with then("BOOTSTRAP.md is absent from the ConfigMap"):
+            assert_that(config_map.data, is_not(has_key("BOOTSTRAP.md")))
+
+
+def test_start_hermes_agent_secret_has_channel_and_dm_lists():
+    with given(
+        [
+            *_GIVEN_WITH_HERMES_IMAGE,
+            there_is_an_agent(agent_type=AgentType.HERMES),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+
+        client.patch(
+            f"{_BASE}/{context.agent.id}",
+            json={
+                "slack_channel_ids": ["C001", "C002"],
+                "slack_dm_user_ids": ["U001", "U002"],
+            },
+            headers=_auth(context),
+        )
+
+        with when("I start the Hermes agent"):
+            response = client.post(
+                f"{_BASE}/{context.agent.id}/start", headers=_auth(context)
+            )
+
+        with then(
+            "the secret has SLACK_CHANNEL_IDS, SLACK_DM_ALLOWED_USERS, and SLACK_ALLOW_ALL_USERS"
+        ):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            secret = k8s.create_secret.call_args.args[1]
+            assert_that(secret.string_data["SLACK_CHANNEL_IDS"], equal_to("C001,C002"))
+            assert_that(
+                secret.string_data["SLACK_DM_ALLOWED_USERS"], equal_to("U001,U002")
+            )
+            assert_that(secret.string_data["SLACK_ALLOW_ALL_USERS"], equal_to("true"))
+            assert_that(secret.string_data["API_SERVER_ENABLED"], equal_to("true"))
+
+
+def test_start_hermes_agent_no_channels_gives_empty_slack_channel_ids():
+    with given(
+        [*_GIVEN_WITH_HERMES_IMAGE, there_is_an_agent(agent_type=AgentType.HERMES)]
+    ) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+
+        with when("I start a Hermes agent with no channel_ids configured"):
+            response = client.post(
+                f"{_BASE}/{context.agent.id}/start", headers=_auth(context)
+            )
+
+        with then("SLACK_CHANNEL_IDS is empty — agent responds in all channels"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            secret = k8s.create_secret.call_args.args[1]
+            assert_that(secret.string_data["SLACK_CHANNEL_IDS"], equal_to(""))
+
+
+def test_start_hermes_agent_deployment_has_workspace_volume():
+    with given(
+        [*_GIVEN_WITH_HERMES_IMAGE, there_is_an_agent(agent_type=AgentType.HERMES)]
+    ) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+
+        with when("I start a Hermes agent"):
+            response = client.post(
+                f"{_BASE}/{context.agent.id}/start", headers=_auth(context)
+            )
+
+        with then("the deployment mounts /opt/data and /workspace"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            deployment = k8s.create_deployment.call_args.args[1]
+            mounts = {
+                m.mount_path
+                for m in deployment.spec.template.spec.containers[0].volume_mounts
+            }
+            assert_that("/opt/data" in mounts, equal_to(True))
+            assert_that("/workspace" in mounts, equal_to(True))
+
+        with then("one volume is emptyDir for workspace"):
+            from kubernetes.client import V1EmptyDirVolumeSource
+
+            volumes = deployment.spec.template.spec.volumes
+            empty_dirs = [
+                v for v in volumes if isinstance(v.empty_dir, V1EmptyDirVolumeSource)
+            ]
+            assert_that(len(empty_dirs), equal_to(1))
+
+
+def test_pair_hermes_agent_returns_400():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(status=AgentStatus.RUNNING, agent_type=AgentType.HERMES),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("I pair a Hermes agent"):
+            response = client.post(
+                f"{_BASE}/{context.agent.id}/pair",
+                json={"platform": "slack", "code": "abc123"},
+                headers=_auth(context),
+            )
+
+        with then("it returns 400"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+
+
+def test_list_slack_channels_works_for_hermes_agent():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(status=AgentStatus.RUNNING, agent_type=AgentType.HERMES),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        slack_response = {
+            "ok": True,
+            "channels": [{"id": "C001", "name": "general"}],
+            "response_metadata": {"next_cursor": ""},
+        }
+
+        with patch("urllib.request.urlopen") as mock_urlopen:
+            mock_urlopen.return_value.__enter__.return_value.read.return_value = (
+                json.dumps(slack_response).encode()
+            )
+
+            with when("I list Slack channels for a Hermes agent"):
+                response = client.get(
+                    f"{_BASE}/{context.agent.id}/slack/channels",
+                    headers=_auth(context),
+                )
+
+        with then("it returns 200 with channels"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(len(response.json()), equal_to(1))
+
+
+def test_existing_agent_rows_backfill_to_openclaw():
+    with given([*_GIVEN, there_is_an_agent(name="Legacy Agent")]) as context:
+        repository: AgentRepository = context.injector.get(AgentRepository)
+
+        with when("I read an agent created without an explicit agent_type"):
+            agent = repository.get_active(context.agent.id, context.organization.id)
+
+        with then("agent_type is openclaw (server_default applied)"):
+            assert_that(agent.agent_type, equal_to(AgentType.OPENCLAW))

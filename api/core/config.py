@@ -25,6 +25,7 @@ class Config(BaseSettings):
     k8s_namespace: str = "agent-farm"
 
     agent_image: str = ""
+    hermes_image: str = ""
     agent_token_encryption_key: str = ""
     litellm_api_key: str = ""
     litellm_base_url: str = ""

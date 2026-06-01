@@ -15,6 +15,7 @@ export const ROLES = [
 export type RoleId = (typeof ROLES)[number]["id"];
 export type WizardStep =
   | "role"
+  | "agent-type"
   | "platform-choice"
   | "slack-choice"
   | "bot-builder"
@@ -430,6 +431,31 @@ export function PlatformChoiceStep({
         onClick={() => onChange("teams")}
         title="Microsoft Teams"
         description="Connect via Azure Bot Framework with a webhook endpoint."
+      />
+    </div>
+  );
+}
+
+export function AgentTypeStep({
+  agentType,
+  onChange,
+}: {
+  agentType: "openclaw" | "hermes";
+  onChange: (v: "openclaw" | "hermes") => void;
+}) {
+  return (
+    <div className="flex flex-col gap-3">
+      <ChoiceCard
+        selected={agentType === "hermes"}
+        onClick={() => onChange("hermes")}
+        title="Hermes"
+        description="Slack-only. Fast, lightweight, plugin-based. Recommended."
+      />
+      <ChoiceCard
+        selected={agentType === "openclaw"}
+        onClick={() => onChange("openclaw")}
+        title="OpenClaw"
+        description="Slack and Microsoft Teams. Full platform support."
       />
     </div>
   );

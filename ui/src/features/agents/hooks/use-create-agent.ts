@@ -10,6 +10,7 @@ import { agentsKey } from "../utils";
 export type CreateAgentData = {
   name: string;
   platform: "slack" | "teams";
+  agentType?: "openclaw" | "hermes";
   // Slack (required when platform=slack)
   slackBotToken?: string;
   slackAppToken?: string;
