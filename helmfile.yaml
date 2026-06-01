@@ -13,11 +13,11 @@ releases:
           size: 5Gi
     set:
       - name: db.user
-        value: {{ env "POSTGRES_APP_USER" | required "POSTGRES_APP_USER is required" }}
+        value: {{ env "POSTGRES_APP_USER" | required "POSTGRES_APP_USER is required" | quote }}
       - name: db.password
-        value: {{ env "POSTGRES_APP_PASSWORD" | required "POSTGRES_APP_PASSWORD is required" }}
+        value: {{ env "POSTGRES_APP_PASSWORD" | required "POSTGRES_APP_PASSWORD is required" | quote }}
       - name: db.name
-        value: {{ env "POSTGRES_APP_DB" | required "POSTGRES_APP_DB is required" }}
+        value: {{ env "POSTGRES_APP_DB" | required "POSTGRES_APP_DB is required" | quote }}
 
   - name: postgres-litellm
     namespace: agent-farm
@@ -30,11 +30,11 @@ releases:
           size: 2Gi
     set:
       - name: db.user
-        value: {{ env "POSTGRES_LITELLM_USER" | required "POSTGRES_LITELLM_USER is required" }}
+        value: {{ env "POSTGRES_LITELLM_USER" | required "POSTGRES_LITELLM_USER is required" | quote }}
       - name: db.password
-        value: {{ env "POSTGRES_LITELLM_PASSWORD" | required "POSTGRES_LITELLM_PASSWORD is required" }}
+        value: {{ env "POSTGRES_LITELLM_PASSWORD" | required "POSTGRES_LITELLM_PASSWORD is required" | quote }}
       - name: db.name
-        value: {{ env "POSTGRES_LITELLM_DB" | required "POSTGRES_LITELLM_DB is required" }}
+        value: {{ env "POSTGRES_LITELLM_DB" | required "POSTGRES_LITELLM_DB is required" | quote }}
 
   - name: litellm
     namespace: agent-farm
@@ -43,11 +43,11 @@ releases:
       name: litellm
     set:
       - name: masterKey
-        value: {{ env "LITELLM_MASTER_KEY" | required "LITELLM_MASTER_KEY is required" }}
+        value: {{ env "LITELLM_MASTER_KEY" | required "LITELLM_MASTER_KEY is required" | quote }}
       - name: openrouterApiKey
-        value: {{ env "OPENROUTER_API_KEY" | required "OPENROUTER_API_KEY is required" }}
+        value: {{ env "OPENROUTER_API_KEY" | required "OPENROUTER_API_KEY is required" | quote }}
       - name: databaseUrl
-        value: {{ printf "postgresql://%s:%s@postgres-litellm:5432/%s" (env "POSTGRES_LITELLM_USER") (env "POSTGRES_LITELLM_PASSWORD") (env "POSTGRES_LITELLM_DB") }}
+        value: {{ printf "postgresql://%s:%s@postgres-litellm:5432/%s" (env "POSTGRES_LITELLM_USER") (env "POSTGRES_LITELLM_PASSWORD") (env "POSTGRES_LITELLM_DB") | quote }}
     needs:
       - agent-farm/postgres-app
       - agent-farm/postgres-litellm
@@ -59,35 +59,35 @@ releases:
       name: agentfarm-api
     set:
       - name: registryPrefix
-        value: {{ env "REGISTRY_PREFIX" | default "registry.k8s.aai-labs.com" }}
+        value: {{ env "REGISTRY_PREFIX" | default "registry.k8s.aai-labs.com" | quote }}
       - name: image.tag
-        value: {{ env "API_IMAGE_TAG" | default "latest" }}
+        value: {{ env "API_IMAGE_TAG" | default "latest" | quote }}
       - name: openclawImage.tag
-        value: {{ env "OPENCLAW_IMAGE_TAG" | default "latest" }}
+        value: {{ env "OPENCLAW_IMAGE_TAG" | default "latest" | quote }}
       - name: dbConnectionUrl
-        value: {{ printf "postgresql://%s:%s@postgres-app:5432/%s" (env "POSTGRES_APP_USER") (env "POSTGRES_APP_PASSWORD") (env "POSTGRES_APP_DB") }}
+        value: {{ printf "postgresql://%s:%s@postgres-app:5432/%s" (env "POSTGRES_APP_USER") (env "POSTGRES_APP_PASSWORD") (env "POSTGRES_APP_DB") | quote }}
       - name: secretSigningKey
-        value: {{ env "SECRET_SIGNING_KEY" | required "SECRET_SIGNING_KEY is required" }}
+        value: {{ env "SECRET_SIGNING_KEY" | required "SECRET_SIGNING_KEY is required" | quote }}
       - name: superUserCredentials
-        value: {{ env "SUPER_USER_CREDENTIALS" | required "SUPER_USER_CREDENTIALS is required" }}
+        value: {{ env "SUPER_USER_CREDENTIALS" | required "SUPER_USER_CREDENTIALS is required" | quote }}
       - name: agentTokenEncryptionKey
-        value: {{ env "AGENT_TOKEN_ENCRYPTION_KEY" | required "AGENT_TOKEN_ENCRYPTION_KEY is required" }}
+        value: {{ env "AGENT_TOKEN_ENCRYPTION_KEY" | required "AGENT_TOKEN_ENCRYPTION_KEY is required" | quote }}
       - name: environment
-        value: {{ env "ENVIRONMENT" | required "ENVIRONMENT is required" }}
+        value: {{ env "ENVIRONMENT" | required "ENVIRONMENT is required" | quote }}
       - name: webAppUrl
-        value: {{ env "WEB_APP_URL" | required "WEB_APP_URL is required" }}
+        value: {{ env "WEB_APP_URL" | required "WEB_APP_URL is required" | quote }}
       - name: apiExternalUrl
-        value: {{ printf "https://%s" (env "API_HOST" | required "API_HOST is required") }}
+        value: {{ printf "https://%s" (env "API_HOST" | required "API_HOST is required") | quote }}
       - name: kubeconfigB64
-        value: {{ env "KUBECONFIG_B64" | required "KUBECONFIG_B64 is required" }}
+        value: {{ env "KUBECONFIG_B64" | required "KUBECONFIG_B64 is required" | quote }}
       - name: registry.server
-        value: {{ env "REGISTRY_SERVER" | required "REGISTRY_SERVER is required" }}
+        value: {{ env "REGISTRY_SERVER" | required "REGISTRY_SERVER is required" | quote }}
       - name: registry.username
-        value: {{ env "REGISTRY_USERNAME" | required "REGISTRY_USERNAME is required" }}
+        value: {{ env "REGISTRY_USERNAME" | required "REGISTRY_USERNAME is required" | quote }}
       - name: registry.password
-        value: {{ env "REGISTRY_PASSWORD" | required "REGISTRY_PASSWORD is required" }}
+        value: {{ env "REGISTRY_PASSWORD" | required "REGISTRY_PASSWORD is required" | quote }}
       - name: ingress.host
-        value: {{ env "API_HOST" | required "API_HOST is required" }}
+        value: {{ env "API_HOST" | required "API_HOST is required" | quote }}
     needs:
       - agent-farm/postgres-app
       - agent-farm/litellm
@@ -99,10 +99,10 @@ releases:
       name: agentfarm-ui
     set:
       - name: registryPrefix
-        value: {{ env "REGISTRY_PREFIX" | default "registry.k8s.aai-labs.com" }}
+        value: {{ env "REGISTRY_PREFIX" | default "registry.k8s.aai-labs.com" | quote }}
       - name: image.tag
-        value: {{ env "UI_IMAGE_TAG" | default "latest" }}
+        value: {{ env "UI_IMAGE_TAG" | default "latest" | quote }}
       - name: ingress.host
-        value: {{ env "UI_HOST" | required "UI_HOST is required" }}
+        value: {{ env "UI_HOST" | required "UI_HOST is required" | quote }}
     needs:
       - agent-farm/agentfarm-api
