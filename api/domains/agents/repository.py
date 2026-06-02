@@ -8,9 +8,12 @@ from sqlmodel import Session, col, select
 from api.domains.agents.models import (
     Agent,
     AgentFilter,
+    AgentSecret,
+    AgentSkill,
     AgentSlackConfig,
     AgentTeamsConfig,
     AgentTemplate,
+    SecretProvider,
 )
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.infrastructure.shared.models import Pagination
@@ -125,6 +128,62 @@ class AgentRepository:
                 col(AgentTeamsConfig.agent_id).in_(agent_ids)
             )
             return {c.agent_id: c for c in session.exec(query).all()}
+
+    # --- Integration secrets ---
+
+    def save_secret(self, secret: AgentSecret) -> AgentSecret:
+        self.delegate.save(secret)
+        return secret
+
+    def get_secret(
+        self, agent_id: UUID, provider: SecretProvider
+    ) -> AgentSecret | None:
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(AgentSecret)
+                .where(col(AgentSecret.agent_id) == agent_id)
+                .where(col(AgentSecret.provider) == provider)
+            )
+            return session.exec(query).first()
+
+    def get_secrets_for_agent(self, agent_id: UUID) -> list[AgentSecret]:
+        with Session(self.delegate.engine) as session:
+            query = select(AgentSecret).where(col(AgentSecret.agent_id) == agent_id)
+            return list(session.exec(query).all())
+
+    def get_secrets_for_agents(
+        self, agent_ids: list[UUID]
+    ) -> dict[UUID, list[AgentSecret]]:
+        if not agent_ids:
+            return {}
+        with Session(self.delegate.engine) as session:
+            query = select(AgentSecret).where(col(AgentSecret.agent_id).in_(agent_ids))
+            result: dict[UUID, list[AgentSecret]] = {}
+            for secret in session.exec(query).all():
+                result.setdefault(secret.agent_id, []).append(secret)
+            return result
+
+    def delete_secret(self, agent_id: UUID, provider: SecretProvider) -> None:
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(AgentSecret)
+                .where(col(AgentSecret.agent_id) == agent_id)
+                .where(col(AgentSecret.provider) == provider)
+            )
+            secret = session.exec(query).first()
+            if secret is not None:
+                session.delete(secret)
+                session.commit()
+
+    # --- Skills (source-agnostic: aai_cli now, custom later) ---
+
+    def save_skills(self, skills: list[AgentSkill]) -> None:
+        self.delegate.save_all(skills)
+
+    def get_skills_for_agent(self, agent_id: UUID) -> list[AgentSkill]:
+        with Session(self.delegate.engine) as session:
+            query = select(AgentSkill).where(col(AgentSkill.agent_id) == agent_id)
+            return list(session.exec(query).all())
 
     # --- Templates ---
 

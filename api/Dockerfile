@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certifi
     && chmod +x kubectl && mv kubectl /usr/local/bin/ \
     && apt-get purge -y curl && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
 
-COPY --from=ghcr.io/astral-sh/uv:0.4.15 /uv /bin/uv
+RUN pip install --no-cache-dir uv==0.4.15
 
 ENV PATH="/app/.venv/bin:$PATH"
 ENV UV_COMPILE_BYTECODE=1

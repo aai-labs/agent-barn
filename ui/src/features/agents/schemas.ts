@@ -11,6 +11,11 @@ export const AgentTeamsConfigSchema = z.object({
   tenantId: z.string(),
 });
 
+export const AgentSecretReadSchema = z.object({
+  provider: z.string(),
+  secretName: z.string(),
+});
+
 export const AgentSchema = z.object({
   id: z.string().uuid(),
   name: z.string(),
@@ -22,6 +27,7 @@ export const AgentSchema = z.object({
   model: z.string(),
   slackConfig: AgentSlackConfigSchema.nullable().optional(),
   teamsConfig: AgentTeamsConfigSchema.nullable().optional(),
+  secrets: z.array(AgentSecretReadSchema).optional(),
   webhookUrl: z.string().nullable().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),

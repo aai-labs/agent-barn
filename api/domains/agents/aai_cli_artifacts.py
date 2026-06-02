@@ -1,0 +1,225 @@
+"""Builders for the aai-cli tool's runtime artifacts (config.toml, setup script, env).
+
+These are pure string/dict builders (no k8s types) consumed by ``start_agent`` to inject an
+agent's integration secrets into its pod so the baked-in ``aai-cli`` can use them.
+"""
+
+from collections.abc import Callable
+from typing import Mapping
+
+from api.domains.agents.models import (
+    BitbucketContent,
+    ConfluenceContent,
+    GithubContent,
+    GmailContent,
+    GoogleCalendarContent,
+    JiraContent,
+    SecretContent,
+    SecretProvider,
+    ZohoCalendarContent,
+    ZohoMailContent,
+)
+
+# Providers whose token is stored in the aai-cli encrypted secret store (populated via
+# ``aai-cli secrets set``). The value is the secret name the CLI references; the part after the
+# dot is also the attribute on the content model that holds the token (see ``token_attr``).
+provider_to_secret_name_map = {
+    "github": "github.token",
+    "jira": "jira.api_token",
+    "confluence": "confluence.api_token",
+    "bitbucket": "bitbucket.api_token",
+}
+
+# Default config dir the CLI reads from. Absolute (not ~) so the setup script has no $HOME
+# ambiguity; the CLI itself resolves its default config path via the node user's home.
+SECRETS_DIR = "/home/node/.config/aai-cli"
+CONFIG_PATH = f"{SECRETS_DIR}/config.toml"
+
+
+def env_var_for(secret_name: str) -> str:
+    """ "jira.api_token" -> "AAI_SECRET_JIRA_API_TOKEN"."""
+    return "AAI_SECRET_" + secret_name.upper().replace(".", "_")
+
+
+def token_attr(secret_name: str) -> str:
+    """The content attribute holding the token — the part after the dot.
+
+    "github.token" -> "token";  "jira.api_token" -> "api_token".
+    """
+    return secret_name.split(".", 1)[1]
+
+
+def _q(value: str) -> str:
+    """TOML-quote a string value, escaping backslashes and double quotes."""
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+# --- per-provider profile blocks (rendered from the decrypted content model) ---
+
+
+def _github_block(c: GithubContent) -> str:
+    return (
+        "[profiles.github-work]\n"
+        'provider = "github"\n'
+        'auth_type = "bearer_token"\n'
+        'token_secret = "github.token"\n'
+        f"owner = {_q(c.owner)}\n"
+        f"repo = {_q(c.repo)}\n"
+        f"org = {_q(c.org)}\n"
+    )
+
+
+def _jira_block(c: JiraContent) -> str:
+    return (
+        "[profiles.jira-work]\n"
+        'auth_type = "basic_api_token"\n'
+        f"site_url = {_q(c.site_url)}\n"
+        f"email = {_q(c.email)}\n"
+        'api_token_secret = "jira.api_token"\n'
+    )
+
+
+def _confluence_block(c: ConfluenceContent) -> str:
+    return (
+        "[profiles.confluence-work]\n"
+        'auth_type = "basic_api_token"\n'
+        f"site_url = {_q(c.site_url)}\n"
+        f"email = {_q(c.email)}\n"
+        'api_token_secret = "confluence.api_token"\n'
+    )
+
+
+def _bitbucket_block(c: BitbucketContent) -> str:
+    return (
+        "[profiles.bitbucket-work]\n"
+        'auth_type = "basic_api_token"\n'
+        f"workspace = {_q(c.workspace)}\n"
+        f"repo = {_q(c.repo)}\n"
+        f"email = {_q(c.email)}\n"
+        'api_token_secret = "bitbucket.api_token"\n'
+    )
+
+
+def _gmail_block(c: GmailContent) -> str:
+    return (
+        "[profiles.gmail-work]\n"
+        'provider = "google"\n'
+        'auth_type = "bearer_token"\n'
+        'token_env = "GOOGLE_GMAIL_ACCESS_TOKEN"\n'
+        f"user_id = {_q(c.user_id)}\n"
+    )
+
+
+def _google_calendar_block(c: GoogleCalendarContent) -> str:
+    return (
+        "[profiles.google-calendar-work]\n"
+        'provider = "google"\n'
+        'auth_type = "bearer_token"\n'
+        'token_env = "GOOGLE_CALENDAR_ACCESS_TOKEN"\n'
+        f"calendar_id = {_q(c.calendar_id)}\n"
+    )
+
+
+def _zoho_mail_block(c: ZohoMailContent) -> str:
+    return (
+        "[profiles.zoho-mail-work]\n"
+        'provider = "zoho"\n'
+        'transport = "smtp_imap"\n'
+        'auth_type = "app_password"\n'
+        f"username = {_q(c.username)}\n"
+        f"email = {_q(c.email)}\n"
+        f"from_address = {_q(c.from_address)}\n"
+        'password_env = "ZOHO_MAIL_APP_PASSWORD"\n'
+        f"smtp_host = {_q(c.smtp_host)}\n"
+        f"smtp_port = {c.smtp_port}\n"
+        f"imap_host = {_q(c.imap_host)}\n"
+        f"imap_port = {c.imap_port}\n"
+        f"mail_folder = {_q(c.mail_folder)}\n"
+        f"sent_folder = {_q(c.sent_folder)}\n"
+    )
+
+
+def _zoho_calendar_block(c: ZohoCalendarContent) -> str:
+    return (
+        "[profiles.zoho-calendar-work]\n"
+        'provider = "zoho"\n'
+        'transport = "caldav"\n'
+        'auth_type = "app_password"\n'
+        f"username = {_q(c.username)}\n"
+        f"email = {_q(c.email)}\n"
+        'password_env = "ZOHO_CALENDAR_APP_PASSWORD"\n'
+        f"caldav_url = {_q(c.caldav_url)}\n"
+    )
+
+
+_PROFILE_BUILDERS: dict[SecretProvider, Callable[..., str]] = {
+    SecretProvider.GITHUB: _github_block,
+    SecretProvider.JIRA: _jira_block,
+    SecretProvider.CONFLUENCE: _confluence_block,
+    SecretProvider.BITBUCKET: _bitbucket_block,
+    SecretProvider.GMAIL: _gmail_block,
+    SecretProvider.GOOGLE_CALENDAR: _google_calendar_block,
+    SecretProvider.ZOHO_MAIL: _zoho_mail_block,
+    SecretProvider.ZOHO_CALENDAR: _zoho_calendar_block,
+}
+
+_HEADER = (
+    f'secrets_file = "{SECRETS_DIR}/aai-secrets.enc.json"\n'
+    f'key_file = "{SECRETS_DIR}/key"\n'
+)
+
+
+def build_config_toml(decrypted: Mapping[SecretProvider, SecretContent]) -> str:
+    """Render config.toml with one profile per provider present in ``decrypted``.
+
+    Providers are emitted in a fixed (enum) order for deterministic output. Store-based providers
+    reference their secret via ``*_secret``; env-based providers via ``*_env`` (token not injected).
+    """
+    blocks = [_HEADER]
+    for provider in SecretProvider:
+        content = decrypted.get(provider)
+        if content is not None:
+            blocks.append(_PROFILE_BUILDERS[provider](content))
+    return "\n".join(blocks)
+
+
+def build_setup_sh(store_providers: list[SecretProvider]) -> str:
+    """Render the in-pod setup script: install config.toml, then `secrets set` per store provider.
+
+    The ``cp`` always runs (installs the mounted config); `secrets set` lines are emitted only for
+    store-based providers (``store_providers``), each pulling the token from its env var.
+    """
+    present = set(store_providers)
+    lines = [
+        "#!/bin/sh",
+        "set -e",
+        "export HOME=/home/node",
+        f"mkdir -p {SECRETS_DIR}",
+        f"cp /app/config/aai-cli-config.toml {CONFIG_PATH}",
+    ]
+    for provider in SecretProvider:  # fixed order for determinism
+        if provider not in present:
+            continue
+        secret_name = provider_to_secret_name_map[provider.value]
+        env = env_var_for(secret_name)
+        lines.append(
+            f"printf '%s' \"${env}\" | "
+            f"aai-cli --config {CONFIG_PATH} secrets set {secret_name}"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def build_env(
+    store_decrypted: Mapping[SecretProvider, SecretContent],
+) -> dict[str, str]:
+    """Env vars (AAI_SECRET_*) carrying the decrypted token for each store-based provider.
+
+    Non-store providers are ignored, so a mixed mapping can be passed safely.
+    """
+    env: dict[str, str] = {}
+    for provider, content in store_decrypted.items():
+        secret_name = provider_to_secret_name_map.get(provider.value)
+        if secret_name is None:
+            continue
+        env[env_var_for(secret_name)] = getattr(content, token_attr(secret_name))
+    return env
