@@ -108,6 +108,24 @@ for (const file of fs.readdirSync(TEMPLATE_DIR)) {
   console.log(`[init-openclaw] Copied workspace/${file}`);
 }
 
+// Reconstruct skill docs under workspace/skills/<path> from the bundled manifest.
+const SKILLS_MANIFEST = path.join(TEMPLATE_DIR, 'skills.json');
+if (fs.existsSync(SKILLS_MANIFEST)) {
+  const SKILLS_DIR = path.join(WORKSPACE_DIR, 'skills');
+  let entries = [];
+  try { entries = JSON.parse(fs.readFileSync(SKILLS_MANIFEST, 'utf8')); }
+  catch { entries = []; }
+  let written = 0;
+  for (const { path: rel, content } of entries) {
+    const dest = path.join(SKILLS_DIR, rel);
+    if (!isPathInside(dest, SKILLS_DIR)) continue;  // block ../ traversal
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.writeFileSync(dest, content);
+    written += 1;
+  }
+  console.log(`[init-openclaw] Wrote ${written} skill files`);
+}
+
 let overlay;
 try { overlay = JSON.parse(fs.readFileSync(OVERLAY_PATH, 'utf8')); }
 catch { console.log('[init-openclaw] No overlay found, skipping'); process.exit(0); }
@@ -414,6 +432,7 @@ def build_config_map(
     openclaw_config_overlay: dict | None = None,
     aai_cli_config_toml: str | None = None,
     aai_cli_setup_sh: str | None = None,
+    skills_json: str | None = None,
 ) -> client.V1ConfigMap:
     data = {
         "SOUL.md": soul_md,
@@ -434,6 +453,8 @@ def build_config_map(
         data["aai-cli-config.toml"] = aai_cli_config_toml
     if aai_cli_setup_sh is not None:
         data["aai-cli-setup.sh"] = aai_cli_setup_sh
+    if skills_json is not None:
+        data["skills.json"] = skills_json
     return client.V1ConfigMap(
         metadata=client.V1ObjectMeta(
             name=_resource_name(agent_id),

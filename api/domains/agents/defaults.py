@@ -4,6 +4,12 @@ DEFAULT_USER_MD = (
 DEFAULT_TOOLS_MD = (
     "# TOOLS\n\n<!-- Local notes specific to this agent's tools and environment. -->\n"
 )
+# Appended to every agent's tools_md so the agent discovers the injected aai-cli skills.
+# Path is relative to the openclaw workspace root, where TOOLS.md is written.
+AAI_CLI_TOOLS_POINTER = (
+    "\nIn order to access jira, confluence, bitbucket, github use the aai-cli tool. "
+    "See ./skills/aai-cli/aai-cli_skill.md file.\n"
+)
 DEFAULT_AGENTS_MD = (
     "# AGENTS\n\n<!-- Workspace notes, conventions, and red lines for this agent. -->\n"
 )

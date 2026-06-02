@@ -49,6 +49,13 @@ class SecretProvider(str, enum.Enum):
     ZOHO_CALENDAR = "zoho_calendar"
 
 
+class SkillSource(str, enum.Enum):
+    # Predefined skill docs for the baked-in aai-cli tool.
+    AAI_CLI = "aai_cli"
+    # User-entered skills (future; reuse the same table + injection).
+    CUSTOM = "custom"
+
+
 # Predefined display labels — NOT user-entered; the backend stamps these by provider.
 PROVIDER_DISPLAY_NAMES: dict[SecretProvider, str] = {
     SecretProvider.GITHUB: "GitHub credential",
@@ -265,6 +272,28 @@ class AgentSecret(BaseModel, table=True):
     content: str = SqlField(
         sa_column=Column(sa.Text(), nullable=False)
     )  # Fernet-encrypted JSON blob
+
+
+class AgentSkill(BaseModel, table=True):
+    __tablename__: str = "agent_skill"
+
+    __table_args__ = (
+        sa.UniqueConstraint(
+            "agent_id", "skill_file_path", name="uq_agent_skill_agent_file_path"
+        ),
+    )
+
+    agent_id: UUID = SqlField(
+        foreign_key="agent.id", nullable=False, ondelete="CASCADE"
+    )
+    source: SkillSource = SqlField(
+        sa_column=Column(sa.String(), nullable=False)
+    )  # aai_cli | custom
+    skill_name: str = SqlField(nullable=False, max_length=255)  # UI label (out of scope now)
+    skill_file_path: str = SqlField(
+        nullable=False, max_length=1024
+    )  # rel path, reconstructs the workspace dir tree
+    skill_content: str = SqlField(sa_column=Column(sa.Text(), nullable=False))
 
 
 class AgentSecretCreate(PydanticBaseModel):  # no secret_name — backend stamps it

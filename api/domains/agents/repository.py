@@ -9,6 +9,7 @@ from api.domains.agents.models import (
     Agent,
     AgentFilter,
     AgentSecret,
+    AgentSkill,
     AgentSlackConfig,
     AgentTeamsConfig,
     AgentTemplate,
@@ -173,6 +174,16 @@ class AgentRepository:
             if secret is not None:
                 session.delete(secret)
                 session.commit()
+
+    # --- Skills (source-agnostic: aai_cli now, custom later) ---
+
+    def save_skills(self, skills: list[AgentSkill]) -> None:
+        self.delegate.save_all(skills)
+
+    def get_skills_for_agent(self, agent_id: UUID) -> list[AgentSkill]:
+        with Session(self.delegate.engine) as session:
+            query = select(AgentSkill).where(col(AgentSkill.agent_id) == agent_id)
+            return list(session.exec(query).all())
 
     # --- Templates ---
 

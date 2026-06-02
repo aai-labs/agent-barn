@@ -14,6 +14,10 @@ from api.domains.agents.aai_cli_artifacts import (
     build_setup_sh,
     provider_to_secret_name_map,
 )
+from api.domains.agents.aai_cli_skills import (
+    build_skills_manifest,
+    load_aai_cli_skills,
+)
 from api.domains.agents.builders import (
     build_config_map,
     build_deployment,
@@ -25,6 +29,7 @@ from api.domains.agents.builders import (
     build_service,
 )
 from api.domains.agents.defaults import (
+    AAI_CLI_TOOLS_POINTER,
     DEFAULT_AGENTS_MD,
     DEFAULT_BOOT_MD,
     DEFAULT_BOOTSTRAP_MD,
@@ -201,7 +206,7 @@ class AgentService:
             soul_md=data.soul_md,
             identity_md=data.identity_md,
             user_md=data.user_md or DEFAULT_USER_MD,
-            tools_md=data.tools_md or DEFAULT_TOOLS_MD,
+            tools_md=(data.tools_md or DEFAULT_TOOLS_MD) + AAI_CLI_TOOLS_POINTER,
             agents_md=data.agents_md or DEFAULT_AGENTS_MD,
             boot_md=data.boot_md or DEFAULT_BOOT_MD,
             bootstrap_md=data.bootstrap_md or DEFAULT_BOOTSTRAP_MD,
@@ -273,6 +278,9 @@ class AgentService:
                     )
                 )
             )
+
+        # Predefined aai-cli skill docs (platform-independent, before any Teams auto-start).
+        self.repository.save_skills(load_aai_cli_skills(agent.id))
 
         if data.platform == AgentPlatform.TEAMS:
             return self.start_agent(agent.id, context)
@@ -542,6 +550,10 @@ class AgentService:
         if store:
             secret.string_data.update(build_env(store))
 
+        # Skill docs (source-agnostic) → workspace manifest injected via the ConfigMap.
+        skills = self.repository.get_skills_for_agent(agent.id)
+        skills_json = build_skills_manifest(skills) if skills else None
+
         try:
             self.k8s.delete_config_map(name, ns)
             self.k8s.delete_secret(name, ns)
@@ -562,6 +574,7 @@ class AgentService:
                     openclaw_config_overlay=overlay,
                     aai_cli_config_toml=aai_config_toml,
                     aai_cli_setup_sh=aai_setup_sh,
+                    skills_json=skills_json,
                 ),
             )
             self.k8s.create_secret(ns, secret)
