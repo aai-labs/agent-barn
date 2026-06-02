@@ -32,8 +32,10 @@ with sync_playwright() as p:
     b.close()
 "
 
-if command -v aws    >/dev/null 2>&1; then check aws    aws --version;  fi
-if command -v gcloud >/dev/null 2>&1; then check gcloud gcloud version; fi
-if command -v az     >/dev/null 2>&1; then check az     az version;     fi
+if [ "$CLOUD_CLIS" = "true" ]; then
+    check aws    aws --version
+    check gcloud gcloud version
+    check az     az version
+fi
 
 echo 'All smoke tests passed'

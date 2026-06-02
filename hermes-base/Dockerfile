@@ -9,29 +9,32 @@ RUN --mount=type=secret,id=gh_token \
       "https://x-access-token:$(cat /run/secrets/gh_token)@github.com/aai-labs/agent-cli-tools.git" repo && \
     cargo install --path repo --root /out --locked
 
-FROM node:22-bookworm-slim
+FROM nousresearch/hermes-agent:v2026.5.29.2
+
 COPY --from=rust-build /out/bin/ /usr/local/bin/
 
-ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright \
-    UV_PYTHON_INSTALL_DIR=/opt/python \
-    PIP_BREAK_SYSTEM_PACKAGES=1
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get update && \
-    apt-get install -y --no-install-recommends git curl jq ripgrep ca-certificates tini
+    apt-get install -y --no-install-recommends \
+        tini \
+        jq \
+        ripgrep \
+        fd-find \
+        poppler-utils \
+        ffmpeg \
+        imagemagick \
+        sqlite3 \
+        unzip \
+        zip \
+        ca-certificates \
+    && ln -sf /usr/bin/fdfind /usr/local/bin/fd \
+    && rm -rf /var/lib/apt/lists/*
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
-
-RUN uv python install 3.12 && \
-    ln -sf "$(uv python find 3.12)" /usr/local/bin/python3 && \
-    chmod -R o+rX /opt/python
-
-RUN --mount=type=cache,target=/root/.cache/pip \
-    python3 -m pip install playwright && \
-    python3 -m playwright install chromium --with-deps && \
+RUN uv pip install --python /opt/hermes/.venv playwright && \
+    /opt/hermes/.venv/bin/python -m playwright install chromium --with-deps && \
     chmod -R o+rX /opt/playwright
-
-RUN npm install -g openclaw@2026.5.7
 
 ARG CLOUD_CLIS=false
 ENV CLOUD_CLIS=${CLOUD_CLIS}
@@ -59,10 +62,6 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         rm -rf /var/lib/apt/lists/*; \
     fi
 
-RUN mkdir -p /opt/openclaw-preinstalled/npm && \
-    npm install --prefix /opt/openclaw-preinstalled/npm @openclaw/msteams@2026.5.7 && \
-    chown -R node:node /opt/openclaw-preinstalled
-
-USER node
+USER hermes
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
