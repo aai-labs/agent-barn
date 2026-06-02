@@ -70,9 +70,15 @@ def test_index_links_all_providers_content_preserved():
     assert "./bitbucket_skill/bitbucket_skill.md" in index
     # verbatim content headings from source files preserved
     assert "# aai-cli Jira Skill" in by_path["aai-cli/jira_skill/jira_skill.md"]
-    assert "# aai-cli Confluence Skill" in by_path["aai-cli/confluence_skill/confluence_skill.md"]
+    assert (
+        "# aai-cli Confluence Skill"
+        in by_path["aai-cli/confluence_skill/confluence_skill.md"]
+    )
     assert "# aai-cli GitHub Skill" in by_path["aai-cli/github_skill/github_skill.md"]
-    assert "# aai-cli Bitbucket Skill" in by_path["aai-cli/bitbucket_skill/bitbucket_skill.md"]
+    assert (
+        "# aai-cli Bitbucket Skill"
+        in by_path["aai-cli/bitbucket_skill/bitbucket_skill.md"]
+    )
 
 
 def test_required_flag_edit_applied_no_config_flags():
@@ -95,6 +101,8 @@ def test_build_skills_manifest_is_sorted_path_content_only():
     rows = load_aai_cli_skills(uuid.uuid4())
     manifest = json.loads(build_skills_manifest(rows))
     assert [m["path"] for m in manifest] == sorted(_EXPECTED_PATHS)
-    assert all(set(m.keys()) == {"path", "content"} for m in manifest)  # no source leaked
+    assert all(
+        set(m.keys()) == {"path", "content"} for m in manifest
+    )  # no source leaked
     by_path = {e["skill_file_path"]: e["skill_content"] for e in AAI_CLI_SKILLS}
     assert all(m["content"] == by_path[m["path"]] for m in manifest)

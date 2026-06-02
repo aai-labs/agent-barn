@@ -289,7 +289,9 @@ class AgentSkill(BaseModel, table=True):
     source: SkillSource = SqlField(
         sa_column=Column(sa.String(), nullable=False)
     )  # aai_cli | custom
-    skill_name: str = SqlField(nullable=False, max_length=255)  # UI label (out of scope now)
+    skill_name: str = SqlField(
+        nullable=False, max_length=255
+    )  # UI label (out of scope now)
     skill_file_path: str = SqlField(
         nullable=False, max_length=1024
     )  # rel path, reconstructs the workspace dir tree

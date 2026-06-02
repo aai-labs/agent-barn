@@ -37,7 +37,7 @@ CONFIG_PATH = f"{SECRETS_DIR}/config.toml"
 
 
 def env_var_for(secret_name: str) -> str:
-    """"jira.api_token" -> "AAI_SECRET_JIRA_API_TOKEN"."""
+    """ "jira.api_token" -> "AAI_SECRET_JIRA_API_TOKEN"."""
     return "AAI_SECRET_" + secret_name.upper().replace(".", "_")
 
 

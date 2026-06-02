@@ -536,14 +536,14 @@ class AgentService:
         agent_secrets = self.repository.get_secrets_for_agent(agent.id)
         decrypted = {
             SecretProvider(s.provider): decrypt_content(
-                SecretProvider(s.provider), s.content, self.config.agent_token_encryption_key
+                SecretProvider(s.provider),
+                s.content,
+                self.config.agent_token_encryption_key,
             )
             for s in agent_secrets
         }
         store = {
-            p: c
-            for p, c in decrypted.items()
-            if p.value in provider_to_secret_name_map
+            p: c for p, c in decrypted.items() if p.value in provider_to_secret_name_map
         }
         aai_config_toml = build_config_toml(decrypted) if decrypted else None
         aai_setup_sh = build_setup_sh(list(store)) if decrypted else None

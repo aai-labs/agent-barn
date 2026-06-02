@@ -1,9 +1,9 @@
 """aai-cli index skill doc."""
 
 AAI_CLI_INDEX_SKILL: dict[str, str] = {
-        "skill_name": "aai-cli",
-        "skill_file_path": "aai-cli/aai-cli_skill.md",
-        "skill_content": """\
+    "skill_name": "aai-cli",
+    "skill_file_path": "aai-cli/aai-cli_skill.md",
+    "skill_content": """\
 # aai-cli Skill
 
 `aai-cli` is a command-line tool for accessing external services from your workspace:
@@ -50,4 +50,4 @@ Read the relevant provider skill file for the full command surface and flag refe
 - **GitHub** — see ./github_skill/github_skill.md
 - **Bitbucket** — see ./bitbucket_skill/bitbucket_skill.md
 """,
-    }
+}

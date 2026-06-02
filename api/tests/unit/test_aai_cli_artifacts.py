@@ -14,11 +14,19 @@ _GITHUB = validate_content(
 )
 _JIRA = validate_content(
     SecretProvider.JIRA,
-    {"site_url": "https://x.atlassian.net", "email": "a@b.com", "api_token": "jira_tok"},
+    {
+        "site_url": "https://x.atlassian.net",
+        "email": "a@b.com",
+        "api_token": "jira_tok",
+    },
 )
 _CONFLUENCE = validate_content(
     SecretProvider.CONFLUENCE,
-    {"site_url": "https://x.atlassian.net", "email": "a@b.com", "api_token": "conf_tok"},
+    {
+        "site_url": "https://x.atlassian.net",
+        "email": "a@b.com",
+        "api_token": "conf_tok",
+    },
 )
 _GMAIL = validate_content(
     SecretProvider.GMAIL, {"access_token": "g_tok", "user_id": "me"}
@@ -63,14 +71,16 @@ def test_config_toml_env_based_provider_uses_env_no_secret():
     toml = build_config_toml({SecretProvider.GMAIL: _GMAIL})
     assert "[profiles.gmail-work]" in toml
     assert 'token_env = "GOOGLE_GMAIL_ACCESS_TOKEN"' in toml
-    assert "secret" not in toml.split("[profiles.gmail-work]")[1]  # no *_secret for gmail
+    assert (
+        "secret" not in toml.split("[profiles.gmail-work]")[1]
+    )  # no *_secret for gmail
 
 
 def test_setup_sh_cp_always_and_secrets_set_per_store_provider():
     setup = build_setup_sh([SecretProvider.JIRA, SecretProvider.GITHUB])
     assert f"cp /app/config/aai-cli-config.toml {CONFIG_PATH}" in setup
     assert (
-        f'printf \'%s\' "$AAI_SECRET_JIRA_API_TOKEN" | '
+        f"printf '%s' \"$AAI_SECRET_JIRA_API_TOKEN\" | "
         f"aai-cli --config {CONFIG_PATH} secrets set jira.api_token" in setup
     )
     assert "secrets set github.token" in setup
