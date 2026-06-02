@@ -21,6 +21,8 @@ jobs:
           tags: openclaw-base:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          secrets: |
+            gh_token=${{ secrets.AAI_CLI_REPO_ACCESS_TOKEN }}
       - name: Smoke test
         run: |
           docker run --rm \

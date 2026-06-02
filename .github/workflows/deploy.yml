@@ -76,18 +76,23 @@ jobs:
       - name: Build and push UI image
         run: |
           docker build \
-            --build-arg NEXT_PUBLIC_BACKEND_URL=https://api.agent-farm.k8s.aai-labs.com \
+            --build-arg NEXT_PUBLIC_BACKEND_URL=https://${{ secrets.API_HOST }} \
             -t '${{ secrets.REGISTRY_URL }}/agentfarm-ui:${{ env.UI_IMAGE_TAG }}' \
             -f ui/Dockerfile \
             ui/
           docker push '${{ secrets.REGISTRY_URL }}/agentfarm-ui:${{ env.UI_IMAGE_TAG }}'
 
       - name: Build, smoke test, and push openclaw-base image
+        env:
+          DOCKER_BUILDKIT: "1"
         run: |
+          printf '%s' '${{ secrets.AAI_CLI_REPO_ACCESS_TOKEN }}' > /tmp/gh_token
           docker build \
+            --secret id=gh_token,src=/tmp/gh_token \
             -t '${{ secrets.REGISTRY_URL }}/agentfarm-openclaw-base:${{ env.OPENCLAW_IMAGE_TAG }}' \
             -f openclaw-base/Dockerfile \
             openclaw-base/
+          rm -f /tmp/gh_token
           docker run --rm \
             -v "${{ github.workspace }}/openclaw-base/smoke-test.sh:/smoke-test.sh:ro" \
             '${{ secrets.REGISTRY_URL }}/agentfarm-openclaw-base:${{ env.OPENCLAW_IMAGE_TAG }}' \
@@ -120,4 +125,25 @@ jobs:
           KUBECONFIG: /home/runner/.kube/config
           API_IMAGE_TAG: ${{ env.API_IMAGE_TAG }}
           UI_IMAGE_TAG: ${{ env.UI_IMAGE_TAG }}
+          OPENCLAW_IMAGE_TAG: ${{ env.OPENCLAW_IMAGE_TAG }}
+          POSTGRES_APP_USER: ${{ secrets.POSTGRES_APP_USER }}
+          POSTGRES_APP_PASSWORD: ${{ secrets.POSTGRES_APP_PASSWORD }}
+          POSTGRES_APP_DB: ${{ secrets.POSTGRES_APP_DB }}
+          POSTGRES_LITELLM_USER: ${{ secrets.POSTGRES_LITELLM_USER }}
+          POSTGRES_LITELLM_PASSWORD: ${{ secrets.POSTGRES_LITELLM_PASSWORD }}
+          POSTGRES_LITELLM_DB: ${{ secrets.POSTGRES_LITELLM_DB }}
+          LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          SECRET_SIGNING_KEY: ${{ secrets.SECRET_SIGNING_KEY }}
+          SUPER_USER_CREDENTIALS: ${{ secrets.SUPER_USER_CREDENTIALS }}
+          AGENT_TOKEN_ENCRYPTION_KEY: ${{ secrets.AGENT_TOKEN_ENCRYPTION_KEY }}
+          ENVIRONMENT: production
+          WEB_APP_URL: ${{ secrets.WEB_APP_URL }}
+          API_HOST: ${{ secrets.API_HOST }}
+          UI_HOST: ${{ secrets.UI_HOST }}
+          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_B64 }}
+          POD_KUBECONFIG_B64: ${{ secrets.POD_KUBECONFIG_B64 }}
+          REGISTRY_SERVER: ${{ secrets.REGISTRY_URL }}
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
         run: helmfile sync --wait

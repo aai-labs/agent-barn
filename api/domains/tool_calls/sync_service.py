@@ -95,7 +95,9 @@ class ToolCallSyncService:
             return
 
         try:
-            raw_sessions = self.k8s.exec_command(pod_name, ns, ["cat", HERMES_SESSIONS_PATH])
+            raw_sessions = self.k8s.exec_command(
+                pod_name, ns, ["cat", HERMES_SESSIONS_PATH]
+            )
         except RuntimeError:
             logger.debug("Could not read hermes sessions.json for agent %s", agent_id)
             return
@@ -120,7 +122,7 @@ class ToolCallSyncService:
                 version = int(
                     datetime.datetime.fromisoformat(updated_at_str).timestamp() * 1000
                 )
-            except (ValueError, AttributeError):
+            except ValueError, AttributeError:
                 version = 0
 
             sync_key = f"hermes:{session_id}"
@@ -142,7 +144,9 @@ class ToolCallSyncService:
                 line = line.strip()
                 if not line:
                     continue
-                tool_calls, tool_results = parse_hermes_export_tool_calls(line, session_id)
+                tool_calls, tool_results = parse_hermes_export_tool_calls(
+                    line, session_id
+                )
                 with self.repository.get_session() as db_session:
                     for tc in tool_calls:
                         self.repository.upsert_pending(
@@ -164,7 +168,9 @@ class ToolCallSyncService:
                             is_error=tr.is_error,
                             completed_at=tr.completed_at,
                         )
-                    self.repository.save_sync_state(db_session, agent_id, sync_key, version)
+                    self.repository.save_sync_state(
+                        db_session, agent_id, sync_key, version
+                    )
                     db_session.commit()
 
     def _sync_file_safe(

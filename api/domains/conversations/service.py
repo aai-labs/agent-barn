@@ -266,6 +266,7 @@ class ConversationSyncService:
         all_messages: list[AgentChatMessage] = []
 
         import json as _json
+
         try:
             sessions_data = _json.loads(sessions_json)
         except _json.JSONDecodeError:
@@ -385,7 +386,10 @@ class ConversationSyncService:
         if self._is_hermes(agent_id):
             n = self._sync_hermes_channel(agent_id, pod_name, ns, channel_id)
             logger.info(
-                "Synced %d messages for hermes agent %s channel %s", n, agent_id, channel_id
+                "Synced %d messages for hermes agent %s channel %s",
+                n,
+                agent_id,
+                channel_id,
             )
             return
 
@@ -440,10 +444,14 @@ class ConversationSyncService:
 
         if self._is_hermes(agent_id):
             sessions_json = self._read_hermes_sessions_json(pod_name, ns)
-            conversations = hermes_distinct_conversations(sessions_json) if sessions_json else []
+            conversations = (
+                hermes_distinct_conversations(sessions_json) if sessions_json else []
+            )
         else:
             sessions_json = self._read_sessions_json(pod_name, ns)
-            conversations = _distinct_pod_conversations(sessions_json) if sessions_json else []
+            conversations = (
+                _distinct_pod_conversations(sessions_json) if sessions_json else []
+            )
 
         if not conversations:
             return
@@ -606,15 +614,25 @@ class ConversationService:
                 pod_name, ns = self.sync_service._pod_or_none(agent_id)
                 if pod_name:
                     if agent.agent_type == AgentType.HERMES:
-                        sessions_json = self.sync_service._read_hermes_sessions_json(pod_name, ns)
-                        pod_conversations = hermes_distinct_conversations(sessions_json) if sessions_json else []
+                        sessions_json = self.sync_service._read_hermes_sessions_json(
+                            pod_name, ns
+                        )
+                        pod_conversations = (
+                            hermes_distinct_conversations(sessions_json)
+                            if sessions_json
+                            else []
+                        )
                         for cid, ctype, display_name in pod_conversations:
                             if cid not in merged or merged[cid][0] is None:
                                 merged[cid] = (display_name, ctype)
                     else:
-                        sessions_json = self.sync_service._read_sessions_json(pod_name, ns)
+                        sessions_json = self.sync_service._read_sessions_json(
+                            pod_name, ns
+                        )
                         if sessions_json:
-                            pod_conversations = _distinct_pod_conversations(sessions_json)
+                            pod_conversations = _distinct_pod_conversations(
+                                sessions_json
+                            )
                             slack_channel_map: dict[str, str] = {}
                             if pod_conversations:
                                 _, slack_channel_map = self.sync_service._platform_maps(

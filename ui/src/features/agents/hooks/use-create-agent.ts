@@ -30,6 +30,8 @@ export type CreateAgentData = {
   bootstrapMd?: string;
   heartbeatMd?: string;
   model?: string;
+  // Integration credentials (provider + provider-specific content; name is server-stamped)
+  secrets?: Array<{ provider: string; content: Record<string, string> }>;
 };
 
 export function useCreateAgent() {

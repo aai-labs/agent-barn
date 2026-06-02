@@ -43,7 +43,7 @@ test.describe("Hire Dialog", () => {
     await page.getByRole("button", { name: /continue/i }).click();
 
     await expect(page.getByText("Connect Slack")).toBeVisible();
-    await expect(page.getByText(/step 4 of 5/i)).toBeVisible();
+    await expect(page.getByText(/step 4 of 6/i)).toBeVisible();
   });
 
   test("should go through bot builder when choosing new bot", async ({ page }) => {
@@ -54,7 +54,7 @@ test.describe("Hire Dialog", () => {
     await page.getByRole("button", { name: /continue/i }).click();
 
     await expect(page.getByText("Build your Slack bot")).toBeVisible();
-    await expect(page.getByText(/step 4 of 6/i)).toBeVisible();
+    await expect(page.getByText(/step 4 of 7/i)).toBeVisible();
   });
 
   test("should show manifest in bot builder step", async ({ page }) => {
@@ -79,7 +79,7 @@ test.describe("Hire Dialog", () => {
     await page.getByRole("button", { name: /continue/i }).click();
 
     await expect(page.getByText("A few details and we'll get them set up.")).toBeVisible();
-    await expect(page.getByText(/step 5 of 5/i)).toBeVisible();
+    await expect(page.getByText(/step 5 of 6/i)).toBeVisible();
   });
 
   test("should show model dropdown with qwen as default and gpt-5-mini as option", async ({ page }) => {
@@ -129,7 +129,8 @@ test.describe("Hire Dialog", () => {
     await page.getByRole("button", { name: /continue/i }).click();
     await page.getByPlaceholder(/xapp-/i).fill("xapp-1-test");
     await page.getByPlaceholder(/xoxb-/i).fill("xoxb-test");
-    await page.getByRole("button", { name: /continue/i }).click();
+    await page.getByRole("button", { name: /continue/i }).click(); // slack-tokens → details
+    await page.getByRole("button", { name: /continue/i }).click(); // details → integrations
     await page.getByRole("button", { name: "Hire Aria" }).click();
 
     await expect(page.getByText("Set up Slack access")).toBeVisible();
@@ -155,7 +156,7 @@ test.describe("Hire Dialog", () => {
     await page.getByRole("button", { name: /continue/i }).click();
 
     await expect(page.getByText("Connect to Azure")).toBeVisible();
-    await expect(page.getByText(/step 3 of 5/i)).toBeVisible();
+    await expect(page.getByText(/step 3 of 6/i)).toBeVisible();
     await expect(page.getByText("Azure credentials")).toBeVisible();
     await expect(page.getByText("Create an Azure Bot resource", { exact: true })).toBeVisible();
 
@@ -174,7 +175,7 @@ test.describe("Hire Dialog", () => {
     await page.getByRole("button", { name: /continue/i }).click();
 
     await expect(page.getByText("Build your Teams bot")).toBeVisible();
-    await expect(page.getByText(/step 4 of 5/i)).toBeVisible();
+    await expect(page.getByText(/step 4 of 6/i)).toBeVisible();
     await page.getByPlaceholder("Aria").fill("Sam");
     await expect(page.getByText("Teams app package", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: /download teams app package/i })).toBeVisible();

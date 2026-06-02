@@ -8,10 +8,11 @@ import { DialogShell } from "./hire-dialog-primitives";
 import {
   ROLES, MODELS, RoleId, WizardStep, pickDefaults,
   RoleStep, AgentTypeStep, PlatformChoiceStep, SlackChoiceStep, BotBuilderStep, SlackTokensStep,
-  TeamsBotBuilderStep, TeamsCredentialsStep, DetailsStep,
+  TeamsBotBuilderStep, TeamsCredentialsStep, DetailsStep, IntegrationsStep,
   downloadTeamsAppPackage, generateTeamsManifest,
 } from "./hire-dialog-steps";
 import { SlackConfigPanel } from "./slack-config-panel";
+import { hasIncompleteIntegration, type IntegrationDraft } from "../integrations";
 import type { Agent } from "../schemas";
 
 interface HireDialogProps {
@@ -35,11 +36,11 @@ function getSteps(agentType: "openclaw" | "hermes", platform: "slack" | "teams",
       : ["role", "agent-type", "slack-choice", "slack-tokens", "details"];
   }
   if (platform === "teams") {
-    return ["role", "agent-type", "platform-choice", "teams-credentials", "teams-bot-builder", "details"];
+    return ["role", "agent-type", "platform-choice", "teams-credentials", "teams-bot-builder", "details", "integrations"];
   }
   return setupNewBot
-    ? ["role", "agent-type", "platform-choice", "slack-choice", "bot-builder", "slack-tokens", "details"]
-    : ["role", "agent-type", "platform-choice", "slack-choice", "slack-tokens", "details"];
+    ? ["role", "agent-type", "platform-choice", "slack-choice", "bot-builder", "slack-tokens", "details", "integrations"]
+    : ["role", "agent-type", "platform-choice", "slack-choice", "slack-tokens", "details", "integrations"];
 }
 
 function stepOrdinal(step: WizardStep, agentType: "openclaw" | "hermes", platform: "slack" | "teams", setupNewBot: boolean): string {
@@ -58,6 +59,7 @@ function stepTitle(step: WizardStep): string {
     case "teams-bot-builder": return "Build your Teams bot";
     case "teams-credentials": return "Connect to Azure";
     case "details": return "A few details and we'll get them set up.";
+    case "integrations": return "Connect integrations";
   }
 }
 
@@ -92,6 +94,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   const [identityMd, setIdentityMd] = useState(defaults.identityMd);
   const [userMd, setUserMd] = useState(defaults.userMd);
   const [toolsMd, setToolsMd] = useState(defaults.toolsMd);
+  const [integrations, setIntegrations] = useState<IntegrationDraft[]>([]);
   const [provisioning, setProvisioning] = useState(false);
   const [progress, setProgress] = useState(0);
   const [provisionError, setProvisionError] = useState<string | null>(null);
@@ -157,6 +160,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
         name, model, platform,
         agentType,
         soulMd, identityMd, userMd, toolsMd,
+        secrets: integrations.map((i) => ({ provider: i.provider, content: i.content })),
         ...(platform === "slack"
           ? { slackBotToken, slackAppToken, slackGroupPolicy, slackDmPolicy }
           : { teamsAppId, teamsAppPassword, teamsTenantId }),
@@ -450,6 +454,9 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
             onChangeRole={() => setStep("role")}
           />
         )}
+        {step === "integrations" && (
+          <IntegrationsStep integrations={integrations} onChange={setIntegrations} />
+        )}
       </div>
 
       <footer
@@ -511,10 +518,28 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
             Continue
           </button>
         )}
-        {step === "details" && (
+        {step === "details" && agentType === "openclaw" && (
           <button
             className="af-btn af-btn-primary af-btn-lg"
             disabled={!name.trim()}
+            onClick={() => setStep("integrations")}
+          >
+            Continue
+          </button>
+        )}
+        {step === "details" && agentType === "hermes" && (
+          <button
+            className="af-btn af-btn-primary af-btn-lg"
+            disabled={!name.trim()}
+            onClick={() => { void startHiring(); }}
+          >
+            Hire {name}
+          </button>
+        )}
+        {step === "integrations" && (
+          <button
+            className="af-btn af-btn-primary af-btn-lg"
+            disabled={!name.trim() || hasIncompleteIntegration(integrations)}
             onClick={() => { void startHiring(); }}
           >
             Hire {name}

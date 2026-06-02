@@ -184,6 +184,9 @@ def build_config_map(
     bootstrap_md: str,
     heartbeat_md: str,
     openclaw_config_overlay: dict | None = None,
+    aai_cli_config_toml: str | None = None,
+    aai_cli_setup_sh: str | None = None,
+    skills_json: str | None = None,
 ) -> client.V1ConfigMap:
     data = {
         "SOUL.md": soul_md,
@@ -200,6 +203,12 @@ def build_config_map(
         data["init-openclaw.js"] = INIT_OPENCLAW_JS
         data["healthz-server.js"] = HEALTHZ_SERVER_JS
         data["start.sh"] = START_SH
+    if aai_cli_config_toml is not None:
+        data["aai-cli-config.toml"] = aai_cli_config_toml
+    if aai_cli_setup_sh is not None:
+        data["aai-cli-setup.sh"] = aai_cli_setup_sh
+    if skills_json is not None:
+        data["skills.json"] = skills_json
     return client.V1ConfigMap(
         metadata=client.V1ObjectMeta(
             name=_resource_name(agent_id),

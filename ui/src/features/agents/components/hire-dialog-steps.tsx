@@ -2,7 +2,13 @@
 
 import { useState } from "react";
 import JSZip from "jszip";
+import { PlusIcon, XIcon } from "@/components/icons";
 import { TEMPLATE_FILES } from "../data";
+import {
+  INTEGRATION_PROVIDERS,
+  getIntegrationProvider,
+  type IntegrationDraft,
+} from "../integrations";
 import { ChoiceCard, FormField, NextStep, TokenInput } from "./hire-dialog-primitives";
 
 export const ROLES = [
@@ -22,7 +28,8 @@ export type WizardStep =
   | "slack-tokens"
   | "teams-bot-builder"
   | "teams-credentials"
-  | "details";
+  | "details"
+  | "integrations";
 
 export const MODELS = [{ value: "litellm/qwen3.6-plus", label: "Qwen3.6 Plus" }, { value: "litellm/gpt-5-mini", label: "GPT-5 mini" }] as const;
 
@@ -882,6 +889,120 @@ export function DetailsStep({
           </FormField>
         </div>
       </details>
+    </div>
+  );
+}
+
+export function IntegrationsStep({
+  integrations,
+  onChange,
+}: {
+  integrations: IntegrationDraft[];
+  onChange: (next: IntegrationDraft[]) => void;
+}) {
+  const [visible, setVisible] = useState<Record<string, boolean>>({});
+
+  const usedProviders = new Set(integrations.map((i) => i.provider));
+  const available = INTEGRATION_PROVIDERS.filter((p) => !usedProviders.has(p.id));
+
+  function addProvider(id: string) {
+    onChange([...integrations, { provider: id, content: {} }]);
+  }
+  function removeProvider(id: string) {
+    onChange(integrations.filter((i) => i.provider !== id));
+  }
+  function setField(providerId: string, key: string, value: string) {
+    onChange(
+      integrations.map((i) =>
+        i.provider === providerId
+          ? { ...i, content: { ...i.content, [key]: value } }
+          : i,
+      ),
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-5">
+      <p className="text-[0.8125rem] leading-[1.5]" style={{ color: "var(--ink-3)" }}>
+        Connect external tools your agent can use. Credentials are encrypted in the key vault.
+        This step is optional — you can hire without any.
+      </p>
+
+      {integrations.map((draft) => {
+        const provider = getIntegrationProvider(draft.provider);
+        if (!provider) return null;
+        return (
+          <div
+            key={draft.provider}
+            className="flex flex-col gap-3.5 p-4 rounded-2xl"
+            style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
+          >
+            <div className="flex items-center justify-between">
+              <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
+                {provider.label}
+              </div>
+              <button
+                type="button"
+                className="af-btn af-btn-ghost af-btn-icon"
+                onClick={() => removeProvider(draft.provider)}
+                aria-label={`Remove ${provider.label}`}
+              >
+                <XIcon size={15} />
+              </button>
+            </div>
+
+            {provider.fields.map((field) => {
+              const value = draft.content[field.key] ?? "";
+              const label = field.required ? field.label : `${field.label} (optional)`;
+              if (field.type === "secret") {
+                const vkey = `${draft.provider}:${field.key}`;
+                return (
+                  <FormField key={field.key} label={label} hint={field.hint}>
+                    <TokenInput
+                      value={value}
+                      onChange={(v) => setField(draft.provider, field.key, v)}
+                      visible={!!visible[vkey]}
+                      onToggle={() => setVisible((s) => ({ ...s, [vkey]: !s[vkey] }))}
+                      placeholder={field.placeholder}
+                    />
+                  </FormField>
+                );
+              }
+              return (
+                <FormField key={field.key} label={label} hint={field.hint}>
+                  <input
+                    className="af-input"
+                    value={value}
+                    onChange={(e) => setField(draft.provider, field.key, e.target.value)}
+                    placeholder={field.placeholder}
+                    autoComplete="off"
+                  />
+                </FormField>
+              );
+            })}
+          </div>
+        );
+      })}
+
+      {available.length > 0 && (
+        <div className="flex flex-col gap-2">
+          <div className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>
+            Add an integration
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {available.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                className="af-btn af-btn-sm flex items-center gap-1.5"
+                onClick={() => addProvider(p.id)}
+              >
+                <PlusIcon size={14} /> {p.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

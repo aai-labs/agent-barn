@@ -42,6 +42,13 @@ Pick the narrowest tool that does the job. Before any destructive action (delete
 _Add your own notes here as you set up the agent._
 """
 
+# Appended to OpenClaw agents' tools_md so the agent discovers the injected aai-cli skills.
+# Path is relative to the openclaw workspace root, where TOOLS.md is written.
+AAI_CLI_TOOLS_POINTER = (
+    "\nIn order to access jira, confluence, bitbucket, github use the aai-cli tool. "
+    "See ./skills/aai-cli/aai-cli_skill.md file.\n"
+)
+
 DEFAULT_AGENTS_MD = """\
 # AGENTS.md - Workspace
 
@@ -159,7 +166,6 @@ Add short, explicit instructions for what this agent should do on startup.
 If the task sends a message, use the message tool and then reply with the exact
 silent token `NO_REPLY` / `no_reply`.
 """
-
 DEFAULT_BOOTSTRAP_MD = "# BOOTSTRAP\n\n<!-- Add bootstrap configuration here. -->\n"
 
 DEFAULT_HEARTBEAT_MD = """\

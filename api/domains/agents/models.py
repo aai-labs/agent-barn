@@ -1,4 +1,5 @@
 import enum
+import json
 from datetime import datetime
 from uuid import UUID
 
@@ -8,6 +9,7 @@ from pydantic import BaseModel as PydanticBaseModel
 from pydantic import ConfigDict, Field, model_validator
 from sqlmodel import Column, Enum, Field as SqlField, Index
 
+from api.infrastructure.crypto import decrypt_token, encrypt_token
 from api.infrastructure.postgres.models import BaseModel
 
 
@@ -36,6 +38,131 @@ class SlackDmPolicy(str, enum.Enum):
     OFF = "off"
     OPEN = "open"
     ALLOWLIST = "allowlist"
+
+
+# --- Integration secrets ---
+
+
+class SecretProvider(str, enum.Enum):
+    GITHUB = "github"
+    JIRA = "jira"
+    CONFLUENCE = "confluence"
+    BITBUCKET = "bitbucket"
+    GMAIL = "gmail"
+    GOOGLE_CALENDAR = "google_calendar"
+    ZOHO_MAIL = "zoho_mail"
+    ZOHO_CALENDAR = "zoho_calendar"
+
+
+class SkillSource(str, enum.Enum):
+    # Predefined skill docs for the baked-in aai-cli tool.
+    AAI_CLI = "aai_cli"
+    # User-entered skills (future; reuse the same table + injection).
+    CUSTOM = "custom"
+
+
+# Predefined display labels — NOT user-entered; the backend stamps these by provider.
+PROVIDER_DISPLAY_NAMES: dict[SecretProvider, str] = {
+    SecretProvider.GITHUB: "GitHub credential",
+    SecretProvider.JIRA: "Jira credential",
+    SecretProvider.CONFLUENCE: "Confluence credential",
+    SecretProvider.BITBUCKET: "Bitbucket credential",
+    SecretProvider.GMAIL: "Gmail credential",
+    SecretProvider.GOOGLE_CALENDAR: "Google Calendar credential",
+    SecretProvider.ZOHO_MAIL: "Zoho Mail credential",
+    SecretProvider.ZOHO_CALENDAR: "Zoho Calendar credential",
+}
+
+
+class SecretContent(PydanticBaseModel):
+    """Base for per-provider credential payloads, validated on read/write."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class GithubContent(SecretContent):
+    token: str
+    owner: str
+    repo: str
+    org: str
+
+
+class JiraContent(SecretContent):
+    site_url: str
+    email: str
+    api_token: str
+
+
+class ConfluenceContent(SecretContent):
+    site_url: str
+    email: str
+    api_token: str
+
+
+class BitbucketContent(SecretContent):
+    workspace: str
+    repo: str
+    email: str
+    api_token: str
+
+
+class GmailContent(SecretContent):
+    access_token: str
+    user_id: str
+
+
+class GoogleCalendarContent(SecretContent):
+    access_token: str
+    calendar_id: str
+
+
+class ZohoMailContent(SecretContent):
+    username: str
+    email: str
+    from_address: str
+    app_password: str
+    smtp_host: str = "smtp.zoho.com"
+    smtp_port: int = 465
+    imap_host: str = "imap.zoho.com"
+    imap_port: int = 993
+    mail_folder: str = "INBOX"
+    sent_folder: str = "Sent"
+
+
+class ZohoCalendarContent(SecretContent):
+    username: str
+    email: str
+    app_password: str
+    caldav_url: str
+
+
+PROVIDER_CONTENT_MODELS: dict[SecretProvider, type[SecretContent]] = {
+    SecretProvider.GITHUB: GithubContent,
+    SecretProvider.JIRA: JiraContent,
+    SecretProvider.CONFLUENCE: ConfluenceContent,
+    SecretProvider.BITBUCKET: BitbucketContent,
+    SecretProvider.GMAIL: GmailContent,
+    SecretProvider.GOOGLE_CALENDAR: GoogleCalendarContent,
+    SecretProvider.ZOHO_MAIL: ZohoMailContent,
+    SecretProvider.ZOHO_CALENDAR: ZohoCalendarContent,
+}
+
+
+def validate_content(provider: SecretProvider, raw: dict) -> SecretContent:
+    """Validate a raw content dict against the provider's schema (raises on bad shape)."""
+    return PROVIDER_CONTENT_MODELS[provider].model_validate(raw)
+
+
+def encrypt_content(content: SecretContent, key: str) -> str:
+    """Serialize and Fernet-encrypt the whole content payload into a single blob."""
+    return encrypt_token(json.dumps(content.model_dump()), key)
+
+
+def decrypt_content(
+    provider: SecretProvider, ciphertext: str, key: str
+) -> SecretContent:
+    """Decrypt the blob and re-validate it against the provider's schema."""
+    return validate_content(provider, json.loads(decrypt_token(ciphertext, key)))
 
 
 class AgentTemplate(BaseModel, table=True):
@@ -137,6 +264,59 @@ class AgentTeamsConfig(BaseModel, table=True):
     tenant_id: str = SqlField(nullable=False, max_length=255)
 
 
+class AgentSecret(BaseModel, table=True):
+    __tablename__: str = "agent_secret"
+
+    __table_args__ = (
+        sa.UniqueConstraint(
+            "agent_id", "provider", name="uq_agent_secret_agent_provider"
+        ),
+    )
+
+    agent_id: UUID = SqlField(
+        foreign_key="agent.id", nullable=False, ondelete="CASCADE"
+    )
+    provider: SecretProvider = SqlField(sa_column=Column(sa.String(), nullable=False))
+    secret_name: str = SqlField(nullable=False, max_length=255)  # predefined label
+    content: str = SqlField(
+        sa_column=Column(sa.Text(), nullable=False)
+    )  # Fernet-encrypted JSON blob
+
+
+class AgentSkill(BaseModel, table=True):
+    __tablename__: str = "agent_skill"
+
+    __table_args__ = (
+        sa.UniqueConstraint(
+            "agent_id", "skill_file_path", name="uq_agent_skill_agent_file_path"
+        ),
+    )
+
+    agent_id: UUID = SqlField(
+        foreign_key="agent.id", nullable=False, ondelete="CASCADE"
+    )
+    source: SkillSource = SqlField(
+        sa_column=Column(sa.String(), nullable=False)
+    )  # aai_cli | custom
+    skill_name: str = SqlField(
+        nullable=False, max_length=255
+    )  # UI label (out of scope now)
+    skill_file_path: str = SqlField(
+        nullable=False, max_length=1024
+    )  # rel path, reconstructs the workspace dir tree
+    skill_content: str = SqlField(sa_column=Column(sa.Text(), nullable=False))
+
+
+class AgentSecretCreate(PydanticBaseModel):  # no secret_name — backend stamps it
+    provider: SecretProvider
+    content: dict
+
+    @model_validator(mode="after")
+    def validate_provider_content(self) -> "AgentSecretCreate":
+        validate_content(self.provider, self.content)
+        return self
+
+
 class AgentCreate(PydanticBaseModel):
     name: str = Field(min_length=1, max_length=255)
     platform: AgentPlatform = AgentPlatform.SLACK
@@ -162,6 +342,8 @@ class AgentCreate(PydanticBaseModel):
     bootstrap_md: str | None = None
     heartbeat_md: str | None = None
     model: str | None = None
+    # Integration credentials (optional)
+    secrets: list[AgentSecretCreate] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_platform_credentials(self) -> "AgentCreate":
@@ -182,6 +364,13 @@ class AgentCreate(PydanticBaseModel):
                     "teams_app_id, teams_app_password, and teams_tenant_id "
                     "are required for Teams agents"
                 )
+        return self
+
+    @model_validator(mode="after")
+    def validate_unique_secret_providers(self) -> "AgentCreate":
+        providers = [s.provider for s in self.secrets]
+        if len(providers) != len(set(providers)):
+            raise ValueError("Duplicate secret providers are not allowed")
         return self
 
 
@@ -225,6 +414,13 @@ class AgentTeamsConfigRead(PydanticBaseModel):
     tenant_id: str
 
 
+class AgentSecretRead(PydanticBaseModel):  # label + provider only — no secret values
+    model_config = ConfigDict(from_attributes=True)
+
+    provider: SecretProvider
+    secret_name: str
+
+
 class AgentRead(PydanticBaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -239,6 +435,7 @@ class AgentRead(PydanticBaseModel):
     model: str
     slack_config: AgentSlackConfigRead | None = None
     teams_config: AgentTeamsConfigRead | None = None
+    secrets: list[AgentSecretRead] = Field(default_factory=list)
     webhook_url: str | None = None
     created_at: datetime
     updated_at: datetime
