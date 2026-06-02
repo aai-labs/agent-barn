@@ -563,7 +563,7 @@ class AgentService:
                     agent.id,
                     org_id,
                     ns,
-                    self.config.agent_image,
+                    self.config.openclaw_image,
                     self.config.agent_image_pull_secret,
                 )
         elif agent.platform == AgentPlatform.TEAMS:
@@ -613,7 +613,7 @@ class AgentService:
                 agent.id,
                 org_id,
                 ns,
-                self.config.agent_image,
+                self.config.openclaw_image,
                 self.config.agent_image_pull_secret,
             )
         else:

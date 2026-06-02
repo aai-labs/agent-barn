@@ -130,6 +130,7 @@ export function SlackConfigPanel({ agent, onSaved }: SlackConfigPanelProps) {
                       key={c.id}
                       className="w-full flex items-center gap-2 px-3.5 py-2.5 text-[0.8125rem] text-left hover:bg-[var(--bg-soft)] transition-colors"
                       style={{ color: "var(--ink-2)" }}
+                      onMouseDown={(e) => e.preventDefault()}
                       onClick={() => {
                         setChannelIds((ids) => [...ids, c.id]);
                         setChannelSearch("");
@@ -220,6 +221,7 @@ export function SlackConfigPanel({ agent, onSaved }: SlackConfigPanelProps) {
                       key={u.id}
                       className="w-full flex items-center gap-2 px-3.5 py-2.5 text-[0.8125rem] text-left hover:bg-[var(--bg-soft)] transition-colors"
                       style={{ color: "var(--ink-2)" }}
+                      onMouseDown={(e) => e.preventDefault()}
                       onClick={() => {
                         setUserIds((ids) => [...ids, u.id]);
                         setUserSearch("");

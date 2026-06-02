@@ -24,7 +24,7 @@ class Config(BaseSettings):
     k8s_kubeconfig_path: str | None = None
     k8s_namespace: str = "agent-farm"
 
-    agent_image: str = ""
+    openclaw_image: str = ""
     hermes_image: str = ""
     agent_token_encryption_key: str = ""
     litellm_api_key: str = ""

@@ -33,7 +33,7 @@ spec:
           env:
             - name: K8S_KUBECONFIG_PATH
               value: /etc/kubeconfig/kubeconfig
-            - name: AGENT_IMAGE
+            - name: OPENCLAW_IMAGE
               value: "{{ .Values.registryPrefix }}/{{ .Values.openclawImage.repository }}:{{ .Values.openclawImage.tag }}"
             - name: HERMES_IMAGE
               value: "{{ .Values.hermesImage.repository }}:{{ .Values.hermesImage.tag }}"
