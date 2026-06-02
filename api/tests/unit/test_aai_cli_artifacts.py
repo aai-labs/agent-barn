@@ -122,7 +122,10 @@ def test_setup_sh_hermes_home_dir_exports_opt_data():
     setup = build_setup_sh([SecretProvider.JIRA], home_dir="/opt/data")
     assert "export HOME=/opt/data" in setup
     assert "mkdir -p /opt/data/.config/aai-cli" in setup
-    assert "cp /app/config/aai-cli-config.toml /opt/data/.config/aai-cli/config.toml" in setup
+    assert (
+        "cp /app/config/aai-cli-config.toml /opt/data/.config/aai-cli/config.toml"
+        in setup
+    )
     assert "/home/node" not in setup
 
 
