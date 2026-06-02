@@ -1,0 +1,31 @@
+name: Hermes Base
+
+on:
+  push:
+    paths:
+      - hermes-base/**
+      - .github/workflows/hermes-base.yml
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: hermes-base
+          file: hermes-base/Dockerfile
+          load: true
+          tags: hermes-base:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          secrets: |
+            gh_token=${{ secrets.AAI_CLI_REPO_ACCESS_TOKEN }}
+      - name: Smoke test
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}/hermes-base/smoke-test.sh:/smoke-test.sh:ro" \
+            hermes-base:ci \
+            /bin/sh /smoke-test.sh
