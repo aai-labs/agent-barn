@@ -88,31 +88,41 @@ def build_hermes_config_map(
     boot_md: str,
     heartbeat_md: str,
     hermes_config: dict,
+    aai_cli_config_toml: str | None = None,
+    aai_cli_setup_sh: str | None = None,
+    skills_json: str | None = None,
 ) -> client.V1ConfigMap:
+    data: dict[str, str] = {
+        "SOUL.md": soul_md + HERMES_BOOTLOADER_FOOTER,
+        "IDENTITY.md": identity_md,
+        "USER.md": user_md,
+        "TOOLS.md": tools_md,
+        "AGENTS.md": agents_md,
+        "BOOT.md": boot_md,
+        "HEARTBEAT.md": heartbeat_md,
+        "hermes-config.yaml": yaml.dump(
+            hermes_config, default_flow_style=False, sort_keys=False
+        ),
+        "slack-deny-dms-plugin.yaml": SLACK_DENY_DMS_PLUGIN_YAML,
+        "slack-deny-dms-init.py": SLACK_DENY_DMS_PLUGIN_INIT,
+        "slack-channel-allowlist-plugin.yaml": SLACK_CHANNEL_ALLOWLIST_PLUGIN_YAML,
+        "slack-channel-allowlist-init.py": SLACK_CHANNEL_ALLOWLIST_PLUGIN_INIT,
+        "healthz-server.py": HERMES_HEALTHZ_PY,
+        "start.sh": HERMES_START_SH,
+    }
+    if aai_cli_config_toml is not None:
+        data["aai-cli-config.toml"] = aai_cli_config_toml
+    if aai_cli_setup_sh is not None:
+        data["aai-cli-setup.sh"] = aai_cli_setup_sh
+    if skills_json is not None:
+        data["skills.json"] = skills_json
     return client.V1ConfigMap(
         metadata=client.V1ObjectMeta(
             name=_resource_name(agent_id),
             namespace=namespace,
             labels=_labels(agent_id, org_id),
         ),
-        data={
-            "SOUL.md": soul_md + HERMES_BOOTLOADER_FOOTER,
-            "IDENTITY.md": identity_md,
-            "USER.md": user_md,
-            "TOOLS.md": tools_md,
-            "AGENTS.md": agents_md,
-            "BOOT.md": boot_md,
-            "HEARTBEAT.md": heartbeat_md,
-            "hermes-config.yaml": yaml.dump(
-                hermes_config, default_flow_style=False, sort_keys=False
-            ),
-            "slack-deny-dms-plugin.yaml": SLACK_DENY_DMS_PLUGIN_YAML,
-            "slack-deny-dms-init.py": SLACK_DENY_DMS_PLUGIN_INIT,
-            "slack-channel-allowlist-plugin.yaml": SLACK_CHANNEL_ALLOWLIST_PLUGIN_YAML,
-            "slack-channel-allowlist-init.py": SLACK_CHANNEL_ALLOWLIST_PLUGIN_INIT,
-            "healthz-server.py": HERMES_HEALTHZ_PY,
-            "start.sh": HERMES_START_SH,
-        },
+        data=data,
     )
 
 

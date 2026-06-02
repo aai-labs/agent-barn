@@ -214,8 +214,7 @@ class AgentService:
             soul_md=data.soul_md,
             identity_md=data.identity_md,
             user_md=data.user_md or DEFAULT_USER_MD,
-            tools_md=(data.tools_md or DEFAULT_TOOLS_MD)
-            + (AAI_CLI_TOOLS_POINTER if data.agent_type == AgentType.OPENCLAW else ""),
+            tools_md=(data.tools_md or DEFAULT_TOOLS_MD) + AAI_CLI_TOOLS_POINTER,
             agents_md=data.agents_md or DEFAULT_AGENTS_MD,
             boot_md=data.boot_md or DEFAULT_BOOT_MD,
             bootstrap_md=data.bootstrap_md or DEFAULT_BOOTSTRAP_MD,
@@ -288,9 +287,7 @@ class AgentService:
                 )
             )
 
-        # Predefined aai-cli skill docs — OpenClaw only for now; Hermes support is the follow-up commit.
-        if data.agent_type == AgentType.OPENCLAW:
-            self.repository.save_skills(load_aai_cli_skills(agent.id))
+        self.repository.save_skills(load_aai_cli_skills(agent.id))
 
         if data.platform == AgentPlatform.TEAMS:
             return self.start_agent(agent.id, context)
@@ -473,6 +470,8 @@ class AgentService:
             else ""
         )
         effective_model = agent.model or self.config.agent_default_model
+        overlay: dict | None = None
+        hermes_cfg: dict | None = None
 
         if agent.platform == AgentPlatform.SLACK:
             slack_config = self.repository.get_slack_config(agent.id)
@@ -507,7 +506,7 @@ class AgentService:
                     boot_md=template.boot_md,
                     heartbeat_md=template.heartbeat_md,
                     hermes_config=hermes_cfg,
-                )
+                )  # rebuilt with aai-cli kwargs below
                 secret = build_secret_hermes_slack(
                     agent_id=agent.id,
                     org_id=org_id,
@@ -623,30 +622,51 @@ class AgentService:
                 detail=f"Unsupported platform: {agent.platform}",
             )
 
-        # aai-cli integration secrets — OpenClaw only for now; Hermes support is the follow-up commit.
-        if agent.agent_type == AgentType.OPENCLAW:
-            agent_secrets = self.repository.get_secrets_for_agent(agent.id)
-            decrypted = {
-                SecretProvider(s.provider): decrypt_content(
-                    SecretProvider(s.provider),
-                    s.content,
-                    self.config.agent_token_encryption_key,
-                )
-                for s in agent_secrets
-            }
-            store = {
-                p: c
-                for p, c in decrypted.items()
-                if p.value in provider_to_secret_name_map
-            }
-            aai_config_toml = build_config_toml(decrypted) if decrypted else None
-            aai_setup_sh = build_setup_sh(list(store)) if decrypted else None
-            if store:
-                secret.string_data.update(build_env(store))
+        # aai-cli integration secrets — all agent types.
+        agent_secrets = self.repository.get_secrets_for_agent(agent.id)
+        decrypted = {
+            SecretProvider(s.provider): decrypt_content(
+                SecretProvider(s.provider),
+                s.content,
+                self.config.agent_token_encryption_key,
+            )
+            for s in agent_secrets
+        }
+        store = {
+            p: c for p, c in decrypted.items() if p.value in provider_to_secret_name_map
+        }
+        aai_home = "/opt/data" if agent.agent_type == AgentType.HERMES else "/home/node"
+        aai_config_toml = (
+            build_config_toml(decrypted, home_dir=aai_home) if decrypted else None
+        )
+        aai_setup_sh = (
+            build_setup_sh(list(store), home_dir=aai_home) if decrypted else None
+        )
+        if store:
+            secret.string_data.update(build_env(store))
 
-            skills = self.repository.get_skills_for_agent(agent.id)
-            skills_json = build_skills_manifest(skills) if skills else None
+        skills = self.repository.get_skills_for_agent(agent.id)
+        skills_json = build_skills_manifest(skills) if skills else None
 
+        if agent.agent_type == AgentType.HERMES:
+            assert hermes_cfg is not None
+            config_map = build_hermes_config_map(
+                agent_id=agent.id,
+                org_id=org_id,
+                namespace=ns,
+                soul_md=template.soul_md,
+                identity_md=template.identity_md,
+                user_md=template.user_md,
+                tools_md=template.tools_md,
+                agents_md=template.agents_md,
+                boot_md=template.boot_md,
+                heartbeat_md=template.heartbeat_md,
+                hermes_config=hermes_cfg,
+                aai_cli_config_toml=aai_config_toml,
+                aai_cli_setup_sh=aai_setup_sh,
+                skills_json=skills_json,
+            )
+        else:
             config_map = build_config_map(
                 agent_id=agent.id,
                 org_id=org_id,

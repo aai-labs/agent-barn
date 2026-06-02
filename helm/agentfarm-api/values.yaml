@@ -10,7 +10,7 @@ openclawImage:
   tag: latest
 
 hermesImage:
-  repository: nousresearch/hermes-agent
+  repository: agentfarm-hermes-base
   tag: latest
 
 replicaCount: 1

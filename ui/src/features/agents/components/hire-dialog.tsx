@@ -32,8 +32,8 @@ const PROVISION_STEPS = [
 function getSteps(agentType: "openclaw" | "hermes", platform: "slack" | "teams", setupNewBot: boolean): WizardStep[] {
   if (agentType === "hermes") {
     return setupNewBot
-      ? ["role", "agent-type", "slack-choice", "bot-builder", "slack-tokens", "details"]
-      : ["role", "agent-type", "slack-choice", "slack-tokens", "details"];
+      ? ["role", "agent-type", "slack-choice", "bot-builder", "slack-tokens", "details", "integrations"]
+      : ["role", "agent-type", "slack-choice", "slack-tokens", "details", "integrations"];
   }
   if (platform === "teams") {
     return ["role", "agent-type", "platform-choice", "teams-credentials", "teams-bot-builder", "details", "integrations"];
@@ -518,22 +518,13 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
             Continue
           </button>
         )}
-        {step === "details" && agentType === "openclaw" && (
+        {step === "details" && (
           <button
             className="af-btn af-btn-primary af-btn-lg"
             disabled={!name.trim()}
             onClick={() => setStep("integrations")}
           >
             Continue
-          </button>
-        )}
-        {step === "details" && agentType === "hermes" && (
-          <button
-            className="af-btn af-btn-primary af-btn-lg"
-            disabled={!name.trim()}
-            onClick={() => { void startHiring(); }}
-          >
-            Hire {name}
           </button>
         )}
         {step === "integrations" && (

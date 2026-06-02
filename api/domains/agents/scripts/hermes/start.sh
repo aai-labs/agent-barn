@@ -40,4 +40,25 @@ for f in IDENTITY.md AGENTS.md TOOLS.md BOOT.md HEARTBEAT.md; do
     cp /app/config/$f /workspace/$f
 done
 
+if [ -f /app/config/aai-cli-setup.sh ]; then
+  sh /app/config/aai-cli-setup.sh || echo "[aai-cli] setup failed; continuing"
+fi
+
+if [ -f /app/config/skills.json ]; then
+  python3 - <<'PYEOF'
+import json, pathlib
+manifest = json.loads(open('/app/config/skills.json').read())
+skills_dir = pathlib.Path('/workspace/skills')
+written = 0
+for entry in manifest:
+    dest = (skills_dir / entry['path']).resolve()
+    if not str(dest).startswith(str(skills_dir.resolve())):
+        continue
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(entry['content'])
+    written += 1
+print(f'[hermes-start] Wrote {written} skill files')
+PYEOF
+fi
+
 exec hermes gateway run

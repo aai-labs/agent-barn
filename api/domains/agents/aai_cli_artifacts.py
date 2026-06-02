@@ -30,10 +30,17 @@ provider_to_secret_name_map = {
     "bitbucket": "bitbucket.api_token",
 }
 
-# Default config dir the CLI reads from. Absolute (not ~) so the setup script has no $HOME
-# ambiguity; the CLI itself resolves its default config path via the node user's home.
+# Default config dir for OpenClaw (node user). Callers can pass a different home_dir for other
+# runtimes (e.g. Hermes runs as root → home_dir="/root").
 SECRETS_DIR = "/home/node/.config/aai-cli"
 CONFIG_PATH = f"{SECRETS_DIR}/config.toml"
+
+
+def _header(secrets_dir: str) -> str:
+    return (
+        f'secrets_file = "{secrets_dir}/aai-secrets.enc.json"\n'
+        f'key_file = "{secrets_dir}/key"\n'
+    )
 
 
 def env_var_for(secret_name: str) -> str:
@@ -163,19 +170,18 @@ _PROFILE_BUILDERS: dict[SecretProvider, Callable[..., str]] = {
     SecretProvider.ZOHO_CALENDAR: _zoho_calendar_block,
 }
 
-_HEADER = (
-    f'secrets_file = "{SECRETS_DIR}/aai-secrets.enc.json"\n'
-    f'key_file = "{SECRETS_DIR}/key"\n'
-)
 
-
-def build_config_toml(decrypted: Mapping[SecretProvider, SecretContent]) -> str:
+def build_config_toml(
+    decrypted: Mapping[SecretProvider, SecretContent],
+    home_dir: str = "/home/node",
+) -> str:
     """Render config.toml with one profile per provider present in ``decrypted``.
 
     Providers are emitted in a fixed (enum) order for deterministic output. Store-based providers
     reference their secret via ``*_secret``; env-based providers via ``*_env`` (token not injected).
     """
-    blocks = [_HEADER]
+    secrets_dir = f"{home_dir}/.config/aai-cli"
+    blocks = [_header(secrets_dir)]
     for provider in SecretProvider:
         content = decrypted.get(provider)
         if content is not None:
@@ -183,19 +189,24 @@ def build_config_toml(decrypted: Mapping[SecretProvider, SecretContent]) -> str:
     return "\n".join(blocks)
 
 
-def build_setup_sh(store_providers: list[SecretProvider]) -> str:
+def build_setup_sh(
+    store_providers: list[SecretProvider],
+    home_dir: str = "/home/node",
+) -> str:
     """Render the in-pod setup script: install config.toml, then `secrets set` per store provider.
 
     The ``cp`` always runs (installs the mounted config); `secrets set` lines are emitted only for
     store-based providers (``store_providers``), each pulling the token from its env var.
     """
+    secrets_dir = f"{home_dir}/.config/aai-cli"
+    config_path = f"{secrets_dir}/config.toml"
     present = set(store_providers)
     lines = [
         "#!/bin/sh",
         "set -e",
-        "export HOME=/home/node",
-        f"mkdir -p {SECRETS_DIR}",
-        f"cp /app/config/aai-cli-config.toml {CONFIG_PATH}",
+        f"export HOME={home_dir}",
+        f"mkdir -p {secrets_dir}",
+        f"cp /app/config/aai-cli-config.toml {config_path}",
     ]
     for provider in SecretProvider:  # fixed order for determinism
         if provider not in present:
@@ -204,7 +215,7 @@ def build_setup_sh(store_providers: list[SecretProvider]) -> str:
         env = env_var_for(secret_name)
         lines.append(
             f"printf '%s' \"${env}\" | "
-            f"aai-cli --config {CONFIG_PATH} secrets set {secret_name}"
+            f"aai-cli --config {config_path} secrets set {secret_name}"
         )
     return "\n".join(lines) + "\n"
 

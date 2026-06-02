@@ -42,8 +42,8 @@ Pick the narrowest tool that does the job. Before any destructive action (delete
 _Add your own notes here as you set up the agent._
 """
 
-# Appended to OpenClaw agents' tools_md so the agent discovers the injected aai-cli skills.
-# Path is relative to the openclaw workspace root, where TOOLS.md is written.
+# Appended to all agents' tools_md so the agent discovers the injected aai-cli skills.
+# Path is relative to the workspace root where TOOLS.md is written (works for both runtimes).
 AAI_CLI_TOOLS_POINTER = (
     "\nIn order to access jira, confluence, bitbucket, github use the aai-cli tool. "
     "See ./skills/aai-cli/aai-cli_skill.md file.\n"
