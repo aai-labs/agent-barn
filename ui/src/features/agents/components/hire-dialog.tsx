@@ -7,7 +7,7 @@ import { useStartAgent } from "../hooks/use-start-agent";
 import { DialogShell } from "./hire-dialog-primitives";
 import {
   ROLES, MODELS, RoleId, WizardStep, pickDefaults,
-  RoleStep, PlatformChoiceStep, SlackChoiceStep, BotBuilderStep, SlackTokensStep,
+  RoleStep, AgentTypeStep, PlatformChoiceStep, SlackChoiceStep, BotBuilderStep, SlackTokensStep,
   TeamsBotBuilderStep, TeamsCredentialsStep, DetailsStep, IntegrationsStep,
   downloadTeamsAppPackage, generateTeamsManifest,
 } from "./hire-dialog-steps";
@@ -29,23 +29,29 @@ const PROVISION_STEPS = [
   { at: 96, text: "", isPending: true },
 ];
 
-function getSteps(platform: "slack" | "teams", setupNewBot: boolean): WizardStep[] {
+function getSteps(agentType: "openclaw" | "hermes", platform: "slack" | "teams", setupNewBot: boolean): WizardStep[] {
+  if (agentType === "hermes") {
+    return setupNewBot
+      ? ["role", "agent-type", "slack-choice", "bot-builder", "slack-tokens", "details", "integrations"]
+      : ["role", "agent-type", "slack-choice", "slack-tokens", "details", "integrations"];
+  }
   if (platform === "teams") {
-    return ["role", "platform-choice", "teams-credentials", "teams-bot-builder", "details", "integrations"];
+    return ["role", "agent-type", "platform-choice", "teams-credentials", "teams-bot-builder", "details", "integrations"];
   }
   return setupNewBot
-    ? ["role", "platform-choice", "slack-choice", "bot-builder", "slack-tokens", "details", "integrations"]
-    : ["role", "platform-choice", "slack-choice", "slack-tokens", "details", "integrations"];
+    ? ["role", "agent-type", "platform-choice", "slack-choice", "bot-builder", "slack-tokens", "details", "integrations"]
+    : ["role", "agent-type", "platform-choice", "slack-choice", "slack-tokens", "details", "integrations"];
 }
 
-function stepOrdinal(step: WizardStep, platform: "slack" | "teams", setupNewBot: boolean): string {
-  const seq = getSteps(platform, setupNewBot);
+function stepOrdinal(step: WizardStep, agentType: "openclaw" | "hermes", platform: "slack" | "teams", setupNewBot: boolean): string {
+  const seq = getSteps(agentType, platform, setupNewBot);
   return `step ${seq.indexOf(step) + 1} of ${seq.length}`;
 }
 
 function stepTitle(step: WizardStep): string {
   switch (step) {
     case "role": return "What kind of teammate do you need?";
+    case "agent-type": return "Choose your agent runtime";
     case "platform-choice": return "Choose your platform";
     case "slack-choice": return "Set up your Slack app";
     case "bot-builder": return "Build your Slack bot";
@@ -76,6 +82,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   const [showAppToken, setShowAppToken] = useState(false);
   const [showBotToken, setShowBotToken] = useState(false);
   const [tokenError, setTokenError] = useState<string | null>(null);
+  const [agentType, setAgentType] = useState<"openclaw" | "hermes">("hermes");
   const [slackGroupPolicy, setSlackGroupPolicy] = useState<"open" | "allowlist">("allowlist");
   const [slackDmPolicy, setSlackDmPolicy] = useState<"off" | "open" | "allowlist">("off");
   const [teamsAppId, setTeamsAppId] = useState("");
@@ -116,9 +123,14 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   }
 
   function handleBack() {
-    const steps = getSteps(platform, setupNewBot);
+    const steps = getSteps(agentType, platform, setupNewBot);
     const idx = steps.indexOf(step);
     if (idx > 0) setStep(steps[idx - 1]);
+  }
+
+  function handleAgentTypeChange(v: "openclaw" | "hermes") {
+    setAgentType(v);
+    if (v === "hermes") setPlatform("slack");
   }
 
   function handleContinueFromTokens() {
@@ -146,6 +158,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
     try {
       const agent = await createAgent.mutateAsync({
         name, model, platform,
+        agentType,
         soulMd, identityMd, userMd, toolsMd,
         secrets: integrations.map((i) => ({ provider: i.provider, content: i.content })),
         ...(platform === "slack"
@@ -371,7 +384,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
       >
         <div>
           <div className="text-xs uppercase tracking-[0.08em] font-semibold mb-1" style={{ color: "var(--ink-3)" }}>
-            Hire · {stepOrdinal(step, platform, setupNewBot)}
+            Hire · {stepOrdinal(step, agentType, platform, setupNewBot)}
           </div>
           <h2 className="text-xl font-semibold tracking-tight m-0" style={{ color: "var(--ink)" }}>
             {stepTitle(step)}
@@ -384,6 +397,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
 
       <div className="flex-1 overflow-y-auto p-6">
         {step === "role" && <RoleStep pick={pick} onPick={handlePickRole} />}
+        {step === "agent-type" && <AgentTypeStep agentType={agentType} onChange={handleAgentTypeChange} />}
         {step === "platform-choice" && <PlatformChoiceStep platform={platform} onChange={setPlatform} />}
         {step === "slack-choice" && <SlackChoiceStep setupNewBot={setupNewBot} onChange={setSetupNewBot} />}
         {step === "bot-builder" && (
@@ -456,7 +470,15 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
         )}
 
         {step === "role" && (
-          <button className="af-btn af-btn-primary af-btn-lg" onClick={() => setStep("platform-choice")}>
+          <button className="af-btn af-btn-primary af-btn-lg" onClick={() => setStep("agent-type")}>
+            Continue
+          </button>
+        )}
+        {step === "agent-type" && (
+          <button
+            className="af-btn af-btn-primary af-btn-lg"
+            onClick={() => setStep(agentType === "hermes" ? "slack-choice" : "platform-choice")}
+          >
             Continue
           </button>
         )}

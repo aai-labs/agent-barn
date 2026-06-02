@@ -1,0 +1,64 @@
+#!/bin/sh
+set -e
+
+python3 /app/config/healthz-server.py &
+
+mkdir -p /opt/data/plugins/slack-deny-dms /opt/data/plugins/slack-channel-allowlist /opt/data/memories /workspace
+
+cat > /opt/data/.env << EOF
+SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN}
+SLACK_APP_TOKEN=${SLACK_APP_TOKEN}
+OPENAI_API_KEY=${OPENAI_API_KEY}
+OPENAI_BASE_URL=${OPENAI_BASE_URL}
+OPENROUTER_BASE_URL=${OPENROUTER_BASE_URL}
+API_SERVER_ENABLED=${API_SERVER_ENABLED}
+API_SERVER_HOST=${API_SERVER_HOST}
+API_SERVER_PORT=${API_SERVER_PORT}
+API_SERVER_KEY=${API_SERVER_KEY}
+API_SERVER_MODEL_NAME=${API_SERVER_MODEL_NAME}
+GATEWAY_ALLOW_ALL_USERS=${GATEWAY_ALLOW_ALL_USERS}
+SLACK_ALLOW_ALL_USERS=${SLACK_ALLOW_ALL_USERS}
+SLACK_HOME_CHANNEL=${SLACK_HOME_CHANNEL}
+SLACK_CHANNEL_IDS=${SLACK_CHANNEL_IDS}
+SLACK_DM_ALLOWED_USERS=${SLACK_DM_ALLOWED_USERS}
+EOF
+
+if [ ! -f /opt/data/memories/USER.md ]; then
+    cp /app/config/USER.md /opt/data/memories/USER.md
+fi
+
+cp /app/config/SOUL.md /opt/data/SOUL.md
+cp /app/config/hermes-config.yaml /opt/data/config.yaml
+
+cp /app/config/slack-deny-dms-plugin.yaml /opt/data/plugins/slack-deny-dms/plugin.yaml
+cp /app/config/slack-deny-dms-init.py /opt/data/plugins/slack-deny-dms/__init__.py
+
+cp /app/config/slack-channel-allowlist-plugin.yaml /opt/data/plugins/slack-channel-allowlist/plugin.yaml
+cp /app/config/slack-channel-allowlist-init.py /opt/data/plugins/slack-channel-allowlist/__init__.py
+
+for f in IDENTITY.md AGENTS.md TOOLS.md BOOT.md HEARTBEAT.md; do
+    cp /app/config/$f /workspace/$f
+done
+
+if [ -f /app/config/aai-cli-setup.sh ]; then
+  sh /app/config/aai-cli-setup.sh || echo "[aai-cli] setup failed; continuing"
+fi
+
+if [ -f /app/config/skills.json ]; then
+  python3 - <<'PYEOF'
+import json, pathlib
+manifest = json.loads(open('/app/config/skills.json').read())
+skills_dir = pathlib.Path('/workspace/skills')
+written = 0
+for entry in manifest:
+    dest = (skills_dir / entry['path']).resolve()
+    if not str(dest).startswith(str(skills_dir.resolve())):
+        continue
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(entry['content'])
+    written += 1
+print(f'[hermes-start] Wrote {written} skill files')
+PYEOF
+fi
+
+exec hermes gateway run

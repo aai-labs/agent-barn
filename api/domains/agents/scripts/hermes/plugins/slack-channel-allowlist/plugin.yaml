@@ -1,0 +1,3 @@
+name: slack-channel-allowlist
+version: "1.0"
+description: Restrict responses to channels listed in SLACK_CHANNEL_IDS; open to all if unset

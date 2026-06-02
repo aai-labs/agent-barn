@@ -9,6 +9,10 @@ openclawImage:
   repository: agentfarm-openclaw-base
   tag: latest
 
+hermesImage:
+  repository: agentfarm-hermes-base
+  tag: latest
+
 replicaCount: 1
 
 # k8s Secret: DB_CONNECTION_URL, SECRET_SIGNING_KEY,

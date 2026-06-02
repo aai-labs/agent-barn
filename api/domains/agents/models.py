@@ -24,6 +24,11 @@ class AgentPlatform(str, enum.Enum):
     TEAMS = "teams"
 
 
+class AgentType(str, enum.Enum):
+    OPENCLAW = "openclaw"
+    HERMES = "hermes"
+
+
 class SlackGroupPolicy(str, enum.Enum):
     OPEN = "open"
     ALLOWLIST = "allowlist"
@@ -216,6 +221,10 @@ class Agent(BaseModel, table=True):
         default=AgentPlatform.SLACK,
         sa_column=Column(sa.String(10), nullable=False, server_default="slack"),
     )
+    agent_type: AgentType = SqlField(
+        default=AgentType.OPENCLAW,
+        sa_column=Column(sa.String(20), nullable=False, server_default="openclaw"),
+    )
 
 
 class AgentSlackConfig(BaseModel, table=True):
@@ -311,6 +320,7 @@ class AgentSecretCreate(PydanticBaseModel):  # no secret_name — backend stamps
 class AgentCreate(PydanticBaseModel):
     name: str = Field(min_length=1, max_length=255)
     platform: AgentPlatform = AgentPlatform.SLACK
+    agent_type: AgentType = AgentType.OPENCLAW
     # Slack credentials (required when platform=slack)
     slack_bot_token: str | None = Field(default=None, min_length=1)
     slack_app_token: str | None = Field(default=None, min_length=1)
@@ -337,6 +347,8 @@ class AgentCreate(PydanticBaseModel):
 
     @model_validator(mode="after")
     def validate_platform_credentials(self) -> "AgentCreate":
+        if self.agent_type == AgentType.HERMES and self.platform == AgentPlatform.TEAMS:
+            raise ValueError("Hermes agents do not support the Teams platform")
         if self.platform == AgentPlatform.SLACK:
             if not self.slack_bot_token or not self.slack_app_token:
                 raise ValueError(
@@ -416,6 +428,7 @@ class AgentRead(PydanticBaseModel):
     name: str
     status: AgentStatus
     platform: AgentPlatform
+    agent_type: AgentType
     organization_id: UUID
     template_id: UUID
     template_version: int

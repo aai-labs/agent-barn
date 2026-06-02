@@ -1,5 +1,6 @@
 import datetime
 import logging
+import secrets
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -21,9 +22,13 @@ from api.domains.agents.aai_cli_skills import (
 from api.domains.agents.builders import (
     build_config_map,
     build_deployment,
+    build_hermes_config,
+    build_hermes_config_map,
+    build_hermes_deployment,
     build_openclaw_config_overlay,
     build_openclaw_config_overlay_teams,
     build_pvc,
+    build_secret_hermes_slack,
     build_secret_slack,
     build_secret_teams,
     build_service,
@@ -54,6 +59,7 @@ from api.domains.agents.models import (
     AgentTeamsConfigRead,
     AgentTemplate,
     AgentTemplateRead,
+    AgentType,
     AgentUpdate,
     PairRequest,
     SecretProvider,
@@ -154,6 +160,7 @@ class AgentService:
             name=agent.name,
             status=agent.status,
             platform=agent.platform,
+            agent_type=agent.agent_type,
             organization_id=agent.organization_id,
             template_id=agent.template_id,
             template_version=agent.template_version,
@@ -184,6 +191,7 @@ class AgentService:
             name=data.name,
             model=data.model or "",
             platform=data.platform,
+            agent_type=data.agent_type,
             template_id=None,  # ty: ignore[invalid-argument-type]
             template_version=0,
         )
@@ -279,7 +287,6 @@ class AgentService:
                 )
             )
 
-        # Predefined aai-cli skill docs (platform-independent, before any Teams auto-start).
         self.repository.save_skills(load_aai_cli_skills(agent.id))
 
         if data.platform == AgentPlatform.TEAMS:
@@ -463,6 +470,8 @@ class AgentService:
             else ""
         )
         effective_model = agent.model or self.config.agent_default_model
+        overlay: dict | None = None
+        hermes_cfg: dict | None = None
 
         if agent.platform == AgentPlatform.SLACK:
             slack_config = self.repository.get_slack_config(agent.id)
@@ -477,24 +486,86 @@ class AgentService:
             app_token = decrypt_token(
                 slack_config.app_token_encrypted, self.config.agent_token_encryption_key
             )
-            overlay = build_openclaw_config_overlay(
-                effective_model,
-                self.config.agent_litellm_base_url,
-                slack_channel_ids=slack_config.channel_ids,
-                slack_dm_user_ids=slack_config.dm_user_ids,
-                slack_group_policy=str(slack_config.group_policy),
-                slack_dm_policy=str(slack_config.dm_policy),
-            )
-            secret = build_secret_slack(
-                agent_id=agent.id,
-                org_id=org_id,
-                namespace=ns,
-                slack_bot_token=bot_token,
-                slack_app_token=app_token,
-                litellm_api_key=litellm_key,
-                litellm_base_url=self.config.agent_litellm_base_url,
-            )
             service = build_service(agent.id, org_id, ns)
+
+            if agent.agent_type == AgentType.HERMES:
+                api_server_key = secrets.token_urlsafe(32)
+                hermes_cfg = build_hermes_config(
+                    effective_model,
+                    self.config.agent_litellm_base_url,
+                )
+                config_map = build_hermes_config_map(
+                    agent_id=agent.id,
+                    org_id=org_id,
+                    namespace=ns,
+                    soul_md=template.soul_md,
+                    identity_md=template.identity_md,
+                    user_md=template.user_md,
+                    tools_md=template.tools_md,
+                    agents_md=template.agents_md,
+                    boot_md=template.boot_md,
+                    heartbeat_md=template.heartbeat_md,
+                    hermes_config=hermes_cfg,
+                )  # rebuilt with aai-cli kwargs below
+                secret = build_secret_hermes_slack(
+                    agent_id=agent.id,
+                    org_id=org_id,
+                    namespace=ns,
+                    agent_name=agent.name,
+                    slack_bot_token=bot_token,
+                    slack_app_token=app_token,
+                    litellm_api_key=litellm_key,
+                    litellm_base_url=self.config.agent_litellm_base_url,
+                    api_server_key=api_server_key,
+                    channel_ids=slack_config.channel_ids,
+                    dm_user_ids=slack_config.dm_user_ids,
+                )
+                deployment = build_hermes_deployment(
+                    agent.id,
+                    org_id,
+                    ns,
+                    self.config.hermes_image,
+                    self.config.agent_image_pull_secret,
+                )
+            else:
+                overlay = build_openclaw_config_overlay(
+                    effective_model,
+                    self.config.agent_litellm_base_url,
+                    slack_channel_ids=slack_config.channel_ids,
+                    slack_dm_user_ids=slack_config.dm_user_ids,
+                    slack_group_policy=str(slack_config.group_policy),
+                    slack_dm_policy=str(slack_config.dm_policy),
+                )
+                secret = build_secret_slack(
+                    agent_id=agent.id,
+                    org_id=org_id,
+                    namespace=ns,
+                    slack_bot_token=bot_token,
+                    slack_app_token=app_token,
+                    litellm_api_key=litellm_key,
+                    litellm_base_url=self.config.agent_litellm_base_url,
+                )
+                config_map = build_config_map(
+                    agent_id=agent.id,
+                    org_id=org_id,
+                    namespace=ns,
+                    soul_md=template.soul_md,
+                    identity_md=template.identity_md,
+                    user_md=template.user_md,
+                    tools_md=template.tools_md,
+                    agents_md=template.agents_md,
+                    boot_md=template.boot_md,
+                    bootstrap_md=template.bootstrap_md,
+                    heartbeat_md=template.heartbeat_md,
+                    openclaw_config_overlay=overlay,
+                )
+                deployment = build_deployment(
+                    agent.id,
+                    org_id,
+                    ns,
+                    self.config.openclaw_image,
+                    self.config.agent_image_pull_secret,
+                )
         elif agent.platform == AgentPlatform.TEAMS:
             teams_config = self.repository.get_teams_config(agent.id)
             if not teams_config:
@@ -524,15 +595,34 @@ class AgentService:
                 litellm_base_url=self.config.agent_litellm_base_url,
             )
             service = build_service(agent.id, org_id, ns, include_webhook_port=True)
+            config_map = build_config_map(
+                agent_id=agent.id,
+                org_id=org_id,
+                namespace=ns,
+                soul_md=template.soul_md,
+                identity_md=template.identity_md,
+                user_md=template.user_md,
+                tools_md=template.tools_md,
+                agents_md=template.agents_md,
+                boot_md=template.boot_md,
+                bootstrap_md=template.bootstrap_md,
+                heartbeat_md=template.heartbeat_md,
+                openclaw_config_overlay=overlay,
+            )
+            deployment = build_deployment(
+                agent.id,
+                org_id,
+                ns,
+                self.config.openclaw_image,
+                self.config.agent_image_pull_secret,
+            )
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Unsupported platform: {agent.platform}",
             )
 
-        # aai-cli integration secrets (platform-independent). Render a config.toml profile per
-        # stored secret; for the store-based providers also run `secrets set` and inject the token
-        # value as an env var on the agent's k8s Secret.
+        # aai-cli integration secrets — all agent types.
         agent_secrets = self.repository.get_secrets_for_agent(agent.id)
         decrypted = {
             SecretProvider(s.provider): decrypt_content(
@@ -545,52 +635,66 @@ class AgentService:
         store = {
             p: c for p, c in decrypted.items() if p.value in provider_to_secret_name_map
         }
-        aai_config_toml = build_config_toml(decrypted) if decrypted else None
-        aai_setup_sh = build_setup_sh(list(store)) if decrypted else None
+        aai_home = "/opt/data" if agent.agent_type == AgentType.HERMES else "/home/node"
+        aai_config_toml = (
+            build_config_toml(decrypted, home_dir=aai_home) if decrypted else None
+        )
+        aai_setup_sh = (
+            build_setup_sh(list(store), home_dir=aai_home) if decrypted else None
+        )
         if store:
             secret.string_data.update(build_env(store))
 
-        # Skill docs (source-agnostic) → workspace manifest injected via the ConfigMap.
         skills = self.repository.get_skills_for_agent(agent.id)
         skills_json = build_skills_manifest(skills) if skills else None
+
+        if agent.agent_type == AgentType.HERMES:
+            assert hermes_cfg is not None
+            config_map = build_hermes_config_map(
+                agent_id=agent.id,
+                org_id=org_id,
+                namespace=ns,
+                soul_md=template.soul_md,
+                identity_md=template.identity_md,
+                user_md=template.user_md,
+                tools_md=template.tools_md,
+                agents_md=template.agents_md,
+                boot_md=template.boot_md,
+                heartbeat_md=template.heartbeat_md,
+                hermes_config=hermes_cfg,
+                aai_cli_config_toml=aai_config_toml,
+                aai_cli_setup_sh=aai_setup_sh,
+                skills_json=skills_json,
+            )
+        else:
+            config_map = build_config_map(
+                agent_id=agent.id,
+                org_id=org_id,
+                namespace=ns,
+                soul_md=template.soul_md,
+                identity_md=template.identity_md,
+                user_md=template.user_md,
+                tools_md=template.tools_md,
+                agents_md=template.agents_md,
+                boot_md=template.boot_md,
+                bootstrap_md=template.bootstrap_md,
+                heartbeat_md=template.heartbeat_md,
+                openclaw_config_overlay=overlay,
+                aai_cli_config_toml=aai_config_toml,
+                aai_cli_setup_sh=aai_setup_sh,
+                skills_json=skills_json,
+            )
 
         try:
             self.k8s.delete_config_map(name, ns)
             self.k8s.delete_secret(name, ns)
-            self.k8s.create_config_map(
-                ns,
-                build_config_map(
-                    agent_id=agent.id,
-                    org_id=org_id,
-                    namespace=ns,
-                    soul_md=template.soul_md,
-                    identity_md=template.identity_md,
-                    user_md=template.user_md,
-                    tools_md=template.tools_md,
-                    agents_md=template.agents_md,
-                    boot_md=template.boot_md,
-                    bootstrap_md=template.bootstrap_md,
-                    heartbeat_md=template.heartbeat_md,
-                    openclaw_config_overlay=overlay,
-                    aai_cli_config_toml=aai_config_toml,
-                    aai_cli_setup_sh=aai_setup_sh,
-                    skills_json=skills_json,
-                ),
-            )
+            self.k8s.create_config_map(ns, config_map)
             self.k8s.create_secret(ns, secret)
             self.k8s.create_pvc(ns, build_pvc(agent.id, org_id, ns))
             self.k8s.create_service(ns, service)
-            self.k8s.create_deployment(
-                ns,
-                build_deployment(
-                    agent.id,
-                    org_id,
-                    ns,
-                    self.config.agent_image,
-                    self.config.agent_image_pull_secret,
-                ),
-            )
+            self.k8s.create_deployment(ns, deployment)
         except Exception:
+            logger.exception("Failed to start agent %s", agent_id)
             agent.status = AgentStatus.ERROR
             self.repository.save(agent)
             raise HTTPException(
@@ -656,6 +760,11 @@ class AgentService:
         org_id = self._org_id(context)
         agent = self._get_active_or_404(agent_id, org_id)
 
+        if agent.agent_type == AgentType.HERMES:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Pairing is not supported for Hermes agents",
+            )
         if agent.platform in (AgentPlatform.SLACK, AgentPlatform.TEAMS):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
