@@ -242,3 +242,56 @@ def test_build_hermes_deployment_has_empty_dir_workspace():
     assert_that(
         isinstance(workspace_vols[0].empty_dir, V1EmptyDirVolumeSource), equal_to(True)
     )
+
+
+def test_build_hermes_config_map_includes_aai_cli_kwargs_when_provided():
+    cfg = build_hermes_config("litellm/m", "http://x:4000")
+    cm = build_hermes_config_map(
+        _AGENT_ID,
+        _ORG_ID,
+        _NS,
+        soul_md="# Soul",
+        identity_md="# Identity",
+        user_md="# User",
+        tools_md="# Tools",
+        agents_md="# Agents",
+        boot_md="# Boot",
+        heartbeat_md="# Heartbeat",
+        hermes_config=cfg,
+        aai_cli_config_toml="[profiles.jira-work]",
+        aai_cli_setup_sh="#!/bin/sh\necho ok",
+        skills_json='[{"path": "aai-cli/skill.md", "content": "# Skill"}]',
+    )
+    assert_that(cm.data, has_key("aai-cli-config.toml"))
+    assert_that(cm.data, has_key("aai-cli-setup.sh"))
+    assert_that(cm.data, has_key("skills.json"))
+    assert_that(cm.data["aai-cli-config.toml"], contains_string("[profiles.jira-work]"))
+
+
+def test_build_hermes_config_map_omits_aai_cli_keys_when_not_provided():
+    cfg = build_hermes_config("litellm/m", "http://x:4000")
+    cm = build_hermes_config_map(
+        _AGENT_ID,
+        _ORG_ID,
+        _NS,
+        soul_md="# Soul",
+        identity_md="# Identity",
+        user_md="# User",
+        tools_md="# Tools",
+        agents_md="# Agents",
+        boot_md="# Boot",
+        heartbeat_md="# Heartbeat",
+        hermes_config=cfg,
+    )
+    assert_that(cm.data, is_not(has_key("aai-cli-config.toml")))
+    assert_that(cm.data, is_not(has_key("aai-cli-setup.sh")))
+    assert_that(cm.data, is_not(has_key("skills.json")))
+
+
+def test_start_sh_includes_aai_cli_setup_hook():
+    assert_that(HERMES_START_SH, contains_string("aai-cli-setup.sh"))
+
+
+def test_start_sh_includes_skills_json_reconstruction():
+    assert_that(HERMES_START_SH, contains_string("skills.json"))
+    assert_that(HERMES_START_SH, contains_string("/workspace/skills"))

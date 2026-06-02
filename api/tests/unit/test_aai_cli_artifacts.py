@@ -104,3 +104,28 @@ def test_build_env_maps_tokens_to_env_vars():
 
 def test_build_env_ignores_non_store_providers():
     assert build_env({SecretProvider.GMAIL: _GMAIL}) == {}
+
+
+def test_config_toml_hermes_home_dir_uses_opt_data_paths():
+    toml = build_config_toml({SecretProvider.JIRA: _JIRA}, home_dir="/opt/data")
+    assert 'secrets_file = "/opt/data/.config/aai-cli/aai-secrets.enc.json"' in toml
+    assert 'key_file = "/opt/data/.config/aai-cli/key"' in toml
+    assert "/home/node" not in toml
+
+
+def test_config_toml_default_home_dir_is_home_node():
+    toml = build_config_toml({SecretProvider.JIRA: _JIRA})
+    assert "/home/node/.config/aai-cli" in toml
+
+
+def test_setup_sh_hermes_home_dir_exports_opt_data():
+    setup = build_setup_sh([SecretProvider.JIRA], home_dir="/opt/data")
+    assert "export HOME=/opt/data" in setup
+    assert "mkdir -p /opt/data/.config/aai-cli" in setup
+    assert "cp /app/config/aai-cli-config.toml /opt/data/.config/aai-cli/config.toml" in setup
+    assert "/home/node" not in setup
+
+
+def test_setup_sh_default_home_dir_is_home_node():
+    setup = build_setup_sh([])
+    assert "export HOME=/home/node" in setup
