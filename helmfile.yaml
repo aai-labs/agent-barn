@@ -64,6 +64,8 @@ releases:
         value: {{ env "API_IMAGE_TAG" | default "latest" | quote }}
       - name: openclawImage.tag
         value: {{ env "OPENCLAW_IMAGE_TAG" | default "latest" | quote }}
+      - name: hermesImage.tag
+        value: {{ env "HERMES_IMAGE_TAG" | default "latest" | quote }}
       - name: dbConnectionUrl
         value: {{ printf "postgresql://%s:%s@postgres-app:5432/%s" (env "POSTGRES_APP_USER") (env "POSTGRES_APP_PASSWORD") (env "POSTGRES_APP_DB") | quote }}
       - name: secretSigningKey

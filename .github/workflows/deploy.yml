@@ -37,12 +37,14 @@ jobs:
           check_workflow "api.yml"
           check_workflow "ui.yml"
           check_workflow "openclaw-base.yml"
+          check_workflow "hermes-base.yml"
 
       - name: Read image versions
         run: |
           echo "API_IMAGE_TAG=$(cat api/VERSION)" >> $GITHUB_ENV
           echo "UI_IMAGE_TAG=$(cat ui/VERSION)" >> $GITHUB_ENV
           echo "OPENCLAW_IMAGE_TAG=$(cat openclaw-base/VERSION)" >> $GITHUB_ENV
+          echo "HERMES_IMAGE_TAG=$(cat hermes-base/VERSION)" >> $GITHUB_ENV
 
       - name: Install Helm
         run: |
@@ -81,6 +83,23 @@ jobs:
             -f ui/Dockerfile \
             ui/
           docker push '${{ secrets.REGISTRY_URL }}/agentfarm-ui:${{ env.UI_IMAGE_TAG }}'
+
+      - name: Build, smoke test, and push hermes-base image
+        env:
+          DOCKER_BUILDKIT: "1"
+        run: |
+          printf '%s' '${{ secrets.AAI_CLI_REPO_ACCESS_TOKEN }}' > /tmp/gh_token
+          docker build \
+            --secret id=gh_token,src=/tmp/gh_token \
+            -t '${{ secrets.REGISTRY_URL }}/agentfarm-hermes-base:${{ env.HERMES_IMAGE_TAG }}' \
+            -f hermes-base/Dockerfile \
+            hermes-base/
+          rm -f /tmp/gh_token
+          docker run --rm \
+            -v "${{ github.workspace }}/hermes-base/smoke-test.sh:/smoke-test.sh:ro" \
+            '${{ secrets.REGISTRY_URL }}/agentfarm-hermes-base:${{ env.HERMES_IMAGE_TAG }}' \
+            /bin/sh /smoke-test.sh
+          docker push '${{ secrets.REGISTRY_URL }}/agentfarm-hermes-base:${{ env.HERMES_IMAGE_TAG }}'
 
       - name: Build, smoke test, and push openclaw-base image
         env:
@@ -126,6 +145,7 @@ jobs:
           API_IMAGE_TAG: ${{ env.API_IMAGE_TAG }}
           UI_IMAGE_TAG: ${{ env.UI_IMAGE_TAG }}
           OPENCLAW_IMAGE_TAG: ${{ env.OPENCLAW_IMAGE_TAG }}
+          HERMES_IMAGE_TAG: ${{ env.HERMES_IMAGE_TAG }}
           POSTGRES_APP_USER: ${{ secrets.POSTGRES_APP_USER }}
           POSTGRES_APP_PASSWORD: ${{ secrets.POSTGRES_APP_PASSWORD }}
           POSTGRES_APP_DB: ${{ secrets.POSTGRES_APP_DB }}
