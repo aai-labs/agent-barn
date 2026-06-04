@@ -228,7 +228,7 @@ class Agent(BaseModel, table=True):
     last_error: str | None = SqlField(
         default=None,
         nullable=True,
-        sa_type=sa.Text(),  # type: ignore[call-arg]
+        sa_type=sa.Text,
     )
 
 

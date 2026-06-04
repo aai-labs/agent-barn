@@ -249,15 +249,17 @@ class AgentService:
         teams_config = None
 
         if data.platform == AgentPlatform.SLACK:
+            assert data.slack_bot_token is not None
+            assert data.slack_app_token is not None
             slack_config = AgentSlackConfig(
                 agent_id=agent.id,
                 bot_token_encrypted=encrypt_token(
                     data.slack_bot_token,
-                    self.config.agent_token_encryption_key,  # type: ignore[arg-type]
+                    self.config.agent_token_encryption_key,
                 ),
                 app_token_encrypted=encrypt_token(
                     data.slack_app_token,
-                    self.config.agent_token_encryption_key,  # type: ignore[arg-type]
+                    self.config.agent_token_encryption_key,
                 ),
                 channel_ids=data.slack_channel_ids,
                 dm_user_ids=data.slack_dm_user_ids,
