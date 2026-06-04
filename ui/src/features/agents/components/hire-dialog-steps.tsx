@@ -173,16 +173,16 @@ export function SlackChoiceStep({
   return (
     <div className="flex flex-col gap-3">
       <ChoiceCard
-        selected={!setupNewBot}
-        onClick={() => onChange(false)}
-        title="I already have a Slack app"
-        description="Skip straight to entering your app and bot tokens."
-      />
-      <ChoiceCard
         selected={setupNewBot}
         onClick={() => onChange(true)}
         title="Set up a new Slack bot"
         description="We'll generate a manifest so you can create one in seconds."
+      />
+      <ChoiceCard
+        selected={!setupNewBot}
+        onClick={() => onChange(false)}
+        title="I already have a Slack app"
+        description="Skip straight to entering your app and bot tokens."
       />
     </div>
   );
@@ -318,7 +318,7 @@ export function BotBuilderStep({
         </NextStep>
         <NextStep n={2} label="Install the app to your workspace">
           In your new app&apos;s settings, go to <b>Install App</b> and click{" "}
-          <b>Install to workspace</b>. Slack will generate a{" "}
+          <b>Install to [your workspace name]</b>. Slack will generate a{" "}
           <span className="font-mono text-xs">xoxb-…</span> bot token automatically.{" "}
           <a
             href="https://api.slack.com/apps"
@@ -331,7 +331,7 @@ export function BotBuilderStep({
           </a>
         </NextStep>
         <NextStep n={3} label="Create an App-Level Token">
-          Go to <b>Basic Information</b> → <b>App-Level Tokens</b> → <b>Generate Token</b>.
+          Go to <b>Basic Information</b> → <b>App-Level Tokens</b> → <b>Generate Token and Scopes</b>.
           Name it anything and add the <span className="font-mono text-xs">connections:write</span> scope.
           This creates your <span className="font-mono text-xs">xapp-…</span> token, required for Socket Mode.{" "}
           <a
@@ -374,7 +374,7 @@ export function SlackTokensStep({
   error: string | null;
 }) {
   return (
-    <div className="flex flex-col gap-5">
+    <form autoComplete="off" className="flex flex-col gap-5" onSubmit={(e) => e.preventDefault()}>
       <div
         className="flex flex-col gap-3.5 p-4 rounded-2xl"
         style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
@@ -414,7 +414,7 @@ export function SlackTokensStep({
           </div>
         )}
       </div>
-    </div>
+    </form>
   );
 }
 
@@ -431,7 +431,7 @@ export function PlatformChoiceStep({
         selected={platform === "slack"}
         onClick={() => onChange("slack")}
         title="Slack"
-        description="Connect via Socket Mode with a bot and app-level token."
+        description="Connect via Socket Mode with a bot and app-level token. Recommended."
       />
       <ChoiceCard
         selected={platform === "teams"}
@@ -672,7 +672,7 @@ export function TeamsCredentialsStep({
   error: string | null;
 }) {
   return (
-    <div className="flex flex-col gap-5">
+    <form autoComplete="off" className="flex flex-col gap-5" onSubmit={(e) => e.preventDefault()}>
       <div
         className="flex flex-col gap-3.5 p-4 rounded-2xl"
         style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
@@ -755,7 +755,7 @@ export function TeamsCredentialsStep({
           In your Bot resource, go to <b>Channels</b> and enable <b>Microsoft Teams</b>.
         </NextStep>
       </div>
-    </div>
+    </form>
   );
 }
 
