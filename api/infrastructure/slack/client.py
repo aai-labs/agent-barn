@@ -37,7 +37,10 @@ def validate_bot_token(token: str) -> tuple[bool, str]:
         req = urllib.request.Request(
             f"{_BASE}/auth.test",
             data=b"",
-            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
         )
         with urllib.request.urlopen(req, timeout=15) as resp:
             body = json.loads(resp.read())
@@ -55,7 +58,10 @@ def validate_app_token(token: str) -> tuple[bool, str]:
         req = urllib.request.Request(
             f"{_BASE}/apps.connections.open",
             data=b"",
-            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
         )
         with urllib.request.urlopen(req, timeout=15) as resp:
             body = json.loads(resp.read())

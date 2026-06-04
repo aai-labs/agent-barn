@@ -1791,7 +1791,9 @@ def test_create_slack_agent_rejects_invalid_tokens():
             return_value=(False, "Slack bot token is invalid."),
         ):
             with when("I create a Slack agent with invalid tokens"):
-                response = client.post(_BASE, json=_VALID_CREATE, headers=_auth(context))
+                response = client.post(
+                    _BASE, json=_VALID_CREATE, headers=_auth(context)
+                )
 
         with then("it returns 400 and no agent is left in the database"):
             assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
