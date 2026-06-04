@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { SlackIcon, XIcon, PlusIcon } from "@/components/icons";
+import { SlackIcon, XIcon, PlusIcon, LockIcon } from "@/components/icons";
 import type { Agent } from "../schemas";
 import { useSlackChannels } from "../hooks/use-slack-channels";
 import { useSlackUsers } from "../hooks/use-slack-users";
@@ -29,7 +29,9 @@ export function SlackConfigPanel({ agent, onSaved }: SlackConfigPanelProps) {
   const [userFocused, setUserFocused] = useState(false);
   const [saved, setSaved] = useState(false);
 
-  const selectedChannels = channels.filter((c) => channelIds.includes(c.id));
+  const selectedChannels = channelIds
+    .map((id) => channels.find((c) => c.id === id))
+    .filter((c): c is NonNullable<typeof c> => c !== undefined);
   const availableChannels = channels.filter(
     (c) =>
       !channelIds.includes(c.id) &&
@@ -89,14 +91,34 @@ export function SlackConfigPanel({ agent, onSaved }: SlackConfigPanelProps) {
           <div className="flex flex-col gap-2">
             {selectedChannels.length > 0 && (
               <div className="flex flex-wrap gap-1.5">
-                {selectedChannels.map((c) => (
+                {selectedChannels.map((c, i) => (
                   <span
                     key={c.id}
                     className="inline-flex items-center gap-1 text-[0.781rem] px-2.5 py-1 rounded-full"
                     style={{ background: "var(--bg-soft)", border: "1px solid var(--line)", color: "var(--ink-2)" }}
                   >
-                    <SlackIcon style={{ width: 12, height: 12, flexShrink: 0 }} />
+                    {c.isPrivate
+                      ? <LockIcon style={{ width: 12, height: 12, flexShrink: 0, color: "var(--ink-4)" }} />
+                      : <SlackIcon style={{ width: 12, height: 12, flexShrink: 0 }} />
+                    }
                     #{c.name}
+                    {agent.agentType === "hermes" && i === 0 && (
+                      <span
+                        className="ml-1 text-[0.688rem] px-1.5 py-px rounded-full font-medium"
+                        style={{ background: "var(--bg-elev)", border: "1px solid var(--line)", color: "var(--ink-4)" }}
+                      >
+                        home
+                      </span>
+                    )}
+                    {agent.agentType === "hermes" && i > 0 && !isRunning && (
+                      <button
+                        className="ml-1 text-[0.688rem] px-1.5 py-px rounded-full transition-colors hover:bg-[var(--bg-elev)]"
+                        style={{ color: "var(--ink-3)", border: "1px solid var(--line)" }}
+                        onClick={() => setChannelIds((ids) => [c.id, ...ids.filter((id) => id !== c.id)])}
+                      >
+                        set home
+                      </button>
+                    )}
                     <button
                       className="ml-0.5 rounded-full flex items-center"
                       style={{ color: "var(--ink-4)" }}
@@ -138,6 +160,9 @@ export function SlackConfigPanel({ agent, onSaved }: SlackConfigPanelProps) {
                     >
                       <PlusIcon style={{ width: 14, height: 14, flexShrink: 0, color: "var(--ink-4)" }} />
                       #{c.name}
+                      {c.isPrivate && (
+                        <LockIcon style={{ width: 11, height: 11, flexShrink: 0, color: "var(--ink-4)" }} />
+                      )}
                     </button>
                   ))}
                 </div>
@@ -151,6 +176,10 @@ export function SlackConfigPanel({ agent, onSaved }: SlackConfigPanelProps) {
                 </div>
               )}
             </div>
+            <p className="text-[0.781rem]" style={{ color: "var(--ink-4)" }}>
+              Private channels only appear here if the bot is already a member. To add one, use{" "}
+              <code className="font-mono">/invite @bot-name</code> in Slack first.
+            </p>
           </div>
         )}
       </section>

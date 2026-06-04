@@ -40,7 +40,7 @@ function HeaderSkeleton() {
 
 export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   const { agent, isLoading, error, refetch } = useAgent(agentId);
-  const { health } = useAgentHealth(agentId, agent?.status === "RUNNING");
+  const { health } = useAgentHealth(agentId, agent?.status === "RUNNING" || agent?.status === "ERROR");
   const stopAgent = useStopAgent();
   const startAgent = useStartAgent();
   const searchParams = useSearchParams();
@@ -127,6 +127,15 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
                 </button>
               </div>
             </div>
+
+            {(agent.status === "ERROR" || health?.status === "crashed" || health?.status === "error") && health?.reason && (
+              <div
+                className="mb-6 rounded-xl px-4 py-3 text-[0.844rem]"
+                style={{ background: "color-mix(in srgb, var(--err) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--err) 25%, transparent)", color: "var(--err)" }}
+              >
+                <span className="font-medium">Error: </span>{health.reason}
+              </div>
+            )}
 
             <div
               className="flex items-center gap-1 mb-7"

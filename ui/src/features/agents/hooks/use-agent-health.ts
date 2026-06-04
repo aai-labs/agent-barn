@@ -18,7 +18,7 @@ export function useAgentHealth(agentId: string, enabled: boolean) {
       return response.data;
     },
     enabled,
-    refetchInterval: 60_000,
+    refetchInterval: 10_000,
     retry: false,
   });
 

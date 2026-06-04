@@ -90,7 +90,7 @@ export function ConversationsTab({ agent }: ConversationsTabProps) {
   return (
     <div
       className="flex rounded-2xl overflow-hidden"
-      style={{ border: "1px solid var(--line-strong)", height: 600 }}
+      style={{ border: "1px solid var(--line-strong)", height: "min(600px, 70vh)" }}
     >
       <ConversationSidebar
         channelConvos={channelConvos}

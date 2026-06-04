@@ -125,6 +125,7 @@ export const ConversationThreadsPageSchema = z.object({
 export const SlackChannelSchema = z.object({
   id: z.string(),
   name: z.string(),
+  isPrivate: z.boolean().optional(),
 });
 
 export const SlackUserSchema = z.object({
