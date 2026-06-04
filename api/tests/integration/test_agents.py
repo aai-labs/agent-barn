@@ -24,6 +24,7 @@ from api.tests.core.modules import (
     set_env_variable,
 )
 from api.domains.agents.models import AgentPlatform, AgentType
+from api.domains.agents.service import AgentService
 from api.tests.steps.agent import (
     FAKE_LITELLM_KEY,
     TEST_ENCRYPTION_KEY,
@@ -67,6 +68,7 @@ _GIVEN = [
             "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
             "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
             "API_EXTERNAL_URL": "https://api.test.com",
+            "SKIP_SLACK_TOKEN_VALIDATION": "true",
         }
     ),
     prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
@@ -903,7 +905,7 @@ def test_get_agent_healthz_returns_ok_when_healthy():
             with patch.object(
                 context.injector.get(KubernetesClient),
                 "get_pod_readiness",
-                return_value="ready",
+                return_value=("ready", None),
             ):
                 with patch.object(
                     context.injector.get(KubernetesClient),
@@ -928,7 +930,7 @@ def test_get_agent_healthz_returns_503_when_pod_unreachable():
             with patch.object(
                 context.injector.get(KubernetesClient),
                 "get_pod_readiness",
-                return_value="ready",
+                return_value=("ready", None),
             ):
                 with patch.object(
                     context.injector.get(KubernetesClient),
@@ -954,7 +956,7 @@ def test_get_agent_healthz_returns_initializing_when_pod_not_ready():
             with patch.object(
                 context.injector.get(KubernetesClient),
                 "get_pod_readiness",
-                return_value="initializing",
+                return_value=("initializing", None),
             ):
                 response = client.get(
                     f"{_BASE}/{agent_id}/healthz", headers=_auth(context)
@@ -974,7 +976,7 @@ def test_get_agent_healthz_returns_crashed_when_pod_has_crashed():
             with patch.object(
                 context.injector.get(KubernetesClient),
                 "get_pod_readiness",
-                return_value="crashed",
+                return_value=("crashed", "CrashLoopBackOff"),
             ):
                 response = client.get(
                     f"{_BASE}/{agent_id}/healthz", headers=_auth(context)
@@ -1092,7 +1094,7 @@ def test_start_agent_overlay_uses_slack_settings():
             assert_that(slack["allowFrom"], equal_to(["U456"]))
             assert_that(
                 slack["channels"],
-                equal_to({"C123": {"enabled": True, "requireMention": False}}),
+                equal_to({"C123": {"enabled": True, "requireMention": True}}),
             )
 
 
@@ -1772,3 +1774,69 @@ def test_existing_agent_rows_backfill_to_openclaw():
 
         with then("agent_type is openclaw (server_default applied)"):
             assert_that(agent.agent_type, equal_to(AgentType.OPENCLAW))
+
+
+# ---------------------------------------------------------------------------
+# Slack token validation — unhappy paths
+# ---------------------------------------------------------------------------
+
+
+def test_create_slack_agent_rejects_invalid_tokens():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with patch.object(
+            AgentService,
+            "_check_slack_tokens",
+            return_value=(False, "Slack bot token is invalid."),
+        ):
+            with when("I create a Slack agent with invalid tokens"):
+                response = client.post(_BASE, json=_VALID_CREATE, headers=_auth(context))
+
+        with then("it returns 400 and no agent is left in the database"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], contains_string("invalid"))
+            list_response = client.get(_BASE, headers=_auth(context))
+            assert_that(list_response.json()["total"], equal_to(0))
+
+
+def test_update_slack_agent_rejects_invalid_tokens():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with patch.object(
+            AgentService,
+            "_check_slack_tokens",
+            return_value=(False, "Slack bot token is invalid."),
+        ):
+            with when("I patch a Slack agent with invalid tokens"):
+                response = client.patch(
+                    f"{_BASE}/{context.agent.id}",
+                    json={"slack_bot_token": "xoxb-bad"},
+                    headers=_auth(context),
+                )
+
+        with then("it returns 400"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], contains_string("invalid"))
+
+
+def test_start_slack_agent_with_invalid_tokens_sets_error_status():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+
+        with patch.object(
+            AgentService,
+            "_check_slack_tokens",
+            return_value=(False, "Slack bot token is invalid."),
+        ):
+            with when("I start a Slack agent with invalid tokens"):
+                response = client.post(
+                    f"{_BASE}/{context.agent.id}/start", headers=_auth(context)
+                )
+
+        with then("it returns 200 with status ERROR and no k8s resources are created"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["status"], equal_to(AgentStatus.ERROR.value))
+            k8s.create_deployment.assert_not_called()
