@@ -36,7 +36,7 @@ spec:
             - name: OPENCLAW_IMAGE
               value: "{{ .Values.registryPrefix }}/{{ .Values.openclawImage.repository }}:{{ .Values.openclawImage.tag }}"
             - name: HERMES_IMAGE
-              value: "{{ .Values.hermesImage.repository }}:{{ .Values.hermesImage.tag }}"
+              value: "{{ .Values.registryPrefix }}/{{ .Values.hermesImage.repository }}:{{ .Values.hermesImage.tag }}"
             - name: API_EXTERNAL_URL
               value: "{{ .Values.apiExternalUrl }}"
             - name: LITELLM_BASE_URL
