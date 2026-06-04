@@ -67,6 +67,7 @@ from api.domains.agents.models import (
     encrypt_content,
     validate_content,
 )
+from api.domains.agents.error_messages import friendly_k8s_error, friendly_pod_reason
 from api.domains.agents.repository import AgentRepository
 from api.domains.auth.models import CurrentUserContext
 from api.domains.conversations.service import ConversationSyncService
@@ -74,7 +75,7 @@ from api.domains.tool_calls.sync_service import ToolCallSyncService
 from api.infrastructure.crypto import decrypt_token, encrypt_token
 from api.infrastructure.kubernetes.client import KubernetesClient
 from api.infrastructure.shared.models import PaginatedItems, Pagination
-from api.infrastructure.slack.client import SlackClient
+from api.infrastructure.slack.client import SlackClient, validate_app_token, validate_bot_token
 
 logger = logging.getLogger(__name__)
 
@@ -186,6 +187,13 @@ class AgentService:
     def create_agent(self, data: AgentCreate, context: CurrentUserContext) -> AgentRead:
         org_id = self._org_id(context)
 
+        if data.platform == AgentPlatform.SLACK:
+            assert data.slack_bot_token is not None
+            assert data.slack_app_token is not None
+            ok, reason = self._check_slack_tokens(data.slack_bot_token, data.slack_app_token)
+            if not ok:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=reason)
+
         agent = Agent(
             organization_id=org_id,
             name=data.name,
@@ -233,8 +241,6 @@ class AgentService:
         teams_config = None
 
         if data.platform == AgentPlatform.SLACK:
-            assert data.slack_bot_token is not None
-            assert data.slack_app_token is not None
             slack_config = AgentSlackConfig(
                 agent_id=agent.id,
                 bot_token_encrypted=encrypt_token(
@@ -404,6 +410,13 @@ class AgentService:
         if agent.platform == AgentPlatform.SLACK and (
             _SLACK_CONFIG_FIELDS & updated.keys()
         ):
+            ok, reason = self._check_slack_tokens(
+                bot_token=updated.get("slack_bot_token"),
+                app_token=updated.get("slack_app_token"),
+            )
+            if not ok:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=reason)
+
             slack_config = self.repository.get_slack_config(agent.id)
             if slack_config:
                 if "slack_bot_token" in updated:
@@ -425,6 +438,10 @@ class AgentService:
                 if "slack_dm_policy" in updated:
                     slack_config.dm_policy = updated["slack_dm_policy"]
                 self.repository.save_slack_config(slack_config)
+                if "slack_channel_ids" in updated:
+                    self._join_public_channels(
+                        self._get_bot_token(agent), updated["slack_channel_ids"]
+                    )
 
         # Teams config updates
         if agent.platform == AgentPlatform.TEAMS and (
@@ -486,6 +503,15 @@ class AgentService:
             app_token = decrypt_token(
                 slack_config.app_token_encrypted, self.config.agent_token_encryption_key
             )
+            ok, reason = self._check_slack_tokens(bot_token=bot_token, app_token=app_token)
+            if not ok:
+                agent.last_error = reason
+                agent.status = AgentStatus.ERROR
+                self.repository.save(agent)
+                return self._get_agent_read(agent)
+
+            if slack_config.channel_ids:
+                self._join_public_channels(bot_token, slack_config.channel_ids)
             service = build_service(agent.id, org_id, ns)
 
             if agent.agent_type == AgentType.HERMES:
@@ -693,9 +719,10 @@ class AgentService:
             self.k8s.create_pvc(ns, build_pvc(agent.id, org_id, ns))
             self.k8s.create_service(ns, service)
             self.k8s.create_deployment(ns, deployment)
-        except Exception:
+        except Exception as exc:
             logger.exception("Failed to start agent %s", agent_id)
             agent.status = AgentStatus.ERROR
+            agent.last_error = friendly_k8s_error(exc)
             self.repository.save(agent)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -703,6 +730,7 @@ class AgentService:
             )
 
         agent.status = AgentStatus.RUNNING
+        agent.last_error = None
         self.repository.save(agent)
         return self._get_agent_read(agent)
 
@@ -802,6 +830,30 @@ class AgentService:
 
         return output
 
+    def _check_slack_tokens(
+        self, bot_token: str | None = None, app_token: str | None = None
+    ) -> tuple[bool, str]:
+        """Validates whichever tokens are provided. Always ok when skip_slack_token_validation is set."""
+        if self.config.skip_slack_token_validation:
+            return True, ""
+        if bot_token is not None:
+            ok, reason = validate_bot_token(bot_token)
+            if not ok:
+                return ok, reason
+        if app_token is not None:
+            ok, reason = validate_app_token(app_token)
+            if not ok:
+                return ok, reason
+        return True, ""
+
+    def _join_public_channels(self, bot_token: str, channel_ids: list[str]) -> None:
+        client = SlackClient(bot_token)
+        for channel_id in channel_ids:
+            try:
+                client.join_channel(channel_id)
+            except Exception as e:
+                logger.warning("Unexpected error joining channel %s: %s", channel_id, e)
+
     def list_slack_channels(
         self, agent_id: UUID, context: CurrentUserContext, search: str | None = None
     ) -> list[dict]:
@@ -864,6 +916,9 @@ class AgentService:
         org_id = self._org_id(context)
         agent = self._get_active_or_404(agent_id, org_id)
 
+        if agent.status == AgentStatus.ERROR:
+            return AgentHealthRead(status="error", reason=agent.last_error)
+
         if agent.status != AgentStatus.RUNNING:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -873,9 +928,9 @@ class AgentService:
         name = f"agent-{agent_id}"
         ns = self.config.k8s_namespace
 
-        pod_status = self.k8s.get_pod_readiness(name, ns)
+        pod_status, pod_reason = self.k8s.get_pod_readiness(name, ns)
         if pod_status == "crashed":
-            return AgentHealthRead(status="crashed")
+            return AgentHealthRead(status="crashed", reason=friendly_pod_reason(pod_reason))
         if pod_status != "ready":
             return AgentHealthRead(status="initializing")
 

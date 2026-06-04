@@ -34,6 +34,7 @@ class Config(BaseSettings):
     agent_image_pull_secret: str = ""
     agent_default_model: str = "litellm/qwen3.6-plus"
     api_external_url: str = ""
+    skip_slack_token_validation: bool = False
 
     @property
     def is_email_delivery_enabled(self) -> bool:
