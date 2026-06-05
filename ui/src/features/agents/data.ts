@@ -1,6 +1,21 @@
 import type { AgentTemplate, Skill, Provider } from "./types";
+import { SCRUM_MASTER_FILES } from "./profiles/scrum-master";
 
 export const TEMPLATES: AgentTemplate[] = [
+  {
+    id: "t_scrum_master",
+    slug: "scrum-master",
+    name: "Scrum Master",
+    description:
+      "Coordinates sprints — surfaces blockers, preps the next sprint, keeps Jira/Confluence in sync.",
+    version: "1.0.0",
+    versions: ["1.0.0"],
+    surfaces: ["Slack"],
+    skills: ["slack", "jira", "confluence", "github", "bitbucket"],
+    files: 7,
+    seededBy: "AAI Labs",
+    activeAgents: 0,
+  },
   {
     id: "t_default",
     slug: "default",
@@ -273,6 +288,8 @@ export const PROVIDERS: Provider[] = [
 ];
 
 export const TEMPLATE_FILES: Record<string, Record<string, string>> = {
+  "t_scrum_master": SCRUM_MASTER_FILES,
+
   "t_default": {
     soul_md: `# Soul
 

@@ -12,10 +12,11 @@ import {
 import { ChoiceCard, FormField, NextStep, TokenInput } from "./hire-dialog-primitives";
 
 export const ROLES = [
-  { id: "default", template_id: "t_default", title: "General Purpose", emoji: "🤖", tagline: "Answers questions, handles tasks, reduces day-to-day friction.", suggested: "Aria" },
-  { id: "code-reviewer", template_id: "t_reviewer", title: "PR Reviewer", emoji: "⚙️", tagline: "Reads diffs, comments on style, security, and tests.", suggested: "Halo" },
-  { id: "analyst", template_id: "t_analyst", title: "Data Analyst", emoji: "📊", tagline: "Answers questions over BigQuery & Sheets, returns charts.", suggested: "Lyra" },
-  { id: "sales-research", template_id: "t_sales", title: "Sales Research", emoji: "📈", tagline: "Enriches leads, drafts outbound, summarises calls.", suggested: "Vega" },
+  { id: "default", template_id: "t_default", title: "General Purpose", emoji: "🤖", tagline: "Answers questions, handles tasks, reduces day-to-day friction.", suggested: "Aria", requiredIntegrations: [] },
+  { id: "scrum-master", template_id: "t_scrum_master", title: "Scrum Master", emoji: "📋", tagline: "Surfaces blockers, preps sprints, keeps Jira & Confluence in sync.", suggested: "Scout", requiredIntegrations: ["jira", "confluence"] },
+  { id: "code-reviewer", template_id: "t_reviewer", title: "PR Reviewer", emoji: "⚙️", tagline: "Reads diffs, comments on style, security, and tests.", suggested: "Halo", requiredIntegrations: [] },
+  { id: "analyst", template_id: "t_analyst", title: "Data Analyst", emoji: "📊", tagline: "Answers questions over BigQuery & Sheets, returns charts.", suggested: "Lyra", requiredIntegrations: [] },
+  { id: "sales-research", template_id: "t_sales", title: "Sales Research", emoji: "📈", tagline: "Enriches leads, drafts outbound, summarises calls.", suggested: "Vega", requiredIntegrations: [] },
 ] as const;
 
 export type RoleId = (typeof ROLES)[number]["id"];
@@ -81,6 +82,10 @@ export function pickDefaults(roleId: RoleId) {
     identityMd: tpl.identity_md ?? "",
     userMd: tpl.user_md ?? "",
     toolsMd: tpl.tools_md ?? "",
+    agentsMd: tpl.agents_md ?? "",
+    bootMd: tpl.boot_md ?? "",
+    heartbeatMd: tpl.heartbeat_md ?? "",
+    requiredIntegrations: role.requiredIntegrations as readonly string[],
   };
 }
 
@@ -896,9 +901,11 @@ export function DetailsStep({
 export function IntegrationsStep({
   integrations,
   onChange,
+  requiredProviders = [],
 }: {
   integrations: IntegrationDraft[];
   onChange: (next: IntegrationDraft[]) => void;
+  requiredProviders?: readonly string[];
 }) {
   const [visible, setVisible] = useState<Record<string, boolean>>({});
 
@@ -925,12 +932,15 @@ export function IntegrationsStep({
     <div className="flex flex-col gap-5">
       <p className="text-[0.8125rem] leading-[1.5]" style={{ color: "var(--ink-3)" }}>
         Connect external tools your agent can use. Credentials are encrypted in the key vault.
-        This step is optional — you can hire without any.
+        {requiredProviders.length > 0
+          ? " This profile requires the integrations below — fill them in to continue."
+          : " This step is optional — you can hire without any."}
       </p>
 
       {integrations.map((draft) => {
         const provider = getIntegrationProvider(draft.provider);
         if (!provider) return null;
+        const isRequired = requiredProviders.includes(draft.provider);
         return (
           <div
             key={draft.provider}
@@ -941,14 +951,23 @@ export function IntegrationsStep({
               <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
                 {provider.label}
               </div>
-              <button
-                type="button"
-                className="af-btn af-btn-ghost af-btn-icon"
-                onClick={() => removeProvider(draft.provider)}
-                aria-label={`Remove ${provider.label}`}
-              >
-                <XIcon size={15} />
-              </button>
+              {isRequired ? (
+                <span
+                  className="text-[0.6875rem] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full"
+                  style={{ color: "var(--ink-3)", background: "var(--line)" }}
+                >
+                  Required
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  className="af-btn af-btn-ghost af-btn-icon"
+                  onClick={() => removeProvider(draft.provider)}
+                  aria-label={`Remove ${provider.label}`}
+                >
+                  <XIcon size={15} />
+                </button>
+              )}
             </div>
 
             {provider.fields.map((field) => {

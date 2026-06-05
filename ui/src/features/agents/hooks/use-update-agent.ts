@@ -28,6 +28,9 @@ export type UpdateAgentData = {
   teamsAppId?: string;
   teamsAppPassword?: string;
   teamsTenantId?: string;
+  // Integration credentials: upsert (add/replace) + explicit removal.
+  secrets?: Array<{ provider: string; content: Record<string, string> }>;
+  removedSecretProviders?: string[];
 };
 
 export function useUpdateAgent() {

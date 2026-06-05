@@ -207,4 +207,40 @@ test.describe("Hire Dialog", () => {
 
     await expect(page.getByText("What kind of teammate do you need?")).not.toBeVisible();
   });
+
+  test("scrum-master profile pre-seeds required jira + confluence integrations", async ({ page }) => {
+    // role: pick Scrum Master (suggested name "Scout")
+    await page.getByText("Scrum Master", { exact: true }).click();
+    await page.getByRole("button", { name: /continue/i }).click(); // role → agent-type
+    await page.getByRole("button", { name: /continue/i }).click(); // agent-type (hermes) → slack-choice
+    await page.getByText("I already have a Slack app").click();
+    await page.getByRole("button", { name: /continue/i }).click(); // slack-choice → tokens
+    await page.getByPlaceholder(/xapp-/i).fill("xapp-1-test");
+    await page.getByPlaceholder(/xoxb-/i).fill("xoxb-test");
+    await page.getByRole("button", { name: /continue/i }).click(); // tokens → details
+    await page.getByRole("button", { name: /continue/i }).click(); // details → integrations
+
+    // Both required integrations are pre-displayed, marked Required, and not removable.
+    await expect(page.getByText("Jira", { exact: true })).toBeVisible();
+    await expect(page.getByText("Confluence", { exact: true })).toBeVisible();
+    await expect(page.getByText("Required")).toHaveCount(2);
+    await expect(page.getByRole("button", { name: "Remove Jira" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Remove Confluence" })).toHaveCount(0);
+
+    // Hire is blocked until the required fields are filled.
+    const hire = page.getByRole("button", { name: "Hire Scout" });
+    await expect(hire).toBeDisabled();
+
+    // Fill jira (nth 0) and confluence (nth 1): siteUrl, email, apiToken.
+    const siteUrls = page.getByPlaceholder("https://your-domain.atlassian.net");
+    const emails = page.getByPlaceholder("you@example.com");
+    const apiTokens = page.locator('input[type="password"]'); // the two API token fields
+    for (let i = 0; i < 2; i++) {
+      await siteUrls.nth(i).fill("https://acme.atlassian.net");
+      await emails.nth(i).fill("a@b.com");
+      await apiTokens.nth(i).fill("tok-secret");
+    }
+
+    await expect(hire).toBeEnabled();
+  });
 });

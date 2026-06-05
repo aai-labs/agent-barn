@@ -8,7 +8,12 @@ import { useUpdateAgent } from "../hooks/use-update-agent";
 import { useDeleteAgent } from "../hooks/use-delete-agent";
 import { XIcon } from "@/components/icons";
 import { TokenInput } from "./hire-dialog-primitives";
-import { MODELS } from "./hire-dialog-steps";
+import { MODELS, IntegrationsStep } from "./hire-dialog-steps";
+import {
+  getIntegrationProvider,
+  hasIncompleteIntegration,
+  type IntegrationDraft,
+} from "../integrations";
 import { SlackConfigPanel } from "./slack-config-panel";
 
 interface ConfigDrawerProps {
@@ -74,8 +79,15 @@ export function ConfigDrawer({ agent, onClose }: ConfigDrawerProps) {
   const [showTeamsAppPassword, setShowTeamsAppPassword] = useState(false);
   const [teamsTenantId, setTeamsTenantId] = useState("");
   const [savedTokens, setSavedTokens] = useState(false);
+  const [secretDrafts, setSecretDrafts] = useState<IntegrationDraft[]>([]);
+  const [removedProviders, setRemovedProviders] = useState<string[]>([]);
+  const [savedSecrets, setSavedSecrets] = useState(false);
 
   const tabs = getTabs(agent.platform);
+
+  const configuredSecrets = (agent.secrets ?? []).filter(
+    (s) => !removedProviders.includes(s.provider),
+  );
 
   useEffect(() => {
     if (template) {
@@ -135,6 +147,30 @@ export function ConfigDrawer({ agent, onClose }: ConfigDrawerProps) {
       }
       setSavedTokens(true);
       setTimeout(() => setSavedTokens(false), 2000);
+    } catch {
+      // error displayed via updateAgent.error
+    }
+  }
+
+  async function handleSaveSecrets() {
+    try {
+      // If a provider is both re-added (draft) and removed, treat it as a
+      // replace — the upsert wins (the backend rejects a provider in both lists).
+      const draftProviders = new Set(secretDrafts.map((d) => d.provider));
+      await updateAgent.mutateAsync({
+        agentId: agent.id,
+        secrets: secretDrafts.map((d) => ({
+          provider: d.provider,
+          content: d.content,
+        })),
+        removedSecretProviders: removedProviders.filter(
+          (p) => !draftProviders.has(p),
+        ),
+      });
+      setSecretDrafts([]);
+      setRemovedProviders([]);
+      setSavedSecrets(true);
+      setTimeout(() => setSavedSecrets(false), 2000);
     } catch {
       // error displayed via updateAgent.error
     }
@@ -440,6 +476,82 @@ export function ConfigDrawer({ agent, onClose }: ConfigDrawerProps) {
                   onClick={() => { void handleSaveTokens(); }}
                 >
                   {updateAgent.isPending ? "Saving…" : savedTokens ? "Saved!" : "Save credentials"}
+                </button>
+                {updateAgent.error && (
+                  <span className="text-xs" style={{ color: "var(--err)" }}>
+                    {updateAgent.error instanceof Error ? updateAgent.error.message : "Save failed"}
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+
+          {tab === "secrets" && (
+            <div className="flex flex-col gap-4 mt-6 pt-6" style={{ borderTop: "1px solid var(--line)" }}>
+              <div className="font-semibold text-[0.9375rem]" style={{ color: "var(--ink)" }}>
+                Integrations
+              </div>
+              <Hint>
+                Credentials for the aai-cli tool (Jira, Confluence, GitHub, Bitbucket). Write-only —
+                to change one, re-enter its fields below.
+              </Hint>
+
+              {configuredSecrets.length > 0 && (
+                <div className="flex flex-col gap-2">
+                  {configuredSecrets.map((s) => {
+                    const label = getIntegrationProvider(s.provider)?.label ?? s.provider;
+                    return (
+                      <div
+                        key={s.provider}
+                        className="flex items-center justify-between p-3 rounded-2xl"
+                        style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
+                      >
+                        <div className="flex flex-col">
+                          <span className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
+                            {label}
+                          </span>
+                          <span className="text-xs" style={{ color: "var(--ink-4)" }}>
+                            {s.secretName} · configured
+                          </span>
+                        </div>
+                        <button
+                          className="af-btn af-btn-ghost af-btn-sm"
+                          disabled={isRunning}
+                          onClick={() => setRemovedProviders((r) => [...r, s.provider])}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              <div
+                style={{
+                  opacity: isRunning ? 0.5 : 1,
+                  pointerEvents: isRunning ? "none" : "auto",
+                }}
+              >
+                <IntegrationsStep
+                  integrations={secretDrafts}
+                  onChange={setSecretDrafts}
+                  requiredProviders={[]}
+                />
+              </div>
+
+              <div className="flex gap-2 items-center">
+                <button
+                  className="af-btn af-btn-sm"
+                  disabled={
+                    isRunning ||
+                    updateAgent.isPending ||
+                    hasIncompleteIntegration(secretDrafts) ||
+                    (secretDrafts.length === 0 && removedProviders.length === 0)
+                  }
+                  onClick={() => { void handleSaveSecrets(); }}
+                >
+                  {updateAgent.isPending ? "Saving…" : savedSecrets ? "Saved!" : "Save integrations"}
                 </button>
                 {updateAgent.error && (
                   <span className="text-xs" style={{ color: "var(--err)" }}>

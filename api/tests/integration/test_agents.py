@@ -1,5 +1,6 @@
 import json
-from unittest.mock import patch
+import time
+from unittest.mock import MagicMock, patch
 
 from fastapi import status
 from hamcrest import (
@@ -12,8 +13,10 @@ from hamcrest import (
 )
 from starlette.testclient import TestClient
 
+from api.domains.agents import service as agent_service
 from api.domains.agents.models import AgentStatus
 from api.domains.agents.repository import AgentRepository
+from api.domains.conversations.service import ConversationSyncService
 from api.infrastructure.kubernetes.client import KubernetesClient
 from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
 from api.tests.core.givenpy import given, then, when
@@ -23,7 +26,7 @@ from api.tests.core.modules import (
     prepare_injector,
     set_env_variable,
 )
-from api.domains.agents.models import AgentPlatform, AgentType
+from api.domains.agents.models import AgentPlatform, AgentType, SecretProvider
 from api.tests.steps.agent import (
     FAKE_LITELLM_KEY,
     TEST_ENCRYPTION_KEY,
@@ -309,6 +312,143 @@ def test_patch_agent_no_auth_returns_401():
             assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
 
 
+_JIRA_CONTENT = {
+    "site_url": "https://acme.atlassian.net",
+    "email": "a@b.com",
+    "api_token": "jira-tok",
+}
+
+
+def _providers(response) -> list[str]:
+    return [s["provider"] for s in response.json()["secrets"]]
+
+
+def test_patch_agent_adds_secret():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I patch the agent with a jira secret"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"secrets": [{"provider": "jira", "content": _JIRA_CONTENT}]},
+                headers=_auth(context),
+            )
+
+        with then("it returns 200 and the agent exposes the jira secret"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(_providers(response), equal_to(["jira"]))
+            jira = response.json()["secrets"][0]
+            assert_that(jira["secret_name"], equal_to("Jira credential"))
+
+
+def test_patch_agent_upserts_existing_secret():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        repository: AgentRepository = context.injector.get(AgentRepository)
+
+        with when("I patch the same provider twice with different content"):
+            client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"secrets": [{"provider": "jira", "content": _JIRA_CONTENT}]},
+                headers=_auth(context),
+            )
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={
+                    "secrets": [
+                        {
+                            "provider": "jira",
+                            "content": {**_JIRA_CONTENT, "api_token": "new-tok"},
+                        }
+                    ]
+                },
+                headers=_auth(context),
+            )
+
+        with then("there is exactly one jira row (upsert, not duplicate)"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            rows = repository.get_secrets_for_agent(context.agent.id)
+            jira_rows = [r for r in rows if r.provider == SecretProvider.JIRA]
+            assert_that(len(jira_rows), equal_to(1))
+
+
+def test_patch_agent_removes_secret():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I add then remove a jira secret"):
+            client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"secrets": [{"provider": "jira", "content": _JIRA_CONTENT}]},
+                headers=_auth(context),
+            )
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"removed_secret_providers": ["jira"]},
+                headers=_auth(context),
+            )
+
+        with then("the jira secret is gone"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(_providers(response), equal_to([]))
+
+
+def test_patch_running_agent_with_secret_returns_409():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        client: TestClient = context.client
+
+        with when("I patch a running agent with a secret"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"secrets": [{"provider": "jira", "content": _JIRA_CONTENT}]},
+                headers=_auth(context),
+            )
+
+        with then("it returns 409"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+
+
+def test_patch_agent_secret_in_both_lists_returns_422():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I patch with a provider in both secrets and removed lists"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={
+                    "secrets": [{"provider": "jira", "content": _JIRA_CONTENT}],
+                    "removed_secret_providers": ["jira"],
+                },
+                headers=_auth(context),
+            )
+
+        with then("it returns 422"):
+            assert_that(
+                response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY)
+            )
+
+
+def test_patch_agent_invalid_secret_content_returns_422():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I patch with jira content missing api_token"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={
+                    "secrets": [
+                        {"provider": "jira", "content": {"site_url": "x", "email": "y"}}
+                    ]
+                },
+                headers=_auth(context),
+            )
+
+        with then("it returns 422"):
+            assert_that(
+                response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY)
+            )
+
+
 def test_start_agent_sets_status_running():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         client: TestClient = context.client
@@ -403,6 +543,46 @@ def test_stop_agent_no_auth_returns_401():
 
         with then("it returns 401"):
             assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
+
+
+def test_stop_agent_succeeds_when_presync_raises():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+        conv = context.injector.get(ConversationSyncService)
+
+        with when("the pre-stop conversation sync raises but I stop the agent"):
+            conv.sync_all_channels = MagicMock(side_effect=RuntimeError("slack 429"))
+            response = client.post(
+                f"{_BASE}/{context.agent.id}/stop", headers=_auth(context)
+            )
+
+        with then("stop still tears down and marks the agent STOPPED"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["status"], equal_to(AgentStatus.STOPPED.value))
+            k8s.delete_deployment.assert_called_once()
+
+
+def test_stop_agent_is_bounded_when_presync_hangs(monkeypatch):
+    monkeypatch.setattr(agent_service, "_STOP_SYNC_TIMEOUT_SECONDS", 0.3)
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+        conv = context.injector.get(ConversationSyncService)
+        conv.sync_all_channels = MagicMock(side_effect=lambda agent_id: time.sleep(5))
+
+        with when("a pre-stop sync hangs far past the budget"):
+            started = time.monotonic()
+            response = client.post(
+                f"{_BASE}/{context.agent.id}/stop", headers=_auth(context)
+            )
+            elapsed = time.monotonic() - started
+
+        with then("stop is bounded by the budget and still tears down + STOPPED"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["status"], equal_to(AgentStatus.STOPPED.value))
+            k8s.delete_deployment.assert_called_once()
+            assert elapsed < 2.0, f"stop took {elapsed:.2f}s, expected < 2s"
 
 
 def test_delete_agent_soft_deletes():
