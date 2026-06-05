@@ -397,6 +397,22 @@ class AgentUpdate(PydanticBaseModel):
     bootstrap_md: str | None = None
     heartbeat_md: str | None = None
     model: str | None = None
+    # Integration credentials: upsert (add/replace) + explicit removal.
+    # Providers not mentioned in either list are left untouched.
+    secrets: list[AgentSecretCreate] | None = None
+    removed_secret_providers: list[SecretProvider] | None = None
+
+    @model_validator(mode="after")
+    def validate_secret_operations(self) -> "AgentUpdate":
+        upserts = [s.provider for s in self.secrets or []]
+        if len(upserts) != len(set(upserts)):
+            raise ValueError("Duplicate secret providers are not allowed")
+        removed = set(self.removed_secret_providers or [])
+        overlap = removed & set(upserts)
+        if overlap:
+            names = ", ".join(p.value for p in overlap)
+            raise ValueError(f"Provider(s) cannot be both updated and removed: {names}")
+        return self
 
 
 class AgentSlackConfigRead(PydanticBaseModel):
