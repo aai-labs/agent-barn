@@ -1,3 +1,4 @@
+import concurrent.futures
 import datetime
 import logging
 import secrets
@@ -83,6 +84,15 @@ from api.infrastructure.slack.client import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Pre-stop conversation/tool-call flush is best-effort and must not block the
+# teardown. We run both syncs in a shared pool and wait at most this long;
+# anything still running is abandoned (the orphaned thread finishes harmlessly
+# in the background). Module-level so tests can monkeypatch the budget.
+_STOP_SYNC_TIMEOUT_SECONDS = 20
+_stop_sync_pool = concurrent.futures.ThreadPoolExecutor(
+    max_workers=4, thread_name_prefix="agent-stop-sync"
+)
 
 _MD_FIELDS = frozenset(
     {
@@ -473,6 +483,30 @@ class AgentService:
                     teams_config.tenant_id = updated["teams_tenant_id"]
                 self.repository.save_teams_config(teams_config)
 
+        # Integration secrets: platform-independent. Remove first, then upsert
+        # (the AgentUpdate validator already forbids a provider in both lists).
+        if "removed_secret_providers" in updated:
+            for provider in updated["removed_secret_providers"] or []:
+                self.repository.delete_secret(agent.id, provider)
+        if "secrets" in updated:
+            key = self.config.agent_token_encryption_key
+            for item in data.secrets or []:
+                content = validate_content(item.provider, item.content)
+                existing = self.repository.get_secret(agent.id, item.provider)
+                if existing:
+                    existing.content = encrypt_content(content, key)
+                    existing.secret_name = PROVIDER_DISPLAY_NAMES[item.provider]
+                    self.repository.save_secret(existing)
+                else:
+                    self.repository.save_secret(
+                        AgentSecret(
+                            agent_id=agent.id,
+                            provider=item.provider,
+                            secret_name=PROVIDER_DISPLAY_NAMES[item.provider],
+                            content=encrypt_content(content, key),
+                        )
+                    )
+
         self.repository.save(agent)
         return self._get_agent_read(agent)
 
@@ -757,14 +791,38 @@ class AgentService:
                 detail=f"Agent {agent_id} is not running",
             )
 
-        try:
-            self.conversation_sync_service.sync_all_channels(agent_id)
-        except Exception as e:
+        # Best-effort flush of conversation + tool-call state before teardown,
+        # bounded so a rate-limited/slow Slack can never block the stop. Both
+        # syncs run concurrently and share one timeout budget; whatever doesn't
+        # finish in time is abandoned and teardown proceeds regardless.
+        futures = {
+            _stop_sync_pool.submit(
+                self.conversation_sync_service.sync_all_channels, agent_id
+            ): "conversation sync",
+            _stop_sync_pool.submit(
+                self.sync_service.sync_agent, agent.id, org_id, force=True
+            ): "tool-call sync",
+        }
+        done, not_done = concurrent.futures.wait(
+            futures, timeout=_STOP_SYNC_TIMEOUT_SECONDS
+        )
+        for fut in done:
+            exc = fut.exception()
+            if exc is not None:
+                logger.warning(
+                    "%s before stop failed for agent %s: %s",
+                    futures[fut],
+                    agent_id,
+                    exc,
+                )
+        for fut in not_done:
             logger.warning(
-                "Conversation sync before stop failed for agent %s: %s", agent_id, e
+                "%s exceeded %ss during stop of agent %s; proceeding with teardown",
+                futures[fut],
+                _STOP_SYNC_TIMEOUT_SECONDS,
+                agent_id,
             )
 
-        self.sync_service.sync_agent(agent.id, org_id, force=True)
         self.k8s.delete_deployment(f"agent-{agent.id}", self.config.k8s_namespace)
 
         agent.status = AgentStatus.STOPPED

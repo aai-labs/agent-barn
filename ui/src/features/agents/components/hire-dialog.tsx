@@ -94,7 +94,12 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   const [identityMd, setIdentityMd] = useState(defaults.identityMd);
   const [userMd, setUserMd] = useState(defaults.userMd);
   const [toolsMd, setToolsMd] = useState(defaults.toolsMd);
-  const [integrations, setIntegrations] = useState<IntegrationDraft[]>([]);
+  const [agentsMd, setAgentsMd] = useState(defaults.agentsMd);
+  const [bootMd, setBootMd] = useState(defaults.bootMd);
+  const [heartbeatMd, setHeartbeatMd] = useState(defaults.heartbeatMd);
+  const [integrations, setIntegrations] = useState<IntegrationDraft[]>(
+    defaults.requiredIntegrations.map((p) => ({ provider: p, content: {} })),
+  );
   const [provisioning, setProvisioning] = useState(false);
   const [progress, setProgress] = useState(0);
   const [provisionError, setProvisionError] = useState<string | null>(null);
@@ -116,6 +121,11 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
     setIdentityMd(d.identityMd);
     setUserMd(d.userMd);
     setToolsMd(d.toolsMd);
+    setAgentsMd(d.agentsMd);
+    setBootMd(d.bootMd);
+    setHeartbeatMd(d.heartbeatMd);
+    // Seed required integrations for this profile (e.g. Scrum Master → jira + confluence).
+    setIntegrations(d.requiredIntegrations.map((p) => ({ provider: p, content: {} })));
   }
 
   function handleTeamsBotNameChange(value: string) {
@@ -157,11 +167,28 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
     apiDoneRef.current = false;
     errorRef.current = false;
 
+    // Substitute {{ … }} profile placeholders with concrete values at submit time.
+    const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+    const vars: Record<string, string> = {
+      agent_display_name: name,
+      agent_name: slug || "agent",
+      slack_app_display_name: botName || name,
+      deploy_date: new Date().toISOString().slice(0, 10),
+    };
+    const fill = (s: string) =>
+      s.replace(/\{\{\s*(\w+)\s*\}\}/g, (m, key) => (key in vars ? vars[key] : m));
+
     try {
       const agent = await createAgent.mutateAsync({
         name, model, platform,
         agentType,
-        soulMd, identityMd, userMd, toolsMd,
+        soulMd: fill(soulMd),
+        identityMd: fill(identityMd),
+        userMd: fill(userMd),
+        toolsMd: fill(toolsMd),
+        agentsMd: fill(agentsMd),
+        bootMd: fill(bootMd),
+        heartbeatMd: fill(heartbeatMd),
         secrets: integrations.map((i) => ({ provider: i.provider, content: i.content })),
         ...(platform === "slack"
           ? { slackBotToken, slackAppToken, slackGroupPolicy, slackDmPolicy }
@@ -461,7 +488,11 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
           />
         )}
         {step === "integrations" && (
-          <IntegrationsStep integrations={integrations} onChange={setIntegrations} />
+          <IntegrationsStep
+            integrations={integrations}
+            onChange={setIntegrations}
+            requiredProviders={selected.requiredIntegrations}
+          />
         )}
       </div>
 
@@ -536,7 +567,13 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
         {step === "integrations" && (
           <button
             className="af-btn af-btn-primary af-btn-lg"
-            disabled={!name.trim() || hasIncompleteIntegration(integrations)}
+            disabled={
+              !name.trim() ||
+              hasIncompleteIntegration(integrations) ||
+              selected.requiredIntegrations.some(
+                (p) => !integrations.some((i) => i.provider === p),
+              )
+            }
             onClick={() => { void startHiring(); }}
           >
             Hire {name}
