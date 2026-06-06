@@ -13,6 +13,7 @@ class Config(BaseSettings):
     db_connection_url: PostgresDsn
     secret_signing_key: str
     super_user_credentials: str
+    super_user_full_name: str = "Super User"
     email_server_credential: str | None = None
     email_smtp_server: str | None = None
 

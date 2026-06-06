@@ -9,6 +9,7 @@ UI_APP_URL=http://localhost:3000
 
 SECRET_SIGNING_KEY=replace_with_a_secure_random_value
 SUPER_USER_CREDENTIALS=admin@example.com:replace_with_secure_password
+SUPER_USER_FULL_NAME=Super User
 
 # Optional: if unset, email delivery is disabled and send attempts are logged.
 EMAIL_SERVER_CREDENTIAL=

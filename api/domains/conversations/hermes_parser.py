@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 HERMES_SESSIONS_PATH = "/opt/data/sessions/sessions.json"
 
 _DM_PREFIXES = ("agent:main:slack:dm:",)
-_CHANNEL_PREFIXES = ("agent:main:slack:channel:",)
+_CHANNEL_PREFIXES = ("agent:main:slack:group:",)
 _ALL_PREFIXES = _DM_PREFIXES + _CHANNEL_PREFIXES
 
 
@@ -31,6 +31,21 @@ def _chat_type_from_key(session_key: str) -> str:
 def _channel_id_from_session(session_data: dict) -> str | None:
     origin = session_data.get("origin") or {}
     return (origin.get("chat_id") or "").upper() or None
+
+
+def _thread_id_from_key(session_key: str) -> str | None:
+    """Extract the Slack thread timestamp from a Hermes session key.
+
+    Keys follow agent:main:slack:{type}:{chat_id}:{thread_ts}.
+    """
+    parts = session_key.rsplit(":", 1)
+    if len(parts) == 2:
+        try:
+            float(parts[1])
+            return parts[1]
+        except ValueError:
+            pass
+    return None
 
 
 def hermes_distinct_conversations(
@@ -150,7 +165,7 @@ def parse_hermes_export(
                 openclaw_msg_id=dedup_id,
                 session_key=session_key,
                 channel_id=channel_id,
-                thread_id=None,
+                thread_id=_thread_id_from_key(session_key),
                 direction=direction,
                 conversation_type=ctype,
                 sender_id=sender_id if role == "user" else None,

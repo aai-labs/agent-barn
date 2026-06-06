@@ -622,9 +622,15 @@ class ConversationService:
                             if sessions_json
                             else []
                         )
+                        slack_channel_map: dict[str, str] = {}
+                        if pod_conversations:
+                            _, slack_channel_map = self.sync_service._platform_maps(
+                                agent_id
+                            )
                         for cid, ctype, display_name in pod_conversations:
                             if cid not in merged or merged[cid][0] is None:
-                                merged[cid] = (display_name, ctype)
+                                name = slack_channel_map.get(cid) or display_name
+                                merged[cid] = (name, ctype)
                     else:
                         sessions_json = self.sync_service._read_sessions_json(
                             pod_name, ns

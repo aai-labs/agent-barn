@@ -22,6 +22,7 @@ secretName: agentfarm-api
 dbConnectionUrl: ""
 secretSigningKey: ""
 superUserCredentials: ""
+superUserFullName: "Super User"
 agentTokenEncryptionKey: ""
 environment: ""
 webAppUrl: ""
