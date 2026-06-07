@@ -463,7 +463,10 @@ class AgentService:
         if "removed_secret_providers" in updated or "secrets" in updated:
             key = self.config.agent_token_encryption_key
             upserts: list[tuple[AgentSecretCreate, str]] = [
-                (item, encrypt_content(validate_content(item.provider, item.content), key))
+                (
+                    item,
+                    encrypt_content(validate_content(item.provider, item.content), key),
+                )
                 for item in data.secrets or []
             ]
             for provider in updated.get("removed_secret_providers") or []:
