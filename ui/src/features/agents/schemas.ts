@@ -132,6 +132,7 @@ export const SlackUserSchema = z.object({
   id: z.string(),
   name: z.string(),
   realName: z.string(),
+  displayName: z.string(),
 });
 
 export type Agent = z.infer<typeof AgentSchema>;

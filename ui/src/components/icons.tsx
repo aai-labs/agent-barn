@@ -67,6 +67,22 @@ export function SlackIcon(p: IconProps) {
   );
 }
 
+export function TeamsIcon({ size = 14, ...p }: IconProps) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width={size}
+      height={size}
+      fill="currentColor"
+      className={p.className}
+      style={p.style}
+    >
+      <path d="M13.5 4.5a2.5 2.5 0 1 1 5 0 2.5 2.5 0 0 1-5 0Zm6.7 3.5h-3.9a3.5 3.5 0 0 1-.3 1.3h3.6c.55 0 1 .45 1 1v3.7a2.7 2.7 0 0 1-2.4 2.68c-.32 1.6-1.32 2.96-2.7 3.74A4.2 4.2 0 0 0 16 16.6V9.3c0-.72.58-1.3 1.3-1.3h2.9c.99 0 1.8.81 1.8 1.8v2.5a3.3 3.3 0 0 1-2 3.03V9.3a.3.3 0 0 0-.3-.3Z" />
+      <path d="M3 6.4h9a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1Zm2.1 2.5v1.45h2.05v5.25h1.7V10.35h2.05V8.9H5.1Z" />
+    </svg>
+  );
+}
+
 export function ChevLeftIcon(p: IconProps) {
   return <Svg {...p}><path d="m15 18-6-6 6-6"/></Svg>;
 }

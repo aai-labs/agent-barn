@@ -1,16 +1,68 @@
+import hashlib
 import json
 import logging
+import threading
+import time
 import urllib.request
+from collections.abc import Callable
 from urllib.parse import urlencode
+
+from api.core.config import get_config
 
 logger = logging.getLogger(__name__)
 
 _BASE = "https://slack.com/api"
 _PAGE_SIZE = 200
-_MAX_SEARCH_PAGES = 5
 
 _ALREADY_IN_CHANNEL = {"already_in_channel"}
 _PRIVATE_CHANNEL_ERRORS = {"method_not_supported_for_channel_type", "is_private"}
+
+# Process-local TTL cache for the workspace directory (users/channels), keyed by
+# entity kind + hashed bot token. Slack has no user-search endpoint and users.list
+# is rate-limited, so we sweep every page once per TTL and filter in memory.
+# Fragmented per pod; swap for a shared store (Redis) keyed the same way if needed.
+_cache: dict[str, tuple[float, list[dict]]] = {}
+_cache_lock = threading.Lock()
+_key_locks: dict[str, threading.Lock] = {}
+
+
+def clear_directory_cache() -> None:
+    """Drops all cached directory entries. Intended for tests."""
+    with _cache_lock:
+        _cache.clear()
+        _key_locks.clear()
+
+
+def _key_lock(key: str) -> threading.Lock:
+    with _cache_lock:
+        lock = _key_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _key_locks[key] = lock
+        return lock
+
+
+def _cached(key: str, fetch: Callable[[], list[dict]]) -> list[dict]:
+    """Returns cached entries for key, refreshing via fetch on miss/expiry.
+    Per-key locking ensures a miss triggers exactly one Slack sweep.
+    """
+    ttl = get_config().slack_directory_cache_ttl_seconds
+    now = time.monotonic()
+    with _cache_lock:
+        entry = _cache.get(key)
+        if entry and now - entry[0] < ttl:
+            return entry[1]
+    with _key_lock(key):
+        # Re-check: another thread may have refreshed while we waited.
+        now = time.monotonic()
+        with _cache_lock:
+            entry = _cache.get(key)
+            if entry and now - entry[0] < ttl:
+                return entry[1]
+        data = fetch()
+        with _cache_lock:
+            _cache[key] = (time.monotonic(), data)
+        return data
 
 
 _BOT_TOKEN_ERRORS: dict[str, str] = {
@@ -183,14 +235,15 @@ class SlackClient:
                 break
         return result
 
-    def search_channels(self, search: str | None = None, limit: int = 50) -> list[dict]:
-        # When no search, return the first page only. With search, scan up to MAX_PAGES
-        # so big workspaces don't time out — search may miss matches past the ceiling.
-        max_pages = _MAX_SEARCH_PAGES if search else 1
-        q = search.lower() if search else None
-        matches: list[dict] = []
+    def _token_key(self, kind: str) -> str:
+        digest = hashlib.sha256(self._token.encode()).hexdigest()
+        return f"{kind}:{digest}"
+
+    def _fetch_all_channels(self) -> list[dict]:
+        """Paginates conversations.list to the end. Returns every accessible channel."""
+        result: list[dict] = []
         cursor = ""
-        for _ in range(max_pages):
+        while True:
             params: dict = {
                 "limit": _PAGE_SIZE,
                 "exclude_archived": "true",
@@ -207,31 +260,26 @@ class SlackClient:
                 logger.warning("conversations.list error: %s", data.get("error"))
                 break
             for ch in data.get("channels", []):
-                entry = {
-                    "id": ch.get("id", ""),
-                    "name": ch.get("name", ""),
-                    "is_private": ch.get("is_private", False),
-                }
-                if (
-                    q
-                    and q not in entry["id"].lower()
-                    and q not in entry["name"].lower()
-                ):
+                cid = ch.get("id", "")
+                if not cid:
                     continue
-                matches.append(entry)
-                if len(matches) >= limit:
-                    return matches
+                result.append(
+                    {
+                        "id": cid,
+                        "name": ch.get("name", ""),
+                        "is_private": ch.get("is_private", False),
+                    }
+                )
             cursor = data.get("response_metadata", {}).get("next_cursor", "")
             if not cursor:
                 break
-        return matches
+        return result
 
-    def search_users(self, search: str | None = None, limit: int = 50) -> list[dict]:
-        max_pages = _MAX_SEARCH_PAGES if search else 1
-        q = search.lower() if search else None
-        matches: list[dict] = []
+    def _fetch_all_users(self) -> list[dict]:
+        """Paginates users.list to the end. Excludes deleted members and bots."""
+        result: list[dict] = []
         cursor = ""
-        for _ in range(max_pages):
+        while True:
             params: dict = {"limit": _PAGE_SIZE}
             if cursor:
                 params["cursor"] = cursor
@@ -244,23 +292,44 @@ class SlackClient:
                 logger.warning("users.list error: %s", data.get("error"))
                 break
             for u in data.get("members", []):
-                if u.get("deleted") or u.get("is_bot"):
+                uid = u.get("id", "")
+                if not uid or u.get("deleted") or u.get("is_bot"):
                     continue
-                entry = {
-                    "id": u.get("id", ""),
-                    "name": u.get("name", ""),
-                    "real_name": u.get("real_name", ""),
-                }
-                if q and not (
-                    q in entry["id"].lower()
-                    or q in entry["name"].lower()
-                    or q in entry["real_name"].lower()
-                ):
-                    continue
-                matches.append(entry)
-                if len(matches) >= limit:
-                    return matches
+                profile = u.get("profile", {})
+                result.append(
+                    {
+                        "id": uid,
+                        "name": u.get("name", ""),
+                        "real_name": profile.get("real_name") or u.get("real_name", ""),
+                        "display_name": profile.get("display_name", ""),
+                    }
+                )
             cursor = data.get("response_metadata", {}).get("next_cursor", "")
             if not cursor:
                 break
-        return matches
+        return result
+
+    def list_channels(self, search: str | None = None) -> list[dict]:
+        """Returns all channels (cached). Filters in memory when search is given."""
+        channels = _cached(self._token_key("channels"), self._fetch_all_channels)
+        if not search:
+            return channels
+        q = search.lower()
+        return [
+            ch for ch in channels if q in ch["id"].lower() or q in ch["name"].lower()
+        ]
+
+    def list_users(self, search: str | None = None) -> list[dict]:
+        """Returns all workspace members (cached). Filters in memory when search is given."""
+        users = _cached(self._token_key("users"), self._fetch_all_users)
+        if not search:
+            return users
+        q = search.lower()
+        return [
+            u
+            for u in users
+            if q in u["id"].lower()
+            or q in u["name"].lower()
+            or q in u["real_name"].lower()
+            or q in u["display_name"].lower()
+        ]

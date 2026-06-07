@@ -935,7 +935,7 @@ class AgentService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Slack channels are only available for Slack agents",
             )
-        return SlackClient(self._get_bot_token(agent)).search_channels(search=search)
+        return SlackClient(self._get_bot_token(agent)).list_channels(search=search)
 
     def list_slack_users(
         self, agent_id: UUID, context: CurrentUserContext, search: str | None = None
@@ -947,7 +947,7 @@ class AgentService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Slack users are only available for Slack agents",
             )
-        return SlackClient(self._get_bot_token(agent)).search_users(search=search)
+        return SlackClient(self._get_bot_token(agent)).list_users(search=search)
 
     def _get_bot_token(self, agent: Agent) -> str:
         slack_config = self.repository.get_slack_config(agent.id)

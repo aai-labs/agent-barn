@@ -36,6 +36,7 @@ class Config(BaseSettings):
     agent_default_model: str = "litellm/qwen3.6-plus"
     api_external_url: str = ""
     skip_slack_token_validation: bool = False
+    slack_directory_cache_ttl_seconds: int = 600
 
     @property
     def is_email_delivery_enabled(self) -> bool:

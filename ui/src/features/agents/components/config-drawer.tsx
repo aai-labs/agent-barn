@@ -18,6 +18,8 @@ import { SlackConfigPanel } from "./slack-config-panel";
 
 interface ConfigDrawerProps {
   agent: Agent;
+  activeTab: TabKey;
+  onTabChange: (tab: TabKey) => void;
   onClose: () => void;
 }
 
@@ -33,7 +35,17 @@ function getTabs(platform: "slack" | "teams"): [string, string, boolean][] {
   ];
 }
 
-type TabKey = "personality" | "channels" | "endpoint" | "skills" | "secrets" | "k8s" | "danger";
+export type TabKey = "personality" | "channels" | "endpoint" | "skills" | "secrets" | "k8s" | "danger";
+
+export const DRAWER_TAB_KEYS: TabKey[] = [
+  "personality",
+  "channels",
+  "endpoint",
+  "skills",
+  "secrets",
+  "k8s",
+  "danger",
+];
 
 type TemplateFiles = {
   soul_md: string;
@@ -57,13 +69,12 @@ const FILE_KEYS: (keyof TemplateFiles)[] = [
   "heartbeat_md",
 ];
 
-export function ConfigDrawer({ agent, onClose }: ConfigDrawerProps) {
+export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigDrawerProps) {
   const router = useRouter();
   const { template, isLoading: templateLoading, error: templateError, refetch: refetchTemplate } = useAgentTemplate(agent.id, agent.templateVersion);
   const updateAgent = useUpdateAgent();
   const deleteAgent = useDeleteAgent();
 
-  const [tab, setTab] = useState<TabKey>("personality");
   const [retireConfirm, setRetireConfirm] = useState(false);
   const [name, setName] = useState(agent.name);
   const [model, setModel] = useState(agent.model);
@@ -84,6 +95,12 @@ export function ConfigDrawer({ agent, onClose }: ConfigDrawerProps) {
   const [savedSecrets, setSavedSecrets] = useState(false);
 
   const tabs = getTabs(agent.platform);
+  // Clamp the URL-provided tab to one that's actually reachable for this agent
+  // (e.g. a deep-linked ?configTab=channels on a Teams agent falls back).
+  const enabledKeys = tabs
+    .filter(([, , enabled]) => enabled)
+    .map(([k]) => k as TabKey);
+  const tab: TabKey = enabledKeys.includes(activeTab) ? activeTab : "personality";
 
   const configuredSecrets = (agent.secrets ?? []).filter(
     (s) => !removedProviders.includes(s.provider),
@@ -224,7 +241,7 @@ export function ConfigDrawer({ agent, onClose }: ConfigDrawerProps) {
               className="af-drawer-tab"
               data-active={tab === k}
               disabled={!enabled}
-              onClick={() => enabled && setTab(k as TabKey)}
+              onClick={() => enabled && onTabChange(k as TabKey)}
               style={!enabled ? { opacity: 0.35, cursor: "default" } : undefined}
             >
               {l}

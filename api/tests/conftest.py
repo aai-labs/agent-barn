@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from testcontainers.postgres import PostgresContainer
 
 from api.core.config import get_config
+from api.infrastructure.slack.client import clear_directory_cache
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -40,3 +41,10 @@ def setup_test_database():
         logger.info("Upgrading test database to heads")
         command.upgrade(config, "heads")
         yield
+
+
+@pytest.fixture(autouse=True)
+def clear_slack_directory_cache():
+    """Slack directory cache is process-global; reset it between tests."""
+    clear_directory_cache()
+    yield

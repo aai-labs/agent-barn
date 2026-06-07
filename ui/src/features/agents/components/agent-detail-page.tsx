@@ -1,8 +1,7 @@
 "use client";
 
-import { useState } from "react";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useQueryState, parseAsStringEnum } from "nuqs";
 import { useAgent } from "../hooks/use-agent";
 import { useAgentHealth } from "../hooks/use-agent-health";
 import { useStartAgent } from "../hooks/use-start-agent";
@@ -11,12 +10,13 @@ import { ChevLeftIcon, PauseIcon, PlayIcon, CogIcon } from "@/components/icons";
 import { AppErrorState } from "@/components/app-error-state";
 import { toastError } from "@/shared/toast";
 import { AgentAvatar } from "./agent-avatar";
+import { AgentMetaBadges } from "./agent-meta-badges";
 import { StatusLine } from "./status-line";
 import { ConversationsTab } from "./conversations-tab";
 import { ToolCallsTab } from "./tool-calls-tab";
 import { WorkTab } from "./work-tab";
 import { AboutTab } from "./about-tab";
-import { ConfigDrawer } from "./config-drawer";
+import { ConfigDrawer, DRAWER_TAB_KEYS } from "./config-drawer";
 
 interface AgentDetailPageProps {
   agentId: string;
@@ -43,11 +43,16 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   const { health } = useAgentHealth(agentId, agent?.status === "RUNNING" || agent?.status === "ERROR");
   const stopAgent = useStopAgent();
   const startAgent = useStartAgent();
-  const searchParams = useSearchParams();
-  const router = useRouter();
-  const rawTab = searchParams.get("tab");
-  const tab: Tab = VALID_TABS.includes(rawTab as Tab) ? (rawTab as Tab) : "conversations";
-  const [configOpen, setConfigOpen] = useState(false);
+  const [tab, setTab] = useQueryState(
+    "tab",
+    parseAsStringEnum<Tab>(VALID_TABS)
+      .withDefault("conversations")
+      .withOptions({ scroll: false, history: "replace" }),
+  );
+  const [configTab, setConfigTab] = useQueryState(
+    "configTab",
+    parseAsStringEnum(DRAWER_TAB_KEYS).withOptions({ history: "replace" }),
+  );
 
   const tabs: [Tab, string][] = [
     ["conversations", "Conversations"],
@@ -99,6 +104,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
                     {agent.model}
                   </div>
                 )}
+                <AgentMetaBadges agent={agent} variant="full" className="mt-2" />
                 <div className="mt-2">
                   <StatusLine status={agent.status} health={health} />
                 </div>
@@ -122,7 +128,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
                     <PlayIcon /> {startAgent.isPending ? "Starting…" : "Start"}
                   </button>
                 )}
-                <button className="af-btn" onClick={() => setConfigOpen(true)}>
+                <button className="af-btn" onClick={() => { void setConfigTab("personality"); }}>
                   <CogIcon /> Configure
                 </button>
               </div>
@@ -146,7 +152,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
                   key={k}
                   className="ap-tab"
                   data-active={tab === k}
-                  onClick={() => router.replace(`?tab=${k}`, { scroll: false })}
+                  onClick={() => { void setTab(k); }}
                 >
                   {l}
                 </button>
@@ -156,13 +162,18 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
             {tab === "conversations" && <ConversationsTab agent={agent} />}
             {tab === "tool-calls" && <ToolCallsTab agent={agent} />}
             {tab === "work" && <WorkTab agent={agent} />}
-            {tab === "about" && <AboutTab agent={agent} onConfigure={() => setConfigOpen(true)} />}
+            {tab === "about" && <AboutTab agent={agent} onConfigure={() => { void setConfigTab("personality"); }} />}
           </>
         )}
       </div>
 
-      {configOpen && agent && (
-        <ConfigDrawer agent={agent} onClose={() => setConfigOpen(false)} />
+      {configTab !== null && agent && (
+        <ConfigDrawer
+          agent={agent}
+          activeTab={configTab}
+          onTabChange={(t) => { void setConfigTab(t); }}
+          onClose={() => { void setConfigTab(null); }}
+        />
       )}
 
     </div>
