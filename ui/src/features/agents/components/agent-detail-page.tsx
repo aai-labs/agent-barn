@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useQueryState, parseAsStringEnum } from "nuqs";
+import { useQueryState, parseAsStringEnum, parseAsString } from "nuqs";
 import { useAgent } from "../hooks/use-agent";
 import { useAgentHealth } from "../hooks/use-agent-health";
 import { useStartAgent } from "../hooks/use-start-agent";
@@ -53,6 +53,16 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
     "configTab",
     parseAsStringEnum(DRAWER_TAB_KEYS).withOptions({ history: "replace" }),
   );
+  const [, setChannel] = useQueryState(
+    "channel",
+    parseAsString.withOptions({ history: "replace" }),
+  );
+
+  function selectTab(next: Tab) {
+    void setTab(next);
+    // channel is only meaningful on the conversations tab; drop it elsewhere
+    if (next !== "conversations") void setChannel(null);
+  }
 
   const tabs: [Tab, string][] = [
     ["conversations", "Conversations"],
@@ -152,7 +162,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
                   key={k}
                   className="ap-tab"
                   data-active={tab === k}
-                  onClick={() => { void setTab(k); }}
+                  onClick={() => { selectTab(k); }}
                 >
                   {l}
                 </button>

@@ -6,7 +6,7 @@ import type { Agent } from "../schemas";
 import { useAgentTemplate } from "../hooks/use-agent-template";
 import { useUpdateAgent } from "../hooks/use-update-agent";
 import { useDeleteAgent } from "../hooks/use-delete-agent";
-import { XIcon } from "@/components/icons";
+import { XIcon, LockIcon } from "@/components/icons";
 import { TokenInput } from "./hire-dialog-primitives";
 import { MODELS, IntegrationsStep } from "./hire-dialog-steps";
 import {
@@ -251,10 +251,21 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
 
         {isRunning && (
           <div
-            className="px-6.5 py-2.5 text-[0.8125rem] flex-shrink-0"
-            style={{ background: "var(--bg-soft)", borderBottom: "1px solid var(--line)", color: "var(--ink-3)" }}
+            className="px-6.5 py-2.5 text-[0.8125rem] font-medium flex items-center gap-2 flex-shrink-0"
+            style={{
+              background: "var(--accent-soft)",
+              borderBottom: "1px solid var(--line)",
+              borderLeft: "3px solid var(--accent-color)",
+              color: "var(--accent-ink)",
+            }}
           >
-            Agent is running — stop it before making changes.
+            <span
+              className="w-1.5 h-1.5 rounded-full inline-block flex-shrink-0 af-dot-pulse"
+              style={{ background: "var(--accent-color)" }}
+              aria-hidden
+            />
+            <LockIcon size={13} />
+            <span>Agent is running — <strong>stop it</strong> before making changes.</span>
           </div>
         )}
 

@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useQueryState, parseAsString } from "nuqs";
 
 import type { Agent, ConversationChannel, ConversationMessage, ConversationThread } from "../schemas";
 import {
@@ -19,28 +20,12 @@ function channelLabel(ch: ConversationChannel): string {
   return `#${ch.channelName ?? ch.channelId.toLowerCase()}`;
 }
 
-function readChannelFromUrl(): string | null {
-  if (typeof window === "undefined") return null;
-  return new URLSearchParams(window.location.search).get("channel");
-}
-
-function writeChannelToUrl(channelId: string | null): void {
-  if (typeof window === "undefined") return;
-  const url = new URL(window.location.href);
-  if (channelId) url.searchParams.set("channel", channelId);
-  else url.searchParams.delete("channel");
-  window.history.replaceState({}, "", url.toString());
-}
-
 export function ConversationsTab({ agent }: ConversationsTabProps) {
   const { channels, isLoading, error, refetch } = useConversationChannels(agent.id);
-  const [selectedChannel, setSelectedChannel] = useState<string | null>(
-    () => readChannelFromUrl(),
+  const [selectedChannel, setSelectedChannel] = useQueryState(
+    "channel",
+    parseAsString.withOptions({ history: "replace", scroll: false }),
   );
-
-  useEffect(() => {
-    writeChannelToUrl(selectedChannel);
-  }, [selectedChannel]);
 
   if (isLoading) return <ConversationsSkeleton />;
 
@@ -90,7 +75,7 @@ export function ConversationsTab({ agent }: ConversationsTabProps) {
   return (
     <div
       className="flex rounded-2xl overflow-hidden"
-      style={{ border: "1px solid var(--line-strong)", height: "min(600px, 70vh)" }}
+      style={{ border: "1px solid var(--line-strong)", height: "min(760px, 80vh)" }}
     >
       <ConversationSidebar
         channelConvos={channelConvos}
@@ -415,7 +400,7 @@ function ConversationsSkeleton() {
   return (
     <div
       className="flex rounded-2xl overflow-hidden animate-pulse"
-      style={{ border: "1px solid var(--line-strong)", minHeight: 480 }}
+      style={{ border: "1px solid var(--line-strong)", minHeight: 620 }}
     >
       <div
         className="w-44 flex-shrink-0"
