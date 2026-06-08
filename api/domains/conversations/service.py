@@ -39,6 +39,7 @@ logger = logging.getLogger(__name__)
 _SESSIONS_PATH = "/home/node/.openclaw/agents/main/sessions/sessions.json"
 _SESSION_DIR = "/home/node/.openclaw/agents/main/sessions"
 _PER_CHANNEL_SYNC_INTERVAL = timedelta(seconds=4)
+_PLATFORM_MAPS_TTL = timedelta(seconds=60)
 _STOP_SYNC_MAX_WORKERS = 4
 _PER_CHANNEL_READ_MAX_WORKERS = 8
 _FIRE_AND_FORGET_MAX_WORKERS = 4
@@ -210,6 +211,9 @@ class ConversationSyncService:
     _last_sync: dict[tuple[UUID, str], datetime] = field(
         init=False, default_factory=dict
     )
+    _maps_cache: dict[UUID, tuple[dict[str, str], dict[str, str], datetime]] = field(
+        init=False, default_factory=dict
+    )
     _lock: threading.Lock = field(init=False, default_factory=threading.Lock)
     _executor: ThreadPoolExecutor = field(
         init=False,
@@ -299,6 +303,12 @@ class ConversationSyncService:
         return len(all_messages)
 
     def _platform_maps(self, agent_id: UUID) -> tuple[dict[str, str], dict[str, str]]:
+        now = datetime.now(timezone.utc)
+        with self._lock:
+            cached = self._maps_cache.get(agent_id)
+            if cached and (now - cached[2]) < _PLATFORM_MAPS_TTL:
+                return cached[0], cached[1]
+
         agent = self.agent_repository.get_by_id(agent_id)
         if not (agent and self.config.agent_token_encryption_key):
             return {}, {}
@@ -313,7 +323,10 @@ class ConversationSyncService:
                 self.config.agent_token_encryption_key,
             )
             slack = SlackClient(bot_token)
-            return slack.get_user_map(), slack.get_channel_map()
+            user_map, channel_map = slack.get_user_map(), slack.get_channel_map()
+            with self._lock:
+                self._maps_cache[agent_id] = (user_map, channel_map, now)
+            return user_map, channel_map
         except Exception as e:
             logger.warning("Failed to fetch Slack maps for agent %s: %s", agent_id, e)
             return {}, {}
