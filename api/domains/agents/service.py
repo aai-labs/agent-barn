@@ -812,7 +812,10 @@ class AgentService:
             self.k8s.delete_secret(name, ns)
             self.k8s.create_config_map(ns, config_map)
             self.k8s.create_secret(ns, secret)
-            self.k8s.create_pvc(ns, build_pvc(agent.id, org_id, ns))
+            self.k8s.create_pvc(
+                ns,
+                build_pvc(agent.id, org_id, ns, self.config.storage_class or None),
+            )
             self.k8s.create_service(ns, service)
             self.k8s.create_deployment(ns, deployment)
         except Exception as exc:

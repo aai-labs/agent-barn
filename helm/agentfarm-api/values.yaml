@@ -41,6 +41,9 @@ agentDefaultModel: ""
 kubeconfigB64: ""
 agentImagePullSecret: "registry-pull-secret"
 
+# StorageClass for agent pod PVCs. Empty falls through to the cluster default.
+storageClass: ""
+
 registry:
   server: ""
   username: ""

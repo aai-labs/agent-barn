@@ -24,6 +24,9 @@ class Config(BaseSettings):
 
     k8s_kubeconfig_path: str | None = None
     k8s_namespace: str = "agent-farm"
+    # StorageClass for PVCs the API provisions (agent pods). Empty falls through
+    # to the cluster's default StorageClass.
+    storage_class: str = ""
 
     openclaw_image: str = ""
     hermes_image: str = ""

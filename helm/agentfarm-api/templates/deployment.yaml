@@ -55,6 +55,10 @@ spec:
             - name: AGENT_DEFAULT_MODEL
               value: "{{ .Values.agentDefaultModel }}"
             {{- end }}
+            {{- if .Values.storageClass }}
+            - name: STORAGE_CLASS
+              value: "{{ .Values.storageClass }}"
+            {{- end }}
           volumeMounts:
             - name: kubeconfig
               mountPath: /etc/kubeconfig

@@ -19,6 +19,12 @@ EMAIL_SMTP_SERVER=
 # Path to kubeconfig file. If unset, tries in-cluster auth then ~/.kube/config.
 K8S_KUBECONFIG_PATH=
 K8S_NAMESPACE=agent-farm
+# StorageClass for PVCs (Postgres + agent pods). Empty falls through to the
+# cluster's default StorageClass. aai-labs default is local-path; set to a
+# network-replicated class (e.g. rook-ceph-block-main, GKE premium-rwo) for
+# node-loss durability. Note: changing this on an existing Postgres deployment
+# requires a data migration (StatefulSet volumeClaimTemplates are immutable).
+STORAGE_CLASS=
 
 # Agents
 # Full image ref for agent pods, e.g. {REGISTRY_URL}/agentfarm-openclaw-base:{VERSION}
