@@ -6,7 +6,7 @@ import { useCreateAgent } from "../hooks/use-create-agent";
 import { useStartAgent } from "../hooks/use-start-agent";
 import { DialogShell } from "./hire-dialog-primitives";
 import {
-  ROLES, MODELS, RoleId, WizardStep, pickDefaults,
+  ROLES, RoleId, WizardStep, pickDefaults,
   RoleStep, AgentTypeStep, PlatformChoiceStep, SlackChoiceStep, BotBuilderStep, SlackTokensStep,
   TeamsBotBuilderStep, TeamsCredentialsStep, DetailsStep, IntegrationsStep,
   downloadTeamsAppPackage, generateTeamsManifest,
@@ -71,7 +71,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   const [pick, setPick] = useState<RoleId>("default");
   const defaults = pickDefaults("default");
   const [name, setName] = useState<string>(defaults.name);
-  const [model, setModel] = useState<string>(MODELS[0].value);
+  const [model, setModel] = useState<string>("");
   const [platform, setPlatform] = useState<"slack" | "teams">("slack");
   const [setupNewBot, setSetupNewBot] = useState(true);
   const [botName, setBotName] = useState<string>(defaults.botName);

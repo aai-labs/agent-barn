@@ -12,6 +12,10 @@ spec:
       {{- include "agentfarm-api.selectorLabels" . | nindent 6 }}
   template:
     metadata:
+      annotations:
+        # Roll the pods when secret-sourced env (envFrom) changes; a Secret update
+        # alone does not alter the pod template. Inline env vars already roll on change.
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
       labels:
         {{- include "agentfarm-api.selectorLabels" . | nindent 8 }}
     spec:
@@ -45,6 +49,12 @@ spec:
               value: "{{ .Values.agentLitellmBaseUrl }}"
             - name: AGENT_IMAGE_PULL_SECRET
               value: "{{ .Values.agentImagePullSecret }}"
+            - name: AGENT_MODEL_ALLOWLIST
+              value: "{{ .Values.agentModelAllowlist }}"
+            {{- if .Values.agentDefaultModel }}
+            - name: AGENT_DEFAULT_MODEL
+              value: "{{ .Values.agentDefaultModel }}"
+            {{- end }}
           volumeMounts:
             - name: kubeconfig
               mountPath: /etc/kubeconfig

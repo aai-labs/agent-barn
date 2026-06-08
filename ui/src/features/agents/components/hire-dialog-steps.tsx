@@ -10,6 +10,7 @@ import {
   type IntegrationDraft,
 } from "../integrations";
 import { ChoiceCard, FormField, NextStep, TokenInput } from "./hire-dialog-primitives";
+import { ModelSelect } from "./model-select";
 
 export const ROLES = [
   { id: "default", template_id: "t_default", title: "General Purpose", emoji: "🤖", tagline: "Answers questions, handles tasks, reduces day-to-day friction.", suggested: "Aria", requiredIntegrations: [] },
@@ -31,8 +32,6 @@ export type WizardStep =
   | "teams-credentials"
   | "details"
   | "integrations";
-
-export const MODELS = [{ value: "litellm/qwen3.6-plus", label: "Qwen3.6 Plus" }, { value: "litellm/gpt-5-mini", label: "GPT-5 mini" }] as const;
 
 export const BOT_COLOR_PRESETS = ["#4A154B", "#1264A3", "#2BAC76", "#E8912D", "#CC4400"];
 const TEAMS_DEVELOPER_NAME = "Agent Farm";
@@ -830,16 +829,7 @@ export function DetailsStep({
       </FormField>
 
       <FormField label="Model">
-        <select
-          className="af-input"
-          aria-label="Model"
-          value={model}
-          onChange={(e) => onModelChange(e.target.value)}
-        >
-          {MODELS.map((m) => (
-            <option key={m.value} value={m.value}>{m.label}</option>
-          ))}
-        </select>
+        <ModelSelect value={model} onChange={onModelChange} aria-label="Model" />
       </FormField>
 
       {platform === "slack" && (
