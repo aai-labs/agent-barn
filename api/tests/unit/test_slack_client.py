@@ -12,7 +12,9 @@ from api.infrastructure.slack.client import (
 _REQUEST = httpx.Request("GET", "https://slack.com/api/users.list")
 
 
-def _resp(page: dict, *, status: int = 200, headers: dict | None = None) -> httpx.Response:
+def _resp(
+    page: dict, *, status: int = 200, headers: dict | None = None
+) -> httpx.Response:
     """An httpx.Response carrying page as the JSON body."""
     return httpx.Response(status, json=page, headers=headers, request=_REQUEST)
 
@@ -189,7 +191,9 @@ def test_validate_bot_token_ok():
 
 
 def test_validate_bot_token_maps_known_error():
-    with patch("httpx.request", _mock_httpx([_resp({"ok": False, "error": "invalid_auth"})])):
+    with patch(
+        "httpx.request", _mock_httpx([_resp({"ok": False, "error": "invalid_auth"})])
+    ):
         ok, message = SlackClient("xoxb-token").validate_bot_token()
 
     assert ok is False
@@ -207,7 +211,9 @@ def test_validate_bot_token_falls_back_for_unknown_error():
 def test_validate_app_token_ok_uses_app_token():
     mock = _mock_httpx([_resp({"ok": True})])
     with patch("httpx.request", mock):
-        ok, message = SlackClient("xoxb-token", app_token="xapp-token").validate_app_token()
+        ok, message = SlackClient(
+            "xoxb-token", app_token="xapp-token"
+        ).validate_app_token()
 
     assert ok is True
     assert message == ""

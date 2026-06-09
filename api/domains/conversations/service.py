@@ -321,7 +321,9 @@ class ConversationSyncService:
                 u["id"]: u["display_name"] or u["real_name"] or u["name"] or u["id"]
                 for u in users
             }
-            channel_map = {c["id"]: c["name"] for c in channels if c["id"] and c["name"]}
+            channel_map = {
+                c["id"]: c["name"] for c in channels if c["id"] and c["name"]
+            }
             return user_map, channel_map
         except Exception as e:
             logger.warning("Failed to fetch Slack maps for agent %s: %s", agent_id, e)

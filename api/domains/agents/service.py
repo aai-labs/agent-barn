@@ -962,9 +962,7 @@ class AgentService:
         try:
             return SlackClient(self._get_bot_token(agent)).list_users(search=search)
         except SlackFetchError as exc:
-            logger.warning(
-                "Failed to list Slack users for agent %s: %s", agent_id, exc
-            )
+            logger.warning("Failed to list Slack users for agent %s: %s", agent_id, exc)
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Could not load Slack users right now. Please try again.",
