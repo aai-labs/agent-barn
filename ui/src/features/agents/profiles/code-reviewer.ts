@@ -145,15 +145,15 @@ The person who deployed me, summons me from DMs, and tunes my behaviour. They ge
 
 - **Team lead name:**
 - **Team lead Slack handle:**
-- **Primary code host:** (bitbucket or github)
-- **Repository:** (e.g. \`myworkspace/my-repo\` for Bitbucket or \`myorg/my-repo\` for GitHub)
-- **Primary review Slack channel:** (e.g. \`#code-reviews\`)
+- **Primary code host (bitbucket or github):** 
+- **Repository (to be used with --repo flag on aai-cli command. e.g. \`my-repo\`):**
+- **Primary review Slack channel (e.g. \`#code-reviews\`):** 
 
 ### Optional
 
-- **Jira base URL:** (e.g. \`https://myorg.atlassian.net\`)
-- **Jira project key(s):** (e.g. \`AUTH\`, \`PLAT\`)
-- **Confluence space key(s):** (e.g. \`ENG\`, \`TEAM\`)
+- **Jira base URL (e.g. \`https://myorg.atlassian.net\`):** 
+- **Jira project key(s) (e.g. \`AUTH\`, \`PLAT\`):** 
+- **Confluence space key(s) (e.g. \`ENG\`, \`TEAM\`):** 
 - **Pronouns:**
 - **Timezone:**
 - **Notes:**
