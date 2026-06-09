@@ -15,6 +15,7 @@ import { SlackConfigPanel } from "./slack-config-panel";
 import {
   allRequiredGroupsSatisfied,
   hasIncompleteIntegration,
+  expandGithubContent,
   type IntegrationDraft,
   type RequiredIntegrationGroup,
 } from "../integrations";
@@ -199,7 +200,10 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
         agentsMd: fill(agentsMd),
         bootMd: fill(bootMd),
         heartbeatMd: fill(heartbeatMd),
-        secrets: integrations.map((i) => ({ provider: i.provider, content: i.content })),
+        secrets: integrations.map((i) => ({
+          provider: i.provider,
+          content: i.provider === "github" ? expandGithubContent(i.content) : i.content,
+        })),
         ...(platform === "slack"
           ? { slackBotToken, slackAppToken, slackGroupPolicy, slackDmPolicy }
           : { teamsAppId, teamsAppPassword, teamsTenantId }),

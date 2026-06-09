@@ -7,7 +7,7 @@
 // (smtp/imap host+port, folders, …) are NOT inputs here — the backend fills them
 // as schema defaults.
 
-export type IntegrationFieldType = "text" | "secret";
+export type IntegrationFieldType = "text" | "secret" | "repo-url";
 
 export interface IntegrationField {
   key: string;
@@ -35,9 +35,7 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
     label: "GitHub",
     fields: [
       { key: "token", label: "Personal access token", type: "secret", required: true, placeholder: "github_pat_… or ghp_…" },
-      { key: "owner", label: "Owner", type: "text", required: true, placeholder: "repo owner" },
-      { key: "repo", label: "Repository", type: "text", required: true, placeholder: "repository" },
-      { key: "org", label: "Organization", type: "text", required: true, placeholder: "organization" },
+      { key: "repoUrl", label: "Repository URL", type: "repo-url", required: true, placeholder: "https://github.com/owner/repo.git" },
     ],
   },
   {
@@ -110,6 +108,19 @@ export function getIntegrationProvider(id: string): IntegrationProvider | undefi
   return INTEGRATION_PROVIDERS.find((p) => p.id === id);
 }
 
+export function parseGithubRepoUrl(url: string): { owner: string; repo: string } | null {
+  const m = url.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?$/);
+  return m ? { owner: m[1], repo: m[2] } : null;
+}
+
+export function expandGithubContent(content: Record<string, string>): Record<string, string> {
+  const parsed = parseGithubRepoUrl(content.repoUrl ?? "");
+  if (!parsed) return content;
+  const { owner, repo } = parsed;
+  const { repoUrl: _, ...rest } = content;
+  return { ...rest, owner, repo, org: owner };
+}
+
 // A single required provider id (AND) or a list of alternatives (OR — at least one must be connected).
 export type RequiredIntegrationGroup = string | readonly string[];
 
@@ -130,8 +141,12 @@ export function hasIncompleteIntegration(integrations: IntegrationDraft[]): bool
   return integrations.some((draft) => {
     const provider = getIntegrationProvider(draft.provider);
     if (!provider) return true;
-    return provider.fields.some(
-      (f) => f.required && !(draft.content[f.key] ?? "").trim(),
-    );
+    return provider.fields.some((f) => {
+      if (!f.required) return false;
+      const value = (draft.content[f.key] ?? "").trim();
+      if (!value) return true;
+      if (f.type === "repo-url") return parseGithubRepoUrl(value) === null;
+      return false;
+    });
   });
 }

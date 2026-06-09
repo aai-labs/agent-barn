@@ -7,6 +7,7 @@ import { TEMPLATE_FILES } from "../data";
 import {
   INTEGRATION_PROVIDERS,
   getIntegrationProvider,
+  parseGithubRepoUrl,
   type IntegrationDraft,
   type RequiredIntegrationGroup,
 } from "../integrations";
@@ -1052,6 +1053,31 @@ export function IntegrationsStep({
                       onToggle={() => setVisible((s) => ({ ...s, [vkey]: !s[vkey] }))}
                       placeholder={field.placeholder}
                     />
+                  </FormField>
+                );
+              }
+              if (field.type === "repo-url") {
+                const parsed = parseGithubRepoUrl(value);
+                const invalid = value.length > 0 && !parsed;
+                return (
+                  <FormField key={field.key} label={label} hint={field.hint}>
+                    <input
+                      className={`af-input${invalid ? " border-red-400" : ""}`}
+                      value={value}
+                      onChange={(e) => setField(draft.provider, field.key, e.target.value)}
+                      placeholder={field.placeholder}
+                      autoComplete="off"
+                    />
+                    {parsed && (
+                      <p className="text-[0.75rem] mt-1" style={{ color: "var(--ink-3)" }}>
+                        owner: <strong>{parsed.owner}</strong> · repo: <strong>{parsed.repo}</strong>
+                      </p>
+                    )}
+                    {invalid && (
+                      <p className="text-[0.75rem] mt-1 text-red-500">
+                        Must be a valid GitHub URL, e.g. https://github.com/owner/repo.git
+                      </p>
+                    )}
                   </FormField>
                 );
               }
