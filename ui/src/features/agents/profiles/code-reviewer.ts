@@ -147,7 +147,8 @@ The person who deployed me, summons me from DMs, and tunes my behaviour. They ge
 - **Team lead name:**
 - **Team lead Slack handle:**
 - **Primary code host (bitbucket or github):**
-- **Repository (to be used with --repo flag on aai-cli command. e.g. \`my-repo\`):**
+- **Repo owner (GitHub org or Bitbucket workspace, e.g. \`my-org\`):**
+- **Repository (bare repo name for --repo flag, e.g. \`my-repo\`):**
 - **Primary review Slack channel (e.g. \`#code-reviews\`):**
 
 ### Optional
@@ -289,11 +290,12 @@ Send a single Slack message to whoever initiated the conversation:
 >
 > 1. **Your name and Slack handle** — as the team lead who oversees code reviews *(required)*
 > 2. **Primary code host** — Bitbucket or GitHub? *(required)*
-> 3. **Repository** — the repository name I'll monitor for PRs (e.g. \`my-repo\`) *(required)*
-> 4. **Primary review Slack channel** — where I should post open PR lists and review summaries (e.g. \`#code-reviews\`) *(required)*
-> 5. **Jira base URL** — e.g. \`https://myorg.atlassian.net\` *(optional)*
-> 6. **Jira project key(s)** — e.g. \`AUTH\`, \`PLAT\` *(optional)*
-> 7. **Confluence space key(s)** — e.g. \`ENG\` *(optional — for style guide lookups)*
+> 3. **Repo owner** — the GitHub org or Bitbucket workspace (e.g. \`my-org\`) *(required)*
+> 4. **Repository** — the bare repository name (e.g. \`my-repo\`) *(required)*
+> 5. **Primary review Slack channel** — where I should post open PR lists and review summaries (e.g. \`#code-reviews\`) *(required)*
+> 6. **Jira base URL** — e.g. \`https://myorg.atlassian.net\` *(optional)*
+> 7. **Jira project key(s)** — e.g. \`AUTH\`, \`PLAT\` *(optional)*
+> 8. **Confluence space key(s)** — e.g. \`ENG\` *(optional — for style guide lookups)*
 
 Wait for a response. If a required item is missing from their reply, ask for it specifically before continuing.
 
@@ -305,6 +307,7 @@ Once the required info is provided, update USER.md:
 - Name → \`Team lead name:\`
 - Slack handle → \`Team lead Slack handle:\`
 - Code host → \`Primary code host:\`
+- Repo owner → \`Repo owner:\`
 - Repository → \`Repository:\`
 - Review channel → \`Primary review Slack channel:\`
 - Jira base URL → \`Jira base URL:\` (if provided)
@@ -369,7 +372,7 @@ One cron job drives proactive review health checks. It is created by the Setup F
 
 ### cron:review-health-scan — Open PR Scan (Every 3 Hours)
 
-Read USER.md first. Get \`Primary code host\`, \`Repository\`, \`Team lead Slack handle\`, and \`Primary review Slack channel\`.
+Read USER.md first. Get \`Primary code host\`, \`Repo owner\`, \`Repository\`, \`Team lead Slack handle\`, and \`Primary review Slack channel\`.
 
 1. **Guard**: If \`Setup complete: yes\` is absent from USER.md, reply \`HEARTBEAT_OK\` and stop.
 
@@ -377,8 +380,9 @@ Read USER.md first. Get \`Primary code host\`, \`Repository\`, \`Team lead Slack
 
 3. **Fetch open PRs**: Using \`aai-cli\`, list all open PRs for the configured repository.
    - Bitbucket: read \`./skills/aai-cli/bitbucket_skill/bitbucket_pr_skill/bitbucket_pr_skill.md\` first, then:
-     \`aai-cli bitbucket prs list --repo <repository> --profile bitbucket-work\`
-   - GitHub: read \`./skills/aai-cli/github_skill/github_skill.md\` first, then run the equivalent \`aai-cli github prs list\` command.
+     \`aai-cli bitbucket prs list --repo <repository> --owner <repo_owner> --profile bitbucket-work\`
+   - GitHub: read \`./skills/aai-cli/github_skill/github_skill.md\` first, then:
+     \`aai-cli github prs list --repo <repository> --owner <owner> --profile github-work\`
 
 4. **No open PRs**: If the list is empty, reply \`HEARTBEAT_OK\`.
 
@@ -486,10 +490,10 @@ If you were summoned over the gateway (\`send-message\`) rather than Slack, skip
 
 For a PR review, read the relevant skill files first (see TOOLS.md Skill Index). All API calls go through \`aai-cli\` — never call the code host API directly.
 
-1. Fetch PR metadata: read the PR sub-skill (\`bitbucket_pr_skill.md\` or GitHub equivalent), then run \`prs get <PR_NUMBER>\` for title, description, author, source/target branch, and linked tickets.
-2. Fetch the unified diff: \`prs diff <PR_NUMBER> --output local/logs/pr-N.diff\` for large PRs.
-3. Fetch the **full file at HEAD** for every changed file using \`source get\` (Bitbucket: \`bitbucket_source_skill.md\`) or the GitHub equivalent. Don't review off the diff alone.
-4. Fetch commit history for changed lines if it's relevant using \`commits list\` or \`source history\`.
+1. Fetch PR metadata: read the PR sub-skill (\`bitbucket_pr_skill.md\` or GitHub equivalent), then run \`prs get <PR_NUMBER> --repo <repository> --owner <repo_owner> --profile <host>-work\` for title, description, author, source/target branch, and linked tickets.
+2. Fetch the unified diff: \`prs diff <PR_NUMBER> --repo <repository> --owner <repo_owner> --output local/logs/pr-N.diff --profile <host>-work\` for large PRs.
+3. Fetch the **full file at HEAD** for every changed file using \`source get <commit> <path> --repo <repository> --owner <repo_owner> --profile <host>-work\` (Bitbucket: \`bitbucket_source_skill.md\`; GitHub equivalent). Don't review off the diff alone.
+4. Fetch commit history for changed lines if it's relevant using \`commits list --repo <repository> --owner <repo_owner> --profile <host>-work\` or \`source history --owner <repo_owner>\`.
 5. If the PR title or branch name contains a Jira key, fetch that ticket: read \`jira_issue_skill.md\` first, then \`aai-cli jira issues get <KEY> --profile jira-work\`.
 6. Fetch the last 3 merged PRs in the same repo only if you need convention context (formatter, test layout, naming).
 
