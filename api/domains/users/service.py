@@ -33,11 +33,24 @@ class UserService:
 
     def ensure_default_superuser(self) -> User:
         email, password = self.config.super_user_credentials.split(":")
-        existing = self.user_repository.get_by_email(email)
+        full_name = self.config.super_user_full_name
+        existing = self.user_repository.get_superuser()
         if existing:
+            updated = False
+            if existing.email != email:
+                existing.email = email
+                updated = True
+            if existing.full_name != full_name:
+                existing.full_name = full_name
+                updated = True
+            if not check_hash(password, existing.hashed_password):
+                existing.hashed_password = hash_text(password)
+                updated = True
+            if updated:
+                self.user_repository.save(existing)
             return existing
         return self.create_superuser(
-            email=email, password=password, full_name="Super User"
+            email=email, password=password, full_name=full_name
         )
 
     def create_superuser(

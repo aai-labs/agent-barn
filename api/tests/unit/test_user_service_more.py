@@ -39,6 +39,7 @@ def build_user_service() -> tuple[
         ),
         secret_signing_key="x" * 32,
         super_user_credentials="admin@example.com:StrongPass123",
+        super_user_full_name="Super User",
         email_server_credential="noreply@example.com:password",
         email_smtp_server="smtp.example.com",
     )
@@ -67,11 +68,11 @@ def test_ensure_default_superuser_returns_existing_user():
     service, user_repository, _, _, _ = build_user_service()
     existing = User(
         email="admin@example.com",
-        hashed_password="hash",
+        hashed_password=hash_text("StrongPass123"),
         full_name="Super User",
         email_verified_at=None,
     )
-    user_repository.get_by_email.return_value = existing
+    user_repository.get_superuser.return_value = existing
 
     result = service.ensure_default_superuser()
 
@@ -81,7 +82,7 @@ def test_ensure_default_superuser_returns_existing_user():
 
 def test_ensure_default_superuser_creates_when_missing():
     service, user_repository, _, _, _ = build_user_service()
-    user_repository.get_by_email.return_value = None
+    user_repository.get_superuser.return_value = None
     user_repository.save.side_effect = lambda user: user
 
     result = service.ensure_default_superuser()

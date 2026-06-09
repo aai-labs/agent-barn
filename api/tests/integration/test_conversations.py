@@ -2,6 +2,8 @@
 
 import json
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
+
 from fastapi import status
 from hamcrest import assert_that, equal_to, has_length
 from starlette.testclient import TestClient
@@ -9,6 +11,7 @@ from starlette.testclient import TestClient
 from api.domains.agents.models import AgentStatus
 from api.domains.conversations.models import AgentChatMessage, MessageDirection
 from api.domains.conversations.repository import ConversationRepository
+from api.domains.conversations.service import ConversationSyncService
 from api.infrastructure.kubernetes.client import KubernetesClient
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
@@ -138,6 +141,43 @@ def test_list_channels_stopped_agent_returns_db_channels():
             assert_that(ids, equal_to({"CAAA", "CBBB"}))
             general = next(c for c in body if c["channel_id"] == "CAAA")
             assert_that(general["channel_name"], equal_to("general"))
+
+
+def test_list_channels_idle_agent_resolves_null_channel_names_from_directory():
+    # A channel the agent only posted to has no persisted name; an idle agent must
+    # still resolve it from the Slack directory rather than render the raw C... id.
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        client: TestClient = context.client
+        _seed_message(
+            context,
+            direction=MessageDirection.INBOUND,
+            channel_id="CAAA",
+            content="msg1",
+            channel_name="general",
+        )
+        _seed_message(
+            context,
+            direction=MessageDirection.OUTBOUND,
+            channel_id="CBBB",
+            content="msg2",
+        )
+
+        with when("I list channels with the directory resolving CBBB"):
+            with patch.object(
+                ConversationSyncService,
+                "_platform_maps",
+                return_value=({}, {"CBBB": "ops-alerts"}),
+            ):
+                response = client.get(
+                    f"{_BASE}/{context.agent.id}/conversations/channels",
+                    headers=_auth(context),
+                )
+
+        with then("the null-named channel gets its directory name, others untouched"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            by_id = {c["channel_id"]: c["channel_name"] for c in response.json()}
+            assert_that(by_id["CBBB"], equal_to("ops-alerts"))
+            assert_that(by_id["CAAA"], equal_to("general"))
 
 
 def test_list_channels_running_agent_unions_pod_sessions_with_db():

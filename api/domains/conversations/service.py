@@ -39,7 +39,6 @@ logger = logging.getLogger(__name__)
 _SESSIONS_PATH = "/home/node/.openclaw/agents/main/sessions/sessions.json"
 _SESSION_DIR = "/home/node/.openclaw/agents/main/sessions"
 _PER_CHANNEL_SYNC_INTERVAL = timedelta(seconds=4)
-_PLATFORM_MAPS_TTL = timedelta(seconds=60)
 _STOP_SYNC_MAX_WORKERS = 4
 _PER_CHANNEL_READ_MAX_WORKERS = 8
 _FIRE_AND_FORGET_MAX_WORKERS = 4
@@ -211,9 +210,6 @@ class ConversationSyncService:
     _last_sync: dict[tuple[UUID, str], datetime] = field(
         init=False, default_factory=dict
     )
-    _maps_cache: dict[UUID, tuple[dict[str, str], dict[str, str], datetime]] = field(
-        init=False, default_factory=dict
-    )
     _lock: threading.Lock = field(init=False, default_factory=threading.Lock)
     _executor: ThreadPoolExecutor = field(
         init=False,
@@ -303,12 +299,8 @@ class ConversationSyncService:
         return len(all_messages)
 
     def _platform_maps(self, agent_id: UUID) -> tuple[dict[str, str], dict[str, str]]:
-        now = datetime.now(timezone.utc)
-        with self._lock:
-            cached = self._maps_cache.get(agent_id)
-            if cached and (now - cached[2]) < _PLATFORM_MAPS_TTL:
-                return cached[0], cached[1]
-
+        # The SlackClient directory cache already memoizes the underlying
+        # list_users/list_channels sweeps, so no extra caching is needed here.
         agent = self.agent_repository.get_by_id(agent_id)
         if not (agent and self.config.agent_token_encryption_key):
             return {}, {}
@@ -323,9 +315,17 @@ class ConversationSyncService:
                 self.config.agent_token_encryption_key,
             )
             slack = SlackClient(bot_token)
-            user_map, channel_map = slack.get_user_map(), slack.get_channel_map()
-            with self._lock:
-                self._maps_cache[agent_id] = (user_map, channel_map, now)
+            # Resolving message senders and @mentions needs every user, including
+            # bots and deactivated accounts, so include them here.
+            users = slack.list_users(include_bots=True, include_deleted=True)
+            channels = slack.list_channels()
+            user_map = {
+                u["id"]: u["display_name"] or u["real_name"] or u["name"] or u["id"]
+                for u in users
+            }
+            channel_map = {
+                c["id"]: c["name"] for c in channels if c["id"] and c["name"]
+            }
             return user_map, channel_map
         except Exception as e:
             logger.warning("Failed to fetch Slack maps for agent %s: %s", agent_id, e)
@@ -635,9 +635,15 @@ class ConversationService:
                             if sessions_json
                             else []
                         )
+                        slack_channel_map: dict[str, str] = {}
+                        if pod_conversations:
+                            _, slack_channel_map = self.sync_service._platform_maps(
+                                agent_id
+                            )
                         for cid, ctype, display_name in pod_conversations:
                             if cid not in merged or merged[cid][0] is None:
-                                merged[cid] = (display_name, ctype)
+                                name = slack_channel_map.get(cid) or display_name
+                                merged[cid] = (name, ctype)
                     else:
                         sessions_json = self.sync_service._read_sessions_json(
                             pod_name, ns
@@ -660,12 +666,40 @@ class ConversationService:
                     "list_channels: pod read failed for agent %s: %s", agent_id, e
                 )
 
+        self._resolve_channel_names(agent_id, merged)
+
         return [
             ConversationChannelRead(
                 channel_id=cid, channel_name=name, conversation_type=ctype
             )
             for cid, (name, ctype) in sorted(merged.items())
         ]
+
+    def _resolve_channel_names(
+        self,
+        agent_id: UUID,
+        merged: dict[str, tuple[str | None, ConversationType]],
+    ) -> None:
+        """Fills channel display names from the Slack directory, in place.
+
+        Channels the agent only posts to have no inbound message to carry a name,
+        so their persisted channel_name is null and they'd otherwise render as a
+        raw C... id whenever the pod isn't running. Resolving here (off the cached
+        directory) makes naming consistent regardless of pod state. DMs are skipped:
+        the directory has no entry for a D... id, and they already persist a name.
+        """
+        unresolved = [
+            cid
+            for cid, (name, ctype) in merged.items()
+            if ctype == ConversationType.CHANNEL and (name is None or name == cid)
+        ]
+        if not unresolved:
+            return
+        _, slack_channel_map = self.sync_service._platform_maps(agent_id)
+        for cid in unresolved:
+            resolved = slack_channel_map.get(cid)
+            if resolved:
+                merged[cid] = (resolved, merged[cid][1])
 
     def list_threads(
         self,

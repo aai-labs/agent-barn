@@ -209,27 +209,39 @@ class KubernetesClient:
         "CreateContainerError",
     }
 
-    def get_pod_readiness(self, deployment_name: str, namespace: str) -> str | None:
+    def get_pod_readiness(
+        self, deployment_name: str, namespace: str
+    ) -> tuple[str | None, str | None]:
+        """Returns (status, reason). status is one of: 'ready', 'initializing', 'crashed', None."""
         pods = self._core_v1.list_namespaced_pod(
             namespace, label_selector=f"app={deployment_name}"
         )
         for pod in pods.items:
             if pod.status.phase == "Failed":
-                return "crashed"
+                reason = None
+                for cs in pod.status.container_statuses or []:
+                    if cs.state and cs.state.terminated:
+                        reason = cs.state.terminated.reason or (
+                            f"exit code {cs.state.terminated.exit_code}"
+                            if cs.state.terminated.exit_code is not None
+                            else None
+                        )
+                        break
+                return "crashed", reason
             if pod.status.phase in ("Pending", "Running"):
                 conditions = pod.status.conditions or []
                 if any(c.type == "Ready" and c.status == "True" for c in conditions):
-                    return "ready"
+                    return "ready", None
                 container_statuses = pod.status.container_statuses or []
-                if any(
-                    cs.state
-                    and cs.state.waiting
-                    and cs.state.waiting.reason in self._TERMINAL_WAITING_REASONS
-                    for cs in container_statuses
-                ):
-                    return "crashed"
-                return "initializing"
-        return None
+                for cs in container_statuses:
+                    if (
+                        cs.state
+                        and cs.state.waiting
+                        and cs.state.waiting.reason in self._TERMINAL_WAITING_REASONS
+                    ):
+                        return "crashed", cs.state.waiting.reason
+                return "initializing", None
+        return None, None
 
     def exec_command(self, pod_name: str, namespace: str, command: list[str]) -> str:
         kubectl_args = self._kubectl_args(["exec", pod_name, "-n", namespace, "--"])
@@ -263,10 +275,49 @@ class KubernetesClient:
             conn.request("GET", "/healthz")
             response = conn.getresponse()
             return json.loads(response.read())
+        except Exception:
+            return self._fetch_agent_healthz_via_port_forward(service_name, namespace)
+
+    def _fetch_agent_healthz_via_port_forward(
+        self, service_name: str, namespace: str
+    ) -> dict:
+        pod_name = self.get_pod_name_for_deployment(service_name, namespace)
+        if not pod_name:
+            raise RuntimeError(f"No running pod found for {service_name}")
+
+        local_port = self._free_local_port()
+        kubectl_args = self._kubectl_args(
+            [
+                "port-forward",
+                f"pod/{pod_name}",
+                "-n",
+                namespace,
+                f"{local_port}:8081",
+            ]
+        )
+        process = subprocess.Popen(
+            kubectl_args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            self._wait_for_local_port(local_port, process)
+            conn = http.client.HTTPConnection("127.0.0.1", local_port, timeout=5)
+            conn.request("GET", "/healthz")
+            response = conn.getresponse()
+            return json.loads(response.read())
         except Exception as exc:
             raise RuntimeError(
                 f"healthz unreachable for {service_name}: {exc}"
             ) from exc
+        finally:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
 
     def proxy_to_agent(
         self,

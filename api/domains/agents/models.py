@@ -225,6 +225,11 @@ class Agent(BaseModel, table=True):
         default=AgentType.OPENCLAW,
         sa_column=Column(sa.String(20), nullable=False, server_default="openclaw"),
     )
+    last_error: str | None = SqlField(
+        default=None,
+        nullable=True,
+        sa_type=sa.Text,
+    )
 
 
 class AgentSlackConfig(BaseModel, table=True):

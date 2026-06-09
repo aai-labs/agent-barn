@@ -13,6 +13,7 @@ class Config(BaseSettings):
     db_connection_url: PostgresDsn
     secret_signing_key: str
     super_user_credentials: str
+    super_user_full_name: str = "Super User"
     email_server_credential: str | None = None
     email_smtp_server: str | None = None
 
@@ -34,6 +35,12 @@ class Config(BaseSettings):
     agent_image_pull_secret: str = ""
     agent_default_model: str = "litellm/qwen3.6-plus"
     api_external_url: str = ""
+    skip_slack_token_validation: bool = False
+    slack_directory_cache_ttl_seconds: int = 600
+    # Socket timeout for Slack Web API calls. Large sweeps (e.g. users.list can be
+    # ~320KB) are slow over a poor link; too tight a timeout cuts the body off
+    # mid-stream (IncompleteRead). Generous default; in-cluster latency is low.
+    slack_request_timeout_seconds: int = 30
 
     @property
     def is_email_delivery_enabled(self) -> bool:

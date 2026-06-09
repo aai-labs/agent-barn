@@ -57,6 +57,10 @@ class UserRepository:
         rows = self.delegate.find_all_by_query(model=User, query=query)
         return rows[0] if rows else None
 
+    def get_superuser(self) -> User | None:
+        query = select(User).where(col(User.is_superuser).is_(True))
+        return self.delegate.find_one_by_query(model=User, query=query)
+
     def find_one(self, **kwargs) -> User | None:
         return self.delegate.find_one(User, **kwargs)
 

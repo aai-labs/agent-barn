@@ -6,7 +6,7 @@ import type { Agent } from "../schemas";
 import { useAgentTemplate } from "../hooks/use-agent-template";
 import { useUpdateAgent } from "../hooks/use-update-agent";
 import { useDeleteAgent } from "../hooks/use-delete-agent";
-import { XIcon } from "@/components/icons";
+import { XIcon, LockIcon } from "@/components/icons";
 import { TokenInput } from "./hire-dialog-primitives";
 import { MODELS, IntegrationsStep } from "./hire-dialog-steps";
 import {
@@ -18,6 +18,8 @@ import { SlackConfigPanel } from "./slack-config-panel";
 
 interface ConfigDrawerProps {
   agent: Agent;
+  activeTab: TabKey;
+  onTabChange: (tab: TabKey) => void;
   onClose: () => void;
 }
 
@@ -33,7 +35,17 @@ function getTabs(platform: "slack" | "teams"): [string, string, boolean][] {
   ];
 }
 
-type TabKey = "personality" | "channels" | "endpoint" | "skills" | "secrets" | "k8s" | "danger";
+export type TabKey = "personality" | "channels" | "endpoint" | "skills" | "secrets" | "k8s" | "danger";
+
+export const DRAWER_TAB_KEYS: TabKey[] = [
+  "personality",
+  "channels",
+  "endpoint",
+  "skills",
+  "secrets",
+  "k8s",
+  "danger",
+];
 
 type TemplateFiles = {
   soul_md: string;
@@ -57,13 +69,12 @@ const FILE_KEYS: (keyof TemplateFiles)[] = [
   "heartbeat_md",
 ];
 
-export function ConfigDrawer({ agent, onClose }: ConfigDrawerProps) {
+export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigDrawerProps) {
   const router = useRouter();
   const { template, isLoading: templateLoading, error: templateError, refetch: refetchTemplate } = useAgentTemplate(agent.id, agent.templateVersion);
   const updateAgent = useUpdateAgent();
   const deleteAgent = useDeleteAgent();
 
-  const [tab, setTab] = useState<TabKey>("personality");
   const [retireConfirm, setRetireConfirm] = useState(false);
   const [name, setName] = useState(agent.name);
   const [model, setModel] = useState(agent.model);
@@ -84,6 +95,12 @@ export function ConfigDrawer({ agent, onClose }: ConfigDrawerProps) {
   const [savedSecrets, setSavedSecrets] = useState(false);
 
   const tabs = getTabs(agent.platform);
+  // Clamp the URL-provided tab to one that's actually reachable for this agent
+  // (e.g. a deep-linked ?configTab=channels on a Teams agent falls back).
+  const enabledKeys = tabs
+    .filter(([, , enabled]) => enabled)
+    .map(([k]) => k as TabKey);
+  const tab: TabKey = enabledKeys.includes(activeTab) ? activeTab : "personality";
 
   const configuredSecrets = (agent.secrets ?? []).filter(
     (s) => !removedProviders.includes(s.provider),
@@ -226,7 +243,7 @@ export function ConfigDrawer({ agent, onClose }: ConfigDrawerProps) {
               className="af-drawer-tab"
               data-active={tab === k}
               disabled={!enabled}
-              onClick={() => enabled && setTab(k as TabKey)}
+              onClick={() => enabled && onTabChange(k as TabKey)}
               style={!enabled ? { opacity: 0.35, cursor: "default" } : undefined}
             >
               {l}
@@ -236,10 +253,21 @@ export function ConfigDrawer({ agent, onClose }: ConfigDrawerProps) {
 
         {isRunning && (
           <div
-            className="px-6.5 py-2.5 text-[0.8125rem] flex-shrink-0"
-            style={{ background: "var(--bg-soft)", borderBottom: "1px solid var(--line)", color: "var(--ink-3)" }}
+            className="px-6.5 py-2.5 text-[0.8125rem] font-medium flex items-center gap-2 flex-shrink-0"
+            style={{
+              background: "var(--accent-soft)",
+              borderBottom: "1px solid var(--line)",
+              borderLeft: "3px solid var(--accent-color)",
+              color: "var(--accent-ink)",
+            }}
           >
-            Agent is running — stop it before making changes.
+            <span
+              className="w-1.5 h-1.5 rounded-full inline-block flex-shrink-0 af-dot-pulse"
+              style={{ background: "var(--accent-color)" }}
+              aria-hidden
+            />
+            <LockIcon size={13} />
+            <span>Agent is running — <strong>stop it</strong> before making changes.</span>
           </div>
         )}
 

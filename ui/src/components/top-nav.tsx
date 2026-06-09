@@ -18,7 +18,7 @@ const NAV_TABS = [
   // { href: "/dashboard/settings", label: "Settings" },
 ];
 
-export function TopNav({ onHire, orgName = "AAI Labs" }: TopNavProps) {
+export function TopNav({ onHire, orgName }: TopNavProps) {
   const pathname = usePathname();
   const router = useRouter();
   const { user } = useCurrentUser();
@@ -65,10 +65,12 @@ export function TopNav({ onHire, orgName = "AAI Labs" }: TopNavProps) {
         Agent Farm
       </div>
 
-      <div className="flex items-center gap-1.5 text-[13px]" style={{ color: "var(--ink-3)" }}>
-        <span style={{ color: "var(--ink-5)" }}>/</span>
-        <span>{orgName}</span>
-      </div>
+      {orgName && (
+        <div className="flex items-center gap-1.5 text-[13px]" style={{ color: "var(--ink-3)" }}>
+          <span style={{ color: "var(--ink-5)" }}>/</span>
+          <span>{orgName}</span>
+        </div>
+      )}
 
       <nav className="flex gap-0.5 flex-1">
         {NAV_TABS.map(({ href, label }) => (

@@ -40,7 +40,7 @@ def build_openclaw_config_overlay(
         direct_reply_mode = "all"
 
     channels_config: dict = {
-        channel_id: {"enabled": True, "requireMention": False}
+        channel_id: {"enabled": True, "requireMention": True}
         for channel_id in channel_ids
     }
 
