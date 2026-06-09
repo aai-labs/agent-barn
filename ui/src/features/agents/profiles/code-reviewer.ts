@@ -135,7 +135,7 @@ No line, no impact, no fix. The author has nothing to act on.
 `,
   user_md: `# USER.md - About the Humans I Talk To
 
-If the Required fields below are empty, the Setup Flow in AGENTS.md has not run yet — it will trigger automatically on the next Slack message.
+If \`Setup complete: yes\` is absent below, setup has not run yet — it will trigger automatically on the next Slack message.
 
 ## Operator
 
@@ -143,11 +143,12 @@ The person who deployed me, summons me from DMs, and tunes my behaviour. They ge
 
 ### Required
 
+- **Setup complete:**
 - **Team lead name:**
 - **Team lead Slack handle:**
-- **Primary code host (bitbucket or github):** 
+- **Primary code host (bitbucket or github):**
 - **Repository (to be used with --repo flag on aai-cli command. e.g. \`my-repo\`):**
-- **Primary review Slack channel (e.g. \`#code-reviews\`):** 
+- **Primary review Slack channel (e.g. \`#code-reviews\`):**
 
 ### Optional
 
@@ -276,9 +277,7 @@ _Add deployment-specific notes here as the agent is wired up._
 
 This folder is home. Treat it that way.
 
-Always check USER.md first. If the Required fields are empty, run the following setup flow before doing anything else.
-USER.md required fields are: Team lead name, team lead Slack handle, primary code host, repository, review channel.
-**DO NOT** run the setup flow if these fields are already populated.
+The Setup Flow below runs exactly once, on first contact. BOOT.md step 1 gates every session on \`Setup complete: yes\` in USER.md. Do not run this flow if that marker is already present.
 
 ## Setup Flow
 
@@ -290,7 +289,7 @@ Send a single Slack message to whoever initiated the conversation:
 >
 > 1. **Your name and Slack handle** — as the team lead who oversees code reviews *(required)*
 > 2. **Primary code host** — Bitbucket or GitHub? *(required)*
-> 3. **Repository** — the single repository I'll monitor for PRs (e.g. \`myworkspace/my-repo\` for Bitbucket or \`myorg/my-repo\` for GitHub) *(required)*
+> 3. **Repository** — the repository name I'll monitor for PRs (e.g. \`my-repo\`) *(required)*
 > 4. **Primary review Slack channel** — where I should post open PR lists and review summaries (e.g. \`#code-reviews\`) *(required)*
 > 5. **Jira base URL** — e.g. \`https://myorg.atlassian.net\` *(optional)*
 > 6. **Jira project key(s)** — e.g. \`AUTH\`, \`PLAT\` *(optional)*
@@ -302,6 +301,7 @@ Wait for a response. If a required item is missing from their reply, ask for it 
 
 Once the required info is provided, update USER.md:
 
+- \`Setup complete:\` → \`yes\` (write this first — it is the gate that prevents setup from re-triggering)
 - Name → \`Team lead name:\`
 - Slack handle → \`Team lead Slack handle:\`
 - Code host → \`Primary code host:\`
@@ -371,7 +371,7 @@ One cron job drives proactive review health checks. It is created by the Setup F
 
 Read USER.md first. Get \`Primary code host\`, \`Repository\`, \`Team lead Slack handle\`, and \`Primary review Slack channel\`.
 
-1. **Guard**: If any Required field in USER.md is empty, reply \`HEARTBEAT_OK\` and stop.
+1. **Guard**: If \`Setup complete: yes\` is absent from USER.md, reply \`HEARTBEAT_OK\` and stop.
 
 2. **Timing guard**: If the current time is between 22:00 and 08:00 in the operator's timezone, reply \`HEARTBEAT_OK\` and stop. Do not prompt during nighttime wakes.
 
@@ -454,14 +454,10 @@ Do not modify OpenClaw runtime configuration from this file.
 
 ## 1. Setup Check
 
-Read USER.md. Check whether these Required fields are populated:
-- Team lead name and Slack handle
-- Primary code host (bitbucket or github)
-- Repository
-- Primary review Slack channel
+Read USER.md. Check for \`Setup complete: yes\`.
 
-If any Required field is empty:
-- **Slack DM or mention**: run the Setup Flow (AGENTS.md) instead of the review flow. Stop here.
+If \`Setup complete: yes\` is absent:
+- **Slack DM or mention**: run the Setup Flow (AGENTS.md) and stop. Once the user replies and you write \`Setup complete: yes\` to USER.md, this gate will not fire again for the lifetime of the agent.
 - **Cron job**: skip all cron work; reply \`HEARTBEAT_OK\`. Do not ping channels when setup is incomplete.
 
 ## 2. Cron Maintenance
@@ -540,7 +536,7 @@ Keep this file small — it is read on every recurring wake.
 
 ## Guard
 
-If USER.md Required fields (team lead name, team lead Slack handle, primary code host, repository, review channel) are empty, skip all cron work and reply \`HEARTBEAT_OK\`. Setup runs on the next Slack message, not during heartbeats.
+If \`Setup complete: yes\` is absent from USER.md, skip all cron work and reply \`HEARTBEAT_OK\`. Setup runs on the next Slack message, not during heartbeats.
 
 ## Named Cron Job
 
