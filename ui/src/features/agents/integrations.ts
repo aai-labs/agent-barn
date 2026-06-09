@@ -110,6 +110,21 @@ export function getIntegrationProvider(id: string): IntegrationProvider | undefi
   return INTEGRATION_PROVIDERS.find((p) => p.id === id);
 }
 
+// A single required provider id (AND) or a list of alternatives (OR — at least one must be connected).
+export type RequiredIntegrationGroup = string | readonly string[];
+
+// True if every required group is satisfied by the current integrations.
+export function allRequiredGroupsSatisfied(
+  groups: readonly RequiredIntegrationGroup[],
+  integrations: IntegrationDraft[],
+): boolean {
+  return groups.every((group) =>
+    Array.isArray(group)
+      ? (group as readonly string[]).some((p) => integrations.some((i) => i.provider === p))
+      : integrations.some((i) => i.provider === (group as string)),
+  );
+}
+
 // True if any added integration is missing a required field — used to gate "Hire".
 export function hasIncompleteIntegration(integrations: IntegrationDraft[]): boolean {
   return integrations.some((draft) => {

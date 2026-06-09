@@ -538,7 +538,7 @@ export function ConfigDrawer({ agent, onClose }: ConfigDrawerProps) {
                 <IntegrationsStep
                   integrations={secretDrafts}
                   onChange={setSecretDrafts}
-                  requiredProviders={[]}
+                  requiredGroups={[]}
                 />
               </div>
 
