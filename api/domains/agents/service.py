@@ -79,8 +79,7 @@ from api.infrastructure.kubernetes.client import KubernetesClient
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 from api.infrastructure.slack.client import (
     SlackClient,
-    validate_app_token,
-    validate_bot_token,
+    SlackFetchError,
 )
 
 logger = logging.getLogger(__name__)
@@ -907,12 +906,13 @@ class AgentService:
         """Validates whichever tokens are provided. Always ok when skip_slack_token_validation is set."""
         if self.config.skip_slack_token_validation:
             return True, ""
+        client = SlackClient(bot_token or "", app_token=app_token)
         if bot_token is not None:
-            ok, reason = validate_bot_token(bot_token)
+            ok, reason = client.validate_bot_token()
             if not ok:
                 return ok, reason
         if app_token is not None:
-            ok, reason = validate_app_token(app_token)
+            ok, reason = client.validate_app_token()
             if not ok:
                 return ok, reason
         return True, ""
@@ -935,7 +935,16 @@ class AgentService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Slack channels are only available for Slack agents",
             )
-        return SlackClient(self._get_bot_token(agent)).list_channels(search=search)
+        try:
+            return SlackClient(self._get_bot_token(agent)).list_channels(search=search)
+        except SlackFetchError as exc:
+            logger.warning(
+                "Failed to list Slack channels for agent %s: %s", agent_id, exc
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Could not load Slack channels right now. Please try again.",
+            ) from exc
 
     def list_slack_users(
         self, agent_id: UUID, context: CurrentUserContext, search: str | None = None
@@ -947,7 +956,16 @@ class AgentService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Slack users are only available for Slack agents",
             )
-        return SlackClient(self._get_bot_token(agent)).list_users(search=search)
+        try:
+            return SlackClient(self._get_bot_token(agent)).list_users(search=search)
+        except SlackFetchError as exc:
+            logger.warning(
+                "Failed to list Slack users for agent %s: %s", agent_id, exc
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Could not load Slack users right now. Please try again.",
+            ) from exc
 
     def _get_bot_token(self, agent: Agent) -> str:
         slack_config = self.repository.get_slack_config(agent.id)

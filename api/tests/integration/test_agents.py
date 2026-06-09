@@ -2,6 +2,7 @@ import json
 import time
 from unittest.mock import MagicMock, patch
 
+import httpx
 from fastapi import status
 from hamcrest import (
     assert_that,
@@ -1368,9 +1369,11 @@ def test_list_slack_channels_returns_filtered_list():
             "response_metadata": {"next_cursor": ""},
         }
 
-        with patch("urllib.request.urlopen") as mock_urlopen:
-            mock_urlopen.return_value.__enter__.return_value.read.return_value = (
-                json.dumps(slack_response).encode()
+        with patch("httpx.request") as mock_request:
+            mock_request.return_value = httpx.Response(
+                200,
+                json=slack_response,
+                request=httpx.Request("GET", "https://slack.com/api/test"),
             )
 
             with when("I list Slack channels with a search query"):
@@ -1419,9 +1422,11 @@ def test_list_slack_users_excludes_bots_and_deleted():
             "response_metadata": {"next_cursor": ""},
         }
 
-        with patch("urllib.request.urlopen") as mock_urlopen:
-            mock_urlopen.return_value.__enter__.return_value.read.return_value = (
-                json.dumps(slack_response).encode()
+        with patch("httpx.request") as mock_request:
+            mock_request.return_value = httpx.Response(
+                200,
+                json=slack_response,
+                request=httpx.Request("GET", "https://slack.com/api/test"),
             )
 
             with when("I list Slack users"):
@@ -1929,9 +1934,11 @@ def test_list_slack_channels_works_for_hermes_agent():
             "response_metadata": {"next_cursor": ""},
         }
 
-        with patch("urllib.request.urlopen") as mock_urlopen:
-            mock_urlopen.return_value.__enter__.return_value.read.return_value = (
-                json.dumps(slack_response).encode()
+        with patch("httpx.request") as mock_request:
+            mock_request.return_value = httpx.Response(
+                200,
+                json=slack_response,
+                request=httpx.Request("GET", "https://slack.com/api/test"),
             )
 
             with when("I list Slack channels for a Hermes agent"):
