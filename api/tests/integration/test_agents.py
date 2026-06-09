@@ -1827,6 +1827,7 @@ def test_start_hermes_agent_secret_has_channel_and_dm_lists():
             json={
                 "slack_channel_ids": ["C001", "C002"],
                 "slack_dm_user_ids": ["U001", "U002"],
+                "slack_dm_policy": "allowlist",
             },
             headers=_auth(context),
         )

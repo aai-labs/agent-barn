@@ -565,6 +565,7 @@ class AgentService:
                 hermes_cfg = build_hermes_config(
                     effective_model,
                     self.config.agent_litellm_base_url,
+                    dm_policy=str(slack_config.dm_policy),
                 )
                 config_map = build_hermes_config_map(
                     agent_id=agent.id,
@@ -591,6 +592,7 @@ class AgentService:
                     api_server_key=api_server_key,
                     channel_ids=slack_config.channel_ids,
                     dm_user_ids=slack_config.dm_user_ids,
+                    dm_policy=str(slack_config.dm_policy),
                 )
                 deployment = build_hermes_deployment(
                     agent.id,

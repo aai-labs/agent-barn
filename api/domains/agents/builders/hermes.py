@@ -26,10 +26,18 @@ SLACK_CHANNEL_ALLOWLIST_PLUGIN_INIT: str = (
 def build_hermes_config(
     model: str,
     litellm_base_url: str,
+    dm_policy: str = "off",
 ) -> dict:
     _, sep, model_name = model.partition("/")
     if not sep:
         model_name = model
+    # Slack DMs are gated by the slack-deny-dms plugin (an allowlist driven by
+    # SLACK_DM_ALLOWED_USERS). An "open" policy means no DM restriction at all, so
+    # the plugin is left out entirely: SLACK_ALLOW_ALL_USERS already authorizes
+    # every user at the gateway, and dropping the deny hook lets all DMs through.
+    enabled_plugins = ["slack-channel-allowlist"]
+    if dm_policy != "open":
+        enabled_plugins.append("slack-deny-dms")
     return {
         "toolsets": ["all"],
         "model": {
@@ -71,7 +79,7 @@ def build_hermes_config(
             "unauthorized_dm_behavior": "ignore",
         },
         "plugins": {
-            "enabled": ["slack-channel-allowlist", "slack-deny-dms"],
+            "enabled": enabled_plugins,
         },
     }
 
@@ -138,7 +146,13 @@ def build_secret_hermes_slack(
     api_server_key: str,
     channel_ids: list[str],
     dm_user_ids: list[str],
+    dm_policy: str = "off",
 ) -> client.V1Secret:
+    # Only an explicit allowlist seeds SLACK_DM_ALLOWED_USERS. "off" denies every
+    # DM (empty allowlist behind the deny plugin); "open" drops the deny plugin,
+    # so the value is unused there. This keeps a stale user list from leaking DM
+    # access when the policy is switched away from allowlist.
+    allowed_dm_users = dm_user_ids if dm_policy == "allowlist" else []
     return client.V1Secret(
         metadata=client.V1ObjectMeta(
             name=_resource_name(agent_id),
@@ -160,7 +174,7 @@ def build_secret_hermes_slack(
             "SLACK_ALLOW_ALL_USERS": "true",
             "SLACK_HOME_CHANNEL": channel_ids[0] if channel_ids else "",
             "SLACK_CHANNEL_IDS": ",".join(channel_ids),
-            "SLACK_DM_ALLOWED_USERS": ",".join(dm_user_ids),
+            "SLACK_DM_ALLOWED_USERS": ",".join(allowed_dm_users),
         },
     )
 
