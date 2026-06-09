@@ -35,10 +35,6 @@ export type WizardStep =
 export const MODELS = [{ value: "litellm/qwen3.6-plus", label: "Qwen3.6 Plus" }, { value: "litellm/gpt-5-mini", label: "GPT-5 mini" }] as const;
 
 export const BOT_COLOR_PRESETS = ["#4A154B", "#1264A3", "#2BAC76", "#E8912D", "#CC4400"];
-const TEAMS_DEVELOPER_NAME = "Agent Farm";
-const TEAMS_DEVELOPER_WEBSITE_URL = "https://example.com";
-const TEAMS_PRIVACY_URL = "https://example.com/privacy";
-const TEAMS_TERMS_URL = "https://example.com/terms";
 
 async function fetchAsset(path: string): Promise<Blob> {
   const response = await fetch(path);
