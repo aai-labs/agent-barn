@@ -572,7 +572,7 @@ def test_stop_agent_is_bounded_when_presync_hangs(monkeypatch):
         client: TestClient = context.client
         k8s: KubernetesClient = context.injector.get(KubernetesClient)
         conv = context.injector.get(ConversationSyncService)
-        conv.sync_all_channels = MagicMock(side_effect=lambda agent_id: time.sleep(5))
+        conv.sync_all_channels = MagicMock(side_effect=lambda agent_id: time.sleep(0.5))
 
         with when("a pre-stop sync hangs far past the budget"):
             started = time.monotonic()

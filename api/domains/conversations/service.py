@@ -299,6 +299,8 @@ class ConversationSyncService:
         return len(all_messages)
 
     def _platform_maps(self, agent_id: UUID) -> tuple[dict[str, str], dict[str, str]]:
+        # The SlackClient directory cache already memoizes the underlying
+        # list_users/list_channels sweeps, so no extra caching is needed here.
         agent = self.agent_repository.get_by_id(agent_id)
         if not (agent and self.config.agent_token_encryption_key):
             return {}, {}

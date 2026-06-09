@@ -53,6 +53,7 @@ from api.domains.agents.models import (
     AgentPlatform,
     AgentRead,
     AgentSecret,
+    AgentSecretCreate,
     AgentSecretRead,
     AgentSlackConfig,
     AgentSlackConfigRead,
@@ -484,16 +485,23 @@ class AgentService:
 
         # Integration secrets: platform-independent. Remove first, then upsert
         # (the AgentUpdate validator already forbids a provider in both lists).
-        if "removed_secret_providers" in updated:
-            for provider in updated["removed_secret_providers"] or []:
-                self.repository.delete_secret(agent.id, provider)
-        if "secrets" in updated:
+        # Validate and encrypt all upserts before touching the DB so that a
+        # validation failure never leaves already-deleted secrets permanently gone.
+        if "removed_secret_providers" in updated or "secrets" in updated:
             key = self.config.agent_token_encryption_key
-            for item in data.secrets or []:
-                content = validate_content(item.provider, item.content)
+            upserts: list[tuple[AgentSecretCreate, str]] = [
+                (
+                    item,
+                    encrypt_content(validate_content(item.provider, item.content), key),
+                )
+                for item in data.secrets or []
+            ]
+            for provider in updated.get("removed_secret_providers") or []:
+                self.repository.delete_secret(agent.id, provider)
+            for item, encrypted in upserts:
                 existing = self.repository.get_secret(agent.id, item.provider)
                 if existing:
-                    existing.content = encrypt_content(content, key)
+                    existing.content = encrypted
                     existing.secret_name = PROVIDER_DISPLAY_NAMES[item.provider]
                     self.repository.save_secret(existing)
                 else:
@@ -502,7 +510,7 @@ class AgentService:
                             agent_id=agent.id,
                             provider=item.provider,
                             secret_name=PROVIDER_DISPLAY_NAMES[item.provider],
-                            content=encrypt_content(content, key),
+                            content=encrypted,
                         )
                     )
 

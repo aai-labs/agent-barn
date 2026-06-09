@@ -147,6 +147,7 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
   }
 
   async function handleSaveTokens() {
+    updateAgent.reset();
     try {
       if (agent.platform === "teams") {
         await updateAgent.mutateAsync({
@@ -170,6 +171,7 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
   }
 
   async function handleSaveSecrets() {
+    updateAgent.reset();
     try {
       // If a provider is both re-added (draft) and removed, treat it as a
       // replace — the upsert wins (the backend rejects a provider in both lists).
