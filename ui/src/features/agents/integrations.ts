@@ -68,42 +68,6 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
       { key: "apiToken", label: "API token", type: "secret", required: true },
     ],
   },
-  {
-    id: "gmail",
-    label: "Gmail",
-    fields: [
-      { key: "accessToken", label: "Access token", type: "secret", required: true },
-      { key: "userId", label: "User ID", type: "text", required: true, placeholder: "me" },
-    ],
-  },
-  {
-    id: "google_calendar",
-    label: "Google Calendar",
-    fields: [
-      { key: "accessToken", label: "Access token", type: "secret", required: true },
-      { key: "calendarId", label: "Calendar ID", type: "text", required: true, placeholder: "primary" },
-    ],
-  },
-  {
-    id: "zoho_mail",
-    label: "Zoho Mail",
-    fields: [
-      { key: "username", label: "Username", type: "text", required: true, placeholder: "you@zoho.com" },
-      { key: "email", label: "Email", type: "text", required: true, placeholder: "you@zoho.com" },
-      { key: "fromAddress", label: "From address", type: "text", required: true, placeholder: "you@zoho.com" },
-      { key: "appPassword", label: "App password", type: "secret", required: true },
-    ],
-  },
-  {
-    id: "zoho_calendar",
-    label: "Zoho Calendar",
-    fields: [
-      { key: "username", label: "Username", type: "text", required: true, placeholder: "you@zoho.com" },
-      { key: "email", label: "Email", type: "text", required: true, placeholder: "you@zoho.com" },
-      { key: "appPassword", label: "App password", type: "secret", required: true },
-      { key: "caldavUrl", label: "CalDAV URL", type: "text", required: true, placeholder: "https://calendar.zoho.com/…" },
-    ],
-  },
 ];
 
 export function getIntegrationProvider(id: string): IntegrationProvider | undefined {
