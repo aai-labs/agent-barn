@@ -27,15 +27,22 @@ def build_hermes_config(
     model: str,
     litellm_base_url: str,
     dm_policy: str = "off",
+    group_policy: str = "allowlist",
 ) -> dict:
     _, sep, model_name = model.partition("/")
     if not sep:
         model_name = model
-    # Slack DMs are gated by the slack-deny-dms plugin (an allowlist driven by
-    # SLACK_DM_ALLOWED_USERS). An "open" policy means no DM restriction at all, so
-    # the plugin is left out entirely: SLACK_ALLOW_ALL_USERS already authorizes
-    # every user at the gateway, and dropping the deny hook lets all DMs through.
-    enabled_plugins = ["slack-channel-allowlist"]
+    # Slack access is gated by two plugins, each dropped entirely when its policy
+    # is "open" so the policy is truly unrestricted regardless of any retained
+    # channel/user lists (the lists persist in config so switching back to
+    # allowlist restores them):
+    #   - slack-channel-allowlist scopes channel replies to SLACK_CHANNEL_IDS
+    #   - slack-deny-dms scopes DMs to SLACK_DM_ALLOWED_USERS
+    # SLACK_ALLOW_ALL_USERS already authorizes every user at the gateway, so
+    # dropping a hook opens that surface up.
+    enabled_plugins: list[str] = []
+    if group_policy != "open":
+        enabled_plugins.append("slack-channel-allowlist")
     if dm_policy != "open":
         enabled_plugins.append("slack-deny-dms")
     return {

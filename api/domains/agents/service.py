@@ -566,6 +566,7 @@ class AgentService:
                     effective_model,
                     self.config.agent_litellm_base_url,
                     dm_policy=str(slack_config.dm_policy),
+                    group_policy=str(slack_config.group_policy),
                 )
                 config_map = build_hermes_config_map(
                     agent_id=agent.id,
