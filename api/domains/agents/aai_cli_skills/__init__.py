@@ -1,55 +1,67 @@
 """aai-cli skill docs (predefined, source=aai_cli).
 
-Package structure: one module per provider, plus _index.py for the top-level index.
-Public interface is identical to the old flat aai_cli_skills.py module so all import
-sites remain unchanged.
+One Skill row per provider is seeded into the DB on API startup (organization_id=None,
+global). Each provider's .md files are bundled into a single zip stored as zip_content.
+
+Public interface used by the seeder in api/domains/skills/skill_seeder.py.
 """
 
+import io
 import json
-from uuid import UUID
+import zipfile
 
-from api.domains.agents.models import AgentSkill, SkillSource
+from api.domains.agents.models import SecretProvider
 
-from ._index import AAI_CLI_INDEX_SKILL
-from .jira import JIRA_SKILLS
+from .bitbucket import BITBUCKET_SKILLS
 from .confluence import CONFLUENCE_SKILLS
 from .github import GITHUB_SKILLS
-from .bitbucket import BITBUCKET_SKILLS
+from .jira import JIRA_SKILLS
 
-# Display label for these rows (UI is out of scope; kept constant for now).
-_SKILL_NAME = "aai-cli"
 
-AAI_CLI_SKILLS: list[dict[str, str]] = [
-    AAI_CLI_INDEX_SKILL,
-    *JIRA_SKILLS,
-    *CONFLUENCE_SKILLS,
-    *GITHUB_SKILLS,
-    *BITBUCKET_SKILLS,
+# One entry per aai-cli provider skill seeded into the DB on startup.
+AAI_CLI_PROVIDER_SKILLS: list[dict] = [
+    {
+        "name": "aai-cli-jira",
+        "required_providers": [SecretProvider.JIRA],
+        "files": JIRA_SKILLS,
+    },
+    {
+        "name": "aai-cli-confluence",
+        "required_providers": [SecretProvider.CONFLUENCE],
+        "files": CONFLUENCE_SKILLS,
+    },
+    {
+        "name": "aai-cli-github",
+        "required_providers": [SecretProvider.GITHUB],
+        "files": GITHUB_SKILLS,
+    },
+    {
+        "name": "aai-cli-bitbucket",
+        "required_providers": [SecretProvider.BITBUCKET],
+        "files": BITBUCKET_SKILLS,
+    },
 ]
 
 
-def load_aai_cli_skills(agent_id: UUID) -> list[AgentSkill]:
-    """Build per-agent AgentSkill rows for the predefined aai-cli skills."""
-    return [
-        AgentSkill(
-            agent_id=agent_id,
-            source=SkillSource.AAI_CLI,
-            skill_name=entry["skill_name"],
-            skill_file_path=entry["skill_file_path"],
-            skill_content=entry["skill_content"],
-        )
-        for entry in AAI_CLI_SKILLS
-    ]
+def build_zip(files: list[dict]) -> bytes:
+    """Build an in-memory zip from a list of {skill_file_path, skill_content} dicts."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for f in files:
+            zf.writestr(f["skill_file_path"], f["skill_content"])
+    return buf.getvalue()
 
 
-def build_skills_manifest(skills: list[AgentSkill]) -> str:
-    """Serialize skills to the ConfigMap manifest (path + content only; source is DB-only).
+def build_skills_manifest_from_zips(agent_skills: list) -> str:
+    """Extract all assigned skill zips and build the ConfigMap manifest.
 
-    Source-agnostic: works for any AgentSkill rows, including future custom skills.
+    agent_skills: list of (AgentSkill, Skill) tuples from get_agent_skills_with_details.
+    Returns a sorted JSON string of {path, content} entries for all mounted files.
     """
-    return json.dumps(
-        sorted(
-            ({"path": s.skill_file_path, "content": s.skill_content} for s in skills),
-            key=lambda d: d["path"],
-        )
-    )
+    entries = []
+    for _agent_skill, skill in agent_skills:
+        buf = io.BytesIO(skill.zip_content)
+        with zipfile.ZipFile(buf, "r") as zf:
+            for name in zf.namelist():
+                entries.append({"path": name, "content": zf.read(name).decode()})
+    return json.dumps(sorted(entries, key=lambda d: d["path"]))

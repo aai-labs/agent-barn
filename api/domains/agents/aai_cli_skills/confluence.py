@@ -9,6 +9,14 @@ CONFLUENCE_SKILLS: list[dict[str, str]] = [
 
 Agent reference for the `aai-cli confluence` command group.
 
+## IMPORTANT: credentials are already configured
+
+The tool is fully set up on this agent. **Do not ask the user for credentials, site URLs,
+tokens, or any config details.** The profile is on disk and ready. Just run the command.
+
+If the command returns an error, show the raw error output to the user — do not ask them
+to provide config or credentials.
+
 ## Required flag
 
 Every command requires `--profile confluence-work`. Always include it.
