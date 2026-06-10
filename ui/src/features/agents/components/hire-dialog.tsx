@@ -12,7 +12,13 @@ import {
   downloadTeamsAppPackage, generateTeamsManifest,
 } from "./hire-dialog-steps";
 import { SlackConfigPanel } from "./slack-config-panel";
-import { hasIncompleteIntegration, type IntegrationDraft } from "../integrations";
+import {
+  allRequiredGroupsSatisfied,
+  hasIncompleteIntegration,
+  expandGithubContent,
+  type IntegrationDraft,
+  type RequiredIntegrationGroup,
+} from "../integrations";
 import type { Agent } from "../schemas";
 
 interface HireDialogProps {
@@ -98,7 +104,10 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   const [bootMd, setBootMd] = useState(defaults.bootMd);
   const [heartbeatMd, setHeartbeatMd] = useState(defaults.heartbeatMd);
   const [integrations, setIntegrations] = useState<IntegrationDraft[]>(
-    defaults.requiredIntegrations.map((p) => ({ provider: p, content: {} })),
+    // Only pre-seed AND-required providers; OR groups start empty so the user picks one.
+    defaults.requiredIntegrations
+      .filter((g): g is string => typeof g === "string")
+      .map((p) => ({ provider: p, content: {} })),
   );
   const [provisioning, setProvisioning] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -124,8 +133,12 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
     setAgentsMd(d.agentsMd);
     setBootMd(d.bootMd);
     setHeartbeatMd(d.heartbeatMd);
-    // Seed required integrations for this profile (e.g. Scrum Master → jira + confluence).
-    setIntegrations(d.requiredIntegrations.map((p) => ({ provider: p, content: {} })));
+    // Seed AND-required integrations for this profile; OR groups start empty.
+    setIntegrations(
+      d.requiredIntegrations
+        .filter((g): g is string => typeof g === "string")
+        .map((p) => ({ provider: p, content: {} })),
+    );
   }
 
   function handleTeamsBotNameChange(value: string) {
@@ -189,7 +202,10 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
         agentsMd: fill(agentsMd),
         bootMd: fill(bootMd),
         heartbeatMd: fill(heartbeatMd),
-        secrets: integrations.map((i) => ({ provider: i.provider, content: i.content })),
+        secrets: integrations.map((i) => ({
+          provider: i.provider,
+          content: i.provider === "github" ? expandGithubContent(i.content) : i.content,
+        })),
         ...(platform === "slack"
           ? { slackBotToken, slackAppToken, slackGroupPolicy, slackDmPolicy }
           : { teamsAppId, teamsAppPassword, teamsTenantId }),
@@ -491,7 +507,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
           <IntegrationsStep
             integrations={integrations}
             onChange={setIntegrations}
-            requiredProviders={selected.requiredIntegrations}
+            requiredGroups={selected.requiredIntegrations as readonly RequiredIntegrationGroup[]}
           />
         )}
       </div>
@@ -570,8 +586,9 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
             disabled={
               !name.trim() ||
               hasIncompleteIntegration(integrations) ||
-              selected.requiredIntegrations.some(
-                (p) => !integrations.some((i) => i.provider === p),
+              !allRequiredGroupsSatisfied(
+                selected.requiredIntegrations as readonly RequiredIntegrationGroup[],
+                integrations,
               )
             }
             onClick={() => { void startHiring(); }}

@@ -566,7 +566,7 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                 <IntegrationsStep
                   integrations={secretDrafts}
                   onChange={setSecretDrafts}
-                  requiredProviders={[]}
+                  requiredGroups={[]}
                 />
               </div>
 
