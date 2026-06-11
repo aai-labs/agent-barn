@@ -17,12 +17,18 @@ tokens, or any config details.** The profile is on disk and ready. Just run the 
 If the command returns an error, show the raw error output to the user — do not ask them
 to provide config or credentials.
 
-## Required flag
+## Required flags
 
-Every command requires `--profile github-work`. Always include it.
+Three flags are required on **every** command:
+
+- `--profile github-work` — always include it
+- `--owner OWNER` — the GitHub org or user; always pass explicitly, never rely on the profile default
+- `--repo REPO` — bare repository slug (e.g. `my-repo`); always pass explicitly
+
+The only exception is `repos list`, which does not take `--repo`.
 
 ```
-aai-cli github <command> --profile github-work [other flags]
+aai-cli github <command> --owner OWNER --repo REPO --profile github-work [other flags]
 ```
 ## Profile and repo selection
 
@@ -142,7 +148,7 @@ These commands return raw GitHub provider responses except for log downloads, wh
 List workflow runs for a repository.
 
 ```
-aai-cli github actions runs list [--owner OWNER] [--repo REPO]
+aai-cli github actions runs list [--owner OWNER] [--repo REPO] --profile github-work
                                   [--branch BRANCH] [--status STATUS] [--event EVENT] [--limit N]
 ```
 
@@ -156,7 +162,7 @@ aai-cli github actions runs list [--owner OWNER] [--repo REPO]
 **Example**
 
 ```
-aai-cli github actions runs list --status failure --limit 10
+aai-cli github actions runs list --status failure --limit 10 --profile github-work
 ```
 
 ---
@@ -166,7 +172,7 @@ aai-cli github actions runs list --status failure --limit 10
 Fetch a single workflow run by ID.
 
 ```
-aai-cli github actions runs get <RUN_ID> [--owner OWNER] [--repo REPO]
+aai-cli github actions runs get <RUN_ID> [--owner OWNER] [--repo REPO] --profile github-work
 ```
 
 ---
@@ -176,7 +182,7 @@ aai-cli github actions runs get <RUN_ID> [--owner OWNER] [--repo REPO]
 Download a workflow run log archive (ZIP) to a local file.
 
 ```
-aai-cli github actions runs logs download <RUN_ID> --output PATH [--owner OWNER] [--repo REPO]
+aai-cli github actions runs logs download <RUN_ID> --output PATH [--owner OWNER] [--repo REPO] --profile github-work
 ```
 
 | Argument / Flag | Required | Description |
@@ -187,7 +193,7 @@ aai-cli github actions runs logs download <RUN_ID> --output PATH [--owner OWNER]
 **Example**
 
 ```
-aai-cli github actions runs logs download 123456789 --output local/logs/github-run-123456789.zip
+aai-cli github actions runs logs download 123456789 --output local/logs/github-run-123456789.zip --profile github-work
 ```
 
 ---
@@ -197,7 +203,7 @@ aai-cli github actions runs logs download 123456789 --output local/logs/github-r
 List jobs for a workflow run.
 
 ```
-aai-cli github actions jobs list <RUN_ID> [--owner OWNER] [--repo REPO] [--limit N] [--all-attempts]
+aai-cli github actions jobs list <RUN_ID> [--owner OWNER] [--repo REPO] [--limit N] [--all-attempts] --profile github-work
 ```
 
 `--all-attempts` switches GitHub's filter from `latest` (default) to `all`.
@@ -209,7 +215,7 @@ aai-cli github actions jobs list <RUN_ID> [--owner OWNER] [--repo REPO] [--limit
 Fetch a single job by ID.
 
 ```
-aai-cli github actions jobs get <JOB_ID> [--owner OWNER] [--repo REPO]
+aai-cli github actions jobs get <JOB_ID> [--owner OWNER] [--repo REPO] --profile github-work
 ```
 
 ---
@@ -219,7 +225,7 @@ aai-cli github actions jobs get <JOB_ID> [--owner OWNER] [--repo REPO]
 Download a job log to a local file (typically plain text).
 
 ```
-aai-cli github actions jobs logs download <JOB_ID> --output PATH [--owner OWNER] [--repo REPO]
+aai-cli github actions jobs logs download <JOB_ID> --output PATH [--owner OWNER] [--repo REPO] --profile github-work
 ```
 
 ```json
@@ -242,15 +248,15 @@ Commands under `aai-cli github branches`. For global flags, profile/owner-repo s
 List branches for a repository. Returns the normalized paginated shape.
 
 ```
-aai-cli github branches list [--owner OWNER] [--repo REPO] [--limit N]
+aai-cli github branches list [--owner OWNER] [--repo REPO] [--limit N] --profile github-work
                               [--name-contains TEXT | --name-prefix TEXT]
                               [--protected true|false]
 ```
 
 | Flag | Required | Description |
 |---|---|---|
-| `--owner` | no | Repository owner. Defaults to `profile.owner` |
-| `--repo` | no | Repository slug. Defaults to `profile.repo` |
+| `--owner` | **yes** | GitHub org or user |
+| `--repo` | **yes** | Bare repository slug (e.g. `my-repo`) |
 | `--limit` | no | Max branches to return after filtering. Default: `50` |
 | `--name-contains` | no | Case-insensitive substring match (client-side) |
 | `--name-prefix` | no | Anchored prefix match (client-side) |
@@ -261,10 +267,10 @@ aai-cli github branches list [--owner OWNER] [--repo REPO] [--limit N]
 **Examples**
 
 ```
-aai-cli github branches list --owner my-org --repo my-repo --limit 20
-aai-cli github branches list --name-contains feature
-aai-cli github branches list --name-prefix release-
-aai-cli github branches list --protected true
+aai-cli github branches list --owner my-org --repo my-repo --limit 20 --profile github-work
+aai-cli github branches list --name-contains feature --profile github-work
+aai-cli github branches list --name-prefix release- --profile github-work
+aai-cli github branches list --protected true --profile github-work
 ```
 
 ```json
@@ -288,7 +294,7 @@ aai-cli github branches list --protected true
 Fetch a single branch by name. Returns the full raw API response.
 
 ```
-aai-cli github branches get <BRANCH_NAME> [--owner OWNER] [--repo REPO]
+aai-cli github branches get <BRANCH_NAME> [--owner OWNER] [--repo REPO] --profile github-work
 ```
 
 | Argument | Required | Description |
@@ -298,7 +304,7 @@ aai-cli github branches get <BRANCH_NAME> [--owner OWNER] [--repo REPO]
 **Example**
 
 ```
-aai-cli github branches get main --owner my-org --repo my-repo
+aai-cli github branches get main --owner my-org --repo my-repo --profile github-work
 ```
 """,
     },
@@ -319,7 +325,7 @@ All issue commands accept `--owner OWNER --repo REPO`; both fall back to `profil
 List issues for a repository. Returns the raw GitHub provider page.
 
 ```
-aai-cli github issues list [--owner OWNER] [--repo REPO] [--limit N]
+aai-cli github issues list [--owner OWNER] [--repo REPO] [--limit N] --profile github-work
 ```
 
 | Flag | Required | Description |
@@ -333,7 +339,7 @@ aai-cli github issues list [--owner OWNER] [--repo REPO] [--limit N]
 Fetch a single issue.
 
 ```
-aai-cli github issues get <NUMBER> [--owner OWNER] [--repo REPO]
+aai-cli github issues get <NUMBER> [--owner OWNER] [--repo REPO] --profile github-work
 ```
 
 ---
@@ -343,7 +349,7 @@ aai-cli github issues get <NUMBER> [--owner OWNER] [--repo REPO]
 Create an issue. Use `--json` to pass a raw GitHub create body; flags override matching JSON fields.
 
 ```
-aai-cli github issues create [--owner OWNER] [--repo REPO]
+aai-cli github issues create [--owner OWNER] [--repo REPO] --profile github-work
                              [--json JSON_OR_PATH] --title TEXT [--body TEXT]
 ```
 
@@ -360,7 +366,7 @@ aai-cli github issues create [--owner OWNER] [--repo REPO]
 Update an issue. Title, body, and state are individually overridable.
 
 ```
-aai-cli github issues update <NUMBER> [--owner OWNER] [--repo REPO]
+aai-cli github issues update <NUMBER> [--owner OWNER] [--repo REPO] --profile github-work
                               [--json JSON_OR_PATH] [--title TEXT] [--body TEXT] [--state STATE]
 ```
 
@@ -373,7 +379,7 @@ aai-cli github issues update <NUMBER> [--owner OWNER] [--repo REPO]
 GitHub does not actually delete issues via REST. This command sends a state-close PATCH and returns the resulting issue.
 
 ```
-aai-cli github issues delete <NUMBER> [--owner OWNER] [--repo REPO]
+aai-cli github issues delete <NUMBER> [--owner OWNER] [--repo REPO] --profile github-work
 ```
 
 Verify with `issues get` before relying on this command.
@@ -404,7 +410,7 @@ GitHub exposes three distinct PR comment resources. This skill keeps them as sep
 List pull requests for a repository. Returns the raw GitHub provider page.
 
 ```
-aai-cli github prs list [--owner OWNER] [--repo REPO] [--limit N]
+aai-cli github prs list [--owner OWNER] [--repo REPO] [--limit N] --profile github-work
 ```
 
 ---
@@ -414,7 +420,7 @@ aai-cli github prs list [--owner OWNER] [--repo REPO] [--limit N]
 Fetch a single pull request. Returns the full raw API response.
 
 ```
-aai-cli github prs get <PR_NUMBER> [--owner OWNER] [--repo REPO]
+aai-cli github prs get <PR_NUMBER> [--owner OWNER] [--repo REPO] --profile github-work
 ```
 
 ---
@@ -424,7 +430,7 @@ aai-cli github prs get <PR_NUMBER> [--owner OWNER] [--repo REPO]
 Create a pull request. Use `--json` to pass a raw GitHub create body; flags override matching JSON fields.
 
 ```
-aai-cli github prs create [--owner OWNER] [--repo REPO]
+aai-cli github prs create [--owner OWNER] [--repo REPO] --profile github-work
                           [--json JSON_OR_PATH] --title TEXT
                           --head BRANCH --base BRANCH [--body TEXT]
 ```
@@ -440,7 +446,7 @@ aai-cli github prs create [--owner OWNER] [--repo REPO]
 **Example**
 
 ```
-aai-cli github prs create --title "Fix auth timeout" --head fix-auth-timeout --base main --body "Ready for review."
+aai-cli github prs create --title "Fix auth timeout" --head fix-auth-timeout --base main --body "Ready for review." --profile github-work
 ```
 
 ---
@@ -450,9 +456,9 @@ aai-cli github prs create --title "Fix auth timeout" --head fix-auth-timeout --b
 GitHub does not delete pull requests via REST. In this CLI slice, `close`, `decline`, and `delete` share the same provider call (PATCH state to `closed`).
 
 ```
-aai-cli github prs close <PR_NUMBER> [--owner OWNER] [--repo REPO]
-aai-cli github prs decline <PR_NUMBER> [--owner OWNER] [--repo REPO]
-aai-cli github prs delete <PR_NUMBER> [--owner OWNER] [--repo REPO]
+aai-cli github prs close <PR_NUMBER> [--owner OWNER] [--repo REPO] --profile github-work
+aai-cli github prs decline <PR_NUMBER> [--owner OWNER] [--repo REPO] --profile github-work
+aai-cli github prs delete <PR_NUMBER> [--owner OWNER] [--repo REPO] --profile github-work
 ```
 
 Verify with `prs get` before using these commands.
@@ -466,14 +472,14 @@ Fetch a unified diff for a pull request. Without `--output`, stdout is a JSON st
 Internally requests the PR endpoint with `Accept: application/vnd.github.v3.diff`.
 
 ```
-aai-cli github prs diff <PR_NUMBER> [--owner OWNER] [--repo REPO] [--output PATH]
+aai-cli github prs diff <PR_NUMBER> [--owner OWNER] [--repo REPO] [--output PATH] --profile github-work
 ```
 
 **Examples**
 
 ```
-aai-cli github prs diff 42
-aai-cli github prs diff 42 --output local/logs/pr-42.diff
+aai-cli github prs diff 42 --profile github-work
+aai-cli github prs diff 42 --output local/logs/pr-42.diff --profile github-work
 ```
 
 ```json
@@ -487,7 +493,7 @@ aai-cli github prs diff 42 --output local/logs/pr-42.diff
 List changed files with patches for a pull request. Returns the normalized paginated shape.
 
 ```
-aai-cli github prs files <PR_NUMBER> [--owner OWNER] [--repo REPO] [--limit N]
+aai-cli github prs files <PR_NUMBER> [--owner OWNER] [--repo REPO] [--limit N] --profile github-work
 ```
 
 | Flag | Required | Description |
@@ -517,7 +523,7 @@ aai-cli github prs files <PR_NUMBER> [--owner OWNER] [--repo REPO] [--limit N]
 List commits on a pull request. Returns the normalized paginated shape.
 
 ```
-aai-cli github prs commits <PR_NUMBER> [--owner OWNER] [--repo REPO] [--limit N]
+aai-cli github prs commits <PR_NUMBER> [--owner OWNER] [--repo REPO] [--limit N] --profile github-work
 ```
 
 ---
@@ -527,7 +533,7 @@ aai-cli github prs commits <PR_NUMBER> [--owner OWNER] [--repo REPO] [--limit N]
 List pull request timeline events. Returns the normalized paginated shape. Internally calls `GET /repos/{o}/{r}/issues/{n}/timeline`.
 
 ```
-aai-cli github prs timeline <PR_NUMBER> [--owner OWNER] [--repo REPO] [--limit N]
+aai-cli github prs timeline <PR_NUMBER> [--owner OWNER] [--repo REPO] [--limit N] --profile github-work
 ```
 
 Timeline events include reviews, commits, label changes, assignments, cross-references, and more.
@@ -539,14 +545,14 @@ Timeline events include reviews, commits, label changes, assignments, cross-refe
 General/issue-level PR comments. These do not have a file or line and live under `/repos/{o}/{r}/issues/{n}/comments`. Returns raw GitHub provider pages.
 
 ```
-aai-cli github prs comments list <PR_NUMBER> [--owner OWNER] [--repo REPO] [--limit N]
-aai-cli github prs comments get <PR_NUMBER> <COMMENT_ID> [--owner OWNER] [--repo REPO]
-aai-cli github prs comments create <PR_NUMBER> [--owner OWNER] [--repo REPO]
+aai-cli github prs comments list <PR_NUMBER> [--owner OWNER] [--repo REPO] [--limit N] --profile github-work
+aai-cli github prs comments get <PR_NUMBER> <COMMENT_ID> [--owner OWNER] [--repo REPO] --profile github-work
+aai-cli github prs comments create <PR_NUMBER> [--owner OWNER] [--repo REPO] --profile github-work
                                     [--json JSON_OR_PATH] --body TEXT
-aai-cli github prs comments update <PR_NUMBER> --comment <COMMENT_ID>
+aai-cli github prs comments update <PR_NUMBER> --comment <COMMENT_ID> --profile github-work
                                     [--owner OWNER] [--repo REPO]
                                     [--json JSON_OR_PATH] --body TEXT
-aai-cli github prs comments delete <PR_NUMBER> <COMMENT_ID> [--owner OWNER] [--repo REPO]
+aai-cli github prs comments delete <PR_NUMBER> <COMMENT_ID> [--owner OWNER] [--repo REPO] --profile github-work
 ```
 
 `--body` becomes the comment body (Markdown). `--json` accepts a full GitHub create/update body and is overridden by `--body`.
@@ -554,8 +560,8 @@ aai-cli github prs comments delete <PR_NUMBER> <COMMENT_ID> [--owner OWNER] [--r
 **Examples**
 
 ```
-aai-cli github prs comments create 42 --body "Reviewed by agent"
-aai-cli github prs comments update 42 --comment 1234567 --body "Updated comment"
+aai-cli github prs comments create 42 --body "Reviewed by agent" --profile github-work
+aai-cli github prs comments update 42 --comment 1234567 --body "Updated comment" --profile github-work
 ```
 
 ---
@@ -565,18 +571,18 @@ aai-cli github prs comments update 42 --comment 1234567 --body "Updated comment"
 Inline review comments tied to a file and line. Endpoint: `/repos/{o}/{r}/pulls/{n}/comments`. Returns the normalized paginated shape on `list`.
 
 ```
-aai-cli github prs review-comments list <PR_NUMBER> [--owner OWNER] [--repo REPO] [--limit N]
-aai-cli github prs review-comments get <PR_NUMBER> <COMMENT_ID> [--owner OWNER] [--repo REPO]
-aai-cli github prs review-comments create <PR_NUMBER> [--owner OWNER] [--repo REPO]
+aai-cli github prs review-comments list <PR_NUMBER> [--owner OWNER] [--repo REPO] [--limit N] --profile github-work
+aai-cli github prs review-comments get <PR_NUMBER> <COMMENT_ID> [--owner OWNER] [--repo REPO] --profile github-work
+aai-cli github prs review-comments create <PR_NUMBER> [--owner OWNER] [--repo REPO] --profile github-work
                                             [--json JSON_OR_PATH] --body TEXT
                                             --path FILE --commit-id SHA
                                             [--line N] [--side LEFT|RIGHT]
                                             [--start-line N] [--start-side LEFT|RIGHT]
                                             [--in-reply-to COMMENT_ID]
-aai-cli github prs review-comments update <PR_NUMBER> --comment <COMMENT_ID>
+aai-cli github prs review-comments update <PR_NUMBER> --comment <COMMENT_ID> --profile github-work
                                             [--owner OWNER] [--repo REPO]
                                             [--json JSON_OR_PATH] --body TEXT
-aai-cli github prs review-comments delete <PR_NUMBER> <COMMENT_ID> [--owner OWNER] [--repo REPO]
+aai-cli github prs review-comments delete <PR_NUMBER> <COMMENT_ID> [--owner OWNER] [--repo REPO] --profile github-work
 ```
 
 For a brand-new inline comment, `--body`, `--path`, and `--commit-id` are required. `--line` is the new-file line number; `--side` is `LEFT` (old file) or `RIGHT` (new file, default). For multi-line comments use `--start-line` and `--start-side`.
@@ -588,13 +594,13 @@ For a reply to an existing inline comment, pass `--in-reply-to COMMENT_ID --body
 ```
 aai-cli github prs review-comments create 42 \
   --body "Please rename this variable" \
-  --path src/lib.rs --line 120 --commit-id abc123def
+  --path src/lib.rs --line 120 --commit-id abc123def --profile github-work
 
 aai-cli github prs review-comments create 42 \
-  --body "Agreed" --in-reply-to 999988887
+  --body "Agreed" --in-reply-to 999988887 --profile github-work
 
-aai-cli github prs review-comments update 42 --comment 999988887 --body "Edited"
-aai-cli github prs review-comments delete 42 999988887
+aai-cli github prs review-comments update 42 --comment 999988887 --body "Edited" --profile github-work
+aai-cli github prs review-comments delete 42 999988887 --profile github-work
 ```
 
 ---
@@ -604,9 +610,9 @@ aai-cli github prs review-comments delete 42 999988887
 Grouped pull request reviews. Endpoint: `/repos/{o}/{r}/pulls/{n}/reviews`. `list` returns the normalized paginated shape; `get` returns raw; `create` returns raw.
 
 ```
-aai-cli github prs reviews list <PR_NUMBER> [--owner OWNER] [--repo REPO] [--limit N]
-aai-cli github prs reviews get <PR_NUMBER> <REVIEW_ID> [--owner OWNER] [--repo REPO]
-aai-cli github prs reviews create <PR_NUMBER> [--owner OWNER] [--repo REPO]
+aai-cli github prs reviews list <PR_NUMBER> [--owner OWNER] [--repo REPO] [--limit N] --profile github-work
+aai-cli github prs reviews get <PR_NUMBER> <REVIEW_ID> [--owner OWNER] [--repo REPO] --profile github-work
+aai-cli github prs reviews create <PR_NUMBER> [--owner OWNER] [--repo REPO] --profile github-work
                                    [--json JSON_OR_PATH]
                                    [--event APPROVE|REQUEST_CHANGES|COMMENT|PENDING]
                                    [--body TEXT] [--commit-id SHA]
@@ -633,15 +639,15 @@ Each entry in `--comments-json` follows GitHub's review-comments shape, e.g.:
 **Examples**
 
 ```
-aai-cli github prs reviews create 42 --event APPROVE --body "LGTM"
+aai-cli github prs reviews create 42 --event APPROVE --body "LGTM" --profile github-work
 
 aai-cli github prs reviews create 42 \
   --event REQUEST_CHANGES \
   --body "A few nits inline" \
   --commit-id abc123def \
-  --comments-json '[{"path":"src/lib.rs","line":120,"body":"rename"}]'
+  --comments-json '[{"path":"src/lib.rs","line":120,"body":"rename"}]' --profile github-work
 
-aai-cli github prs reviews list 42 --limit 5
+aai-cli github prs reviews list 42 --limit 5 --profile github-work
 ```
 
 Use `prs review-comments create` when you only have one inline note; use `prs reviews create` when you want to bundle a summary plus several inline comments in a single API call.
@@ -662,7 +668,7 @@ Commands under `aai-cli github repos`. For global flags, profile/owner-repo sele
 List repositories accessible to the configured profile. Uses `profile.org` if set (org repos), otherwise falls back to the authenticated user's repos. Returns the raw GitHub provider page.
 
 ```
-aai-cli github repos list [--limit N]
+aai-cli github repos list [--limit N] --profile github-work
 ```
 
 | Flag | Required | Description |
@@ -672,7 +678,7 @@ aai-cli github repos list [--limit N]
 **Example**
 
 ```
-aai-cli github repos list --limit 5
+aai-cli github repos list --limit 5 --profile github-work
 ```
 
 ---
@@ -682,18 +688,18 @@ aai-cli github repos list --limit 5
 Fetch a single repository. Returns the full raw API response.
 
 ```
-aai-cli github repos get [--owner OWNER] [--repo REPO]
+aai-cli github repos get [--owner OWNER] [--repo REPO] --profile github-work
 ```
 
 | Flag | Required | Description |
 |---|---|---|
-| `--owner` | no | Repository owner. Defaults to `profile.owner` |
-| `--repo` | no | Repository slug. Defaults to `profile.repo` |
+| `--owner` | **yes** | GitHub org or user |
+| `--repo` | **yes** | Bare repository slug (e.g. `my-repo`) |
 
 **Example**
 
 ```
-aai-cli github repos get --owner my-org --repo my-repo
+aai-cli github repos get --owner my-org --repo my-repo --profile github-work
 ```
 """,
     },
@@ -714,7 +720,7 @@ Commands under `aai-cli github source`. For global flags, profile/owner-repo sel
 Fetch source file content or source metadata.
 
 ```
-aai-cli github source get <COMMIT> <PATH> [--owner OWNER] [--repo REPO]
+aai-cli github source get <COMMIT> <PATH> [--owner OWNER] [--repo REPO] --profile github-work
                             [--output PATH] [--meta]
 ```
 
@@ -722,8 +728,8 @@ aai-cli github source get <COMMIT> <PATH> [--owner OWNER] [--repo REPO]
 |---|---|---|
 | `COMMIT` | yes | Branch, tag, or commit SHA |
 | `PATH` | yes | Repository-relative file path |
-| `--owner` | no | Repository owner. Defaults to `profile.owner` |
-| `--repo` | no | Repository slug. Defaults to `profile.repo` |
+| `--owner` | **yes** | GitHub org or user |
+| `--repo` | **yes** | Bare repository slug (e.g. `my-repo`) |
 | `--output` | no | Write raw bytes to a local file and return `{ output, bytes }` |
 | `--meta` | no | Return GitHub JSON metadata for the path (uses default JSON Accept) |
 
@@ -732,9 +738,9 @@ aai-cli github source get <COMMIT> <PATH> [--owner OWNER] [--repo REPO]
 **Examples**
 
 ```
-aai-cli github source get main README.md --owner my-org --repo my-repo
-aai-cli github source get abc123def src/main.rs --output local/logs/main-src-main.rs
-aai-cli github source get main README.md --meta
+aai-cli github source get main README.md --owner my-org --repo my-repo --profile github-work
+aai-cli github source get abc123def src/main.rs --output local/logs/main-src-main.rs --profile github-work
+aai-cli github source get main README.md --meta --profile github-work
 ```
 
 ```json
@@ -748,7 +754,7 @@ aai-cli github source get main README.md --meta
 List commits that modified a file. Returns the normalized paginated shape. Internally calls `GET /repos/{owner}/{repo}/commits?path=PATH&sha=REF`.
 
 ```
-aai-cli github source history <COMMIT> <PATH> [--owner OWNER] [--repo REPO] [--limit N]
+aai-cli github source history <COMMIT> <PATH> [--owner OWNER] [--repo REPO] [--limit N] --profile github-work
 ```
 
 | Argument / Flag | Required | Description |
@@ -760,7 +766,7 @@ aai-cli github source history <COMMIT> <PATH> [--owner OWNER] [--repo REPO] [--l
 **Example**
 
 ```
-aai-cli github source history main README.md --limit 20
+aai-cli github source history main README.md --limit 20 --profile github-work
 ```
 
 GitHub's REST API does not expose a per-line blame endpoint. `source history` is the closest REST analog for agents; per-line annotation is only available via GitHub's GraphQL API.

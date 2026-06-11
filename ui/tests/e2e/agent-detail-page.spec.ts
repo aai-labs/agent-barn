@@ -119,7 +119,7 @@ test.describe("Agent Detail Page — Tool calls tab", () => {
     await expect(page.getByRole("columnheader", { name: /tool/i })).toBeVisible();
   });
 
-  test("renders tool calls returned by the API", async ({ page }) => {
+  test("renders tool calls returned by the API", async () => {
     await agentDetailPage.toolCallsTab().click();
 
     const row = agentDetailPage.toolCallRow("read");
@@ -166,7 +166,7 @@ test.describe("Agent Detail Page — Tool calls tab", () => {
     await expect(agentDetailPage.toolCallRow("read")).toBeVisible();
   });
 
-  test("status badge renders for PENDING and ERROR tool calls", async ({ page }) => {
+  test("status badge renders for PENDING and ERROR tool calls", async () => {
     const pendingCall = { ...mockToolCall, id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", tool_name: "bash", status: "PENDING", result: null, completed_at: null, duration_ms: null };
     const errorCall = { ...mockToolCall, id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", tool_name: "write", status: "ERROR" };
 

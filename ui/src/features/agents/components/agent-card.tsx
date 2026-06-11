@@ -3,6 +3,7 @@
 import type { Agent } from "../schemas";
 import { useAgentHealth } from "../hooks/use-agent-health";
 import { AgentAvatar } from "./agent-avatar";
+import { AgentMetaBadges } from "./agent-meta-badges";
 import { StatusLine } from "./status-line";
 
 interface AgentCardProps {
@@ -29,6 +30,7 @@ export function AgentCard({ agent, onOpen }: AgentCardProps) {
               {agent.model}
             </div>
           )}
+          <AgentMetaBadges agent={agent} className="mt-2" />
         </div>
       </div>
 

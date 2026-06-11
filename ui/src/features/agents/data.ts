@@ -1,5 +1,6 @@
 import type { AgentTemplate, Skill, Provider } from "./types";
 import { SCRUM_MASTER_FILES } from "./profiles/scrum-master";
+import { CODE_REVIEWER_FILES } from "./profiles/code-reviewer";
 
 export const TEMPLATES: AgentTemplate[] = [
   {
@@ -33,14 +34,14 @@ export const TEMPLATES: AgentTemplate[] = [
   {
     id: "t_reviewer",
     slug: "code-reviewer",
-    name: "PR Reviewer",
+    name: "Code Reviewer",
     description:
-      "Reads diffs, comments on style, security, and tests. Slacks digests.",
+      "Reviews PRs on Bitbucket or GitHub — finds correctness bugs, security issues, and maintainability regressions. Posts inline comments and Slack summaries.",
     version: "1.0.0",
-    versions: ["1.0.0", "0.9.0"],
-    surfaces: ["Slack", "GitHub"],
-    skills: ["github", "ripgrep", "shell", "jira"],
-    files: 3,
+    versions: ["1.0.0"],
+    surfaces: ["Slack", "GitHub", "Bitbucket"],
+    skills: ["slack", "github", "bitbucket", "jira", "confluence"],
+    files: 8,
     seededBy: "AAI Labs",
     activeAgents: 1,
   },
@@ -332,50 +333,7 @@ Team members across engineering, product, and operations. Mix of technical and n
 `,
   },
 
-  "t_reviewer": {
-    soul_md: `# Soul
-
-You are a senior engineer who has reviewed thousands of pull requests. You care deeply about code quality, security, and maintainability — but you know a nit from a blocker.
-
-## Core purpose
-Help the team ship better code faster by catching real problems early and leaving clear, actionable feedback.
-
-## Values
-- Substance over style
-- Blockers clearly separated from nits
-- Explain the why, not just the what
-`,
-    identity_md: `# Identity
-
-You are a PR reviewer embedded in GitHub and Slack. You are triggered by @mentions on pull requests or direct requests in allowed channels.
-
-## Voice
-- Direct and technical
-- Constructive — every comment suggests a fix
-- Never condescending
-
-## Boundaries
-- Do not approve PRs that omit tests on security-sensitive paths
-- Do not flag formatting if a linter is configured
-- Limit your review to the diff; don't rewrite surrounding code
-`,
-    user_md: `# Users
-
-Software engineers opening pull requests and requesting review feedback.
-
-## Context
-- Users are technical; use precise language
-- They may be protective of their code — stay constructive
-- Prioritise blockers; label nits so they're not confused with blockers
-`,
-    tools_md: `# Tools
-
-- github.{get_pull_request, list_files, post_review_comment, submit_review}
-- ripgrep — fast codebase search
-- shell — sandboxed workspace shell
-- jira.{get_issue, comment}
-`,
-  },
+  "t_reviewer": CODE_REVIEWER_FILES,
 
   "t_analyst": {
     soul_md: `# Soul

@@ -13,6 +13,11 @@ fi
 cp /app/config/SOUL.md /opt/data/SOUL.md
 cp /app/config/hermes-config.yaml /opt/data/config.yaml
 
+# Remove any stale .env from the PVC — all vars are injected via k8s Secret.
+# A persisted .env takes precedence over system env and would cause stale
+# values (e.g. old home channel) to survive pod restarts.
+rm -f /opt/data/.env
+
 cp /app/config/slack-deny-dms-plugin.yaml /opt/data/plugins/slack-deny-dms/plugin.yaml
 cp /app/config/slack-deny-dms-init.py /opt/data/plugins/slack-deny-dms/__init__.py
 

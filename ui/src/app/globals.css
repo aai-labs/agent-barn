@@ -162,8 +162,12 @@
   transition: background .12s, border-color .12s;
   cursor: default;
 }
-.af-btn:hover {
+.af-btn:not(:disabled):hover {
   background: var(--bg-soft);
+}
+.af-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 .af-btn svg {
   width: 14px;
@@ -175,7 +179,7 @@
   border-color: var(--ink);
   color: var(--bg-elev);
 }
-.af-btn-primary:hover {
+.af-btn-primary:not(:disabled):hover {
   background: var(--ink-2);
   border-color: var(--ink-2);
 }
@@ -185,7 +189,7 @@
   background: transparent;
   color: var(--ink-3);
 }
-.af-btn-ghost:hover {
+.af-btn-ghost:not(:disabled):hover {
   color: var(--ink);
   background: var(--bg-soft);
 }
@@ -229,6 +233,12 @@
 .af-select:focus {
   border-color: var(--ink);
   box-shadow: 0 0 0 3px var(--bg-sunken);
+}
+.af-input:disabled,
+.af-select:disabled {
+  background: var(--bg-soft);
+  color: var(--ink-3);
+  cursor: not-allowed;
 }
 
 .af-input-lg {

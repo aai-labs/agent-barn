@@ -101,6 +101,9 @@ export function TokenInput({
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         autoComplete="off"
+        data-lpignore="true"
+        data-1p-ignore
+        data-form-type="other"
         disabled={disabled}
       />
       <button

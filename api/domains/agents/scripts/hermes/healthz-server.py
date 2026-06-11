@@ -9,9 +9,14 @@ from urllib.request import Request, urlopen
 PORT = 8081
 HERMES_URL = "http://localhost:8642/v1/models"
 POLL_INTERVAL = 10
+TOKEN_POLL_INTERVAL = 300  # 5 minutes
 
 _lock = threading.Lock()
 _cache: dict = {"ok": None, "ever_connected": False, "reason": None}
+_token_cache: dict = {"ok": None, "reason": None}
+
+_SLACK_API = "https://slack.com/api"
+_SKIP_VALIDATION = os.environ.get("SKIP_SLACK_TOKEN_VALIDATION", "").lower() in ("1", "true", "yes")
 
 
 def _poll() -> None:
@@ -32,7 +37,44 @@ def _poll() -> None:
         time.sleep(POLL_INTERVAL)
 
 
+def _check_token(url: str, token: str, label: str) -> tuple[bool, str]:
+    try:
+        req = Request(
+            url,
+            data=b"",
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        )
+        with urlopen(req, timeout=15) as resp:
+            body = json.loads(resp.read())
+        if body.get("ok"):
+            return True, ""
+        return False, f"Invalid {label}: {body.get('error', 'unknown_error')}"
+    except Exception as exc:
+        return False, f"{label} validation failed: {exc}"
+
+
+def _poll_tokens() -> None:
+    if _SKIP_VALIDATION:
+        with _lock:
+            _token_cache["ok"] = True
+            _token_cache["reason"] = None
+        return
+
+    bot_token = os.environ.get("SLACK_BOT_TOKEN", "")
+    app_token = os.environ.get("SLACK_APP_TOKEN", "")
+
+    while True:
+        ok, reason = _check_token(f"{_SLACK_API}/auth.test", bot_token, "bot token")
+        if ok:
+            ok, reason = _check_token(f"{_SLACK_API}/apps.connections.open", app_token, "app token")
+        with _lock:
+            _token_cache["ok"] = ok
+            _token_cache["reason"] = reason if not ok else None
+        time.sleep(TOKEN_POLL_INTERVAL)
+
+
 threading.Thread(target=_poll, daemon=True).start()
+threading.Thread(target=_poll_tokens, daemon=True).start()
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -47,7 +89,15 @@ class _Handler(BaseHTTPRequestHandler):
                 ok = _cache["ok"]
                 ever = _cache["ever_connected"]
                 reason = _cache["reason"]
-            if ok is None:
+                tok_ok = _token_cache["ok"]
+                tok_reason = _token_cache["reason"]
+
+            # Token failures surface immediately as errors
+            if tok_ok is False:
+                self._send(500, {"status": "error", "reason": tok_reason})
+                return
+
+            if ok is None or tok_ok is None:
                 self._send(503, {"status": "starting"})
             elif ok:
                 self._send(200, {"status": "ok"})

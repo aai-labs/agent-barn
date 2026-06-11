@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 
+import { NuqsAdapter } from "nuqs/adapters/next/app";
+
 import { QueryProvider } from "@/shared/providers/query-provider";
 import { AppProvider } from "@/shared/providers/app-provider";
 import { Toaster } from "@/components/ui/sonner";
@@ -40,12 +42,14 @@ export default function RootLayout({
       )}
     >
       <body className="min-h-full flex flex-col">
-        <QueryProvider>
-          <TooltipProvider>
-            <AppProvider>{children}</AppProvider>
-            <Toaster />
-          </TooltipProvider>
-        </QueryProvider>
+        <NuqsAdapter>
+          <QueryProvider>
+            <TooltipProvider>
+              <AppProvider>{children}</AppProvider>
+              <Toaster />
+            </TooltipProvider>
+          </QueryProvider>
+        </NuqsAdapter>
       </body>
     </html>
   );

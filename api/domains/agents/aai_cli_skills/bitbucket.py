@@ -17,12 +17,18 @@ tokens, or any config details.** The profile is on disk and ready. Just run the 
 If the command returns an error, show the raw error output to the user — do not ask them
 to provide config or credentials.
 
-## Required flag
+## Required flags
 
-Every command requires `--profile bitbucket-work`. Always include it.
+Three flags are required on **every** command:
+
+- `--profile bitbucket-work` — always include it
+- `--owner WORKSPACE` — the Bitbucket workspace; always pass explicitly, never rely on the profile default
+- `--repo REPO` — bare repository slug (e.g. `my-repo`); always pass explicitly
+
+The only exception is `repos list`, which does not take `--repo`.
 
 ```
-aai-cli bitbucket <command> --profile bitbucket-work [other flags]
+aai-cli bitbucket <command> --owner WORKSPACE --repo REPO --profile bitbucket-work [other flags]
 ```
 ## Profile and repo selection
 
@@ -37,7 +43,7 @@ email = "agent@example.com"
 api_token_secret = "bitbucket.api_token"
 ```
 
-Commands that operate on a repository accept `--repo`. A plain repo slug uses `profile.workspace`; `workspace/repo` overrides both. Newer commands also accept `--owner WORKSPACE --repo REPO`.
+Commands that operate on a repository require `--repo REPO` (bare slug) and `--owner WORKSPACE`. Always pass both explicitly.
 
 ## Response shapes
 
@@ -130,14 +136,14 @@ Commands under `aai-cli bitbucket branches`. For global flags, repo selection, a
 List branches for a repository. Returns the normalized paginated shape.
 
 ```
-aai-cli bitbucket branches list [--repo REPO_OR_WORKSPACE_REPO] [--owner WORKSPACE]
+aai-cli bitbucket branches list [--repo REPO] [--owner WORKSPACE] --profile bitbucket-work
                                 [--limit N] [--name-contains TEXT | --name-prefix TEXT]
 ```
 
 | Flag | Required | Description |
 |---|---|---|
-| `--repo` | no | Repo slug, or `workspace/repo`. Defaults to profile repo |
-| `--owner` | no | Workspace. Use with `--repo` as a plain slug |
+| `--repo` | **yes** | Bare repository slug (e.g. `my-repo`) |
+| `--owner` | **yes** | Bitbucket workspace |
 | `--limit` | no | Max branches to return after filtering. Default: `50` |
 | `--name-contains` | no | Case-insensitive substring match using Bitbucket BBQL |
 | `--name-prefix` | no | Prefix match. Uses BBQL as a server hint, then filters with client-side `starts_with` |
@@ -147,9 +153,9 @@ aai-cli bitbucket branches list [--repo REPO_OR_WORKSPACE_REPO] [--owner WORKSPA
 **Examples**
 
 ```
-aai-cli bitbucket branches list --repo my-workspace/my-repo --limit 20
-aai-cli bitbucket branches list --name-contains feature
-aai-cli bitbucket branches list --name-prefix release-
+aai-cli bitbucket branches list --repo my-repo --limit 20 --profile bitbucket-work
+aai-cli bitbucket branches list --name-contains feature --profile bitbucket-work
+aai-cli bitbucket branches list --name-prefix release- --profile bitbucket-work
 ```
 
 ```json
@@ -173,7 +179,7 @@ aai-cli bitbucket branches list --name-prefix release-
 Fetch a single branch by name. Returns the full raw API response.
 
 ```
-aai-cli bitbucket branches get <BRANCH_NAME> [--repo REPO_OR_WORKSPACE_REPO] [--owner WORKSPACE]
+aai-cli bitbucket branches get <BRANCH_NAME> [--repo REPO] [--owner WORKSPACE] --profile bitbucket-work
 ```
 
 | Argument | Required | Description |
@@ -183,7 +189,7 @@ aai-cli bitbucket branches get <BRANCH_NAME> [--repo REPO_OR_WORKSPACE_REPO] [--
 **Example**
 
 ```
-aai-cli bitbucket branches get main --repo my-workspace/my-repo
+aai-cli bitbucket branches get main --repo my-repo --profile bitbucket-work
 ```
 
 """,
@@ -203,14 +209,14 @@ Commands under `aai-cli bitbucket commits`. For global flags, repo selection, an
 List commits for a repository. Returns the normalized paginated shape.
 
 ```
-aai-cli bitbucket commits list [--repo REPO_OR_WORKSPACE_REPO] [--owner WORKSPACE]
+aai-cli bitbucket commits list [--repo REPO] [--owner WORKSPACE] --profile bitbucket-work
                                [--limit N] [--branch BRANCH] [--include REV] [--exclude REV]
 ```
 
 | Flag | Required | Description |
 |---|---|---|
-| `--repo` | no | Repo slug, or `workspace/repo`. Defaults to profile repo |
-| `--owner` | no | Workspace. Use with `--repo` as a plain slug |
+| `--repo` | **yes** | Bare repository slug (e.g. `my-repo`) |
+| `--owner` | **yes** | Bitbucket workspace |
 | `--limit` | no | Max commits to return. Default: `50` |
 | `--branch` | no | Branch name. Implemented as Bitbucket `include` and takes precedence over `--include` |
 | `--include` | no | Include commits reachable from this rev |
@@ -219,8 +225,8 @@ aai-cli bitbucket commits list [--repo REPO_OR_WORKSPACE_REPO] [--owner WORKSPAC
 **Examples**
 
 ```
-aai-cli bitbucket commits list --repo my-workspace/my-repo --branch main --limit 10
-aai-cli bitbucket commits list --include feature/auth --exclude main --limit 25
+aai-cli bitbucket commits list --repo my-repo --branch main --limit 10 --profile bitbucket-work
+aai-cli bitbucket commits list --include feature/auth --exclude main --limit 25 --profile bitbucket-work
 ```
 
 ```json
@@ -244,7 +250,7 @@ aai-cli bitbucket commits list --include feature/auth --exclude main --limit 25
 Fetch a single commit by SHA. Returns the full raw API response.
 
 ```
-aai-cli bitbucket commits get <SHA> [--repo REPO_OR_WORKSPACE_REPO] [--owner WORKSPACE]
+aai-cli bitbucket commits get <SHA> [--repo REPO] [--owner WORKSPACE] --profile bitbucket-work
 ```
 
 | Argument | Required | Description |
@@ -254,7 +260,7 @@ aai-cli bitbucket commits get <SHA> [--repo REPO_OR_WORKSPACE_REPO] [--owner WOR
 **Example**
 
 ```
-aai-cli bitbucket commits get abc123def456 --repo my-workspace/my-repo
+aai-cli bitbucket commits get abc123def456 --repo my-repo --profile bitbucket-work
 ```
 
 """,
@@ -276,14 +282,14 @@ These commands return raw Bitbucket provider responses except for log downloads,
 List pipeline runs for a repository.
 
 ```
-aai-cli bitbucket pipelines list [--repo REPO_OR_WORKSPACE_REPO] [--owner WORKSPACE]
+aai-cli bitbucket pipelines list [--repo REPO] [--owner WORKSPACE] --profile bitbucket-work
                                   [--branch BRANCH] [--status STATUS] [--sort FIELD] [--limit N]
 ```
 
 | Flag | Required | Description |
 |---|---|---|
-| `--repo` | no | Repo slug, or `workspace/repo`. Defaults to profile repo |
-| `--owner` | no | Workspace. Use with `--repo` as a plain slug |
+| `--repo` | **yes** | Bare repository slug (e.g. `my-repo`) |
+| `--owner` | **yes** | Bitbucket workspace |
 | `--branch` | no | Filter by target branch |
 | `--status` | no | Provider status filter, for example `COMPLETED` |
 | `--sort` | no | Provider sort field |
@@ -292,7 +298,7 @@ aai-cli bitbucket pipelines list [--repo REPO_OR_WORKSPACE_REPO] [--owner WORKSP
 **Example**
 
 ```
-aai-cli bitbucket pipelines list --repo my-workspace/my-repo --branch main --status COMPLETED --limit 10
+aai-cli bitbucket pipelines list --repo my-repo --branch main --status COMPLETED --limit 10 --profile bitbucket-work
 ```
 
 ---
@@ -302,7 +308,7 @@ aai-cli bitbucket pipelines list --repo my-workspace/my-repo --branch main --sta
 Fetch a single pipeline by UUID. Returns the full raw API response.
 
 ```
-aai-cli bitbucket pipelines get <PIPELINE_UUID> [--repo REPO_OR_WORKSPACE_REPO] [--owner WORKSPACE]
+aai-cli bitbucket pipelines get <PIPELINE_UUID> [--repo REPO] [--owner WORKSPACE] --profile bitbucket-work
 ```
 
 | Argument | Required | Description |
@@ -316,7 +322,7 @@ aai-cli bitbucket pipelines get <PIPELINE_UUID> [--repo REPO_OR_WORKSPACE_REPO] 
 List steps for a pipeline. Returns the raw API response.
 
 ```
-aai-cli bitbucket pipelines steps list <PIPELINE_UUID> [--repo REPO_OR_WORKSPACE_REPO] [--owner WORKSPACE]
+aai-cli bitbucket pipelines steps list <PIPELINE_UUID> [--repo REPO] [--owner WORKSPACE] --profile bitbucket-work
 ```
 
 ---
@@ -326,7 +332,7 @@ aai-cli bitbucket pipelines steps list <PIPELINE_UUID> [--repo REPO_OR_WORKSPACE
 Fetch a single pipeline step. Returns the full raw API response.
 
 ```
-aai-cli bitbucket pipelines steps get <PIPELINE_UUID> <STEP_UUID> [--repo REPO_OR_WORKSPACE_REPO] [--owner WORKSPACE]
+aai-cli bitbucket pipelines steps get <PIPELINE_UUID> <STEP_UUID> [--repo REPO] [--owner WORKSPACE] --profile bitbucket-work
 ```
 
 | Argument | Required | Description |
@@ -341,9 +347,9 @@ aai-cli bitbucket pipelines steps get <PIPELINE_UUID> <STEP_UUID> [--repo REPO_O
 Download a pipeline step log to a local file.
 
 ```
-aai-cli bitbucket pipelines steps logs download <PIPELINE_UUID> <STEP_UUID>
+aai-cli bitbucket pipelines steps logs download <PIPELINE_UUID> <STEP_UUID> --profile bitbucket-work
                                                  [--log LOG_UUID] --output PATH
-                                                 [--repo REPO_OR_WORKSPACE_REPO] [--owner WORKSPACE]
+                                                 [--repo REPO] [--owner WORKSPACE]
 ```
 
 | Argument / Flag | Required | Description |
@@ -356,7 +362,7 @@ aai-cli bitbucket pipelines steps logs download <PIPELINE_UUID> <STEP_UUID>
 **Example**
 
 ```
-aai-cli bitbucket pipelines steps logs download "{pipeline-uuid}" "{step-uuid}" --output local/logs/bitbucket-step.log
+aai-cli bitbucket pipelines steps logs download "{pipeline-uuid}" "{step-uuid}" --output local/logs/bitbucket-step.log --profile bitbucket-work
 ```
 
 ```json
@@ -373,7 +379,7 @@ aai-cli bitbucket pipelines steps logs download "{pipeline-uuid}" "{step-uuid}" 
 
 Commands under `aai-cli bitbucket prs`. For global flags, repo selection, and error shapes see [../bitbucket_skill.md](../bitbucket_skill.md).
 
-Most commands accept `--repo REPO_OR_WORKSPACE_REPO`. Newer commands also accept `--owner WORKSPACE --repo REPO`.
+Most commands accept `--repo REPO`. Newer commands also accept `--owner WORKSPACE --repo REPO`.
 
 ---
 
@@ -382,19 +388,19 @@ Most commands accept `--repo REPO_OR_WORKSPACE_REPO`. Newer commands also accept
 List pull requests for a repository. Returns the raw Bitbucket provider page.
 
 ```
-aai-cli bitbucket prs list [--repo REPO_OR_WORKSPACE_REPO] [--owner WORKSPACE] [--limit N]
+aai-cli bitbucket prs list [--repo REPO] [--owner WORKSPACE] [--limit N] --profile bitbucket-work
 ```
 
 | Flag | Required | Description |
 |---|---|---|
-| `--repo` | no | Repo slug, or `workspace/repo`. Defaults to profile repo |
-| `--owner` | no | Workspace. Use with `--repo` as a plain slug |
+| `--repo` | **yes** | Bare repository slug (e.g. `my-repo`) |
+| `--owner` | **yes** | Bitbucket workspace |
 | `--limit` | no | Provider page length. Default: `50` |
 
 **Example**
 
 ```
-aai-cli bitbucket prs list --repo my-workspace/my-repo --limit 5
+aai-cli bitbucket prs list --repo my-repo --limit 5 --profile bitbucket-work
 ```
 
 ---
@@ -404,19 +410,19 @@ aai-cli bitbucket prs list --repo my-workspace/my-repo --limit 5
 Fetch a single pull request. Returns the full raw API response.
 
 ```
-aai-cli bitbucket prs get <PR_NUMBER> [--repo REPO_OR_WORKSPACE_REPO] [--owner WORKSPACE]
+aai-cli bitbucket prs get <PR_NUMBER> [--repo REPO] [--owner WORKSPACE] --profile bitbucket-work
 ```
 
 | Argument / Flag | Required | Description |
 |---|---|---|
 | `PR_NUMBER` | yes | Numeric pull request ID |
-| `--repo` | no | Repo slug, or `workspace/repo` |
-| `--owner` | no | Workspace. Use with `--repo` as a plain slug |
+| `--repo` | **yes** | Bare repository slug (e.g. `my-repo`) |
+| `--owner` | **yes** | Bitbucket workspace |
 
 **Example**
 
 ```
-aai-cli bitbucket prs get 42 --repo my-workspace/my-repo
+aai-cli bitbucket prs get 42 --repo my-repo --profile bitbucket-work
 ```
 
 ---
@@ -426,15 +432,15 @@ aai-cli bitbucket prs get 42 --repo my-workspace/my-repo
 Create a pull request. `--title`, `--source`, and `--destination` are the normal minimal flags. Use `--json` to pass a raw Bitbucket create body; individual flags override matching JSON fields.
 
 ```
-aai-cli bitbucket prs create [--repo REPO_OR_WORKSPACE_REPO] [--owner WORKSPACE]
+aai-cli bitbucket prs create [--repo REPO] [--owner WORKSPACE] --profile bitbucket-work
                              [--json JSON_OR_PATH] --title TEXT
                              --source BRANCH --destination BRANCH [--body TEXT]
 ```
 
 | Flag | Required | Description |
 |---|---|---|
-| `--repo` | no | Repo slug, or `workspace/repo` |
-| `--owner` | no | Workspace. Use with `--repo` as a plain slug |
+| `--repo` | **yes** | Bare repository slug (e.g. `my-repo`) |
+| `--owner` | **yes** | Bitbucket workspace |
 | `--title` | yes unless JSON covers it | Pull request title |
 | `--source` | yes unless JSON covers it | Source branch name |
 | `--destination` | yes unless JSON covers it | Destination branch name |
@@ -444,7 +450,7 @@ aai-cli bitbucket prs create [--repo REPO_OR_WORKSPACE_REPO] [--owner WORKSPACE]
 **Example**
 
 ```
-aai-cli bitbucket prs create --repo my-workspace/my-repo --title "Fix auth timeout" --source fix-auth-timeout --destination main --body "Ready for review."
+aai-cli bitbucket prs create --repo my-repo --title "Fix auth timeout" --source fix-auth-timeout --destination main --body "Ready for review." --profile bitbucket-work
 ```
 
 ---
@@ -454,9 +460,9 @@ aai-cli bitbucket prs create --repo my-workspace/my-repo --title "Fix auth timeo
 Close a pull request through Bitbucket's decline endpoint. In this CLI slice, `close`, `decline`, and `delete` share the same provider call.
 
 ```
-aai-cli bitbucket prs close <PR_NUMBER> [--repo REPO_OR_WORKSPACE_REPO] [--owner WORKSPACE]
-aai-cli bitbucket prs decline <PR_NUMBER> [--repo REPO_OR_WORKSPACE_REPO] [--owner WORKSPACE]
-aai-cli bitbucket prs delete <PR_NUMBER> [--repo REPO_OR_WORKSPACE_REPO] [--owner WORKSPACE]
+aai-cli bitbucket prs close <PR_NUMBER> [--repo REPO] [--owner WORKSPACE] --profile bitbucket-work
+aai-cli bitbucket prs decline <PR_NUMBER> [--repo REPO] [--owner WORKSPACE] --profile bitbucket-work
+aai-cli bitbucket prs delete <PR_NUMBER> [--repo REPO] [--owner WORKSPACE] --profile bitbucket-work
 ```
 
 Verify with `prs get` before using these commands.
@@ -468,7 +474,7 @@ Verify with `prs get` before using these commands.
 Fetch a unified diff for a pull request. Without `--output`, stdout is a JSON string containing diff text. With `--output`, bytes are written to disk and stdout is metadata.
 
 ```
-aai-cli bitbucket prs diff <PR_NUMBER> [--repo REPO_OR_WORKSPACE_REPO] [--owner WORKSPACE] [--output PATH]
+aai-cli bitbucket prs diff <PR_NUMBER> [--repo REPO] [--owner WORKSPACE] [--output PATH] --profile bitbucket-work
 ```
 
 | Flag | Required | Description |
@@ -478,8 +484,8 @@ aai-cli bitbucket prs diff <PR_NUMBER> [--repo REPO_OR_WORKSPACE_REPO] [--owner 
 **Examples**
 
 ```
-aai-cli bitbucket prs diff 42 --repo my-workspace/my-repo
-aai-cli bitbucket prs diff 42 --repo my-workspace/my-repo --output local/logs/pr-42.diff
+aai-cli bitbucket prs diff 42 --repo my-repo --profile bitbucket-work
+aai-cli bitbucket prs diff 42 --repo my-repo --output local/logs/pr-42.diff --profile bitbucket-work
 ```
 
 ```json
@@ -493,7 +499,7 @@ aai-cli bitbucket prs diff 42 --repo my-workspace/my-repo --output local/logs/pr
 List changed files for a pull request. Returns the normalized paginated shape.
 
 ```
-aai-cli bitbucket prs diffstat <PR_NUMBER> [--repo REPO_OR_WORKSPACE_REPO] [--owner WORKSPACE] [--limit N]
+aai-cli bitbucket prs diffstat <PR_NUMBER> [--repo REPO] [--owner WORKSPACE] [--limit N] --profile bitbucket-work
 ```
 
 | Flag | Required | Description |
@@ -503,7 +509,7 @@ aai-cli bitbucket prs diffstat <PR_NUMBER> [--repo REPO_OR_WORKSPACE_REPO] [--ow
 **Example**
 
 ```
-aai-cli bitbucket prs diffstat 42 --limit 100
+aai-cli bitbucket prs diffstat 42 --limit 100 --profile bitbucket-work
 ```
 
 ```json
@@ -527,7 +533,7 @@ aai-cli bitbucket prs diffstat 42 --limit 100
 List commits on a pull request. Returns the normalized paginated shape.
 
 ```
-aai-cli bitbucket prs commits <PR_NUMBER> [--repo REPO_OR_WORKSPACE_REPO] [--owner WORKSPACE] [--limit N]
+aai-cli bitbucket prs commits <PR_NUMBER> [--repo REPO] [--owner WORKSPACE] [--limit N] --profile bitbucket-work
 ```
 
 | Flag | Required | Description |
@@ -541,7 +547,7 @@ aai-cli bitbucket prs commits <PR_NUMBER> [--repo REPO_OR_WORKSPACE_REPO] [--own
 List pull request activity events. Returns the normalized paginated shape.
 
 ```
-aai-cli bitbucket prs activity <PR_NUMBER> [--repo REPO_OR_WORKSPACE_REPO] [--owner WORKSPACE] [--limit N]
+aai-cli bitbucket prs activity <PR_NUMBER> [--repo REPO] [--owner WORKSPACE] [--limit N] --profile bitbucket-work
 ```
 
 | Flag | Required | Description |
@@ -555,7 +561,7 @@ aai-cli bitbucket prs activity <PR_NUMBER> [--repo REPO_OR_WORKSPACE_REPO] [--ow
 List pull request comments. Returns the normalized paginated shape. `--inline-only` filters across all fetched pages.
 
 ```
-aai-cli bitbucket prs comments list <PR_NUMBER> [--repo REPO_OR_WORKSPACE_REPO]
+aai-cli bitbucket prs comments list <PR_NUMBER> [--repo REPO] --profile bitbucket-work
                                       [--owner WORKSPACE] [--limit N] [--inline-only]
 ```
 
@@ -572,7 +578,7 @@ aai-cli bitbucket prs comments list <PR_NUMBER> [--repo REPO_OR_WORKSPACE_REPO]
 Fetch a single pull request comment. Returns the full raw API response.
 
 ```
-aai-cli bitbucket prs comments get <PR_NUMBER> <COMMENT_ID> [--repo REPO_OR_WORKSPACE_REPO] [--owner WORKSPACE]
+aai-cli bitbucket prs comments get <PR_NUMBER> <COMMENT_ID> [--repo REPO] [--owner WORKSPACE] --profile bitbucket-work
 ```
 
 | Argument | Required | Description |
@@ -587,7 +593,7 @@ aai-cli bitbucket prs comments get <PR_NUMBER> <COMMENT_ID> [--repo REPO_OR_WORK
 Create a general, inline, or reply comment. Use `--body` for plain text or `--json` for a raw Bitbucket comment body; flags override matching JSON fields.
 
 ```
-aai-cli bitbucket prs comments create <PR_NUMBER> [--repo REPO_OR_WORKSPACE_REPO]
+aai-cli bitbucket prs comments create <PR_NUMBER> [--repo REPO] --profile bitbucket-work
                                          [--owner WORKSPACE] [--json JSON_OR_PATH]
                                          --body TEXT [--inline-path FILE]
                                          [--inline-from LINE_BEFORE] [--inline-to LINE_AFTER]
@@ -606,9 +612,9 @@ aai-cli bitbucket prs comments create <PR_NUMBER> [--repo REPO_OR_WORKSPACE_REPO
 **Examples**
 
 ```
-aai-cli bitbucket prs comments create 42 --body "Review complete."
-aai-cli bitbucket prs comments create 42 --body "Please rename this variable" --inline-path src/lib.rs --inline-to 120
-aai-cli bitbucket prs comments create 42 --body "Agreed" --parent-id 799066024
+aai-cli bitbucket prs comments create 42 --body "Review complete." --profile bitbucket-work
+aai-cli bitbucket prs comments create 42 --body "Please rename this variable" --inline-path src/lib.rs --inline-to 120 --profile bitbucket-work
+aai-cli bitbucket prs comments create 42 --body "Agreed" --parent-id 799066024 --profile bitbucket-work
 ```
 
 ---
@@ -618,8 +624,8 @@ aai-cli bitbucket prs comments create 42 --body "Agreed" --parent-id 799066024
 Update an existing pull request comment. The comment ID is passed with `--comment`.
 
 ```
-aai-cli bitbucket prs comments update <PR_NUMBER> --comment COMMENT_ID
-                                         [--repo REPO_OR_WORKSPACE_REPO] [--owner WORKSPACE]
+aai-cli bitbucket prs comments update <PR_NUMBER> --comment COMMENT_ID --profile bitbucket-work
+                                         [--repo REPO] [--owner WORKSPACE]
                                          [--json JSON_OR_PATH] --body TEXT
                                          [--inline-path FILE] [--inline-from LINE_BEFORE]
                                          [--inline-to LINE_AFTER] [--parent-id COMMENT_ID]
@@ -634,7 +640,7 @@ The inline and reply flags behave the same as `comments create`.
 Delete a pull request comment.
 
 ```
-aai-cli bitbucket prs comments delete <PR_NUMBER> <COMMENT_ID> [--repo REPO_OR_WORKSPACE_REPO] [--owner WORKSPACE]
+aai-cli bitbucket prs comments delete <PR_NUMBER> <COMMENT_ID> [--repo REPO] [--owner WORKSPACE] --profile bitbucket-work
 ```
 
 Verify with `comments get` before deleting.
@@ -656,7 +662,7 @@ Commands under `aai-cli bitbucket repos`. For global flags, repo selection, and 
 List repositories in the configured workspace. Returns the raw Bitbucket provider page.
 
 ```
-aai-cli bitbucket repos list [--limit N]
+aai-cli bitbucket repos list [--limit N] --profile bitbucket-work
 ```
 
 | Flag | Required | Description |
@@ -666,7 +672,7 @@ aai-cli bitbucket repos list [--limit N]
 **Example**
 
 ```
-aai-cli bitbucket repos list --limit 3
+aai-cli bitbucket repos list --limit 3 --profile bitbucket-work
 ```
 
 ```json
@@ -691,7 +697,7 @@ aai-cli bitbucket repos list --limit 3
 Fetch a single repository by slug or `workspace/repo`.
 
 ```
-aai-cli bitbucket repos get <REPO_SLUG_OR_WORKSPACE_REPO>
+aai-cli bitbucket repos get <REPO_SLUG_OR_WORKSPACE_REPO> --profile bitbucket-work
 ```
 
 | Argument | Required | Description |
@@ -701,7 +707,7 @@ aai-cli bitbucket repos get <REPO_SLUG_OR_WORKSPACE_REPO>
 **Example**
 
 ```
-aai-cli bitbucket repos get my-workspace/my-repo
+aai-cli bitbucket repos get my-workspace/my-repo --profile bitbucket-work
 ```
 
 ```json
@@ -733,7 +739,7 @@ Commands under `aai-cli bitbucket source`. For global flags, repo selection, and
 Fetch source file content or source metadata.
 
 ```
-aai-cli bitbucket source get <COMMIT> <PATH> [--repo REPO_OR_WORKSPACE_REPO]
+aai-cli bitbucket source get <COMMIT> <PATH> [--repo REPO] --profile bitbucket-work
                               [--owner WORKSPACE] [--output PATH] [--meta]
 ```
 
@@ -741,8 +747,8 @@ aai-cli bitbucket source get <COMMIT> <PATH> [--repo REPO_OR_WORKSPACE_REPO]
 |---|---|---|
 | `COMMIT` | yes | Branch, tag, or commit hash |
 | `PATH` | yes | Repository-relative file path |
-| `--repo` | no | Repo slug, or `workspace/repo`. Defaults to profile repo |
-| `--owner` | no | Workspace. Use with `--repo` as a plain slug |
+| `--repo` | **yes** | Bare repository slug (e.g. `my-repo`) |
+| `--owner` | **yes** | Bitbucket workspace |
 | `--output` | no | Write raw bytes to a local file and return `{ output, bytes }` |
 | `--meta` | no | Return Bitbucket JSON metadata using `format=meta` |
 
@@ -751,9 +757,9 @@ aai-cli bitbucket source get <COMMIT> <PATH> [--repo REPO_OR_WORKSPACE_REPO]
 **Examples**
 
 ```
-aai-cli bitbucket source get main README.md --repo my-workspace/my-repo
-aai-cli bitbucket source get abc123def src/main.rs --output local/logs/main-src-main.rs
-aai-cli bitbucket source get main README.md --meta
+aai-cli bitbucket source get main README.md --repo my-repo --profile bitbucket-work
+aai-cli bitbucket source get abc123def src/main.rs --output local/logs/main-src-main.rs --profile bitbucket-work
+aai-cli bitbucket source get main README.md --meta --profile bitbucket-work
 ```
 
 ```json
@@ -767,7 +773,7 @@ aai-cli bitbucket source get main README.md --meta
 List commits that modified a file. Returns the normalized paginated shape.
 
 ```
-aai-cli bitbucket source history <COMMIT> <PATH> [--repo REPO_OR_WORKSPACE_REPO]
+aai-cli bitbucket source history <COMMIT> <PATH> [--repo REPO] --profile bitbucket-work
                                   [--owner WORKSPACE] [--limit N]
 ```
 
@@ -780,7 +786,7 @@ aai-cli bitbucket source history <COMMIT> <PATH> [--repo REPO_OR_WORKSPACE_REPO]
 **Example**
 
 ```
-aai-cli bitbucket source history main README.md --limit 20
+aai-cli bitbucket source history main README.md --limit 20 --profile bitbucket-work
 ```
 
 Bitbucket Cloud does not expose a dedicated per-line blame REST endpoint. `source history` is the closest REST analog for agents.

@@ -7,14 +7,16 @@ import { TEMPLATE_FILES } from "../data";
 import {
   INTEGRATION_PROVIDERS,
   getIntegrationProvider,
+  parseGithubRepoUrl,
   type IntegrationDraft,
+  type RequiredIntegrationGroup,
 } from "../integrations";
 import { ChoiceCard, FormField, NextStep, TokenInput } from "./hire-dialog-primitives";
 
 export const ROLES = [
   { id: "default", template_id: "t_default", title: "General Purpose", emoji: "🤖", tagline: "Answers questions, handles tasks, reduces day-to-day friction.", suggested: "Aria", requiredIntegrations: [] },
   { id: "scrum-master", template_id: "t_scrum_master", title: "Scrum Master", emoji: "📋", tagline: "Surfaces blockers, preps sprints, keeps Jira & Confluence in sync.", suggested: "Scout", requiredIntegrations: ["jira", "confluence"] },
-  { id: "code-reviewer", template_id: "t_reviewer", title: "PR Reviewer", emoji: "⚙️", tagline: "Reads diffs, comments on style, security, and tests.", suggested: "Halo", requiredIntegrations: [] },
+  { id: "code-reviewer", template_id: "t_reviewer", title: "PR Reviewer", emoji: "⚙️", tagline: "Reads diffs, comments on style, security, and tests.", suggested: "Halo", requiredIntegrations: [["github", "bitbucket"]] },
   { id: "analyst", template_id: "t_analyst", title: "Data Analyst", emoji: "📊", tagline: "Answers questions over BigQuery & Sheets, returns charts.", suggested: "Lyra", requiredIntegrations: [] },
   { id: "sales-research", template_id: "t_sales", title: "Sales Research", emoji: "📈", tagline: "Enriches leads, drafts outbound, summarises calls.", suggested: "Vega", requiredIntegrations: [] },
 ] as const;
@@ -35,10 +37,6 @@ export type WizardStep =
 export const MODELS = [{ value: "litellm/qwen3.6-plus", label: "Qwen3.6 Plus" }, { value: "litellm/gpt-5-mini", label: "GPT-5 mini" }] as const;
 
 export const BOT_COLOR_PRESETS = ["#4A154B", "#1264A3", "#2BAC76", "#E8912D", "#CC4400"];
-const TEAMS_DEVELOPER_NAME = "Agent Farm";
-const TEAMS_DEVELOPER_WEBSITE_URL = "https://example.com";
-const TEAMS_PRIVACY_URL = "https://example.com/privacy";
-const TEAMS_TERMS_URL = "https://example.com/terms";
 
 async function fetchAsset(path: string): Promise<Blob> {
   const response = await fetch(path);
@@ -84,8 +82,9 @@ export function pickDefaults(roleId: RoleId) {
     toolsMd: tpl.tools_md ?? "",
     agentsMd: tpl.agents_md ?? "",
     bootMd: tpl.boot_md ?? "",
+    bootstrapMd: tpl.bootstrap_md ?? "",
     heartbeatMd: tpl.heartbeat_md ?? "",
-    requiredIntegrations: role.requiredIntegrations as readonly string[],
+    requiredIntegrations: role.requiredIntegrations as readonly RequiredIntegrationGroup[],
   };
 }
 
@@ -178,16 +177,16 @@ export function SlackChoiceStep({
   return (
     <div className="flex flex-col gap-3">
       <ChoiceCard
-        selected={!setupNewBot}
-        onClick={() => onChange(false)}
-        title="I already have a Slack app"
-        description="Skip straight to entering your app and bot tokens."
-      />
-      <ChoiceCard
         selected={setupNewBot}
         onClick={() => onChange(true)}
         title="Set up a new Slack bot"
         description="We'll generate a manifest so you can create one in seconds."
+      />
+      <ChoiceCard
+        selected={!setupNewBot}
+        onClick={() => onChange(false)}
+        title="I already have a Slack app"
+        description="Skip straight to entering your app and bot tokens."
       />
     </div>
   );
@@ -323,7 +322,7 @@ export function BotBuilderStep({
         </NextStep>
         <NextStep n={2} label="Install the app to your workspace">
           In your new app&apos;s settings, go to <b>Install App</b> and click{" "}
-          <b>Install to workspace</b>. Slack will generate a{" "}
+          <b>Install to [your workspace name]</b>. Slack will generate a{" "}
           <span className="font-mono text-xs">xoxb-…</span> bot token automatically.{" "}
           <a
             href="https://api.slack.com/apps"
@@ -336,7 +335,7 @@ export function BotBuilderStep({
           </a>
         </NextStep>
         <NextStep n={3} label="Create an App-Level Token">
-          Go to <b>Basic Information</b> → <b>App-Level Tokens</b> → <b>Generate Token</b>.
+          Go to <b>Basic Information</b> → <b>App-Level Tokens</b> → <b>Generate Token and Scopes</b>.
           Name it anything and add the <span className="font-mono text-xs">connections:write</span> scope.
           This creates your <span className="font-mono text-xs">xapp-…</span> token, required for Socket Mode.{" "}
           <a
@@ -379,7 +378,7 @@ export function SlackTokensStep({
   error: string | null;
 }) {
   return (
-    <div className="flex flex-col gap-5">
+    <form autoComplete="off" className="flex flex-col gap-5" onSubmit={(e) => e.preventDefault()}>
       <div
         className="flex flex-col gap-3.5 p-4 rounded-2xl"
         style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
@@ -419,7 +418,7 @@ export function SlackTokensStep({
           </div>
         )}
       </div>
-    </div>
+    </form>
   );
 }
 
@@ -436,7 +435,7 @@ export function PlatformChoiceStep({
         selected={platform === "slack"}
         onClick={() => onChange("slack")}
         title="Slack"
-        description="Connect via Socket Mode with a bot and app-level token."
+        description="Connect via Socket Mode with a bot and app-level token. Recommended."
       />
       <ChoiceCard
         selected={platform === "teams"}
@@ -677,7 +676,7 @@ export function TeamsCredentialsStep({
   error: string | null;
 }) {
   return (
-    <div className="flex flex-col gap-5">
+    <form autoComplete="off" className="flex flex-col gap-5" onSubmit={(e) => e.preventDefault()}>
       <div
         className="flex flex-col gap-3.5 p-4 rounded-2xl"
         style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
@@ -760,7 +759,7 @@ export function TeamsCredentialsStep({
           In your Bot resource, go to <b>Channels</b> and enable <b>Microsoft Teams</b>.
         </NextStep>
       </div>
-    </div>
+    </form>
   );
 }
 
@@ -901,16 +900,42 @@ export function DetailsStep({
 export function IntegrationsStep({
   integrations,
   onChange,
-  requiredProviders = [],
+  requiredGroups = [],
 }: {
   integrations: IntegrationDraft[];
   onChange: (next: IntegrationDraft[]) => void;
-  requiredProviders?: readonly string[];
+  requiredGroups?: readonly RequiredIntegrationGroup[];
 }) {
   const [visible, setVisible] = useState<Record<string, boolean>>({});
 
   const usedProviders = new Set(integrations.map((i) => i.provider));
   const available = INTEGRATION_PROVIDERS.filter((p) => !usedProviders.has(p.id));
+
+  // Split required groups into individual AND requirements and OR groups.
+  const requiredAndSet = new Set(
+    requiredGroups.filter((g): g is string => typeof g === "string"),
+  );
+  const orGroups = requiredGroups.filter(
+    (g): g is readonly string[] => Array.isArray(g),
+  );
+
+  function getOrGroup(providerId: string): readonly string[] | undefined {
+    return orGroups.find((g) => g.includes(providerId));
+  }
+
+  // A provider can be removed if it's not an AND requirement and either it's
+  // optional (no OR group) or its OR group is still satisfied by another connected provider.
+  function canRemove(providerId: string): boolean {
+    if (requiredAndSet.has(providerId)) return false;
+    const orGroup = getOrGroup(providerId);
+    if (!orGroup) return true;
+    return orGroup.some((p) => p !== providerId && integrations.some((i) => i.provider === p));
+  }
+
+  // OR groups where no member is yet connected — these render as "connect one of" prompts.
+  const unsatisfiedOrGroups = orGroups.filter(
+    (group) => !group.some((p) => integrations.some((i) => i.provider === p)),
+  );
 
   function addProvider(id: string) {
     onChange([...integrations, { provider: id, content: {} }]);
@@ -932,15 +957,55 @@ export function IntegrationsStep({
     <div className="flex flex-col gap-5">
       <p className="text-[0.8125rem] leading-[1.5]" style={{ color: "var(--ink-3)" }}>
         Connect external tools your agent can use. Credentials are encrypted in the key vault.
-        {requiredProviders.length > 0
+        {requiredGroups.length > 0
           ? " This profile requires the integrations below — fill them in to continue."
           : " This step is optional — you can hire without any."}
       </p>
 
+      {/* Unsatisfied OR groups: show a "connect one of" picker card. */}
+      {unsatisfiedOrGroups.map((group) => (
+        <div
+          key={group.join("|")}
+          className="flex flex-col gap-3.5 p-4 rounded-2xl"
+          style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
+        >
+          <div className="flex items-center justify-between">
+            <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
+              Connect one of
+            </div>
+            <span
+              className="text-[0.6875rem] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full"
+              style={{ color: "var(--ink-3)", background: "var(--line)" }}
+            >
+              Required — one of
+            </span>
+          </div>
+          <div className="flex gap-2">
+            {group.map((id) => {
+              const p = getIntegrationProvider(id);
+              if (!p) return null;
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  className="af-btn af-btn-sm flex items-center gap-1.5"
+                  onClick={() => addProvider(id)}
+                >
+                  <PlusIcon size={14} /> {p.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+
+      {/* Connected integrations. */}
       {integrations.map((draft) => {
         const provider = getIntegrationProvider(draft.provider);
         if (!provider) return null;
-        const isRequired = requiredProviders.includes(draft.provider);
+        const isAnd = requiredAndSet.has(draft.provider);
+        const isOneOf = !isAnd && !!getOrGroup(draft.provider);
+        const removable = canRemove(draft.provider);
         return (
           <div
             key={draft.provider}
@@ -951,14 +1016,7 @@ export function IntegrationsStep({
               <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
                 {provider.label}
               </div>
-              {isRequired ? (
-                <span
-                  className="text-[0.6875rem] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full"
-                  style={{ color: "var(--ink-3)", background: "var(--line)" }}
-                >
-                  Required
-                </span>
-              ) : (
+              {removable ? (
                 <button
                   type="button"
                   className="af-btn af-btn-ghost af-btn-icon"
@@ -967,6 +1025,13 @@ export function IntegrationsStep({
                 >
                   <XIcon size={15} />
                 </button>
+              ) : (
+                <span
+                  className="text-[0.6875rem] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full"
+                  style={{ color: "var(--ink-3)", background: "var(--line)" }}
+                >
+                  {isOneOf ? "Required (one of)" : isAnd ? "Required" : null}
+                </span>
               )}
             </div>
 
@@ -984,6 +1049,31 @@ export function IntegrationsStep({
                       onToggle={() => setVisible((s) => ({ ...s, [vkey]: !s[vkey] }))}
                       placeholder={field.placeholder}
                     />
+                  </FormField>
+                );
+              }
+              if (field.type === "repo-url") {
+                const parsed = parseGithubRepoUrl(value);
+                const invalid = value.length > 0 && !parsed;
+                return (
+                  <FormField key={field.key} label={label} hint={field.hint}>
+                    <input
+                      className={`af-input${invalid ? " border-red-400" : ""}`}
+                      value={value}
+                      onChange={(e) => setField(draft.provider, field.key, e.target.value)}
+                      placeholder={field.placeholder}
+                      autoComplete="off"
+                    />
+                    {parsed && (
+                      <p className="text-[0.75rem] mt-1" style={{ color: "var(--ink-3)" }}>
+                        owner: <strong>{parsed.owner}</strong> · repo: <strong>{parsed.repo}</strong>
+                      </p>
+                    )}
+                    {invalid && (
+                      <p className="text-[0.75rem] mt-1 text-red-500">
+                        Must be a valid GitHub URL, e.g. https://github.com/owner/repo.git
+                      </p>
+                    )}
                   </FormField>
                 );
               }

@@ -12,7 +12,13 @@ import {
   downloadTeamsAppPackage, generateTeamsManifest,
 } from "./hire-dialog-steps";
 import { SlackConfigPanel } from "./slack-config-panel";
-import { hasIncompleteIntegration, type IntegrationDraft } from "../integrations";
+import {
+  allRequiredGroupsSatisfied,
+  hasIncompleteIntegration,
+  expandGithubContent,
+  type IntegrationDraft,
+  type RequiredIntegrationGroup,
+} from "../integrations";
 import type { Agent } from "../schemas";
 
 interface HireDialogProps {
@@ -21,11 +27,11 @@ interface HireDialogProps {
 }
 
 const PROVISION_STEPS = [
-  { at: 14, text: "Resolved template" },
-  { at: 32, text: "Created workspace and config" },
-  { at: 50, text: "Issued provider keys (vaulted)" },
-  { at: 68, text: "Locked network egress" },
-  { at: 84, text: "Started agent" },
+  { at: 14, text: "Validating credentials" },
+  { at: 32, text: "Creating agent profile" },
+  { at: 50, text: "Saving persona and template" },
+  { at: 68, text: "Encrypting and storing tokens" },
+  { at: 84, text: "Saving integrations" },
   { at: 96, text: "", isPending: true },
 ];
 
@@ -73,7 +79,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   const [name, setName] = useState<string>(defaults.name);
   const [model, setModel] = useState<string>(MODELS[0].value);
   const [platform, setPlatform] = useState<"slack" | "teams">("slack");
-  const [setupNewBot, setSetupNewBot] = useState(false);
+  const [setupNewBot, setSetupNewBot] = useState(true);
   const [botName, setBotName] = useState<string>(defaults.botName);
   const [botDescription, setBotDescription] = useState<string>(defaults.botDescription);
   const [botColor, setBotColor] = useState("#4A154B");
@@ -98,7 +104,10 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   const [bootMd, setBootMd] = useState(defaults.bootMd);
   const [heartbeatMd, setHeartbeatMd] = useState(defaults.heartbeatMd);
   const [integrations, setIntegrations] = useState<IntegrationDraft[]>(
-    defaults.requiredIntegrations.map((p) => ({ provider: p, content: {} })),
+    // Only pre-seed AND-required providers; OR groups start empty so the user picks one.
+    defaults.requiredIntegrations
+      .filter((g): g is string => typeof g === "string")
+      .map((p) => ({ provider: p, content: {} })),
   );
   const [provisioning, setProvisioning] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -107,6 +116,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
 
   const progressRef = useRef(0);
   const apiDoneRef = useRef(false);
+  const errorRef = useRef(false);
 
   const selected = ROLES.find((r) => r.id === pick)!;
 
@@ -123,8 +133,12 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
     setAgentsMd(d.agentsMd);
     setBootMd(d.bootMd);
     setHeartbeatMd(d.heartbeatMd);
-    // Seed required integrations for this profile (e.g. Scrum Master → jira + confluence).
-    setIntegrations(d.requiredIntegrations.map((p) => ({ provider: p, content: {} })));
+    // Seed AND-required integrations for this profile; OR groups start empty.
+    setIntegrations(
+      d.requiredIntegrations
+        .filter((g): g is string => typeof g === "string")
+        .map((p) => ({ provider: p, content: {} })),
+    );
   }
 
   function handleTeamsBotNameChange(value: string) {
@@ -164,6 +178,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
     setProvisionError(null);
     progressRef.current = 0;
     apiDoneRef.current = false;
+    errorRef.current = false;
 
     // Substitute {{ … }} profile placeholders with concrete values at submit time.
     const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
@@ -187,7 +202,10 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
         agentsMd: fill(agentsMd),
         bootMd: fill(bootMd),
         heartbeatMd: fill(heartbeatMd),
-        secrets: integrations.map((i) => ({ provider: i.provider, content: i.content })),
+        secrets: integrations.map((i) => ({
+          provider: i.provider,
+          content: i.provider === "github" ? expandGithubContent(i.content) : i.content,
+        })),
         ...(platform === "slack"
           ? { slackBotToken, slackAppToken, slackGroupPolicy, slackDmPolicy }
           : { teamsAppId, teamsAppPassword, teamsTenantId }),
@@ -196,6 +214,9 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
       apiDoneRef.current = true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Something went wrong. Please try again.";
+      errorRef.current = true;
+      progressRef.current = 0;
+      setProgress(0);
       setProvisionError(msg);
     }
   }
@@ -203,6 +224,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   useEffect(() => {
     if (!provisioning) return;
     const id = setInterval(() => {
+      if (errorRef.current) return;
       const cap = apiDoneRef.current ? 100 : 88;
       progressRef.current = Math.min(progressRef.current + 8 + Math.random() * 12, cap);
       setProgress(progressRef.current);
@@ -362,7 +384,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
             {PROVISION_STEPS.map((s, i) => {
               const done = progress >= s.at;
               const pending = s.isPending && done && progress < 100;
-              const text = s.isPending ? `${name} said hello in ${platform === "teams" ? "Teams" : "Slack"}` : s.text;
+              const text = s.isPending ? "Finishing up…" : s.text;
               return (
                 <div key={i} className="flex items-center gap-3 text-[0.844rem]">
                   <div className="w-5 h-5 flex-shrink-0 grid place-items-center">
@@ -485,7 +507,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
           <IntegrationsStep
             integrations={integrations}
             onChange={setIntegrations}
-            requiredProviders={selected.requiredIntegrations}
+            requiredGroups={selected.requiredIntegrations as readonly RequiredIntegrationGroup[]}
           />
         )}
       </div>
@@ -564,8 +586,9 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
             disabled={
               !name.trim() ||
               hasIncompleteIntegration(integrations) ||
-              selected.requiredIntegrations.some(
-                (p) => !integrations.some((i) => i.provider === p),
+              !allRequiredGroupsSatisfied(
+                selected.requiredIntegrations as readonly RequiredIntegrationGroup[],
+                integrations,
               )
             }
             onClick={() => { void startHiring(); }}

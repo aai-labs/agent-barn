@@ -30,26 +30,27 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    container:
+      image: mcr.microsoft.com/playwright:v1.59.1-noble
     steps:
       - uses: actions/checkout@v4
+      - name: Install make
+        run: apt-get update && apt-get install -y --no-install-recommends make
       - uses: pnpm/action-setup@v4
         with:
           version: 9
-      - uses: actions/setup-node@v4
+      - name: Get pnpm store directory
+        shell: bash
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_ENV"
+      - uses: actions/cache@v4
         with:
-          node-version: "24"
-          cache: pnpm
-          cache-dependency-path: ui/pnpm-lock.yaml
+          path: ${{ env.STORE_PATH }}
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('ui/pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-store-${{ runner.os }}-
       - name: Install dependencies
         working-directory: ui
         run: pnpm install --frozen-lockfile
-      - uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('ui/pnpm-lock.yaml') }}
-      - name: Install Playwright browsers
-        working-directory: ui
-        run: pnpm exec playwright install --with-deps chromium
       - run: make test-ui
 
   build:
