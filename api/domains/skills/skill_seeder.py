@@ -19,6 +19,7 @@ def seed_aai_cli_skills(repository: SkillRepository) -> None:
             source=SkillSource.AAI_CLI,
             required_providers=skill_def["required_providers"],
             zip_content=build_zip(skill_def["files"]),
+            tools_pointer=skill_def.get("tools_pointer"),
         )
         repository.save(skill)
         logger.info("Seeded AAI_CLI skill: %s", name)

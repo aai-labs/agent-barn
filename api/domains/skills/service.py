@@ -50,6 +50,7 @@ class SkillService:
             source=SkillSource.CUSTOM,
             required_providers=data.required_providers,
             zip_content=data.zip_content,
+            tools_pointer=data.tools_pointer,
         )
         self.repository.save(skill)
         return SkillRead.model_validate(skill)
@@ -76,6 +77,8 @@ class SkillService:
             skill.name = updated["name"]
         if "required_providers" in updated:
             skill.required_providers = updated["required_providers"]
+        if "tools_pointer" in updated:
+            skill.tools_pointer = updated["tools_pointer"]
         self.repository.save(skill)
         return SkillRead.model_validate(skill)
 

@@ -29,6 +29,7 @@ def upgrade() -> None:
         sa.Column('source', sa.String(), nullable=False),
         sa.Column('required_providers', sa.JSON(), server_default='[]', nullable=False),
         sa.Column('zip_content', sa.LargeBinary(), nullable=False),
+        sa.Column('tools_pointer', sa.Text(), nullable=True),
         sa.ForeignKeyConstraint(['organization_id'], ['organization.id'], ondelete='CASCADE'),
         sa.PrimaryKeyConstraint('id'),
         sa.UniqueConstraint('organization_id', 'name', name='uq_skill_organization_name'),

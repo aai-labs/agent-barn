@@ -34,18 +34,23 @@ class Skill(BaseModel, table=True):
         sa_column=Column(sa.JSON(), nullable=False, server_default="[]"),
     )
     zip_content: bytes = SqlField(sa_column=Column(sa.LargeBinary(), nullable=False))
+    tools_pointer: str | None = SqlField(
+        default=None, sa_column=Column(sa.Text(), nullable=True)
+    )
 
 
 class SkillCreate(PydanticBaseModel):
     name: str = Field(min_length=1, max_length=255)
     required_providers: list[SecretProvider] = Field(default_factory=list)
     zip_content: bytes
+    tools_pointer: str | None = None
 
 
 class SkillUpdate(PydanticBaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     required_providers: list[SecretProvider] | None = Field(default=None)
     zip_content: bytes | None = None
+    tools_pointer: str | None = None
 
 
 class SkillRead(PydanticBaseModel):
@@ -54,6 +59,7 @@ class SkillRead(PydanticBaseModel):
     name: str
     source: SkillSource
     required_providers: list[SecretProvider]
+    tools_pointer: str | None
     created_at: datetime
     updated_at: datetime
 
