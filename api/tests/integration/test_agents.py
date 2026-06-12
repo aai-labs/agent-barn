@@ -159,9 +159,9 @@ def test_create_agent_optional_md_gets_defaults():
             assert_that(body["template_version"], equal_to(1))
 
             repository: AgentRepository = context.injector.get(AgentRepository)
-            from uuid import UUID
-
-            template = repository.get_template(UUID(body["template_id"]))
+            template = repository.get_template_by_slug_and_version(
+                context.organization.id, body["template_slug"], 1
+            )
             assert_that(template, is_not(none()))
             assert_that(template.user_md, is_not(none()))
             assert_that(template.tools_md, is_not(none()))

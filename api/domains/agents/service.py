@@ -72,6 +72,7 @@ from api.domains.agents.models import (
 )
 from api.domains.agents.error_messages import friendly_k8s_error, friendly_pod_reason
 from api.domains.agents.repository import AgentRepository
+from api.domains.agents.slug import generate_template_slug
 from api.domains.auth.models import CurrentUserContext
 from api.domains.conversations.service import ConversationSyncService
 from api.domains.tool_calls.sync_service import ToolCallSyncService
@@ -178,7 +179,7 @@ class AgentService:
             platform=agent.platform,
             agent_type=agent.agent_type,
             organization_id=agent.organization_id,
-            template_id=agent.template_id,
+            template_slug=agent.template_slug,
             template_version=agent.template_version,
             model=agent.model,
             slack_config=slack_config_read,
@@ -213,14 +214,15 @@ class AgentService:
                     status_code=status.HTTP_400_BAD_REQUEST, detail=reason
                 )
 
+        slug = generate_template_slug(data.name)
         agent = Agent(
             organization_id=org_id,
             name=data.name,
             model=data.model or "",
             platform=data.platform,
             agent_type=data.agent_type,
-            template_id=None,  # ty: ignore[invalid-argument-type]
-            template_version=0,
+            template_slug=slug,
+            template_version=1,
         )
 
         if self.config.litellm_base_url and self.config.litellm_secret_name:
@@ -237,6 +239,7 @@ class AgentService:
 
         template = AgentTemplate(
             organization_id=org_id,
+            template_slug=slug,
             version=1,
             soul_md=data.soul_md,
             identity_md=data.identity_md,
@@ -247,14 +250,9 @@ class AgentService:
             bootstrap_md=data.bootstrap_md or DEFAULT_BOOTSTRAP_MD,
             heartbeat_md=data.heartbeat_md or DEFAULT_HEARTBEAT_MD,
         )
+        # The agent's composite FK requires the template row to exist first.
         self.repository.save_template(template)
-
-        agent.template_id = template.id
-        agent.template_version = template.version
         self.repository.save(agent)
-
-        template.agent_id = agent.id
-        self.repository.save_template(template)
 
         slack_config = None
         teams_config = None
@@ -327,9 +325,9 @@ class AgentService:
         self, agent_id: UUID, version: int, context: CurrentUserContext
     ) -> AgentTemplateRead:
         org_id = self._org_id(context)
-        self._get_active_or_404(agent_id, org_id)
-        template = self.repository.get_template_by_agent_and_version(
-            agent_id, version, org_id
+        agent = self._get_active_or_404(agent_id, org_id)
+        template = self.repository.get_template_by_slug_and_version(
+            org_id, agent.template_slug, version
         )
         if not template:
             raise HTTPException(
@@ -401,10 +399,12 @@ class AgentService:
             )
 
         if _MD_FIELDS & updated.keys():
-            old_template = self.repository.get_template(agent.template_id)
+            old_template = self.repository.get_template_or_raise(
+                org_id, agent.template_slug, agent.template_version
+            )
             new_template = AgentTemplate(
                 organization_id=org_id,
-                agent_id=agent.id,
+                template_slug=agent.template_slug,
                 version=old_template.version + 1,
                 soul_md=updated.get("soul_md", old_template.soul_md),
                 identity_md=updated.get("identity_md", old_template.identity_md),
@@ -416,7 +416,6 @@ class AgentService:
                 heartbeat_md=updated.get("heartbeat_md", old_template.heartbeat_md),
             )
             self.repository.save_template(new_template)
-            agent.template_id = new_template.id
             agent.template_version = new_template.version
 
         if "name" in updated:
@@ -527,7 +526,9 @@ class AgentService:
                 detail=f"Agent {agent_id} is already running",
             )
 
-        template = self.repository.get_template(agent.template_id)
+        template = self.repository.get_template_or_raise(
+            org_id, agent.template_slug, agent.template_version
+        )
         ns = self.config.k8s_namespace
 
         name = f"agent-{agent.id}"

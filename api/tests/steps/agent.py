@@ -24,6 +24,7 @@ from api.domains.agents.models import (
     AgentType,
 )
 from api.domains.agents.repository import AgentRepository
+from api.domains.agents.slug import generate_template_slug
 from api.domains.auth.utils import set_default_org_id
 from api.infrastructure.crypto import encrypt_token
 from api.infrastructure.kubernetes.client import KubernetesClient
@@ -72,6 +73,7 @@ def there_is_an_agent(
 
         template = AgentTemplate(
             organization_id=org_id,
+            template_slug=generate_template_slug(name),
             version=1,
             soul_md="# Soul\n\nTest soul.",
             identity_md="# Identity\n\nTest identity.",
@@ -92,7 +94,7 @@ def there_is_an_agent(
             status=status,
             platform=platform,
             agent_type=agent_type,
-            template_id=template.id,
+            template_slug=template.template_slug,
             template_version=template.version,
         )
 
@@ -122,9 +124,6 @@ def there_is_an_agent(
                 tenant_id=TEST_TEAMS_TENANT_ID,
             )
             repository.save_teams_config(teams_config)
-
-        template.agent_id = agent.id
-        repository.save_template(template)
 
         context.agent = agent
 

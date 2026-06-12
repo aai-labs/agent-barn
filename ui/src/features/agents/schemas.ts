@@ -23,7 +23,7 @@ export const AgentSchema = z.object({
   platform: z.enum(["slack", "teams"]),
   agentType: z.enum(["openclaw", "hermes"]).default("openclaw"),
   organizationId: z.string().uuid(),
-  templateId: z.string().uuid(),
+  templateSlug: z.string(),
   templateVersion: z.number().int(),
   model: z.string(),
   slackConfig: AgentSlackConfigSchema.nullable().optional(),
@@ -37,6 +37,7 @@ export const AgentSchema = z.object({
 export const AgentTemplateReadSchema = z.object({
   id: z.string().uuid(),
   organizationId: z.string().uuid(),
+  templateSlug: z.string(),
   version: z.number().int(),
   soulMd: z.string(),
   identityMd: z.string(),

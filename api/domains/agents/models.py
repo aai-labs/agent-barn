@@ -170,15 +170,18 @@ class AgentTemplate(BaseModel, table=True):
 
     __table_args__ = (
         sa.Index("ix_agent_template_organization_id", "organization_id"),
-        sa.Index("ix_agent_template_agent_version", "agent_id", "version"),
+        sa.UniqueConstraint(
+            "organization_id",
+            "template_slug",
+            "version",
+            name="uq_agent_template_org_slug_version",
+        ),
     )
 
     organization_id: UUID = SqlField(
         foreign_key="organization.id", nullable=False, ondelete="CASCADE"
     )
-    agent_id: UUID | None = SqlField(
-        default=None, foreign_key="agent.id", nullable=True
-    )
+    template_slug: str = SqlField(nullable=False, max_length=255)
     version: int = SqlField(nullable=False)
     soul_md: str = SqlField(nullable=False)
     identity_md: str = SqlField(nullable=False)
@@ -196,6 +199,16 @@ class Agent(BaseModel, table=True):
     __table_args__ = (
         Index("ix_agent_organization_deleted", "organization_id", "deleted_at"),
         sa.Index("ix_agent_status", "status"),
+        sa.ForeignKeyConstraint(
+            ["organization_id", "template_slug", "template_version"],
+            [
+                "agent_template.organization_id",
+                "agent_template.template_slug",
+                "agent_template.version",
+            ],
+            name="fk_agent_template_slug_version",
+            ondelete="RESTRICT",
+        ),
     )
 
     organization_id: UUID = SqlField(
@@ -212,9 +225,7 @@ class Agent(BaseModel, table=True):
         nullable=True,
         sa_type=sa.DateTime(timezone=True),  # type: ignore
     )
-    template_id: UUID = SqlField(
-        foreign_key="agent_template.id", nullable=False, ondelete="RESTRICT"
-    )
+    template_slug: str = SqlField(nullable=False, max_length=255)
     template_version: int = SqlField(nullable=False)
     model: str = SqlField(nullable=False, default="")
     platform: AgentPlatform = SqlField(
@@ -451,7 +462,7 @@ class AgentRead(PydanticBaseModel):
     platform: AgentPlatform
     agent_type: AgentType
     organization_id: UUID
-    template_id: UUID
+    template_slug: str
     template_version: int
     model: str
     slack_config: AgentSlackConfigRead | None = None
@@ -467,6 +478,7 @@ class AgentTemplateRead(PydanticBaseModel):
 
     id: UUID
     organization_id: UUID
+    template_slug: str
     version: int
     soul_md: str
     identity_md: str

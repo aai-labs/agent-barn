@@ -2,6 +2,7 @@ import { Page } from "@playwright/test";
 
 export const MOCK_AGENT_ID = "33333333-3333-4333-8333-333333333333";
 export const MOCK_TEMPLATE_ID = "44444444-4444-4444-8444-444444444444";
+export const MOCK_TEMPLATE_SLUG = "maya-3f9a2c1b";
 export const MOCK_ORG_ID = "22222222-2222-4222-8222-222222222222";
 
 export const mockAgent = {
@@ -10,7 +11,7 @@ export const mockAgent = {
   status: "RUNNING",
   platform: "slack",
   organization_id: MOCK_ORG_ID,
-  template_id: MOCK_TEMPLATE_ID,
+  template_slug: MOCK_TEMPLATE_SLUG,
   template_version: 1,
   model: "litellm/gpt-5-mini",
   slack_config: {
@@ -41,6 +42,7 @@ export const mockToolCall = {
 export const mockAgentTemplate = {
   id: MOCK_TEMPLATE_ID,
   organization_id: MOCK_ORG_ID,
+  template_slug: MOCK_TEMPLATE_SLUG,
   version: 1,
   soul_md: "# Soul\nYou are a helpful assistant.",
   identity_md: "# Identity\nYou are an AI embedded in Slack.",
