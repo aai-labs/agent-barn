@@ -2165,139 +2165,6 @@ def test_create_agent_duplicate_skill_ids_assigns_skill_once():
             assert_that(len(agent_skills), equal_to(1))
 
 
-def test_create_agent_skill_pointer_appended_to_tools_md():
-    with given(
-        [
-            *_GIVEN,
-            there_is_a_skill(
-                name="Pointed Skill",
-                tools_pointer="\nSee ./skills/pointed/skill.md\n",
-            ),
-        ]
-    ) as context:
-        client: TestClient = context.client
-        payload = {**_VALID_CREATE, "skill_ids": [str(context.skill.id)]}
-
-        with when("I create an agent with a skill that has a tools_pointer"):
-            response = client.post(_BASE, json=payload, headers=_auth(context))
-
-        with then("the agent template's tools_md contains the pointer"):
-            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
-            repository: AgentRepository = context.injector.get(AgentRepository)
-            from uuid import UUID
-
-            template = repository.get_template(UUID(response.json()["template_id"]))
-            assert_that(template.tools_md, contains_string("./skills/pointed/skill.md"))
-
-
-# --- update agent skill pointer sync ---
-
-
-def test_update_agent_adding_skill_appends_pointer_to_tools_md():
-    with given(
-        [
-            *_GIVEN,
-            there_is_an_agent(),
-            there_is_a_skill(
-                name="Pointed Skill",
-                tools_pointer="\nSee ./skills/pointed/skill.md\n",
-            ),
-        ]
-    ) as context:
-        client: TestClient = context.client
-
-        with when("I add a skill with a tools_pointer via PATCH"):
-            response = client.patch(
-                f"{_BASE}/{context.agent.id}",
-                json={"skill_ids": [str(context.skill.id)]},
-                headers=_auth(context),
-            )
-
-        with then("the new template's tools_md contains the pointer"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            repository: AgentRepository = context.injector.get(AgentRepository)
-            from uuid import UUID
-
-            template = repository.get_template(UUID(response.json()["template_id"]))
-            assert_that(template.tools_md, contains_string("./skills/pointed/skill.md"))
-
-
-def test_update_agent_removing_skill_removes_pointer_from_tools_md():
-    with given(
-        [
-            *_GIVEN,
-            there_is_an_agent(),
-            there_is_a_skill(
-                name="Pointed Skill",
-                tools_pointer="\nSee ./skills/pointed/skill.md\n",
-            ),
-        ]
-    ) as context:
-        client: TestClient = context.client
-        repository: AgentRepository = context.injector.get(AgentRepository)
-        from uuid import UUID
-
-        # Add the skill first so the pointer lands in tools_md
-        client.patch(
-            f"{_BASE}/{context.agent.id}",
-            json={"skill_ids": [str(context.skill.id)]},
-            headers=_auth(context),
-        )
-
-        with when("I remove the skill via PATCH"):
-            response = client.patch(
-                f"{_BASE}/{context.agent.id}",
-                json={"removed_skill_ids": [str(context.skill.id)]},
-                headers=_auth(context),
-            )
-
-        with then("the new template's tools_md no longer contains the pointer"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            template = repository.get_template(UUID(response.json()["template_id"]))
-            assert_that(
-                template.tools_md,
-                is_not(contains_string("./skills/pointed/skill.md")),
-            )
-
-
-def test_update_agent_explicit_tools_md_preserves_skill_pointers():
-    with given(
-        [
-            *_GIVEN,
-            there_is_an_agent(),
-            there_is_a_skill(
-                name="Pointed Skill",
-                tools_pointer="\nSee ./skills/pointed/skill.md\n",
-            ),
-        ]
-    ) as context:
-        client: TestClient = context.client
-        # Add the skill first so the pointer is in tools_md
-        client.patch(
-            f"{_BASE}/{context.agent.id}",
-            json={"skill_ids": [str(context.skill.id)]},
-            headers=_auth(context),
-        )
-
-        with when("I update tools_md explicitly without touching skills"):
-            response = client.patch(
-                f"{_BASE}/{context.agent.id}",
-                json={"tools_md": "# My Custom Tools\n\nSome notes.\n"},
-                headers=_auth(context),
-            )
-
-        with then(
-            "the new template's tools_md has the custom base AND the skill pointer"
-        ):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            repository: AgentRepository = context.injector.get(AgentRepository)
-            from uuid import UUID
-
-            template = repository.get_template(UUID(response.json()["template_id"]))
-            assert_that(template.tools_md, contains_string("My Custom Tools"))
-            assert_that(template.tools_md, contains_string("./skills/pointed/skill.md"))
-
-
 # --- skills.json in ConfigMap on start ---
 
 
@@ -2343,3 +2210,32 @@ def test_start_agent_without_skills_has_no_skills_json_in_configmap():
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             config_map = k8s.create_config_map.call_args.args[1]
             assert_that(config_map.data, is_not(has_key("skills.json")))
+
+
+def test_start_agent_with_skill_pointer_injects_pointer_into_tools_md():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(),
+            there_is_a_skill(
+                name="Pointed Skill",
+                tools_pointer="\nSee ./skills/pointed/skill.md\n",
+            ),
+            skill_is_assigned_to_agent(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+
+        with when("I start the agent"):
+            response = client.post(
+                f"{_BASE}/{context.agent.id}/start", headers=_auth(context)
+            )
+
+        with then("the ConfigMap TOOLS.md contains the skill pointer"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            assert_that(
+                config_map.data["TOOLS.md"],
+                contains_string("./skills/pointed/skill.md"),
+            )

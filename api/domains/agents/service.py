@@ -341,8 +341,7 @@ class AgentService:
             soul_md=data.soul_md,
             identity_md=data.identity_md,
             user_md=data.user_md or DEFAULT_USER_MD,
-            tools_md=(data.tools_md or DEFAULT_TOOLS_MD)
-            + self._build_skill_pointers(skills_to_assign),
+            tools_md=data.tools_md or DEFAULT_TOOLS_MD,
             agents_md=data.agents_md or DEFAULT_AGENTS_MD,
             boot_md=data.boot_md or DEFAULT_BOOT_MD,
             bootstrap_md=data.bootstrap_md or DEFAULT_BOOTSTRAP_MD,
@@ -508,28 +507,24 @@ class AgentService:
                 detail="Cannot set Teams fields on a Slack agent",
             )
 
-        skills_changing = bool(data.skill_ids or data.removed_skill_ids)
-        md_fields_changing = bool(_MD_FIELDS & updated.keys())
-
-        # Pre-fetch old skill data before any DB writes so we can reconstruct
-        # the tools_md base (strip old pointers) after changes are applied.
-        _old_skill_ids: set[UUID] = set()
-        _old_skill_pointers = ""
-        if skills_changing or "tools_md" in updated:
-            if "tools_md" not in updated:
-                _pre_skills = [
-                    s
-                    for _, s in self.skill_repository.get_agent_skills_with_details(
-                        agent.id
-                    )
-                ]
-                _old_skill_ids = {s.id for s in _pre_skills}
-                _old_skill_pointers = self._build_skill_pointers(_pre_skills)
-            else:
-                _old_skill_ids = {
-                    row.skill_id
-                    for row in self.repository.get_skills_for_agent(agent.id)
-                }
+        if _MD_FIELDS & updated.keys():
+            old_template = self.repository.get_template(agent.template_id)
+            new_template = AgentTemplate(
+                organization_id=org_id,
+                agent_id=agent.id,
+                version=old_template.version + 1,
+                soul_md=updated.get("soul_md", old_template.soul_md),
+                identity_md=updated.get("identity_md", old_template.identity_md),
+                user_md=updated.get("user_md", old_template.user_md),
+                tools_md=updated.get("tools_md", old_template.tools_md),
+                agents_md=updated.get("agents_md", old_template.agents_md),
+                boot_md=updated.get("boot_md", old_template.boot_md),
+                bootstrap_md=updated.get("bootstrap_md", old_template.bootstrap_md),
+                heartbeat_md=updated.get("heartbeat_md", old_template.heartbeat_md),
+            )
+            self.repository.save_template(new_template)
+            agent.template_id = new_template.id
+            agent.template_version = new_template.version
 
         if "name" in updated:
             agent.name = updated["name"]
@@ -595,7 +590,7 @@ class AgentService:
                     teams_config.tenant_id = updated["teams_tenant_id"]
                 self.repository.save_teams_config(teams_config)
 
-        # Validate skills accessibility and secret coverage before any DB writes.
+        # Validate skills accessibility and secret coverage
         if data.skill_ids or data.removed_secret_providers:
             self._validate_skill_update(agent, data, org_id)
 
@@ -635,49 +630,6 @@ class AgentService:
             self.repository.remove_skill(agent.id, skill_id)
         for skill_id in dict.fromkeys(data.skill_ids):
             self.repository.add_skill(agent.id, skill_id)
-
-        # Build and save new template now that all validations have passed
-        # and skill assignments are up to date.
-        if md_fields_changing or skills_changing:
-            old_template = self.repository.get_template(agent.template_id)
-
-            if "tools_md" in updated or skills_changing:
-                if "tools_md" in updated:
-                    tools_md_base = updated["tools_md"]
-                else:
-                    tools_md_base = (
-                        old_template.tools_md.removesuffix(_old_skill_pointers)
-                        if _old_skill_pointers
-                        else old_template.tools_md
-                    )
-                new_skill_ids = (_old_skill_ids - set(data.removed_skill_ids)) | set(
-                    data.skill_ids
-                )
-                new_skills = (
-                    self.skill_repository.get_many_by_ids(list(new_skill_ids))
-                    if new_skill_ids
-                    else []
-                )
-                new_tools_md = tools_md_base + self._build_skill_pointers(new_skills)
-            else:
-                new_tools_md = old_template.tools_md
-
-            new_template = AgentTemplate(
-                organization_id=org_id,
-                agent_id=agent.id,
-                version=old_template.version + 1,
-                soul_md=updated.get("soul_md", old_template.soul_md),
-                identity_md=updated.get("identity_md", old_template.identity_md),
-                user_md=updated.get("user_md", old_template.user_md),
-                tools_md=new_tools_md,
-                agents_md=updated.get("agents_md", old_template.agents_md),
-                boot_md=updated.get("boot_md", old_template.boot_md),
-                bootstrap_md=updated.get("bootstrap_md", old_template.bootstrap_md),
-                heartbeat_md=updated.get("heartbeat_md", old_template.heartbeat_md),
-            )
-            self.repository.save_template(new_template)
-            agent.template_id = new_template.id
-            agent.template_version = new_template.version
 
         self.repository.save(agent)
         return self._get_agent_read(agent)
@@ -897,6 +849,9 @@ class AgentService:
         skills_json = (
             build_skills_manifest_from_zips(agent_skills) if agent_skills else None
         )
+        tools_md = template.tools_md + self._build_skill_pointers(
+            [s for _, s in agent_skills]
+        )
 
         if agent.agent_type == AgentType.HERMES:
             assert hermes_cfg is not None
@@ -907,7 +862,7 @@ class AgentService:
                 soul_md=template.soul_md,
                 identity_md=template.identity_md,
                 user_md=template.user_md,
-                tools_md=template.tools_md,
+                tools_md=tools_md,
                 agents_md=template.agents_md,
                 boot_md=template.boot_md,
                 heartbeat_md=template.heartbeat_md,
@@ -924,7 +879,7 @@ class AgentService:
                 soul_md=template.soul_md,
                 identity_md=template.identity_md,
                 user_md=template.user_md,
-                tools_md=template.tools_md,
+                tools_md=tools_md,
                 agents_md=template.agents_md,
                 boot_md=template.boot_md,
                 bootstrap_md=template.bootstrap_md,
