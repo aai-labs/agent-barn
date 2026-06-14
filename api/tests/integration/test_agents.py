@@ -2165,6 +2165,123 @@ def test_create_agent_duplicate_skill_ids_assigns_skill_once():
             assert_that(len(agent_skills), equal_to(1))
 
 
+# --- skill assignment on agent update ---
+
+
+def test_patch_agent_adds_skill():
+    with given(
+        [*_GIVEN, there_is_an_agent(), there_is_a_skill(name="New Skill")]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("I add a skill via PATCH"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"skill_ids": [str(context.skill.id)]},
+                headers=_auth(context),
+            )
+
+        with then("it returns 200 and the skill is assigned"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            body = response.json()
+            repository: AgentRepository = context.injector.get(AgentRepository)
+            from uuid import UUID
+
+            agent_skills = repository.get_skills_for_agent(UUID(body["id"]))
+            assert_that(len(agent_skills), equal_to(1))
+            assert_that(agent_skills[0].skill_id, equal_to(context.skill.id))
+            assert_that(len(body["skills"]), equal_to(1))
+            assert_that(body["skills"][0]["id"], equal_to(str(context.skill.id)))
+
+
+def test_patch_agent_removes_skill():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(),
+            there_is_a_skill(name="Removable Skill"),
+            skill_is_assigned_to_agent(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("I remove the skill via PATCH"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"removed_skill_ids": [str(context.skill.id)]},
+                headers=_auth(context),
+            )
+
+        with then("it returns 200 and the skill is no longer assigned"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            body = response.json()
+            repository: AgentRepository = context.injector.get(AgentRepository)
+            from uuid import UUID
+
+            agent_skills = repository.get_skills_for_agent(UUID(body["id"]))
+            assert_that(len(agent_skills), equal_to(0))
+            assert_that(len(body["skills"]), equal_to(0))
+
+
+def test_patch_agent_add_skill_from_other_org_returns_404():
+    with given(
+        [*_GIVEN, there_is_an_agent(), there_is_a_skill_for_another_org()]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("I add a skill from another org via PATCH"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"skill_ids": [str(context.other_org_skill.id)]},
+                headers=_auth(context),
+            )
+
+        with then("it returns 404"):
+            assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_patch_agent_add_unknown_skill_returns_404():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        from uuid import uuid4
+
+        with when("I add a non-existent skill via PATCH"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"skill_ids": [str(uuid4())]},
+                headers=_auth(context),
+            )
+
+        with then("it returns 404"):
+            assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_patch_agent_add_skill_missing_provider_returns_400():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(),
+            there_is_a_skill(
+                name="GitHub Skill",
+                required_providers=[SecretProvider.GITHUB],
+            ),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("I add a skill that requires GitHub without providing the secret"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"skill_ids": [str(context.skill.id)]},
+                headers=_auth(context),
+            )
+
+        with then("it returns 400 naming the skill and the missing provider"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], contains_string("GitHub Skill"))
+            assert_that(response.json()["detail"], contains_string("github"))
+
+
 # --- skills.json in ConfigMap on start ---
 
 
