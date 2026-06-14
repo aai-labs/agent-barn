@@ -34,7 +34,10 @@ from api.tests.steps.agent import (
     TEST_ENCRYPTION_KEY,
     MockK8sModule,
     MockLiteLLMModule,
+    skill_is_assigned_to_agent,
     there_is_an_agent,
+    there_is_a_skill,
+    there_is_a_skill_for_another_org,
     use_org_for_auth,
 )
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
@@ -2030,3 +2033,286 @@ def test_start_slack_agent_with_invalid_tokens_sets_error_status():
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             assert_that(response.json()["status"], equal_to(AgentStatus.ERROR.value))
             k8s.create_deployment.assert_not_called()
+
+
+# --- skill assignment on agent creation ---
+
+
+def test_create_agent_with_valid_skill_assigns_it():
+    with given([*_GIVEN, there_is_a_skill(name="My Skill")]) as context:
+        client: TestClient = context.client
+        payload = {**_VALID_CREATE, "skill_ids": [str(context.skill.id)]}
+
+        with when("I create an agent with a valid skill"):
+            response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("it returns 201 and the skill is assigned"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            repository: AgentRepository = context.injector.get(AgentRepository)
+            from uuid import UUID
+            agent_skills = repository.get_skills_for_agent(UUID(response.json()["id"]))
+            assert_that(len(agent_skills), equal_to(1))
+            assert_that(agent_skills[0].skill_id, equal_to(context.skill.id))
+
+
+def test_create_agent_with_skill_from_other_org_returns_404():
+    with given([*_GIVEN, there_is_a_skill_for_another_org()]) as context:
+        client: TestClient = context.client
+        payload = {**_VALID_CREATE, "skill_ids": [str(context.other_org_skill.id)]}
+
+        with when("I create an agent using a skill that belongs to another org"):
+            response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("it returns 404"):
+            assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_create_agent_with_unknown_skill_id_returns_404():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        from uuid import uuid4
+        payload = {**_VALID_CREATE, "skill_ids": [str(uuid4())]}
+
+        with when("I create an agent with a non-existent skill"):
+            response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("it returns 404"):
+            assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_create_agent_skill_missing_provider_returns_400():
+    with given([
+        *_GIVEN,
+        there_is_a_skill(
+            name="GitHub Skill",
+            required_providers=[SecretProvider.GITHUB],
+        ),
+    ]) as context:
+        client: TestClient = context.client
+        payload = {**_VALID_CREATE, "skill_ids": [str(context.skill.id)]}
+
+        with when("I create an agent without providing the required GitHub secret"):
+            response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("it returns 400 naming the skill and the missing provider"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], contains_string("GitHub Skill"))
+            assert_that(response.json()["detail"], contains_string("github"))
+
+
+def test_create_agent_skill_with_covered_provider_assigns_skill():
+    with given([
+        *_GIVEN,
+        there_is_a_skill(
+            name="GitHub Skill",
+            required_providers=[SecretProvider.GITHUB],
+        ),
+    ]) as context:
+        client: TestClient = context.client
+        payload = {
+            **_VALID_CREATE,
+            "skill_ids": [str(context.skill.id)],
+            "secrets": [
+                {
+                    "provider": "github",
+                    "content": {
+                        "token": "ghp_token",
+                        "owner": "my-org",
+                        "repo": "my-repo",
+                        "org": "my-org",
+                    },
+                }
+            ],
+        }
+
+        with when("I create an agent with the required GitHub secret"):
+            response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("it returns 201 and the skill is assigned"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            repository: AgentRepository = context.injector.get(AgentRepository)
+            from uuid import UUID
+            agent_skills = repository.get_skills_for_agent(UUID(response.json()["id"]))
+            assert_that(len(agent_skills), equal_to(1))
+
+
+def test_create_agent_duplicate_skill_ids_assigns_skill_once():
+    with given([*_GIVEN, there_is_a_skill(name="Dedup Skill")]) as context:
+        client: TestClient = context.client
+        skill_id = str(context.skill.id)
+        payload = {**_VALID_CREATE, "skill_ids": [skill_id, skill_id]}
+
+        with when("I create an agent with the same skill_id twice"):
+            response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("it returns 201 and the skill is assigned only once"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            repository: AgentRepository = context.injector.get(AgentRepository)
+            from uuid import UUID
+            agent_skills = repository.get_skills_for_agent(UUID(response.json()["id"]))
+            assert_that(len(agent_skills), equal_to(1))
+
+
+def test_create_agent_skill_pointer_appended_to_tools_md():
+    with given([
+        *_GIVEN,
+        there_is_a_skill(
+            name="Pointed Skill",
+            tools_pointer="\nSee ./skills/pointed/skill.md\n",
+        ),
+    ]) as context:
+        client: TestClient = context.client
+        payload = {**_VALID_CREATE, "skill_ids": [str(context.skill.id)]}
+
+        with when("I create an agent with a skill that has a tools_pointer"):
+            response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("the agent template's tools_md contains the pointer"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            repository: AgentRepository = context.injector.get(AgentRepository)
+            from uuid import UUID
+            template = repository.get_template(UUID(response.json()["template_id"]))
+            assert_that(template.tools_md, contains_string("./skills/pointed/skill.md"))
+
+
+# --- update agent skill pointer sync ---
+
+
+def test_update_agent_adding_skill_appends_pointer_to_tools_md():
+    with given([
+        *_GIVEN,
+        there_is_an_agent(),
+        there_is_a_skill(
+            name="Pointed Skill",
+            tools_pointer="\nSee ./skills/pointed/skill.md\n",
+        ),
+    ]) as context:
+        client: TestClient = context.client
+
+        with when("I add a skill with a tools_pointer via PATCH"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"skill_ids": [str(context.skill.id)]},
+                headers=_auth(context),
+            )
+
+        with then("the new template's tools_md contains the pointer"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            repository: AgentRepository = context.injector.get(AgentRepository)
+            from uuid import UUID
+            template = repository.get_template(UUID(response.json()["template_id"]))
+            assert_that(template.tools_md, contains_string("./skills/pointed/skill.md"))
+
+
+def test_update_agent_removing_skill_removes_pointer_from_tools_md():
+    with given([
+        *_GIVEN,
+        there_is_an_agent(),
+        there_is_a_skill(
+            name="Pointed Skill",
+            tools_pointer="\nSee ./skills/pointed/skill.md\n",
+        ),
+    ]) as context:
+        client: TestClient = context.client
+        repository: AgentRepository = context.injector.get(AgentRepository)
+        from uuid import UUID
+
+        # Add the skill first so the pointer lands in tools_md
+        client.patch(
+            f"{_BASE}/{context.agent.id}",
+            json={"skill_ids": [str(context.skill.id)]},
+            headers=_auth(context),
+        )
+
+        with when("I remove the skill via PATCH"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"removed_skill_ids": [str(context.skill.id)]},
+                headers=_auth(context),
+            )
+
+        with then("the new template's tools_md no longer contains the pointer"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            template = repository.get_template(UUID(response.json()["template_id"]))
+            assert_that(
+                template.tools_md,
+                is_not(contains_string("./skills/pointed/skill.md")),
+            )
+
+
+def test_update_agent_explicit_tools_md_preserves_skill_pointers():
+    with given([
+        *_GIVEN,
+        there_is_an_agent(),
+        there_is_a_skill(
+            name="Pointed Skill",
+            tools_pointer="\nSee ./skills/pointed/skill.md\n",
+        ),
+    ]) as context:
+        client: TestClient = context.client
+        # Add the skill first so the pointer is in tools_md
+        client.patch(
+            f"{_BASE}/{context.agent.id}",
+            json={"skill_ids": [str(context.skill.id)]},
+            headers=_auth(context),
+        )
+
+        with when("I update tools_md explicitly without touching skills"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"tools_md": "# My Custom Tools\n\nSome notes.\n"},
+                headers=_auth(context),
+            )
+
+        with then("the new template's tools_md has the custom base AND the skill pointer"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            repository: AgentRepository = context.injector.get(AgentRepository)
+            from uuid import UUID
+            template = repository.get_template(UUID(response.json()["template_id"]))
+            assert_that(template.tools_md, contains_string("My Custom Tools"))
+            assert_that(template.tools_md, contains_string("./skills/pointed/skill.md"))
+
+
+# --- skills.json in ConfigMap on start ---
+
+
+def test_start_agent_with_skill_includes_skills_json_in_configmap():
+    import json as _json
+
+    with given([
+        *_GIVEN,
+        there_is_an_agent(),
+        there_is_a_skill(name="Mounted Skill"),
+        skill_is_assigned_to_agent(),
+    ]) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+
+        with when("I start an agent that has an assigned skill"):
+            response = client.post(
+                f"{_BASE}/{context.agent.id}/start", headers=_auth(context)
+            )
+
+        with then("the ConfigMap contains skills.json with the skill's files"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            assert_that(config_map.data, has_key("skills.json"))
+            entries = _json.loads(config_map.data["skills.json"])
+            assert_that(len(entries), equal_to(1))
+            assert_that(entries[0]["path"], equal_to("skill.md"))
+
+
+def test_start_agent_without_skills_has_no_skills_json_in_configmap():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+
+        with when("I start an agent with no assigned skills"):
+            response = client.post(
+                f"{_BASE}/{context.agent.id}/start", headers=_auth(context)
+            )
+
+        with then("the ConfigMap does not contain skills.json"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            assert_that(config_map.data, is_not(has_key("skills.json")))

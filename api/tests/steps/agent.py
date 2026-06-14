@@ -138,3 +138,82 @@ def use_org_for_auth():
         return LambdaWith(lambda: None, lambda: set_default_org_id(None))
 
     return step
+
+
+def skill_is_assigned_to_agent():
+    def step(context):
+        from api.domains.agents.models import AgentSkill
+        from api.domains.agents.repository import AgentRepository
+
+        repo: AgentRepository = context.injector.get(AgentRepository)
+        repo.save_skills([AgentSkill(agent_id=context.agent.id, skill_id=context.skill.id)])
+
+    return step
+
+
+def there_is_a_skill_for_another_org():
+    def step(context):
+        from api.tests.steps.organization import there_is_an_organization
+
+        original_org = context.organization
+        there_is_an_organization(name="Other Org")(context)
+        other_org_id = context.organization.id
+        context.organization = original_org
+
+        import io
+        import zipfile
+
+        from api.domains.skills.models import Skill, SkillSource
+        from api.domains.skills.repository import SkillRepository
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("skill.md", "# Other Org Skill")
+
+        skill = Skill(
+            organization_id=other_org_id,
+            name="Other Org Skill",
+            source=SkillSource.CUSTOM,
+            required_providers=[],
+            zip_content=buf.getvalue(),
+        )
+        repo: SkillRepository = context.injector.get(SkillRepository)
+        repo.save(skill)
+        context.other_org_skill = skill
+
+    return step
+
+
+def there_is_a_skill(
+    name: str = "Test Skill",
+    required_providers: list | None = None,
+    tools_pointer: str | None = None,
+    global_skill: bool = False,
+):
+    def step(context):
+        import io
+        import zipfile
+
+        from api.domains.skills.models import Skill, SkillSource
+        from api.domains.skills.repository import SkillRepository
+
+        org_id = None if global_skill else context.organization.id
+        source = SkillSource.AAI_CLI if global_skill else SkillSource.CUSTOM
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("skill.md", f"# {name}")
+
+        skill = Skill(
+            organization_id=org_id,
+            name=name,
+            source=source,
+            required_providers=required_providers or [],
+            zip_content=buf.getvalue(),
+            tools_pointer=tools_pointer,
+        )
+        repo: SkillRepository = context.injector.get(SkillRepository)
+        repo.save(skill)
+        context.skill = skill
+
+    return step

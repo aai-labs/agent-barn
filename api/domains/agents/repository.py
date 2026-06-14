@@ -175,10 +175,32 @@ class AgentRepository:
                 session.delete(secret)
                 session.commit()
 
-    # --- Skills (source-agnostic: aai_cli now, custom later) ---
+    # --- Skills ---
 
     def save_skills(self, skills: list[AgentSkill]) -> None:
         self.delegate.save_all(skills)
+
+    def add_skill(self, agent_id: UUID, skill_id: UUID) -> None:
+        with Session(self.delegate.engine) as session:
+            existing = session.exec(
+                select(AgentSkill)
+                .where(col(AgentSkill.agent_id) == agent_id)
+                .where(col(AgentSkill.skill_id) == skill_id)
+            ).first()
+            if existing is None:
+                session.add(AgentSkill(agent_id=agent_id, skill_id=skill_id))
+                session.commit()
+
+    def remove_skill(self, agent_id: UUID, skill_id: UUID) -> None:
+        with Session(self.delegate.engine) as session:
+            row = session.exec(
+                select(AgentSkill)
+                .where(col(AgentSkill.agent_id) == agent_id)
+                .where(col(AgentSkill.skill_id) == skill_id)
+            ).first()
+            if row is not None:
+                session.delete(row)
+                session.commit()
 
     def get_skills_for_agent(self, agent_id: UUID) -> list[AgentSkill]:
         with Session(self.delegate.engine) as session:
