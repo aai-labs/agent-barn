@@ -2046,14 +2046,18 @@ def test_create_agent_with_valid_skill_assigns_it():
         with when("I create an agent with a valid skill"):
             response = client.post(_BASE, json=payload, headers=_auth(context))
 
-        with then("it returns 201 and the skill is assigned"):
+        with then("it returns 201, the skill is persisted and present in the response"):
             assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            body = response.json()
             repository: AgentRepository = context.injector.get(AgentRepository)
             from uuid import UUID
 
-            agent_skills = repository.get_skills_for_agent(UUID(response.json()["id"]))
+            agent_skills = repository.get_skills_for_agent(UUID(body["id"]))
             assert_that(len(agent_skills), equal_to(1))
             assert_that(agent_skills[0].skill_id, equal_to(context.skill.id))
+            assert_that(len(body["skills"]), equal_to(1))
+            assert_that(body["skills"][0]["id"], equal_to(str(context.skill.id)))
+            assert_that(body["skills"][0]["name"], equal_to("My Skill"))
 
 
 def test_create_agent_with_skill_from_other_org_returns_404():

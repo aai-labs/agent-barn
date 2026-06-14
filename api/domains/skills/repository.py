@@ -73,3 +73,17 @@ class SkillRepository:
 
     def get_many_by_ids(self, skill_ids: list[UUID]) -> list[Skill]:
         return self.delegate.find_many(Skill, skill_ids)
+
+    def get_skills_for_agents(self, agent_ids: list[UUID]) -> dict[UUID, list[Skill]]:
+        if not agent_ids:
+            return {}
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(AgentSkill, Skill)
+                .join(Skill, col(AgentSkill.skill_id) == col(Skill.id))
+                .where(col(AgentSkill.agent_id).in_(agent_ids))
+            )
+            result: dict[UUID, list[Skill]] = {}
+            for agent_skill, skill in session.exec(query).all():
+                result.setdefault(agent_skill.agent_id, []).append(skill)
+            return result

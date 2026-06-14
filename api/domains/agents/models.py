@@ -438,6 +438,17 @@ class AgentSecretRead(PydanticBaseModel):  # label + provider only — no secret
     secret_name: str
 
 
+class AgentAssignedSkillRead(PydanticBaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    name: str
+    source: str
+    tools_pointer: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
 class AgentRead(PydanticBaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -453,6 +464,7 @@ class AgentRead(PydanticBaseModel):
     slack_config: AgentSlackConfigRead | None = None
     teams_config: AgentTeamsConfigRead | None = None
     secrets: list[AgentSecretRead] = Field(default_factory=list)
+    skills: list[AgentAssignedSkillRead] = Field(default_factory=list)
     webhook_url: str | None = None
     created_at: datetime
     updated_at: datetime

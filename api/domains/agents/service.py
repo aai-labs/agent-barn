@@ -45,6 +45,7 @@ from api.domains.agents.defaults import (
 from api.domains.agents.models import (
     PROVIDER_DISPLAY_NAMES,
     Agent,
+    AgentAssignedSkillRead,
     AgentCreate,
     AgentFilter,
     AgentHealthRead,
@@ -242,6 +243,7 @@ class AgentService:
         slack_config: AgentSlackConfig | None = None,
         teams_config: AgentTeamsConfig | None = None,
         secrets: list[AgentSecret] | None = None,
+        skills: list[Skill] | None = None,
     ) -> AgentRead:
         slack_config_read = (
             AgentSlackConfigRead.model_validate(slack_config) if slack_config else None
@@ -251,6 +253,9 @@ class AgentService:
         )
         secrets_read = [
             AgentSecretRead.model_validate(secret) for secret in (secrets or [])
+        ]
+        skills_read = [
+            AgentAssignedSkillRead.model_validate(skill) for skill in (skills or [])
         ]
         webhook_url = (
             f"{self.config.api_external_url}/api/v1/webhooks/teams/{agent.id}/messages"
@@ -270,6 +275,7 @@ class AgentService:
             slack_config=slack_config_read,
             teams_config=teams_config_read,
             secrets=secrets_read,
+            skills=skills_read,
             webhook_url=webhook_url,
             created_at=agent.created_at,
             updated_at=agent.updated_at,
@@ -283,7 +289,12 @@ class AgentService:
         elif agent.platform == AgentPlatform.TEAMS:
             teams_config = self.repository.get_teams_config(agent.id)
         secrets = self.repository.get_secrets_for_agent(agent.id)
-        return self._build_agent_read(agent, slack_config, teams_config, secrets)
+        skills = [
+            s for _, s in self.skill_repository.get_agent_skills_with_details(agent.id)
+        ]
+        return self._build_agent_read(
+            agent, slack_config, teams_config, secrets, skills
+        )
 
     def create_agent(self, data: AgentCreate, context: CurrentUserContext) -> AgentRead:
         org_id = self._org_id(context)
@@ -409,7 +420,7 @@ class AgentService:
 
         if data.platform == AgentPlatform.TEAMS:
             return self.start_agent(agent.id, context)
-        return self._build_agent_read(agent, slack_config, teams_config, secrets)
+        return self._build_agent_read(agent, slack_config, teams_config, secrets, skills_to_assign)
 
     def get_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
         org_id = self._org_id(context)
@@ -446,6 +457,7 @@ class AgentService:
         slack_configs = self.repository.get_slack_configs_for_agents(agent_ids)
         teams_configs = self.repository.get_teams_configs_for_agents(agent_ids)
         secrets_by_agent = self.repository.get_secrets_for_agents(agent_ids)
+        skills_by_agent = self.skill_repository.get_skills_for_agents(agent_ids)
 
         items = [
             self._build_agent_read(
@@ -453,6 +465,7 @@ class AgentService:
                 slack_configs.get(agent.id),
                 teams_configs.get(agent.id),
                 secrets_by_agent.get(agent.id, []),
+                skills_by_agent.get(agent.id, []),
             )
             for agent in agents
         ]
