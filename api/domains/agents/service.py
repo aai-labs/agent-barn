@@ -420,7 +420,9 @@ class AgentService:
 
         if data.platform == AgentPlatform.TEAMS:
             return self.start_agent(agent.id, context)
-        return self._build_agent_read(agent, slack_config, teams_config, secrets, skills_to_assign)
+        return self._build_agent_read(
+            agent, slack_config, teams_config, secrets, skills_to_assign
+        )
 
     def get_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
         org_id = self._org_id(context)
