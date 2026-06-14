@@ -146,7 +146,9 @@ def skill_is_assigned_to_agent():
         from api.domains.agents.repository import AgentRepository
 
         repo: AgentRepository = context.injector.get(AgentRepository)
-        repo.save_skills([AgentSkill(agent_id=context.agent.id, skill_id=context.skill.id)])
+        repo.save_skills(
+            [AgentSkill(agent_id=context.agent.id, skill_id=context.skill.id)]
+        )
 
     return step
 

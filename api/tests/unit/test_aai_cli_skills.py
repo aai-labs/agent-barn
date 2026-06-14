@@ -23,7 +23,9 @@ def test_aai_cli_provider_skills_has_expected_entries():
 
 def test_each_provider_skill_has_required_providers():
     for skill_def in AAI_CLI_PROVIDER_SKILLS:
-        assert skill_def["required_providers"], f"No required_providers for {skill_def['name']}"
+        assert skill_def["required_providers"], (
+            f"No required_providers for {skill_def['name']}"
+        )
 
 
 def test_each_provider_skill_has_non_empty_files():

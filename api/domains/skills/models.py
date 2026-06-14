@@ -21,7 +21,9 @@ class Skill(BaseModel, table=True):
 
     __table_args__ = (
         sa.Index("ix_skill_organization_id", "organization_id"),
-        sa.UniqueConstraint("organization_id", "name", name="uq_skill_organization_name"),
+        sa.UniqueConstraint(
+            "organization_id", "name", name="uq_skill_organization_name"
+        ),
     )
 
     organization_id: UUID | None = SqlField(

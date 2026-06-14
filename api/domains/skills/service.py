@@ -29,7 +29,7 @@ class SkillService:
     def _get_or_404(self, skill_id: UUID, org_id: UUID) -> Skill:
         skill = self.repository.get_by_id(skill_id)
         if skill is None or (
-                skill.organization_id is not None and skill.organization_id != org_id
+            skill.organization_id is not None and skill.organization_id != org_id
         ):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -56,7 +56,7 @@ class SkillService:
         return SkillRead.model_validate(skill)
 
     def update_skill(
-            self, skill_id: UUID, data: SkillUpdate, context: CurrentUserContext
+        self, skill_id: UUID, data: SkillUpdate, context: CurrentUserContext
     ) -> SkillRead:
         org_id = self._org_id(context)
         skill = self._get_or_404(skill_id, org_id)

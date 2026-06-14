@@ -197,9 +197,9 @@ class AgentService:
 
         current_skill_rows = self.repository.get_skills_for_agent(agent.id)
         current_skill_ids = {row.skill_id for row in current_skill_rows}
-        remaining_skill_ids = (
-            current_skill_ids - set(data.removed_skill_ids)
-        ) | set(data.skill_ids)
+        remaining_skill_ids = (current_skill_ids - set(data.removed_skill_ids)) | set(
+            data.skill_ids
+        )
 
         if not remaining_skill_ids:
             return
@@ -210,9 +210,13 @@ class AgentService:
         removed_providers = set(data.removed_secret_providers or [])
         remaining_providers = (current_providers - removed_providers) | upsert_providers
 
-        remaining_skills = self.skill_repository.get_many_by_ids(list(remaining_skill_ids))
+        remaining_skills = self.skill_repository.get_many_by_ids(
+            list(remaining_skill_ids)
+        )
         for skill in remaining_skills:
-            missing = [p for p in skill.required_providers if p not in remaining_providers]
+            missing = [
+                p for p in skill.required_providers if p not in remaining_providers
+            ]
             if missing:
                 names = ", ".join(p.value for p in missing)
                 raise HTTPException(
@@ -326,7 +330,8 @@ class AgentService:
             soul_md=data.soul_md,
             identity_md=data.identity_md,
             user_md=data.user_md or DEFAULT_USER_MD,
-            tools_md=(data.tools_md or DEFAULT_TOOLS_MD) + self._build_skill_pointers(skills_to_assign),
+            tools_md=(data.tools_md or DEFAULT_TOOLS_MD)
+            + self._build_skill_pointers(skills_to_assign),
             agents_md=data.agents_md or DEFAULT_AGENTS_MD,
             boot_md=data.boot_md or DEFAULT_BOOT_MD,
             bootstrap_md=data.bootstrap_md or DEFAULT_BOOTSTRAP_MD,
@@ -498,13 +503,17 @@ class AgentService:
         if skills_changing or "tools_md" in updated:
             if "tools_md" not in updated:
                 _pre_skills = [
-                    s for _, s in self.skill_repository.get_agent_skills_with_details(agent.id)
+                    s
+                    for _, s in self.skill_repository.get_agent_skills_with_details(
+                        agent.id
+                    )
                 ]
                 _old_skill_ids = {s.id for s in _pre_skills}
                 _old_skill_pointers = self._build_skill_pointers(_pre_skills)
             else:
                 _old_skill_ids = {
-                    row.skill_id for row in self.repository.get_skills_for_agent(agent.id)
+                    row.skill_id
+                    for row in self.repository.get_skills_for_agent(agent.id)
                 }
 
         if "name" in updated:
@@ -626,9 +635,9 @@ class AgentService:
                         if _old_skill_pointers
                         else old_template.tools_md
                     )
-                new_skill_ids = (
-                    _old_skill_ids - set(data.removed_skill_ids)
-                ) | set(data.skill_ids)
+                new_skill_ids = (_old_skill_ids - set(data.removed_skill_ids)) | set(
+                    data.skill_ids
+                )
                 new_skills = (
                     self.skill_repository.get_many_by_ids(list(new_skill_ids))
                     if new_skill_ids
@@ -870,7 +879,9 @@ class AgentService:
             secret.string_data.update(build_env(store))
 
         agent_skills = self.skill_repository.get_agent_skills_with_details(agent.id)
-        skills_json = build_skills_manifest_from_zips(agent_skills) if agent_skills else None
+        skills_json = (
+            build_skills_manifest_from_zips(agent_skills) if agent_skills else None
+        )
 
         if agent.agent_type == AgentType.HERMES:
             assert hermes_cfg is not None

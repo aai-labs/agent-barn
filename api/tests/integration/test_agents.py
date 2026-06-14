@@ -2050,6 +2050,7 @@ def test_create_agent_with_valid_skill_assigns_it():
             assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             repository: AgentRepository = context.injector.get(AgentRepository)
             from uuid import UUID
+
             agent_skills = repository.get_skills_for_agent(UUID(response.json()["id"]))
             assert_that(len(agent_skills), equal_to(1))
             assert_that(agent_skills[0].skill_id, equal_to(context.skill.id))
@@ -2071,6 +2072,7 @@ def test_create_agent_with_unknown_skill_id_returns_404():
     with given(_GIVEN) as context:
         client: TestClient = context.client
         from uuid import uuid4
+
         payload = {**_VALID_CREATE, "skill_ids": [str(uuid4())]}
 
         with when("I create an agent with a non-existent skill"):
@@ -2081,13 +2083,15 @@ def test_create_agent_with_unknown_skill_id_returns_404():
 
 
 def test_create_agent_skill_missing_provider_returns_400():
-    with given([
-        *_GIVEN,
-        there_is_a_skill(
-            name="GitHub Skill",
-            required_providers=[SecretProvider.GITHUB],
-        ),
-    ]) as context:
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(
+                name="GitHub Skill",
+                required_providers=[SecretProvider.GITHUB],
+            ),
+        ]
+    ) as context:
         client: TestClient = context.client
         payload = {**_VALID_CREATE, "skill_ids": [str(context.skill.id)]}
 
@@ -2101,13 +2105,15 @@ def test_create_agent_skill_missing_provider_returns_400():
 
 
 def test_create_agent_skill_with_covered_provider_assigns_skill():
-    with given([
-        *_GIVEN,
-        there_is_a_skill(
-            name="GitHub Skill",
-            required_providers=[SecretProvider.GITHUB],
-        ),
-    ]) as context:
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(
+                name="GitHub Skill",
+                required_providers=[SecretProvider.GITHUB],
+            ),
+        ]
+    ) as context:
         client: TestClient = context.client
         payload = {
             **_VALID_CREATE,
@@ -2132,6 +2138,7 @@ def test_create_agent_skill_with_covered_provider_assigns_skill():
             assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             repository: AgentRepository = context.injector.get(AgentRepository)
             from uuid import UUID
+
             agent_skills = repository.get_skills_for_agent(UUID(response.json()["id"]))
             assert_that(len(agent_skills), equal_to(1))
 
@@ -2149,18 +2156,21 @@ def test_create_agent_duplicate_skill_ids_assigns_skill_once():
             assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             repository: AgentRepository = context.injector.get(AgentRepository)
             from uuid import UUID
+
             agent_skills = repository.get_skills_for_agent(UUID(response.json()["id"]))
             assert_that(len(agent_skills), equal_to(1))
 
 
 def test_create_agent_skill_pointer_appended_to_tools_md():
-    with given([
-        *_GIVEN,
-        there_is_a_skill(
-            name="Pointed Skill",
-            tools_pointer="\nSee ./skills/pointed/skill.md\n",
-        ),
-    ]) as context:
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(
+                name="Pointed Skill",
+                tools_pointer="\nSee ./skills/pointed/skill.md\n",
+            ),
+        ]
+    ) as context:
         client: TestClient = context.client
         payload = {**_VALID_CREATE, "skill_ids": [str(context.skill.id)]}
 
@@ -2171,6 +2181,7 @@ def test_create_agent_skill_pointer_appended_to_tools_md():
             assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             repository: AgentRepository = context.injector.get(AgentRepository)
             from uuid import UUID
+
             template = repository.get_template(UUID(response.json()["template_id"]))
             assert_that(template.tools_md, contains_string("./skills/pointed/skill.md"))
 
@@ -2179,14 +2190,16 @@ def test_create_agent_skill_pointer_appended_to_tools_md():
 
 
 def test_update_agent_adding_skill_appends_pointer_to_tools_md():
-    with given([
-        *_GIVEN,
-        there_is_an_agent(),
-        there_is_a_skill(
-            name="Pointed Skill",
-            tools_pointer="\nSee ./skills/pointed/skill.md\n",
-        ),
-    ]) as context:
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(),
+            there_is_a_skill(
+                name="Pointed Skill",
+                tools_pointer="\nSee ./skills/pointed/skill.md\n",
+            ),
+        ]
+    ) as context:
         client: TestClient = context.client
 
         with when("I add a skill with a tools_pointer via PATCH"):
@@ -2200,19 +2213,22 @@ def test_update_agent_adding_skill_appends_pointer_to_tools_md():
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             repository: AgentRepository = context.injector.get(AgentRepository)
             from uuid import UUID
+
             template = repository.get_template(UUID(response.json()["template_id"]))
             assert_that(template.tools_md, contains_string("./skills/pointed/skill.md"))
 
 
 def test_update_agent_removing_skill_removes_pointer_from_tools_md():
-    with given([
-        *_GIVEN,
-        there_is_an_agent(),
-        there_is_a_skill(
-            name="Pointed Skill",
-            tools_pointer="\nSee ./skills/pointed/skill.md\n",
-        ),
-    ]) as context:
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(),
+            there_is_a_skill(
+                name="Pointed Skill",
+                tools_pointer="\nSee ./skills/pointed/skill.md\n",
+            ),
+        ]
+    ) as context:
         client: TestClient = context.client
         repository: AgentRepository = context.injector.get(AgentRepository)
         from uuid import UUID
@@ -2241,14 +2257,16 @@ def test_update_agent_removing_skill_removes_pointer_from_tools_md():
 
 
 def test_update_agent_explicit_tools_md_preserves_skill_pointers():
-    with given([
-        *_GIVEN,
-        there_is_an_agent(),
-        there_is_a_skill(
-            name="Pointed Skill",
-            tools_pointer="\nSee ./skills/pointed/skill.md\n",
-        ),
-    ]) as context:
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(),
+            there_is_a_skill(
+                name="Pointed Skill",
+                tools_pointer="\nSee ./skills/pointed/skill.md\n",
+            ),
+        ]
+    ) as context:
         client: TestClient = context.client
         # Add the skill first so the pointer is in tools_md
         client.patch(
@@ -2264,10 +2282,13 @@ def test_update_agent_explicit_tools_md_preserves_skill_pointers():
                 headers=_auth(context),
             )
 
-        with then("the new template's tools_md has the custom base AND the skill pointer"):
+        with then(
+            "the new template's tools_md has the custom base AND the skill pointer"
+        ):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             repository: AgentRepository = context.injector.get(AgentRepository)
             from uuid import UUID
+
             template = repository.get_template(UUID(response.json()["template_id"]))
             assert_that(template.tools_md, contains_string("My Custom Tools"))
             assert_that(template.tools_md, contains_string("./skills/pointed/skill.md"))
@@ -2279,12 +2300,14 @@ def test_update_agent_explicit_tools_md_preserves_skill_pointers():
 def test_start_agent_with_skill_includes_skills_json_in_configmap():
     import json as _json
 
-    with given([
-        *_GIVEN,
-        there_is_an_agent(),
-        there_is_a_skill(name="Mounted Skill"),
-        skill_is_assigned_to_agent(),
-    ]) as context:
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(),
+            there_is_a_skill(name="Mounted Skill"),
+            skill_is_assigned_to_agent(),
+        ]
+    ) as context:
         client: TestClient = context.client
         k8s: KubernetesClient = context.injector.get(KubernetesClient)
 

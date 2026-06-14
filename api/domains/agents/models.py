@@ -285,9 +285,7 @@ class AgentSkill(BaseModel, table=True):
     __tablename__: str = "agent_skill"
 
     __table_args__ = (
-        sa.UniqueConstraint(
-            "agent_id", "skill_id", name="uq_agent_skill_agent_skill"
-        ),
+        sa.UniqueConstraint("agent_id", "skill_id", name="uq_agent_skill_agent_skill"),
     )
 
     agent_id: UUID = SqlField(
