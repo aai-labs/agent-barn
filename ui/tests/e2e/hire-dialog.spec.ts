@@ -31,6 +31,7 @@ test.describe("Hire Dialog", () => {
   });
 
   test("should advance to agent-type step", async ({ page }) => {
+    await page.getByText("General Purpose", { exact: true }).click();
     await page.getByRole("button", { name: /continue/i }).click();
 
     await expect(page.getByText("Choose your agent runtime")).toBeVisible();
@@ -38,6 +39,7 @@ test.describe("Hire Dialog", () => {
   });
 
   test("should advance to platform choice step when OpenClaw is selected", async ({ page }) => {
+    await page.getByText("General Purpose", { exact: true }).click();
     await page.getByRole("button", { name: /continue/i }).click();
     await page.getByText("OpenClaw").click();
     await page.getByRole("button", { name: /continue/i }).click();
@@ -47,7 +49,8 @@ test.describe("Hire Dialog", () => {
   });
 
   test("should skip platform choice for hermes and go directly to slack setup", async ({ page }) => {
-    await page.getByRole("button", { name: /continue/i }).click(); // role → agent-type (hermes default)
+    await page.getByText("General Purpose", { exact: true }).click();
+    await page.getByRole("button", { name: /continue/i }).click(); // template → agent-type (hermes default)
     await page.getByRole("button", { name: /continue/i }).click(); // agent-type → slack-choice
 
     await expect(page.getByText("Set up your Slack app")).toBeVisible();
@@ -55,7 +58,8 @@ test.describe("Hire Dialog", () => {
   });
 
   test("should skip bot builder when choosing existing app", async ({ page }) => {
-    await page.getByRole("button", { name: /continue/i }).click(); // role → agent-type
+    await page.getByText("General Purpose", { exact: true }).click();
+    await page.getByRole("button", { name: /continue/i }).click(); // template → agent-type
     await page.getByRole("button", { name: /continue/i }).click(); // agent-type → slack-choice
     await page.getByText("I already have a Slack app").click();
     await page.getByRole("button", { name: /continue/i }).click();
@@ -65,7 +69,8 @@ test.describe("Hire Dialog", () => {
   });
 
   test("should go through bot builder when choosing new bot", async ({ page }) => {
-    await page.getByRole("button", { name: /continue/i }).click(); // role → agent-type
+    await page.getByText("General Purpose", { exact: true }).click();
+    await page.getByRole("button", { name: /continue/i }).click(); // template → agent-type
     await page.getByRole("button", { name: /continue/i }).click(); // agent-type → slack-choice
     await page.getByText("Set up a new Slack bot").click();
     await page.getByRole("button", { name: /continue/i }).click();
@@ -75,6 +80,7 @@ test.describe("Hire Dialog", () => {
   });
 
   test("should show manifest in bot builder step", async ({ page }) => {
+    await page.getByText("General Purpose", { exact: true }).click();
     await page.getByRole("button", { name: /continue/i }).click();
     await page.getByRole("button", { name: /continue/i }).click();
     await page.getByText("Set up a new Slack bot").click();
@@ -85,7 +91,8 @@ test.describe("Hire Dialog", () => {
   });
 
   test("should advance to details step (path: skip bot builder)", async ({ page }) => {
-    await page.getByRole("button", { name: /continue/i }).click(); // role → agent-type
+    await page.getByText("General Purpose", { exact: true }).click();
+    await page.getByRole("button", { name: /continue/i }).click(); // template → agent-type
     await page.getByRole("button", { name: /continue/i }).click(); // agent-type → slack-choice
     await page.getByText("I already have a Slack app").click();
     await page.getByRole("button", { name: /continue/i }).click();
@@ -98,6 +105,7 @@ test.describe("Hire Dialog", () => {
   });
 
   test("should show model dropdown with qwen as default and gpt-5-mini as option", async ({ page }) => {
+    await page.getByText("General Purpose", { exact: true }).click();
     await page.getByRole("button", { name: /continue/i }).click();
     await page.getByRole("button", { name: /continue/i }).click();
     await page.getByText("I already have a Slack app").click();
@@ -113,6 +121,7 @@ test.describe("Hire Dialog", () => {
   });
 
   test("should populate agent name from slack bot name", async ({ page }) => {
+    await page.getByText("General Purpose", { exact: true }).click();
     await page.getByRole("button", { name: /continue/i }).click();
     await page.getByRole("button", { name: /continue/i }).click();
     await page.getByText("Set up a new Slack bot").click();
@@ -135,7 +144,8 @@ test.describe("Hire Dialog", () => {
     await dataSupportPage.agents.interceptSlackChannelsRequest({ agentId: mockAgent.id });
     await dataSupportPage.agents.interceptSlackUsersRequest({ agentId: mockAgent.id });
 
-    await page.getByRole("button", { name: /continue/i }).click(); // role → agent-type
+    await page.getByText("General Purpose", { exact: true }).click();
+    await page.getByRole("button", { name: /continue/i }).click(); // template → agent-type
     await page.getByRole("button", { name: /continue/i }).click(); // agent-type → slack-choice
     await page.getByText("I already have a Slack app").click();
     await page.getByRole("button", { name: /continue/i }).click(); // slack-choice → tokens
@@ -155,6 +165,7 @@ test.describe("Hire Dialog", () => {
   });
 
   test("should navigate back through steps", async ({ page }) => {
+    await page.getByText("General Purpose", { exact: true }).click();
     await page.getByRole("button", { name: /continue/i }).click();
     await expect(page.getByText("Choose your agent runtime")).toBeVisible();
 
@@ -163,7 +174,8 @@ test.describe("Hire Dialog", () => {
   });
 
   test("should collect Teams credentials before package generation", async ({ page }) => {
-    await page.getByRole("button", { name: /continue/i }).click(); // role → agent-type
+    await page.getByText("General Purpose", { exact: true }).click();
+    await page.getByRole("button", { name: /continue/i }).click(); // template → agent-type
     await page.getByText("OpenClaw").click();
     await page.getByRole("button", { name: /continue/i }).click(); // agent-type → platform-choice
     await page.getByText("Microsoft Teams").click();
@@ -216,7 +228,8 @@ test.describe("Hire Dialog", () => {
     await expect(page.getByText("My Custom", { exact: true })).toBeVisible();
     // Badge spans only (source filter options are not spans).
     await expect(page.locator('span:text-is("Pre-defined")')).toHaveCount(2);
-    // The first template is auto-selected, so the version dropdown shows (latest = v2).
+    // Select a template to reveal the version dropdown.
+    await page.getByText("General Purpose", { exact: true }).click();
     const version = page.getByLabel("Version");
     await expect(version).toBeVisible();
     await expect(version).toContainText("v2");
@@ -245,7 +258,8 @@ test.describe("Hire Dialog", () => {
     await dataSupportPage.agents.interceptSlackChannelsRequest({ agentId: mockAgent.id });
     await dataSupportPage.agents.interceptSlackUsersRequest({ agentId: mockAgent.id });
 
-    // Pick v1 (default is latest v2) to prove the chosen version is submitted.
+    // Select general-purpose, then pick v1 (default is latest v2) to prove the chosen version is submitted.
+    await page.getByText("General Purpose", { exact: true }).click();
     await page.getByLabel("Version").click();
     await page.getByRole("menuitemradio", { name: "v1" }).click();
     await page.getByRole("button", { name: /continue/i }).click(); // template → agent-type
@@ -264,7 +278,7 @@ test.describe("Hire Dialog", () => {
     const createRequest = await createPromise;
     const body = createRequest.postDataJSON() as Record<string, unknown>;
 
-    // First catalog template is auto-selected; markdown never leaves the backend.
+    // Markdown never leaves the backend — only slug + version are submitted.
     expect(body.template_slug).toBe("general-purpose");
     expect(body.template_version).toBe(1);
     expect(body.soul_md).toBeUndefined();
