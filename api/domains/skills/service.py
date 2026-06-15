@@ -1,3 +1,5 @@
+import io
+import zipfile
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -14,7 +16,11 @@ from api.domains.skills.models import (
 )
 from api.domains.skills.repository import SkillRepository
 
-_MAX_ZIP_BYTES = 50 * 1024 * 1024  # 50 MB
+_MAX_ZIP_BYTES = 50 * 1024 * 1024  # 50 MB compressed
+_MAX_UNCOMPRESSED_BYTES = 200 * 1024 * 1024  # 200 MB total uncompressed
+_MAX_SINGLE_FILE_BYTES = 100 * 1024 * 1024  # 100 MB per entry (actual read)
+_MAX_COMPRESSION_RATIO = 100  # uncompressed / compressed
+_MAX_ENTRIES = 1000
 
 
 @inject
@@ -25,6 +31,73 @@ class SkillService:
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
+
+    @staticmethod
+    def _validate_zip(content: bytes) -> None:
+        if len(content) > _MAX_ZIP_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Zip content exceeds 50 MB limit",
+            )
+        try:
+            with zipfile.ZipFile(io.BytesIO(content)) as zf:
+                entries = zf.infolist()
+
+                if len(entries) > _MAX_ENTRIES:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Zip contains too many entries (max {_MAX_ENTRIES})",
+                    )
+
+                total_uncompressed = sum(e.file_size for e in entries)
+                total_compressed = sum(e.compress_size for e in entries)
+
+                if total_uncompressed > _MAX_UNCOMPRESSED_BYTES:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Zip uncompressed content exceeds 200 MB limit",
+                    )
+
+                if (
+                    len(content) > 0
+                    and total_uncompressed / total_compressed > _MAX_COMPRESSION_RATIO
+                ):
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Zip compression ratio is suspiciously high (possible zip bomb)",
+                    )
+
+                for entry in entries:
+                    if entry.flag_bits & 0x1:
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail=f"Zip entry is encrypted: {entry.filename!r}",
+                        )
+                    name = entry.filename
+                    if name.startswith("/") or name.startswith("\\"):
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail=f"Zip entry has an absolute path: {name!r}",
+                        )
+                    if ".." in name.replace("\\", "/").split("/"):
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail=f"Zip entry contains path traversal: {name!r}",
+                        )
+                    with zf.open(entry) as f:
+                        extracted = 0
+                        while chunk := f.read(65536):
+                            extracted += len(chunk)
+                            if extracted > _MAX_SINGLE_FILE_BYTES:
+                                raise HTTPException(
+                                    status_code=status.HTTP_400_BAD_REQUEST,
+                                    detail=f"Entry {entry.filename!r} exceeds per-file size limit",
+                                )
+        except zipfile.BadZipFile:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Uploaded file is not a valid zip archive",
+            )
 
     def _get_or_404(self, skill_id: UUID, org_id: UUID) -> Skill:
         skill = self.repository.get_by_id(skill_id)
@@ -39,11 +112,7 @@ class SkillService:
 
     def create_skill(self, data: SkillCreate, context: CurrentUserContext) -> SkillRead:
         org_id = self._org_id(context)
-        if len(data.zip_content) > _MAX_ZIP_BYTES:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Zip content exceeds 50 MB limit",
-            )
+        self._validate_zip(data.zip_content)
         skill = Skill(
             organization_id=org_id,
             name=data.name,
@@ -67,11 +136,7 @@ class SkillService:
             )
         updated = data.model_dump(exclude_unset=True)
         if "zip_content" in updated and updated["zip_content"] is not None:
-            if len(updated["zip_content"]) > _MAX_ZIP_BYTES:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Zip content exceeds 50 MB limit",
-                )
+            self._validate_zip(updated["zip_content"])
             skill.zip_content = updated["zip_content"]
         if "name" in updated:
             skill.name = updated["name"]

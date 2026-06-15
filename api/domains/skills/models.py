@@ -5,7 +5,7 @@ import sqlalchemy as sa
 from sqlmodel import Column, Field as SqlField
 from api.domains.agents.models import SecretProvider
 from api.infrastructure.postgres.models import BaseModel
-from pydantic import BaseModel as PydanticBaseModel
+from pydantic import Base64Bytes, BaseModel as PydanticBaseModel
 from pydantic import ConfigDict, Field
 
 
@@ -44,14 +44,14 @@ class Skill(BaseModel, table=True):
 class SkillCreate(PydanticBaseModel):
     name: str = Field(min_length=1, max_length=255)
     required_providers: list[SecretProvider] = Field(default_factory=list)
-    zip_content: bytes
+    zip_content: Base64Bytes
     tools_pointer: str | None = None
 
 
 class SkillUpdate(PydanticBaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     required_providers: list[SecretProvider] | None = Field(default=None)
-    zip_content: bytes | None = None
+    zip_content: Base64Bytes | None = None
     tools_pointer: str | None = None
 
 

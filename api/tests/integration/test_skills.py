@@ -61,6 +61,37 @@ def _make_zip(filename: str = "skill.md", content: str = "# Skill") -> str:
     return base64.b64encode(buf.getvalue()).decode()
 
 
+def _make_zip_with_path_traversal() -> str:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("../../../etc/passwd", "root:x:0:0:root:/root:/bin/bash")
+    return base64.b64encode(buf.getvalue()).decode()
+
+
+def _make_high_ratio_zip() -> str:
+    # 1 MB of null bytes compresses to ~1 KB → ratio ~1000x, well above the 100x limit.
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("data.bin", b"\x00" * 1_000_000)
+    return base64.b64encode(buf.getvalue()).decode()
+
+
+def _make_encrypted_zip() -> str:
+    # Create a valid zip then set the encryption flag (bit 0) in the central directory
+    # entry so that zipfile reports flag_bits & 0x1 == 1.
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("skill.md", "# Skill")
+    data = bytearray(buf.getvalue())
+    # Central directory entry starts with PK\x01\x02; the general-purpose bit flag
+    # is at byte offset 8 within that entry.
+    cd_sig = b"\x50\x4b\x01\x02"
+    idx = data.find(cd_sig)
+    if idx != -1:
+        data[idx + 8] |= 0x1
+    return base64.b64encode(bytes(data)).decode()
+
+
 _VALID_CREATE = {
     "name": "My Skill",
     "zip_content": None,
@@ -84,6 +115,78 @@ def test_create_skill_returns_201():
             assert_that(body["name"], equal_to("My Skill"))
             assert_that(body["source"], equal_to("custom"))
             assert_that(body["organization_id"], equal_to(str(context.organization.id)))
+
+
+def test_create_skill_with_invalid_zip_returns_400():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I create a skill with a non-zip payload"):
+            response = client.post(
+                _BASE,
+                json={
+                    "name": "Bad Skill",
+                    "zip_content": base64.b64encode(b"not a zip").decode(),
+                },
+                headers=_auth(context),
+            )
+
+        with then("it returns 400"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+
+
+def test_create_skill_with_path_traversal_returns_400():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I create a skill with a zip containing path traversal"):
+            response = client.post(
+                _BASE,
+                json={
+                    "name": "Evil Skill",
+                    "zip_content": _make_zip_with_path_traversal(),
+                },
+                headers=_auth(context),
+            )
+
+        with then("it returns 400"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+
+
+def test_create_skill_with_zip_bomb_returns_400():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I create a skill with a zip bomb"):
+            response = client.post(
+                _BASE,
+                json={
+                    "name": "Bomb Skill",
+                    "zip_content": _make_high_ratio_zip(),
+                },
+                headers=_auth(context),
+            )
+
+        with then("it returns 400"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+
+
+def test_create_skill_with_encrypted_zip_returns_400():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I create a skill with an encrypted zip entry"):
+            response = client.post(
+                _BASE,
+                json={
+                    "name": "Encrypted Skill",
+                    "zip_content": _make_encrypted_zip(),
+                },
+                headers=_auth(context),
+            )
+
+        with then("it returns 400"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
 
 
 def test_create_skill_with_oversized_zip_returns_400():
@@ -238,6 +341,66 @@ def test_update_aai_cli_skill_returns_403():
 
         with then("it returns 403"):
             assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_update_skill_with_invalid_zip_returns_400():
+    with given([*_GIVEN, there_is_a_skill(name="Valid Skill")]) as context:
+        client: TestClient = context.client
+
+        with when("I update the skill with a non-zip payload"):
+            response = client.patch(
+                f"{_BASE}/{context.skill.id}",
+                json={"zip_content": base64.b64encode(b"not a zip").decode()},
+                headers=_auth(context),
+            )
+
+        with then("it returns 400"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+
+
+def test_update_skill_with_path_traversal_returns_400():
+    with given([*_GIVEN, there_is_a_skill(name="Valid Skill")]) as context:
+        client: TestClient = context.client
+
+        with when("I update the skill with a zip containing path traversal"):
+            response = client.patch(
+                f"{_BASE}/{context.skill.id}",
+                json={"zip_content": _make_zip_with_path_traversal()},
+                headers=_auth(context),
+            )
+
+        with then("it returns 400"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+
+
+def test_update_skill_with_zip_bomb_returns_400():
+    with given([*_GIVEN, there_is_a_skill(name="Valid Skill")]) as context:
+        client: TestClient = context.client
+
+        with when("I update the skill with a zip bomb"):
+            response = client.patch(
+                f"{_BASE}/{context.skill.id}",
+                json={"zip_content": _make_high_ratio_zip()},
+                headers=_auth(context),
+            )
+
+        with then("it returns 400"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+
+
+def test_update_skill_with_encrypted_zip_returns_400():
+    with given([*_GIVEN, there_is_a_skill(name="Valid Skill")]) as context:
+        client: TestClient = context.client
+
+        with when("I update the skill with an encrypted zip entry"):
+            response = client.patch(
+                f"{_BASE}/{context.skill.id}",
+                json={"zip_content": _make_encrypted_zip()},
+                headers=_auth(context),
+            )
+
+        with then("it returns 400"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
 
 
 def test_update_skill_not_found_returns_404():
