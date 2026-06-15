@@ -5,7 +5,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/shared/api";
 
 import { Agent, AgentSchema } from "../schemas";
-import { agentsKey } from "../utils";
+import { agentsKey, templatesKey } from "../utils";
 
 export type UpdateAgentData = {
   agentId: string;
@@ -46,6 +46,8 @@ export function useUpdateAgent() {
     onSuccess: (data) => {
       queryClient.setQueryData(agentsKey.detail(data.id), data);
       void queryClient.invalidateQueries({ queryKey: agentsKey.lists() });
+      // Markdown edits publish a new version of the shared template lineage.
+      void queryClient.invalidateQueries({ queryKey: templatesKey.all });
     },
   });
 }

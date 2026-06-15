@@ -165,34 +165,6 @@ def decrypt_content(
     return validate_content(provider, json.loads(decrypt_token(ciphertext, key)))
 
 
-class AgentTemplate(BaseModel, table=True):
-    __tablename__: str = "agent_template"
-
-    __table_args__ = (
-        sa.Index("ix_agent_template_organization_id", "organization_id"),
-        sa.UniqueConstraint(
-            "organization_id",
-            "template_slug",
-            "version",
-            name="uq_agent_template_org_slug_version",
-        ),
-    )
-
-    organization_id: UUID = SqlField(
-        foreign_key="organization.id", nullable=False, ondelete="CASCADE"
-    )
-    template_slug: str = SqlField(nullable=False, max_length=255)
-    version: int = SqlField(nullable=False)
-    soul_md: str = SqlField(nullable=False)
-    identity_md: str = SqlField(nullable=False)
-    user_md: str = SqlField(nullable=False)
-    tools_md: str = SqlField(nullable=False)
-    agents_md: str = SqlField(nullable=False)
-    boot_md: str = SqlField(nullable=False)
-    bootstrap_md: str = SqlField(nullable=False)
-    heartbeat_md: str = SqlField(nullable=False)
-
-
 class Agent(BaseModel, table=True):
     __tablename__: str = "agent"
 
@@ -348,15 +320,8 @@ class AgentCreate(PydanticBaseModel):
     teams_app_id: str | None = Field(default=None, min_length=1)
     teams_app_password: str | None = Field(default=None, min_length=1)
     teams_tenant_id: str | None = Field(default=None, min_length=1)
-    # Template
-    soul_md: str = Field(min_length=1)
-    identity_md: str = Field(min_length=1)
-    user_md: str | None = None
-    tools_md: str | None = None
-    agents_md: str | None = None
-    boot_md: str | None = None
-    bootstrap_md: str | None = None
-    heartbeat_md: str | None = None
+    # Template reference — the agent pins to the lineage's latest version
+    template_slug: str = Field(min_length=1, max_length=255)
     model: str | None = None
     # Integration credentials (optional)
     secrets: list[AgentSecretCreate] = Field(default_factory=list)
@@ -469,25 +434,6 @@ class AgentRead(PydanticBaseModel):
     teams_config: AgentTeamsConfigRead | None = None
     secrets: list[AgentSecretRead] = Field(default_factory=list)
     webhook_url: str | None = None
-    created_at: datetime
-    updated_at: datetime
-
-
-class AgentTemplateRead(PydanticBaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: UUID
-    organization_id: UUID
-    template_slug: str
-    version: int
-    soul_md: str
-    identity_md: str
-    user_md: str
-    tools_md: str
-    agents_md: str
-    boot_md: str
-    bootstrap_md: str
-    heartbeat_md: str
     created_at: datetime
     updated_at: datetime
 

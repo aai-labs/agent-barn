@@ -18,6 +18,7 @@ test.describe("Hire Dialog", () => {
     await dataSupportPage.auth.interceptRefreshRequest();
     await dataSupportPage.users.interceptGetUserContextRequest();
     await dataSupportPage.agents.interceptGetAgentsRequest();
+    await dataSupportPage.agents.interceptGetTemplatesRequest();
 
     await dashboardPage.goto();
     await page.getByRole("button", { name: /hire agent/i }).click();
@@ -208,11 +209,39 @@ test.describe("Hire Dialog", () => {
     await expect(page.getByText("What kind of teammate do you need?")).not.toBeVisible();
   });
 
-  test("scrum-master profile pre-seeds required jira + confluence integrations", async ({ page }) => {
-    // role: pick Scrum Master (suggested name "Scout")
+  test("template step renders catalog templates with pre-defined badges", async ({ page }) => {
+    await expect(page.getByText("General Purpose", { exact: true })).toBeVisible();
+    await expect(page.getByText("Scrum Master", { exact: true })).toBeVisible();
+    await expect(page.getByText("My Custom", { exact: true })).toBeVisible();
+    await expect(page.getByText("Pre-defined")).toHaveCount(2);
+    await expect(page.getByText("general-purpose@v1")).toBeVisible();
+  });
+
+  test("details step shows a read-only template preview with raw placeholders", async ({ page }) => {
+    // Pick the scrum-master template (its soul contains a raw {{ placeholder }}).
     await page.getByText("Scrum Master", { exact: true }).click();
-    await page.getByRole("button", { name: /continue/i }).click(); // role → agent-type
-    await page.getByRole("button", { name: /continue/i }).click(); // agent-type (hermes) → slack-choice
+    await page.getByRole("button", { name: /continue/i }).click(); // template → agent-type
+    await page.getByRole("button", { name: /continue/i }).click(); // agent-type → slack-choice
+    await page.getByText("I already have a Slack app").click();
+    await page.getByRole("button", { name: /continue/i }).click(); // slack-choice → tokens
+    await page.getByPlaceholder(/xapp-/i).fill("xapp-1-test");
+    await page.getByPlaceholder(/xoxb-/i).fill("xoxb-test");
+    await page.getByRole("button", { name: /continue/i }).click(); // tokens → details
+
+    await page.getByText("Review configuration files").click();
+    const preview = page.getByLabel("SOUL.md preview");
+    await expect(preview).toBeVisible();
+    await expect(preview).toHaveAttribute("readonly", "");
+    await expect(preview).toHaveValue(/\{\{ agent_display_name \}\}/);
+  });
+
+  test("hire posts template_slug instead of markdown", async ({ page }) => {
+    await dataSupportPage.agents.interceptCreateAgentRequest({ body: { ...mockAgent, status: "STOPPED" } });
+    await dataSupportPage.agents.interceptSlackChannelsRequest({ agentId: mockAgent.id });
+    await dataSupportPage.agents.interceptSlackUsersRequest({ agentId: mockAgent.id });
+
+    await page.getByRole("button", { name: /continue/i }).click(); // template → agent-type
+    await page.getByRole("button", { name: /continue/i }).click(); // agent-type → slack-choice
     await page.getByText("I already have a Slack app").click();
     await page.getByRole("button", { name: /continue/i }).click(); // slack-choice → tokens
     await page.getByPlaceholder(/xapp-/i).fill("xapp-1-test");
@@ -220,27 +249,16 @@ test.describe("Hire Dialog", () => {
     await page.getByRole("button", { name: /continue/i }).click(); // tokens → details
     await page.getByRole("button", { name: /continue/i }).click(); // details → integrations
 
-    // Both required integrations are pre-displayed, marked Required, and not removable.
-    await expect(page.getByText("Jira", { exact: true })).toBeVisible();
-    await expect(page.getByText("Confluence", { exact: true })).toBeVisible();
-    await expect(page.getByText("Required")).toHaveCount(2);
-    await expect(page.getByRole("button", { name: "Remove Jira" })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Remove Confluence" })).toHaveCount(0);
+    const createPromise = page.waitForRequest(
+      (req) => req.url().includes("/api/v1/agents") && req.method() === "POST",
+    );
+    await page.getByRole("button", { name: "Hire Aria" }).click();
+    const createRequest = await createPromise;
+    const body = createRequest.postDataJSON() as Record<string, unknown>;
 
-    // Hire is blocked until the required fields are filled.
-    const hire = page.getByRole("button", { name: "Hire Scout" });
-    await expect(hire).toBeDisabled();
-
-    // Fill jira (nth 0) and confluence (nth 1): siteUrl, email, apiToken.
-    const siteUrls = page.getByPlaceholder("https://your-domain.atlassian.net");
-    const emails = page.getByPlaceholder("you@example.com");
-    const apiTokens = page.locator('input[type="password"]'); // the two API token fields
-    for (let i = 0; i < 2; i++) {
-      await siteUrls.nth(i).fill("https://acme.atlassian.net");
-      await emails.nth(i).fill("a@b.com");
-      await apiTokens.nth(i).fill("tok-secret");
-    }
-
-    await expect(hire).toBeEnabled();
+    // First catalog template is auto-selected; markdown never leaves the backend.
+    expect(body.template_slug).toBe("general-purpose");
+    expect(body.soul_md).toBeUndefined();
+    expect(body.identity_md).toBeUndefined();
   });
 });

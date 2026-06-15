@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { PROVIDERS, TEMPLATES, SKILLS } from "@/features/agents/data";
+import { PROVIDERS, SKILLS } from "@/features/agents/data";
+import { TemplatesPanel } from "@/features/agents/components/templates-panel";
 import { PlusIcon, LockIcon, ShieldIcon, EyeIcon, ServerIcon, SearchIcon } from "@/components/icons";
 
 type SectionKey =
@@ -271,33 +272,6 @@ function ProvidersPanel() {
             </span>
           )}
           <button className="af-btn af-btn-sm af-btn-ghost">Manage</button>
-        </TableRow>
-      ))}
-    </div>
-  );
-}
-
-function TemplatesPanel() {
-  return (
-    <div>
-      <div className="mb-4">
-        <button className="af-btn af-btn-primary">
-          <PlusIcon /> New template
-        </button>
-      </div>
-      {TEMPLATES.map((t) => (
-        <TableRow key={t.id}>
-          <div className="flex-1">
-            <div className="font-medium text-[14px]" style={{ color: "var(--ink)" }}>
-              {t.name}{" "}
-              <span className="font-mono text-[12px] font-normal" style={{ color: "var(--ink-4)" }}>
-                · {t.slug}@{t.version}
-              </span>
-            </div>
-            <div className="text-[12.5px] mt-0.5" style={{ color: "var(--ink-3)" }}>{t.description}</div>
-          </div>
-          <span className="text-[12.5px]" style={{ color: "var(--ink-4)" }}>{t.activeAgents} in use</span>
-          <button className="af-btn af-btn-sm af-btn-ghost">Edit</button>
         </TableRow>
       ))}
     </div>

@@ -38,6 +38,8 @@ export const AgentTemplateReadSchema = z.object({
   id: z.string().uuid(),
   organizationId: z.string().uuid(),
   templateSlug: z.string(),
+  templateName: z.string(),
+  templateSource: z.enum(["pre-defined", "custom"]),
   version: z.number().int(),
   soulMd: z.string(),
   identityMd: z.string(),
@@ -49,6 +51,13 @@ export const AgentTemplateReadSchema = z.object({
   heartbeatMd: z.string(),
   createdAt: z.string(),
   updatedAt: z.string(),
+});
+
+export const PaginatedTemplatesSchema = z.object({
+  page: z.number().int().min(1),
+  pageSize: z.number().int().min(1),
+  total: z.number().int().min(0),
+  items: z.array(AgentTemplateReadSchema),
 });
 
 export const PaginatedAgentsSchema = z.object({
@@ -141,6 +150,8 @@ export type AgentSlackConfig = z.infer<typeof AgentSlackConfigSchema>;
 export type AgentTeamsConfig = z.infer<typeof AgentTeamsConfigSchema>;
 export type AgentHealth = z.infer<typeof AgentHealthSchema>;
 export type AgentTemplateRead = z.infer<typeof AgentTemplateReadSchema>;
+export type TemplateSource = AgentTemplateRead["templateSource"];
+export type PaginatedTemplates = z.infer<typeof PaginatedTemplatesSchema>;
 export type PaginatedAgents = z.infer<typeof PaginatedAgentsSchema>;
 export type ConversationMessage = z.infer<typeof ConversationMessageSchema>;
 export type ConversationChannel = z.infer<typeof ConversationChannelSchema>;

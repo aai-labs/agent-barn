@@ -43,6 +43,8 @@ export const mockAgentTemplate = {
   id: MOCK_TEMPLATE_ID,
   organization_id: MOCK_ORG_ID,
   template_slug: MOCK_TEMPLATE_SLUG,
+  template_name: "Maya",
+  template_source: "custom",
   version: 1,
   soul_md: "# Soul\nYou are a helpful assistant.",
   identity_md: "# Identity\nYou are an AI embedded in Slack.",
@@ -55,6 +57,31 @@ export const mockAgentTemplate = {
   created_at: "2026-03-14T00:00:00Z",
   updated_at: "2026-05-14T09:14:00Z",
 };
+
+export const mockTemplates = [
+  {
+    ...mockAgentTemplate,
+    id: "55555555-5555-4555-8555-555555555551",
+    template_slug: "general-purpose",
+    template_name: "General Purpose",
+    template_source: "pre-defined",
+  },
+  {
+    ...mockAgentTemplate,
+    id: "55555555-5555-4555-8555-555555555552",
+    template_slug: "scrum-master",
+    template_name: "Scrum Master",
+    template_source: "pre-defined",
+    soul_md: "# SOUL.md - Who {{ agent_display_name }} Is\nScrum master soul.",
+  },
+  {
+    ...mockAgentTemplate,
+    id: "55555555-5555-4555-8555-555555555553",
+    template_slug: "my-custom",
+    template_name: "My Custom",
+    template_source: "custom",
+  },
+];
 
 export class AgentDataSupport {
   constructor(private page: Page) {}
@@ -369,6 +396,134 @@ export class AgentDataSupport {
         });
       },
     );
+  }
+
+  async interceptGetTemplatesRequest({
+    status = 200,
+    detail = "Unable to load templates",
+    body,
+  }: {
+    status?: number;
+    detail?: string;
+    body?: unknown;
+  } = {}) {
+    await this.page.route("**/api/v1/templates*", async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      const url = new URL(route.request().url());
+      if (url.pathname !== "/api/v1/templates") {
+        await route.fallback();
+        return;
+      }
+      // Apply search/source params so specs can assert filtering behavior.
+      const search = url.searchParams.get("search")?.toLowerCase();
+      const source = url.searchParams.get("source");
+      let items = mockTemplates;
+      if (search) {
+        items = items.filter(
+          (t) =>
+            t.template_name.toLowerCase().includes(search) ||
+            t.template_slug.toLowerCase().includes(search),
+        );
+      }
+      if (source) {
+        items = items.filter((t) => t.template_source === source);
+      }
+      await route.fulfill({
+        status,
+        contentType: "application/json",
+        body: JSON.stringify(
+          status >= 400
+            ? { detail }
+            : (body ?? {
+                page: 1,
+                page_size: 50,
+                total: items.length,
+                items,
+              }),
+        ),
+      });
+    });
+  }
+
+  async interceptGetTemplateRequest({
+    slug = MOCK_TEMPLATE_SLUG,
+    status = 200,
+    detail = "Unable to load template",
+    body,
+  }: {
+    slug?: string;
+    status?: number;
+    detail?: string;
+    body?: unknown;
+  } = {}) {
+    await this.page.route(`**/api/v1/templates/${slug}`, async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      const fallback =
+        mockTemplates.find((t) => t.template_slug === slug) ?? mockAgentTemplate;
+      await route.fulfill({
+        status,
+        contentType: "application/json",
+        body: JSON.stringify(status >= 400 ? { detail } : (body ?? fallback)),
+      });
+    });
+  }
+
+  async interceptCreateTemplateRequest({
+    status = 201,
+    detail = "Unable to create template",
+    body,
+  }: {
+    status?: number;
+    detail?: string;
+    body?: unknown;
+  } = {}) {
+    await this.page.route("**/api/v1/templates", async (route) => {
+      if (route.request().method() !== "POST") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status,
+        contentType: "application/json",
+        body: JSON.stringify(
+          status >= 400 ? { detail } : (body ?? mockAgentTemplate),
+        ),
+      });
+    });
+  }
+
+  async interceptUpdateTemplateRequest({
+    slug = MOCK_TEMPLATE_SLUG,
+    status = 200,
+    detail = "Unable to update template",
+    body,
+  }: {
+    slug?: string;
+    status?: number;
+    detail?: string;
+    body?: unknown;
+  } = {}) {
+    await this.page.route(`**/api/v1/templates/${slug}`, async (route) => {
+      if (route.request().method() !== "PATCH") {
+        await route.fallback();
+        return;
+      }
+      const fallback =
+        mockTemplates.find((t) => t.template_slug === slug) ?? mockAgentTemplate;
+      await route.fulfill({
+        status,
+        contentType: "application/json",
+        body: JSON.stringify(
+          status >= 400 ? { detail } : (body ?? { ...fallback, version: fallback.version + 1 }),
+        ),
+      });
+    });
   }
 
   async interceptGetToolCallsRequest({

@@ -19,8 +19,7 @@ _BASE_CREATE = {
     "name": "Agent",
     "slack_bot_token": "xoxb-x",
     "slack_app_token": "xapp-x",
-    "soul_md": "# soul",
-    "identity_md": "# identity",
+    "template_slug": "test-template",
 }
 
 _JIRA = {

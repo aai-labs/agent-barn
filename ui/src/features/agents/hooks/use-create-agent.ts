@@ -20,15 +20,8 @@ export type CreateAgentData = {
   teamsAppId?: string;
   teamsAppPassword?: string;
   teamsTenantId?: string;
-  // Template
-  soulMd: string;
-  identityMd: string;
-  userMd?: string;
-  toolsMd?: string;
-  agentsMd?: string;
-  bootMd?: string;
-  bootstrapMd?: string;
-  heartbeatMd?: string;
+  // Template reference — the agent pins to the lineage's latest version
+  templateSlug: string;
   model?: string;
   // Integration credentials (provider + provider-specific content; name is server-stamped)
   secrets?: Array<{ provider: string; content: Record<string, string> }>;

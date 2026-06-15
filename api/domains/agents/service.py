@@ -35,15 +35,6 @@ from api.domains.agents.builders import (
     build_secret_teams,
     build_service,
 )
-from api.domains.agents.defaults import (
-    AAI_CLI_TOOLS_POINTER,
-    DEFAULT_AGENTS_MD,
-    DEFAULT_BOOT_MD,
-    DEFAULT_BOOTSTRAP_MD,
-    DEFAULT_HEARTBEAT_MD,
-    DEFAULT_TOOLS_MD,
-    DEFAULT_USER_MD,
-)
 from api.domains.agents.models import (
     PROVIDER_DISPLAY_NAMES,
     Agent,
@@ -60,8 +51,6 @@ from api.domains.agents.models import (
     AgentStatus,
     AgentTeamsConfig,
     AgentTeamsConfigRead,
-    AgentTemplate,
-    AgentTemplateRead,
     AgentType,
     AgentUpdate,
     PairRequest,
@@ -72,8 +61,10 @@ from api.domains.agents.models import (
 )
 from api.domains.agents.error_messages import friendly_k8s_error, friendly_pod_reason
 from api.domains.agents.repository import AgentRepository
-from api.domains.agents.slug import generate_template_slug
 from api.domains.auth.models import CurrentUserContext
+from api.domains.templates.models import AgentTemplate, TemplateRead
+from api.domains.templates.renderer import render_template
+from api.domains.templates.repository import TemplateRepository
 from api.domains.conversations.service import ConversationSyncService
 from api.domains.tool_calls.sync_service import ToolCallSyncService
 from api.infrastructure.crypto import decrypt_token, encrypt_token
@@ -133,6 +124,7 @@ _TEAMS_CONFIG_FIELDS = frozenset(
 @dataclass
 class AgentService:
     repository: AgentRepository
+    template_repository: TemplateRepository
     k8s: KubernetesClient
     litellm: LiteLLMClient
     config: Config
@@ -214,15 +206,24 @@ class AgentService:
                     status_code=status.HTTP_400_BAD_REQUEST, detail=reason
                 )
 
-        slug = generate_template_slug(data.name)
+        # The agent pins to the latest version of the referenced shared lineage.
+        template = self.template_repository.get_latest_template(
+            org_id, data.template_slug
+        )
+        if template is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Template {data.template_slug} not found",
+            )
+
         agent = Agent(
             organization_id=org_id,
             name=data.name,
             model=data.model or "",
             platform=data.platform,
             agent_type=data.agent_type,
-            template_slug=slug,
-            template_version=1,
+            template_slug=template.template_slug,
+            template_version=template.version,
         )
 
         if self.config.litellm_base_url and self.config.litellm_secret_name:
@@ -237,21 +238,6 @@ class AgentService:
                     detail="LiteLLM key generation failed; cannot create agent.",
                 ) from exc
 
-        template = AgentTemplate(
-            organization_id=org_id,
-            template_slug=slug,
-            version=1,
-            soul_md=data.soul_md,
-            identity_md=data.identity_md,
-            user_md=data.user_md or DEFAULT_USER_MD,
-            tools_md=(data.tools_md or DEFAULT_TOOLS_MD) + AAI_CLI_TOOLS_POINTER,
-            agents_md=data.agents_md or DEFAULT_AGENTS_MD,
-            boot_md=data.boot_md or DEFAULT_BOOT_MD,
-            bootstrap_md=data.bootstrap_md or DEFAULT_BOOTSTRAP_MD,
-            heartbeat_md=data.heartbeat_md or DEFAULT_HEARTBEAT_MD,
-        )
-        # The agent's composite FK requires the template row to exist first.
-        self.repository.save_template(template)
         self.repository.save(agent)
 
         slack_config = None
@@ -323,10 +309,10 @@ class AgentService:
 
     def get_agent_template(
         self, agent_id: UUID, version: int, context: CurrentUserContext
-    ) -> AgentTemplateRead:
+    ) -> TemplateRead:
         org_id = self._org_id(context)
         agent = self._get_active_or_404(agent_id, org_id)
-        template = self.repository.get_template_by_slug_and_version(
+        template = self.template_repository.get_template_by_slug_and_version(
             org_id, agent.template_slug, version
         )
         if not template:
@@ -334,7 +320,7 @@ class AgentService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Template version {version} not found for agent {agent_id}",
             )
-        return AgentTemplateRead.model_validate(template)
+        return TemplateRead.model_validate(template)
 
     def list_agents(
         self,
@@ -399,13 +385,22 @@ class AgentService:
             )
 
         if _MD_FIELDS & updated.keys():
-            old_template = self.repository.get_template_or_raise(
+            old_template = self.template_repository.get_template_or_raise(
                 org_id, agent.template_slug, agent.template_version
             )
+            # Content merges from the agent's pinned version, but the new
+            # version number continues the shared lineage (other agents or the
+            # templates page may have published versions past this pin).
+            latest = self.template_repository.get_latest_template(
+                org_id, agent.template_slug
+            )
+            latest_version = latest.version if latest else old_template.version
             new_template = AgentTemplate(
                 organization_id=org_id,
                 template_slug=agent.template_slug,
-                version=old_template.version + 1,
+                template_name=old_template.template_name,
+                template_source=old_template.template_source,
+                version=latest_version + 1,
                 soul_md=updated.get("soul_md", old_template.soul_md),
                 identity_md=updated.get("identity_md", old_template.identity_md),
                 user_md=updated.get("user_md", old_template.user_md),
@@ -415,7 +410,7 @@ class AgentService:
                 bootstrap_md=updated.get("bootstrap_md", old_template.bootstrap_md),
                 heartbeat_md=updated.get("heartbeat_md", old_template.heartbeat_md),
             )
-            self.repository.save_template(new_template)
+            self.template_repository.save_template(new_template)
             agent.template_version = new_template.version
 
         if "name" in updated:
@@ -526,9 +521,11 @@ class AgentService:
                 detail=f"Agent {agent_id} is already running",
             )
 
-        template = self.repository.get_template_or_raise(
+        template = self.template_repository.get_template_or_raise(
             org_id, agent.template_slug, agent.template_version
         )
+        # Placeholders are kept raw in storage and rendered at seed time.
+        rendered = render_template(template, agent.name)
         ns = self.config.k8s_namespace
 
         name = f"agent-{agent.id}"
@@ -577,19 +574,6 @@ class AgentService:
                     dm_policy=str(slack_config.dm_policy),
                     group_policy=str(slack_config.group_policy),
                 )
-                config_map = build_hermes_config_map(
-                    agent_id=agent.id,
-                    org_id=org_id,
-                    namespace=ns,
-                    soul_md=template.soul_md,
-                    identity_md=template.identity_md,
-                    user_md=template.user_md,
-                    tools_md=template.tools_md,
-                    agents_md=template.agents_md,
-                    boot_md=template.boot_md,
-                    heartbeat_md=template.heartbeat_md,
-                    hermes_config=hermes_cfg,
-                )  # rebuilt with aai-cli kwargs below
                 secret = build_secret_hermes_slack(
                     agent_id=agent.id,
                     org_id=org_id,
@@ -629,20 +613,6 @@ class AgentService:
                     litellm_api_key=litellm_key,
                     litellm_base_url=self.config.agent_litellm_base_url,
                 )
-                config_map = build_config_map(
-                    agent_id=agent.id,
-                    org_id=org_id,
-                    namespace=ns,
-                    soul_md=template.soul_md,
-                    identity_md=template.identity_md,
-                    user_md=template.user_md,
-                    tools_md=template.tools_md,
-                    agents_md=template.agents_md,
-                    boot_md=template.boot_md,
-                    bootstrap_md=template.bootstrap_md,
-                    heartbeat_md=template.heartbeat_md,
-                    openclaw_config_overlay=overlay,
-                )
                 deployment = build_deployment(
                     agent.id,
                     org_id,
@@ -679,20 +649,6 @@ class AgentService:
                 litellm_base_url=self.config.agent_litellm_base_url,
             )
             service = build_service(agent.id, org_id, ns, include_webhook_port=True)
-            config_map = build_config_map(
-                agent_id=agent.id,
-                org_id=org_id,
-                namespace=ns,
-                soul_md=template.soul_md,
-                identity_md=template.identity_md,
-                user_md=template.user_md,
-                tools_md=template.tools_md,
-                agents_md=template.agents_md,
-                boot_md=template.boot_md,
-                bootstrap_md=template.bootstrap_md,
-                heartbeat_md=template.heartbeat_md,
-                openclaw_config_overlay=overlay,
-            )
             deployment = build_deployment(
                 agent.id,
                 org_id,
@@ -738,13 +694,13 @@ class AgentService:
                 agent_id=agent.id,
                 org_id=org_id,
                 namespace=ns,
-                soul_md=template.soul_md,
-                identity_md=template.identity_md,
-                user_md=template.user_md,
-                tools_md=template.tools_md,
-                agents_md=template.agents_md,
-                boot_md=template.boot_md,
-                heartbeat_md=template.heartbeat_md,
+                soul_md=rendered.soul_md,
+                identity_md=rendered.identity_md,
+                user_md=rendered.user_md,
+                tools_md=rendered.tools_md,
+                agents_md=rendered.agents_md,
+                boot_md=rendered.boot_md,
+                heartbeat_md=rendered.heartbeat_md,
                 hermes_config=hermes_cfg,
                 aai_cli_config_toml=aai_config_toml,
                 aai_cli_setup_sh=aai_setup_sh,
@@ -755,14 +711,14 @@ class AgentService:
                 agent_id=agent.id,
                 org_id=org_id,
                 namespace=ns,
-                soul_md=template.soul_md,
-                identity_md=template.identity_md,
-                user_md=template.user_md,
-                tools_md=template.tools_md,
-                agents_md=template.agents_md,
-                boot_md=template.boot_md,
-                bootstrap_md=template.bootstrap_md,
-                heartbeat_md=template.heartbeat_md,
+                soul_md=rendered.soul_md,
+                identity_md=rendered.identity_md,
+                user_md=rendered.user_md,
+                tools_md=rendered.tools_md,
+                agents_md=rendered.agents_md,
+                boot_md=rendered.boot_md,
+                bootstrap_md=rendered.bootstrap_md,
+                heartbeat_md=rendered.heartbeat_md,
                 openclaw_config_overlay=overlay,
                 aai_cli_config_toml=aai_config_toml,
                 aai_cli_setup_sh=aai_setup_sh,
