@@ -8,8 +8,8 @@ import { AgentTemplateRead, AgentTemplateReadSchema } from "../schemas";
 import { templatesKey } from "../utils";
 
 export type UpdateTemplateData = {
+  // template_name is immutable — new versions inherit the v1 name.
   slug: string;
-  templateName?: string;
   soulMd?: string;
   identityMd?: string;
   userMd?: string;

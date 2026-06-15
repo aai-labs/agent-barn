@@ -68,6 +68,18 @@ class TemplateService:
         org_id = self._org_id(context)
         return TemplateRead.model_validate(self._get_latest_or_404(org_id, slug))
 
+    def list_template_versions(
+        self, slug: str, context: CurrentUserContext
+    ) -> list[TemplateRead]:
+        org_id = self._org_id(context)
+        versions = self.repository.find_versions(org_id, slug)
+        if not versions:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Template {slug} not found",
+            )
+        return [TemplateRead.model_validate(v) for v in versions]
+
     def create_template(
         self, data: TemplateCreate, context: CurrentUserContext
     ) -> TemplateRead:

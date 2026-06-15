@@ -19,6 +19,7 @@ test.describe("Hire Dialog", () => {
     await dataSupportPage.users.interceptGetUserContextRequest();
     await dataSupportPage.agents.interceptGetAgentsRequest();
     await dataSupportPage.agents.interceptGetTemplatesRequest();
+    await dataSupportPage.agents.interceptGetTemplateVersionsRequest();
 
     await dashboardPage.goto();
     await page.getByRole("button", { name: /hire agent/i }).click();
@@ -209,12 +210,16 @@ test.describe("Hire Dialog", () => {
     await expect(page.getByText("What kind of teammate do you need?")).not.toBeVisible();
   });
 
-  test("template step renders catalog templates with pre-defined badges", async ({ page }) => {
+  test("template step renders catalog templates with pre-defined badges and a version dropdown", async ({ page }) => {
     await expect(page.getByText("General Purpose", { exact: true })).toBeVisible();
     await expect(page.getByText("Scrum Master", { exact: true })).toBeVisible();
     await expect(page.getByText("My Custom", { exact: true })).toBeVisible();
-    await expect(page.getByText("Pre-defined")).toHaveCount(2);
-    await expect(page.getByText("general-purpose@v1")).toBeVisible();
+    // Badge spans only (source filter options are not spans).
+    await expect(page.locator('span:text-is("Pre-defined")')).toHaveCount(2);
+    // The first template is auto-selected, so the version dropdown shows (latest = v2).
+    const version = page.getByLabel("Version");
+    await expect(version).toBeVisible();
+    await expect(version).toContainText("v2");
   });
 
   test("details step shows a read-only template preview with raw placeholders", async ({ page }) => {
@@ -235,11 +240,14 @@ test.describe("Hire Dialog", () => {
     await expect(preview).toHaveValue(/\{\{ agent_display_name \}\}/);
   });
 
-  test("hire posts template_slug instead of markdown", async ({ page }) => {
+  test("hire posts template_slug + selected version, not markdown", async ({ page }) => {
     await dataSupportPage.agents.interceptCreateAgentRequest({ body: { ...mockAgent, status: "STOPPED" } });
     await dataSupportPage.agents.interceptSlackChannelsRequest({ agentId: mockAgent.id });
     await dataSupportPage.agents.interceptSlackUsersRequest({ agentId: mockAgent.id });
 
+    // Pick v1 (default is latest v2) to prove the chosen version is submitted.
+    await page.getByLabel("Version").click();
+    await page.getByRole("menuitemradio", { name: "v1" }).click();
     await page.getByRole("button", { name: /continue/i }).click(); // template → agent-type
     await page.getByRole("button", { name: /continue/i }).click(); // agent-type → slack-choice
     await page.getByText("I already have a Slack app").click();
@@ -258,6 +266,7 @@ test.describe("Hire Dialog", () => {
 
     // First catalog template is auto-selected; markdown never leaves the backend.
     expect(body.template_slug).toBe("general-purpose");
+    expect(body.template_version).toBe(1);
     expect(body.soul_md).toBeUndefined();
     expect(body.identity_md).toBeUndefined();
   });

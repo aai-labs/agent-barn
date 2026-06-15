@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { XIcon } from "@/components/icons";
-import { useTemplate } from "../hooks/use-template";
+import { useTemplateVersions } from "../hooks/use-template-versions";
 import { useCreateTemplate } from "../hooks/use-create-template";
 import { useUpdateTemplate } from "../hooks/use-update-template";
 import type { AgentTemplateRead } from "../schemas";
@@ -10,6 +10,7 @@ import {
   TEMPLATE_FILE_KEYS,
   TemplateFileKey,
   TemplateSourceBadge,
+  VersionSelect,
   templateFileLabel,
 } from "./hire-dialog-steps";
 
@@ -52,7 +53,9 @@ export function TemplateDrawer({
   slug?: string;
   onClose: () => void;
 }) {
-  const { template, isLoading } = useTemplate(mode === "view" ? (slug ?? "") : "");
+  const { versions, isLoading, refetch } = useTemplateVersions(
+    mode === "view" ? slug : null,
+  );
   const createTemplate = useCreateTemplate();
   const updateTemplate = useUpdateTemplate();
 
@@ -60,21 +63,24 @@ export function TemplateDrawer({
   const [name, setName] = useState("");
   const [files, setFiles] = useState<TemplateFiles>(EMPTY_FILES);
   const [file, setFile] = useState<TemplateFileKey>("soulMd");
-  const [saved, setSaved] = useState(false);
+  const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
+  const [savedVersion, setSavedVersion] = useState<number | null>(null);
 
-  // In view mode the fetched template is displayed directly; local draft state
-  // only becomes meaningful once the user starts editing (snapshot below).
-  const displayName = editing ? name : (template?.templateName ?? "");
-  const displayFiles = editing ? files : template ? filesFrom(template) : EMPTY_FILES;
+  // The version currently being displayed/edited (defaults to latest).
+  const resolvedVersion = selectedVersion ?? versions[0]?.version ?? null;
+  const current = versions.find((v) => v.version === resolvedVersion) ?? versions[0];
+
+  // In view mode the selected version is displayed directly; local draft state
+  // only matters once the user starts editing (snapshotted from `current`).
+  const displayName = mode === "create" ? name : (current?.templateName ?? "");
+  const displayFiles = editing ? files : current ? filesFrom(current) : EMPTY_FILES;
 
   const mutationError = createTemplate.error ?? updateTemplate.error;
   const pending = createTemplate.isPending || updateTemplate.isPending;
 
   function handleStartEdit() {
-    if (template) {
-      setName(template.templateName);
-      setFiles(filesFrom(template));
-    }
+    if (current) setFiles(filesFrom(current)); // fork from the viewed version
+    setSavedVersion(null);
     setEditing(true);
   }
 
@@ -87,11 +93,13 @@ export function TemplateDrawer({
         onClose();
         return;
       }
-      // Saving publishes a new immutable version of the lineage.
-      await updateTemplate.mutateAsync({ slug: slug!, templateName: name, ...files });
+      // Saving publishes a new immutable version; the name is inherited.
+      const updated = await updateTemplate.mutateAsync({ slug: slug!, ...files });
+      await refetch();
+      setSelectedVersion(updated.version);
       setEditing(false);
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
+      setSavedVersion(updated.version);
+      setTimeout(() => setSavedVersion(null), 2500);
     } catch {
       // error displayed via mutationError
     }
@@ -106,7 +114,9 @@ export function TemplateDrawer({
   }
 
   const headerSlug =
-    mode === "create" ? deriveSlug(name) || "—" : `${slug}@v${template?.version ?? "…"}`;
+    mode === "create"
+      ? deriveSlug(name) || "—"
+      : `${slug}@v${current?.version ?? "…"}`;
 
   return (
     <div className="fixed inset-0 z-50">
@@ -133,9 +143,9 @@ export function TemplateDrawer({
             </div>
             <div className="flex items-center gap-2">
               <h2 className="text-lg font-semibold tracking-tight m-0" style={{ color: "var(--ink)" }}>
-                {mode === "create" ? (name || "Untitled template") : template?.templateName ?? "…"}
+                {mode === "create" ? (name || "Untitled template") : (current?.templateName ?? "…")}
               </h2>
-              {template && <TemplateSourceBadge source={template.templateSource} />}
+              {current && <TemplateSourceBadge source={current.templateSource} />}
             </div>
           </div>
           <button className="af-btn af-btn-ghost af-btn-icon" onClick={onClose} aria-label="Close">
@@ -148,13 +158,13 @@ export function TemplateDrawer({
             <div className="text-[13px]" style={{ color: "var(--ink-3)" }}>Loading…</div>
           )}
 
-          {(mode === "create" || template) && (
+          {(mode === "create" || current) && (
             <>
               <div className="flex flex-col gap-1.5">
                 <label className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>
                   Template name
                 </label>
-                {editing ? (
+                {mode === "create" ? (
                   <input
                     className="af-input"
                     aria-label="Template name"
@@ -163,6 +173,7 @@ export function TemplateDrawer({
                     placeholder="My Template"
                   />
                 ) : (
+                  // Names are immutable; new versions inherit the v1 name.
                   <div className="text-[14px]" style={{ color: "var(--ink)" }}>{displayName}</div>
                 )}
                 {mode === "create" && (
@@ -172,11 +183,24 @@ export function TemplateDrawer({
                 )}
               </div>
 
-              {mode === "view" && template && (
+              {mode === "view" && !editing && (
+                <div className="flex items-center gap-3">
+                  <label className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>
+                    Version
+                  </label>
+                  <div className="w-40">
+                    <VersionSelect
+                      versions={versions}
+                      selectedVersion={resolvedVersion}
+                      onChange={setSelectedVersion}
+                    />
+                  </div>
+                </div>
+              )}
+              {mode === "view" && editing && (
                 <div className="text-[12.5px]" style={{ color: "var(--ink-3)" }}>
-                  Version <span className="font-mono">v{template.version}</span>
-                  {" — saving an edit publishes a new version. "}
-                  <span className="font-mono">{"{{ … }}"}</span> placeholders are rendered when an agent starts.
+                  Editing from <span className="font-mono">v{current?.version}</span>. Saving publishes a new
+                  version. <span className="font-mono">{"{{ … }}"}</span> placeholders are rendered when an agent starts.
                 </div>
               )}
 
@@ -224,7 +248,7 @@ export function TemplateDrawer({
               <button className="af-btn af-btn-ghost" onClick={handleCancelEdit}>Cancel</button>
               <button
                 className="af-btn af-btn-primary"
-                disabled={pending || !name.trim()}
+                disabled={pending || (mode === "create" && !name.trim())}
                 onClick={() => void handleSave()}
               >
                 {pending ? "Saving…" : mode === "create" ? "Create template" : "Save"}
@@ -232,14 +256,14 @@ export function TemplateDrawer({
             </>
           ) : (
             <>
-              {saved && (
+              {savedVersion != null && (
                 <span className="text-[13px] mr-auto" style={{ color: "var(--ok)" }}>
-                  Saved as v{template?.version}
+                  Saved as v{savedVersion}
                 </span>
               )}
               <button
                 className="af-btn af-btn-primary"
-                disabled={!template}
+                disabled={!current}
                 onClick={handleStartEdit}
               >
                 Edit template

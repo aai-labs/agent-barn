@@ -53,6 +53,15 @@ def get_template(
     return service.get_template(slug, context)
 
 
+@templates_router.get("/{slug}/versions", response_model=list[TemplateRead])
+def list_template_versions(
+    slug: str,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[TemplateService, Injected(TemplateService)],
+):
+    return service.list_template_versions(slug, context)
+
+
 @templates_router.patch("/{slug}", response_model=TemplateRead)
 def update_template(
     slug: str,

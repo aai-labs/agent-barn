@@ -5,6 +5,7 @@ import { XIcon, CheckIcon } from "@/components/icons";
 import { useCreateAgent } from "../hooks/use-create-agent";
 import { useStartAgent } from "../hooks/use-start-agent";
 import { useTemplates } from "../hooks/use-templates";
+import { useTemplateVersions } from "../hooks/use-template-versions";
 import { DialogShell } from "./hire-dialog-primitives";
 import {
   MODELS, WizardStep,
@@ -79,6 +80,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
 
   const [step, setStep] = useState<WizardStep>("template");
   const [selectedTemplate, setSelectedTemplate] = useState<AgentTemplateRead | null>(null);
+  const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
   const [name, setName] = useState<string>(DEFAULT_AGENT_NAME);
   const [model, setModel] = useState<string>(MODELS[0].value);
   const [platform, setPlatform] = useState<"slack" | "teams">("slack");
@@ -111,7 +113,21 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
 
   // Until the user picks one, the first catalog template is the selection.
   const effectiveTemplate = selectedTemplate ?? templates[0] ?? null;
+  const { versions, isLoading: versionsLoading } = useTemplateVersions(
+    effectiveTemplate?.templateSlug,
+  );
+  // The chosen version (defaults to latest = versions[0]). The full row for the
+  // resolved version drives the preview + submit.
+  const resolvedVersion =
+    selectedVersion ?? versions[0]?.version ?? effectiveTemplate?.version ?? null;
+  const versionTemplate =
+    versions.find((v) => v.version === resolvedVersion) ?? effectiveTemplate;
   const roleLabel = effectiveTemplate?.templateName ?? "Agent";
+
+  function handlePickTemplate(template: AgentTemplateRead) {
+    setSelectedTemplate(template);
+    setSelectedVersion(null); // reset to the new lineage's latest
+  }
 
   function handleTeamsBotNameChange(value: string) {
     setBotName(value);
@@ -160,6 +176,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
         name, model, platform,
         agentType,
         templateSlug: effectiveTemplate.templateSlug,
+        ...(resolvedVersion != null ? { templateVersion: resolvedVersion } : {}),
         secrets: integrations.map((i) => ({
           provider: i.provider,
           content: i.provider === "github" ? expandGithubContent(i.content) : i.content,
@@ -409,7 +426,11 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
             isLoading={templatesLoading}
             error={templatesError}
             selectedSlug={effectiveTemplate?.templateSlug ?? null}
-            onPick={setSelectedTemplate}
+            onPick={handlePickTemplate}
+            versions={versions}
+            versionsLoading={versionsLoading}
+            selectedVersion={resolvedVersion}
+            onVersionChange={setSelectedVersion}
           />
         )}
         {step === "agent-type" && <AgentTypeStep agentType={agentType} onChange={handleAgentTypeChange} />}
@@ -454,9 +475,9 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
             error={teamsTokenError}
           />
         )}
-        {step === "details" && effectiveTemplate && (
+        {step === "details" && versionTemplate && (
           <DetailsStep
-            template={effectiveTemplate}
+            template={versionTemplate}
             platform={platform}
             name={name} onNameChange={setName}
             model={model} onModelChange={setModel}

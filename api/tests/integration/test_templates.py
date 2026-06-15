@@ -226,6 +226,51 @@ def test_get_template_unknown_slug_returns_404():
             assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
+# --- versions ---
+
+
+def test_list_template_versions_returns_all_desc():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_template(slug="alpha", name="Alpha", version=1),
+            there_is_a_template(slug="alpha", name="Alpha", version=2),
+            there_is_a_template(slug="alpha", name="Alpha", version=3),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("I list the lineage's versions"):
+            response = client.get(f"{_BASE}/alpha/versions", headers=_auth(context))
+
+        with then("all versions are returned newest-first"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            versions = [item["version"] for item in response.json()]
+            assert_that(versions, equal_to([3, 2, 1]))
+
+
+def test_list_template_versions_unknown_slug_returns_404():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I list versions of a non-existent lineage"):
+            response = client.get(f"{_BASE}/nope/versions", headers=_auth(context))
+
+        with then("it returns 404"):
+            assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_list_template_versions_no_auth_returns_401():
+    with given([*_GIVEN, there_is_a_template(slug="alpha", name="Alpha")]) as context:
+        client: TestClient = context.client
+
+        with when("I list versions without a token"):
+            response = client.get(f"{_BASE}/alpha/versions")
+
+        with then("it returns 401"):
+            assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
+
+
 # --- create ---
 
 
@@ -353,22 +398,23 @@ def test_update_template_creates_new_version_with_merge():
             assert_that(body["template_slug"], equal_to("alpha"))
 
 
-def test_update_template_name_is_editable_slug_immutable():
+def test_update_template_name_is_inherited_not_editable():
     with given([*_GIVEN, there_is_a_template(slug="alpha", name="Alpha")]) as context:
         client: TestClient = context.client
 
-        with when("I rename the template"):
+        with when("I edit content and attempt to rename in the same request"):
             response = client.patch(
                 f"{_BASE}/alpha",
-                json={"template_name": "Alpha Renamed"},
+                json={"soul_md": "# New", "template_name": "Alpha Renamed"},
                 headers=_auth(context),
             )
 
-        with then("the name changes but the slug does not"):
+        with then("the new version inherits the v1 name; the rename is ignored"):
             body = response.json()
-            assert_that(body["template_name"], equal_to("Alpha Renamed"))
+            assert_that(body["template_name"], equal_to("Alpha"))
             assert_that(body["template_slug"], equal_to("alpha"))
             assert_that(body["version"], equal_to(2))
+            assert_that(body["soul_md"], equal_to("# New"))
 
 
 def test_update_predefined_template_keeps_source():
@@ -578,8 +624,14 @@ def test_predefined_content_keeps_raw_placeholders():
 # --- shared lineage lifecycle ---
 
 
-def test_agent_md_edit_re_pins_only_that_agent_and_bumps_catalog():
-    with given([*_GIVEN, there_is_a_template(slug="shared", name="Shared")]) as context:
+def test_agent_repin_moves_only_that_agent():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_template(slug="shared", name="Shared", version=1),
+            there_is_a_template(slug="shared", name="Shared", version=2),
+        ]
+    ) as context:
         client: TestClient = context.client
         create_payload = {
             "platform": "slack",
@@ -588,7 +640,7 @@ def test_agent_md_edit_re_pins_only_that_agent_and_bumps_catalog():
             "template_slug": "shared",
         }
 
-        with when("two agents are hired from the same lineage"):
+        with when("two agents are hired from the same lineage (latest = v2)"):
             first = client.post(
                 _AGENTS_BASE,
                 json={**create_payload, "name": "First"},
@@ -599,27 +651,24 @@ def test_agent_md_edit_re_pins_only_that_agent_and_bumps_catalog():
                 json={**create_payload, "name": "Second"},
                 headers=_auth(context),
             ).json()
-            assert_that(first["template_version"], equal_to(1))
-            assert_that(second["template_version"], equal_to(1))
+            assert_that(first["template_version"], equal_to(2))
+            assert_that(second["template_version"], equal_to(2))
 
-        with when("the first agent's md is edited via the config drawer"):
+        with when("the first agent is re-pinned to v1"):
             response = client.patch(
                 f"{_AGENTS_BASE}/{first['id']}",
-                json={"soul_md": "# Forked Soul"},
+                json={"template_slug": "shared", "template_version": 1},
                 headers=_auth(context),
             )
 
-        with then("only the first agent re-pins to the new version"):
-            assert_that(response.json()["template_version"], equal_to(2))
+        with then("only the first agent moves; no new template version is created"):
+            assert_that(response.json()["template_version"], equal_to(1))
             second_refreshed = client.get(
                 f"{_AGENTS_BASE}/{second['id']}", headers=_auth(context)
             ).json()
-            assert_that(second_refreshed["template_version"], equal_to(1))
-
-        with then("the catalog's latest version is bumped"):
+            assert_that(second_refreshed["template_version"], equal_to(2))
             catalog = client.get(f"{_BASE}/shared", headers=_auth(context)).json()
             assert_that(catalog["version"], equal_to(2))
-            assert_that(catalog["soul_md"], equal_to("# Forked Soul"))
 
 
 def test_default_soul_md_is_nonempty():

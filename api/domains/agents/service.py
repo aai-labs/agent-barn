@@ -62,7 +62,7 @@ from api.domains.agents.models import (
 from api.domains.agents.error_messages import friendly_k8s_error, friendly_pod_reason
 from api.domains.agents.repository import AgentRepository
 from api.domains.auth.models import CurrentUserContext
-from api.domains.templates.models import AgentTemplate, TemplateRead
+from api.domains.templates.models import TemplateRead
 from api.domains.templates.renderer import render_template
 from api.domains.templates.repository import TemplateRepository
 from api.domains.conversations.service import ConversationSyncService
@@ -84,19 +84,6 @@ logger = logging.getLogger(__name__)
 _STOP_SYNC_TIMEOUT_SECONDS = 20
 _stop_sync_pool = concurrent.futures.ThreadPoolExecutor(
     max_workers=4, thread_name_prefix="agent-stop-sync"
-)
-
-_MD_FIELDS = frozenset(
-    {
-        "soul_md",
-        "identity_md",
-        "user_md",
-        "tools_md",
-        "agents_md",
-        "boot_md",
-        "bootstrap_md",
-        "heartbeat_md",
-    }
 )
 
 _SLACK_CONFIG_FIELDS = frozenset(
@@ -206,14 +193,22 @@ class AgentService:
                     status_code=status.HTTP_400_BAD_REQUEST, detail=reason
                 )
 
-        # The agent pins to the latest version of the referenced shared lineage.
-        template = self.template_repository.get_latest_template(
-            org_id, data.template_slug
-        )
+        # Pin to the requested version, or the lineage's latest if unspecified.
+        if data.template_version is not None:
+            template = self.template_repository.get_template_by_slug_and_version(
+                org_id, data.template_slug, data.template_version
+            )
+            missing_detail = (
+                f"Template {data.template_slug} v{data.template_version} not found"
+            )
+        else:
+            template = self.template_repository.get_latest_template(
+                org_id, data.template_slug
+            )
+            missing_detail = f"Template {data.template_slug} not found"
         if template is None:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Template {data.template_slug} not found",
+                status_code=status.HTTP_404_NOT_FOUND, detail=missing_detail
             )
 
         agent = Agent(
@@ -384,34 +379,22 @@ class AgentService:
                 detail="Cannot set Teams fields on a Slack agent",
             )
 
-        if _MD_FIELDS & updated.keys():
-            old_template = self.template_repository.get_template_or_raise(
-                org_id, agent.template_slug, agent.template_version
+        # Re-pin the agent to a different template (slug, version). The model
+        # validator guarantees both keys appear together.
+        if "template_slug" in updated:
+            target = self.template_repository.get_template_by_slug_and_version(
+                org_id, updated["template_slug"], updated["template_version"]
             )
-            # Content merges from the agent's pinned version, but the new
-            # version number continues the shared lineage (other agents or the
-            # templates page may have published versions past this pin).
-            latest = self.template_repository.get_latest_template(
-                org_id, agent.template_slug
-            )
-            latest_version = latest.version if latest else old_template.version
-            new_template = AgentTemplate(
-                organization_id=org_id,
-                template_slug=agent.template_slug,
-                template_name=old_template.template_name,
-                template_source=old_template.template_source,
-                version=latest_version + 1,
-                soul_md=updated.get("soul_md", old_template.soul_md),
-                identity_md=updated.get("identity_md", old_template.identity_md),
-                user_md=updated.get("user_md", old_template.user_md),
-                tools_md=updated.get("tools_md", old_template.tools_md),
-                agents_md=updated.get("agents_md", old_template.agents_md),
-                boot_md=updated.get("boot_md", old_template.boot_md),
-                bootstrap_md=updated.get("bootstrap_md", old_template.bootstrap_md),
-                heartbeat_md=updated.get("heartbeat_md", old_template.heartbeat_md),
-            )
-            self.template_repository.save_template(new_template)
-            agent.template_version = new_template.version
+            if target is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=(
+                        f"Template {updated['template_slug']} "
+                        f"v{updated['template_version']} not found"
+                    ),
+                )
+            agent.template_slug = target.template_slug
+            agent.template_version = target.version
 
         if "name" in updated:
             agent.name = updated["name"]

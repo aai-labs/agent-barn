@@ -83,6 +83,30 @@ export const mockTemplates = [
   },
 ];
 
+// Two versions (latest first) for any lineage — used by version dropdowns.
+export function mockVersionsForSlug(slug: string) {
+  const base =
+    mockTemplates.find((t) => t.template_slug === slug) ?? {
+      ...mockAgentTemplate,
+      template_slug: slug,
+      template_name: slug,
+    };
+  return [
+    {
+      ...base,
+      id: "66666666-6666-4666-8666-666666666602",
+      version: 2,
+      soul_md: `# Soul v2\n${base.soul_md}`,
+    },
+    {
+      ...base,
+      id: "66666666-6666-4666-8666-666666666601",
+      version: 1,
+      soul_md: `# Soul v1\n${base.soul_md}`,
+    },
+  ];
+}
+
 export class AgentDataSupport {
   constructor(private page: Page) {}
 
@@ -470,6 +494,32 @@ export class AgentDataSupport {
         status,
         contentType: "application/json",
         body: JSON.stringify(status >= 400 ? { detail } : (body ?? fallback)),
+      });
+    });
+  }
+
+  async interceptGetTemplateVersionsRequest({
+    status = 200,
+    detail = "Unable to load versions",
+  }: {
+    status?: number;
+    detail?: string;
+  } = {}) {
+    await this.page.route("**/api/v1/templates/*/versions", async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      const match = new URL(route.request().url()).pathname.match(
+        /\/templates\/([^/]+)\/versions$/,
+      );
+      const slug = match ? match[1] : MOCK_TEMPLATE_SLUG;
+      await route.fulfill({
+        status,
+        contentType: "application/json",
+        body: JSON.stringify(
+          status >= 400 ? { detail } : mockVersionsForSlug(slug),
+        ),
       });
     });
   }

@@ -320,8 +320,10 @@ class AgentCreate(PydanticBaseModel):
     teams_app_id: str | None = Field(default=None, min_length=1)
     teams_app_password: str | None = Field(default=None, min_length=1)
     teams_tenant_id: str | None = Field(default=None, min_length=1)
-    # Template reference — the agent pins to the lineage's latest version
+    # Template reference. The agent pins to template_version if given, else to
+    # the lineage's latest version.
     template_slug: str = Field(min_length=1, max_length=255)
+    template_version: int | None = None
     model: str | None = None
     # Integration credentials (optional)
     secrets: list[AgentSecretCreate] = Field(default_factory=list)
@@ -368,20 +370,24 @@ class AgentUpdate(PydanticBaseModel):
     teams_app_id: str | None = Field(default=None, min_length=1)
     teams_app_password: str | None = Field(default=None, min_length=1)
     teams_tenant_id: str | None = Field(default=None, min_length=1)
-    # Template
-    soul_md: str | None = None
-    identity_md: str | None = None
-    user_md: str | None = None
-    tools_md: str | None = None
-    agents_md: str | None = None
-    boot_md: str | None = None
-    bootstrap_md: str | None = None
-    heartbeat_md: str | None = None
+    # Template re-pin: point the agent at a different (slug, version). Both must
+    # be provided together. Per-agent markdown editing is no longer supported —
+    # persona changes happen by editing templates in the catalog.
+    template_slug: str | None = Field(default=None, min_length=1, max_length=255)
+    template_version: int | None = None
     model: str | None = None
     # Integration credentials: upsert (add/replace) + explicit removal.
     # Providers not mentioned in either list are left untouched.
     secrets: list[AgentSecretCreate] | None = None
     removed_secret_providers: list[SecretProvider] | None = None
+
+    @model_validator(mode="after")
+    def validate_template_repin(self) -> "AgentUpdate":
+        if (self.template_slug is None) != (self.template_version is None):
+            raise ValueError(
+                "template_slug and template_version must be provided together"
+            )
+        return self
 
     @model_validator(mode="after")
     def validate_secret_operations(self) -> "AgentUpdate":

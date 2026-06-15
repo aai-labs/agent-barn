@@ -48,6 +48,16 @@ class TemplateRepository:
             )
             return session.exec(query).first()
 
+    def find_versions(self, org_id: UUID, slug: str) -> list[AgentTemplate]:
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(AgentTemplate)
+                .where(col(AgentTemplate.organization_id) == org_id)
+                .where(col(AgentTemplate.template_slug) == slug)
+                .order_by(col(AgentTemplate.version).desc())
+            )
+            return list(session.exec(query).all())
+
     def find_latest_templates(
         self,
         org_id: UUID,

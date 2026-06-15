@@ -83,7 +83,8 @@ class TemplateCreate(PydanticBaseModel):
 
 
 class TemplateUpdate(PydanticBaseModel):
-    template_name: str | None = Field(default=None, min_length=1, max_length=255)
+    # template_name is intentionally NOT editable: new versions inherit the v1
+    # name. Only the markdown content can change between versions.
     soul_md: str | None = None
     identity_md: str | None = None
     user_md: str | None = None

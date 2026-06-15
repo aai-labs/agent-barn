@@ -2,7 +2,15 @@
 
 import { useState } from "react";
 import JSZip from "jszip";
+import { ChevronDownIcon } from "lucide-react";
 import { PlusIcon, XIcon } from "@/components/icons";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   INTEGRATION_PROVIDERS,
   getIntegrationProvider,
@@ -145,18 +153,77 @@ function generateManifest(name: string, description: string, color: string): str
   );
 }
 
+// Shared lineage version picker — used at hire time, in the template drawer,
+// and in the agent re-pin panel. Marks the highest version as "latest".
+export function VersionSelect({
+  versions,
+  selectedVersion,
+  onChange,
+  disabled,
+  ariaLabel = "Version",
+}: {
+  versions: AgentTemplateRead[];
+  selectedVersion: number | null;
+  onChange: (version: number) => void;
+  disabled?: boolean;
+  ariaLabel?: string;
+}) {
+  const latest = versions[0]?.version;
+  const resolved = selectedVersion ?? latest ?? null;
+  const displayLabel =
+    resolved != null
+      ? `v${resolved}${resolved === latest ? " (latest)" : ""}`
+      : "Select…";
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          className="af-input flex items-center justify-between gap-2 w-full text-left"
+          aria-label={ariaLabel}
+          disabled={disabled || versions.length === 0}
+        >
+          <span>{displayLabel}</span>
+          <ChevronDownIcon size={13} className="opacity-50 flex-shrink-0" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent>
+        <DropdownMenuRadioGroup
+          value={resolved != null ? String(resolved) : ""}
+          onValueChange={(v) => onChange(Number(v))}
+        >
+          {versions.map((v) => (
+            <DropdownMenuRadioItem key={v.version} value={String(v.version)}>
+              v{v.version}
+              {v.version === latest ? " (latest)" : ""}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 export function TemplateStep({
   templates,
   isLoading,
   error,
   selectedSlug,
   onPick,
+  versions,
+  versionsLoading,
+  selectedVersion,
+  onVersionChange,
 }: {
   templates: AgentTemplateRead[];
   isLoading: boolean;
   error: Error | null;
   selectedSlug: string | null;
   onPick: (template: AgentTemplateRead) => void;
+  versions: AgentTemplateRead[];
+  versionsLoading: boolean;
+  selectedVersion: number | null;
+  onVersionChange: (version: number) => void;
 }) {
   if (isLoading) {
     return (
@@ -180,26 +247,43 @@ export function TemplateStep({
     );
   }
   return (
-    <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
-      {templates.map((t) => (
-        <div
-          key={t.templateSlug}
-          className="flex flex-col gap-2 p-4 rounded-2xl cursor-default transition-colors"
-          style={{
-            border: selectedSlug === t.templateSlug ? "1.5px solid var(--ink)" : "1.5px solid var(--line)",
-            background: selectedSlug === t.templateSlug ? "var(--bg-soft)" : "var(--bg-elev)",
-          }}
-          onClick={() => onPick(t)}
-        >
-          <div className="flex items-center justify-between gap-2">
-            <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>{t.templateName}</div>
-            <TemplateSourceBadge source={t.templateSource} />
+    <div className="flex flex-col gap-4">
+      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+        {templates.map((t) => (
+          <div
+            key={t.templateSlug}
+            className="flex flex-col gap-2 p-4 rounded-2xl cursor-default transition-colors"
+            style={{
+              border: selectedSlug === t.templateSlug ? "1.5px solid var(--ink)" : "1.5px solid var(--line)",
+              background: selectedSlug === t.templateSlug ? "var(--bg-soft)" : "var(--bg-elev)",
+            }}
+            onClick={() => onPick(t)}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>{t.templateName}</div>
+              <TemplateSourceBadge source={t.templateSource} />
+            </div>
           </div>
-          <div className="text-[0.781rem] font-mono leading-[1.4]" style={{ color: "var(--ink-3)" }}>
-            {t.templateSlug}@v{t.version}
-          </div>
+        ))}
+      </div>
+      {selectedSlug && (
+        <div className="flex items-center gap-3">
+          <label className="text-[0.844rem] font-medium" style={{ color: "var(--ink-2)" }}>
+            Version
+          </label>
+          {versionsLoading ? (
+            <span className="text-[0.8125rem]" style={{ color: "var(--ink-3)" }}>Loading…</span>
+          ) : (
+            <div className="w-40">
+              <VersionSelect
+                versions={versions}
+                selectedVersion={selectedVersion}
+                onChange={onVersionChange}
+              />
+            </div>
+          )}
         </div>
-      ))}
+      )}
     </div>
   );
 }
@@ -839,7 +923,7 @@ export function DetailsStep({
             <TemplateSourceBadge source={template.templateSource} />
           </div>
           <div className="text-[0.8125rem] font-mono" style={{ color: "var(--ink-3)" }}>
-            {template.templateSlug}@v{template.version}
+            v{template.version}
           </div>
         </div>
         <button className="af-btn af-btn-sm af-btn-ghost" onClick={onChangeTemplate}>Change</button>
@@ -904,7 +988,7 @@ export function DetailsStep({
         </summary>
         <div className="p-4 flex flex-col gap-3" style={{ background: "var(--bg-soft)" }}>
           <div className="text-[0.781rem] leading-[1.5]" style={{ color: "var(--ink-3)" }}>
-            Read-only preview of <span className="font-mono">{template.templateSlug}@v{template.version}</span>.
+            Read-only preview of <span className="font-mono">v{template.version}</span>.
             {" "}<span className="font-mono">{"{{ … }}"}</span> placeholders are filled in when the agent starts.
             To customise, edit the template in Settings → Templates.
           </div>

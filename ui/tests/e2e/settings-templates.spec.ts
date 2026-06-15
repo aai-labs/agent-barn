@@ -18,6 +18,7 @@ test.describe("Settings · Templates", () => {
     await dataSupport.auth.interceptRefreshRequest();
     await dataSupport.users.interceptGetUserContextRequest();
     await dataSupport.agents.interceptGetTemplatesRequest();
+    await dataSupport.agents.interceptGetTemplateVersionsRequest();
 
     await page.goto("/dashboard/settings");
     await page.getByRole("button", { name: "Templates", exact: true }).click();
@@ -39,29 +40,35 @@ test.describe("Settings · Templates", () => {
   });
 
   test("source filter narrows to custom templates", async ({ page }) => {
-    await page.getByLabel("Filter by source").selectOption("custom");
+    await page.getByLabel("Filter by source").click();
+    await page.getByRole("menuitemradio", { name: "Custom" }).click();
 
     await expect(page.getByText("My Custom", { exact: true })).toBeVisible();
     await expect(page.getByText("Scrum Master", { exact: true })).not.toBeVisible();
   });
 
-  test("clicking a template opens a read-only preview with the version shown", async ({ page }) => {
-    await dataSupport.agents.interceptGetTemplateRequest({ slug: "scrum-master" });
-
+  test("clicking a template opens a read-only preview with a version dropdown", async ({ page }) => {
     await page.getByText("Scrum Master", { exact: true }).click();
 
     await expect(page.getByRole("heading", { name: "Scrum Master" })).toBeVisible();
-    await expect(page.getByText("Version v1")).toBeVisible();
+    // Version dropdown defaults to latest (v2).
+    const version = page.getByLabel("Version");
+    await expect(version).toContainText("v2");
     const content = page.getByLabel("SOUL.md content");
-    await expect(content).toBeVisible();
     await expect(content).toHaveAttribute("readonly", "");
+    await expect(content).toHaveValue(/# Soul v2/);
     await expect(content).toHaveValue(/\{\{ agent_display_name \}\}/);
-    // Version is displayed, never editable.
+
+    // Switching the version changes the displayed content.
+    await version.click();
+    await page.getByRole("menuitemradio", { name: "v1" }).click();
+    await expect(content).toHaveValue(/# Soul v1/);
+
+    // The name is shown but not editable in view mode.
     await expect(page.getByLabel("Template name")).toHaveCount(0);
   });
 
-  test("edit template enables fields and save publishes a new version", async ({ page }) => {
-    await dataSupport.agents.interceptGetTemplateRequest({ slug: "my-custom" });
+  test("edit template enables fields and save publishes a new version (name inherited)", async ({ page }) => {
     await dataSupport.agents.interceptUpdateTemplateRequest({ slug: "my-custom" });
 
     await page.getByText("My Custom", { exact: true }).click();
@@ -69,7 +76,7 @@ test.describe("Settings · Templates", () => {
 
     const content = page.getByLabel("SOUL.md content");
     await expect(content).not.toHaveAttribute("readonly", "");
-    await content.fill("# Soul v2");
+    await content.fill("# Soul next");
 
     const patchPromise = page.waitForRequest(
       (req) => req.url().includes("/api/v1/templates/my-custom") && req.method() === "PATCH",
@@ -77,8 +84,9 @@ test.describe("Settings · Templates", () => {
     await page.getByRole("button", { name: "Save", exact: true }).click();
     const patchRequest = await patchPromise;
     const body = patchRequest.postDataJSON() as Record<string, unknown>;
-    expect(body.soul_md).toBe("# Soul v2");
-    expect(body.template_name).toBe("My Custom");
+    expect(body.soul_md).toBe("# Soul next");
+    // Name is immutable — never sent on update.
+    expect(body.template_name).toBeUndefined();
 
     await expect(page.getByText("Saved as v2")).toBeVisible();
   });

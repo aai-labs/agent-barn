@@ -60,6 +60,8 @@ export const PaginatedTemplatesSchema = z.object({
   items: z.array(AgentTemplateReadSchema),
 });
 
+export const TemplateVersionsSchema = z.array(AgentTemplateReadSchema);
+
 export const PaginatedAgentsSchema = z.object({
   page: z.number().int().min(1),
   pageSize: z.number().int().min(1),

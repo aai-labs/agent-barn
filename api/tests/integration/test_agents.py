@@ -161,6 +161,33 @@ def test_create_agent_pins_latest_template_version():
             assert_that(body["template_version"], equal_to(2))
 
 
+def test_create_agent_pins_specific_version():
+    with given(
+        [*_GIVEN, there_is_a_template(version=2, soul_md="# Soul v2")]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("I create an agent requesting v1 of a two-version lineage"):
+            payload = {**_VALID_CREATE, "template_version": 1}
+            response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("it pins to the requested version, not the latest"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(response.json()["template_version"], equal_to(1))
+
+
+def test_create_agent_unknown_version_returns_404():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I create an agent requesting a non-existent version"):
+            payload = {**_VALID_CREATE, "template_version": 99}
+            response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("it returns 404"):
+            assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
 def test_create_agent_does_not_create_template_rows():
     with given(_GIVEN) as context:
         client: TestClient = context.client
@@ -282,20 +309,56 @@ def test_patch_agent_updates_name():
             assert_that(response.json()["name"], equal_to("New Name"))
 
 
-def test_patch_agent_updates_md_bumps_version():
+def test_patch_agent_repins_template():
+    # _GIVEN seeds the "test-template" lineage; the agent has its own generated
+    # lineage, so re-pinning to "test-template" v1 is an observable change.
     with given([*_GIVEN, there_is_an_agent()]) as context:
         client: TestClient = context.client
 
-        with when("I patch an md field"):
+        with when("I re-pin the agent to a different template version"):
             response = client.patch(
                 f"{_BASE}/{context.agent.id}",
-                json={"soul_md": "# Soul\n\nUpdated soul."},
+                json={"template_slug": "test-template", "template_version": 1},
                 headers=_auth(context),
             )
 
-        with then("it returns 200 and template_version is incremented"):
+        with then("it returns 200 pinned to the requested template"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            assert_that(response.json()["template_version"], equal_to(2))
+            body = response.json()
+            assert_that(body["template_slug"], equal_to("test-template"))
+            assert_that(body["template_version"], equal_to(1))
+
+
+def test_patch_agent_repin_unknown_version_returns_404():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I re-pin to a non-existent version"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"template_slug": "test-template", "template_version": 99},
+                headers=_auth(context),
+            )
+
+        with then("it returns 404"):
+            assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_patch_agent_repin_requires_both_slug_and_version():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I send only template_slug without a version"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"template_slug": "test-template"},
+                headers=_auth(context),
+            )
+
+        with then("it returns 422"):
+            assert_that(
+                response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY)
+            )
 
 
 def test_patch_running_agent_returns_409():

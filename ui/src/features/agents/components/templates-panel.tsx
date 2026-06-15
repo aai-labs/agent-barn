@@ -1,7 +1,15 @@
 "use client";
 
 import { useState } from "react";
+import { ChevronDownIcon } from "lucide-react";
 import { PlusIcon, SearchIcon } from "@/components/icons";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useTemplates } from "../hooks/use-templates";
 import type { AgentTemplateRead, TemplateSource } from "../schemas";
 import { TemplateSourceBadge } from "./hire-dialog-steps";
@@ -27,13 +35,7 @@ export function TemplatesPanel() {
   return (
     <div>
       <div className="mb-4 flex items-center gap-2.5">
-        <div className="relative flex-1 max-w-xs">
-          <span
-            className="absolute left-3 top-1/2 -translate-y-1/2"
-            style={{ color: "var(--ink-4)" }}
-          >
-            <SearchIcon size={14} />
-          </span>
+        <div className="relative flex-1">
           <input
             className="af-input pl-8.5 w-full"
             placeholder="Search templates…"
@@ -42,16 +44,31 @@ export function TemplatesPanel() {
             onChange={(e) => setSearch(e.target.value)}
           />
         </div>
-        <select
-          className="af-input w-auto"
-          aria-label="Filter by source"
-          value={source}
-          onChange={(e) => setSource(e.target.value as TemplateSource | "")}
-        >
-          {SOURCE_FILTERS.map((f) => (
-            <option key={f.value} value={f.value}>{f.label}</option>
-          ))}
-        </select>
+        <div className="flex-1">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              className="af-input w-full flex items-center gap-2 whitespace-nowrap"
+              aria-label="Filter by source"
+            >
+              {SOURCE_FILTERS.find((f) => f.value === source)?.label ?? "All sources"}
+              <ChevronDownIcon size={13} className="opacity-50 flex-shrink-0" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent>
+            <DropdownMenuRadioGroup
+              value={source}
+              onValueChange={(v) => setSource(v as TemplateSource | "")}
+            >
+              {SOURCE_FILTERS.map((f) => (
+                <DropdownMenuRadioItem key={f.value} value={f.value}>
+                  {f.label}
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
+        </div>
         <button className="af-btn af-btn-primary ml-auto" onClick={() => setCreating(true)}>
           <PlusIcon /> New template
         </button>

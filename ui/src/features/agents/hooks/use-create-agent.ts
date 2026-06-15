@@ -20,8 +20,9 @@ export type CreateAgentData = {
   teamsAppId?: string;
   teamsAppPassword?: string;
   teamsTenantId?: string;
-  // Template reference — the agent pins to the lineage's latest version
+  // Template reference — pins to templateVersion if given, else latest.
   templateSlug: string;
+  templateVersion?: number;
   model?: string;
   // Integration credentials (provider + provider-specific content; name is server-stamped)
   secrets?: Array<{ provider: string; content: Record<string, string> }>;
