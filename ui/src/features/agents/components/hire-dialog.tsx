@@ -8,16 +8,14 @@ import { DialogShell } from "./hire-dialog-primitives";
 import {
   ROLES, MODELS, RoleId, WizardStep, pickDefaults,
   RoleStep, AgentTypeStep, PlatformChoiceStep, SlackChoiceStep, BotBuilderStep, SlackTokensStep,
-  TeamsBotBuilderStep, TeamsCredentialsStep, DetailsStep, IntegrationsStep,
+  TeamsBotBuilderStep, TeamsCredentialsStep, DetailsStep, SkillsStep,
   downloadTeamsAppPackage, generateTeamsManifest,
 } from "./hire-dialog-steps";
 import { SlackConfigPanel } from "./slack-config-panel";
 import {
-  allRequiredGroupsSatisfied,
   hasIncompleteIntegration,
   expandGithubContent,
   type IntegrationDraft,
-  type RequiredIntegrationGroup,
 } from "../integrations";
 import type { Agent } from "../schemas";
 
@@ -38,15 +36,15 @@ const PROVISION_STEPS = [
 function getSteps(agentType: "openclaw" | "hermes", platform: "slack" | "teams", setupNewBot: boolean): WizardStep[] {
   if (agentType === "hermes") {
     return setupNewBot
-      ? ["role", "agent-type", "slack-choice", "bot-builder", "slack-tokens", "details", "integrations"]
-      : ["role", "agent-type", "slack-choice", "slack-tokens", "details", "integrations"];
+      ? ["role", "agent-type", "slack-choice", "bot-builder", "slack-tokens", "details", "skills"]
+      : ["role", "agent-type", "slack-choice", "slack-tokens", "details", "skills"];
   }
   if (platform === "teams") {
-    return ["role", "agent-type", "platform-choice", "teams-credentials", "teams-bot-builder", "details", "integrations"];
+    return ["role", "agent-type", "platform-choice", "teams-credentials", "teams-bot-builder", "details", "skills"];
   }
   return setupNewBot
-    ? ["role", "agent-type", "platform-choice", "slack-choice", "bot-builder", "slack-tokens", "details", "integrations"]
-    : ["role", "agent-type", "platform-choice", "slack-choice", "slack-tokens", "details", "integrations"];
+    ? ["role", "agent-type", "platform-choice", "slack-choice", "bot-builder", "slack-tokens", "details", "skills"]
+    : ["role", "agent-type", "platform-choice", "slack-choice", "slack-tokens", "details", "skills"];
 }
 
 function stepOrdinal(step: WizardStep, agentType: "openclaw" | "hermes", platform: "slack" | "teams", setupNewBot: boolean): string {
@@ -65,7 +63,7 @@ function stepTitle(step: WizardStep): string {
     case "teams-bot-builder": return "Build your Teams bot";
     case "teams-credentials": return "Connect to Azure";
     case "details": return "A few details and we'll get them set up.";
-    case "integrations": return "Connect integrations";
+    case "skills": return "Assign skills";
   }
 }
 
@@ -103,12 +101,8 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   const [agentsMd, setAgentsMd] = useState(defaults.agentsMd);
   const [bootMd, setBootMd] = useState(defaults.bootMd);
   const [heartbeatMd, setHeartbeatMd] = useState(defaults.heartbeatMd);
-  const [integrations, setIntegrations] = useState<IntegrationDraft[]>(
-    // Only pre-seed AND-required providers; OR groups start empty so the user picks one.
-    defaults.requiredIntegrations
-      .filter((g): g is string => typeof g === "string")
-      .map((p) => ({ provider: p, content: {} })),
-  );
+  const [selectedSkillIds, setSelectedSkillIds] = useState<string[]>([]);
+  const [skillCredentials, setSkillCredentials] = useState<IntegrationDraft[]>([]);
   const [provisioning, setProvisioning] = useState(false);
   const [progress, setProgress] = useState(0);
   const [provisionError, setProvisionError] = useState<string | null>(null);
@@ -133,12 +127,6 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
     setAgentsMd(d.agentsMd);
     setBootMd(d.bootMd);
     setHeartbeatMd(d.heartbeatMd);
-    // Seed AND-required integrations for this profile; OR groups start empty.
-    setIntegrations(
-      d.requiredIntegrations
-        .filter((g): g is string => typeof g === "string")
-        .map((p) => ({ provider: p, content: {} })),
-    );
   }
 
   function handleTeamsBotNameChange(value: string) {
@@ -202,9 +190,10 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
         agentsMd: fill(agentsMd),
         bootMd: fill(bootMd),
         heartbeatMd: fill(heartbeatMd),
-        secrets: integrations.map((i) => ({
-          provider: i.provider,
-          content: i.provider === "github" ? expandGithubContent(i.content) : i.content,
+        skillIds: selectedSkillIds,
+        secrets: skillCredentials.map((c) => ({
+          provider: c.provider,
+          content: c.provider === "github" ? expandGithubContent(c.content) : c.content,
         })),
         ...(platform === "slack"
           ? { slackBotToken, slackAppToken, slackGroupPolicy, slackDmPolicy }
@@ -503,11 +492,12 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
             onChangeRole={() => setStep("role")}
           />
         )}
-        {step === "integrations" && (
-          <IntegrationsStep
-            integrations={integrations}
-            onChange={setIntegrations}
-            requiredGroups={selected.requiredIntegrations as readonly RequiredIntegrationGroup[]}
+        {step === "skills" && (
+          <SkillsStep
+            selectedSkillIds={selectedSkillIds}
+            skillCredentials={skillCredentials}
+            onSkillIdsChange={setSelectedSkillIds}
+            onSkillCredentialsChange={setSkillCredentials}
           />
         )}
       </div>
@@ -575,22 +565,15 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
           <button
             className="af-btn af-btn-primary af-btn-lg"
             disabled={!name.trim()}
-            onClick={() => setStep("integrations")}
+            onClick={() => setStep("skills")}
           >
             Continue
           </button>
         )}
-        {step === "integrations" && (
+        {step === "skills" && (
           <button
             className="af-btn af-btn-primary af-btn-lg"
-            disabled={
-              !name.trim() ||
-              hasIncompleteIntegration(integrations) ||
-              !allRequiredGroupsSatisfied(
-                selected.requiredIntegrations as readonly RequiredIntegrationGroup[],
-                integrations,
-              )
-            }
+            disabled={!name.trim() || hasIncompleteIntegration(skillCredentials)}
             onClick={() => { void startHiring(); }}
           >
             Hire {name}
