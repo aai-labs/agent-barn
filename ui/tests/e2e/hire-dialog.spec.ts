@@ -1,8 +1,9 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 import { mockAgent } from "../pages/data-support/agent-data-support.po";
 import { DataSupport } from "../pages/data-support/data-support.po";
 import { DashboardPage } from "../pages/dashboard-page.po";
+import { mockPlatformSkill, mockCustomSkill } from "../pages/data-support/skill-data-support.po";
 
 test.describe("Hire Dialog", () => {
   test.describe.configure({ mode: "serial" });
@@ -132,6 +133,7 @@ test.describe("Hire Dialog", () => {
     await dataSupportPage.agents.interceptStartAgentRequest({ agentId: mockAgent.id });
     await dataSupportPage.agents.interceptSlackChannelsRequest({ agentId: mockAgent.id });
     await dataSupportPage.agents.interceptSlackUsersRequest({ agentId: mockAgent.id });
+    await dataSupportPage.skills.interceptGetSkillsRequest({ body: [] });
 
     await page.getByRole("button", { name: /continue/i }).click(); // role → agent-type
     await page.getByRole("button", { name: /continue/i }).click(); // agent-type → slack-choice
@@ -140,7 +142,7 @@ test.describe("Hire Dialog", () => {
     await page.getByPlaceholder(/xapp-/i).fill("xapp-1-test");
     await page.getByPlaceholder(/xoxb-/i).fill("xoxb-test");
     await page.getByRole("button", { name: /continue/i }).click(); // tokens → details
-    await page.getByRole("button", { name: /continue/i }).click(); // details → integrations
+    await page.getByRole("button", { name: /continue/i }).click(); // details → skills
     await page.getByRole("button", { name: "Hire Aria" }).click();
 
     await expect(page.getByText("Set up Slack access")).toBeVisible();
@@ -208,7 +210,9 @@ test.describe("Hire Dialog", () => {
     await expect(page.getByText("What kind of teammate do you need?")).not.toBeVisible();
   });
 
-  test("scrum-master profile pre-seeds required jira + confluence integrations", async ({ page }) => {
+  test("scrum-master profile reaches skills step with suggested name Scout", async ({ page }) => {
+    await dataSupportPage.skills.interceptGetSkillsRequest({ body: [] });
+
     // role: pick Scrum Master (suggested name "Scout")
     await page.getByText("Scrum Master", { exact: true }).click();
     await page.getByRole("button", { name: /continue/i }).click(); // role → agent-type
@@ -218,29 +222,103 @@ test.describe("Hire Dialog", () => {
     await page.getByPlaceholder(/xapp-/i).fill("xapp-1-test");
     await page.getByPlaceholder(/xoxb-/i).fill("xoxb-test");
     await page.getByRole("button", { name: /continue/i }).click(); // tokens → details
-    await page.getByRole("button", { name: /continue/i }).click(); // details → integrations
+    await page.getByRole("button", { name: /continue/i }).click(); // details → skills
 
-    // Both required integrations are pre-displayed, marked Required, and not removable.
-    await expect(page.getByText("Jira", { exact: true })).toBeVisible();
-    await expect(page.getByText("Confluence", { exact: true })).toBeVisible();
-    await expect(page.getByText("Required")).toHaveCount(2);
-    await expect(page.getByRole("button", { name: "Remove Jira" })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Remove Confluence" })).toHaveCount(0);
+    await expect(page.getByText("Assign skills")).toBeVisible();
+    // The hire button uses the suggested name from the scrum-master profile
+    await expect(page.getByRole("button", { name: "Hire Scout" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Hire Scout" })).toBeEnabled();
+  });
+});
 
-    // Hire is blocked until the required fields are filled.
-    const hire = page.getByRole("button", { name: "Hire Scout" });
-    await expect(hire).toBeDisabled();
+test.describe("Hire Dialog — Skills step", () => {
+  test.describe.configure({ mode: "serial" });
+  let dataSupportPage: DataSupport;
+  let dashboardPage: DashboardPage;
 
-    // Fill jira (nth 0) and confluence (nth 1): siteUrl, email, apiToken.
-    const siteUrls = page.getByPlaceholder("https://your-domain.atlassian.net");
-    const emails = page.getByPlaceholder("you@example.com");
-    const apiTokens = page.locator('input[type="password"]'); // the two API token fields
-    for (let i = 0; i < 2; i++) {
-      await siteUrls.nth(i).fill("https://acme.atlassian.net");
-      await emails.nth(i).fill("a@b.com");
-      await apiTokens.nth(i).fill("tok-secret");
-    }
+  test.use({ storageState: { cookies: [], origins: [] } });
 
-    await expect(hire).toBeEnabled();
+  async function navigateToSkillsStep(page: Page) {
+    await page.getByRole("button", { name: /continue/i }).click(); // role → agent-type
+    await page.getByRole("button", { name: /continue/i }).click(); // agent-type → slack-choice
+    await page.getByText("I already have a Slack app").click();
+    await page.getByRole("button", { name: /continue/i }).click(); // slack-choice → tokens
+    await page.getByPlaceholder(/xapp-/i).fill("xapp-1-test");
+    await page.getByPlaceholder(/xoxb-/i).fill("xoxb-test");
+    await page.getByRole("button", { name: /continue/i }).click(); // tokens → details
+    await page.getByRole("button", { name: /continue/i }).click(); // details → skills
+  }
+
+  test.beforeEach(async ({ page }) => {
+    dashboardPage = new DashboardPage(page);
+    dataSupportPage = new DataSupport(page);
+
+    await dataSupportPage.auth.interceptRefreshRequest();
+    await dataSupportPage.users.interceptGetUserContextRequest();
+    await dataSupportPage.agents.interceptGetAgentsRequest();
+    await dataSupportPage.skills.interceptGetSkillsRequest();
+
+    await dashboardPage.goto();
+    await page.getByRole("button", { name: /hire agent/i }).click();
+  });
+
+  test("shows Assign skills title and correct step number", async ({ page }) => {
+    await navigateToSkillsStep(page);
+
+    await expect(page.getByText("Assign skills")).toBeVisible();
+    await expect(page.getByText(/step 6 of 6/i)).toBeVisible();
+  });
+
+  test("shows platform and custom skill groups", async ({ page }) => {
+    await navigateToSkillsStep(page);
+
+    await expect(page.getByText("Platform", { exact: true })).toBeVisible();
+    await expect(page.getByText(mockPlatformSkill.name)).toBeVisible();
+    await expect(page.getByText("Custom", { exact: true })).toBeVisible();
+    await expect(page.getByText(mockCustomSkill.name)).toBeVisible();
+  });
+
+  test("shows empty state when no skills are available", async ({ page }) => {
+    await dataSupportPage.skills.interceptGetSkillsRequest({ body: [] });
+
+    await navigateToSkillsStep(page);
+
+    await expect(page.getByText(/No skills available/)).toBeVisible();
+    await expect(page.getByText(/Settings.*Skills/)).toBeVisible();
+  });
+
+  test("selecting a skill with required providers reveals credentials section", async ({ page }) => {
+    await navigateToSkillsStep(page);
+
+    // Check the github skill (has requiredProviders: ["github"])
+    await page.getByLabel(mockPlatformSkill.name).check();
+
+    await expect(page.getByText("Required credentials")).toBeVisible();
+    await expect(page.getByText("GitHub")).toBeVisible();
+  });
+
+  test("hire button is disabled when selected skill has incomplete credentials", async ({ page }) => {
+    await navigateToSkillsStep(page);
+
+    await page.getByLabel(mockPlatformSkill.name).check();
+
+    // GitHub requires token + repo URL; both empty → button disabled
+    await expect(page.getByRole("button", { name: /hire aria/i })).toBeDisabled();
+  });
+
+  test("hire button is enabled when no skills are selected", async ({ page }) => {
+    await navigateToSkillsStep(page);
+
+    await expect(page.getByRole("button", { name: /hire aria/i })).toBeEnabled();
+  });
+
+  test("deselecting a skill removes its credentials section", async ({ page }) => {
+    await navigateToSkillsStep(page);
+
+    await page.getByLabel(mockPlatformSkill.name).check();
+    await expect(page.getByText("Required credentials")).toBeVisible();
+
+    await page.getByLabel(mockPlatformSkill.name).uncheck();
+    await expect(page.getByText("Required credentials")).not.toBeVisible();
   });
 });
