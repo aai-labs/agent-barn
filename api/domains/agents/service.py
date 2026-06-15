@@ -219,7 +219,7 @@ class AgentService:
                 p for p in skill.required_providers if p not in remaining_providers
             ]
             if missing:
-                names = ", ".join(p.value for p in missing)
+                names = ", ".join(p for p in missing)
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=(
