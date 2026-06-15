@@ -41,6 +41,7 @@ export const AgentTemplateReadSchema = z.object({
   templateName: z.string(),
   templateSource: z.enum(["pre-defined", "custom"]),
   version: z.number().int(),
+  description: z.string().nullable().optional(),
   soulMd: z.string(),
   identityMd: z.string(),
   userMd: z.string(),

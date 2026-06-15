@@ -61,6 +61,7 @@ export function TemplateDrawer({
 
   const [editing, setEditing] = useState(mode === "create");
   const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
   const [files, setFiles] = useState<TemplateFiles>(EMPTY_FILES);
   const [file, setFile] = useState<TemplateFileKey>("soulMd");
   const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
@@ -79,7 +80,10 @@ export function TemplateDrawer({
   const pending = createTemplate.isPending || updateTemplate.isPending;
 
   function handleStartEdit() {
-    if (current) setFiles(filesFrom(current)); // fork from the viewed version
+    if (current) {
+      setFiles(filesFrom(current));
+      setDescription(current.description ?? "");
+    }
     setSavedVersion(null);
     setEditing(true);
   }
@@ -89,12 +93,12 @@ export function TemplateDrawer({
     updateTemplate.reset();
     try {
       if (mode === "create") {
-        await createTemplate.mutateAsync({ templateName: name, ...files });
+        await createTemplate.mutateAsync({ templateName: name, description: description || null, ...files });
         onClose();
         return;
       }
       // Saving publishes a new immutable version; the name is inherited.
-      const updated = await updateTemplate.mutateAsync({ slug: slug!, ...files });
+      const updated = await updateTemplate.mutateAsync({ slug: slug!, description: description || null, ...files });
       await refetch();
       setSelectedVersion(updated.version);
       setEditing(false);
@@ -179,6 +183,27 @@ export function TemplateDrawer({
                 {mode === "create" && (
                   <div className="text-[12px]" style={{ color: "var(--ink-4)" }}>
                     Slug: <span className="font-mono">{deriveSlug(name) || "—"}</span> (derived from the name, fixed after creation)
+                  </div>
+                )}
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <label className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>
+                  Description
+                </label>
+                {editing ? (
+                  <textarea
+                    className="af-input font-mono text-[0.781rem] leading-[1.65] resize-none flex-1"
+                    aria-label="Description"
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                    placeholder="A short summary of what this template does…"
+                    maxLength={500}
+                    rows={4}
+                  />
+                ) : (
+                  <div className="text-[13px] leading-[1.5]" style={{ color: current?.description ? "var(--ink-2)" : "var(--ink-4)" }}>
+                    {current?.description || "No description."}
                   </div>
                 )}
               </div>

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronDownIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
 import { PlusIcon, SearchIcon } from "@/components/icons";
 import {
   DropdownMenu,
@@ -24,13 +24,28 @@ const SOURCE_FILTERS: Array<{ value: TemplateSource | ""; label: string }> = [
 export function TemplatesPanel() {
   const [search, setSearch] = useState("");
   const [source, setSource] = useState<TemplateSource | "">("");
+  const [page, setPage] = useState(1);
   const [openTemplate, setOpenTemplate] = useState<AgentTemplateRead | null>(null);
   const [creating, setCreating] = useState(false);
 
-  const { templates, isLoading, error } = useTemplates({
+  const { templates, total, isLoading, error } = useTemplates({
     search: search || undefined,
     source: source || undefined,
+    page,
   });
+
+  const PAGE_SIZE = 15;
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+
+  function handleSearchChange(value: string) {
+    setSearch(value);
+    setPage(1);
+  }
+
+  function handleSourceChange(value: TemplateSource | "") {
+    setSource(value);
+    setPage(1);
+  }
 
   return (
     <div>
@@ -41,7 +56,7 @@ export function TemplatesPanel() {
             placeholder="Search templates…"
             aria-label="Search templates"
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => handleSearchChange(e.target.value)}
           />
         </div>
         <div className="flex-1">
@@ -58,7 +73,7 @@ export function TemplatesPanel() {
           <DropdownMenuContent>
             <DropdownMenuRadioGroup
               value={source}
-              onValueChange={(v) => setSource(v as TemplateSource | "")}
+              onValueChange={(v) => handleSourceChange(v as TemplateSource | "")}
             >
               {SOURCE_FILTERS.map((f) => (
                 <DropdownMenuRadioItem key={f.value} value={f.value}>
@@ -115,6 +130,30 @@ export function TemplatesPanel() {
           </button>
         </div>
       ))}
+
+      {totalPages > 1 && (
+        <div className="flex items-center justify-center gap-3 pt-4">
+          <button
+            className="af-btn af-btn-sm af-btn-ghost"
+            disabled={page <= 1}
+            onClick={() => setPage((p) => p - 1)}
+            aria-label="Previous page"
+          >
+            <ChevronLeftIcon size={14} />
+          </button>
+          <span className="text-[13px]" style={{ color: "var(--ink-3)" }}>
+            {page} / {totalPages}
+          </span>
+          <button
+            className="af-btn af-btn-sm af-btn-ghost"
+            disabled={page >= totalPages}
+            onClick={() => setPage((p) => p + 1)}
+            aria-label="Next page"
+          >
+            <ChevronRightIcon size={14} />
+          </button>
+        </div>
+      )}
 
       {openTemplate && (
         <TemplateDrawer

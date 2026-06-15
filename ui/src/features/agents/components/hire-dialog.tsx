@@ -4,7 +4,6 @@ import { useState, useEffect, useRef } from "react";
 import { XIcon, CheckIcon } from "@/components/icons";
 import { useCreateAgent } from "../hooks/use-create-agent";
 import { useStartAgent } from "../hooks/use-start-agent";
-import { useTemplates } from "../hooks/use-templates";
 import { useTemplateVersions } from "../hooks/use-template-versions";
 import { DialogShell } from "./hire-dialog-primitives";
 import {
@@ -76,8 +75,6 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   const createAgent = useCreateAgent();
   const startAgent = useStartAgent();
 
-  const { templates, isLoading: templatesLoading, error: templatesError } = useTemplates();
-
   const [step, setStep] = useState<WizardStep>("template");
   const [selectedTemplate, setSelectedTemplate] = useState<AgentTemplateRead | null>(null);
   const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
@@ -111,8 +108,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   const apiDoneRef = useRef(false);
   const errorRef = useRef(false);
 
-  // Until the user picks one, the first catalog template is the selection.
-  const effectiveTemplate = selectedTemplate ?? templates[0] ?? null;
+  const effectiveTemplate = selectedTemplate;
   const { versions, isLoading: versionsLoading } = useTemplateVersions(
     effectiveTemplate?.templateSlug,
   );
@@ -422,9 +418,6 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
       <div className="flex-1 overflow-y-auto p-6">
         {step === "template" && (
           <TemplateStep
-            templates={templates}
-            isLoading={templatesLoading}
-            error={templatesError}
             selectedSlug={effectiveTemplate?.templateSlug ?? null}
             onPick={handlePickTemplate}
             versions={versions}

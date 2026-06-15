@@ -10,6 +10,7 @@ import { templatesKey } from "../utils";
 export type UpdateTemplateData = {
   // template_name is immutable — new versions inherit the v1 name.
   slug: string;
+  description?: string | null;
   soulMd?: string;
   identityMd?: string;
   userMd?: string;

@@ -9,6 +9,7 @@ import { templatesKey } from "../utils";
 
 export type CreateTemplateData = {
   templateName: string;
+  description?: string | null;
   soulMd?: string;
   identityMd?: string;
   userMd?: string;

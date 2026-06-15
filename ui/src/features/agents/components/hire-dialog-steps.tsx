@@ -2,8 +2,8 @@
 
 import { useState } from "react";
 import JSZip from "jszip";
-import { ChevronDownIcon } from "lucide-react";
-import { PlusIcon, XIcon } from "@/components/icons";
+import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
+import { PlusIcon, SearchIcon, XIcon } from "@/components/icons";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -18,7 +18,10 @@ import {
   type IntegrationDraft,
 } from "../integrations";
 import type { AgentTemplateRead } from "../schemas";
+import { useTemplates } from "../hooks/use-templates";
 import { ChoiceCard, FormField, NextStep, TokenInput } from "./hire-dialog-primitives";
+
+const HIRE_DIALOG_PAGE_SIZE = 10;
 
 export type WizardStep =
   | "template"
@@ -179,12 +182,12 @@ export function VersionSelect({
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
-          className="af-input flex items-center justify-between gap-2 w-full text-left"
+          className="af-btn af-btn-sm flex items-center gap-1.5"
           aria-label={ariaLabel}
           disabled={disabled || versions.length === 0}
         >
           <span>{displayLabel}</span>
-          <ChevronDownIcon size={13} className="opacity-50 flex-shrink-0" />
+          <ChevronDownIcon size={12} className="opacity-50 flex-shrink-0" />
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent>
@@ -205,9 +208,6 @@ export function VersionSelect({
 }
 
 export function TemplateStep({
-  templates,
-  isLoading,
-  error,
   selectedSlug,
   onPick,
   versions,
@@ -215,9 +215,6 @@ export function TemplateStep({
   selectedVersion,
   onVersionChange,
 }: {
-  templates: AgentTemplateRead[];
-  isLoading: boolean;
-  error: Error | null;
   selectedSlug: string | null;
   onPick: (template: AgentTemplateRead) => void;
   versions: AgentTemplateRead[];
@@ -225,63 +222,118 @@ export function TemplateStep({
   selectedVersion: number | null;
   onVersionChange: (version: number) => void;
 }) {
-  if (isLoading) {
-    return (
-      <div className="text-[0.8125rem] py-8 text-center" style={{ color: "var(--ink-3)" }}>
-        Loading templates…
-      </div>
-    );
+  const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
+
+  const { templates, total, isLoading, error } = useTemplates({
+    search: search || undefined,
+    page,
+    pageSize: HIRE_DIALOG_PAGE_SIZE,
+  });
+
+  const totalPages = Math.max(1, Math.ceil(total / HIRE_DIALOG_PAGE_SIZE));
+
+  function handleSearchChange(value: string) {
+    setSearch(value);
+    setPage(1);
   }
-  if (error) {
-    return (
-      <div className="text-[0.8125rem] py-8 text-center" style={{ color: "var(--err)" }}>
-        Could not load templates. Please try again.
-      </div>
-    );
-  }
-  if (templates.length === 0) {
-    return (
-      <div className="text-[0.8125rem] py-8 text-center" style={{ color: "var(--ink-3)" }}>
-        No templates yet. Create one in Settings → Templates first.
-      </div>
-    );
-  }
+
   return (
-    <div className="flex flex-col gap-4">
-      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
-        {templates.map((t) => (
-          <div
-            key={t.templateSlug}
-            className="flex flex-col gap-2 p-4 rounded-2xl cursor-default transition-colors"
-            style={{
-              border: selectedSlug === t.templateSlug ? "1.5px solid var(--ink)" : "1.5px solid var(--line)",
-              background: selectedSlug === t.templateSlug ? "var(--bg-soft)" : "var(--bg-elev)",
-            }}
-            onClick={() => onPick(t)}
-          >
-            <div className="flex items-center justify-between gap-2">
-              <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>{t.templateName}</div>
-              <TemplateSourceBadge source={t.templateSource} />
-            </div>
-          </div>
-        ))}
+    <div className="flex flex-col gap-3">
+      <div
+        className="flex items-center gap-2 px-3 py-2 rounded-xl"
+        style={{ border: "1px solid var(--line)", background: "var(--bg-elev)" }}
+      >
+        <SearchIcon size={14} style={{ color: "var(--ink-4)", flexShrink: 0 }} />
+        <input
+          className="flex-1 text-[0.8125rem] outline-none bg-transparent"
+          style={{ color: "var(--ink)" }}
+          placeholder="Search templates…"
+          value={search}
+          onChange={(e) => handleSearchChange(e.target.value)}
+        />
       </div>
-      {selectedSlug && (
-        <div className="flex items-center gap-3">
-          <label className="text-[0.844rem] font-medium" style={{ color: "var(--ink-2)" }}>
-            Version
-          </label>
-          {versionsLoading ? (
-            <span className="text-[0.8125rem]" style={{ color: "var(--ink-3)" }}>Loading…</span>
-          ) : (
-            <div className="w-40">
-              <VersionSelect
-                versions={versions}
-                selectedVersion={selectedVersion}
-                onChange={onVersionChange}
-              />
+
+      {isLoading && (
+        <div className="text-[0.8125rem] py-8 text-center" style={{ color: "var(--ink-3)" }}>
+          Loading templates…
+        </div>
+      )}
+      {!isLoading && error && (
+        <div className="text-[0.8125rem] py-8 text-center" style={{ color: "var(--err)" }}>
+          Could not load templates. Please try again.
+        </div>
+      )}
+      {!isLoading && !error && templates.length === 0 && (
+        <div className="text-[0.8125rem] py-8 text-center" style={{ color: "var(--ink-3)" }}>
+          {search ? "No templates match." : "No templates yet. Create one in Settings → Templates first."}
+        </div>
+      )}
+
+      {!isLoading && !error && templates.length > 0 && (
+        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+          {templates.map((t) => (
+            <div
+              key={t.templateSlug}
+              className="flex flex-col gap-1.5 p-4 rounded-2xl cursor-default transition-colors min-h-[4.5rem]"
+              style={{
+                border: selectedSlug === t.templateSlug ? "1.5px solid var(--ink)" : "1.5px solid var(--line)",
+                background: selectedSlug === t.templateSlug ? "var(--bg-soft)" : "var(--bg-elev)",
+              }}
+              onClick={() => onPick(t)}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>{t.templateName}</div>
+                <TemplateSourceBadge source={t.templateSource} />
+              </div>
+              {t.description && (
+                <div className="text-[0.75rem] leading-[1.4]" style={{ color: "var(--ink-3)" }}>
+                  {t.description}
+                </div>
+              )}
+              <div className="mt-1">
+                {selectedSlug === t.templateSlug ? (
+                  <div onClick={(e) => e.stopPropagation()}>
+                    {versionsLoading ? (
+                      <span className="text-[0.75rem]" style={{ color: "var(--ink-3)" }}>Loading…</span>
+                    ) : (
+                      <VersionSelect
+                        versions={versions}
+                        selectedVersion={selectedVersion}
+                        onChange={onVersionChange}
+                      />
+                    )}
+                  </div>
+                ) : (
+                  <div className="h-8" />
+                )}
+              </div>
             </div>
-          )}
+          ))}
+        </div>
+      )}
+
+      {totalPages > 1 && (
+        <div className="flex items-center justify-center gap-3 pt-1">
+          <button
+            className="af-btn af-btn-sm af-btn-ghost"
+            disabled={page <= 1}
+            onClick={() => setPage((p) => p - 1)}
+            aria-label="Previous page"
+          >
+            <ChevronLeftIcon size={14} />
+          </button>
+          <span className="text-[0.8125rem]" style={{ color: "var(--ink-3)" }}>
+            {page} / {totalPages}
+          </span>
+          <button
+            className="af-btn af-btn-sm af-btn-ghost"
+            disabled={page >= totalPages}
+            onClick={() => setPage((p) => p + 1)}
+            aria-label="Next page"
+          >
+            <ChevronRightIcon size={14} />
+          </button>
         </div>
       )}
     </div>

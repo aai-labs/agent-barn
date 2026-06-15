@@ -39,6 +39,7 @@ class AgentTemplate(BaseModel, table=True):
         sa_column=Column(sa.String(20), nullable=False, server_default="custom"),
     )
     version: int = SqlField(nullable=False)
+    description: str | None = SqlField(default=None, nullable=True, max_length=500)
     soul_md: str = SqlField(nullable=False)
     identity_md: str = SqlField(nullable=False)
     user_md: str = SqlField(nullable=False)
@@ -58,6 +59,7 @@ class TemplateRead(PydanticBaseModel):
     template_name: str
     template_source: TemplateSource
     version: int
+    description: str | None
     soul_md: str
     identity_md: str
     user_md: str
@@ -72,6 +74,7 @@ class TemplateRead(PydanticBaseModel):
 
 class TemplateCreate(PydanticBaseModel):
     template_name: str = Field(min_length=1, max_length=255)
+    description: str | None = None
     soul_md: str | None = None
     identity_md: str | None = None
     user_md: str | None = None
@@ -84,7 +87,8 @@ class TemplateCreate(PydanticBaseModel):
 
 class TemplateUpdate(PydanticBaseModel):
     # template_name is intentionally NOT editable: new versions inherit the v1
-    # name. Only the markdown content can change between versions.
+    # name. Only the markdown content and description can change between versions.
+    description: str | None = None
     soul_md: str | None = None
     identity_md: str | None = None
     user_md: str | None = None
