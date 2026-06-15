@@ -2,7 +2,6 @@ registryPrefix: "registry.k8s.aai-labs.com"
 
 image:
   repository: agentfarm-api
-  tag: latest
   pullPolicy: Always
 
 openclawImage:
