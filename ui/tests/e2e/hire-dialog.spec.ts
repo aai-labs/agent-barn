@@ -273,9 +273,9 @@ test.describe("Hire Dialog — Skills step", () => {
     await navigateToSkillsStep(page);
 
     await expect(page.getByText("Platform", { exact: true })).toBeVisible();
-    await expect(page.getByText(mockPlatformSkill.name)).toBeVisible();
+    await expect(page.getByText(mockPlatformSkill.name, { exact: true })).toBeVisible();
     await expect(page.getByText("Custom", { exact: true })).toBeVisible();
-    await expect(page.getByText(mockCustomSkill.name)).toBeVisible();
+    await expect(page.getByText(mockCustomSkill.name, { exact: true })).toBeVisible();
   });
 
   test("shows empty state when no skills are available", async ({ page }) => {

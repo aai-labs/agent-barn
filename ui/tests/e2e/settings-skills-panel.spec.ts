@@ -34,8 +34,8 @@ test.describe("Settings — Skills panel", () => {
   });
 
   test("shows Platform section with platform skill", async ({ page }) => {
-    await expect(page.getByText("Platform")).toBeVisible();
-    await expect(page.getByText("github")).toBeVisible();
+    await expect(page.locator("div").filter({ hasText: /^Platform$/ })).toBeVisible();
+    await expect(page.getByText("github", { exact: true })).toBeVisible();
   });
 
   test("shows Custom section with custom skill", async ({ page }) => {
