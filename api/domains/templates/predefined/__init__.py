@@ -17,6 +17,7 @@ from api.domains.templates.predefined import (
 class PredefinedTemplate:
     slug: str
     name: str
+    description: str
     soul_md: str
     identity_md: str
     user_md: str
@@ -31,6 +32,7 @@ PREDEFINED_TEMPLATES: tuple[PredefinedTemplate, ...] = (
     PredefinedTemplate(
         slug="general-purpose",
         name="General Purpose",
+        description="A flexible, general-purpose agent ready to handle a broad range of tasks.",
         soul_md=general_purpose.SOUL_MD,
         identity_md=general_purpose.IDENTITY_MD,
         user_md=general_purpose.USER_MD,
@@ -43,6 +45,7 @@ PREDEFINED_TEMPLATES: tuple[PredefinedTemplate, ...] = (
     PredefinedTemplate(
         slug="scrum-master",
         name="Scrum Master",
+        description="Runs your sprint ceremonies, tracks blockers, and keeps the team on cadence.",
         soul_md=scrum_master.SOUL_MD,
         identity_md=scrum_master.IDENTITY_MD,
         user_md=scrum_master.USER_MD,
@@ -55,6 +58,7 @@ PREDEFINED_TEMPLATES: tuple[PredefinedTemplate, ...] = (
     PredefinedTemplate(
         slug="code-reviewer",
         name="PR Reviewer",
+        description="Reviews pull requests for correctness, clarity, and style.",
         soul_md=code_reviewer.SOUL_MD,
         identity_md=code_reviewer.IDENTITY_MD,
         user_md=code_reviewer.USER_MD,

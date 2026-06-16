@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
+import { ChevronDownIcon } from "lucide-react";
 import { PlusIcon, SearchIcon } from "@/components/icons";
 import {
   DropdownMenu,
@@ -14,6 +14,7 @@ import { useTemplates } from "../hooks/use-templates";
 import type { AgentTemplateRead, TemplateSource } from "../schemas";
 import { TemplateSourceBadge } from "./hire-dialog-steps";
 import { TemplateDrawer } from "./template-drawer";
+import { Pagination } from "./pagination";
 
 const SOURCE_FILTERS: Array<{ value: TemplateSource | ""; label: string }> = [
   { value: "", label: "All sources" },
@@ -131,29 +132,9 @@ export function TemplatesPanel() {
         </div>
       ))}
 
-      {totalPages > 1 && (
-        <div className="flex items-center justify-center gap-3 pt-4">
-          <button
-            className="af-btn af-btn-sm af-btn-ghost"
-            disabled={page <= 1}
-            onClick={() => setPage((p) => p - 1)}
-            aria-label="Previous page"
-          >
-            <ChevronLeftIcon size={14} />
-          </button>
-          <span className="text-[13px]" style={{ color: "var(--ink-3)" }}>
-            {page} / {totalPages}
-          </span>
-          <button
-            className="af-btn af-btn-sm af-btn-ghost"
-            disabled={page >= totalPages}
-            onClick={() => setPage((p) => p + 1)}
-            aria-label="Next page"
-          >
-            <ChevronRightIcon size={14} />
-          </button>
-        </div>
-      )}
+      <div className="pt-4">
+        <Pagination page={page} totalPages={totalPages} onPageChange={setPage} />
+      </div>
 
       {openTemplate && (
         <TemplateDrawer

@@ -2,11 +2,11 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from injector import inject, singleton
-from sqlalchemy import func, or_
+from sqlalchemy import case, func, or_
 from sqlalchemy.orm import aliased
 from sqlmodel import Session, col, select
 
-from api.domains.templates.models import AgentTemplate, TemplateFilter
+from api.domains.templates.models import AgentTemplate, TemplateFilter, TemplateSource
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.infrastructure.shared.models import Pagination
 
@@ -103,7 +103,13 @@ class TemplateRepository:
             for condition in conditions:
                 query = query.where(condition)
             query = (
-                query.order_by(col(latest_template.template_name).asc())
+                query.order_by(
+                    case(
+                        (col(latest_template.template_source) == TemplateSource.PRE_DEFINED, 0),
+                        else_=1,
+                    ).asc(),
+                    col(latest_template.template_name).asc(),
+                )
                 .offset((pagination.page - 1) * pagination.size)
                 .limit(pagination.size)
             )

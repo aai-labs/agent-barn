@@ -13,6 +13,7 @@ def build_predefined_templates(org_id: UUID) -> list[AgentTemplate]:
             template_name=predefined.name,
             template_source=TemplateSource.PRE_DEFINED,
             version=1,
+            description=predefined.description,
             soul_md=predefined.soul_md,
             identity_md=predefined.identity_md,
             user_md=predefined.user_md,

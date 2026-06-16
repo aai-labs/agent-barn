@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import JSZip from "jszip";
-import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
+import { ChevronDownIcon } from "lucide-react";
 import { PlusIcon, SearchIcon, XIcon } from "@/components/icons";
 import {
   DropdownMenu,
@@ -20,8 +20,10 @@ import {
 import type { AgentTemplateRead } from "../schemas";
 import { useTemplates } from "../hooks/use-templates";
 import { ChoiceCard, FormField, NextStep, TokenInput } from "./hire-dialog-primitives";
+import { Pagination } from "./pagination";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
-const HIRE_DIALOG_PAGE_SIZE = 10;
+const HIRE_DIALOG_PAGE_SIZE = 6;
 
 export type WizardStep =
   | "template"
@@ -207,6 +209,42 @@ export function VersionSelect({
   );
 }
 
+function ClampedDescription({ text }: { text: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [clamped, setClamped] = useState(false);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (el) setClamped(el.scrollHeight > el.clientHeight);
+  }, [text]);
+
+  const inner = (
+    <div
+      ref={ref}
+      className="text-[0.75rem] leading-[1.4] overflow-hidden cursor-default"
+      style={{
+        color: "var(--ink-3)",
+        display: "-webkit-box",
+        WebkitLineClamp: 3,
+        WebkitBoxOrient: "vertical",
+      }}
+    >
+      {text}
+    </div>
+  );
+
+  if (!clamped) return inner;
+
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>{inner}</TooltipTrigger>
+        <TooltipContent side="top">{text}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
 export function TemplateStep({
   selectedSlug,
   onPick,
@@ -233,6 +271,7 @@ export function TemplateStep({
 
   const totalPages = Math.max(1, Math.ceil(total / HIRE_DIALOG_PAGE_SIZE));
 
+
   function handleSearchChange(value: string) {
     setSearch(value);
     setPage(1);
@@ -254,6 +293,7 @@ export function TemplateStep({
         />
       </div>
 
+      <div style={{ minHeight: "22rem" }}>
       {isLoading && (
         <div className="text-[0.8125rem] py-8 text-center" style={{ color: "var(--ink-3)" }}>
           Loading templates…
@@ -286,11 +326,7 @@ export function TemplateStep({
                 <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>{t.templateName}</div>
                 <TemplateSourceBadge source={t.templateSource} />
               </div>
-              {t.description && (
-                <div className="text-[0.75rem] leading-[1.4]" style={{ color: "var(--ink-3)" }}>
-                  {t.description}
-                </div>
-              )}
+              {t.description && <ClampedDescription text={t.description} />}
               <div className="mt-1">
                 {selectedSlug === t.templateSlug ? (
                   <div onClick={(e) => e.stopPropagation()}>
@@ -313,29 +349,11 @@ export function TemplateStep({
         </div>
       )}
 
-      {totalPages > 1 && (
-        <div className="flex items-center justify-center gap-3 pt-1">
-          <button
-            className="af-btn af-btn-sm af-btn-ghost"
-            disabled={page <= 1}
-            onClick={() => setPage((p) => p - 1)}
-            aria-label="Previous page"
-          >
-            <ChevronLeftIcon size={14} />
-          </button>
-          <span className="text-[0.8125rem]" style={{ color: "var(--ink-3)" }}>
-            {page} / {totalPages}
-          </span>
-          <button
-            className="af-btn af-btn-sm af-btn-ghost"
-            disabled={page >= totalPages}
-            onClick={() => setPage((p) => p + 1)}
-            aria-label="Next page"
-          >
-            <ChevronRightIcon size={14} />
-          </button>
-        </div>
-      )}
+      </div>
+
+      <div style={{ minHeight: "1.875rem" }}>
+        <Pagination page={page} totalPages={totalPages} onPageChange={setPage} />
+      </div>
     </div>
   );
 }
