@@ -67,5 +67,7 @@ def build_skills_manifest_from_zips(agent_skills: list) -> str:
         buf = io.BytesIO(skill.zip_content)
         with zipfile.ZipFile(buf, "r") as zf:
             for name in zf.namelist():
+                if name.endswith("/") or name.startswith("__MACOSX/") or name.startswith("._"):
+                    continue
                 entries.append({"path": name, "content": zf.read(name).decode()})
     return json.dumps(sorted(entries, key=lambda d: d["path"]))
