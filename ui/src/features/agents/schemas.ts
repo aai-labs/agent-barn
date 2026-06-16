@@ -16,6 +16,16 @@ export const AgentSecretReadSchema = z.object({
   secretName: z.string(),
 });
 
+export const AgentAssignedSkillSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+  source: z.string(),
+  requiredProviders: z.array(z.string()),
+  toolsPointer: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
 export const AgentSchema = z.object({
   id: z.string().uuid(),
   name: z.string(),
@@ -29,6 +39,7 @@ export const AgentSchema = z.object({
   slackConfig: AgentSlackConfigSchema.nullable().optional(),
   teamsConfig: AgentTeamsConfigSchema.nullable().optional(),
   secrets: z.array(AgentSecretReadSchema).optional(),
+  skills: z.array(AgentAssignedSkillSchema).default([]),
   webhookUrl: z.string().nullable().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -136,6 +147,7 @@ export const SlackUserSchema = z.object({
 });
 
 export type Agent = z.infer<typeof AgentSchema>;
+export type AgentAssignedSkill = z.infer<typeof AgentAssignedSkillSchema>;
 export type AgentSlackConfig = z.infer<typeof AgentSlackConfigSchema>;
 export type AgentTeamsConfig = z.infer<typeof AgentTeamsConfigSchema>;
 export type AgentHealth = z.infer<typeof AgentHealthSchema>;
