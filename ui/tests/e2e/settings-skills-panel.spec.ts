@@ -48,7 +48,7 @@ test.describe("Settings — Skills panel", () => {
     await expect(page.getByRole("button", { name: "Edit" })).toHaveCount(1);
     await expect(page.getByRole("button", { name: "Delete" })).toHaveCount(1);
     // The Platform badge appears next to the platform skill
-    await expect(page.getByText("Platform", { exact: true })).toBeVisible();
+    await expect(page.locator("span").filter({ hasText: /^Platform$/ })).toBeVisible();
   });
 
   test("custom skill shows Edit and Delete buttons", async ({ page }) => {
