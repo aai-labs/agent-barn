@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 
-import { MOCK_AGENT_ID, mockAgent, mockToolCall } from "../pages/data-support/agent-data-support.po";
+import { MOCK_AGENT_ID, mockAgent, mockAssignedSkill, mockToolCall } from "../pages/data-support/agent-data-support.po";
+import { mockCustomSkill, mockPlatformSkill } from "../pages/data-support/skill-data-support.po";
 import { DataSupport } from "../pages/data-support/data-support.po";
 import { AgentDetailPage } from "../pages/agent-detail-page.po";
 
@@ -224,5 +225,130 @@ test.describe("Agent Detail Page — Channels tab", () => {
     await expect(
       page.getByRole("button", { name: /#engineering/ }),
     ).toBeVisible();
+  });
+});
+
+test.describe("Agent Detail Page — Skills tab", () => {
+  test.describe.configure({ mode: "serial" });
+  let agentDetailPage: AgentDetailPage;
+  let dataSupportPage: DataSupport;
+
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  test.beforeEach(async ({ page }) => {
+    agentDetailPage = new AgentDetailPage(page);
+    dataSupportPage = new DataSupport(page);
+
+    await dataSupportPage.auth.interceptRefreshRequest();
+    await dataSupportPage.users.interceptGetUserContextRequest();
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, status: "STOPPED" },
+    });
+    await dataSupportPage.agents.interceptGetAgentTemplateRequest();
+    await dataSupportPage.skills.interceptGetSkillsRequest();
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.configureButton().click();
+    await page.getByRole("button", { name: "Skills" }).click();
+  });
+
+  test("Skills tab is clickable and shows the tab panel", async ({ page }) => {
+    await expect(page.getByText("No skills assigned yet.")).toBeVisible();
+  });
+
+  test("shows assigned skills when agent has skills", async ({ page }) => {
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, status: "STOPPED", skills: [mockAssignedSkill] },
+    });
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.configureButton().click();
+    await page.getByRole("button", { name: "Skills" }).click();
+
+    await expect(page.getByText(mockAssignedSkill.name)).toBeVisible();
+    await expect(page.getByRole("button", { name: "Remove" })).toBeVisible();
+  });
+
+  test("shows available skills grouped by Platform and Custom", async ({ page }) => {
+    await expect(page.getByText("Add skills")).toBeVisible();
+    await expect(page.getByText("Platform")).toBeVisible();
+    await expect(page.getByText(mockPlatformSkill.name)).toBeVisible();
+    await expect(page.getByText("Custom")).toBeVisible();
+    await expect(page.getByText(mockCustomSkill.name)).toBeVisible();
+  });
+
+  test("adding a skill moves it to the pending Assigned section", async ({ page }) => {
+    await page.getByRole("button", { name: "Add" }).first().click();
+
+    await expect(page.getByText("Assigned")).toBeVisible();
+    await expect(page.getByText("· Adding")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Cancel" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Save changes" })).toBeVisible();
+  });
+
+  test("cancelling a pending add removes it from the list", async ({ page }) => {
+    await page.getByRole("button", { name: "Add" }).first().click();
+    await expect(page.getByText("· Adding")).toBeVisible();
+
+    await page.getByRole("button", { name: "Cancel" }).click();
+
+    await expect(page.getByText("· Adding")).not.toBeVisible();
+    await expect(page.getByRole("button", { name: "Save changes" })).not.toBeVisible();
+  });
+
+  test("removing an assigned skill shows it struck-through with Undo", async ({ page }) => {
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, status: "STOPPED", skills: [mockAssignedSkill] },
+    });
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.configureButton().click();
+    await page.getByRole("button", { name: "Skills" }).click();
+
+    await page.getByRole("button", { name: "Remove" }).click();
+
+    await expect(page.getByRole("button", { name: "Undo" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Save changes" })).toBeVisible();
+  });
+
+  test("undoing a removal restores the skill row", async ({ page }) => {
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, status: "STOPPED", skills: [mockAssignedSkill] },
+    });
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.configureButton().click();
+    await page.getByRole("button", { name: "Skills" }).click();
+
+    await page.getByRole("button", { name: "Remove" }).click();
+    await page.getByRole("button", { name: "Undo" }).click();
+
+    await expect(page.getByRole("button", { name: "Remove" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Save changes" })).not.toBeVisible();
+  });
+
+  test("adding a skill with required providers shows credentials section", async ({ page }) => {
+    // github skill requires "github" provider — click Add for it
+    await page.getByRole("button", { name: "Add" }).first().click();
+
+    await expect(page.getByText("Required credentials")).toBeVisible();
+    await expect(page.getByText("GitHub")).toBeVisible();
+  });
+
+  test("save button is disabled when required credentials are incomplete", async ({ page }) => {
+    await page.getByRole("button", { name: "Add" }).first().click();
+
+    await expect(page.getByRole("button", { name: "Save changes" })).toBeDisabled();
+  });
+
+  test("saving skills calls the update API", async ({ page }) => {
+    await dataSupportPage.agents.interceptUpdateAgentRequest();
+
+    await page.getByRole("button", { name: "Add" }).last().click(); // custom skill — no required providers
+
+    const updatePromise = page.waitForRequest(
+      (req) =>
+        req.url().includes(`/agents/${MOCK_AGENT_ID}`) &&
+        req.method() === "PATCH",
+    );
+    await page.getByRole("button", { name: "Save changes" }).click();
+    await updatePromise;
   });
 });
