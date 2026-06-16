@@ -293,7 +293,7 @@ test.describe("Hire Dialog — Skills step", () => {
     // Check the github skill (has requiredProviders: ["github"])
     await page.getByLabel(mockPlatformSkill.name).check();
 
-    await expect(page.getByText("Required credentials")).toBeVisible();
+    await expect(page.getByText("Required credentials", { exact: true })).toBeVisible();
     await expect(page.getByText("GitHub")).toBeVisible();
   });
 
@@ -316,9 +316,9 @@ test.describe("Hire Dialog — Skills step", () => {
     await navigateToSkillsStep(page);
 
     await page.getByLabel(mockPlatformSkill.name).check();
-    await expect(page.getByText("Required credentials")).toBeVisible();
+    await expect(page.getByText("Required credentials", { exact: true })).toBeVisible();
 
     await page.getByLabel(mockPlatformSkill.name).uncheck();
-    await expect(page.getByText("Required credentials")).not.toBeVisible();
+    await expect(page.getByText("Required credentials", { exact: true })).not.toBeVisible();
   });
 });

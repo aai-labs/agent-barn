@@ -39,7 +39,7 @@ test.describe("Settings — Skills panel", () => {
   });
 
   test("shows Custom section with custom skill", async ({ page }) => {
-    await expect(page.getByText("Custom")).toBeVisible();
+    await expect(page.locator("div").filter({ hasText: /^Custom$/ })).toBeVisible();
     await expect(page.getByText("my-tool")).toBeVisible();
   });
 
