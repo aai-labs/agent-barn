@@ -220,7 +220,7 @@ function SkillDialog({ mode, onClose }: SkillDialogProps) {
 
           {mutationError && (
             <div className="text-[0.8125rem]" style={{ color: "var(--err)" }}>
-              {mutationError instanceof Error ? mutationError.message : "An error occurred."}
+              {mutationError.message}
             </div>
           )}
 
@@ -241,9 +241,10 @@ function SkillDialog({ mode, onClose }: SkillDialogProps) {
 interface DeleteConfirmRowProps {
   skill: Skill;
   onCancel: () => void;
+  onError: (message: string) => void;
 }
 
-function DeleteConfirmRow({ skill, onCancel }: DeleteConfirmRowProps) {
+function DeleteConfirmRow({ skill, onCancel, onError }: DeleteConfirmRowProps) {
   const deleteSkill = useDeleteSkill();
 
   return (
@@ -262,7 +263,12 @@ function DeleteConfirmRow({ skill, onCancel }: DeleteConfirmRowProps) {
         className="af-btn af-btn-sm"
         disabled={deleteSkill.isPending}
         style={{ borderColor: "var(--err)", color: "var(--err)" }}
-        onClick={() => { void deleteSkill.mutateAsync(skill.id).then(onCancel); }}
+        onClick={() => {
+          void deleteSkill.mutateAsync(skill.id).then(onCancel).catch((err: Error) => {
+            onError(err.message);
+            onCancel();
+          });
+        }}
       >
         {deleteSkill.isPending ? "Deleting…" : "Delete"}
       </button>
@@ -274,6 +280,7 @@ export function SkillsPanel() {
   const { skills, isLoading, error, refetch } = useSkills();
   const [dialog, setDialog] = useState<DialogMode | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<{ skillId: string; message: string } | null>(null);
 
   const platformSkills = skills.filter((s) => s.source === "aai_cli");
   const customSkills = skills.filter((s) => s.source === "custom");
@@ -357,6 +364,7 @@ export function SkillsPanel() {
                 key={skill.id}
                 skill={skill}
                 onCancel={() => setDeletingId(null)}
+                onError={(message) => setDeleteError({ skillId: skill.id, message })}
               />
             ) : (
               <SkillRow key={skill.id}>
@@ -364,6 +372,11 @@ export function SkillsPanel() {
                   <div className="font-medium text-[14px]" style={{ color: "var(--ink)" }}>
                     {skill.name}
                   </div>
+                  {deleteError?.skillId === skill.id && (
+                    <div className="text-[0.75rem] mt-0.5" style={{ color: "var(--err)" }}>
+                      {deleteError.message}
+                    </div>
+                  )}
                   {skill.requiredProviders.length > 0 && (
                     <div className="flex flex-wrap gap-1 mt-1">
                       {skill.requiredProviders.map((p) => (
@@ -381,7 +394,7 @@ export function SkillsPanel() {
                 <button
                   className="af-btn af-btn-sm af-btn-ghost"
                   style={{ color: "var(--err)" }}
-                  onClick={() => setDeletingId(skill.id)}
+                  onClick={() => { setDeleteError(null); setDeletingId(skill.id); }}
                 >
                   Delete
                 </button>
