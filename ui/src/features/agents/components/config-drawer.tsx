@@ -15,6 +15,7 @@ import {
   type IntegrationDraft,
 } from "../integrations";
 import { SlackConfigPanel } from "./slack-config-panel";
+import { AgentSkillsTab } from "./agent-skills-tab";
 
 interface ConfigDrawerProps {
   agent: Agent;
@@ -29,7 +30,7 @@ function getTabs(platform: "slack" | "teams"): [string, string, boolean][] {
     ["secrets", "Keys", true],
     ...(platform === "slack" ? [["channels", "Channels", true] as [string, string, boolean]] : []),
     ...(platform === "teams" ? [["endpoint", "Endpoint", true] as [string, string, boolean]] : []),
-    ["skills", "Skills", false],
+    ["skills", "Skills", true],
     ["k8s", "Infrastructure", false],
     ["danger", "Danger zone", true],
   ];
@@ -400,14 +401,7 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
           )}
 
           {tab === "skills" && (
-            <div
-              className="flex flex-col items-center justify-center text-center py-14 rounded-2xl"
-              style={{ border: "1px dashed var(--line-strong)" }}
-            >
-              <div className="text-2xl mb-2">🚧</div>
-              <div className="font-medium text-sm mb-1" style={{ color: "var(--ink)" }}>Coming soon</div>
-              <div className="text-[0.8125rem]" style={{ color: "var(--ink-3)" }}>Skill management will appear here soon.</div>
-            </div>
+            <AgentSkillsTab agent={agent} isRunning={isRunning} />
           )}
 
           {tab === "secrets" && agent.platform === "slack" && (
