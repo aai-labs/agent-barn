@@ -94,6 +94,8 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
   const [secretDrafts, setSecretDrafts] = useState<IntegrationDraft[]>([]);
   const [removedProviders, setRemovedProviders] = useState<string[]>([]);
   const [savedSecrets, setSavedSecrets] = useState(false);
+  const [errorSection, setErrorSection] = useState<"tokens" | "secrets" | null>(null);
+  const [pendingSection, setPendingSection] = useState<"tokens" | "secrets" | null>(null);
 
   const tabs = getTabs(agent.platform);
   // Clamp the URL-provided tab to one that's actually reachable for this agent
@@ -103,9 +105,7 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
     .map(([k]) => k as TabKey);
   const tab: TabKey = enabledKeys.includes(activeTab) ? activeTab : "personality";
 
-  const configuredSecrets = (agent.secrets ?? []).filter(
-    (s) => !removedProviders.includes(s.provider),
-  );
+  const configuredSecrets = agent.secrets ?? [];
 
   useEffect(() => {
     if (template) {
@@ -149,6 +149,8 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
 
   async function handleSaveTokens() {
     updateAgent.reset();
+    setErrorSection(null);
+    setPendingSection("tokens");
     try {
       if (agent.platform === "teams") {
         await updateAgent.mutateAsync({
@@ -167,12 +169,16 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
       setSavedTokens(true);
       setTimeout(() => setSavedTokens(false), 2000);
     } catch {
-      // error displayed via updateAgent.error
+      setErrorSection("tokens");
+    } finally {
+      setPendingSection(null);
     }
   }
 
   async function handleSaveSecrets() {
     updateAgent.reset();
+    setErrorSection(null);
+    setPendingSection("secrets");
     try {
       // If a provider is both re-added (draft) and removed, treat it as a
       // replace — the upsert wins (the backend rejects a provider in both lists).
@@ -192,7 +198,10 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
       setSavedSecrets(true);
       setTimeout(() => setSavedSecrets(false), 2000);
     } catch {
-      // error displayed via updateAgent.error
+      setRemovedProviders([]);
+      setErrorSection("secrets");
+    } finally {
+      setPendingSection(null);
     }
   }
 
@@ -438,12 +447,12 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
               <div className="flex gap-2 items-center">
                 <button
                   className="af-btn af-btn-sm"
-                  disabled={isRunning || updateAgent.isPending || (!slackAppToken.trim() && !slackBotToken.trim())}
+                  disabled={isRunning || pendingSection === "tokens" || (!slackAppToken.trim() && !slackBotToken.trim())}
                   onClick={() => { void handleSaveTokens(); }}
                 >
-                  {updateAgent.isPending ? "Saving…" : savedTokens ? "Saved!" : "Save tokens"}
+                  {pendingSection === "tokens" ? "Saving…" : savedTokens ? "Saved!" : "Save tokens"}
                 </button>
-                {updateAgent.error && (
+                {updateAgent.error && errorSection === "tokens" && (
                   <span className="text-xs" style={{ color: "var(--err)" }}>
                     {updateAgent.error instanceof Error ? updateAgent.error.message : "Save failed"}
                   </span>
@@ -496,12 +505,12 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
               <div className="flex gap-2 items-center">
                 <button
                   className="af-btn af-btn-sm"
-                  disabled={isRunning || updateAgent.isPending || (!teamsAppId.trim() && !teamsAppPassword.trim() && !teamsTenantId.trim())}
+                  disabled={isRunning || pendingSection === "tokens" || (!teamsAppId.trim() && !teamsAppPassword.trim() && !teamsTenantId.trim())}
                   onClick={() => { void handleSaveTokens(); }}
                 >
-                  {updateAgent.isPending ? "Saving…" : savedTokens ? "Saved!" : "Save credentials"}
+                  {pendingSection === "tokens" ? "Saving…" : savedTokens ? "Saved!" : "Save credentials"}
                 </button>
-                {updateAgent.error && (
+                {updateAgent.error && errorSection === "tokens" && (
                   <span className="text-xs" style={{ color: "var(--err)" }}>
                     {updateAgent.error instanceof Error ? updateAgent.error.message : "Save failed"}
                   </span>
@@ -524,7 +533,29 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                 <div className="flex flex-col gap-2">
                   {configuredSecrets.map((s) => {
                     const label = getIntegrationProvider(s.provider)?.label ?? s.provider;
-                    return (
+                    const isPendingRemoval = removedProviders.includes(s.provider);
+                    return isPendingRemoval ? (
+                      <div
+                        key={s.provider}
+                        className="flex items-center justify-between p-3 rounded-2xl"
+                        style={{ border: "1px dashed var(--line)", opacity: 0.55 }}
+                      >
+                        <div className="flex flex-col">
+                          <span className="font-semibold text-[0.844rem] line-through" style={{ color: "var(--ink-3)" }}>
+                            {label}
+                          </span>
+                          <span className="text-xs" style={{ color: "var(--ink-4)" }}>
+                            {s.secretName} · will be removed
+                          </span>
+                        </div>
+                        <button
+                          className="af-btn af-btn-ghost af-btn-sm"
+                          onClick={() => setRemovedProviders((r) => r.filter((p) => p !== s.provider))}
+                        >
+                          Undo
+                        </button>
+                      </div>
+                    ) : (
                       <div
                         key={s.provider}
                         className="flex items-center justify-between p-3 rounded-2xl"
@@ -569,15 +600,15 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                   className="af-btn af-btn-sm"
                   disabled={
                     isRunning ||
-                    updateAgent.isPending ||
+                    pendingSection === "secrets" ||
                     hasIncompleteIntegration(secretDrafts) ||
                     (secretDrafts.length === 0 && removedProviders.length === 0)
                   }
                   onClick={() => { void handleSaveSecrets(); }}
                 >
-                  {updateAgent.isPending ? "Saving…" : savedSecrets ? "Saved!" : "Save integrations"}
+                  {pendingSection === "secrets" ? "Saving…" : savedSecrets ? "Saved!" : "Save integrations"}
                 </button>
-                {updateAgent.error && (
+                {updateAgent.error && errorSection === "secrets" && (
                   <span className="text-xs" style={{ color: "var(--err)" }}>
                     {updateAgent.error instanceof Error ? updateAgent.error.message : "Save failed"}
                   </span>
