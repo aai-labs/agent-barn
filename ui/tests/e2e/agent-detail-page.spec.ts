@@ -271,7 +271,7 @@ test.describe("Agent Detail Page — Skills tab", () => {
   test("shows available skills grouped by Platform and Custom", async ({ page }) => {
     await expect(page.getByText("Add skills")).toBeVisible();
     await expect(page.getByText("Platform")).toBeVisible();
-    await expect(page.getByText(mockPlatformSkill.name)).toBeVisible();
+    await expect(page.getByText(mockPlatformSkill.name, { exact: true })).toBeVisible();
     await expect(page.getByText("Custom")).toBeVisible();
     await expect(page.getByText(mockCustomSkill.name)).toBeVisible();
   });
