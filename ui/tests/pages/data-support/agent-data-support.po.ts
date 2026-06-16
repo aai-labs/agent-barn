@@ -27,6 +27,11 @@ export const mockAgent = {
   updated_at: "2026-05-14T09:14:00Z",
 };
 
+export const mockSecret = {
+  provider: "github",
+  secret_name: "github-secret",
+};
+
 export const mockAssignedSkill = {
   id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
   name: "github",
