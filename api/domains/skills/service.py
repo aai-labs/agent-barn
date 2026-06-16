@@ -59,7 +59,7 @@ class SkillService:
                     )
 
                 if (
-                    len(content) > 0
+                    total_compressed > 0
                     and total_uncompressed / total_compressed > _MAX_COMPRESSION_RATIO
                 ):
                     raise HTTPException(
