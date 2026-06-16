@@ -1154,10 +1154,12 @@ export function IntegrationsStep({
   integrations,
   onChange,
   requiredGroups = [],
+  optionalText = "This step is optional — you can hire without any.",
 }: {
   integrations: IntegrationDraft[];
   onChange: (next: IntegrationDraft[]) => void;
   requiredGroups?: readonly RequiredIntegrationGroup[];
+  optionalText?: string;
 }) {
   const [visible, setVisible] = useState<Record<string, boolean>>({});
 
@@ -1212,7 +1214,7 @@ export function IntegrationsStep({
         Connect external tools your agent can use. Credentials are encrypted in the key vault.
         {requiredGroups.length > 0
           ? " This profile requires the integrations below — fill them in to continue."
-          : " This step is optional — you can hire without any."}
+          : ` ${optionalText}`}
       </p>
 
       {/* Unsatisfied OR groups: show a "connect one of" picker card. */}

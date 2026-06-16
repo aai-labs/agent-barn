@@ -592,6 +592,7 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                   integrations={secretDrafts}
                   onChange={setSecretDrafts}
                   requiredGroups={[]}
+                  optionalText="Adding integrations is optional."
                 />
               </div>
 
