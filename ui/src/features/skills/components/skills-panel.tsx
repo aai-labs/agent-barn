@@ -144,6 +144,15 @@ function SkillDialog({ mode, onClose }: SkillDialogProps) {
           {isEdit ? "Edit skill" : "New skill"}
         </h3>
 
+        {isEdit && (
+          <div
+            className="text-[0.8125rem] rounded-xl px-3.5 py-3 mb-5 leading-[1.5]"
+            style={{ background: "var(--bg-soft)", color: "var(--ink-3)" }}
+          >
+            Agents currently using this skill will keep running the old version until they are restarted.
+          </div>
+        )}
+
         <form onSubmit={(e) => { void handleSubmit(e); }} className="flex flex-col gap-4">
           <div className="flex flex-col gap-1.5">
             <label className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>
