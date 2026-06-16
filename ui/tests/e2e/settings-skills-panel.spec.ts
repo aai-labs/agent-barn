@@ -59,7 +59,7 @@ test.describe("Settings — Skills panel", () => {
   test("clicking New skill opens create dialog", async ({ page }) => {
     await page.getByRole("button", { name: /new skill/i }).click();
 
-    await expect(page.getByText("New skill")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "New skill" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Create skill" })).toBeVisible();
   });
 
@@ -73,11 +73,11 @@ test.describe("Settings — Skills panel", () => {
 
   test("create skill dialog can be cancelled", async ({ page }) => {
     await page.getByRole("button", { name: /new skill/i }).click();
-    await expect(page.getByText("New skill")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "New skill" })).toBeVisible();
 
     await page.getByRole("button", { name: "Cancel" }).click();
 
-    await expect(page.getByText("New skill")).not.toBeVisible();
+    await expect(page.getByRole("heading", { name: "New skill" })).not.toBeVisible();
   });
 
   test("clicking Edit opens dialog pre-populated with skill name", async ({ page }) => {

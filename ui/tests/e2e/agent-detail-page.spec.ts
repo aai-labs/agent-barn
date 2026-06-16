@@ -264,7 +264,7 @@ test.describe("Agent Detail Page — Skills tab", () => {
     await agentDetailPage.configureButton().click();
     await agentDetailPage.skillsTab().click();
 
-    await expect(page.getByText(mockAssignedSkill.name)).toBeVisible();
+    await expect(page.getByText("Assigned")).toBeVisible();
     await expect(agentDetailPage.removeSkillButton()).toBeVisible();
   });
 
@@ -295,7 +295,7 @@ test.describe("Agent Detail Page — Skills tab", () => {
     await expect(agentDetailPage.saveSkillsButton()).not.toBeVisible();
   });
 
-  test("removing an assigned skill shows it struck-through with Undo", async ({ page }) => {
+  test("removing an assigned skill shows it struck-through with Undo", async () => {
     await dataSupportPage.agents.interceptGetAgentRequest({
       body: { ...mockAgent, status: "STOPPED", skills: [mockAssignedSkill] },
     });

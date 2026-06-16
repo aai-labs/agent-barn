@@ -294,7 +294,7 @@ test.describe("Hire Dialog — Skills step", () => {
     await page.getByLabel(mockPlatformSkill.name).check();
 
     await expect(page.getByText("Required credentials", { exact: true })).toBeVisible();
-    await expect(page.getByText("GitHub", { exact: true })).toBeVisible();
+    await expect(page.getByPlaceholder(/github_pat_/)).toBeVisible();
   });
 
   test("hire button is disabled when selected skill has incomplete credentials", async ({ page }) => {
