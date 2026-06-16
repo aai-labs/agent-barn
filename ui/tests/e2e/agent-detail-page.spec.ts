@@ -329,7 +329,7 @@ test.describe("Agent Detail Page — Skills tab", () => {
     await agentDetailPage.addSkillButton().first().click();
 
     await expect(page.getByText("Required credentials")).toBeVisible();
-    await expect(page.getByText("GitHub")).toBeVisible();
+    await expect(page.getByText("GitHub", { exact: true })).toBeVisible();
   });
 
   test("save button is disabled when required credentials are incomplete", async () => {
