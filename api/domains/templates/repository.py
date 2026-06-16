@@ -105,7 +105,11 @@ class TemplateRepository:
             query = (
                 query.order_by(
                     case(
-                        (col(latest_template.template_source) == TemplateSource.PRE_DEFINED, 0),
+                        (
+                            col(latest_template.template_source)
+                            == TemplateSource.PRE_DEFINED,
+                            0,
+                        ),
                         else_=1,
                     ).asc(),
                     col(latest_template.template_name).asc(),
