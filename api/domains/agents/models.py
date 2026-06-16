@@ -444,6 +444,7 @@ class AgentAssignedSkillRead(PydanticBaseModel):
     id: UUID
     name: str
     source: str
+    required_providers: list[str]
     tools_pointer: str | None
     created_at: datetime
     updated_at: datetime
