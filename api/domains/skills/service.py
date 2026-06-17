@@ -67,6 +67,7 @@ class SkillService:
                         detail="Zip compression ratio is suspiciously high (possible zip bomb)",
                     )
 
+                total_extracted = 0
                 for entry in entries:
                     if entry.flag_bits & 0x1:
                         raise HTTPException(
@@ -92,6 +93,12 @@ class SkillService:
                                 raise HTTPException(
                                     status_code=status.HTTP_400_BAD_REQUEST,
                                     detail=f"Entry {entry.filename!r} exceeds per-file size limit",
+                                )
+                            total_extracted += len(chunk)
+                            if total_extracted > _MAX_UNCOMPRESSED_BYTES:
+                                raise HTTPException(
+                                    status_code=status.HTTP_400_BAD_REQUEST,
+                                    detail="Zip uncompressed content exceeds 200 MB limit",
                                 )
         except zipfile.BadZipFile:
             raise HTTPException(

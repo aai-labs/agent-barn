@@ -1,6 +1,7 @@
 import base64
 import io
 import zipfile
+from unittest.mock import patch
 
 from fastapi import status
 from hamcrest import assert_that, equal_to, has_item, has_items, not_
@@ -89,6 +90,34 @@ def _make_encrypted_zip() -> str:
     idx = data.find(cd_sig)
     if idx != -1:
         data[idx + 8] |= 0x1
+    return base64.b64encode(bytes(data)).decode()
+
+
+def _make_zip_spoofed_uncompressed_size(
+    file_count: int = 3, file_size: int = 500
+) -> str:
+    # Build a zip whose central-directory file_size fields are zeroed (metadata spoofed
+    # to 0), so the header-based total check sees 0 bytes, but actual extraction of
+    # file_count × file_size bytes exceeds a patched _MAX_UNCOMPRESSED_BYTES limit.
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_STORED) as zf:
+        for i in range(file_count):
+            zf.writestr(f"file_{i}.bin", b"\x00" * file_size)
+    data = bytearray(buf.getvalue())
+    for sig, compressed_off, uncompressed_off in (
+        (b"\x50\x4b\x03\x04", 18, 22),
+        (b"\x50\x4b\x01\x02", 20, 24),
+    ):
+        pos = 0
+        while True:
+            idx = data.find(sig, pos)
+            if idx == -1:
+                break
+            data[idx + compressed_off : idx + compressed_off + 4] = b"\x00\x00\x00\x00"
+            data[idx + uncompressed_off : idx + uncompressed_off + 4] = (
+                b"\x00\x00\x00\x00"
+            )
+            pos = idx + 1
     return base64.b64encode(bytes(data)).decode()
 
 
@@ -205,6 +234,31 @@ def test_create_skill_with_oversized_zip_returns_400():
 
         with then("it returns 400"):
             assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+
+
+def test_create_skill_with_spoofed_uncompressed_size_returns_400():
+    # The zip's metadata declares 0 bytes per entry (bypassing the header check), but
+    # actual extraction totals 1500 bytes — above the patched 1000-byte limit.
+    with patch("api.domains.skills.service._MAX_UNCOMPRESSED_BYTES", 1000):
+        with given(_GIVEN) as context:
+            client: TestClient = context.client
+
+            with when(
+                "I create a skill with a zip that has spoofed metadata but oversized content"
+            ):
+                response = client.post(
+                    _BASE,
+                    json={
+                        "name": "Spoofed Skill",
+                        "zip_content": _make_zip_spoofed_uncompressed_size(
+                            file_count=3, file_size=500
+                        ),
+                    },
+                    headers=_auth(context),
+                )
+
+            with then("it returns 400"):
+                assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
 
 
 def test_create_skill_without_auth_returns_401():
@@ -386,6 +440,28 @@ def test_update_skill_with_zip_bomb_returns_400():
 
         with then("it returns 400"):
             assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+
+
+def test_update_skill_with_spoofed_uncompressed_size_returns_400():
+    with patch("api.domains.skills.service._MAX_UNCOMPRESSED_BYTES", 1000):
+        with given([*_GIVEN, there_is_a_skill(name="Valid Skill")]) as context:
+            client: TestClient = context.client
+
+            with when(
+                "I update the skill with a zip that has spoofed metadata but oversized content"
+            ):
+                response = client.patch(
+                    f"{_BASE}/{context.skill.id}",
+                    json={
+                        "zip_content": _make_zip_spoofed_uncompressed_size(
+                            file_count=3, file_size=500
+                        )
+                    },
+                    headers=_auth(context),
+                )
+
+            with then("it returns 400"):
+                assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
 
 
 def test_update_skill_with_encrypted_zip_returns_400():
