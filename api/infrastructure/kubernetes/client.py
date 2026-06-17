@@ -252,7 +252,7 @@ class KubernetesClient:
 
     def exec_command(self, pod_name: str, namespace: str, command: list[str]) -> str:
         ws = k8s_stream(
-            self._stream_core_v1.connect_post_namespaced_pod_exec,
+            self._stream_core_v1.connect_get_namespaced_pod_exec,
             pod_name,
             namespace,
             command=command,
@@ -296,7 +296,7 @@ class KubernetesClient:
             raise RuntimeError(f"No running pod found for {service_name}")
 
         pf = k8s_portforward(
-            self._stream_core_v1.connect_post_namespaced_pod_portforward,
+            self._stream_core_v1.connect_get_namespaced_pod_portforward,
             pod_name,
             namespace,
             ports=str(8081),
@@ -351,7 +351,7 @@ class KubernetesClient:
             raise RuntimeError(f"No running pod found for {service_name}")
 
         pf = k8s_portforward(
-            self._stream_core_v1.connect_post_namespaced_pod_portforward,
+            self._stream_core_v1.connect_get_namespaced_pod_portforward,
             pod_name,
             namespace,
             ports=str(port),
