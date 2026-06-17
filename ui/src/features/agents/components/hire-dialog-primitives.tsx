@@ -18,7 +18,7 @@ export function DialogShell({
         onClick={shadeClick}
       />
       <div
-        className="relative flex flex-col w-full max-w-2xl max-h-[90vh] rounded-2xl shadow-2xl"
+        className="relative flex flex-col w-full max-w-4xl max-h-[90vh] rounded-2xl shadow-2xl"
         style={{ background: "var(--bg-elev)" }}
       >
         {children}

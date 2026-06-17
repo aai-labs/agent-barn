@@ -165,37 +165,22 @@ def decrypt_content(
     return validate_content(provider, json.loads(decrypt_token(ciphertext, key)))
 
 
-class AgentTemplate(BaseModel, table=True):
-    __tablename__: str = "agent_template"
-
-    __table_args__ = (
-        sa.Index("ix_agent_template_organization_id", "organization_id"),
-        sa.Index("ix_agent_template_agent_version", "agent_id", "version"),
-    )
-
-    organization_id: UUID = SqlField(
-        foreign_key="organization.id", nullable=False, ondelete="CASCADE"
-    )
-    agent_id: UUID | None = SqlField(
-        default=None, foreign_key="agent.id", nullable=True
-    )
-    version: int = SqlField(nullable=False)
-    soul_md: str = SqlField(nullable=False)
-    identity_md: str = SqlField(nullable=False)
-    user_md: str = SqlField(nullable=False)
-    tools_md: str = SqlField(nullable=False)
-    agents_md: str = SqlField(nullable=False)
-    boot_md: str = SqlField(nullable=False)
-    bootstrap_md: str = SqlField(nullable=False)
-    heartbeat_md: str = SqlField(nullable=False)
-
-
 class Agent(BaseModel, table=True):
     __tablename__: str = "agent"
 
     __table_args__ = (
         Index("ix_agent_organization_deleted", "organization_id", "deleted_at"),
         sa.Index("ix_agent_status", "status"),
+        sa.ForeignKeyConstraint(
+            ["organization_id", "template_slug", "template_version"],
+            [
+                "agent_template.organization_id",
+                "agent_template.template_slug",
+                "agent_template.version",
+            ],
+            name="fk_agent_template_slug_version",
+            ondelete="RESTRICT",
+        ),
     )
 
     organization_id: UUID = SqlField(
@@ -212,9 +197,7 @@ class Agent(BaseModel, table=True):
         nullable=True,
         sa_type=sa.DateTime(timezone=True),  # type: ignore
     )
-    template_id: UUID = SqlField(
-        foreign_key="agent_template.id", nullable=False, ondelete="RESTRICT"
-    )
+    template_slug: str = SqlField(nullable=False, max_length=255)
     template_version: int = SqlField(nullable=False)
     model: str = SqlField(nullable=False, default="")
     platform: AgentPlatform = SqlField(
@@ -337,15 +320,10 @@ class AgentCreate(PydanticBaseModel):
     teams_app_id: str | None = Field(default=None, min_length=1)
     teams_app_password: str | None = Field(default=None, min_length=1)
     teams_tenant_id: str | None = Field(default=None, min_length=1)
-    # Template
-    soul_md: str = Field(min_length=1)
-    identity_md: str = Field(min_length=1)
-    user_md: str | None = None
-    tools_md: str | None = None
-    agents_md: str | None = None
-    boot_md: str | None = None
-    bootstrap_md: str | None = None
-    heartbeat_md: str | None = None
+    # Template reference. The agent pins to template_version if given, else to
+    # the lineage's latest version.
+    template_slug: str = Field(min_length=1, max_length=255)
+    template_version: int | None = None
     model: str | None = None
     # Integration credentials (optional)
     secrets: list[AgentSecretCreate] = Field(default_factory=list)
@@ -392,20 +370,24 @@ class AgentUpdate(PydanticBaseModel):
     teams_app_id: str | None = Field(default=None, min_length=1)
     teams_app_password: str | None = Field(default=None, min_length=1)
     teams_tenant_id: str | None = Field(default=None, min_length=1)
-    # Template
-    soul_md: str | None = None
-    identity_md: str | None = None
-    user_md: str | None = None
-    tools_md: str | None = None
-    agents_md: str | None = None
-    boot_md: str | None = None
-    bootstrap_md: str | None = None
-    heartbeat_md: str | None = None
+    # Template re-pin: point the agent at a different (slug, version). Both must
+    # be provided together. Per-agent markdown editing is no longer supported —
+    # persona changes happen by editing templates in the catalog.
+    template_slug: str | None = Field(default=None, min_length=1, max_length=255)
+    template_version: int | None = None
     model: str | None = None
     # Integration credentials: upsert (add/replace) + explicit removal.
     # Providers not mentioned in either list are left untouched.
     secrets: list[AgentSecretCreate] | None = None
     removed_secret_providers: list[SecretProvider] | None = None
+
+    @model_validator(mode="after")
+    def validate_template_repin(self) -> "AgentUpdate":
+        if (self.template_slug is None) != (self.template_version is None):
+            raise ValueError(
+                "template_slug and template_version must be provided together"
+            )
+        return self
 
     @model_validator(mode="after")
     def validate_secret_operations(self) -> "AgentUpdate":
@@ -451,31 +433,13 @@ class AgentRead(PydanticBaseModel):
     platform: AgentPlatform
     agent_type: AgentType
     organization_id: UUID
-    template_id: UUID
+    template_slug: str
     template_version: int
     model: str
     slack_config: AgentSlackConfigRead | None = None
     teams_config: AgentTeamsConfigRead | None = None
     secrets: list[AgentSecretRead] = Field(default_factory=list)
     webhook_url: str | None = None
-    created_at: datetime
-    updated_at: datetime
-
-
-class AgentTemplateRead(PydanticBaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: UUID
-    organization_id: UUID
-    version: int
-    soul_md: str
-    identity_md: str
-    user_md: str
-    tools_md: str
-    agents_md: str
-    boot_md: str
-    bootstrap_md: str
-    heartbeat_md: str
     created_at: datetime
     updated_at: datetime
 

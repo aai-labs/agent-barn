@@ -4,6 +4,7 @@ import React, { useState } from "react";
 import { useToolCalls, type ToolCallFilters } from "../hooks/use-tool-calls";
 import { TOOL_CALLS_PAGE_SIZE } from "../utils";
 import type { Agent, ToolCall } from "../schemas";
+import { Pagination } from "./pagination";
 
 interface ToolCallsTabProps {
   agent: Agent;
@@ -157,27 +158,7 @@ export function ToolCallsTab({ agent }: ToolCallsTabProps) {
             </div>
           )}
 
-          {totalPages > 1 && (
-            <div className="flex items-center justify-end gap-3">
-              <button
-                className="af-btn af-btn-sm"
-                disabled={page <= 1}
-                onClick={() => setPage((p) => p - 1)}
-              >
-                Previous
-              </button>
-              <span className="text-[0.8125rem]" style={{ color: "var(--ink-3)" }}>
-                {page} / {totalPages}
-              </span>
-              <button
-                className="af-btn af-btn-sm"
-                disabled={page >= totalPages}
-                onClick={() => setPage((p) => p + 1)}
-              >
-                Next
-              </button>
-            </div>
-          )}
+          <Pagination page={page} totalPages={totalPages} onPageChange={setPage} align="end" />
         </>
       )}
     </div>

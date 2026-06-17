@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import type { Agent } from "../schemas";
 import { useAgentTemplate } from "../hooks/use-agent-template";
@@ -8,13 +8,15 @@ import { useUpdateAgent } from "../hooks/use-update-agent";
 import { useDeleteAgent } from "../hooks/use-delete-agent";
 import { XIcon, LockIcon } from "@/components/icons";
 import { TokenInput } from "./hire-dialog-primitives";
-import { MODELS, IntegrationsStep } from "./hire-dialog-steps";
+import { MODELS, IntegrationsStep, TemplateSourceBadge, VersionSelect } from "./hire-dialog-steps";
 import {
   getIntegrationProvider,
   hasIncompleteIntegration,
   type IntegrationDraft,
 } from "../integrations";
 import { SlackConfigPanel } from "./slack-config-panel";
+import { useTemplates } from "../hooks/use-templates";
+import { useTemplateVersions } from "../hooks/use-template-versions";
 
 interface ConfigDrawerProps {
   agent: Agent;
@@ -25,7 +27,7 @@ interface ConfigDrawerProps {
 
 function getTabs(platform: "slack" | "teams"): [string, string, boolean][] {
   return [
-    ["personality", "Personality", true],
+    ["personality", "Template", true],
     ["secrets", "Keys", true],
     ...(platform === "slack" ? [["channels", "Channels", true] as [string, string, boolean]] : []),
     ...(platform === "teams" ? [["endpoint", "Endpoint", true] as [string, string, boolean]] : []),
@@ -47,40 +49,22 @@ export const DRAWER_TAB_KEYS: TabKey[] = [
   "danger",
 ];
 
-type TemplateFiles = {
-  soul_md: string;
-  identity_md: string;
-  user_md: string;
-  tools_md: string;
-  agents_md: string;
-  boot_md: string;
-  bootstrap_md: string;
-  heartbeat_md: string;
-};
-
-const FILE_KEYS: (keyof TemplateFiles)[] = [
-  "soul_md",
-  "identity_md",
-  "user_md",
-  "tools_md",
-  "agents_md",
-  "boot_md",
-  "bootstrap_md",
-  "heartbeat_md",
-];
-
 export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigDrawerProps) {
   const router = useRouter();
-  const { template, isLoading: templateLoading, error: templateError, refetch: refetchTemplate } = useAgentTemplate(agent.id, agent.templateVersion);
+  // Current pinned template — used to show its display name next to the pin.
+  const { template } = useAgentTemplate(agent.id, agent.templateVersion);
   const updateAgent = useUpdateAgent();
   const deleteAgent = useDeleteAgent();
 
   const [retireConfirm, setRetireConfirm] = useState(false);
   const [name, setName] = useState(agent.name);
   const [model, setModel] = useState(agent.model);
-  const [file, setFile] = useState<keyof TemplateFiles>("soul_md");
-  const [files, setFiles] = useState<Partial<TemplateFiles>>({});
   const [saved, setSaved] = useState(false);
+  // Template re-pin browsing state.
+  const [templateSearch, setTemplateSearch] = useState("");
+  const [repinSlug, setRepinSlug] = useState<string | null>(null);
+  const [repinVersion, setRepinVersion] = useState<number | null>(null);
+  const [savedTemplate, setSavedTemplate] = useState(false);
   const [slackAppToken, setSlackAppToken] = useState("");
   const [slackBotToken, setSlackBotToken] = useState("");
   const [showAppToken, setShowAppToken] = useState(false);
@@ -106,41 +90,42 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
     (s) => !removedProviders.includes(s.provider),
   );
 
-  useEffect(() => {
-    if (template) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setFiles({
-        soul_md: template.soulMd,
-        identity_md: template.identityMd,
-        user_md: template.userMd,
-        tools_md: template.toolsMd,
-        agents_md: template.agentsMd,
-        boot_md: template.bootMd,
-        bootstrap_md: template.bootstrapMd,
-        heartbeat_md: template.heartbeatMd,
-      });
-    }
-  }, [template]);
-
   const isRunning = agent.status === "RUNNING";
+
+  // Template browse + re-pin.
+  const { templates: browseTemplates } = useTemplates({
+    search: templateSearch || undefined,
+  });
+  const { versions: repinVersions, isLoading: repinVersionsLoading } =
+    useTemplateVersions(repinSlug);
+  const resolvedRepinVersion =
+    repinVersion ?? repinVersions[0]?.version ?? null;
+  const repinIsNoop =
+    repinSlug === agent.templateSlug &&
+    resolvedRepinVersion === agent.templateVersion;
 
   async function handleSave() {
     try {
-      await updateAgent.mutateAsync({
-        agentId: agent.id,
-        name,
-        model,
-        soulMd: files.soul_md,
-        identityMd: files.identity_md,
-        userMd: files.user_md,
-        toolsMd: files.tools_md,
-        agentsMd: files.agents_md,
-        bootMd: files.boot_md,
-        bootstrapMd: files.bootstrap_md,
-        heartbeatMd: files.heartbeat_md,
-      });
+      await updateAgent.mutateAsync({ agentId: agent.id, name, model });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
+    } catch {
+      // error displayed via updateAgent.error
+    }
+  }
+
+  async function handleApplyTemplate() {
+    if (!repinSlug || resolvedRepinVersion == null) return;
+    try {
+      await updateAgent.mutateAsync({
+        agentId: agent.id,
+        templateSlug: repinSlug,
+        templateVersion: resolvedRepinVersion,
+      });
+      setRepinSlug(null);
+      setRepinVersion(null);
+      setSavedTemplate(true);
+      setTimeout(() => setSavedTemplate(false), 2500);
     } catch {
       // error displayed via updateAgent.error
     }
@@ -273,8 +258,8 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
 
         <div className="flex-1 overflow-y-auto px-6.5 py-5.5 flex flex-col">
           {tab === "personality" && (
-            <div className="flex flex-col flex-1">
-              <div className="flex flex-col gap-3.5 mb-5">
+            <div className="flex flex-col flex-1 gap-5">
+              <div className="flex flex-col gap-3.5">
                 <div className="flex flex-col gap-1.5">
                   <label className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>Name</label>
                   <input
@@ -297,98 +282,114 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                     ))}
                   </select>
                 </div>
-              </div>
-              <Hint>
-                {agent.name}&apos;s personality is defined by markdown files. Edit below to customise per-agent.
-              </Hint>
-
-              {templateLoading ? (
-                <div className="flex flex-col gap-2 animate-pulse">
-                  <div className="h-4 w-24 rounded-md" style={{ background: "var(--bg-soft)" }} />
-                  <div className="h-44 rounded-xl" style={{ background: "var(--bg-soft)" }} />
-                </div>
-              ) : templateError ? (
-                <div
-                  className="flex flex-col items-start gap-2 rounded-xl px-4 py-3.5 text-[0.8125rem]"
-                  style={{ background: "var(--err-soft, #fef2f2)", color: "var(--err)" }}
-                >
-                  <div className="font-semibold">Failed to load configuration files</div>
-                  <div style={{ color: "var(--err)", opacity: 0.8 }}>
-                    {templateError instanceof Error ? templateError.message : "An error occurred."}
-                  </div>
-                  <button className="af-btn af-btn-sm mt-1" onClick={() => { void refetchTemplate(); }}>
-                    Retry
+                <div className="flex gap-2 items-center">
+                  <button
+                    className="af-btn af-btn-sm"
+                    disabled={isRunning || updateAgent.isPending}
+                    title={isRunning ? "Stop the agent before saving changes" : undefined}
+                    onClick={() => { void handleSave(); }}
+                  >
+                    {updateAgent.isPending ? "Saving…" : saved ? "Saved!" : "Save name & model"}
                   </button>
                 </div>
-              ) : (
-                <div className="flex flex-col flex-1">
-                  <div className="flex flex-wrap gap-1 mb-3">
-                    {FILE_KEYS.map((k) => (
+              </div>
+
+              <div className="h-px" style={{ background: "var(--line)" }} />
+
+              <div className="flex flex-col gap-1">
+                <div className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>Template</div>
+                <div className="text-[0.8125rem]" style={{ color: "var(--ink-3)" }}>
+                  Currently pinned to{" "}
+                  <span className="font-mono">{agent.templateSlug}@v{agent.templateVersion}</span>
+                  {template?.templateName ? ` · ${template.templateName}` : ""}.
+                  {" "}Re-pin to a different template or version. Edit content in Settings → Templates.
+                </div>
+              </div>
+
+              <Hint>
+                Browse templates, pick a version, and apply to change {agent.name}&apos;s persona.
+              </Hint>
+
+              <input
+                className="af-input"
+                placeholder="Search templates…"
+                aria-label="Search templates"
+                value={templateSearch}
+                onChange={(e) => setTemplateSearch(e.target.value)}
+                disabled={isRunning}
+              />
+
+              <div
+                className="flex flex-col rounded-xl overflow-hidden"
+                style={{ border: "1px solid var(--line)" }}
+              >
+                {browseTemplates.length === 0 ? (
+                  <div className="px-3.5 py-3 text-[0.8125rem]" style={{ color: "var(--ink-3)" }}>
+                    No templates match.
+                  </div>
+                ) : (
+                  browseTemplates.map((t) => {
+                    const selected = repinSlug === t.templateSlug;
+                    return (
                       <button
-                        key={k}
-                        className="font-mono text-xs px-2.5 py-1.25 rounded-[0.4375rem] border"
+                        key={t.templateSlug}
+                        type="button"
+                        disabled={isRunning}
+                        className="flex items-center gap-2 px-3.5 py-2.5 text-left"
                         style={{
-                          background: k === file ? "var(--bg-elev)" : "transparent",
-                          borderColor: k === file ? "var(--line)" : "transparent",
-                          color: k === file ? "var(--ink)" : "var(--ink-3)",
-                          fontWeight: k === file ? 500 : 400,
+                          borderBottom: "1px solid var(--line)",
+                          background: selected ? "var(--bg-soft)" : "transparent",
                         }}
-                        onClick={() => setFile(k)}
+                        onClick={() => { setRepinSlug(t.templateSlug); setRepinVersion(null); }}
                       >
-                        {k.replace("_md", ".md")}
+                        <span className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>
+                          {t.templateName}
+                        </span>
+                        <span className="font-mono text-[12px]" style={{ color: "var(--ink-4)" }}>
+                          {t.templateSlug}
+                        </span>
+                        <TemplateSourceBadge source={t.templateSource} />
                       </button>
-                    ))}
-                  </div>
-                  <textarea
-                    className="w-full rounded-xl font-mono text-[0.781rem] leading-[1.65] resize-none p-4 flex-1"
-                    style={{
-                      background: "var(--bg-elev)",
-                      border: "1px solid var(--line)",
-                      color: "var(--ink-2)",
-                      outline: "none",
-                      minHeight: "10rem",
-                    }}
-                    value={files[file] ?? ""}
-                    disabled={isRunning}
-                    onChange={(e) => setFiles((prev) => ({ ...prev, [file]: e.target.value }))}
-                  />
-                  <div className="flex gap-2 mt-3.5 items-center">
-                    <button
-                      className="af-btn af-btn-sm"
-                      disabled={isRunning || updateAgent.isPending}
-                      title={isRunning ? "Stop the agent before saving changes" : undefined}
-                      onClick={() => { void handleSave(); }}
-                    >
-                      {updateAgent.isPending ? "Saving…" : saved ? "Saved!" : "Save changes"}
-                    </button>
-                    <button
-                      className="af-btn af-btn-sm af-btn-ghost"
-                      disabled={isRunning}
-                      onClick={() => {
-                        if (template) {
-                          setFiles({
-                            soul_md: template.soulMd,
-                            identity_md: template.identityMd,
-                            user_md: template.userMd,
-                            tools_md: template.toolsMd,
-                            agents_md: template.agentsMd,
-                            boot_md: template.bootMd,
-                            bootstrap_md: template.bootstrapMd,
-                            heartbeat_md: template.heartbeatMd,
-                          });
-                        }
-                      }}
-                    >
-                      Reset to template
-                    </button>
-                    {updateAgent.error && (
-                      <span className="text-xs" style={{ color: "var(--err)" }}>
-                        {updateAgent.error instanceof Error ? updateAgent.error.message : "Save failed"}
-                      </span>
-                    )}
-                  </div>
+                    );
+                  })
+                )}
+              </div>
+
+              {repinSlug && (
+                <div className="flex items-center gap-3">
+                  <label className="text-[0.844rem] font-medium" style={{ color: "var(--ink-2)" }}>
+                    Version
+                  </label>
+                  {repinVersionsLoading ? (
+                    <span className="text-[0.8125rem]" style={{ color: "var(--ink-3)" }}>Loading…</span>
+                  ) : (
+                    <div className="w-40">
+                      <VersionSelect
+                        versions={repinVersions}
+                        selectedVersion={resolvedRepinVersion}
+                        onChange={setRepinVersion}
+                        disabled={isRunning}
+                      />
+                    </div>
+                  )}
                 </div>
               )}
+
+              <div className="flex gap-2 items-center">
+                <button
+                  className="af-btn af-btn-sm"
+                  disabled={isRunning || updateAgent.isPending || !repinSlug || repinIsNoop}
+                  title={isRunning ? "Stop the agent before changing its template" : undefined}
+                  onClick={() => { void handleApplyTemplate(); }}
+                >
+                  {savedTemplate ? "Applied!" : "Apply template"}
+                </button>
+                {updateAgent.error && (
+                  <span className="text-xs" style={{ color: "var(--err)" }}>
+                    {updateAgent.error instanceof Error ? updateAgent.error.message : "Update failed"}
+                  </span>
+                )}
+              </div>
             </div>
           )}
 
@@ -566,7 +567,6 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                 <IntegrationsStep
                   integrations={secretDrafts}
                   onChange={setSecretDrafts}
-                  requiredGroups={[]}
                 />
               </div>
 
