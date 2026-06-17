@@ -2,4 +2,4 @@ apiVersion: v2
 name: agentfarm-ui
 description: Next.js frontend for agent-farm
 version: 0.2.0
-appVersion: "0.13.0"
+appVersion: "0.13.1"

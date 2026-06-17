@@ -183,7 +183,6 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
   async function handleRetire() {
     try {
       await deleteAgent.mutateAsync(agent.id);
-      onClose();
       router.push("/dashboard");
     } catch {
       // error displayed via deleteAgent.error
