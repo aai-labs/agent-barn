@@ -72,7 +72,6 @@ function SkillDialog({ mode, onClose }: SkillDialogProps) {
   const existing = isEdit ? mode.skill : null;
 
   const [name, setName] = useState(existing?.name ?? "");
-  const [toolsPointer, setToolsPointer] = useState(existing?.toolsPointer ?? "");
   const [selectedProviders, setSelectedProviders] = useState<string[]>(
     existing?.requiredProviders ?? [],
   );
@@ -106,7 +105,6 @@ function SkillDialog({ mode, onClose }: SkillDialogProps) {
         const payload: SkillUpdatePayload = {
           skillId: existing!.id,
           name: name.trim() || undefined,
-          toolsPointer: toolsPointer.trim() || null,
           requiredProviders: selectedProviders,
         };
         if (file) {
@@ -118,7 +116,6 @@ function SkillDialog({ mode, onClose }: SkillDialogProps) {
         const payload: SkillCreatePayload = {
           name: name.trim(),
           zipContent,
-          toolsPointer: toolsPointer.trim() || null,
           requiredProviders: selectedProviders,
         };
         await createSkill.mutateAsync(payload);
@@ -190,18 +187,6 @@ function SkillDialog({ mode, onClose }: SkillDialogProps) {
             {fileError && (
               <span className="text-xs" style={{ color: "var(--err)" }}>{fileError}</span>
             )}
-          </div>
-
-          <div className="flex flex-col gap-1.5">
-            <label className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>
-              Tools pointer <span className="font-normal" style={{ color: "var(--ink-4)" }}>(optional)</span>
-            </label>
-            <input
-              className="af-input font-mono text-[0.8125rem]"
-              value={toolsPointer}
-              onChange={(e) => setToolsPointer(e.target.value)}
-              placeholder="e.g. path/to/tools.md"
-            />
           </div>
 
           <div className="flex flex-col gap-2">

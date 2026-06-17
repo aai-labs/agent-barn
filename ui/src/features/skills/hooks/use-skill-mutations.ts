@@ -10,7 +10,6 @@ import { skillsKey } from "../utils";
 export type SkillCreatePayload = {
   name: string;
   zipContent: string;
-  toolsPointer?: string | null;
   requiredProviders?: string[];
 };
 
@@ -18,7 +17,6 @@ export type SkillUpdatePayload = {
   skillId: string;
   name?: string;
   zipContent?: string;
-  toolsPointer?: string | null;
   requiredProviders?: string[];
 };
 

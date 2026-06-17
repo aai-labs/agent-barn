@@ -126,7 +126,7 @@ class SkillService:
             source=SkillSource.CUSTOM,
             required_providers=data.required_providers,
             zip_content=data.zip_content,
-            tools_pointer=data.tools_pointer,
+            tools_pointer=f'You can use "{data.name}" skill in the ./skills folder',
         )
         self.repository.save(skill)
         return SkillRead.model_validate(skill)
@@ -147,10 +147,9 @@ class SkillService:
             skill.zip_content = updated["zip_content"]
         if "name" in updated:
             skill.name = updated["name"]
+            skill.tools_pointer = f'You can use "{skill.name}" skill in the ./skills folder'
         if "required_providers" in updated:
             skill.required_providers = updated["required_providers"]
-        if "tools_pointer" in updated:
-            skill.tools_pointer = updated["tools_pointer"]
         self.repository.save(skill)
         return SkillRead.model_validate(skill)
 

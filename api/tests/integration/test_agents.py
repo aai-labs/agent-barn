@@ -2334,10 +2334,7 @@ def test_start_agent_with_skill_pointer_injects_pointer_into_tools_md():
         [
             *_GIVEN,
             there_is_an_agent(),
-            there_is_a_skill(
-                name="Pointed Skill",
-                tools_pointer="\nSee ./skills/pointed/skill.md\n",
-            ),
+            there_is_a_skill(name="Pointed Skill"),
             skill_is_assigned_to_agent(),
         ]
     ) as context:
@@ -2349,10 +2346,10 @@ def test_start_agent_with_skill_pointer_injects_pointer_into_tools_md():
                 f"{_BASE}/{context.agent.id}/start", headers=_auth(context)
             )
 
-        with then("the ConfigMap TOOLS.md contains the skill pointer"):
+        with then("the ConfigMap TOOLS.md contains the auto-generated skill pointer"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             config_map = k8s.create_config_map.call_args.args[1]
             assert_that(
                 config_map.data["TOOLS.md"],
-                contains_string("./skills/pointed/skill.md"),
+                contains_string('You can use "Pointed Skill" skill in the ./skills folder'),
             )

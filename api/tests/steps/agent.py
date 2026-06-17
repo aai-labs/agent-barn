@@ -189,7 +189,6 @@ def there_is_a_skill_for_another_org():
 def there_is_a_skill(
     name: str = "Test Skill",
     required_providers: list | None = None,
-    tools_pointer: str | None = None,
     global_skill: bool = False,
 ):
     def step(context):
@@ -201,6 +200,11 @@ def there_is_a_skill(
 
         org_id = None if global_skill else context.organization.id
         source = SkillSource.AAI_CLI if global_skill else SkillSource.CUSTOM
+        tools_pointer = (
+            None
+            if global_skill
+            else f'You can use "{name}" skill in the ./skills folder'
+        )
 
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w") as zf:
