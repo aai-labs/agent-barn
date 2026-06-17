@@ -17,6 +17,8 @@ from starlette.testclient import TestClient
 from api.domains.agents import service as agent_service
 from api.domains.agents.models import AgentStatus
 from api.domains.agents.repository import AgentRepository
+from api.domains.templates.defaults import AAI_CLI_TOOLS_POINTER
+from api.domains.templates.repository import TemplateRepository
 from api.domains.conversations.service import ConversationSyncService
 from api.infrastructure.kubernetes.client import KubernetesClient
 from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
@@ -44,6 +46,7 @@ from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import (
     there_is_an_organization_with_user_and_access_token,
 )
+from api.tests.steps.template import there_is_a_template
 
 _BASE = "/api/v1/agents"
 
@@ -52,8 +55,7 @@ _VALID_CREATE = {
     "platform": "slack",
     "slack_bot_token": "xoxb-real-bot-token",
     "slack_app_token": "xapp-1-real-app-token",
-    "soul_md": "# Soul\n\nThe agent's soul.",
-    "identity_md": "# Identity\n\nThe agent's identity.",
+    "template_slug": "test-template",
 }
 
 _VALID_CREATE_TEAMS = {
@@ -62,8 +64,7 @@ _VALID_CREATE_TEAMS = {
     "teams_app_id": "test-app-id-000",
     "teams_app_password": "test-app-password-000",
     "teams_tenant_id": "test-tenant-000",
-    "soul_md": "# Soul\n\nThe agent's soul.",
-    "identity_md": "# Identity\n\nThe agent's identity.",
+    "template_slug": "test-template",
 }
 
 _GIVEN = [
@@ -85,6 +86,7 @@ _GIVEN = [
     database_is_clean(),
     there_is_an_organization_with_user_and_access_token(),
     use_org_for_auth(),
+    there_is_a_template(),
 ]
 
 
@@ -108,13 +110,13 @@ def test_create_slack_agent_returns_201_stopped():
             assert_that(body, is_not(has_key("slack_app_token")))
 
 
-def test_create_agent_missing_soul_returns_422():
+def test_create_agent_missing_template_slug_returns_422():
     with given(_GIVEN) as context:
         client: TestClient = context.client
         payload = {**_VALID_CREATE}
-        del payload["soul_md"]
+        del payload["template_slug"]
 
-        with when("I create an agent without soul_md"):
+        with when("I create an agent without template_slug"):
             response = client.post(_BASE, json=payload, headers=_auth(context))
 
         with then("it returns 422"):
@@ -123,19 +125,16 @@ def test_create_agent_missing_soul_returns_422():
             )
 
 
-def test_create_agent_missing_identity_returns_422():
+def test_create_agent_unknown_template_slug_returns_404():
     with given(_GIVEN) as context:
         client: TestClient = context.client
-        payload = {**_VALID_CREATE}
-        del payload["identity_md"]
+        payload = {**_VALID_CREATE, "template_slug": "no-such-template"}
 
-        with when("I create an agent without identity_md"):
+        with when("I create an agent referencing a non-existent template"):
             response = client.post(_BASE, json=payload, headers=_auth(context))
 
-        with then("it returns 422"):
-            assert_that(
-                response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY)
-            )
+        with then("it returns 404"):
+            assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
 def test_create_agent_no_auth_returns_401():
@@ -149,25 +148,67 @@ def test_create_agent_no_auth_returns_401():
             assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
 
 
-def test_create_agent_optional_md_gets_defaults():
+def test_create_agent_pins_latest_template_version():
+    with given(
+        [*_GIVEN, there_is_a_template(version=2, soul_md="# Soul v2")]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("I create an agent referencing a lineage with two versions"):
+            response = client.post(_BASE, json=_VALID_CREATE, headers=_auth(context))
+
+        with then("it returns 201 pinned to the latest version"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            body = response.json()
+            assert_that(body["template_slug"], equal_to("test-template"))
+            assert_that(body["template_version"], equal_to(2))
+
+
+def test_create_agent_pins_specific_version():
+    with given(
+        [*_GIVEN, there_is_a_template(version=2, soul_md="# Soul v2")]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("I create an agent requesting v1 of a two-version lineage"):
+            payload = {**_VALID_CREATE, "template_version": 1}
+            response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("it pins to the requested version, not the latest"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(response.json()["template_version"], equal_to(1))
+
+
+def test_create_agent_unknown_version_returns_404():
     with given(_GIVEN) as context:
         client: TestClient = context.client
 
-        with when("I create an agent with only mandatory fields"):
+        with when("I create an agent requesting a non-existent version"):
+            payload = {**_VALID_CREATE, "template_version": 99}
+            response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("it returns 404"):
+            assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_create_agent_does_not_create_template_rows():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I create an agent from the shared template"):
             response = client.post(_BASE, json=_VALID_CREATE, headers=_auth(context))
 
-        with then("it returns 201 and the agent has template_version 1"):
+        with then("the lineage still has only its original version"):
             assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
-            body = response.json()
-            assert_that(body["template_version"], equal_to(1))
-
-            repository: AgentRepository = context.injector.get(AgentRepository)
-            from uuid import UUID
-
-            template = repository.get_template(UUID(body["template_id"]))
-            assert_that(template, is_not(none()))
-            assert_that(template.user_md, is_not(none()))
-            assert_that(template.tools_md, is_not(none()))
+            template_repository: TemplateRepository = context.injector.get(
+                TemplateRepository
+            )
+            latest = template_repository.get_latest_template(
+                context.organization.id, "test-template"
+            )
+            assert_that(latest, is_not(none()))
+            assert latest is not None
+            assert_that(latest.version, equal_to(1))
 
 
 def test_list_agents_returns_active_only():
@@ -271,20 +312,56 @@ def test_patch_agent_updates_name():
             assert_that(response.json()["name"], equal_to("New Name"))
 
 
-def test_patch_agent_updates_md_bumps_version():
+def test_patch_agent_repins_template():
+    # _GIVEN seeds the "test-template" lineage; the agent has its own generated
+    # lineage, so re-pinning to "test-template" v1 is an observable change.
     with given([*_GIVEN, there_is_an_agent()]) as context:
         client: TestClient = context.client
 
-        with when("I patch an md field"):
+        with when("I re-pin the agent to a different template version"):
             response = client.patch(
                 f"{_BASE}/{context.agent.id}",
-                json={"soul_md": "# Soul\n\nUpdated soul."},
+                json={"template_slug": "test-template", "template_version": 1},
                 headers=_auth(context),
             )
 
-        with then("it returns 200 and template_version is incremented"):
+        with then("it returns 200 pinned to the requested template"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            assert_that(response.json()["template_version"], equal_to(2))
+            body = response.json()
+            assert_that(body["template_slug"], equal_to("test-template"))
+            assert_that(body["template_version"], equal_to(1))
+
+
+def test_patch_agent_repin_unknown_version_returns_404():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I re-pin to a non-existent version"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"template_slug": "test-template", "template_version": 99},
+                headers=_auth(context),
+            )
+
+        with then("it returns 404"):
+            assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_patch_agent_repin_requires_both_slug_and_version():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I send only template_slug without a version"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"template_slug": "test-template"},
+                headers=_auth(context),
+            )
+
+        with then("it returns 422"):
+            assert_that(
+                response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY)
+            )
 
 
 def test_patch_running_agent_returns_409():
@@ -1080,6 +1157,56 @@ def test_start_agent_configmap_and_overlay_are_correct():
             )
 
 
+def test_start_agent_renders_template_placeholders():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(
+                name="Maya Bot",
+                soul_md="# Soul of {{ agent_display_name }} ({{agent_name}})",
+                tools_md="# Tools for {{ unknown_placeholder }}",
+            ),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+
+        with when("I start the agent"):
+            response = client.post(
+                f"{_BASE}/{context.agent.id}/start", headers=_auth(context)
+            )
+
+        config_map = k8s.create_config_map.call_args.args[1]
+
+        with then("known placeholders are rendered from the agent"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(
+                config_map.data["SOUL.md"],
+                equal_to("# Soul of Maya Bot (maya-bot)"),
+            )
+
+        with then(
+            "unknown placeholders pass through and the aai-cli pointer is appended once"
+        ):
+            tools = config_map.data["TOOLS.md"]
+            assert_that(tools, contains_string("{{ unknown_placeholder }}"))
+            assert_that(tools.count(AAI_CLI_TOOLS_POINTER), equal_to(1))
+
+        with then("the stored template keeps its raw placeholders"):
+            template_repository: TemplateRepository = context.injector.get(
+                TemplateRepository
+            )
+            stored = template_repository.get_template_or_raise(
+                context.organization.id,
+                context.agent.template_slug,
+                context.agent.template_version,
+            )
+            assert_that(
+                stored.soul_md,
+                equal_to("# Soul of {{ agent_display_name }} ({{agent_name}})"),
+            )
+
+
 def test_get_agent_healthz_returns_ok_when_healthy():
     with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
         client: TestClient = context.client
@@ -1646,8 +1773,7 @@ _VALID_CREATE_HERMES = {
     "agent_type": "hermes",
     "slack_bot_token": "xoxb-hermes-bot-token",
     "slack_app_token": "xapp-1-hermes-app-token",
-    "soul_md": "# Soul\n\nHermes soul.",
-    "identity_md": "# Identity\n\nHermes identity.",
+    "template_slug": "test-template",
 }
 
 _GIVEN_WITH_HERMES_IMAGE = [
@@ -1669,6 +1795,7 @@ _GIVEN_WITH_HERMES_IMAGE = [
     database_is_clean(),
     there_is_an_organization_with_user_and_access_token(),
     use_org_for_auth(),
+    there_is_a_template(),
 ]
 
 

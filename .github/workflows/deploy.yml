@@ -41,8 +41,8 @@ jobs:
 
       - name: Read image versions
         run: |
-          echo "API_IMAGE_TAG=$(cat api/VERSION)" >> $GITHUB_ENV
-          echo "UI_IMAGE_TAG=$(cat ui/VERSION)" >> $GITHUB_ENV
+          echo "API_IMAGE_TAG=$(grep '^\s*appVersion:' helm/agentfarm-api/Chart.yaml | awk '{print $2}' | tr -d '"')" >> $GITHUB_ENV
+          echo "UI_IMAGE_TAG=$(grep '^\s*appVersion:' helm/agentfarm-ui/Chart.yaml | awk '{print $2}' | tr -d '"')" >> $GITHUB_ENV
           echo "OPENCLAW_IMAGE_TAG=$(cat openclaw-base/VERSION)" >> $GITHUB_ENV
           echo "HERMES_IMAGE_TAG=$(cat hermes-base/VERSION)" >> $GITHUB_ENV
 

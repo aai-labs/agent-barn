@@ -1,3 +1,17 @@
+DEFAULT_SOUL_MD = """\
+# SOUL.md - Who Am I?
+
+Describe who this agent is, what it values, and how it should behave.
+"""
+
+DEFAULT_IDENTITY_MD = """\
+# IDENTITY.md - Who Am I?
+
+- **Name:**
+- **Primary task:**
+- **Vibe:**
+"""
+
 DEFAULT_USER_MD = """\
 # USER.md - About Your Human
 

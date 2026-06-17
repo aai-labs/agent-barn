@@ -12,7 +12,6 @@ from api.domains.agents.models import (
     AgentSkill,
     AgentSlackConfig,
     AgentTeamsConfig,
-    AgentTemplate,
     SecretProvider,
 )
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
@@ -206,30 +205,6 @@ class AgentRepository:
         with Session(self.delegate.engine) as session:
             query = select(AgentSkill).where(col(AgentSkill.agent_id) == agent_id)
             return list(session.exec(query).all())
-
-    # --- Templates ---
-
-    def get_template_by_agent_and_version(
-        self, agent_id: UUID, version: int, org_id: UUID
-    ) -> AgentTemplate | None:
-        with Session(self.delegate.engine) as session:
-            query = (
-                select(AgentTemplate)
-                .where(col(AgentTemplate.agent_id) == agent_id)
-                .where(col(AgentTemplate.version) == version)
-                .where(col(AgentTemplate.organization_id) == org_id)
-            )
-            return session.exec(query).first()
-
-    def get_template(self, template_id: UUID) -> AgentTemplate:
-        template = self.delegate.find_by_id(AgentTemplate, template_id)
-        if template is None:
-            raise RuntimeError(f"AgentTemplate {template_id} not found")
-        return template
-
-    def save_template(self, template: AgentTemplate) -> AgentTemplate:
-        self.delegate.save(template)
-        return template
 
     def save(self, agent: Agent) -> Agent:
         self.delegate.save(agent)

@@ -27,6 +27,7 @@ from api.domains.auth.repository import (
 )
 from api.domains.organizations.models import Organization
 from api.domains.organizations.repository import OrganizationRepository
+from api.domains.templates.seeding import build_predefined_templates
 from api.domains.users.exceptions import EmailTakenHTTPException
 from api.domains.users.models import User
 from api.domains.users.organization_users.models import (
@@ -137,6 +138,10 @@ class AuthService:
                 ),
                 session,
             )
+            # New orgs get the pre-defined template catalog, atomically with
+            # the org itself.
+            for template in build_predefined_templates(organization.id):
+                session.add(template)
             session.commit()
             session.refresh(user)
             return user

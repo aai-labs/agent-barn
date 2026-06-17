@@ -33,7 +33,7 @@ export const AgentSchema = z.object({
   platform: z.enum(["slack", "teams"]),
   agentType: z.enum(["openclaw", "hermes"]).default("openclaw"),
   organizationId: z.string().uuid(),
-  templateId: z.string().uuid(),
+  templateSlug: z.string(),
   templateVersion: z.number().int(),
   model: z.string(),
   slackConfig: AgentSlackConfigSchema.nullable().optional(),
@@ -48,7 +48,11 @@ export const AgentSchema = z.object({
 export const AgentTemplateReadSchema = z.object({
   id: z.string().uuid(),
   organizationId: z.string().uuid(),
+  templateSlug: z.string(),
+  templateName: z.string(),
+  templateSource: z.enum(["pre-defined", "custom"]),
   version: z.number().int(),
+  description: z.string().nullable().optional(),
   soulMd: z.string(),
   identityMd: z.string(),
   userMd: z.string(),
@@ -60,6 +64,15 @@ export const AgentTemplateReadSchema = z.object({
   createdAt: z.string(),
   updatedAt: z.string(),
 });
+
+export const PaginatedTemplatesSchema = z.object({
+  page: z.number().int().min(1),
+  pageSize: z.number().int().min(1),
+  total: z.number().int().min(0),
+  items: z.array(AgentTemplateReadSchema),
+});
+
+export const TemplateVersionsSchema = z.array(AgentTemplateReadSchema);
 
 export const PaginatedAgentsSchema = z.object({
   page: z.number().int().min(1),
@@ -152,6 +165,8 @@ export type AgentSlackConfig = z.infer<typeof AgentSlackConfigSchema>;
 export type AgentTeamsConfig = z.infer<typeof AgentTeamsConfigSchema>;
 export type AgentHealth = z.infer<typeof AgentHealthSchema>;
 export type AgentTemplateRead = z.infer<typeof AgentTemplateReadSchema>;
+export type TemplateSource = AgentTemplateRead["templateSource"];
+export type PaginatedTemplates = z.infer<typeof PaginatedTemplatesSchema>;
 export type PaginatedAgents = z.infer<typeof PaginatedAgentsSchema>;
 export type ConversationMessage = z.infer<typeof ConversationMessageSchema>;
 export type ConversationChannel = z.infer<typeof ConversationChannelSchema>;

@@ -183,6 +183,53 @@ test.describe("Agent Detail Page — Tool calls tab", () => {
   });
 });
 
+test.describe("Agent Detail Page — Template tab (re-pin)", () => {
+  test.describe.configure({ mode: "serial" });
+  let agentDetailPage: AgentDetailPage;
+  let dataSupportPage: DataSupport;
+
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  test.beforeEach(async ({ page }) => {
+    agentDetailPage = new AgentDetailPage(page);
+    dataSupportPage = new DataSupport(page);
+
+    await dataSupportPage.auth.interceptRefreshRequest();
+    await dataSupportPage.users.interceptGetUserContextRequest();
+    // Stopped agent so the re-pin controls are enabled.
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, status: "STOPPED" },
+    });
+    await dataSupportPage.agents.interceptGetAgentTemplateRequest();
+    await dataSupportPage.agents.interceptGetTemplatesRequest();
+    await dataSupportPage.agents.interceptGetTemplateVersionsRequest();
+    await dataSupportPage.agents.interceptUpdateAgentRequest();
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.configureButton().click();
+  });
+
+  test("re-pins the agent to a browsed template + version", async ({ page }) => {
+    // Pick a different lineage, choose v1, and apply.
+    await page.getByRole("button", { name: /Scrum Master/ }).click();
+    await page.getByLabel("Version").click();
+    await page.getByRole("menuitemradio", { name: "v1" }).click();
+
+    const patchPromise = page.waitForRequest(
+      (req) =>
+        req.url().includes(`/api/v1/agents/${MOCK_AGENT_ID}`) &&
+        req.method() === "PATCH",
+    );
+    await page.getByRole("button", { name: "Apply template" }).click();
+    const body = (await patchPromise).postDataJSON() as Record<string, unknown>;
+
+    expect(body.template_slug).toBe("scrum-master");
+    expect(body.template_version).toBe(1);
+    // No per-agent markdown is ever sent.
+    expect(body.soul_md).toBeUndefined();
+  });
+});
+
 test.describe("Agent Detail Page — Channels tab", () => {
   test.describe.configure({ mode: "serial" });
   let agentDetailPage: AgentDetailPage;

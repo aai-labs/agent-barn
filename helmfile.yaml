@@ -60,8 +60,6 @@ releases:
     set:
       - name: registryPrefix
         value: {{ env "REGISTRY_PREFIX" | default "registry.k8s.aai-labs.com" | quote }}
-      - name: image.tag
-        value: {{ env "API_IMAGE_TAG" | default "latest" | quote }}
       - name: openclawImage.tag
         value: {{ env "OPENCLAW_IMAGE_TAG" | default "latest" | quote }}
       - name: hermesImage.tag
@@ -102,8 +100,6 @@ releases:
     set:
       - name: registryPrefix
         value: {{ env "REGISTRY_PREFIX" | default "registry.k8s.aai-labs.com" | quote }}
-      - name: image.tag
-        value: {{ env "UI_IMAGE_TAG" | default "latest" | quote }}
       - name: ingress.host
         value: {{ env "UI_HOST" | required "UI_HOST is required" | quote }}
     needs:

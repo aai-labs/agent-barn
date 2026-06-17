@@ -18,6 +18,8 @@ from api.domains.conversations.routes import conversations_router
 from api.domains.organizations.routes import org_router
 from api.domains.skills.routes import skills_router
 from api.domains.skills.skill_seeder import seed_aai_cli_skills
+from api.domains.templates.routes import templates_router
+from api.domains.templates.service import TemplateService
 from api.domains.tool_calls.routes import tool_calls_router
 from api.domains.users.routes import users_router
 from api.domains.users.service import UserService
@@ -52,6 +54,9 @@ async def lifespan(_: FastAPI):
         org_service = injector.get(OrganizationService)
         default_org = org_service.ensure_default_organization()
         set_default_org_id(default_org.id)
+
+        template_service = injector.get(TemplateService)
+        template_service.seed_predefined_templates(default_org.id)
 
         org_user_repo = injector.get(OrganizationUserRepository)
         if not org_user_repo.get_by_user_id_and_organization_id(
@@ -105,6 +110,7 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(conversations_router)
     subapi.include_router(org_router)
     subapi.include_router(skills_router)
+    subapi.include_router(templates_router)
     subapi.include_router(tool_calls_router)
     subapi.include_router(users_router)
 

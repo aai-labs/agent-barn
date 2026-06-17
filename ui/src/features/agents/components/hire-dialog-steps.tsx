@@ -1,32 +1,35 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import JSZip from "jszip";
-import { PlusIcon, XIcon } from "@/components/icons";
+import { ChevronDownIcon } from "lucide-react";
+import { PlusIcon, SearchIcon, XIcon } from "@/components/icons";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useSkills } from "@/features/skills/hooks/use-skills";
 import { SKILL_PROVIDER_LABELS } from "@/features/skills/utils";
 import type { Skill } from "@/features/skills/schemas";
-import { TEMPLATE_FILES } from "../data";
 import {
   INTEGRATION_PROVIDERS,
   getIntegrationProvider,
   parseGithubRepoUrl,
   type IntegrationDraft,
-  type RequiredIntegrationGroup,
 } from "../integrations";
+import type { AgentTemplateRead } from "../schemas";
+import { useTemplates } from "../hooks/use-templates";
 import { ChoiceCard, FormField, NextStep, TokenInput } from "./hire-dialog-primitives";
+import { Pagination } from "./pagination";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
-export const ROLES = [
-  { id: "default", template_id: "t_default", title: "General Purpose", emoji: "🤖", tagline: "Answers questions, handles tasks, reduces day-to-day friction.", suggested: "Aria", requiredIntegrations: [] },
-  { id: "scrum-master", template_id: "t_scrum_master", title: "Scrum Master", emoji: "📋", tagline: "Surfaces blockers, preps sprints, keeps Jira & Confluence in sync.", suggested: "Scout", requiredIntegrations: ["jira", "confluence"] },
-  { id: "code-reviewer", template_id: "t_reviewer", title: "PR Reviewer", emoji: "⚙️", tagline: "Reads diffs, comments on style, security, and tests.", suggested: "Halo", requiredIntegrations: [["github", "bitbucket"]] },
-  { id: "analyst", template_id: "t_analyst", title: "Data Analyst", emoji: "📊", tagline: "Answers questions over BigQuery & Sheets, returns charts.", suggested: "Lyra", requiredIntegrations: [] },
-  { id: "sales-research", template_id: "t_sales", title: "Sales Research", emoji: "📈", tagline: "Enriches leads, drafts outbound, summarises calls.", suggested: "Vega", requiredIntegrations: [] },
-] as const;
+const HIRE_DIALOG_PAGE_SIZE = 6;
 
-export type RoleId = (typeof ROLES)[number]["id"];
 export type WizardStep =
-  | "role"
+  | "template"
   | "agent-type"
   | "platform-choice"
   | "slack-choice"
@@ -36,6 +39,23 @@ export type WizardStep =
   | "teams-credentials"
   | "details"
   | "skills";
+
+export const TEMPLATE_FILE_KEYS = [
+  "soulMd",
+  "identityMd",
+  "userMd",
+  "toolsMd",
+  "agentsMd",
+  "bootMd",
+  "bootstrapMd",
+  "heartbeatMd",
+] as const;
+
+export type TemplateFileKey = (typeof TEMPLATE_FILE_KEYS)[number];
+
+export function templateFileLabel(key: TemplateFileKey): string {
+  return key.replace("Md", "").toUpperCase() + ".md";
+}
 
 export const MODELS = [{ value: "litellm/qwen3.6-plus", label: "Qwen3.6 Plus" }, { value: "litellm/gpt-5-mini", label: "GPT-5 mini" }] as const;
 
@@ -72,23 +92,16 @@ export async function downloadTeamsAppPackage(manifest: string, botName: string)
   URL.revokeObjectURL(url);
 }
 
-export function pickDefaults(roleId: RoleId) {
-  const role = ROLES.find((r) => r.id === roleId)!;
-  const tpl = TEMPLATE_FILES[role.template_id] ?? {};
-  return {
-    name: role.suggested,
-    botName: role.suggested,
-    botDescription: role.tagline,
-    soulMd: tpl.soul_md ?? "",
-    identityMd: tpl.identity_md ?? "",
-    userMd: tpl.user_md ?? "",
-    toolsMd: tpl.tools_md ?? "",
-    agentsMd: tpl.agents_md ?? "",
-    bootMd: tpl.boot_md ?? "",
-    bootstrapMd: tpl.bootstrap_md ?? "",
-    heartbeatMd: tpl.heartbeat_md ?? "",
-    requiredIntegrations: role.requiredIntegrations as readonly RequiredIntegrationGroup[],
-  };
+export function TemplateSourceBadge({ source }: { source: AgentTemplateRead["templateSource"] }) {
+  if (source !== "pre-defined") return null;
+  return (
+    <span
+      className="text-[0.6875rem] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full"
+      style={{ color: "var(--ink-3)", background: "var(--line)" }}
+    >
+      Pre-defined
+    </span>
+  );
 }
 
 function generateManifest(name: string, description: string, color: string): string {
@@ -148,24 +161,202 @@ function generateManifest(name: string, description: string, color: string): str
   );
 }
 
-export function RoleStep({ pick, onPick }: { pick: RoleId; onPick: (id: RoleId) => void }) {
+// Shared lineage version picker — used at hire time, in the template drawer,
+// and in the agent re-pin panel. Marks the highest version as "latest".
+export function VersionSelect({
+  versions,
+  selectedVersion,
+  onChange,
+  disabled,
+  ariaLabel = "Version",
+}: {
+  versions: AgentTemplateRead[];
+  selectedVersion: number | null;
+  onChange: (version: number) => void;
+  disabled?: boolean;
+  ariaLabel?: string;
+}) {
+  const latest = versions[0]?.version;
+  const resolved = selectedVersion ?? latest ?? null;
+  const displayLabel =
+    resolved != null
+      ? `v${resolved}${resolved === latest ? " (latest)" : ""}`
+      : "Select…";
+
   return (
-    <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
-      {ROLES.map((r) => (
-        <div
-          key={r.id}
-          className="flex flex-col gap-2 p-4 rounded-2xl cursor-default transition-colors"
-          style={{
-            border: pick === r.id ? "1.5px solid var(--ink)" : "1.5px solid var(--line)",
-            background: pick === r.id ? "var(--bg-soft)" : "var(--bg-elev)",
-          }}
-          onClick={() => onPick(r.id)}
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          className="af-btn af-btn-sm flex items-center gap-1.5"
+          aria-label={ariaLabel}
+          disabled={disabled || versions.length === 0}
         >
-          <div className="text-2xl">{r.emoji}</div>
-          <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>{r.title}</div>
-          <div className="text-[0.781rem] leading-[1.4]" style={{ color: "var(--ink-3)" }}>{r.tagline}</div>
+          <span>{displayLabel}</span>
+          <ChevronDownIcon size={12} className="opacity-50 flex-shrink-0" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent>
+        <DropdownMenuRadioGroup
+          value={resolved != null ? String(resolved) : ""}
+          onValueChange={(v) => onChange(Number(v))}
+        >
+          {versions.map((v) => (
+            <DropdownMenuRadioItem key={v.version} value={String(v.version)}>
+              v{v.version}
+              {v.version === latest ? " (latest)" : ""}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function ClampedDescription({ text }: { text: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [clamped, setClamped] = useState(false);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (el) setClamped(el.scrollHeight > el.clientHeight);
+  }, [text]);
+
+  const inner = (
+    <div
+      ref={ref}
+      className="text-[0.75rem] leading-[1.4] overflow-hidden cursor-default"
+      style={{
+        color: "var(--ink-3)",
+        display: "-webkit-box",
+        WebkitLineClamp: 3,
+        WebkitBoxOrient: "vertical",
+      }}
+    >
+      {text}
+    </div>
+  );
+
+  if (!clamped) return inner;
+
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>{inner}</TooltipTrigger>
+        <TooltipContent side="top">{text}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
+export function TemplateStep({
+  selectedSlug,
+  onPick,
+  versions,
+  versionsLoading,
+  selectedVersion,
+  onVersionChange,
+}: {
+  selectedSlug: string | null;
+  onPick: (template: AgentTemplateRead) => void;
+  versions: AgentTemplateRead[];
+  versionsLoading: boolean;
+  selectedVersion: number | null;
+  onVersionChange: (version: number) => void;
+}) {
+  const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
+
+  const { templates, total, isLoading, error } = useTemplates({
+    search: search || undefined,
+    page,
+    pageSize: HIRE_DIALOG_PAGE_SIZE,
+  });
+
+  const totalPages = Math.max(1, Math.ceil(total / HIRE_DIALOG_PAGE_SIZE));
+
+
+  function handleSearchChange(value: string) {
+    setSearch(value);
+    setPage(1);
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div
+        className="flex items-center gap-2 px-3 py-2 rounded-xl"
+        style={{ border: "1px solid var(--line)", background: "var(--bg-elev)" }}
+      >
+        <SearchIcon size={14} style={{ color: "var(--ink-4)", flexShrink: 0 }} />
+        <input
+          className="flex-1 text-[0.8125rem] outline-none bg-transparent"
+          style={{ color: "var(--ink)" }}
+          placeholder="Search templates…"
+          value={search}
+          onChange={(e) => handleSearchChange(e.target.value)}
+        />
+      </div>
+
+      <div style={{ minHeight: "22rem" }}>
+      {isLoading && (
+        <div className="text-[0.8125rem] py-8 text-center" style={{ color: "var(--ink-3)" }}>
+          Loading templates…
         </div>
-      ))}
+      )}
+      {!isLoading && error && (
+        <div className="text-[0.8125rem] py-8 text-center" style={{ color: "var(--err)" }}>
+          Could not load templates. Please try again.
+        </div>
+      )}
+      {!isLoading && !error && templates.length === 0 && (
+        <div className="text-[0.8125rem] py-8 text-center" style={{ color: "var(--ink-3)" }}>
+          {search ? "No templates match." : "No templates yet. Create one in Settings → Templates first."}
+        </div>
+      )}
+
+      {!isLoading && !error && templates.length > 0 && (
+        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+          {templates.map((t) => (
+            <div
+              key={t.templateSlug}
+              className="flex flex-col gap-1.5 p-4 rounded-2xl cursor-default transition-colors min-h-[4.5rem]"
+              style={{
+                border: selectedSlug === t.templateSlug ? "1.5px solid var(--ink)" : "1.5px solid var(--line)",
+                background: selectedSlug === t.templateSlug ? "var(--bg-soft)" : "var(--bg-elev)",
+              }}
+              onClick={() => onPick(t)}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>{t.templateName}</div>
+                <TemplateSourceBadge source={t.templateSource} />
+              </div>
+              {t.description && <ClampedDescription text={t.description} />}
+              <div className="mt-1">
+                {selectedSlug === t.templateSlug ? (
+                  <div onClick={(e) => e.stopPropagation()}>
+                    {versionsLoading ? (
+                      <span className="text-[0.75rem]" style={{ color: "var(--ink-3)" }}>Loading…</span>
+                    ) : (
+                      <VersionSelect
+                        versions={versions}
+                        selectedVersion={selectedVersion}
+                        onChange={onVersionChange}
+                      />
+                    )}
+                  </div>
+                ) : (
+                  <div className="h-8" />
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      </div>
+
+      <div style={{ minHeight: "1.875rem" }}>
+        <Pagination page={page} totalPages={totalPages} onPageChange={setPage} />
+      </div>
     </div>
   );
 }
@@ -767,7 +958,7 @@ export function TeamsCredentialsStep({
 }
 
 export function DetailsStep({
-  selected,
+  template,
   platform,
   name,
   onNameChange,
@@ -777,17 +968,9 @@ export function DetailsStep({
   onSlackGroupPolicyChange,
   slackDmPolicy,
   onSlackDmPolicyChange,
-  soulMd,
-  onSoulMdChange,
-  identityMd,
-  onIdentityMdChange,
-  userMd,
-  onUserMdChange,
-  toolsMd,
-  onToolsMdChange,
-  onChangeRole,
+  onChangeTemplate,
 }: {
-  selected: (typeof ROLES)[number];
+  template: AgentTemplateRead;
   platform: "slack" | "teams";
   name: string;
   onNameChange: (v: string) => void;
@@ -797,37 +980,35 @@ export function DetailsStep({
   onSlackGroupPolicyChange: (v: string) => void;
   slackDmPolicy: string;
   onSlackDmPolicyChange: (v: string) => void;
-  soulMd: string;
-  onSoulMdChange: (v: string) => void;
-  identityMd: string;
-  onIdentityMdChange: (v: string) => void;
-  userMd: string;
-  onUserMdChange: (v: string) => void;
-  toolsMd: string;
-  onToolsMdChange: (v: string) => void;
-  onChangeRole: () => void;
+  onChangeTemplate: () => void;
 }) {
+  const [previewFile, setPreviewFile] = useState<TemplateFileKey>("soulMd");
   return (
     <div className="flex flex-col gap-5">
       <div
         className="flex items-center gap-3 p-4 rounded-2xl"
         style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
       >
-        <div className="text-2xl">{selected.emoji}</div>
+        <div className="text-2xl">🤖</div>
         <div className="flex-1">
-          <div className="font-semibold text-sm" style={{ color: "var(--ink)" }}>{selected.title}</div>
-          <div className="text-[0.8125rem]" style={{ color: "var(--ink-3)" }}>{selected.tagline}</div>
+          <div className="flex items-center gap-2">
+            <div className="font-semibold text-sm" style={{ color: "var(--ink)" }}>{template.templateName}</div>
+            <TemplateSourceBadge source={template.templateSource} />
+          </div>
+          <div className="text-[0.8125rem] font-mono" style={{ color: "var(--ink-3)" }}>
+            v{template.version}
+          </div>
         </div>
-        <button className="af-btn af-btn-sm af-btn-ghost" onClick={onChangeRole}>Change</button>
+        <button className="af-btn af-btn-sm af-btn-ghost" onClick={onChangeTemplate}>Change</button>
       </div>
 
-      <FormField label="Name them" hint={`Suggested: ${selected.suggested}`}>
+      <FormField label="Name them" hint="Suggested: Aria">
         <input
           className="af-input af-input-lg"
           aria-label="Name them"
           value={name}
           onChange={(e) => onNameChange(e.target.value)}
-          placeholder={selected.suggested}
+          placeholder="Aria"
         />
       </FormField>
 
@@ -878,22 +1059,35 @@ export function DetailsStep({
         >
           Review configuration files
         </summary>
-        <div className="p-4 flex flex-col gap-4" style={{ background: "var(--bg-soft)" }}>
+        <div className="p-4 flex flex-col gap-3" style={{ background: "var(--bg-soft)" }}>
           <div className="text-[0.781rem] leading-[1.5]" style={{ color: "var(--ink-3)" }}>
-            Pre-populated from the <span className="font-mono">{selected.id}</span> template. Edit before hiring to customise.
+            Read-only preview of <span className="font-mono">v{template.version}</span>.
+            {" "}<span className="font-mono">{"{{ … }}"}</span> placeholders are filled in when the agent starts.
+            To customise, edit the template in Settings → Templates.
           </div>
-          <FormField label="soul.md" hint="Core purpose and values — required">
-            <textarea className="af-input font-mono text-[0.781rem] leading-[1.65] resize-none" rows={7} value={soulMd} onChange={(e) => onSoulMdChange(e.target.value)} />
-          </FormField>
-          <FormField label="identity.md" hint="Voice, tone, and hard boundaries — required">
-            <textarea className="af-input font-mono text-[0.781rem] leading-[1.65] resize-none" rows={7} value={identityMd} onChange={(e) => onIdentityMdChange(e.target.value)} />
-          </FormField>
-          <FormField label="user.md" hint="Who this agent talks to">
-            <textarea className="af-input font-mono text-[0.781rem] leading-[1.65] resize-none" rows={5} value={userMd} onChange={(e) => onUserMdChange(e.target.value)} />
-          </FormField>
-          <FormField label="tools.md" hint="Available tools">
-            <textarea className="af-input font-mono text-[0.781rem] leading-[1.65] resize-none" rows={5} value={toolsMd} onChange={(e) => onToolsMdChange(e.target.value)} />
-          </FormField>
+          <div className="flex flex-wrap gap-1">
+            {TEMPLATE_FILE_KEYS.map((key) => (
+              <button
+                key={key}
+                type="button"
+                className="af-btn af-btn-sm"
+                style={{
+                  background: previewFile === key ? "var(--ink)" : undefined,
+                  color: previewFile === key ? "var(--bg)" : undefined,
+                }}
+                onClick={() => setPreviewFile(key)}
+              >
+                {templateFileLabel(key)}
+              </button>
+            ))}
+          </div>
+          <textarea
+            className="af-input font-mono text-[0.781rem] leading-[1.65] resize-none"
+            rows={10}
+            readOnly
+            aria-label={`${templateFileLabel(previewFile)} preview`}
+            value={template[previewFile]}
+          />
         </div>
       </details>
     </div>
@@ -1153,44 +1347,14 @@ export function SkillsStep({
 export function IntegrationsStep({
   integrations,
   onChange,
-  requiredGroups = [],
-  optionalText = "This step is optional — you can hire without any.",
 }: {
   integrations: IntegrationDraft[];
   onChange: (next: IntegrationDraft[]) => void;
-  requiredGroups?: readonly RequiredIntegrationGroup[];
-  optionalText?: string;
 }) {
   const [visible, setVisible] = useState<Record<string, boolean>>({});
 
   const usedProviders = new Set(integrations.map((i) => i.provider));
   const available = INTEGRATION_PROVIDERS.filter((p) => !usedProviders.has(p.id));
-
-  // Split required groups into individual AND requirements and OR groups.
-  const requiredAndSet = new Set(
-    requiredGroups.filter((g): g is string => typeof g === "string"),
-  );
-  const orGroups = requiredGroups.filter(
-    (g): g is readonly string[] => Array.isArray(g),
-  );
-
-  function getOrGroup(providerId: string): readonly string[] | undefined {
-    return orGroups.find((g) => g.includes(providerId));
-  }
-
-  // A provider can be removed if it's not an AND requirement and either it's
-  // optional (no OR group) or its OR group is still satisfied by another connected provider.
-  function canRemove(providerId: string): boolean {
-    if (requiredAndSet.has(providerId)) return false;
-    const orGroup = getOrGroup(providerId);
-    if (!orGroup) return true;
-    return orGroup.some((p) => p !== providerId && integrations.some((i) => i.provider === p));
-  }
-
-  // OR groups where no member is yet connected — these render as "connect one of" prompts.
-  const unsatisfiedOrGroups = orGroups.filter(
-    (group) => !group.some((p) => integrations.some((i) => i.provider === p)),
-  );
 
   function addProvider(id: string) {
     onChange([...integrations, { provider: id, content: {} }]);
@@ -1212,55 +1376,13 @@ export function IntegrationsStep({
     <div className="flex flex-col gap-5">
       <p className="text-[0.8125rem] leading-[1.5]" style={{ color: "var(--ink-3)" }}>
         Connect external tools your agent can use. Credentials are encrypted in the key vault.
-        {requiredGroups.length > 0
-          ? " This profile requires the integrations below — fill them in to continue."
-          : ` ${optionalText}`}
+        {" This step is optional — you can hire without any."}
       </p>
-
-      {/* Unsatisfied OR groups: show a "connect one of" picker card. */}
-      {unsatisfiedOrGroups.map((group) => (
-        <div
-          key={group.join("|")}
-          className="flex flex-col gap-3.5 p-4 rounded-2xl"
-          style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
-        >
-          <div className="flex items-center justify-between">
-            <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
-              Connect one of
-            </div>
-            <span
-              className="text-[0.6875rem] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full"
-              style={{ color: "var(--ink-3)", background: "var(--line)" }}
-            >
-              Required — one of
-            </span>
-          </div>
-          <div className="flex gap-2">
-            {group.map((id) => {
-              const p = getIntegrationProvider(id);
-              if (!p) return null;
-              return (
-                <button
-                  key={id}
-                  type="button"
-                  className="af-btn af-btn-sm flex items-center gap-1.5"
-                  onClick={() => addProvider(id)}
-                >
-                  <PlusIcon size={14} /> {p.label}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      ))}
 
       {/* Connected integrations. */}
       {integrations.map((draft) => {
         const provider = getIntegrationProvider(draft.provider);
         if (!provider) return null;
-        const isAnd = requiredAndSet.has(draft.provider);
-        const isOneOf = !isAnd && !!getOrGroup(draft.provider);
-        const removable = canRemove(draft.provider);
         return (
           <div
             key={draft.provider}
@@ -1271,23 +1393,14 @@ export function IntegrationsStep({
               <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
                 {provider.label}
               </div>
-              {removable ? (
-                <button
-                  type="button"
-                  className="af-btn af-btn-ghost af-btn-icon"
-                  onClick={() => removeProvider(draft.provider)}
-                  aria-label={`Remove ${provider.label}`}
-                >
-                  <XIcon size={15} />
-                </button>
-              ) : (
-                <span
-                  className="text-[0.6875rem] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full"
-                  style={{ color: "var(--ink-3)", background: "var(--line)" }}
-                >
-                  {isOneOf ? "Required (one of)" : isAnd ? "Required" : null}
-                </span>
-              )}
+              <button
+                type="button"
+                className="af-btn af-btn-ghost af-btn-icon"
+                onClick={() => removeProvider(draft.provider)}
+                aria-label={`Remove ${provider.label}`}
+              >
+                <XIcon size={15} />
+              </button>
             </div>
 
             {provider.fields.map((field) => {

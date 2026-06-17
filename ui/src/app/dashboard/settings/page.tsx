@@ -1,9 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { PROVIDERS, TEMPLATES } from "@/features/agents/data";
+import { PROVIDERS } from "@/features/agents/data";
+import { TemplatesPanel } from "@/features/agents/components/templates-panel";
 import { SkillsPanel } from "@/features/skills/components/skills-panel";
-import { PlusIcon, LockIcon, EyeIcon, ServerIcon, SearchIcon } from "@/components/icons";
+import { PlusIcon, LockIcon, ShieldIcon, EyeIcon, ServerIcon, SearchIcon } from "@/components/icons";
 
 type SectionKey =
   | "general"
@@ -17,28 +18,29 @@ type SectionKey =
   | "infra"
   | "advanced";
 
-const SECTIONS: [SectionKey, string, string][] = [
-  ["general", "General", "Your install's identity and defaults."],
-  ["team", "Team & access", "Operators who can manage agents."],
-  ["models", "Models", "Which LLMs your agents are allowed to use."],
-  ["providers", "Integrations", "Slack, GitHub, Jira and other third parties."],
-  ["templates", "Templates", "Reusable agent definitions."],
-  ["skills", "Skills", "Vetted tools your agents can call."],
-  ["budgets", "Budgets", "Spend caps and alerts."],
-  ["audit", "Audit log", "Searchable history of every conversation and tool call."],
-  ["infra", "Infrastructure", "Cluster, storage, and proxy details."],
-  ["advanced", "Advanced", "Power-user flags. Touch carefully."],
+// real: true = backed by API; false = mock UI kept in code but hidden from nav
+const SECTIONS: [SectionKey, string, string, boolean][] = [
+  ["general",   "General",         "Your install's identity and defaults.",                         false],
+  ["team",      "Team & access",   "Operators who can manage agents.",                              false],
+  ["models",    "Models",          "Which LLMs your agents are allowed to use.",                   false],
+  ["providers", "Integrations",    "Slack, GitHub, Jira and other third parties.",                 false],
+  ["templates", "Templates",       "Reusable agent definitions.",                                   true],
+  ["skills",    "Skills",          "Vetted tools your agents can call.",                           true],
+  ["budgets",   "Budgets",         "Spend caps and alerts.",                                       false],
+  ["audit",     "Audit log",       "Searchable history of every conversation and tool call.",      false],
+  ["infra",     "Infrastructure",  "Cluster, storage, and proxy details.",                         false],
+  ["advanced",  "Advanced",        "Power-user flags. Touch carefully.",                           false],
 ];
 
 export default function SettingsPage() {
-  const [tab, setTab] = useState<SectionKey>("general");
+  const [tab, setTab] = useState<SectionKey>("templates");
   const current = SECTIONS.find((s) => s[0] === tab)!;
 
   return (
     <div className="max-w-[1320px] mx-auto px-10 pt-9 pb-24">
       <div className="flex gap-8 items-start">
         <aside className="w-48 flex-shrink-0 sticky top-[77px]">
-          {SECTIONS.map(([k, l]) => (
+          {SECTIONS.filter(([,,,real]) => real).map(([k, l]) => (
             <button
               key={k}
               className="w-full text-left px-3 py-2 rounded-lg text-[13.5px] font-medium mb-0.5 transition-colors"
@@ -272,33 +274,6 @@ function ProvidersPanel() {
             </span>
           )}
           <button className="af-btn af-btn-sm af-btn-ghost">Manage</button>
-        </TableRow>
-      ))}
-    </div>
-  );
-}
-
-function TemplatesPanel() {
-  return (
-    <div>
-      <div className="mb-4">
-        <button className="af-btn af-btn-primary">
-          <PlusIcon /> New template
-        </button>
-      </div>
-      {TEMPLATES.map((t) => (
-        <TableRow key={t.id}>
-          <div className="flex-1">
-            <div className="font-medium text-[14px]" style={{ color: "var(--ink)" }}>
-              {t.name}{" "}
-              <span className="font-mono text-[12px] font-normal" style={{ color: "var(--ink-4)" }}>
-                · {t.slug}@{t.version}
-              </span>
-            </div>
-            <div className="text-[12.5px] mt-0.5" style={{ color: "var(--ink-3)" }}>{t.description}</div>
-          </div>
-          <span className="text-[12.5px]" style={{ color: "var(--ink-4)" }}>{t.activeAgents} in use</span>
-          <button className="af-btn af-btn-sm af-btn-ghost">Edit</button>
         </TableRow>
       ))}
     </div>

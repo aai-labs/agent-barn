@@ -20,15 +20,9 @@ export type CreateAgentData = {
   teamsAppId?: string;
   teamsAppPassword?: string;
   teamsTenantId?: string;
-  // Template
-  soulMd: string;
-  identityMd: string;
-  userMd?: string;
-  toolsMd?: string;
-  agentsMd?: string;
-  bootMd?: string;
-  bootstrapMd?: string;
-  heartbeatMd?: string;
+  // Template reference — pins to templateVersion if given, else latest.
+  templateSlug: string;
+  templateVersion?: number;
   model?: string;
   // Skills to assign on creation
   skillIds?: string[];
