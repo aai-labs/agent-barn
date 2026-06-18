@@ -35,6 +35,17 @@ class SkillRepository:
             )
             return session.exec(query).first()
 
+    def find_accessible_for_org(self, org_id: UUID) -> list[Skill]:
+        """Return all org-scoped + global skills without filtering or pagination."""
+        with Session(self.delegate.engine) as session:
+            query = select(Skill).where(
+                or_(
+                    col(Skill.organization_id) == org_id,
+                    col(Skill.organization_id).is_(None),
+                )
+            )
+            return list(session.exec(query).all())
+
     def find_all_for_org(
         self,
         org_id: UUID,
