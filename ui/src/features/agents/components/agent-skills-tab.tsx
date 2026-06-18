@@ -1,10 +1,13 @@
 "use client";
 
 import { useState } from "react";
+import { useDebouncedValue } from "@tanstack/react-pacer";
 
 import { AppErrorState } from "@/components/app-error-state";
+import { SearchIcon } from "@/components/icons";
 import { useSkills } from "@/features/skills/hooks/use-skills";
 import { SKILL_PROVIDER_LABELS } from "@/features/skills/utils";
+import { SkillSourceBadge } from "@/features/skills/components/skill-drawer";
 import type { Skill } from "@/features/skills/schemas";
 
 import {
@@ -23,7 +26,9 @@ interface AgentSkillsTabProps {
 }
 
 export function AgentSkillsTab({ agent, isRunning }: AgentSkillsTabProps) {
-  const { skills, isLoading, error, refetch } = useSkills();
+  const [search, setSearch] = useState("");
+  const [debouncedSearch] = useDebouncedValue(search, { wait: 300 });
+  const { skills, isLoading, error, refetch } = useSkills({ search: debouncedSearch || undefined, pageSize: 100 });
   const updateAgent = useUpdateAgent();
 
   const [pendingAddIds, setPendingAddIds] = useState<string[]>([]);
@@ -46,8 +51,6 @@ export function AgentSkillsTab({ agent, isRunning }: AgentSkillsTabProps) {
   const availableSkills = skills.filter(
     (s) => !assignedIds.has(s.id) && !pendingAddIds.includes(s.id),
   );
-  const platformAvailable = availableSkills.filter((s) => s.source === "aai_cli");
-  const customAvailable = availableSkills.filter((s) => s.source === "custom");
 
   const newlyRequiredProviderIds = [
     ...new Set(
@@ -353,37 +356,40 @@ export function AgentSkillsTab({ agent, isRunning }: AgentSkillsTabProps) {
       )}
 
       {/* Available skills to add */}
-      {availableSkills.length > 0 && (
-        <div className="flex flex-col gap-2">
-          <SectionLabel>Add skills</SectionLabel>
-          {platformAvailable.length > 0 && (
-            <>
-              <GroupLabel>Platform</GroupLabel>
-              {platformAvailable.map((skill) => (
-                <AvailableSkillRow
-                  key={skill.id}
-                  skill={skill}
-                  isRunning={isRunning}
-                  onAdd={() => addSkill(skill)}
-                />
-              ))}
-            </>
-          )}
-          {customAvailable.length > 0 && (
-            <>
-              <GroupLabel>Custom</GroupLabel>
-              {customAvailable.map((skill) => (
-                <AvailableSkillRow
-                  key={skill.id}
-                  skill={skill}
-                  isRunning={isRunning}
-                  onAdd={() => addSkill(skill)}
-                />
-              ))}
-            </>
-          )}
+      <div className="flex flex-col gap-2">
+        <SectionLabel>Add skills</SectionLabel>
+        <div
+          className="flex items-center gap-2 px-3 py-2 rounded-xl"
+          style={{ border: "1px solid var(--line)", background: "var(--bg-elev)" }}
+        >
+          <SearchIcon size={14} style={{ color: "var(--ink-4)", flexShrink: 0 }} />
+          <input
+            className="flex-1 text-[0.8125rem] outline-none bg-transparent"
+            style={{ color: "var(--ink)" }}
+            placeholder="Search skills…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
         </div>
-      )}
+        {isLoading && (
+          <div className="text-[0.8125rem] py-4 text-center" style={{ color: "var(--ink-3)" }}>
+            Loading…
+          </div>
+        )}
+        {!isLoading && availableSkills.length === 0 && (
+          <div className="text-[0.8125rem] py-4 text-center" style={{ color: "var(--ink-3)" }}>
+            {search ? "No skills match." : "No more skills to add."}
+          </div>
+        )}
+        {!isLoading && availableSkills.map((skill) => (
+          <AvailableSkillRow
+            key={skill.id}
+            skill={skill}
+            isRunning={isRunning}
+            onAdd={() => addSkill(skill)}
+          />
+        ))}
+      </div>
 
       {/* Save */}
       {hasPendingChanges && (
@@ -425,14 +431,6 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
-function GroupLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="text-[0.75rem] font-medium mt-1" style={{ color: "var(--ink-4)" }}>
-      {children}
-    </div>
-  );
-}
-
 function AssignedSkillRow({
   skill,
   isRunning,
@@ -447,20 +445,11 @@ function AssignedSkillRow({
       className="flex items-center gap-2 px-3.5 py-2.5 rounded-2xl"
       style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
     >
-      <div className="flex-1 min-w-0">
+      <div className="flex items-center gap-2 flex-1 min-w-0">
         <span className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>
           {skill.name}
         </span>
-        <span
-          className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium"
-          style={{
-            background: "var(--bg-elev)",
-            color: "var(--ink-4)",
-            border: "1px solid var(--line)",
-          }}
-        >
-          {skill.source === "aai_cli" ? "Platform" : "Custom"}
-        </span>
+        <SkillSourceBadge source={skill.source} />
       </div>
       <button
         className="af-btn af-btn-sm af-btn-ghost"
@@ -488,11 +477,14 @@ function AvailableSkillRow({
       style={{ border: "1px solid var(--line)" }}
     >
       <div className="flex-1 min-w-0">
-        <span className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>
-          {skill.name}
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>
+            {skill.name}
+          </span>
+          <SkillSourceBadge source={skill.source} />
+        </div>
         {skill.requiredProviders.length > 0 && (
-          <span className="text-[0.75rem] ml-2" style={{ color: "var(--ink-4)" }}>
+          <span className="text-[0.75rem]" style={{ color: "var(--ink-4)" }}>
             Requires:{" "}
             {skill.requiredProviders
               .map((p) => SKILL_PROVIDER_LABELS[p] ?? p)
