@@ -315,12 +315,17 @@ test.describe("Agent Detail Page — Skills tab", () => {
     await expect(agentDetailPage.removeSkillButton()).toBeVisible();
   });
 
-  test("shows available skills grouped by Platform and Custom", async ({ page }) => {
+  test("shows available skills with source badges", async ({ page }) => {
     await expect(page.getByText("Add skills")).toBeVisible();
-    await expect(page.getByText("Platform")).toBeVisible();
     await expect(page.getByText(mockPlatformSkill.name, { exact: true })).toBeVisible();
-    await expect(page.getByText("Custom")).toBeVisible();
     await expect(page.getByText(mockCustomSkill.name)).toBeVisible();
+    await expect(agentDetailPage.skillsSearchInput()).toBeVisible();
+  });
+
+  test("search filters available skills", async ({ page }) => {
+    await agentDetailPage.skillsSearchInput().fill(mockCustomSkill.name);
+    await expect(page.getByText(mockCustomSkill.name)).toBeVisible();
+    await expect(page.getByText(mockPlatformSkill.name, { exact: true })).not.toBeVisible();
   });
 
   test("adding a skill moves it to the pending Assigned section", async ({ page }) => {

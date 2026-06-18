@@ -327,13 +327,20 @@ test.describe("Hire Dialog — Skills step", () => {
     await expect(page.getByText(/step 6 of 6/i)).toBeVisible();
   });
 
-  test("shows platform and custom skill groups", async ({ page }) => {
+  test("shows skills as cards with source badges and search input", async ({ page }) => {
     await navigateToSkillsStep(page);
 
-    await expect(page.getByText("Platform", { exact: true })).toBeVisible();
     await expect(page.getByText(mockPlatformSkill.name, { exact: true })).toBeVisible();
-    await expect(page.getByText("Custom", { exact: true })).toBeVisible();
     await expect(page.getByText(mockCustomSkill.name, { exact: true })).toBeVisible();
+    await expect(page.getByPlaceholder("Search skills…")).toBeVisible();
+  });
+
+  test("search filters skills", async ({ page }) => {
+    await navigateToSkillsStep(page);
+
+    await page.getByPlaceholder("Search skills…").fill(mockCustomSkill.name);
+    await expect(page.getByText(mockCustomSkill.name, { exact: true })).toBeVisible();
+    await expect(page.getByText(mockPlatformSkill.name, { exact: true })).not.toBeVisible();
   });
 
   test("shows empty state when no skills are available", async ({ page }) => {
@@ -348,8 +355,7 @@ test.describe("Hire Dialog — Skills step", () => {
   test("selecting a skill with required providers reveals credentials section", async ({ page }) => {
     await navigateToSkillsStep(page);
 
-    // Check the github skill (has requiredProviders: ["github"])
-    await page.getByLabel(mockPlatformSkill.name).check();
+    await page.getByText(mockPlatformSkill.name, { exact: true }).click();
 
     await expect(page.getByText("Required credentials", { exact: true })).toBeVisible();
     await expect(page.getByPlaceholder(/github_pat_/)).toBeVisible();
@@ -358,7 +364,7 @@ test.describe("Hire Dialog — Skills step", () => {
   test("hire button is disabled when selected skill has incomplete credentials", async ({ page }) => {
     await navigateToSkillsStep(page);
 
-    await page.getByLabel(mockPlatformSkill.name).check();
+    await page.getByText(mockPlatformSkill.name, { exact: true }).click();
 
     // GitHub requires token + repo URL; both empty → button disabled
     await expect(page.getByRole("button", { name: /hire aria/i })).toBeDisabled();
@@ -373,10 +379,10 @@ test.describe("Hire Dialog — Skills step", () => {
   test("deselecting a skill removes its credentials section", async ({ page }) => {
     await navigateToSkillsStep(page);
 
-    await page.getByLabel(mockPlatformSkill.name).check();
+    await page.getByText(mockPlatformSkill.name, { exact: true }).click();
     await expect(page.getByText("Required credentials", { exact: true })).toBeVisible();
 
-    await page.getByLabel(mockPlatformSkill.name).uncheck();
+    await page.getByText(mockPlatformSkill.name, { exact: true }).click();
     await expect(page.getByText("Required credentials", { exact: true })).not.toBeVisible();
   });
 });

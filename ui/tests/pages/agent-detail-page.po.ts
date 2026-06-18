@@ -57,6 +57,10 @@ export class AgentDetailPage {
     return this.page.getByRole("button", { name: /^skills$/i });
   }
 
+  skillsSearchInput(): Locator {
+    return this.page.getByPlaceholder("Search skills…");
+  }
+
   addSkillButton(): Locator {
     return this.page.getByRole("button", { name: "Add" });
   }
