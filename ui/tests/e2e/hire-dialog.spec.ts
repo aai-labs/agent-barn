@@ -114,10 +114,15 @@ test.describe("Hire Dialog", () => {
     await page.getByPlaceholder(/xoxb-/i).fill("xoxb-test");
     await page.getByRole("button", { name: /continue/i }).click();
 
-    await expect(page.getByRole("combobox", { name: /model/i })).toBeVisible();
-    await expect(page.getByRole("combobox", { name: /model/i })).toHaveValue("litellm/qwen3.6-plus");
-    await expect(page.getByRole("option", { name: /qwen3\.6 plus/i })).toBeAttached();
-    await expect(page.getByRole("option", { name: /gpt-5 mini/i })).toBeAttached();
+    // The model picker is a searchable combobox: the trigger button shows the
+    // default model's label, and options render once it is opened.
+    const modelTrigger = page.getByRole("button", { name: /model/i });
+    await expect(modelTrigger).toBeVisible();
+    await expect(modelTrigger).toContainText(/qwen3\.6 plus/i);
+
+    await modelTrigger.click();
+    await expect(page.getByRole("option", { name: /qwen3\.6 plus/i })).toBeVisible();
+    await expect(page.getByRole("option", { name: /gpt-5 mini/i })).toBeVisible();
   });
 
   test("should populate agent name from slack bot name", async ({ page }) => {

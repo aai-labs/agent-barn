@@ -12,6 +12,14 @@ spec:
       {{- include "agentfarm-api.selectorLabels" . | nindent 6 }}
   template:
     metadata:
+      annotations:
+        # Roll the pods when secret-sourced env (envFrom) changes; a Secret update
+        # alone does not alter the pod template. Inline env vars already roll on change.
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        # Also roll on kubeconfig secret changes (mounted as a volume). The
+        # litellm-api-key secret is created by a Job at runtime, so it has no
+        # render-time content to checksum and is intentionally not tracked here.
+        checksum/kubeconfig: {{ include (print $.Template.BasePath "/kubeconfig-secret.yaml") . | sha256sum }}
       labels:
         {{- include "agentfarm-api.selectorLabels" . | nindent 8 }}
     spec:
@@ -45,6 +53,16 @@ spec:
               value: "{{ .Values.agentLitellmBaseUrl }}"
             - name: AGENT_IMAGE_PULL_SECRET
               value: "{{ .Values.agentImagePullSecret }}"
+            - name: AGENT_MODEL_ALLOWLIST
+              value: "{{ .Values.agentModelAllowlist }}"
+            {{- if .Values.agentDefaultModel }}
+            - name: AGENT_DEFAULT_MODEL
+              value: "{{ .Values.agentDefaultModel }}"
+            {{- end }}
+            {{- if .Values.storageClass }}
+            - name: STORAGE_CLASS
+              value: "{{ .Values.storageClass }}"
+            {{- end }}
           volumeMounts:
             - name: kubeconfig
               mountPath: /etc/kubeconfig
