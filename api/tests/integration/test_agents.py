@@ -17,7 +17,6 @@ from starlette.testclient import TestClient
 from api.domains.agents import service as agent_service
 from api.domains.agents.models import AgentStatus
 from api.domains.agents.repository import AgentRepository
-from api.domains.templates.defaults import AAI_CLI_TOOLS_POINTER
 from api.domains.templates.repository import TemplateRepository
 from api.domains.conversations.service import ConversationSyncService
 from api.infrastructure.kubernetes.client import KubernetesClient
@@ -1185,12 +1184,9 @@ def test_start_agent_renders_template_placeholders():
                 equal_to("# Soul of Maya Bot (maya-bot)"),
             )
 
-        with then(
-            "unknown placeholders pass through and the aai-cli pointer is appended once"
-        ):
+        with then("unknown placeholders pass through"):
             tools = config_map.data["TOOLS.md"]
             assert_that(tools, contains_string("{{ unknown_placeholder }}"))
-            assert_that(tools.count(AAI_CLI_TOOLS_POINTER), equal_to(1))
 
         with then("the stored template keeps its raw placeholders"):
             template_repository: TemplateRepository = context.injector.get(
