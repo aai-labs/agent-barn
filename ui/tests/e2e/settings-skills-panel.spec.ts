@@ -29,7 +29,12 @@ test.describe("Settings — Skills panel", () => {
     ).toBeVisible();
   });
 
-  test("shows New skill button", async ({ page }) => {
+  test("shows search input and source filter", async ({ page }) => {
+    await expect(page.getByLabel("Search skills")).toBeVisible();
+    await expect(page.getByLabel("Filter by source")).toBeVisible();
+  });
+
+  test("shows New skill button right-aligned in toolbar", async ({ page }) => {
     await expect(page.getByRole("button", { name: /new skill/i })).toBeVisible();
   });
 
@@ -43,27 +48,57 @@ test.describe("Settings — Skills panel", () => {
     await expect(page.getByText("my-tool")).toBeVisible();
   });
 
-  test("platform skill has no edit or delete buttons", async ({ page }) => {
-    // Only the custom skill row has Edit and Delete buttons
-    await expect(page.getByRole("button", { name: "Edit" })).toHaveCount(1);
-    await expect(page.getByRole("button", { name: "Delete" })).toHaveCount(1);
-    // The Platform badge appears next to the platform skill
-    await expect(page.locator("span").filter({ hasText: /^Platform$/ })).toBeVisible();
+  test("both platform and custom skill rows have only a View button", async ({ page }) => {
+    await expect(page.getByRole("button", { name: "View" })).toHaveCount(2);
+    await expect(page.getByRole("button", { name: "Edit" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Delete" })).toHaveCount(0);
   });
 
-  test("custom skill shows Edit and Delete buttons", async ({ page }) => {
-    await expect(page.getByRole("button", { name: "Edit" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Delete" })).toBeVisible();
+  test("search filters the list", async ({ page }) => {
+    await page.getByLabel("Search skills").fill("github");
+
+    await expect(page.getByText("github", { exact: true })).toBeVisible();
+    await expect(page.getByText("my-tool")).not.toBeVisible();
   });
 
-  test("clicking New skill opens create dialog", async ({ page }) => {
+  test("source filter narrows to platform skills", async ({ page }) => {
+    await page.getByLabel("Filter by source").click();
+    await page.getByRole("menuitemradio", { name: "Platform" }).click();
+
+    await expect(page.getByText("github", { exact: true })).toBeVisible();
+    await expect(page.getByText("my-tool")).not.toBeVisible();
+  });
+
+  test("source filter narrows to custom skills", async ({ page }) => {
+    await page.getByLabel("Filter by source").click();
+    await page.getByRole("menuitemradio", { name: "Custom" }).click();
+
+    await expect(page.getByText("my-tool")).toBeVisible();
+    await expect(page.getByText("github", { exact: true })).not.toBeVisible();
+  });
+
+  test("search with no matches shows 'No skills match'", async ({ page }) => {
+    await page.getByLabel("Search skills").fill("xyznonexistent");
+
+    await expect(page.getByText("No skills match.")).toBeVisible();
+  });
+
+  test("clicking View on platform skill opens the drawer in read-only mode", async ({ page }) => {
+    await page.getByRole("button", { name: "View" }).click();
+
+    await expect(page.getByRole("heading", { name: "github" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Close" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Save changes" })).not.toBeVisible();
+  });
+
+  test("clicking New skill opens create drawer", async ({ page }) => {
     await page.getByRole("button", { name: /new skill/i }).click();
 
     await expect(page.getByRole("heading", { name: "New skill" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Create skill" })).toBeVisible();
   });
 
-  test("create skill dialog shows file error when submitted without a zip", async ({ page }) => {
+  test("create skill drawer shows file error when submitted without a zip", async ({ page }) => {
     await page.getByRole("button", { name: /new skill/i }).click();
     await page.getByPlaceholder("e.g. my-tool").fill("test-skill");
     await page.getByRole("button", { name: "Create skill" }).click();
@@ -71,7 +106,7 @@ test.describe("Settings — Skills panel", () => {
     await expect(page.getByText("A zip file is required.")).toBeVisible();
   });
 
-  test("create skill dialog can be cancelled", async ({ page }) => {
+  test("create skill drawer can be cancelled", async ({ page }) => {
     await page.getByRole("button", { name: /new skill/i }).click();
     await expect(page.getByRole("heading", { name: "New skill" })).toBeVisible();
 
@@ -80,32 +115,47 @@ test.describe("Settings — Skills panel", () => {
     await expect(page.getByRole("heading", { name: "New skill" })).not.toBeVisible();
   });
 
-  test("clicking Edit opens dialog pre-populated with skill name", async ({ page }) => {
-    await page.getByRole("button", { name: "Edit" }).click();
+  test("clicking View on custom skill opens drawer with Edit skill and Delete buttons", async ({
+    page,
+  }) => {
+    // Custom skill is the second View button (platform is first)
+    await page.getByRole("button", { name: "View" }).nth(1).click();
+
+    await expect(page.getByRole("heading", { name: mockCustomSkill.name })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Edit skill" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Delete" })).toBeVisible();
+  });
+
+  test("clicking Edit skill in drawer shows edit form pre-populated with skill name", async ({
+    page,
+  }) => {
+    await page.getByRole("button", { name: "View" }).nth(1).click();
+    await page.getByRole("button", { name: "Edit skill" }).click();
 
     await expect(page.getByText("Edit skill")).toBeVisible();
     await expect(page.getByPlaceholder("e.g. my-tool")).toHaveValue(mockCustomSkill.name);
   });
 
-  test("edit dialog shows hint to keep existing zip", async ({ page }) => {
-    await page.getByRole("button", { name: "Edit" }).click();
+  test("edit form in drawer shows hint to keep existing zip", async ({ page }) => {
+    await page.getByRole("button", { name: "View" }).nth(1).click();
+    await page.getByRole("button", { name: "Edit skill" }).click();
 
     await expect(page.getByText("Leave empty to keep the existing zip.")).toBeVisible();
   });
 
-  test("clicking Delete shows confirmation row", async ({ page }) => {
+  test("clicking Delete in drawer shows confirmation", async ({ page }) => {
+    await page.getByRole("button", { name: "View" }).nth(1).click();
     await page.getByRole("button", { name: "Delete" }).click();
 
     await expect(
       page.getByText(`Delete ${mockCustomSkill.name}? This cannot be undone.`),
     ).toBeVisible();
     await expect(page.getByRole("button", { name: "Cancel" })).toBeVisible();
-    await expect(
-      page.getByRole("button", { name: "Delete", exact: true }),
-    ).toBeVisible();
+    await expect(page.getByRole("button", { name: "Delete", exact: true })).toBeVisible();
   });
 
-  test("cancelling delete restores the normal skill row", async ({ page }) => {
+  test("cancelling delete in drawer returns to view mode", async ({ page }) => {
+    await page.getByRole("button", { name: "View" }).nth(1).click();
     await page.getByRole("button", { name: "Delete" }).click();
     await expect(
       page.getByText(`Delete ${mockCustomSkill.name}? This cannot be undone.`),
@@ -116,15 +166,14 @@ test.describe("Settings — Skills panel", () => {
     await expect(
       page.getByText(`Delete ${mockCustomSkill.name}? This cannot be undone.`),
     ).not.toBeVisible();
-    await expect(page.getByRole("button", { name: "Edit" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Edit skill" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Delete" })).toBeVisible();
   });
 
-  test("confirming delete calls the delete API and removes the skill", async ({ page }) => {
+  test("confirming delete calls the delete API and closes the drawer", async ({ page }) => {
     await dataSupportPage.skills.interceptDeleteSkillRequest({
       skillId: MOCK_CUSTOM_SKILL_ID,
     });
-    // After delete, re-intercept GET to return only the platform skill
     await dataSupportPage.skills.interceptGetSkillsRequest({
       body: [
         {
@@ -140,6 +189,7 @@ test.describe("Settings — Skills panel", () => {
       ],
     });
 
+    await page.getByRole("button", { name: "View" }).nth(1).click();
     await page.getByRole("button", { name: "Delete" }).click();
     await page.getByRole("button", { name: "Delete", exact: true }).click();
 
@@ -155,6 +205,7 @@ test.describe("Settings — Skills panel (empty state)", () => {
 
     await dataSupportPage.auth.interceptRefreshRequest();
     await dataSupportPage.users.interceptGetUserContextRequest();
+    await dataSupportPage.agents.interceptGetTemplatesRequest();
     await dataSupportPage.skills.interceptGetSkillsRequest({ body: [] });
 
     await page.goto("/dashboard/settings");
@@ -171,6 +222,7 @@ test.describe("Settings — Skills panel (empty state)", () => {
 
     await dataSupportPage.auth.interceptRefreshRequest();
     await dataSupportPage.users.interceptGetUserContextRequest();
+    await dataSupportPage.agents.interceptGetTemplatesRequest();
     await dataSupportPage.skills.interceptGetSkillsRequest({
       status: 500,
       detail: "Skills service unavailable",
