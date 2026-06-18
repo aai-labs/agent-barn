@@ -68,6 +68,7 @@ def build_slack_app_manifest(
         },
         "oauth_config": {
             "scopes": {"bot": list(BOT_SCOPES)},
+            "pkce_enabled": False,
         },
         "settings": {
             "event_subscriptions": {"bot_events": list(BOT_EVENTS)},
@@ -75,5 +76,6 @@ def build_slack_app_manifest(
             "org_deploy_enabled": False,
             "socket_mode_enabled": True,
             "token_rotation_enabled": False,
+            "is_mcp_enabled": False,
         },
     }

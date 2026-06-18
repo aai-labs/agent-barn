@@ -5,33 +5,9 @@ from fastapi import HTTPException, status
 
 from api.infrastructure.slack.transport import request_json
 
-_BASE = "https://slack.com/api"
+from api.infrastructure.slack.manifest import BOT_EVENTS, BOT_SCOPES
 
-_VALIDATION_MANIFEST: dict = {
-    "display_information": {
-        "name": "Agent Farm Validation",
-        "description": "Temporary manifest validation",
-    },
-    "features": {
-        "app_home": {
-            "home_tab_enabled": False,
-            "messages_tab_enabled": True,
-            "messages_tab_read_only_enabled": False,
-        },
-        "bot_user": {
-            "display_name": "Agent Farm Validation",
-            "always_online": False,
-        },
-    },
-    "oauth_config": {"scopes": {"bot": ["chat:write"]}},
-    "settings": {
-        "event_subscriptions": {"bot_events": ["message.im"]},
-        "interactivity": {"is_enabled": True},
-        "org_deploy_enabled": False,
-        "socket_mode_enabled": True,
-        "token_rotation_enabled": False,
-    },
-}
+_BASE = "https://slack.com/api"
 
 
 def _post_form(token: str, method: str, data: dict[str, str]) -> dict:
@@ -73,11 +49,40 @@ def validate_config_access_token(token: str) -> None:
             ),
         )
 
+    manifest = {
+        "display_information": {
+            "name": "Agent Farm Validation",
+            "description": "Temporary manifest validation",
+        },
+        "features": {
+            "app_home": {
+                "home_tab_enabled": False,
+                "messages_tab_enabled": True,
+                "messages_tab_read_only_enabled": False,
+            },
+            "bot_user": {
+                "display_name": "Agent Farm Validation",
+                "always_online": False,
+            },
+        },
+        "oauth_config": {
+            "scopes": {"bot": list(BOT_SCOPES)},
+            "pkce_enabled": False,
+        },
+        "settings": {
+            "event_subscriptions": {"bot_events": list(BOT_EVENTS)},
+            "interactivity": {"is_enabled": True},
+            "org_deploy_enabled": False,
+            "socket_mode_enabled": True,
+            "token_rotation_enabled": False,
+            "is_mcp_enabled": False,
+        },
+    }
     try:
         body = _post_form(
             token,
             "apps.manifest.validate",
-            {"manifest": json.dumps(_VALIDATION_MANIFEST)},
+            {"manifest": json.dumps(manifest)},
         )
     except Exception as exc:
         raise HTTPException(
