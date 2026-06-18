@@ -16,6 +16,9 @@ spec:
         # Roll the pods when the mounted config.yaml changes (a ConfigMap update
         # alone does not alter the pod template, so it would otherwise go unnoticed).
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        # Roll the pods when the envFrom secret changes (master key, OpenRouter
+        # key, db url); a Secret update alone does not alter the pod template.
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
       labels:
         {{- include "litellm.selectorLabels" . | nindent 8 }}
     spec:
