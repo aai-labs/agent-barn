@@ -14,7 +14,7 @@ export function useDeleteAgent() {
       await api.delete(`/api/v1/agents/${agentId}`);
     },
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: agentsKey.all });
+      void queryClient.invalidateQueries({ queryKey: agentsKey.lists() });
     },
   });
 }

@@ -13,14 +13,9 @@ export type UpdateAgentData = {
   model?: string;
   slackBotToken?: string;
   slackAppToken?: string;
-  soulMd?: string;
-  identityMd?: string;
-  userMd?: string;
-  toolsMd?: string;
-  agentsMd?: string;
-  bootMd?: string;
-  bootstrapMd?: string;
-  heartbeatMd?: string;
+  // Re-pin the agent to a different template version (both required together).
+  templateSlug?: string;
+  templateVersion?: number;
   slackChannelIds?: string[];
   slackDmUserIds?: string[];
   slackGroupPolicy?: "open" | "allowlist";

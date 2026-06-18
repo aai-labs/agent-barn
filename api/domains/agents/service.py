@@ -37,15 +37,6 @@ from api.domains.agents.builders import (
     build_secret_teams,
     build_service,
 )
-from api.domains.agents.defaults import (
-    AAI_CLI_TOOLS_POINTER,
-    DEFAULT_AGENTS_MD,
-    DEFAULT_BOOT_MD,
-    DEFAULT_BOOTSTRAP_MD,
-    DEFAULT_HEARTBEAT_MD,
-    DEFAULT_TOOLS_MD,
-    DEFAULT_USER_MD,
-)
 from api.domains.agents.models import (
     PROVIDER_DISPLAY_NAMES,
     Agent,
@@ -55,14 +46,13 @@ from api.domains.agents.models import (
     AgentPlatform,
     AgentRead,
     AgentSecret,
+    AgentSecretCreate,
     AgentSecretRead,
     AgentSlackConfig,
     AgentSlackConfigRead,
     AgentStatus,
     AgentTeamsConfig,
     AgentTeamsConfigRead,
-    AgentTemplate,
-    AgentTemplateRead,
     AgentType,
     AgentUpdate,
     PairRequest,
@@ -74,6 +64,9 @@ from api.domains.agents.models import (
 from api.domains.agents.error_messages import friendly_k8s_error, friendly_pod_reason
 from api.domains.agents.repository import AgentRepository
 from api.domains.auth.models import CurrentUserContext
+from api.domains.templates.models import TemplateRead
+from api.domains.templates.renderer import render_template
+from api.domains.templates.repository import TemplateRepository
 from api.domains.conversations.service import ConversationSyncService
 from api.domains.tool_calls.sync_service import ToolCallSyncService
 from api.infrastructure.crypto import decrypt_token, encrypt_token
@@ -81,8 +74,7 @@ from api.infrastructure.kubernetes.client import KubernetesClient
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 from api.infrastructure.slack.client import (
     SlackClient,
-    validate_app_token,
-    validate_bot_token,
+    SlackFetchError,
 )
 
 logger = logging.getLogger(__name__)
@@ -94,19 +86,6 @@ logger = logging.getLogger(__name__)
 _STOP_SYNC_TIMEOUT_SECONDS = 20
 _stop_sync_pool = concurrent.futures.ThreadPoolExecutor(
     max_workers=4, thread_name_prefix="agent-stop-sync"
-)
-
-_MD_FIELDS = frozenset(
-    {
-        "soul_md",
-        "identity_md",
-        "user_md",
-        "tools_md",
-        "agents_md",
-        "boot_md",
-        "bootstrap_md",
-        "heartbeat_md",
-    }
 )
 
 _SLACK_CONFIG_FIELDS = frozenset(
@@ -167,6 +146,7 @@ def is_model_allowed(model: str, allowlist: str) -> bool:
 @dataclass
 class AgentService:
     repository: AgentRepository
+    template_repository: TemplateRepository
     k8s: KubernetesClient
     litellm: LiteLLMClient
     openrouter: OpenRouterClient
@@ -225,7 +205,7 @@ class AgentService:
             platform=agent.platform,
             agent_type=agent.agent_type,
             organization_id=agent.organization_id,
-            template_id=agent.template_id,
+            template_slug=agent.template_slug,
             template_version=agent.template_version,
             model=agent.model,
             slack_config=slack_config_read,
@@ -261,14 +241,32 @@ class AgentService:
                     status_code=status.HTTP_400_BAD_REQUEST, detail=reason
                 )
 
+        # Pin to the requested version, or the lineage's latest if unspecified.
+        if data.template_version is not None:
+            template = self.template_repository.get_template_by_slug_and_version(
+                org_id, data.template_slug, data.template_version
+            )
+            missing_detail = (
+                f"Template {data.template_slug} v{data.template_version} not found"
+            )
+        else:
+            template = self.template_repository.get_latest_template(
+                org_id, data.template_slug
+            )
+            missing_detail = f"Template {data.template_slug} not found"
+        if template is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail=missing_detail
+            )
+
         agent = Agent(
             organization_id=org_id,
             name=data.name,
             model=data.model or "",
             platform=data.platform,
             agent_type=data.agent_type,
-            template_id=None,  # ty: ignore[invalid-argument-type]
-            template_version=0,
+            template_slug=template.template_slug,
+            template_version=template.version,
         )
 
         if self.config.litellm_base_url and self.config.litellm_secret_name:
@@ -283,26 +281,7 @@ class AgentService:
                     detail="LiteLLM key generation failed; cannot create agent.",
                 ) from exc
 
-        template = AgentTemplate(
-            organization_id=org_id,
-            version=1,
-            soul_md=data.soul_md,
-            identity_md=data.identity_md,
-            user_md=data.user_md or DEFAULT_USER_MD,
-            tools_md=(data.tools_md or DEFAULT_TOOLS_MD) + AAI_CLI_TOOLS_POINTER,
-            agents_md=data.agents_md or DEFAULT_AGENTS_MD,
-            boot_md=data.boot_md or DEFAULT_BOOT_MD,
-            bootstrap_md=data.bootstrap_md or DEFAULT_BOOTSTRAP_MD,
-            heartbeat_md=data.heartbeat_md or DEFAULT_HEARTBEAT_MD,
-        )
-        self.repository.save_template(template)
-
-        agent.template_id = template.id
-        agent.template_version = template.version
         self.repository.save(agent)
-
-        template.agent_id = agent.id
-        self.repository.save_template(template)
 
         slack_config = None
         teams_config = None
@@ -373,18 +352,18 @@ class AgentService:
 
     def get_agent_template(
         self, agent_id: UUID, version: int, context: CurrentUserContext
-    ) -> AgentTemplateRead:
+    ) -> TemplateRead:
         org_id = self._org_id(context)
-        self._get_active_or_404(agent_id, org_id)
-        template = self.repository.get_template_by_agent_and_version(
-            agent_id, version, org_id
+        agent = self._get_active_or_404(agent_id, org_id)
+        template = self.template_repository.get_template_by_slug_and_version(
+            org_id, agent.template_slug, version
         )
         if not template:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Template version {version} not found for agent {agent_id}",
             )
-        return AgentTemplateRead.model_validate(template)
+        return TemplateRead.model_validate(template)
 
     def list_agents(
         self,
@@ -448,24 +427,22 @@ class AgentService:
                 detail="Cannot set Teams fields on a Slack agent",
             )
 
-        if _MD_FIELDS & updated.keys():
-            old_template = self.repository.get_template(agent.template_id)
-            new_template = AgentTemplate(
-                organization_id=org_id,
-                agent_id=agent.id,
-                version=old_template.version + 1,
-                soul_md=updated.get("soul_md", old_template.soul_md),
-                identity_md=updated.get("identity_md", old_template.identity_md),
-                user_md=updated.get("user_md", old_template.user_md),
-                tools_md=updated.get("tools_md", old_template.tools_md),
-                agents_md=updated.get("agents_md", old_template.agents_md),
-                boot_md=updated.get("boot_md", old_template.boot_md),
-                bootstrap_md=updated.get("bootstrap_md", old_template.bootstrap_md),
-                heartbeat_md=updated.get("heartbeat_md", old_template.heartbeat_md),
+        # Re-pin the agent to a different template (slug, version). The model
+        # validator guarantees both keys appear together.
+        if "template_slug" in updated:
+            target = self.template_repository.get_template_by_slug_and_version(
+                org_id, updated["template_slug"], updated["template_version"]
             )
-            self.repository.save_template(new_template)
-            agent.template_id = new_template.id
-            agent.template_version = new_template.version
+            if target is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=(
+                        f"Template {updated['template_slug']} "
+                        f"v{updated['template_version']} not found"
+                    ),
+                )
+            agent.template_slug = target.template_slug
+            agent.template_version = target.version
 
         if "name" in updated:
             agent.name = updated["name"]
@@ -534,16 +511,23 @@ class AgentService:
 
         # Integration secrets: platform-independent. Remove first, then upsert
         # (the AgentUpdate validator already forbids a provider in both lists).
-        if "removed_secret_providers" in updated:
-            for provider in updated["removed_secret_providers"] or []:
-                self.repository.delete_secret(agent.id, provider)
-        if "secrets" in updated:
+        # Validate and encrypt all upserts before touching the DB so that a
+        # validation failure never leaves already-deleted secrets permanently gone.
+        if "removed_secret_providers" in updated or "secrets" in updated:
             key = self.config.agent_token_encryption_key
-            for item in data.secrets or []:
-                content = validate_content(item.provider, item.content)
+            upserts: list[tuple[AgentSecretCreate, str]] = [
+                (
+                    item,
+                    encrypt_content(validate_content(item.provider, item.content), key),
+                )
+                for item in data.secrets or []
+            ]
+            for provider in updated.get("removed_secret_providers") or []:
+                self.repository.delete_secret(agent.id, provider)
+            for item, encrypted in upserts:
                 existing = self.repository.get_secret(agent.id, item.provider)
                 if existing:
-                    existing.content = encrypt_content(content, key)
+                    existing.content = encrypted
                     existing.secret_name = PROVIDER_DISPLAY_NAMES[item.provider]
                     self.repository.save_secret(existing)
                 else:
@@ -552,7 +536,7 @@ class AgentService:
                             agent_id=agent.id,
                             provider=item.provider,
                             secret_name=PROVIDER_DISPLAY_NAMES[item.provider],
-                            content=encrypt_content(content, key),
+                            content=encrypted,
                         )
                     )
 
@@ -569,7 +553,11 @@ class AgentService:
                 detail=f"Agent {agent_id} is already running",
             )
 
-        template = self.repository.get_template(agent.template_id)
+        template = self.template_repository.get_template_or_raise(
+            org_id, agent.template_slug, agent.template_version
+        )
+        # Placeholders are kept raw in storage and rendered at seed time.
+        rendered = render_template(template, agent.name)
         ns = self.config.k8s_namespace
 
         name = f"agent-{agent.id}"
@@ -615,20 +603,9 @@ class AgentService:
                 hermes_cfg = build_hermes_config(
                     effective_model,
                     self.config.agent_litellm_base_url,
+                    dm_policy=str(slack_config.dm_policy),
+                    group_policy=str(slack_config.group_policy),
                 )
-                config_map = build_hermes_config_map(
-                    agent_id=agent.id,
-                    org_id=org_id,
-                    namespace=ns,
-                    soul_md=template.soul_md,
-                    identity_md=template.identity_md,
-                    user_md=template.user_md,
-                    tools_md=template.tools_md,
-                    agents_md=template.agents_md,
-                    boot_md=template.boot_md,
-                    heartbeat_md=template.heartbeat_md,
-                    hermes_config=hermes_cfg,
-                )  # rebuilt with aai-cli kwargs below
                 secret = build_secret_hermes_slack(
                     agent_id=agent.id,
                     org_id=org_id,
@@ -641,6 +618,7 @@ class AgentService:
                     api_server_key=api_server_key,
                     channel_ids=slack_config.channel_ids,
                     dm_user_ids=slack_config.dm_user_ids,
+                    dm_policy=str(slack_config.dm_policy),
                 )
                 deployment = build_hermes_deployment(
                     agent.id,
@@ -666,20 +644,6 @@ class AgentService:
                     slack_app_token=app_token,
                     litellm_api_key=litellm_key,
                     litellm_base_url=self.config.agent_litellm_base_url,
-                )
-                config_map = build_config_map(
-                    agent_id=agent.id,
-                    org_id=org_id,
-                    namespace=ns,
-                    soul_md=template.soul_md,
-                    identity_md=template.identity_md,
-                    user_md=template.user_md,
-                    tools_md=template.tools_md,
-                    agents_md=template.agents_md,
-                    boot_md=template.boot_md,
-                    bootstrap_md=template.bootstrap_md,
-                    heartbeat_md=template.heartbeat_md,
-                    openclaw_config_overlay=overlay,
                 )
                 deployment = build_deployment(
                     agent.id,
@@ -717,20 +681,6 @@ class AgentService:
                 litellm_base_url=self.config.agent_litellm_base_url,
             )
             service = build_service(agent.id, org_id, ns, include_webhook_port=True)
-            config_map = build_config_map(
-                agent_id=agent.id,
-                org_id=org_id,
-                namespace=ns,
-                soul_md=template.soul_md,
-                identity_md=template.identity_md,
-                user_md=template.user_md,
-                tools_md=template.tools_md,
-                agents_md=template.agents_md,
-                boot_md=template.boot_md,
-                bootstrap_md=template.bootstrap_md,
-                heartbeat_md=template.heartbeat_md,
-                openclaw_config_overlay=overlay,
-            )
             deployment = build_deployment(
                 agent.id,
                 org_id,
@@ -776,13 +726,13 @@ class AgentService:
                 agent_id=agent.id,
                 org_id=org_id,
                 namespace=ns,
-                soul_md=template.soul_md,
-                identity_md=template.identity_md,
-                user_md=template.user_md,
-                tools_md=template.tools_md,
-                agents_md=template.agents_md,
-                boot_md=template.boot_md,
-                heartbeat_md=template.heartbeat_md,
+                soul_md=rendered.soul_md,
+                identity_md=rendered.identity_md,
+                user_md=rendered.user_md,
+                tools_md=rendered.tools_md,
+                agents_md=rendered.agents_md,
+                boot_md=rendered.boot_md,
+                heartbeat_md=rendered.heartbeat_md,
                 hermes_config=hermes_cfg,
                 aai_cli_config_toml=aai_config_toml,
                 aai_cli_setup_sh=aai_setup_sh,
@@ -793,14 +743,14 @@ class AgentService:
                 agent_id=agent.id,
                 org_id=org_id,
                 namespace=ns,
-                soul_md=template.soul_md,
-                identity_md=template.identity_md,
-                user_md=template.user_md,
-                tools_md=template.tools_md,
-                agents_md=template.agents_md,
-                boot_md=template.boot_md,
-                bootstrap_md=template.bootstrap_md,
-                heartbeat_md=template.heartbeat_md,
+                soul_md=rendered.soul_md,
+                identity_md=rendered.identity_md,
+                user_md=rendered.user_md,
+                tools_md=rendered.tools_md,
+                agents_md=rendered.agents_md,
+                boot_md=rendered.boot_md,
+                bootstrap_md=rendered.bootstrap_md,
+                heartbeat_md=rendered.heartbeat_md,
                 openclaw_config_overlay=overlay,
                 aai_cli_config_toml=aai_config_toml,
                 aai_cli_setup_sh=aai_setup_sh,
@@ -959,12 +909,13 @@ class AgentService:
         """Validates whichever tokens are provided. Always ok when skip_slack_token_validation is set."""
         if self.config.skip_slack_token_validation:
             return True, ""
+        client = SlackClient(bot_token or "", app_token=app_token)
         if bot_token is not None:
-            ok, reason = validate_bot_token(bot_token)
+            ok, reason = client.validate_bot_token()
             if not ok:
                 return ok, reason
         if app_token is not None:
-            ok, reason = validate_app_token(app_token)
+            ok, reason = client.validate_app_token()
             if not ok:
                 return ok, reason
         return True, ""
@@ -1023,7 +974,16 @@ class AgentService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Slack channels are only available for Slack agents",
             )
-        return SlackClient(self._get_bot_token(agent)).list_channels(search=search)
+        try:
+            return SlackClient(self._get_bot_token(agent)).list_channels(search=search)
+        except SlackFetchError as exc:
+            logger.warning(
+                "Failed to list Slack channels for agent %s: %s", agent_id, exc
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Could not load Slack channels right now. Please try again.",
+            ) from exc
 
     def list_slack_users(
         self, agent_id: UUID, context: CurrentUserContext, search: str | None = None
@@ -1035,7 +995,14 @@ class AgentService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Slack users are only available for Slack agents",
             )
-        return SlackClient(self._get_bot_token(agent)).list_users(search=search)
+        try:
+            return SlackClient(self._get_bot_token(agent)).list_users(search=search)
+        except SlackFetchError as exc:
+            logger.warning("Failed to list Slack users for agent %s: %s", agent_id, exc)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Could not load Slack users right now. Please try again.",
+            ) from exc
 
     def _get_bot_token(self, agent: Agent) -> str:
         slack_config = self.repository.get_slack_config(agent.id)

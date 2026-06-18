@@ -74,7 +74,7 @@ Commands under `aai-cli confluence pages attachments`. For global flags and erro
 List attachments on a page. Returns trimmed attachment objects (UI links and verbose metadata stripped).
 
 ```
-aai-cli confluence pages attachments list <PAGE_ID> [--limit N]
+aai-cli confluence pages attachments list <PAGE_ID> [--limit N] --profile confluence-work
 ```
 
 | Argument / Flag | Required | Description |
@@ -85,7 +85,7 @@ aai-cli confluence pages attachments list <PAGE_ID> [--limit N]
 **Example**
 
 ```
-aai-cli confluence pages attachments list 3964929 --limit 5
+aai-cli confluence pages attachments list 3964929 --limit 5 --profile confluence-work
 ```
 
 ```json
@@ -120,7 +120,7 @@ Use `id` from this response as `<ATTACHMENT_ID>` in the download command.
 Download an attachment's binary content to a local file. Requires both the page ID and attachment ID.
 
 ```
-aai-cli confluence pages attachments download <PAGE_ID> <ATTACHMENT_ID> --output <PATH>
+aai-cli confluence pages attachments download <PAGE_ID> <ATTACHMENT_ID> --output <PATH> --profile confluence-work
 ```
 
 | Argument / Flag | Required | Description |
@@ -132,7 +132,7 @@ aai-cli confluence pages attachments download <PAGE_ID> <ATTACHMENT_ID> --output
 **Example**
 
 ```
-aai-cli confluence pages attachments download 3964929 att3997705 --output /tmp/skill_doc_downloaded.txt
+aai-cli confluence pages attachments download 3964929 att3997705 --output /tmp/skill_doc_downloaded.txt --profile confluence-work
 ```
 
 ```json
@@ -149,7 +149,7 @@ aai-cli confluence pages attachments download 3964929 att3997705 --output /tmp/s
 Upload a local file as an attachment to a page. If an attachment with the same filename already exists on the page, a new version of that attachment is created.
 
 ```
-aai-cli confluence pages attachments upload <PAGE_ID> --file <PATH> [--comment TEXT]
+aai-cli confluence pages attachments upload <PAGE_ID> --file <PATH> [--comment TEXT] --profile confluence-work
 ```
 
 | Argument / Flag | Required | Description |
@@ -163,7 +163,7 @@ Returns the created attachment object (first element of the Confluence v1 `resul
 **Example**
 
 ```
-aai-cli confluence pages attachments upload 3964929 --file /tmp/skill_doc_test.txt --comment "Uploaded for skill doc test"
+aai-cli confluence pages attachments upload 3964929 --file /tmp/skill_doc_test.txt --comment "Uploaded for skill doc test" --profile confluence-work
 ```
 
 ```json
@@ -210,7 +210,7 @@ Commands under `aai-cli confluence pages comments`. For global flags and error s
 List comments on a page. Returns `page_comments` (top-level and threaded replies) and `inline_comments`. Avatar URLs and UI-only links are stripped.
 
 ```
-aai-cli confluence pages comments list <PAGE_ID> [--limit N]
+aai-cli confluence pages comments list <PAGE_ID> [--limit N] --profile confluence-work
 ```
 
 | Argument / Flag | Required | Description |
@@ -221,7 +221,7 @@ aai-cli confluence pages comments list <PAGE_ID> [--limit N]
 **Example**
 
 ```
-aai-cli confluence pages comments list 3964929 --limit 10
+aai-cli confluence pages comments list 3964929 --limit 10 --profile confluence-work
 ```
 
 ```json
@@ -276,7 +276,7 @@ aai-cli confluence pages comments list 3964929 --limit 10
 Add a comment to a page. Use `--body` for plain text (stored as Confluence storage format), or `--json` for a pre-built body. Use `--reply-to` to create a nested reply to an existing comment.
 
 ```
-aai-cli confluence pages comments create <PAGE_ID> [--body TEXT] [--reply-to COMMENT_ID]
+aai-cli confluence pages comments create <PAGE_ID> [--body TEXT] [--reply-to COMMENT_ID] --profile confluence-work
                                          [--json JSON_OR_PATH]
 ```
 
@@ -290,7 +290,7 @@ aai-cli confluence pages comments create <PAGE_ID> [--body TEXT] [--reply-to COM
 **Example — top-level comment**
 
 ```
-aai-cli confluence pages comments create 3964929 --body "This is a skill doc test comment."
+aai-cli confluence pages comments create 3964929 --body "This is a skill doc test comment." --profile confluence-work
 ```
 
 ```json
@@ -320,7 +320,7 @@ aai-cli confluence pages comments create 3964929 --body "This is a skill doc tes
 **Example — reply to an existing comment**
 
 ```
-aai-cli confluence pages comments create 3964929 --body "This is a reply comment." --reply-to 4063233
+aai-cli confluence pages comments create 3964929 --body "This is a reply comment." --reply-to 4063233 --profile confluence-work
 ```
 
 ```json
@@ -364,7 +364,7 @@ Commands under `aai-cli confluence pages`. For global flags and error shapes see
 List pages with optional filters. All filter flags are optional and AND-joined.
 
 ```
-aai-cli confluence pages list [--space KEY_OR_ID] [--title TEXT] [--status STATUS]
+aai-cli confluence pages list [--space KEY_OR_ID] [--title TEXT] [--status STATUS] --profile confluence-work
                               [--parent-id ID] [--limit N]
 ```
 
@@ -379,7 +379,7 @@ aai-cli confluence pages list [--space KEY_OR_ID] [--title TEXT] [--status STATU
 **Example — space + status + limit**
 
 ```
-aai-cli confluence pages list --space SD --status current --limit 3
+aai-cli confluence pages list --space SD --status current --limit 3 --profile confluence-work
 ```
 
 ```json
@@ -440,7 +440,7 @@ aai-cli confluence pages list --space SD --status current --limit 3
 Fetch a single page by ID. Returns the full raw API response including the page body in storage format.
 
 ```
-aai-cli confluence pages get <PAGE_ID>
+aai-cli confluence pages get <PAGE_ID> --profile confluence-work
 ```
 
 | Argument | Required | Description |
@@ -450,7 +450,7 @@ aai-cli confluence pages get <PAGE_ID>
 **Example**
 
 ```
-aai-cli confluence pages get 3964929
+aai-cli confluence pages get 3964929 --profile confluence-work
 ```
 
 ```json
@@ -497,7 +497,7 @@ aai-cli confluence pages get 3964929
 Create a new page. Either `--space-key` or `--space-id` must be provided. Use `--json` to pass a full Confluence create body; individual flags override matching JSON fields.
 
 ```
-aai-cli confluence pages create [--json JSON_OR_PATH] [--space-key KEY] [--space-id ID]
+aai-cli confluence pages create [--json JSON_OR_PATH] [--space-key KEY] [--space-id ID] --profile confluence-work
                                 [--title TEXT] [--body TEXT] [--parent-id ID]
 ```
 
@@ -513,7 +513,7 @@ aai-cli confluence pages create [--json JSON_OR_PATH] [--space-key KEY] [--space
 **Example — with space key, title, body, and parent**
 
 ```
-aai-cli confluence pages create --space-key SD --title "aai-cli skill doc child page" --body "Child page body." --parent-id 3964929
+aai-cli confluence pages create --space-key SD --title "aai-cli skill doc child page" --body "Child page body." --parent-id 3964929 --profile confluence-work
 ```
 
 ```json
@@ -560,7 +560,7 @@ aai-cli confluence pages create --space-key SD --title "aai-cli skill doc child 
 Update an existing page. The command auto-fetches the current page version before submitting — you do not need to pass the current version number. Only the flags you pass are changed; omitted flags leave the field untouched.
 
 ```
-aai-cli confluence pages update <PAGE_ID> [--json JSON_OR_PATH] [--title TEXT]
+aai-cli confluence pages update <PAGE_ID> [--json JSON_OR_PATH] [--title TEXT] --profile confluence-work
                                 [--body TEXT] [--version N]
 ```
 
@@ -575,7 +575,7 @@ aai-cli confluence pages update <PAGE_ID> [--json JSON_OR_PATH] [--title TEXT]
 **Example — update title and body**
 
 ```
-aai-cli confluence pages update 3964929 --title "aai-cli skill doc test page (updated)" --body "Updated body content for skill documentation."
+aai-cli confluence pages update 3964929 --title "aai-cli skill doc test page (updated)" --body "Updated body content for skill documentation." --profile confluence-work
 ```
 
 ```json
@@ -628,7 +628,7 @@ List Confluence spaces with optional filters. All filter flags are optional and 
 Multi-value flags accept comma-separated strings.
 
 ```
-aai-cli confluence spaces list [--key KEYS] [--type TYPE] [--status STATUS] [--limit N]
+aai-cli confluence spaces list [--key KEYS] [--type TYPE] [--status STATUS] [--limit N] --profile confluence-work
 ```
 
 | Flag | Required | Type | Description |
@@ -641,7 +641,7 @@ aai-cli confluence spaces list [--key KEYS] [--type TYPE] [--status STATUS] [--l
 **Example — filter by key**
 
 ```
-aai-cli confluence spaces list --key SD
+aai-cli confluence spaces list --key SD --profile confluence-work
 ```
 
 ```json
@@ -668,7 +668,7 @@ aai-cli confluence spaces list --key SD
 Fetch a single space by key. Returns the full raw API response.
 
 ```
-aai-cli confluence spaces get <SPACE_KEY>
+aai-cli confluence spaces get <SPACE_KEY> --profile confluence-work
 ```
 
 | Argument | Required | Description |
@@ -678,7 +678,7 @@ aai-cli confluence spaces get <SPACE_KEY>
 **Example**
 
 ```
-aai-cli confluence spaces get SD
+aai-cli confluence spaces get SD --profile confluence-work
 ```
 
 ```json

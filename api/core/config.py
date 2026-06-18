@@ -40,6 +40,10 @@ class Config(BaseSettings):
     api_external_url: str = ""
     skip_slack_token_validation: bool = False
     slack_directory_cache_ttl_seconds: int = 600
+    # Socket timeout for Slack Web API calls. Large sweeps (e.g. users.list can be
+    # ~320KB) are slow over a poor link; too tight a timeout cuts the body off
+    # mid-stream (IncompleteRead). Generous default; in-cluster latency is low.
+    slack_request_timeout_seconds: int = 30
 
     openrouter_api_key: str = ""
     openrouter_base_url: str = "https://openrouter.ai/api/v1"

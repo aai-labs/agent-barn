@@ -1,18 +1,3 @@
-
-export interface AgentTemplate {
-  id: string;
-  slug: string;
-  name: string;
-  description: string;
-  version: string;
-  versions: string[];
-  surfaces: string[];
-  skills: string[];
-  files: number;
-  seededBy: string;
-  activeAgents: number;
-}
-
 export interface Skill {
   id: string;
   name: string;

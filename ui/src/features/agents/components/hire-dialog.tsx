@@ -4,16 +4,24 @@ import { useState, useEffect, useRef } from "react";
 import { XIcon, CheckIcon } from "@/components/icons";
 import { useCreateAgent } from "../hooks/use-create-agent";
 import { useStartAgent } from "../hooks/use-start-agent";
+import { useTemplateVersions } from "../hooks/use-template-versions";
 import { DialogShell } from "./hire-dialog-primitives";
 import {
-  ROLES, RoleId, WizardStep, pickDefaults,
-  RoleStep, AgentTypeStep, PlatformChoiceStep, SlackChoiceStep, BotBuilderStep, SlackTokensStep,
+  WizardStep,
+  TemplateStep, AgentTypeStep, PlatformChoiceStep, SlackChoiceStep, BotBuilderStep, SlackTokensStep,
   TeamsBotBuilderStep, TeamsCredentialsStep, DetailsStep, IntegrationsStep,
   downloadTeamsAppPackage, generateTeamsManifest,
 } from "./hire-dialog-steps";
 import { SlackConfigPanel } from "./slack-config-panel";
-import { hasIncompleteIntegration, type IntegrationDraft } from "../integrations";
-import type { Agent } from "../schemas";
+import {
+  hasIncompleteIntegration,
+  expandGithubContent,
+  type IntegrationDraft,
+} from "../integrations";
+import type { Agent, AgentTemplateRead } from "../schemas";
+
+const DEFAULT_AGENT_NAME = "Aria";
+const DEFAULT_BOT_DESCRIPTION = "Handles tasks and reduces day-to-day friction.";
 
 interface HireDialogProps {
   onClose: () => void;
@@ -32,15 +40,15 @@ const PROVISION_STEPS = [
 function getSteps(agentType: "openclaw" | "hermes", platform: "slack" | "teams", setupNewBot: boolean): WizardStep[] {
   if (agentType === "hermes") {
     return setupNewBot
-      ? ["role", "agent-type", "slack-choice", "bot-builder", "slack-tokens", "details", "integrations"]
-      : ["role", "agent-type", "slack-choice", "slack-tokens", "details", "integrations"];
+      ? ["template", "agent-type", "slack-choice", "bot-builder", "slack-tokens", "details", "integrations"]
+      : ["template", "agent-type", "slack-choice", "slack-tokens", "details", "integrations"];
   }
   if (platform === "teams") {
-    return ["role", "agent-type", "platform-choice", "teams-credentials", "teams-bot-builder", "details", "integrations"];
+    return ["template", "agent-type", "platform-choice", "teams-credentials", "teams-bot-builder", "details", "integrations"];
   }
   return setupNewBot
-    ? ["role", "agent-type", "platform-choice", "slack-choice", "bot-builder", "slack-tokens", "details", "integrations"]
-    : ["role", "agent-type", "platform-choice", "slack-choice", "slack-tokens", "details", "integrations"];
+    ? ["template", "agent-type", "platform-choice", "slack-choice", "bot-builder", "slack-tokens", "details", "integrations"]
+    : ["template", "agent-type", "platform-choice", "slack-choice", "slack-tokens", "details", "integrations"];
 }
 
 function stepOrdinal(step: WizardStep, agentType: "openclaw" | "hermes", platform: "slack" | "teams", setupNewBot: boolean): string {
@@ -50,7 +58,7 @@ function stepOrdinal(step: WizardStep, agentType: "openclaw" | "hermes", platfor
 
 function stepTitle(step: WizardStep): string {
   switch (step) {
-    case "role": return "What kind of teammate do you need?";
+    case "template": return "What kind of teammate do you need?";
     case "agent-type": return "Choose your agent runtime";
     case "platform-choice": return "Choose your platform";
     case "slack-choice": return "Set up your Slack app";
@@ -67,15 +75,15 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   const createAgent = useCreateAgent();
   const startAgent = useStartAgent();
 
-  const [step, setStep] = useState<WizardStep>("role");
-  const [pick, setPick] = useState<RoleId>("default");
-  const defaults = pickDefaults("default");
-  const [name, setName] = useState<string>(defaults.name);
+  const [step, setStep] = useState<WizardStep>("template");
+  const [selectedTemplate, setSelectedTemplate] = useState<AgentTemplateRead | null>(null);
+  const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
+  const [name, setName] = useState<string>(DEFAULT_AGENT_NAME);
   const [model, setModel] = useState<string>("");
   const [platform, setPlatform] = useState<"slack" | "teams">("slack");
   const [setupNewBot, setSetupNewBot] = useState(true);
-  const [botName, setBotName] = useState<string>(defaults.botName);
-  const [botDescription, setBotDescription] = useState<string>(defaults.botDescription);
+  const [botName, setBotName] = useState<string>(DEFAULT_AGENT_NAME);
+  const [botDescription, setBotDescription] = useState<string>(DEFAULT_BOT_DESCRIPTION);
   const [botColor, setBotColor] = useState("#4A154B");
   const [slackAppToken, setSlackAppToken] = useState("");
   const [slackBotToken, setSlackBotToken] = useState("");
@@ -90,16 +98,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   const [showTeamsAppPassword, setShowTeamsAppPassword] = useState(false);
   const [teamsTenantId, setTeamsTenantId] = useState("");
   const [teamsTokenError, setTeamsTokenError] = useState<string | null>(null);
-  const [soulMd, setSoulMd] = useState(defaults.soulMd);
-  const [identityMd, setIdentityMd] = useState(defaults.identityMd);
-  const [userMd, setUserMd] = useState(defaults.userMd);
-  const [toolsMd, setToolsMd] = useState(defaults.toolsMd);
-  const [agentsMd, setAgentsMd] = useState(defaults.agentsMd);
-  const [bootMd, setBootMd] = useState(defaults.bootMd);
-  const [heartbeatMd, setHeartbeatMd] = useState(defaults.heartbeatMd);
-  const [integrations, setIntegrations] = useState<IntegrationDraft[]>(
-    defaults.requiredIntegrations.map((p) => ({ provider: p, content: {} })),
-  );
+  const [integrations, setIntegrations] = useState<IntegrationDraft[]>([]);
   const [provisioning, setProvisioning] = useState(false);
   const [progress, setProgress] = useState(0);
   const [provisionError, setProvisionError] = useState<string | null>(null);
@@ -109,23 +108,21 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   const apiDoneRef = useRef(false);
   const errorRef = useRef(false);
 
-  const selected = ROLES.find((r) => r.id === pick)!;
+  const effectiveTemplate = selectedTemplate;
+  const { versions, isLoading: versionsLoading } = useTemplateVersions(
+    effectiveTemplate?.templateSlug,
+  );
+  // The chosen version (defaults to latest = versions[0]). The full row for the
+  // resolved version drives the preview + submit.
+  const resolvedVersion =
+    selectedVersion ?? versions[0]?.version ?? effectiveTemplate?.version ?? null;
+  const versionTemplate =
+    versions.find((v) => v.version === resolvedVersion) ?? effectiveTemplate;
+  const roleLabel = effectiveTemplate?.templateName ?? "Agent";
 
-  function handlePickRole(roleId: RoleId) {
-    const d = pickDefaults(roleId);
-    setPick(roleId);
-    setName(d.name);
-    setBotName(d.botName);
-    setBotDescription(d.botDescription);
-    setSoulMd(d.soulMd);
-    setIdentityMd(d.identityMd);
-    setUserMd(d.userMd);
-    setToolsMd(d.toolsMd);
-    setAgentsMd(d.agentsMd);
-    setBootMd(d.bootMd);
-    setHeartbeatMd(d.heartbeatMd);
-    // Seed required integrations for this profile (e.g. Scrum Master → jira + confluence).
-    setIntegrations(d.requiredIntegrations.map((p) => ({ provider: p, content: {} })));
+  function handlePickTemplate(template: AgentTemplateRead) {
+    setSelectedTemplate(template);
+    setSelectedVersion(null); // reset to the new lineage's latest
   }
 
   function handleTeamsBotNameChange(value: string) {
@@ -161,35 +158,25 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   }
 
   async function startHiring() {
+    if (!effectiveTemplate) return;
     setProvisioning(true);
     setProvisionError(null);
     progressRef.current = 0;
     apiDoneRef.current = false;
     errorRef.current = false;
 
-    // Substitute {{ … }} profile placeholders with concrete values at submit time.
-    const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
-    const vars: Record<string, string> = {
-      agent_display_name: name,
-      agent_name: slug || "agent",
-      slack_app_display_name: botName || name,
-      deploy_date: new Date().toISOString().slice(0, 10),
-    };
-    const fill = (s: string) =>
-      s.replace(/\{\{\s*(\w+)\s*\}\}/g, (m, key) => (key in vars ? vars[key] : m));
-
     try {
+      // Templates are stored raw; {{ … }} placeholders render server-side
+      // when the agent starts.
       const agent = await createAgent.mutateAsync({
         name, model, platform,
         agentType,
-        soulMd: fill(soulMd),
-        identityMd: fill(identityMd),
-        userMd: fill(userMd),
-        toolsMd: fill(toolsMd),
-        agentsMd: fill(agentsMd),
-        bootMd: fill(bootMd),
-        heartbeatMd: fill(heartbeatMd),
-        secrets: integrations.map((i) => ({ provider: i.provider, content: i.content })),
+        templateSlug: effectiveTemplate.templateSlug,
+        ...(resolvedVersion != null ? { templateVersion: resolvedVersion } : {}),
+        secrets: integrations.map((i) => ({
+          provider: i.provider,
+          content: i.provider === "github" ? expandGithubContent(i.content) : i.content,
+        })),
         ...(platform === "slack"
           ? { slackBotToken, slackAppToken, slackGroupPolicy, slackDmPolicy }
           : { teamsAppId, teamsAppPassword, teamsTenantId }),
@@ -238,7 +225,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
                 Set up the messaging endpoint
               </h2>
             </div>
-            <button className="af-btn af-btn-ghost af-btn-icon" onClick={() => onHired({ name, role: selected.title })}>
+            <button className="af-btn af-btn-ghost af-btn-icon" onClick={() => onHired({ name, role: roleLabel })}>
               <XIcon />
             </button>
           </header>
@@ -286,7 +273,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
           >
             <button
               className="af-btn af-btn-primary"
-              onClick={() => onHired({ name, role: selected.title })}
+              onClick={() => onHired({ name, role: roleLabel })}
             >
               Done
             </button>
@@ -309,7 +296,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
               Set up Slack access
             </h2>
           </div>
-          <button className="af-btn af-btn-ghost af-btn-icon" onClick={() => onHired({ name, role: selected.title })}>
+          <button className="af-btn af-btn-ghost af-btn-icon" onClick={() => onHired({ name, role: roleLabel })}>
             <XIcon />
           </button>
         </header>
@@ -321,7 +308,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
             agent={createdAgent}
             onSaved={() => {
               void startAgent.mutateAsync(createdAgent.id).then(() => {
-                onHired({ name, role: selected.title });
+                onHired({ name, role: roleLabel });
               });
             }}
           />
@@ -334,7 +321,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
             className="af-btn af-btn-ghost"
             onClick={() => {
               void startAgent.mutateAsync(createdAgent.id).then(() => {
-                onHired({ name, role: selected.title });
+                onHired({ name, role: roleLabel });
               });
             }}
           >
@@ -349,7 +336,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
     return (
       <DialogShell shadeClick={undefined}>
         <div className="flex flex-col items-center text-center py-12 px-8">
-          <div className="text-6xl mb-6">{selected.emoji}</div>
+          <div className="text-6xl mb-6">🤖</div>
           <h2 className="text-2xl font-semibold tracking-tight mb-2" style={{ color: "var(--ink)" }}>
             Hiring {name}…
           </h2>
@@ -429,7 +416,16 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
       </header>
 
       <div className="flex-1 overflow-y-auto p-6">
-        {step === "role" && <RoleStep pick={pick} onPick={handlePickRole} />}
+        {step === "template" && (
+          <TemplateStep
+            selectedSlug={effectiveTemplate?.templateSlug ?? null}
+            onPick={handlePickTemplate}
+            versions={versions}
+            versionsLoading={versionsLoading}
+            selectedVersion={resolvedVersion}
+            onVersionChange={setSelectedVersion}
+          />
+        )}
         {step === "agent-type" && <AgentTypeStep agentType={agentType} onChange={handleAgentTypeChange} />}
         {step === "platform-choice" && <PlatformChoiceStep platform={platform} onChange={setPlatform} />}
         {step === "slack-choice" && <SlackChoiceStep setupNewBot={setupNewBot} onChange={setSetupNewBot} />}
@@ -472,26 +468,21 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
             error={teamsTokenError}
           />
         )}
-        {step === "details" && (
+        {step === "details" && versionTemplate && (
           <DetailsStep
-            selected={selected}
+            template={versionTemplate}
             platform={platform}
             name={name} onNameChange={setName}
             model={model} onModelChange={setModel}
             slackGroupPolicy={slackGroupPolicy} onSlackGroupPolicyChange={(v) => setSlackGroupPolicy(v as "open" | "allowlist")}
             slackDmPolicy={slackDmPolicy} onSlackDmPolicyChange={(v) => setSlackDmPolicy(v as "off" | "open" | "allowlist")}
-            soulMd={soulMd} onSoulMdChange={setSoulMd}
-            identityMd={identityMd} onIdentityMdChange={setIdentityMd}
-            userMd={userMd} onUserMdChange={setUserMd}
-            toolsMd={toolsMd} onToolsMdChange={setToolsMd}
-            onChangeRole={() => setStep("role")}
+            onChangeTemplate={() => setStep("template")}
           />
         )}
         {step === "integrations" && (
           <IntegrationsStep
             integrations={integrations}
             onChange={setIntegrations}
-            requiredProviders={selected.requiredIntegrations}
           />
         )}
       </div>
@@ -500,14 +491,18 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
         className="px-6 py-4 flex items-center justify-between flex-shrink-0"
         style={{ borderTop: "1px solid var(--line)" }}
       >
-        {step === "role" ? (
+        {step === "template" ? (
           <button className="af-btn af-btn-ghost" onClick={onClose}>Cancel</button>
         ) : (
           <button className="af-btn" onClick={handleBack}>Back</button>
         )}
 
-        {step === "role" && (
-          <button className="af-btn af-btn-primary af-btn-lg" onClick={() => setStep("agent-type")}>
+        {step === "template" && (
+          <button
+            className="af-btn af-btn-primary af-btn-lg"
+            disabled={!effectiveTemplate}
+            onClick={() => setStep("agent-type")}
+          >
             Continue
           </button>
         )}
@@ -567,13 +562,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
         {step === "integrations" && (
           <button
             className="af-btn af-btn-primary af-btn-lg"
-            disabled={
-              !name.trim() ||
-              hasIncompleteIntegration(integrations) ||
-              selected.requiredIntegrations.some(
-                (p) => !integrations.some((i) => i.provider === p),
-              )
-            }
+            disabled={!name.trim() || hasIncompleteIntegration(integrations)}
             onClick={() => { void startHiring(); }}
           >
             Hire {name}

@@ -1,9 +1,12 @@
 import { createQueryKeyStructure } from "@/shared/query-keys";
 
 export const AGENTS_PAGE_SIZE = 50;
+export const TEMPLATES_PAGE_SIZE = 50;
 export const CONVERSATION_MESSAGES_PAGE_SIZE = 6;
 export const TOOL_CALLS_PAGE_SIZE = 20;
 const _agentsKeyBase = createQueryKeyStructure("agents");
+
+export const templatesKey = createQueryKeyStructure("templates");
 
 export type ConversationsFiltersKey = {
   fromDate: string;

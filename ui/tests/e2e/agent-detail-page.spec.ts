@@ -119,7 +119,7 @@ test.describe("Agent Detail Page — Tool calls tab", () => {
     await expect(page.getByRole("columnheader", { name: /tool/i })).toBeVisible();
   });
 
-  test("renders tool calls returned by the API", async ({ page }) => {
+  test("renders tool calls returned by the API", async () => {
     await agentDetailPage.toolCallsTab().click();
 
     const row = agentDetailPage.toolCallRow("read");
@@ -166,7 +166,7 @@ test.describe("Agent Detail Page — Tool calls tab", () => {
     await expect(agentDetailPage.toolCallRow("read")).toBeVisible();
   });
 
-  test("status badge renders for PENDING and ERROR tool calls", async ({ page }) => {
+  test("status badge renders for PENDING and ERROR tool calls", async () => {
     const pendingCall = { ...mockToolCall, id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", tool_name: "bash", status: "PENDING", result: null, completed_at: null, duration_ms: null };
     const errorCall = { ...mockToolCall, id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", tool_name: "write", status: "ERROR" };
 
@@ -179,6 +179,53 @@ test.describe("Agent Detail Page — Tool calls tab", () => {
 
     await expect(agentDetailPage.toolCallRow("bash").getByText("Pending")).toBeVisible();
     await expect(agentDetailPage.toolCallRow("write").getByText("Error")).toBeVisible();
+  });
+});
+
+test.describe("Agent Detail Page — Template tab (re-pin)", () => {
+  test.describe.configure({ mode: "serial" });
+  let agentDetailPage: AgentDetailPage;
+  let dataSupportPage: DataSupport;
+
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  test.beforeEach(async ({ page }) => {
+    agentDetailPage = new AgentDetailPage(page);
+    dataSupportPage = new DataSupport(page);
+
+    await dataSupportPage.auth.interceptRefreshRequest();
+    await dataSupportPage.users.interceptGetUserContextRequest();
+    // Stopped agent so the re-pin controls are enabled.
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, status: "STOPPED" },
+    });
+    await dataSupportPage.agents.interceptGetAgentTemplateRequest();
+    await dataSupportPage.agents.interceptGetTemplatesRequest();
+    await dataSupportPage.agents.interceptGetTemplateVersionsRequest();
+    await dataSupportPage.agents.interceptUpdateAgentRequest();
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.configureButton().click();
+  });
+
+  test("re-pins the agent to a browsed template + version", async ({ page }) => {
+    // Pick a different lineage, choose v1, and apply.
+    await page.getByRole("button", { name: /Scrum Master/ }).click();
+    await page.getByLabel("Version").click();
+    await page.getByRole("menuitemradio", { name: "v1" }).click();
+
+    const patchPromise = page.waitForRequest(
+      (req) =>
+        req.url().includes(`/api/v1/agents/${MOCK_AGENT_ID}`) &&
+        req.method() === "PATCH",
+    );
+    await page.getByRole("button", { name: "Apply template" }).click();
+    const body = (await patchPromise).postDataJSON() as Record<string, unknown>;
+
+    expect(body.template_slug).toBe("scrum-master");
+    expect(body.template_version).toBe(1);
+    // No per-agent markdown is ever sent.
+    expect(body.soul_md).toBeUndefined();
   });
 });
 

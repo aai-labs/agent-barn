@@ -6,7 +6,17 @@ from uuid import UUID
 from cryptography.fernet import Fernet
 from injector import Module, provider, singleton
 
-from api.domains.agents.defaults import (
+from api.domains.agents.models import (
+    Agent,
+    AgentPlatform,
+    AgentSlackConfig,
+    AgentStatus,
+    AgentTeamsConfig,
+    AgentType,
+)
+from api.domains.agents.repository import AgentRepository
+from api.domains.auth.utils import set_default_org_id
+from api.domains.templates.defaults import (
     DEFAULT_AGENTS_MD,
     DEFAULT_BOOT_MD,
     DEFAULT_BOOTSTRAP_MD,
@@ -14,17 +24,9 @@ from api.domains.agents.defaults import (
     DEFAULT_TOOLS_MD,
     DEFAULT_USER_MD,
 )
-from api.domains.agents.models import (
-    Agent,
-    AgentPlatform,
-    AgentSlackConfig,
-    AgentStatus,
-    AgentTeamsConfig,
-    AgentTemplate,
-    AgentType,
-)
-from api.domains.agents.repository import AgentRepository
-from api.domains.auth.utils import set_default_org_id
+from api.domains.templates.models import AgentTemplate, TemplateSource
+from api.domains.templates.repository import TemplateRepository
+from api.domains.templates.slug import generate_template_slug
 from api.infrastructure.crypto import encrypt_token
 from api.infrastructure.kubernetes.client import KubernetesClient
 from api.infrastructure.litellm.client import LiteLLMClient
@@ -65,24 +67,32 @@ def there_is_an_agent(
     model: str = "",
     platform: AgentPlatform = AgentPlatform.SLACK,
     agent_type: AgentType = AgentType.OPENCLAW,
+    soul_md: str = "# Soul\n\nTest soul.",
+    tools_md: str = DEFAULT_TOOLS_MD,
 ):
     def step(context):
         org_id = organization_id or context.organization.id
         repository: AgentRepository = context.injector.get(AgentRepository)
+        template_repository: TemplateRepository = context.injector.get(
+            TemplateRepository
+        )
 
         template = AgentTemplate(
             organization_id=org_id,
+            template_slug=generate_template_slug(name),
+            template_name=name,
+            template_source=TemplateSource.CUSTOM,
             version=1,
-            soul_md="# Soul\n\nTest soul.",
+            soul_md=soul_md,
             identity_md="# Identity\n\nTest identity.",
             user_md=DEFAULT_USER_MD,
-            tools_md=DEFAULT_TOOLS_MD,
+            tools_md=tools_md,
             agents_md=DEFAULT_AGENTS_MD,
             boot_md=DEFAULT_BOOT_MD,
             bootstrap_md=DEFAULT_BOOTSTRAP_MD,
             heartbeat_md=DEFAULT_HEARTBEAT_MD,
         )
-        repository.save_template(template)
+        template_repository.save_template(template)
 
         agent = Agent(
             organization_id=org_id,
@@ -92,7 +102,7 @@ def there_is_an_agent(
             status=status,
             platform=platform,
             agent_type=agent_type,
-            template_id=template.id,
+            template_slug=template.template_slug,
             template_version=template.version,
         )
 
@@ -122,9 +132,6 @@ def there_is_an_agent(
                 tenant_id=TEST_TEAMS_TENANT_ID,
             )
             repository.save_teams_config(teams_config)
-
-        template.agent_id = agent.id
-        repository.save_template(template)
 
         context.agent = agent
 

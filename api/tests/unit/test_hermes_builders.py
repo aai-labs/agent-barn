@@ -146,6 +146,7 @@ def test_build_secret_hermes_slack_contains_required_keys():
         api_server_key="secret-key-123",
         channel_ids=["C001", "C002"],
         dm_user_ids=["U001", "U002"],
+        dm_policy="allowlist",
     )
     data = secret.string_data
     assert_that(data["SLACK_BOT_TOKEN"], equal_to("xoxb-bot"))
@@ -174,6 +175,74 @@ def test_build_secret_hermes_slack_empty_lists_give_empty_strings():
         dm_user_ids=[],
     )
     assert_that(secret.string_data["SLACK_CHANNEL_IDS"], equal_to(""))
+    assert_that(secret.string_data["SLACK_DM_ALLOWED_USERS"], equal_to(""))
+
+
+def _secret_with(dm_user_ids, dm_policy):
+    return build_secret_hermes_slack(
+        _AGENT_ID,
+        _ORG_ID,
+        _NS,
+        agent_name="myagent",
+        slack_bot_token="xoxb-bot",
+        slack_app_token="xapp-app",
+        litellm_api_key="sk-key",
+        litellm_base_url="http://x:4000",
+        api_server_key="k",
+        channel_ids=[],
+        dm_user_ids=dm_user_ids,
+        dm_policy=dm_policy,
+    )
+
+
+def test_open_dm_policy_drops_deny_dms_plugin():
+    cfg = build_hermes_config("litellm/qwen3", "http://x:4000", dm_policy="open")
+    enabled = cfg["plugins"]["enabled"]
+    # Open means no DM gate: the deny plugin is left out, channel allowlist stays.
+    assert_that("slack-deny-dms" in enabled, equal_to(False))
+    assert_that("slack-channel-allowlist" in enabled, equal_to(True))
+
+
+def test_off_and_allowlist_keep_deny_dms_plugin():
+    for policy in ("off", "allowlist"):
+        cfg = build_hermes_config("litellm/qwen3", "http://x:4000", dm_policy=policy)
+        assert_that("slack-deny-dms" in cfg["plugins"]["enabled"], equal_to(True))
+
+
+def test_open_group_policy_drops_channel_allowlist_plugin():
+    cfg = build_hermes_config("litellm/qwen3", "http://x:4000", group_policy="open")
+    enabled = cfg["plugins"]["enabled"]
+    # Open means reply everywhere even if a channel list is retained in config.
+    assert_that("slack-channel-allowlist" in enabled, equal_to(False))
+
+
+def test_allowlist_group_policy_keeps_channel_allowlist_plugin():
+    cfg = build_hermes_config(
+        "litellm/qwen3", "http://x:4000", group_policy="allowlist"
+    )
+    assert_that("slack-channel-allowlist" in cfg["plugins"]["enabled"], equal_to(True))
+
+
+def test_open_group_and_dm_policy_drops_both_gating_plugins():
+    cfg = build_hermes_config(
+        "litellm/qwen3", "http://x:4000", dm_policy="open", group_policy="open"
+    )
+    assert_that(cfg["plugins"]["enabled"], equal_to([]))
+
+
+def test_allowlist_policy_seeds_dm_allowed_users():
+    secret = _secret_with(["U001", "U002"], "allowlist")
+    assert_that(secret.string_data["SLACK_DM_ALLOWED_USERS"], equal_to("U001,U002"))
+
+
+def test_off_policy_clears_dm_allowed_users_even_with_user_ids():
+    # Switching to "off" must not leave a stale allowlist that still grants DM access.
+    secret = _secret_with(["U001", "U002"], "off")
+    assert_that(secret.string_data["SLACK_DM_ALLOWED_USERS"], equal_to(""))
+
+
+def test_open_policy_does_not_seed_dm_allowed_users():
+    secret = _secret_with(["U001", "U002"], "open")
     assert_that(secret.string_data["SLACK_DM_ALLOWED_USERS"], equal_to(""))
 
 

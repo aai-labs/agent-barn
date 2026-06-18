@@ -9,7 +9,6 @@ from api.domains.agents.models import (
     AgentFilter,
     AgentHealthRead,
     AgentRead,
-    AgentTemplateRead,
     AgentUpdate,
     PairRequest,
     get_agent_filter,
@@ -17,6 +16,7 @@ from api.domains.agents.models import (
 from api.domains.agents.service import AgentService
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import get_current_user
+from api.domains.templates.models import TemplateRead
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 agents_router = APIRouter(prefix="/agents", tags=["agents"])
@@ -63,7 +63,7 @@ def get_agent(
     return service.get_agent(agent_id, context)
 
 
-@agents_router.get("/{agent_id}/template/{version}", response_model=AgentTemplateRead)
+@agents_router.get("/{agent_id}/template/{version}", response_model=TemplateRead)
 def get_agent_template(
     agent_id: UUID,
     version: int,
