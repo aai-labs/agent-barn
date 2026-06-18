@@ -19,11 +19,14 @@ from api.domains.auth.models import (
     ForgotPasswordRequest,
     PasswordResetRequest,
     RefreshTokenRequest,
+    SlackConfigTokenRead,
+    SlackConfigTokenSave,
     SignupRequest,
     Token,
     TokenData,
 )
 from api.domains.auth.service import AuthService
+from api.domains.auth.token_service import SlackConfigTokenService
 from api.domains.auth.utils import get_current_user
 from api.domains.users.models import UserPasswordChange, UserRead, UserUpdate
 from api.domains.users.service import UserService
@@ -184,3 +187,28 @@ def logout(response: Response, config: Config = Injected(Config)):
         samesite="lax" if is_local_like else "none",
     )
     return {"message": "Successfully logged out"}
+
+
+@auth_router.get("/me/slack-config-token", response_model=SlackConfigTokenRead)
+def get_slack_config_token(
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: SlackConfigTokenService = Injected(SlackConfigTokenService),
+) -> SlackConfigTokenRead:
+    return service.get_config_token_read(context.user.id)
+
+
+@auth_router.put("/me/slack-config-token", response_model=SlackConfigTokenRead)
+def save_slack_config_token(
+    body: SlackConfigTokenSave,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: SlackConfigTokenService = Injected(SlackConfigTokenService),
+) -> SlackConfigTokenRead:
+    return service.save_config_token(context.user.id, body.token)
+
+
+@auth_router.delete("/me/slack-config-token", status_code=status.HTTP_204_NO_CONTENT)
+def delete_slack_config_token(
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: SlackConfigTokenService = Injected(SlackConfigTokenService),
+) -> None:
+    service.delete_config_token(context.user.id)

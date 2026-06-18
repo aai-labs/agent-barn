@@ -452,7 +452,7 @@ class SlackConfigTokenRepository:
 
 No separate unit tests — the service is fully covered by the integration tests in Step 6. The service orchestrates encryption, validation, and storage.
 
-### 5a. IMPLEMENT: `api/domains/auth/slack_config_token_service.py`
+### 5a. IMPLEMENT: `api/domains/auth/token_service.py`
 
 ```python
 """Service for managing per-user Slack configuration tokens."""
@@ -718,7 +718,7 @@ def test_slack_config_token_requires_auth():
 Add imports at top:
 ```python
 from api.domains.auth.models import SlackConfigTokenRead, SlackConfigTokenSave
-from api.domains.auth.slack_config_token_service import SlackConfigTokenService
+from api.domains.auth.token_service import SlackConfigTokenService
 ```
 
 Add 3 endpoints at end of file:
@@ -797,7 +797,7 @@ def test_create_slack_app_via_api(mock_create, mock_validate):
 
 **Verify:** This test FAILS (route doesn't exist yet).
 
-### 7b. IMPLEMENT: `api/infrastructure/slack/routes.py`
+### 7b. IMPLEMENT: `api/domains/agents/slack_routes.py`
 
 ```python
 """Slack app management routes."""
@@ -809,7 +809,7 @@ from pydantic import BaseModel as PydanticBaseModel
 from pydantic import Field
 
 from api.domains.auth.models import CurrentUserContext
-from api.domains.auth.slack_config_token_service import SlackConfigTokenService
+from api.domains.auth.token_service import SlackConfigTokenService
 from api.domains.auth.utils import get_current_user
 from api.infrastructure.slack.config_token import create_slack_app
 from api.infrastructure.slack.manifest import build_slack_app_manifest
@@ -853,7 +853,7 @@ def create_slack_app_route(
 
 Add import:
 ```python
-from api.infrastructure.slack.routes import slack_router
+from api.domains.agents.slack_routes import slack_router
 ```
 
 Add after existing `subapi.include_router(users_router)`:
@@ -1296,11 +1296,11 @@ Manual smoke tests:
 | 3a | `api/domains/auth/models.py` (modify) | `UserSlackConfigToken` model + DTOs |
 | 3b | `api/migrations/versions/<hash>_...py` | DB migration |
 | 4a | `api/domains/auth/repository.py` (modify) | `SlackConfigTokenRepository` |
-| 5a | `api/domains/auth/slack_config_token_service.py` | Token management service |
+| 5a | `api/domains/auth/token_service.py` | Token management service |
 | 6a | `api/tests/integration/test_slack_config_token.py` | Integration tests for auth routes |
 | 6b | `api/domains/auth/routes.py` (modify) | 3 config token endpoints |
 | 7a | (add to 6a) | Integration test for app creation route |
-| 7b | `api/infrastructure/slack/routes.py` | `POST /api/v1/slack/apps` endpoint |
+| 7b | `api/domains/agents/slack_routes.py` | `POST /api/v1/slack/apps` endpoint |
 | 7c | `api/api_app.py` (modify) | Register `slack_router` |
 | 8a-e | UI hooks/schemas/query-keys | API bindings (5 files) |
 | 9a-d | UI account page + nav | Account page (3 new files + 1 modify) |
