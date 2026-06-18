@@ -233,22 +233,25 @@ export function SkillDrawer({ mode, onClose }: SkillDrawerProps) {
                     (optional)
                   </span>
                 </label>
-                <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
-                  {ALL_PROVIDERS.map(({ value, label }) => (
-                    <label
-                      key={value}
-                      className="flex items-center gap-2 text-[0.844rem] cursor-pointer"
-                      style={{ color: "var(--ink-2)" }}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={selectedProviders.includes(value)}
-                        onChange={() => toggleProvider(value)}
-                        className="rounded"
-                      />
-                      {label}
-                    </label>
-                  ))}
+                <div className="flex flex-wrap gap-1.5">
+                  {ALL_PROVIDERS.map(({ value, label }) => {
+                    const selected = selectedProviders.includes(value);
+                    return (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() => toggleProvider(value)}
+                        className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium transition-colors"
+                        style={
+                          selected
+                            ? { background: "var(--ink)", color: "var(--bg)", border: "1px solid var(--ink)" }
+                            : { background: "var(--bg-soft)", color: "var(--ink-3)", border: "1px solid var(--line)" }
+                        }
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
