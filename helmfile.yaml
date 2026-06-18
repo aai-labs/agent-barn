@@ -86,6 +86,10 @@ releases:
         value: {{ env "POD_KUBECONFIG_B64" | required "POD_KUBECONFIG_B64 is required" | quote }}
       - name: storageClass
         value: {{ env "STORAGE_CLASS" | default "" | quote }}
+      - name: agentDefaultModel
+        value: {{ env "AGENT_DEFAULT_MODEL" | default "" | quote }}
+      - name: agentModelAllowlist
+        value: {{ env "AGENT_MODEL_ALLOWLIST" | default "" | quote }}
       - name: registry.server
         value: {{ env "REGISTRY_SERVER" | required "REGISTRY_SERVER is required" | quote }}
       - name: registry.username
