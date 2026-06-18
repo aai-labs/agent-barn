@@ -136,7 +136,9 @@ class AgentService:
         if not skill_ids:
             return []
         submitted_providers = {item.provider for item in secrets_data}
-        accessible = {s.id: s for s in self.skill_repository.find_accessible_for_org(org_id)}
+        accessible = {
+            s.id: s for s in self.skill_repository.find_accessible_for_org(org_id)
+        }
         skills = []
         for skill_id in dict.fromkeys(skill_ids):
             skill = accessible.get(skill_id)
@@ -169,7 +171,9 @@ class AgentService:
         """Validate that new skills are accessible and that all remaining skills
         have their required providers covered after the update is applied."""
         if data.skill_ids:
-            accessible = {s.id for s in self.skill_repository.find_accessible_for_org(org_id)}
+            accessible = {
+                s.id for s in self.skill_repository.find_accessible_for_org(org_id)
+            }
             for skill_id in data.skill_ids:
                 if skill_id not in accessible:
                     raise HTTPException(

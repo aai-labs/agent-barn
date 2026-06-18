@@ -338,7 +338,9 @@ def test_list_skills_search_filter():
         client: TestClient = context.client
 
         with when("I search for 'github'"):
-            response = client.get(_BASE, params={"search": "github"}, headers=_auth(context))
+            response = client.get(
+                _BASE, params={"search": "github"}, headers=_auth(context)
+            )
 
         with then("only matching skills are returned"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))

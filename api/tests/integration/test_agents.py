@@ -2478,5 +2478,7 @@ def test_start_agent_with_skill_pointer_injects_pointer_into_tools_md():
             config_map = k8s.create_config_map.call_args.args[1]
             assert_that(
                 config_map.data["TOOLS.md"],
-                contains_string('You can use "Pointed Skill" skill in the ./skills folder'),
+                contains_string(
+                    'You can use "Pointed Skill" skill in the ./skills folder'
+                ),
             )

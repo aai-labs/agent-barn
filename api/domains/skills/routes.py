@@ -6,7 +6,13 @@ from fastapi_injector import Injected
 
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import get_current_user
-from api.domains.skills.models import SkillCreate, SkillFilter, SkillRead, SkillUpdate, get_skill_filter
+from api.domains.skills.models import (
+    SkillCreate,
+    SkillFilter,
+    SkillRead,
+    SkillUpdate,
+    get_skill_filter,
+)
 from api.domains.skills.service import SkillService
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 

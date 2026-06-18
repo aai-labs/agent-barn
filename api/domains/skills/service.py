@@ -149,7 +149,9 @@ class SkillService:
             skill.zip_content = updated["zip_content"]
         if "name" in updated:
             skill.name = updated["name"]
-            skill.tools_pointer = f'You can use "{skill.name}" skill in the ./skills folder'
+            skill.tools_pointer = (
+                f'You can use "{skill.name}" skill in the ./skills folder'
+            )
         if "required_providers" in updated:
             skill.required_providers = updated["required_providers"]
         self.repository.save(skill)
@@ -182,7 +184,9 @@ class SkillService:
         context: CurrentUserContext,
     ) -> PaginatedItems[SkillRead]:
         org_id = self._org_id(context)
-        skills, total = self.repository.find_all_for_org(org_id, skill_filter, pagination)
+        skills, total = self.repository.find_all_for_org(
+            org_id, skill_filter, pagination
+        )
         return PaginatedItems(
             page=pagination.page,
             page_size=pagination.size,
