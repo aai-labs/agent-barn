@@ -290,7 +290,7 @@ def test_list_skills_returns_org_and_global_skills():
 
         with then("both org-scoped and global skills are returned"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            names = [s["name"] for s in response.json()]
+            names = [s["name"] for s in response.json()["items"]]
             assert_that(names, has_items("Org Skill", "Global Skill"))
 
 
@@ -303,8 +303,97 @@ def test_list_skills_excludes_other_org_skills():
 
         with then("the other org's skill is not included"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            names = [s["name"] for s in response.json()]
+            names = [s["name"] for s in response.json()["items"]]
             assert_that(names, not_(has_item("Other Org Skill")))
+
+
+def test_list_skills_returns_pagination_metadata():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Skill A"),
+            there_is_a_skill(name="Skill B"),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("I list skills"):
+            response = client.get(_BASE, headers=_auth(context))
+
+        with then("the response includes pagination metadata"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            body = response.json()
+            assert_that(body["page"], equal_to(1))
+            assert_that(body["total"], equal_to(2))
+
+
+def test_list_skills_search_filter():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="GitHub Skill"),
+            there_is_a_skill(name="Jira Skill"),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("I search for 'github'"):
+            response = client.get(_BASE, params={"search": "github"}, headers=_auth(context))
+
+        with then("only matching skills are returned"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            body = response.json()
+            names = [s["name"] for s in body["items"]]
+            assert_that(names, has_item("GitHub Skill"))
+            assert_that(names, not_(has_item("Jira Skill")))
+            assert_that(body["total"], equal_to(1))
+
+
+def test_list_skills_source_filter():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Custom Skill"),
+            there_is_a_skill(name="Platform Skill", global_skill=True),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("I filter by source=custom"):
+            response = client.get(
+                _BASE, params={"source": "custom"}, headers=_auth(context)
+            )
+
+        with then("only custom skills are returned"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            body = response.json()
+            names = [s["name"] for s in body["items"]]
+            assert_that(names, has_item("Custom Skill"))
+            assert_that(names, not_(has_item("Platform Skill")))
+
+
+def test_list_skills_pagination():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Skill 1"),
+            there_is_a_skill(name="Skill 2"),
+            there_is_a_skill(name="Skill 3"),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("I request page 1 with page_size=2"):
+            response = client.get(
+                _BASE, params={"page": 1, "page_size": 2}, headers=_auth(context)
+            )
+
+        with then("only 2 items are returned and total reflects all skills"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            body = response.json()
+            assert_that(len(body["items"]), equal_to(2))
+            assert_that(body["total"], equal_to(3))
+            assert_that(body["page"], equal_to(1))
 
 
 def test_list_skills_requires_auth():

@@ -37,19 +37,43 @@ export class SkillDataSupport {
     detail?: string;
     body?: unknown;
   } = {}) {
-    await this.page.route("**/api/v1/skills", async (route) => {
+    await this.page.route("**/api/v1/skills*", async (route) => {
       if (route.request().method() !== "GET") {
         await route.fallback();
         return;
       }
+      const url = new URL(route.request().url());
+      if (url.pathname !== "/api/v1/skills") {
+        await route.fallback();
+        return;
+      }
+
+      const search = url.searchParams.get("search")?.toLowerCase();
+      const source = url.searchParams.get("source");
+      let items = [mockPlatformSkill, mockCustomSkill];
+      if (search) {
+        items = items.filter((s) => s.name.toLowerCase().includes(search));
+      }
+      if (source) {
+        items = items.filter((s) => s.source === source);
+      }
+
+      let responseBody: unknown;
+      if (status >= 400) {
+        responseBody = { detail };
+      } else if (body !== undefined) {
+        // Allow callers to pass a flat array (auto-wrapped) or a full paginated object.
+        responseBody = Array.isArray(body)
+          ? { page: 1, page_size: 15, total: (body as unknown[]).length, items: body }
+          : body;
+      } else {
+        responseBody = { page: 1, page_size: 15, total: items.length, items };
+      }
+
       await route.fulfill({
         status,
         contentType: "application/json",
-        body: JSON.stringify(
-          status >= 400
-            ? { detail }
-            : (body ?? [mockPlatformSkill, mockCustomSkill]),
-        ),
+        body: JSON.stringify(responseBody),
       });
     });
   }

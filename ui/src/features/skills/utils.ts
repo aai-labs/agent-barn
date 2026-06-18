@@ -1,6 +1,7 @@
 import { createQueryKeyStructure } from "@/shared/query-keys";
 
 export const skillsKey = createQueryKeyStructure("skills");
+export const SKILLS_PAGE_SIZE = 15;
 
 export const SKILL_PROVIDER_LABELS: Record<string, string> = {
   github: "GitHub",

@@ -10,11 +10,13 @@ from api.domains.auth.models import CurrentUserContext
 from api.domains.skills.models import (
     Skill,
     SkillCreate,
+    SkillFilter,
     SkillRead,
     SkillSource,
     SkillUpdate,
 )
 from api.domains.skills.repository import SkillRepository
+from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 _MAX_ZIP_BYTES = 50 * 1024 * 1024  # 50 MB compressed
 _MAX_UNCOMPRESSED_BYTES = 200 * 1024 * 1024  # 200 MB total uncompressed
@@ -173,7 +175,17 @@ class SkillService:
         skill = self._get_or_404(skill_id, org_id)
         return SkillRead.model_validate(skill)
 
-    def list_skills(self, context: CurrentUserContext) -> list[SkillRead]:
+    def list_skills(
+        self,
+        skill_filter: SkillFilter,
+        pagination: Pagination,
+        context: CurrentUserContext,
+    ) -> PaginatedItems[SkillRead]:
         org_id = self._org_id(context)
-        skills = self.repository.find_all_for_org(org_id)
-        return [SkillRead.model_validate(s) for s in skills]
+        skills, total = self.repository.find_all_for_org(org_id, skill_filter, pagination)
+        return PaginatedItems(
+            page=pagination.page,
+            page_size=pagination.size,
+            total=total,
+            items=[SkillRead.model_validate(s) for s in skills],
+        )

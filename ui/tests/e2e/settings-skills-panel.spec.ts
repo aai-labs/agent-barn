@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 
 import {
   mockCustomSkill,
+  mockPlatformSkill,
   MOCK_CUSTOM_SKILL_ID,
 } from "../pages/data-support/skill-data-support.po";
 import { DataSupport } from "../pages/data-support/data-support.po";
@@ -38,13 +39,11 @@ test.describe("Settings — Skills panel", () => {
     await expect(page.getByRole("button", { name: /new skill/i })).toBeVisible();
   });
 
-  test("shows Platform section with platform skill", async ({ page }) => {
-    await expect(page.locator("div").filter({ hasText: /^Platform$/ })).toBeVisible();
+  test("shows platform skill in the list", async ({ page }) => {
     await expect(page.getByText("github", { exact: true })).toBeVisible();
   });
 
-  test("shows Custom section with custom skill", async ({ page }) => {
-    await expect(page.locator("div").filter({ hasText: /^Custom$/ })).toBeVisible();
+  test("shows custom skill in the list", async ({ page }) => {
     await expect(page.getByText("my-tool")).toBeVisible();
   });
 
@@ -84,7 +83,7 @@ test.describe("Settings — Skills panel", () => {
   });
 
   test("clicking View on platform skill opens the drawer in read-only mode", async ({ page }) => {
-    await page.getByRole("button", { name: "View" }).click();
+    await page.getByRole("button", { name: "View" }).first().click();
 
     await expect(page.getByRole("heading", { name: "github" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Close" })).toBeVisible();
@@ -175,18 +174,7 @@ test.describe("Settings — Skills panel", () => {
       skillId: MOCK_CUSTOM_SKILL_ID,
     });
     await dataSupportPage.skills.interceptGetSkillsRequest({
-      body: [
-        {
-          id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-          organizationId: null,
-          name: "github",
-          source: "aai_cli",
-          requiredProviders: ["github"],
-          toolsPointer: null,
-          createdAt: "2026-01-01T00:00:00Z",
-          updatedAt: "2026-01-01T00:00:00Z",
-        },
-      ],
+      body: [mockPlatformSkill],
     });
 
     await page.getByRole("button", { name: "View" }).nth(1).click();
@@ -232,5 +220,117 @@ test.describe("Settings — Skills panel (empty state)", () => {
     await page.getByRole("button", { name: "Skills" }).click();
 
     await expect(page.getByText("We couldn't load skills")).toBeVisible();
+  });
+});
+
+test.describe("Settings — Skills panel (pagination)", () => {
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  let dataSupportPage: DataSupport;
+
+  test.beforeEach(async ({ page }) => {
+    dataSupportPage = new DataSupport(page);
+    await dataSupportPage.auth.interceptRefreshRequest();
+    await dataSupportPage.users.interceptGetUserContextRequest();
+  });
+
+  test("shows pagination controls when results exceed one page", async ({ page }) => {
+    const manySkills = Array.from({ length: 15 }, (_, i) => ({
+      ...mockPlatformSkill,
+      id: `aaaaaaaa-aaaa-4aaa-8aaa-${String(i).padStart(12, "0")}`,
+      name: `skill-${i}`,
+    }));
+    await dataSupportPage.skills.interceptGetSkillsRequest({
+      body: { page: 1, page_size: 15, total: 16, items: manySkills },
+    });
+
+    await page.goto("/dashboard/settings");
+    await page.getByRole("button", { name: "Skills" }).click();
+
+    await expect(page.getByRole("button", { name: "Next" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Previous" })).toBeVisible();
+  });
+
+  test("pagination controls are hidden when all results fit on one page", async ({ page }) => {
+    await dataSupportPage.skills.interceptGetSkillsRequest();
+
+    await page.goto("/dashboard/settings");
+    await page.getByRole("button", { name: "Skills" }).click();
+
+    await expect(page.getByRole("button", { name: "Next" })).not.toBeVisible();
+    await expect(page.getByRole("button", { name: "Previous" })).not.toBeVisible();
+  });
+
+  test("clicking Next requests page 2 from the API", async ({ page }) => {
+    const page1Skills = Array.from({ length: 15 }, (_, i) => ({
+      ...mockPlatformSkill,
+      id: `aaaaaaaa-aaaa-4aaa-8aaa-${String(i).padStart(12, "0")}`,
+      name: `skill-page1-${i}`,
+    }));
+    const page2Skills = [{ ...mockCustomSkill, name: "skill-page2-0" }];
+
+    await page.route("**/api/v1/skills*", async (route) => {
+      if (route.request().method() !== "GET") { await route.fallback(); return; }
+      const url = new URL(route.request().url());
+      if (url.pathname !== "/api/v1/skills") { await route.fallback(); return; }
+      const pageNum = Number(url.searchParams.get("page") ?? "1");
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          page: pageNum,
+          page_size: 15,
+          total: 16,
+          items: pageNum === 1 ? page1Skills : page2Skills,
+        }),
+      });
+    });
+
+    await page.goto("/dashboard/settings");
+    await page.getByRole("button", { name: "Skills" }).click();
+
+    await expect(page.getByText("skill-page1-0")).toBeVisible();
+
+    await page.getByRole("button", { name: "Next" }).click();
+
+    await expect(page.getByText("skill-page2-0")).toBeVisible();
+    await expect(page.getByText("skill-page1-0")).not.toBeVisible();
+  });
+
+  test("search resets to page 1", async ({ page }) => {
+    const page1Skills = Array.from({ length: 15 }, (_, i) => ({
+      ...mockPlatformSkill,
+      id: `aaaaaaaa-aaaa-4aaa-8aaa-${String(i).padStart(12, "0")}`,
+      name: `skill-${i}`,
+    }));
+
+    await page.route("**/api/v1/skills*", async (route) => {
+      if (route.request().method() !== "GET") { await route.fallback(); return; }
+      const url = new URL(route.request().url());
+      if (url.pathname !== "/api/v1/skills") { await route.fallback(); return; }
+      const search = url.searchParams.get("search")?.toLowerCase();
+      const pageNum = Number(url.searchParams.get("page") ?? "1");
+      const items = search
+        ? page1Skills.filter((s) => s.name.includes(search))
+        : pageNum === 1
+          ? page1Skills
+          : [];
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ page: pageNum, page_size: 15, total: search ? items.length : 16, items }),
+      });
+    });
+
+    await page.goto("/dashboard/settings");
+    await page.getByRole("button", { name: "Skills" }).click();
+
+    // Advance to page 2.
+    await page.getByRole("button", { name: "Next" }).click();
+    await expect(page.getByText("2 / 2")).toBeVisible();
+
+    // Typing in search should reset back to page 1.
+    await page.getByLabel("Search skills").fill("skill-0");
+    await expect(page.getByRole("button", { name: "Next" })).not.toBeVisible();
   });
 });

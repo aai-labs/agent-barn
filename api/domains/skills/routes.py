@@ -1,13 +1,14 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, Query, Response, status
 from fastapi_injector import Injected
 
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import get_current_user
-from api.domains.skills.models import SkillCreate, SkillRead, SkillUpdate
+from api.domains.skills.models import SkillCreate, SkillFilter, SkillRead, SkillUpdate, get_skill_filter
 from api.domains.skills.service import SkillService
+from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 skills_router = APIRouter(prefix="/skills", tags=["skills"])
 
@@ -21,12 +22,19 @@ def create_skill(
     return service.create_skill(data, context)
 
 
-@skills_router.get("", response_model=list[SkillRead])
+@skills_router.get("", response_model=PaginatedItems[SkillRead])
 def list_skills(
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[SkillService, Injected(SkillService)],
+    skill_filter: Annotated[SkillFilter, Depends(get_skill_filter)],
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1)] = 15,
 ):
-    return service.list_skills(context)
+    return service.list_skills(
+        skill_filter=skill_filter,
+        pagination=Pagination(page=page, size=page_size),
+        context=context,
+    )
 
 
 @skills_router.get("/{skill_id}", response_model=SkillRead)

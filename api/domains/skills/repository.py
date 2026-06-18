@@ -2,11 +2,13 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from injector import inject, singleton
+from sqlalchemy import func
 from sqlmodel import Session, col, or_, select
 
 from api.domains.agents.models import AgentSkill
-from api.domains.skills.models import Skill, SkillSource
+from api.domains.skills.models import Skill, SkillFilter, SkillSource
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
+from api.infrastructure.shared.models import Pagination
 
 
 @inject
@@ -33,20 +35,39 @@ class SkillRepository:
             )
             return session.exec(query).first()
 
-    def find_all_for_org(self, org_id: UUID) -> list[Skill]:
-        """Return org-scoped skills + global AAI_CLI skills, ordered by creation time."""
+    def find_all_for_org(
+        self,
+        org_id: UUID,
+        skill_filter: SkillFilter,
+        pagination: Pagination,
+    ) -> tuple[list[Skill], int]:
+        """Return org-scoped skills + global AAI_CLI skills, filtered and paginated."""
         with Session(self.delegate.engine) as session:
-            query = (
-                select(Skill)
-                .where(
-                    or_(
-                        col(Skill.organization_id) == org_id,
-                        col(Skill.organization_id).is_(None),
-                    )
+            conditions = [
+                or_(
+                    col(Skill.organization_id) == org_id,
+                    col(Skill.organization_id).is_(None),
                 )
-                .order_by(col(Skill.created_at).asc())
+            ]
+            if skill_filter.search:
+                conditions.append(col(Skill.name).ilike(f"%{skill_filter.search}%"))
+            if skill_filter.source is not None:
+                conditions.append(col(Skill.source) == skill_filter.source)
+
+            count_query = select(func.count()).select_from(Skill)
+            for condition in conditions:
+                count_query = count_query.where(condition)
+            total = session.scalar(count_query) or 0
+
+            query = select(Skill)
+            for condition in conditions:
+                query = query.where(condition)
+            query = (
+                query.order_by(col(Skill.created_at).asc())
+                .offset((pagination.page - 1) * pagination.size)
+                .limit(pagination.size)
             )
-            return list(session.exec(query).all())
+            return list(session.exec(query).all()), total
 
     def save(self, skill: Skill) -> Skill:
         self.delegate.save(skill)

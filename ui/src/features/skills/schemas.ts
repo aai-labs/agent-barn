@@ -13,7 +13,13 @@ export const SkillSchema = z.object({
   updatedAt: z.string(),
 });
 
-export const SkillsListSchema = z.array(SkillSchema);
+export const PaginatedSkillsSchema = z.object({
+  page: z.number().int().min(1),
+  pageSize: z.number().int().min(1),
+  total: z.number().int().min(0),
+  items: z.array(SkillSchema),
+});
 
 export type Skill = z.infer<typeof SkillSchema>;
 export type SkillSource = z.infer<typeof SkillSourceSchema>;
+export type PaginatedSkills = z.infer<typeof PaginatedSkillsSchema>;

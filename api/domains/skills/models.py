@@ -2,6 +2,7 @@ import enum
 from datetime import datetime
 from uuid import UUID
 import sqlalchemy as sa
+from fastapi import Query
 from sqlmodel import Column, Field as SqlField
 from api.domains.agents.models import SecretProvider
 from api.infrastructure.postgres.models import BaseModel
@@ -64,3 +65,15 @@ class SkillRead(PydanticBaseModel):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class SkillFilter(PydanticBaseModel):
+    search: str | None = None
+    source: SkillSource | None = None
+
+
+def get_skill_filter(
+    search: str | None = Query(default=None),
+    source: SkillSource | None = Query(default=None),
+) -> SkillFilter:
+    return SkillFilter(search=search, source=source)
