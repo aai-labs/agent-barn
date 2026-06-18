@@ -56,3 +56,13 @@ export function agentColor(id: string): string {
 export function agentInitials(name: string): string {
   return name.slice(0, 2).toUpperCase();
 }
+
+const MODEL_DISPLAY_PREFIX = "litellm/openrouter/";
+
+// Strips the internal litellm/openrouter routing prefix for display, leaving the
+// provider/model slug (e.g. "openai/gpt-5-mini"). No-op if the prefix is absent.
+export function formatModelName(model: string): string {
+  return model.startsWith(MODEL_DISPLAY_PREFIX)
+    ? model.slice(MODEL_DISPLAY_PREFIX.length)
+    : model;
+}
