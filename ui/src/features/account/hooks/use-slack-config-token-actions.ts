@@ -14,10 +14,10 @@ export function useSlackConfigTokenActions() {
   const queryClient = useQueryClient();
 
   const saveToken = useMutation({
-    mutationFn: async (data: { accessToken: string; refreshToken?: string }) => {
+    mutationFn: async (data: { accessToken: string; refreshToken: string }) => {
       const response = await api.put<SlackConfigTokenRead>(
         "/api/v1/auth/me/slack-config-token",
-        { accessToken: data.accessToken, refreshToken: data.refreshToken ?? "" },
+        { accessToken: data.accessToken, refreshToken: data.refreshToken },
         { schema: SlackConfigTokenReadSchema },
       );
       return response.data;

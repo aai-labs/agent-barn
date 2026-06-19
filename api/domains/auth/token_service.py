@@ -44,7 +44,10 @@ class SlackConfigTokenService:
         return SlackConfigTokenRead(has_token=True, token_preview=preview)
 
     def save_config_token(
-        self, user_id: UUID, access_token_raw: str, refresh_token_raw: str = "",
+        self,
+        user_id: UUID,
+        access_token_raw: str,
+        refresh_token_raw: str,
     ) -> SlackConfigTokenRead:
         access = access_token_raw.strip()
         refresh = refresh_token_raw.strip()
@@ -53,15 +56,18 @@ class SlackConfigTokenService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Access token cannot be empty.",
             )
+        if not refresh:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Refresh token cannot be empty.",
+            )
 
         validate_config_access_token(access)
         key = self.config.agent_token_encryption_key
         self.repository.upsert(
             user_id=user_id,
             access_token_encrypted=encrypt_token(access, key),
-            refresh_token_encrypted=(
-                encrypt_token(refresh, key) if refresh else ""
-            ),
+            refresh_token_encrypted=encrypt_token(refresh, key),
         )
 
         return SlackConfigTokenRead(

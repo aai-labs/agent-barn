@@ -642,7 +642,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
         {step === "config-token" && (
           <button
             className="af-btn af-btn-primary af-btn-lg"
-            disabled={!configTokenInput.trim() || saveToken.isPending}
+            disabled={!configTokenInput.trim() || !configRefreshInput.trim() || saveToken.isPending}
             onClick={() => { void handleSaveConfigToken(); }}
           >
             {saveToken.isPending ? "Validating..." : "Save & continue"}

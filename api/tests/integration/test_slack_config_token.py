@@ -47,7 +47,7 @@ def test_get_slack_config_token_when_none_stored():
                 assert_that(body["token_preview"], none())
 
 
-@patch(_VALIDATE, return_value=("valid-access-token", None))
+@patch(_VALIDATE)
 def test_save_and_get_slack_config_token(mock_validate):
     with given(_GIVEN) as context:
         client: TestClient = context.client
@@ -55,7 +55,10 @@ def test_save_and_get_slack_config_token(mock_validate):
         with when("I save a config token"):
             response = client.put(
                 _URL,
-                json={"access_token": "valid-access-token"},
+                json={
+                    "access_token": "valid-access-token",
+                    "refresh_token": "xoxe-valid-refresh",
+                },
                 headers=_headers(context),
             )
 
@@ -81,7 +84,7 @@ def test_save_slack_config_token_rejects_xoxb():
         with when("I try to save a bot token"):
             response = client.put(
                 _URL,
-                json={"access_token": "xoxb-fake-token"},
+                json={"access_token": "xoxb-fake-token", "refresh_token": "xoxe-fake"},
                 headers=_headers(context),
             )
 
@@ -89,7 +92,7 @@ def test_save_slack_config_token_rejects_xoxb():
                 assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
 
 
-@patch(_VALIDATE, return_value=("valid-access-token", None))
+@patch(_VALIDATE)
 def test_delete_slack_config_token(mock_validate):
     with given(_GIVEN) as context:
         client: TestClient = context.client
@@ -97,7 +100,10 @@ def test_delete_slack_config_token(mock_validate):
         with when("I save then delete a config token"):
             client.put(
                 _URL,
-                json={"access_token": "valid-access-token"},
+                json={
+                    "access_token": "valid-access-token",
+                    "refresh_token": "xoxe-valid-refresh",
+                },
                 headers=_headers(context),
             )
             response = client.delete(_URL, headers=_headers(context))
@@ -111,14 +117,22 @@ def test_delete_slack_config_token(mock_validate):
                 assert_that(body["has_token"], equal_to(False))
 
 
-@patch(_VALIDATE, return_value=("valid-access-token", None))
-@patch("api.infrastructure.slack.config_token.create_slack_app", return_value="A12345")
-def test_create_slack_app_via_api(mock_create, mock_validate):
+@patch(_VALIDATE)
+@patch("api.domains.auth.token_service.rotate_refresh_token", return_value=("rotated-access", "rotated-refresh"))
+@patch("api.domains.agents.slack_routes.create_slack_app", return_value="A12345")
+def test_create_slack_app_via_api(mock_create, mock_rotate, mock_validate):
     with given(_GIVEN) as context:
         client: TestClient = context.client
         headers = _headers(context)
 
-        client.put(_URL, json={"access_token": "valid-access-token"}, headers=headers)
+        client.put(
+            _URL,
+            json={
+                "access_token": "valid-access-token",
+                "refresh_token": "xoxe-valid-refresh",
+            },
+            headers=headers,
+        )
 
         with when("I create a slack app"):
             response = client.post(

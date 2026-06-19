@@ -415,13 +415,13 @@ export function ConfigTokenStep({
         />
       </FormField>
 
-      <FormField label="Refresh token" hint="Starts with xoxe- · enables automatic renewal (recommended)">
+      <FormField label="Refresh token" hint="Starts with xoxe- · enables automatic renewal">
         <TokenInput
           value={refreshInput}
           onChange={onRefreshInputChange}
           visible={showRefresh}
           onToggle={onToggleRefresh}
-          placeholder="xoxe-… (optional)"
+          placeholder="xoxe-…"
           disabled={isSaving}
         />
       </FormField>
@@ -738,7 +738,7 @@ export function SlackTokensStep({
           <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
             Your Slack app is created!
           </div>
-          <NextStep n={1} label="Install the app and copy the Bot Token">
+          <NextStep n={1} label="Install the app to your workspace">
             Go to{" "}
             <a
               href={botTokenUrl ?? "#"}
@@ -747,9 +747,9 @@ export function SlackTokensStep({
               className="underline"
               style={{ color: "var(--ink-2)" }}
             >
-              Install App ↗
+              OAuth &amp; Permissions ↗
             </a>
-            {" "}— install to your workspace, then copy the <span className="font-mono text-xs">xoxb-…</span> bot token.
+            {" "}and click <b>Install to Workspace</b>. After installing, the page will show a <b>Bot User OAuth Token</b> (<span className="font-mono text-xs">xoxb-…</span>) — copy it.
           </NextStep>
           <NextStep n={2} label="Generate an App-Level Token">
             Go to{" "}
@@ -762,7 +762,7 @@ export function SlackTokensStep({
             >
               Basic Information ↗
             </a>
-            {" "}→ App-Level Tokens → Generate Token and Scopes. Add the <span className="font-mono text-xs">connections:write</span> scope.
+            {" "}→ scroll to <b>App-Level Tokens</b> → click <b>Generate Token and Scopes</b>. Name it anything, add the <span className="font-mono text-xs">connections:write</span> scope, and copy the generated <span className="font-mono text-xs">xapp-…</span> token.
           </NextStep>
           <NextStep n={3} label="Paste both tokens above" />
         </div>

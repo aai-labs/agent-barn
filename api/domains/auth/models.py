@@ -83,7 +83,7 @@ class UserSlackConfigToken(BaseModel, table=True):
 
 class SlackConfigTokenSave(PydanticBaseModel):
     access_token: str = Field(min_length=1)
-    refresh_token: str = Field(default="")
+    refresh_token: str = Field(min_length=1)
 
 
 class SlackConfigTokenRead(PydanticBaseModel):

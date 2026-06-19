@@ -133,7 +133,7 @@ export function SlackTokenSection() {
 
             <div>
               <label className="block text-[12.5px] font-medium mb-1" style={{ color: "var(--ink-2)" }}>
-                Refresh token <span className="font-normal" style={{ color: "var(--ink-4)" }}>(recommended — enables automatic renewal)</span>
+                Refresh token <span className="font-normal" style={{ color: "var(--ink-4)" }}>(enables automatic renewal)</span>
               </label>
               <div className="relative">
                 <input
@@ -141,7 +141,7 @@ export function SlackTokenSection() {
                   type={visibleRefresh ? "text" : "password"}
                   value={refreshInput}
                   onChange={(e) => setRefreshInput(e.target.value)}
-                  placeholder="xoxe-… (optional)"
+                  placeholder="xoxe-…"
                   autoComplete="off"
                   data-lpignore="true"
                   data-1p-ignore
@@ -173,7 +173,7 @@ export function SlackTokenSection() {
           <div className="flex gap-2">
             <button
               className="af-btn af-btn-primary"
-              disabled={!accessInput.trim() || saveToken.isPending}
+              disabled={!accessInput.trim() || !refreshInput.trim() || saveToken.isPending}
               onClick={() => void handleSave()}
             >
               {saveToken.isPending ? "Saving..." : "Save"}
