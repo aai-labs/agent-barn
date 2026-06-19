@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import http.client
 import json
+import os
+import tempfile
 from dataclasses import dataclass, field
 
+import yaml
 from injector import inject, singleton
 from kubernetes import client
 from kubernetes import config as k8s_config
@@ -12,6 +15,8 @@ from kubernetes.stream import portforward as k8s_portforward
 from kubernetes.stream import stream as k8s_stream
 
 from api.core.config import Config
+
+_SERVICE_ACCOUNT_TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token"
 
 
 @inject
@@ -22,10 +27,14 @@ class KubernetesClient:
     _apps_v1: client.AppsV1Api = field(init=False)
     _core_v1: client.CoreV1Api = field(init=False)
     _stream_core_v1: client.CoreV1Api = field(init=False)
+    _kubeconfig_path: str | None = field(init=False, default=None)
 
     def __post_init__(self) -> None:
         if self.config.k8s_kubeconfig_path:
-            k8s_config.load_kube_config(config_file=self.config.k8s_kubeconfig_path)
+            self._kubeconfig_path = self._resolve_kubeconfig(
+                self.config.k8s_kubeconfig_path
+            )
+            k8s_config.load_kube_config(config_file=self._kubeconfig_path)
         else:
             try:
                 k8s_config.load_incluster_config()
@@ -35,11 +44,59 @@ class KubernetesClient:
         self._core_v1 = client.CoreV1Api()
         if self.config.k8s_kubeconfig_path:
             stream_api_client = k8s_config.new_client_from_config(
-                config_file=self.config.k8s_kubeconfig_path
+                config_file=self._kubeconfig_path
             )
         else:
             stream_api_client = client.ApiClient()
         self._stream_core_v1 = client.CoreV1Api(api_client=stream_api_client)
+
+    @staticmethod
+    def _incluster_apiserver() -> str | None:
+        """The in-cluster API server URL when running inside a pod, else None.
+
+        Detection mirrors the official client's load_incluster_config: the kubelet
+        injects KUBERNETES_SERVICE_HOST into every pod and mounts the service
+        account token at a well-known path. Both must be present, so a stray
+        KUBERNETES_SERVICE_HOST exported in a local shell does not trigger a
+        rewrite.
+        """
+        host = os.environ.get("KUBERNETES_SERVICE_HOST")
+        if not host or not os.path.exists(_SERVICE_ACCOUNT_TOKEN_PATH):
+            return None
+        port = os.environ.get("KUBERNETES_SERVICE_PORT_HTTPS") or os.environ.get(
+            "KUBERNETES_SERVICE_PORT", "443"
+        )
+        if ":" in host:  # IPv6 literal
+            host = f"[{host}]"
+        return f"https://{host}:{port}"
+
+    @staticmethod
+    def _resolve_kubeconfig(path: str) -> str:
+        """Returns a kubeconfig path whose server host points at the in-cluster API
+        when running inside a pod. The mounted kubeconfig may carry an external or
+        loopback host (e.g. k3s's 127.0.0.1) that is unreachable from a pod; the
+        cluster CA still validates the in-cluster host, so only the server changes.
+        Off-cluster the original path is returned unchanged.
+        """
+        apiserver = KubernetesClient._incluster_apiserver()
+        if not apiserver:
+            return path
+        with open(path) as f:
+            kubeconfig = yaml.safe_load(f)
+        changed = False
+        for entry in kubeconfig.get("clusters", []):
+            cluster = entry.get("cluster", {})
+            if cluster.get("server") != apiserver:
+                cluster["server"] = apiserver
+                changed = True
+        if not changed:
+            return path
+        patched = os.path.join(
+            tempfile.gettempdir(), "agentfarm-kubeconfig-incluster.yaml"
+        )
+        with open(patched, "w") as f:
+            yaml.safe_dump(kubeconfig, f)
+        return patched
 
     def _create_or_get(self, create_fn, read_fn, namespace: str, manifest):
         try:

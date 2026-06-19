@@ -71,18 +71,22 @@ jobs:
         run: |
           docker build \
             -t '${{ secrets.REGISTRY_URL }}/agentfarm-api:${{ env.API_IMAGE_TAG }}' \
+            -t '${{ secrets.REGISTRY_URL }}/agentfarm-api:latest' \
             -f api/Dockerfile \
             .
           docker push '${{ secrets.REGISTRY_URL }}/agentfarm-api:${{ env.API_IMAGE_TAG }}'
+          docker push '${{ secrets.REGISTRY_URL }}/agentfarm-api:latest'
 
       - name: Build and push UI image
         run: |
           docker build \
             --build-arg NEXT_PUBLIC_BACKEND_URL=https://${{ secrets.API_HOST }} \
             -t '${{ secrets.REGISTRY_URL }}/agentfarm-ui:${{ env.UI_IMAGE_TAG }}' \
+            -t '${{ secrets.REGISTRY_URL }}/agentfarm-ui:latest' \
             -f ui/Dockerfile \
             ui/
           docker push '${{ secrets.REGISTRY_URL }}/agentfarm-ui:${{ env.UI_IMAGE_TAG }}'
+          docker push '${{ secrets.REGISTRY_URL }}/agentfarm-ui:latest'
 
       - name: Build, smoke test, and push hermes-base image
         env:
@@ -92,6 +96,7 @@ jobs:
           docker build \
             --secret id=gh_token,src=/tmp/gh_token \
             -t '${{ secrets.REGISTRY_URL }}/agentfarm-hermes-base:${{ env.HERMES_IMAGE_TAG }}' \
+            -t '${{ secrets.REGISTRY_URL }}/agentfarm-hermes-base:latest' \
             -f hermes-base/Dockerfile \
             hermes-base/
           rm -f /tmp/gh_token
@@ -100,6 +105,7 @@ jobs:
             '${{ secrets.REGISTRY_URL }}/agentfarm-hermes-base:${{ env.HERMES_IMAGE_TAG }}' \
             /bin/sh /smoke-test.sh
           docker push '${{ secrets.REGISTRY_URL }}/agentfarm-hermes-base:${{ env.HERMES_IMAGE_TAG }}'
+          docker push '${{ secrets.REGISTRY_URL }}/agentfarm-hermes-base:latest'
 
       - name: Build, smoke test, and push openclaw-base image
         env:
@@ -109,6 +115,7 @@ jobs:
           docker build \
             --secret id=gh_token,src=/tmp/gh_token \
             -t '${{ secrets.REGISTRY_URL }}/agentfarm-openclaw-base:${{ env.OPENCLAW_IMAGE_TAG }}' \
+            -t '${{ secrets.REGISTRY_URL }}/agentfarm-openclaw-base:latest' \
             -f openclaw-base/Dockerfile \
             openclaw-base/
           rm -f /tmp/gh_token
@@ -117,6 +124,7 @@ jobs:
             '${{ secrets.REGISTRY_URL }}/agentfarm-openclaw-base:${{ env.OPENCLAW_IMAGE_TAG }}' \
             /bin/sh /smoke-test.sh
           docker push '${{ secrets.REGISTRY_URL }}/agentfarm-openclaw-base:${{ env.OPENCLAW_IMAGE_TAG }}'
+          docker push '${{ secrets.REGISTRY_URL }}/agentfarm-openclaw-base:latest'
 
       - name: Set up SSH tunnel to k3s
         run: |
@@ -169,4 +177,4 @@ jobs:
           REGISTRY_SERVER: ${{ secrets.REGISTRY_URL }}
           REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
           REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
-        run: helmfile sync --wait
+        run: helmfile -f helmfile.yaml.gotmpl sync --wait

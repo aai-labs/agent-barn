@@ -64,8 +64,14 @@ releases:
     set:
       - name: registryPrefix
         value: {{ env "REGISTRY_PREFIX" | default "registry.k8s.aai-labs.com" | quote }}
+      - name: image.repository
+        value: {{ env "API_IMAGE_REPOSITORY" | default "agentfarm-api" | quote }}
+      - name: openclawImage.repository
+        value: {{ env "OPENCLAW_IMAGE_REPOSITORY" | default "agentfarm-openclaw-base" | quote }}
       - name: openclawImage.tag
         value: {{ env "OPENCLAW_IMAGE_TAG" | default "latest" | quote }}
+      - name: hermesImage.repository
+        value: {{ env "HERMES_IMAGE_REPOSITORY" | default "agentfarm-hermes-base" | quote }}
       - name: hermesImage.tag
         value: {{ env "HERMES_IMAGE_TAG" | default "latest" | quote }}
       - name: dbConnectionUrl
@@ -110,6 +116,8 @@ releases:
     set:
       - name: registryPrefix
         value: {{ env "REGISTRY_PREFIX" | default "registry.k8s.aai-labs.com" | quote }}
+      - name: image.repository
+        value: {{ env "UI_IMAGE_REPOSITORY" | default "agentfarm-ui" | quote }}
       - name: ingress.host
         value: {{ env "UI_HOST" | required "UI_HOST is required" | quote }}
     needs:
