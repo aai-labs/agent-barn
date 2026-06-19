@@ -72,7 +72,6 @@ def test_rotate_refresh_token_failure(mock_rj):
     assert "token_expired" in exc.value.detail
 
 
-
 @patch(_TRANSPORT, return_value={"ok": True, "app_id": "A12345"})
 def test_create_slack_app_success(mock_rj):
     app_id = create_slack_app(

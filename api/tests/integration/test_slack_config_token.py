@@ -118,7 +118,10 @@ def test_delete_slack_config_token(mock_validate):
 
 
 @patch(_VALIDATE)
-@patch("api.domains.auth.token_service.rotate_refresh_token", return_value=("rotated-access", "rotated-refresh"))
+@patch(
+    "api.domains.auth.token_service.rotate_refresh_token",
+    return_value=("rotated-access", "rotated-refresh"),
+)
 @patch("api.domains.agents.slack_routes.create_slack_app", return_value="A12345")
 def test_create_slack_app_via_api(mock_create, mock_rotate, mock_validate):
     with given(_GIVEN) as context:
