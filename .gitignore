@@ -17,6 +17,7 @@ dist/
 *.py[cod]
 .env
 .env.test
+.env.deploy
 
 # Log files
 *.log
