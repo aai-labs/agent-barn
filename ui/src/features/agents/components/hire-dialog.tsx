@@ -131,7 +131,9 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   const [showConfigToken, setShowConfigToken] = useState(false);
   const [showConfigRefresh, setShowConfigRefresh] = useState(false);
   const [configTokenError, setConfigTokenError] = useState<string | null>(null);
-  const [configTokenReady, setConfigTokenReady] = useState(false);
+  const [configTokenReady, setConfigTokenReady] = useState(
+    () => !isLoadingConfigToken && hasConfigToken,
+  );
   const [slackAppId, setSlackAppId] = useState<string | null>(null);
   const [botTokenUrl, setBotTokenUrl] = useState<string | null>(null);
   const [appTokenUrl, setAppTokenUrl] = useState<string | null>(null);
@@ -141,11 +143,6 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   const [provisionError, setProvisionError] = useState<string | null>(null);
   const [createdAgent, setCreatedAgent] = useState<Agent | null>(null);
 
-  useEffect(() => {
-    if (!isLoadingConfigToken && hasConfigToken) {
-      setConfigTokenReady(true);
-    }
-  }, [isLoadingConfigToken, hasConfigToken]);
 
   const progressRef = useRef(0);
   const apiDoneRef = useRef(false);
@@ -204,8 +201,9 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
       setConfigTokenInput("");
       setConfigRefreshInput("");
       setStep("bot-builder");
-    } catch (e: any) {
-      setConfigTokenError(e?.response?.data?.detail ?? e?.message ?? "Failed to save token");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to save token";
+      setConfigTokenError(msg);
     }
   }
 
@@ -222,8 +220,9 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
         setBotTokenUrl(result.botTokenUrl);
         setAppTokenUrl(result.appTokenUrl);
         setStep("slack-tokens");
-      } catch (e: any) {
-        setCreateAppError(e?.response?.data?.detail ?? e?.message ?? "Failed to create Slack app");
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Failed to create Slack app";
+        setCreateAppError(msg);
       }
     } else {
       setStep("slack-tokens");

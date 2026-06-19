@@ -33,8 +33,9 @@ export function SlackTokenSection() {
       setEditing(false);
       setVisibleAccess(false);
       setVisibleRefresh(false);
-    } catch (e: any) {
-      setError(e?.response?.data?.detail ?? e?.message ?? "Failed to save token");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to save token";
+      setError(msg);
     }
   };
 
@@ -45,8 +46,9 @@ export function SlackTokenSection() {
       setAccessInput("");
       setRefreshInput("");
       setEditing(false);
-    } catch (e: any) {
-      setError(e?.response?.data?.detail ?? e?.message ?? "Failed to remove token");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to remove token";
+      setError(msg);
     }
   };
 
