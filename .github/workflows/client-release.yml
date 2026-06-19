@@ -13,10 +13,11 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Baked into the UI bundle at build time. The in-cluster Service URL is
-  # portable across any client cluster: the browser hits same-origin /api/*,
-  # and the UI server proxies to this address from inside the cluster.
-  UI_BACKEND_URL: http://agentfarm-api.agent-farm.svc.cluster.local:8000
+  # Baked into the UI bundle at build time. The bare in-cluster Service name is
+  # portable across any client cluster: the browser hits same-origin /api/*, and
+  # the UI server proxies to this address from inside the agent-farm namespace
+  # (same namespace as the API, so the short name resolves).
+  UI_BACKEND_URL: http://agentfarm-api:8000
 
 jobs:
   release:
