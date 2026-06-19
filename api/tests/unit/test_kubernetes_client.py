@@ -143,9 +143,7 @@ def test_incluster_apiserver_builds_url(monkeypatch, tmp_path):
     token.write_text("x")
     monkeypatch.setenv("KUBERNETES_SERVICE_HOST", "10.0.0.1")
     monkeypatch.setenv("KUBERNETES_SERVICE_PORT_HTTPS", "443")
-    monkeypatch.setattr(
-        k8s_client_module, "_SERVICE_ACCOUNT_TOKEN_PATH", str(token)
-    )
+    monkeypatch.setattr(k8s_client_module, "_SERVICE_ACCOUNT_TOKEN_PATH", str(token))
     assert_that(
         KubernetesClient._incluster_apiserver(), equal_to("https://10.0.0.1:443")
     )
@@ -155,7 +153,9 @@ def test_resolve_kubeconfig_unchanged_off_cluster(monkeypatch, tmp_path):
     monkeypatch.delenv("KUBERNETES_SERVICE_HOST", raising=False)
     kubeconfig = tmp_path / "kubeconfig"
     kubeconfig.write_text(
-        yaml.safe_dump({"clusters": [{"cluster": {"server": "https://127.0.0.1:6443"}}]})
+        yaml.safe_dump(
+            {"clusters": [{"cluster": {"server": "https://127.0.0.1:6443"}}]}
+        )
     )
     assert_that(
         KubernetesClient._resolve_kubeconfig(str(kubeconfig)), equal_to(str(kubeconfig))
@@ -167,13 +167,15 @@ def test_resolve_kubeconfig_rewrites_server_in_cluster(monkeypatch, tmp_path):
     token.write_text("x")
     monkeypatch.setenv("KUBERNETES_SERVICE_HOST", "10.0.0.1")
     monkeypatch.setenv("KUBERNETES_SERVICE_PORT", "443")
-    monkeypatch.setattr(
-        k8s_client_module, "_SERVICE_ACCOUNT_TOKEN_PATH", str(token)
-    )
+    monkeypatch.setattr(k8s_client_module, "_SERVICE_ACCOUNT_TOKEN_PATH", str(token))
     kubeconfig = tmp_path / "kubeconfig"
     kubeconfig.write_text(
         yaml.safe_dump(
-            {"clusters": [{"name": "k3s", "cluster": {"server": "https://127.0.0.1:6443"}}]}
+            {
+                "clusters": [
+                    {"name": "k3s", "cluster": {"server": "https://127.0.0.1:6443"}}
+                ]
+            }
         )
     )
 
