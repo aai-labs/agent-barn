@@ -20,6 +20,32 @@ test.describe("Hire Dialog", () => {
     await dataSupportPage.agents.interceptGetAgentsRequest();
     await dataSupportPage.agents.interceptGetTemplatesRequest();
     await dataSupportPage.agents.interceptGetTemplateVersionsRequest();
+    await page.route("**/api/v1/auth/me/slack-config-token", async (route) => {
+      if (route.request().method() === "GET") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ has_token: true, token_preview: "xoxe.****test" }),
+        });
+      } else {
+        await route.fallback();
+      }
+    });
+    await page.route("**/api/v1/slack/apps", async (route) => {
+      if (route.request().method() === "POST") {
+        await route.fulfill({
+          status: 201,
+          contentType: "application/json",
+          body: JSON.stringify({
+            app_id: "A_TEST_123",
+            bot_token_url: "https://api.slack.com/apps/A_TEST_123/oauth",
+            app_token_url: "https://api.slack.com/apps/A_TEST_123/general",
+          }),
+        });
+      } else {
+        await route.fallback();
+      }
+    });
 
     await dashboardPage.goto();
     await page.getByRole("button", { name: /hire agent/i }).click();
@@ -79,15 +105,15 @@ test.describe("Hire Dialog", () => {
     await expect(page.getByText(/step 4 of 7/i)).toBeVisible();
   });
 
-  test("should show manifest in bot builder step", async ({ page }) => {
+  test("should show bot builder fields when choosing new bot", async ({ page }) => {
     await page.getByText("General Purpose", { exact: true }).click();
     await page.getByRole("button", { name: /continue/i }).click();
     await page.getByRole("button", { name: /continue/i }).click();
     await page.getByText("Set up a new Slack bot").click();
     await page.getByRole("button", { name: /continue/i }).click();
 
-    await expect(page.getByText("Generated manifest")).toBeVisible();
-    await expect(page.getByRole("link", { name: /create app/i })).toBeVisible();
+    await expect(page.getByPlaceholder("Aria")).toBeVisible();
+    await expect(page.getByText("Bot display name")).toBeVisible();
   });
 
   test("should advance to details step (path: skip bot builder)", async ({ page }) => {
