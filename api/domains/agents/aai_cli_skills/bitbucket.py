@@ -2,8 +2,7 @@
 
 BITBUCKET_SKILLS: list[dict[str, str]] = [
     {
-        "skill_name": "aai-cli",
-        "skill_file_path": "aai-cli/bitbucket_skill/bitbucket_skill.md",
+        "skill_file_path": "aai-cli/bitbucket_skill.md",
         "skill_content": """\
 # aai-cli Bitbucket Skill
 
@@ -106,28 +105,9 @@ For review agents, prefer this flow:
 
 Use `--inline-to` for lines added in the new file, `--inline-from` for lines removed from the old file, and always pass `--inline-path` for inline comments.
 
-## Resource reference
-
-Read the file for the resource you need:
-
-| Resource | Commands | File |
-|---|---|---|
-| Repositories | list, get | [bitbucket_repo_skill/bitbucket_repo_skill.md](bitbucket_repo_skill/bitbucket_repo_skill.md) |
-| Pull requests | list, get, create, close/decline/delete, diff, diffstat, commits, activity, comments | [bitbucket_pr_skill/bitbucket_pr_skill.md](bitbucket_pr_skill/bitbucket_pr_skill.md) |
-| Branches | list, get | [bitbucket_branch_skill/bitbucket_branch_skill.md](bitbucket_branch_skill/bitbucket_branch_skill.md) |
-| Commits | list, get | [bitbucket_commit_skill/bitbucket_commit_skill.md](bitbucket_commit_skill/bitbucket_commit_skill.md) |
-| Source | get, history | [bitbucket_source_skill/bitbucket_source_skill.md](bitbucket_source_skill/bitbucket_source_skill.md) |
-| Pipelines | list, get, steps list/get, step logs download | [bitbucket_pipeline_skill/bitbucket_pipeline_skill.md](bitbucket_pipeline_skill/bitbucket_pipeline_skill.md) |
-
-""",
-    },
-    {
-        "skill_name": "aai-cli",
-        "skill_file_path": "aai-cli/bitbucket_skill/bitbucket_branch_skill/bitbucket_branch_skill.md",
-        "skill_content": """\
 # Bitbucket Branches Skill
 
-Commands under `aai-cli bitbucket branches`. For global flags, repo selection, and error shapes see [../bitbucket_skill.md](../bitbucket_skill.md).
+Commands under `aai-cli bitbucket branches`.
 
 ---
 
@@ -192,15 +172,9 @@ aai-cli bitbucket branches get <BRANCH_NAME> [--repo REPO] [--owner WORKSPACE] -
 aai-cli bitbucket branches get main --repo my-repo --profile bitbucket-work
 ```
 
-""",
-    },
-    {
-        "skill_name": "aai-cli",
-        "skill_file_path": "aai-cli/bitbucket_skill/bitbucket_commit_skill/bitbucket_commit_skill.md",
-        "skill_content": """\
 # Bitbucket Commits Skill
 
-Commands under `aai-cli bitbucket commits`. For global flags, repo selection, and error shapes see [../bitbucket_skill.md](../bitbucket_skill.md).
+Commands under `aai-cli bitbucket commits`.
 
 ---
 
@@ -263,15 +237,9 @@ aai-cli bitbucket commits get <SHA> [--repo REPO] [--owner WORKSPACE] --profile 
 aai-cli bitbucket commits get abc123def456 --repo my-repo --profile bitbucket-work
 ```
 
-""",
-    },
-    {
-        "skill_name": "aai-cli",
-        "skill_file_path": "aai-cli/bitbucket_skill/bitbucket_pipeline_skill/bitbucket_pipeline_skill.md",
-        "skill_content": """\
 # Bitbucket Pipelines Skill
 
-Commands under `aai-cli bitbucket pipelines`. For global flags, repo selection, and error shapes see [../bitbucket_skill.md](../bitbucket_skill.md).
+Commands under `aai-cli bitbucket pipelines`.
 
 These commands return raw Bitbucket provider responses except for log downloads, which write bytes to disk and return `{ output, bytes }`.
 
@@ -369,15 +337,9 @@ aai-cli bitbucket pipelines steps logs download "{pipeline-uuid}" "{step-uuid}" 
 { "output": "local/logs/bitbucket-step.log", "bytes": 12345 }
 ```
 
-""",
-    },
-    {
-        "skill_name": "aai-cli",
-        "skill_file_path": "aai-cli/bitbucket_skill/bitbucket_pr_skill/bitbucket_pr_skill.md",
-        "skill_content": """\
 # Bitbucket Pull Requests Skill
 
-Commands under `aai-cli bitbucket prs`. For global flags, repo selection, and error shapes see [../bitbucket_skill.md](../bitbucket_skill.md).
+Commands under `aai-cli bitbucket prs`.
 
 Most commands accept `--repo REPO`. Newer commands also accept `--owner WORKSPACE --repo REPO`.
 
@@ -645,15 +607,9 @@ aai-cli bitbucket prs comments delete <PR_NUMBER> <COMMENT_ID> [--repo REPO] [--
 
 Verify with `comments get` before deleting.
 
-""",
-    },
-    {
-        "skill_name": "aai-cli",
-        "skill_file_path": "aai-cli/bitbucket_skill/bitbucket_repo_skill/bitbucket_repo_skill.md",
-        "skill_content": """\
 # Bitbucket Repositories Skill
 
-Commands under `aai-cli bitbucket repos`. For global flags, repo selection, and error shapes see [../bitbucket_skill.md](../bitbucket_skill.md).
+Commands under `aai-cli bitbucket repos`.
 
 ---
 
@@ -720,15 +676,9 @@ aai-cli bitbucket repos get my-workspace/my-repo --profile bitbucket-work
 }
 ```
 
-""",
-    },
-    {
-        "skill_name": "aai-cli",
-        "skill_file_path": "aai-cli/bitbucket_skill/bitbucket_source_skill/bitbucket_source_skill.md",
-        "skill_content": """\
 # Bitbucket Source Skill
 
-Commands under `aai-cli bitbucket source`. For global flags, repo selection, and error shapes see [../bitbucket_skill.md](../bitbucket_skill.md).
+Commands under `aai-cli bitbucket source`.
 
 `COMMIT` can be a branch name, tag, or commit hash accepted by Bitbucket. File paths are encoded path segment by path segment; a leading slash is ignored.
 
@@ -790,7 +740,6 @@ aai-cli bitbucket source history main README.md --limit 20 --profile bitbucket-w
 ```
 
 Bitbucket Cloud does not expose a dedicated per-line blame REST endpoint. `source history` is the closest REST analog for agents.
-
 """,
     },
 ]
