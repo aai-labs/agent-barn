@@ -131,9 +131,8 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   const [showConfigToken, setShowConfigToken] = useState(false);
   const [showConfigRefresh, setShowConfigRefresh] = useState(false);
   const [configTokenError, setConfigTokenError] = useState<string | null>(null);
-  const [configTokenReady, setConfigTokenReady] = useState(
-    () => !isLoadingConfigToken && hasConfigToken,
-  );
+  const [configTokenSaved, setConfigTokenSaved] = useState(false);
+  const configTokenReady = configTokenSaved || (!isLoadingConfigToken && hasConfigToken);
   const [slackAppId, setSlackAppId] = useState<string | null>(null);
   const [botTokenUrl, setBotTokenUrl] = useState<string | null>(null);
   const [appTokenUrl, setAppTokenUrl] = useState<string | null>(null);
@@ -197,7 +196,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
         accessToken: configTokenInput.trim(),
         refreshToken: configRefreshInput.trim(),
       });
-      setConfigTokenReady(true);
+      setConfigTokenSaved(true);
       setConfigTokenInput("");
       setConfigRefreshInput("");
       setStep("bot-builder");
