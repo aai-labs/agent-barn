@@ -127,7 +127,9 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   const [teamsTokenError, setTeamsTokenError] = useState<string | null>(null);
   const [integrations, setIntegrations] = useState<IntegrationDraft[]>([]);
   const [configTokenInput, setConfigTokenInput] = useState("");
+  const [configRefreshInput, setConfigRefreshInput] = useState("");
   const [showConfigToken, setShowConfigToken] = useState(false);
+  const [showConfigRefresh, setShowConfigRefresh] = useState(false);
   const [configTokenError, setConfigTokenError] = useState<string | null>(null);
   const [configTokenReady, setConfigTokenReady] = useState(false);
   const [slackAppId, setSlackAppId] = useState<string | null>(null);
@@ -194,9 +196,13 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
     if (!configTokenInput.trim()) return;
     setConfigTokenError(null);
     try {
-      await saveToken.mutateAsync(configTokenInput.trim());
+      await saveToken.mutateAsync({
+        accessToken: configTokenInput.trim(),
+        refreshToken: configRefreshInput.trim(),
+      });
       setConfigTokenReady(true);
       setConfigTokenInput("");
+      setConfigRefreshInput("");
       setStep("bot-builder");
     } catch (e: any) {
       setConfigTokenError(e?.response?.data?.detail ?? e?.message ?? "Failed to save token");
@@ -510,6 +516,10 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
             onTokenInputChange={(v) => { setConfigTokenInput(v); setConfigTokenError(null); }}
             showToken={showConfigToken}
             onToggleToken={() => setShowConfigToken((v) => !v)}
+            refreshInput={configRefreshInput}
+            onRefreshInputChange={(v) => { setConfigRefreshInput(v); setConfigTokenError(null); }}
+            showRefresh={showConfigRefresh}
+            onToggleRefresh={() => setShowConfigRefresh((v) => !v)}
             isSaving={saveToken.isPending}
             error={configTokenError}
           />

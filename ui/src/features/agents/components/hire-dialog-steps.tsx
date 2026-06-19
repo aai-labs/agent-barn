@@ -380,6 +380,10 @@ export function ConfigTokenStep({
   onTokenInputChange,
   showToken,
   onToggleToken,
+  refreshInput,
+  onRefreshInputChange,
+  showRefresh,
+  onToggleRefresh,
   isSaving,
   error,
 }: {
@@ -387,14 +391,46 @@ export function ConfigTokenStep({
   onTokenInputChange: (v: string) => void;
   showToken: boolean;
   onToggleToken: () => void;
+  refreshInput: string;
+  onRefreshInputChange: (v: string) => void;
+  showRefresh: boolean;
+  onToggleRefresh: () => void;
   isSaving: boolean;
   error: string | null;
 }) {
   return (
     <div className="flex flex-col gap-5">
       <p className="text-[0.8125rem] leading-[1.5]" style={{ color: "var(--ink-3)" }}>
-        To create the Slack app automatically, you need a configuration access token.
+        To create the Slack app automatically, you need configuration tokens.
       </p>
+
+      <FormField label="Access token" hint="Configuration access token from Slack">
+        <TokenInput
+          value={tokenInput}
+          onChange={onTokenInputChange}
+          visible={showToken}
+          onToggle={onToggleToken}
+          placeholder="Configuration access token..."
+          disabled={isSaving}
+        />
+      </FormField>
+
+      <FormField label="Refresh token" hint="Starts with xoxe- · enables automatic renewal (recommended)">
+        <TokenInput
+          value={refreshInput}
+          onChange={onRefreshInputChange}
+          visible={showRefresh}
+          onToggle={onToggleRefresh}
+          placeholder="xoxe-… (optional)"
+          disabled={isSaving}
+        />
+      </FormField>
+
+      {error && (
+        <div className="text-[0.8125rem]" style={{ color: "var(--err)" }}>
+          {error}
+        </div>
+      )}
 
       <div
         className="flex flex-col gap-3 rounded-2xl p-4"
@@ -413,32 +449,15 @@ export function ConfigTokenStep({
           </a>
         </NextStep>
         <NextStep n={2} label="Open any app's Basic Information page">
-          Scroll to <b>App Configuration Tokens</b> and click <b>Generate Token</b>.
+          Scroll to <b>App Configuration Tokens</b> and click <b>Generate Token</b>. You will get both an access token and a refresh token.
         </NextStep>
-        <NextStep n={3} label="Paste the token below">
-          It will be saved to your account and reused for future bot creation.
+        <NextStep n={3} label="Paste both tokens above">
+          They will be saved to your account and reused for future bot creation.
         </NextStep>
       </div>
 
-      <FormField label="Configuration token" hint="Starts with xoxe- or a long alphanumeric string">
-        <TokenInput
-          value={tokenInput}
-          onChange={onTokenInputChange}
-          visible={showToken}
-          onToggle={onToggleToken}
-          placeholder="Paste configuration token..."
-          disabled={isSaving}
-        />
-      </FormField>
-
-      {error && (
-        <div className="text-[0.8125rem]" style={{ color: "var(--err)" }}>
-          {error}
-        </div>
-      )}
-
       <p className="text-[0.75rem]" style={{ color: "var(--ink-4)" }}>
-        You can update this token later in{" "}
+        You can update these tokens later in{" "}
         <a href="/dashboard/account" className="underline" style={{ color: "var(--ink-3)" }}>
           Account settings
         </a>.
@@ -671,44 +690,6 @@ export function SlackTokensStep({
 }) {
   return (
     <form autoComplete="off" className="flex flex-col gap-5" onSubmit={(e) => e.preventDefault()}>
-      {appId && (
-        <div
-          className="flex flex-col gap-3 rounded-2xl p-4"
-          style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
-        >
-          <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
-            Your Slack app is created!
-          </div>
-          <NextStep n={1} label="Install the app and copy the Bot Token">
-            Go to{" "}
-            <a
-              href={botTokenUrl ?? "#"}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="underline"
-              style={{ color: "var(--ink-2)" }}
-            >
-              Install App ↗
-            </a>
-            {" "}— install to your workspace, then copy the <span className="font-mono text-xs">xoxb-…</span> bot token.
-          </NextStep>
-          <NextStep n={2} label="Generate an App-Level Token">
-            Go to{" "}
-            <a
-              href={appTokenUrl ?? "#"}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="underline"
-              style={{ color: "var(--ink-2)" }}
-            >
-              Basic Information ↗
-            </a>
-            {" "}→ App-Level Tokens → Generate Token and Scopes. Add the <span className="font-mono text-xs">connections:write</span> scope.
-          </NextStep>
-          <NextStep n={3} label="Paste both tokens below" />
-        </div>
-      )}
-
       <div
         className="flex flex-col gap-3.5 p-4 rounded-2xl"
         style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
@@ -748,6 +729,44 @@ export function SlackTokensStep({
           </div>
         )}
       </div>
+
+      {appId && (
+        <div
+          className="flex flex-col gap-3 rounded-2xl p-4"
+          style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
+        >
+          <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
+            Your Slack app is created!
+          </div>
+          <NextStep n={1} label="Install the app and copy the Bot Token">
+            Go to{" "}
+            <a
+              href={botTokenUrl ?? "#"}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline"
+              style={{ color: "var(--ink-2)" }}
+            >
+              Install App ↗
+            </a>
+            {" "}— install to your workspace, then copy the <span className="font-mono text-xs">xoxb-…</span> bot token.
+          </NextStep>
+          <NextStep n={2} label="Generate an App-Level Token">
+            Go to{" "}
+            <a
+              href={appTokenUrl ?? "#"}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline"
+              style={{ color: "var(--ink-2)" }}
+            >
+              Basic Information ↗
+            </a>
+            {" "}→ App-Level Tokens → Generate Token and Scopes. Add the <span className="font-mono text-xs">connections:write</span> scope.
+          </NextStep>
+          <NextStep n={3} label="Paste both tokens above" />
+        </div>
+      )}
     </form>
   );
 }

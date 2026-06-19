@@ -10,7 +10,7 @@ from api.domains.auth.repository import SlackConfigTokenRepository
 from api.infrastructure.crypto import decrypt_token, encrypt_token
 from api.infrastructure.slack.config_token import (
     rotate_refresh_token,
-    validate_config_credential,
+    validate_config_access_token,
 )
 
 
@@ -43,27 +43,30 @@ class SlackConfigTokenService:
 
         return SlackConfigTokenRead(has_token=True, token_preview=preview)
 
-    def save_config_token(self, user_id: UUID, raw_token: str) -> SlackConfigTokenRead:
-        raw = raw_token.strip()
-        if not raw:
+    def save_config_token(
+        self, user_id: UUID, access_token_raw: str, refresh_token_raw: str = "",
+    ) -> SlackConfigTokenRead:
+        access = access_token_raw.strip()
+        refresh = refresh_token_raw.strip()
+        if not access:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Token cannot be empty.",
+                detail="Access token cannot be empty.",
             )
 
-        access_token, refresh_token = validate_config_credential(raw)
+        validate_config_access_token(access)
         key = self.config.agent_token_encryption_key
         self.repository.upsert(
             user_id=user_id,
-            access_token_encrypted=encrypt_token(access_token, key),
+            access_token_encrypted=encrypt_token(access, key),
             refresh_token_encrypted=(
-                encrypt_token(refresh_token, key) if refresh_token else ""
+                encrypt_token(refresh, key) if refresh else ""
             ),
         )
 
         return SlackConfigTokenRead(
             has_token=True,
-            token_preview=_mask_token(access_token),
+            token_preview=_mask_token(access),
         )
 
     def get_usable_access_token(self, user_id: UUID) -> str:

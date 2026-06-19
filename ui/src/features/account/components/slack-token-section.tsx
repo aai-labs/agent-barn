@@ -14,18 +14,25 @@ export function SlackTokenSection() {
   const { saveToken, deleteToken } = useSlackConfigTokenActions();
 
   const [editing, setEditing] = useState(false);
-  const [input, setInput] = useState("");
-  const [visible, setVisible] = useState(false);
+  const [accessInput, setAccessInput] = useState("");
+  const [refreshInput, setRefreshInput] = useState("");
+  const [visibleAccess, setVisibleAccess] = useState(false);
+  const [visibleRefresh, setVisibleRefresh] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const handleSave = async () => {
-    if (!input.trim()) return;
+    if (!accessInput.trim()) return;
     setError(null);
     try {
-      await saveToken.mutateAsync(input.trim());
-      setInput("");
+      await saveToken.mutateAsync({
+        accessToken: accessInput.trim(),
+        refreshToken: refreshInput.trim(),
+      });
+      setAccessInput("");
+      setRefreshInput("");
       setEditing(false);
-      setVisible(false);
+      setVisibleAccess(false);
+      setVisibleRefresh(false);
     } catch (e: any) {
       setError(e?.response?.data?.detail ?? e?.message ?? "Failed to save token");
     }
@@ -35,7 +42,8 @@ export function SlackTokenSection() {
     setError(null);
     try {
       await deleteToken.mutateAsync();
-      setInput("");
+      setAccessInput("");
+      setRefreshInput("");
       setEditing(false);
     } catch (e: any) {
       setError(e?.response?.data?.detail ?? e?.message ?? "Failed to remove token");
@@ -43,10 +51,12 @@ export function SlackTokenSection() {
   };
 
   const handleCancel = () => {
-    setInput("");
+    setAccessInput("");
+    setRefreshInput("");
     setEditing(false);
     setError(null);
-    setVisible(false);
+    setVisibleAccess(false);
+    setVisibleRefresh(false);
   };
 
   if (isLoading) {
@@ -62,7 +72,7 @@ export function SlackTokenSection() {
   return (
     <div className="af-card p-6">
       <div className="font-semibold text-[15px] mb-1" style={{ color: "var(--ink)" }}>
-        Slack configuration token
+        Slack configuration tokens
       </div>
       <p className="text-[13.5px] leading-[1.55] mb-5" style={{ color: "var(--ink-3)" }}>
         Used to automatically create Slack apps when hiring agents. This avoids
@@ -87,35 +97,67 @@ export function SlackTokenSection() {
               </li>
               <li>Click any app (or create a temporary one)</li>
               <li>Go to &quot;Basic Information&quot; &rarr; scroll to &quot;App Configuration Tokens&quot;</li>
-              <li>Click &quot;Generate Token&quot; to create a configuration access token</li>
-              <li>Copy and paste it below</li>
+              <li>Click &quot;Generate Token&quot; — you will get an access token and a refresh token</li>
+              <li>Copy and paste both below</li>
             </ol>
           </div>
 
-          <div className="relative mb-3">
-            <input
-              className="af-input font-mono text-[13px] pr-10"
-              type={visible ? "text" : "password"}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder="Paste configuration token..."
-              autoComplete="off"
-              data-lpignore="true"
-              data-1p-ignore
-              data-form-type="other"
-              onKeyDown={(e) => {
-                if (e.key === "Enter") void handleSave();
-              }}
-            />
-            <button
-              type="button"
-              className="absolute right-3 top-1/2 -translate-y-1/2"
-              style={{ color: "var(--ink-4)" }}
-              onClick={() => setVisible((v) => !v)}
-              tabIndex={-1}
-            >
-              {visible ? <EyeOffIcon size={15} /> : <EyeIcon size={15} />}
-            </button>
+          <div className="flex flex-col gap-3 mb-3">
+            <div>
+              <label className="block text-[12.5px] font-medium mb-1" style={{ color: "var(--ink-2)" }}>
+                Access token
+              </label>
+              <div className="relative">
+                <input
+                  className="af-input font-mono text-[13px] pr-10"
+                  type={visibleAccess ? "text" : "password"}
+                  value={accessInput}
+                  onChange={(e) => setAccessInput(e.target.value)}
+                  placeholder="Configuration access token..."
+                  autoComplete="off"
+                  data-lpignore="true"
+                  data-1p-ignore
+                  data-form-type="other"
+                />
+                <button
+                  type="button"
+                  className="absolute right-3 top-1/2 -translate-y-1/2"
+                  style={{ color: "var(--ink-4)" }}
+                  onClick={() => setVisibleAccess((v) => !v)}
+                  tabIndex={-1}
+                >
+                  {visibleAccess ? <EyeOffIcon size={15} /> : <EyeIcon size={15} />}
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-[12.5px] font-medium mb-1" style={{ color: "var(--ink-2)" }}>
+                Refresh token <span className="font-normal" style={{ color: "var(--ink-4)" }}>(recommended — enables automatic renewal)</span>
+              </label>
+              <div className="relative">
+                <input
+                  className="af-input font-mono text-[13px] pr-10"
+                  type={visibleRefresh ? "text" : "password"}
+                  value={refreshInput}
+                  onChange={(e) => setRefreshInput(e.target.value)}
+                  placeholder="xoxe-… (optional)"
+                  autoComplete="off"
+                  data-lpignore="true"
+                  data-1p-ignore
+                  data-form-type="other"
+                />
+                <button
+                  type="button"
+                  className="absolute right-3 top-1/2 -translate-y-1/2"
+                  style={{ color: "var(--ink-4)" }}
+                  onClick={() => setVisibleRefresh((v) => !v)}
+                  tabIndex={-1}
+                >
+                  {visibleRefresh ? <EyeOffIcon size={15} /> : <EyeIcon size={15} />}
+                </button>
+              </div>
+            </div>
           </div>
 
           {error && (
@@ -131,7 +173,7 @@ export function SlackTokenSection() {
           <div className="flex gap-2">
             <button
               className="af-btn af-btn-primary"
-              disabled={!input.trim() || saveToken.isPending}
+              disabled={!accessInput.trim() || saveToken.isPending}
               onClick={() => void handleSave()}
             >
               {saveToken.isPending ? "Saving..." : "Save"}

@@ -15,7 +15,7 @@ from api.tests.steps.agent import TEST_ENCRYPTION_KEY
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.user import there_is_authenticated_user
 
-_VALIDATE = "api.domains.auth.token_service.validate_config_credential"
+_VALIDATE = "api.domains.auth.token_service.validate_config_access_token"
 _URL = "/api/v1/auth/me/slack-config-token"
 
 _GIVEN = [
@@ -55,7 +55,7 @@ def test_save_and_get_slack_config_token(mock_validate):
         with when("I save a config token"):
             response = client.put(
                 _URL,
-                json={"token": "valid-access-token"},
+                json={"access_token": "valid-access-token"},
                 headers=_headers(context),
             )
 
@@ -81,7 +81,7 @@ def test_save_slack_config_token_rejects_xoxb():
         with when("I try to save a bot token"):
             response = client.put(
                 _URL,
-                json={"token": "xoxb-fake-token"},
+                json={"access_token": "xoxb-fake-token"},
                 headers=_headers(context),
             )
 
@@ -97,7 +97,7 @@ def test_delete_slack_config_token(mock_validate):
         with when("I save then delete a config token"):
             client.put(
                 _URL,
-                json={"token": "valid-access-token"},
+                json={"access_token": "valid-access-token"},
                 headers=_headers(context),
             )
             response = client.delete(_URL, headers=_headers(context))
@@ -118,7 +118,7 @@ def test_create_slack_app_via_api(mock_create, mock_validate):
         client: TestClient = context.client
         headers = _headers(context)
 
-        client.put(_URL, json={"token": "valid-access-token"}, headers=headers)
+        client.put(_URL, json={"access_token": "valid-access-token"}, headers=headers)
 
         with when("I create a slack app"):
             response = client.post(
