@@ -133,14 +133,6 @@ def rotate_refresh_token(refresh_token: str) -> tuple[str, str]:
     return access_token, new_refresh_token
 
 
-def validate_config_credential(token: str) -> tuple[str, str | None]:
-    if token.startswith("xoxe-") and not token.startswith("xoxe.xoxp-"):
-        return rotate_refresh_token(token)
-
-    validate_config_access_token(token)
-    return token, None
-
-
 def create_slack_app(access_token: str, manifest: dict) -> str:
     try:
         body = _post_form(

@@ -1,7 +1,7 @@
 """add user_slack_config_token table
 
 Revision ID: d4e5f6a7b8c9
-Revises: c2d3e4f5a6b7
+Revises: 7e2a9c4b1d63
 Create Date: 2026-06-18
 
 """
@@ -13,7 +13,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "d4e5f6a7b8c9"
-down_revision: Union[str, None] = "c2d3e4f5a6b7"
+down_revision: Union[str, None] = "7e2a9c4b1d63"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

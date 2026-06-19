@@ -7,7 +7,6 @@ from api.infrastructure.slack.config_token import (
     create_slack_app,
     rotate_refresh_token,
     validate_config_access_token,
-    validate_config_credential,
 )
 
 _TRANSPORT = "api.infrastructure.slack.config_token.request_json"
@@ -72,26 +71,6 @@ def test_rotate_refresh_token_failure(mock_rj):
     assert exc.value.status_code == 400
     assert "token_expired" in exc.value.detail
 
-
-@patch(
-    "api.infrastructure.slack.config_token.rotate_refresh_token",
-    return_value=("access", "refresh"),
-)
-def test_validate_config_credential_refresh_token(mock_rotate):
-    access, refresh = validate_config_credential("xoxe-something")
-
-    mock_rotate.assert_called_once_with("xoxe-something")
-    assert access == "access"
-    assert refresh == "refresh"
-
-
-@patch("api.infrastructure.slack.config_token.validate_config_access_token")
-def test_validate_config_credential_access_token(mock_validate):
-    access, refresh = validate_config_credential("some-access-token")
-
-    mock_validate.assert_called_once_with("some-access-token")
-    assert access == "some-access-token"
-    assert refresh is None
 
 
 @patch(_TRANSPORT, return_value={"ok": True, "app_id": "A12345"})

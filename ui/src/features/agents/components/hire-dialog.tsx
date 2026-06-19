@@ -530,7 +530,6 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
               botName={botName} onBotNameChange={(v) => { setBotName(v); setName(v); }}
               botDescription={botDescription} onBotDescriptionChange={setBotDescription}
               botColor={botColor} onBotColorChange={setBotColor}
-              automated={configTokenReady && setupNewBot}
             />
             {createAppError && (
               <div className="mt-3 text-[0.8125rem]" style={{ color: "var(--err)" }}>
