@@ -167,7 +167,7 @@ export function SkillDrawer({ mode, onClose }: SkillDrawerProps) {
           <button
             className="af-btn af-btn-ghost af-btn-icon"
             onClick={onClose}
-            aria-label="Close"
+            aria-label="Close drawer"
           >
             <XIcon />
           </button>

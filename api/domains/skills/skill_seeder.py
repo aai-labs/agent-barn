@@ -18,7 +18,7 @@ def seed_aai_cli_skills(repository: SkillRepository) -> None:
             existing.zip_content = new_zip
             existing.tools_pointer = new_pointer
             repository.save(existing)
-            logger.info("Updated AAI_CLI skill: %s", name)
+            logger.warning("Updated AAI_CLI skill: %s", name)
             continue
         skill = Skill(
             organization_id=None,
@@ -29,4 +29,4 @@ def seed_aai_cli_skills(repository: SkillRepository) -> None:
             tools_pointer=new_pointer,
         )
         repository.save(skill)
-        logger.info("Seeded AAI_CLI skill: %s", name)
+        logger.warning("Seeded AAI_CLI skill: %s", name)
