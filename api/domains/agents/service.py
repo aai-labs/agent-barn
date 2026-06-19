@@ -1,5 +1,6 @@
 import concurrent.futures
 import datetime
+import fnmatch
 import logging
 import secrets
 from dataclasses import dataclass
@@ -11,6 +12,7 @@ from injector import inject, singleton
 
 from api.core.config import Config
 from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
+from api.infrastructure.openrouter.client import OpenRouterClient
 from api.domains.agents.aai_cli_artifacts import (
     build_config_toml,
     build_env,
@@ -106,6 +108,39 @@ _TEAMS_CONFIG_FIELDS = frozenset(
 )
 
 
+_OPENROUTER_MODEL_PREFIX = "litellm/openrouter/"
+
+
+def _allowlist_patterns(allowlist: str) -> list[str]:
+    return [p.strip().lower() for p in allowlist.split(",") if p.strip()]
+
+
+def filter_models_by_allowlist(catalog: list[dict], allowlist: str) -> list[dict]:
+    """Keeps catalogue entries whose id matches any comma-separated glob pattern.
+    An empty allowlist passes everything through. Matching is case-insensitive.
+    """
+    patterns = _allowlist_patterns(allowlist)
+    if not patterns:
+        return catalog
+    return [
+        model
+        for model in catalog
+        if any(fnmatch.fnmatch(model["id"].lower(), pattern) for pattern in patterns)
+    ]
+
+
+def is_model_allowed(model: str, allowlist: str) -> bool:
+    """Whether a stored model string (litellm/openrouter/<slug>) is permitted by
+    the allowlist globs. An empty allowlist permits everything. The litellm/
+    gateway prefix is stripped so patterns match the OpenRouter slug.
+    """
+    patterns = _allowlist_patterns(allowlist)
+    if not patterns:
+        return True
+    slug = model.removeprefix(_OPENROUTER_MODEL_PREFIX).lower()
+    return any(fnmatch.fnmatch(slug, pattern) for pattern in patterns)
+
+
 @inject
 @singleton
 @dataclass
@@ -114,12 +149,24 @@ class AgentService:
     template_repository: TemplateRepository
     k8s: KubernetesClient
     litellm: LiteLLMClient
+    openrouter: OpenRouterClient
     config: Config
     conversation_sync_service: ConversationSyncService
     sync_service: ToolCallSyncService
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
+
+    def _ensure_model_allowed(self, model: str | None) -> None:
+        """Rejects models outside the allowlist. litellm is cluster-internal, so
+        create/update are the only paths that can set an agent's model; enforcing
+        here is sufficient. An empty/None model defers to the configured default.
+        """
+        if model and not is_model_allowed(model, self.config.agent_model_allowlist):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Model '{model}' is not in the allowed model list",
+            )
 
     def _get_active_or_404(self, agent_id: UUID, org_id: UUID) -> Agent:
         agent = self.repository.get_active(agent_id, org_id)
@@ -181,6 +228,7 @@ class AgentService:
 
     def create_agent(self, data: AgentCreate, context: CurrentUserContext) -> AgentRead:
         org_id = self._org_id(context)
+        self._ensure_model_allowed(data.model)
 
         if data.platform == AgentPlatform.SLACK:
             assert data.slack_bot_token is not None
@@ -400,6 +448,7 @@ class AgentService:
             agent.name = updated["name"]
 
         if "model" in updated:
+            self._ensure_model_allowed(updated["model"])
             agent.model = updated["model"]
 
         # Slack config updates
@@ -713,7 +762,10 @@ class AgentService:
             self.k8s.delete_secret(name, ns)
             self.k8s.create_config_map(ns, config_map)
             self.k8s.create_secret(ns, secret)
-            self.k8s.create_pvc(ns, build_pvc(agent.id, org_id, ns))
+            self.k8s.create_pvc(
+                ns,
+                build_pvc(agent.id, org_id, ns, self.config.storage_class or None),
+            )
             self.k8s.create_service(ns, service)
             self.k8s.create_deployment(ns, deployment)
         except Exception as exc:
@@ -875,6 +927,42 @@ class AgentService:
                 client.join_channel(channel_id)
             except Exception as e:
                 logger.warning("Unexpected error joining channel %s: %s", channel_id, e)
+
+    def list_models(self, context: CurrentUserContext) -> list[dict]:
+        """Returns the allowlisted OpenRouter models as picker options. The
+        configured default (AGENT_DEFAULT_MODEL) is guaranteed present, flagged
+        is_default, and listed first so the frontend and backend agree on it.
+        """
+        self._org_id(context)
+        catalog = self.openrouter.list_models()
+        allowed = filter_models_by_allowlist(catalog, self.config.agent_model_allowlist)
+        options = [
+            {
+                "value": f"litellm/openrouter/{model['id']}",
+                "label": model["name"],
+                "context_length": model.get("context_length"),
+                "pricing": model.get("pricing"),
+            }
+            for model in allowed
+        ]
+
+        default_value = self.config.agent_default_model
+        if default_value and not any(o["value"] == default_value for o in options):
+            options.insert(
+                0,
+                {
+                    "value": default_value,
+                    "label": default_value.removeprefix(_OPENROUTER_MODEL_PREFIX),
+                    "context_length": None,
+                    "pricing": None,
+                },
+            )
+
+        # Stable sort puts the default first while preserving catalogue order.
+        options.sort(key=lambda o: o["value"] != default_value)
+        for option in options:
+            option["is_default"] = option["value"] == default_value
+        return options
 
     def list_slack_channels(
         self, agent_id: UUID, context: CurrentUserContext, search: str | None = None

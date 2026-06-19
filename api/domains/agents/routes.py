@@ -46,6 +46,14 @@ def list_agents(
     )
 
 
+@agents_router.get("/models")
+def list_models(
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentService, Injected(AgentService)],
+):
+    return service.list_models(context)
+
+
 @agents_router.get("/{agent_id}", response_model=AgentRead)
 def get_agent(
     agent_id: UUID,

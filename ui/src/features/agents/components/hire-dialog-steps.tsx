@@ -20,6 +20,7 @@ import {
 import type { AgentTemplateRead } from "../schemas";
 import { useTemplates } from "../hooks/use-templates";
 import { ChoiceCard, FormField, NextStep, TokenInput } from "./hire-dialog-primitives";
+import { ModelSelect } from "./model-select";
 import { Pagination } from "./pagination";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
@@ -54,8 +55,6 @@ export type TemplateFileKey = (typeof TEMPLATE_FILE_KEYS)[number];
 export function templateFileLabel(key: TemplateFileKey): string {
   return key.replace("Md", "").toUpperCase() + ".md";
 }
-
-export const MODELS = [{ value: "litellm/qwen3.6-plus", label: "Qwen3.6 Plus" }, { value: "litellm/gpt-5-mini", label: "GPT-5 mini" }] as const;
 
 export const BOT_COLOR_PRESETS = ["#4A154B", "#1264A3", "#2BAC76", "#E8912D", "#CC4400"];
 
@@ -1168,16 +1167,7 @@ export function DetailsStep({
       </FormField>
 
       <FormField label="Model">
-        <select
-          className="af-input"
-          aria-label="Model"
-          value={model}
-          onChange={(e) => onModelChange(e.target.value)}
-        >
-          {MODELS.map((m) => (
-            <option key={m.value} value={m.value}>{m.label}</option>
-          ))}
-        </select>
+        <ModelSelect value={model} onChange={onModelChange} aria-label="Model" />
       </FormField>
 
       {platform === "slack" && (

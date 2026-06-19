@@ -545,6 +545,21 @@ test("user can log in", async ({ page }) => {
 6. Add/update Playwright coverage.
 7. Run `make lint-ui`, `pnpm -s tsc --noEmit`, and relevant tests.
 
+## Versioning and Releases
+
+Each deployable is its own Helm chart with two independent versions in `Chart.yaml`:
+
+- `appVersion` — the container image tag the deploy builds and pushes. Bump it whenever that service's image content (code) changes: minor for features, patch for fixes.
+- chart `version` — the chart packaging version. Bump it when that chart's templates/values change, independently of app code.
+
+Rules:
+
+- Frontend and backend versions are independent and will drift apart. Do not keep them in lockstep — bump only the service(s) that actually changed.
+- `appVersion` tags are immutable: never reuse an `appVersion` for different code. The deploy would overwrite the tag, and pods would not roll.
+- Bump versions late — ideally the last commit before opening the PR — so you bump off the freshest `main` and avoid version-line merge conflicts.
+- The product/release identifier is the git commit/PR, not a shared chart number.
+- `deploy.yml` derives the API and UI image tags from `appVersion` in `helm/agentfarm-api/Chart.yaml` and `helm/agentfarm-ui/Chart.yaml`. `litellm` and `postgres` have no `appVersion` (they run upstream images); bump only their chart `version` when their templates change.
+
 ## Review Guidance
 
 When asked to review code, prioritize in this order:
@@ -565,4 +580,5 @@ Do not lead with style-only feedback unless it impacts correctness or maintainab
 - Tests for changed behavior are added/updated and passing.
 - Lint/type/check commands pass for touched areas.
 - Migrations are included for DB schema changes.
+- Helm `appVersion`/chart `version` are bumped for changed service images/charts.
 - No unrelated refactors or style churn.
