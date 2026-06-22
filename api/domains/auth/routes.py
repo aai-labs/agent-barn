@@ -2,7 +2,6 @@ from typing import Annotated
 
 from fastapi import (
     APIRouter,
-    BackgroundTasks,
     Depends,
     HTTPException,
     Request,
@@ -19,7 +18,6 @@ from api.domains.auth.models import (
     ForgotPasswordRequest,
     PasswordResetRequest,
     RefreshTokenRequest,
-    SignupRequest,
     Token,
     TokenData,
 )
@@ -152,17 +150,12 @@ def forgot_password(
     return {"message": "Password reset email sent if user exists."}
 
 
-@auth_router.post("/signup", response_model=Token, status_code=status.HTTP_201_CREATED)
-def signup(
-    response: Response,
-    background_tasks: BackgroundTasks,
-    signup_request: SignupRequest,
-    auth_service: AuthService = Injected(AuthService),
-    config: Config = Injected(Config),
-):
-    token_pair = auth_service.signup(signup_request, background_tasks)
-    _set_refresh_token_cookie(response, token_pair.refresh_token, config)
-    return token_pair
+@auth_router.post("/signup")
+def signup():
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail="Self-registration is disabled. Contact an administrator.",
+    )
 
 
 @auth_router.post("/reset-password")

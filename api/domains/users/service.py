@@ -8,7 +8,9 @@ from api.core.config import Config
 from api.domains.auth.hashing import check_hash, hash_text
 from api.domains.auth.password_validation import validate_strong_password
 from api.domains.auth.repository import RefreshTokenRepository
+from api.domains.organizations.repository import OrganizationRepository
 from api.domains.users.models import (
+    AdminUserCreate,
     User,
     UserCreateSuperAdmin,
     UserFilter,
@@ -16,6 +18,7 @@ from api.domains.users.models import (
     UserRead,
     UserUpdate,
 )
+from api.domains.users.organization_users.models import OrganizationRole, OrganizationUser
 from api.domains.users.organization_users.repository import OrganizationUserRepository
 from api.domains.users.organization_users.service import OrganizationUserService
 from api.domains.users.repository import UserRepository
@@ -28,6 +31,7 @@ class UserService:
     user_repository: UserRepository
     organization_user_service: OrganizationUserService
     organization_user_repository: OrganizationUserRepository
+    organization_repository: OrganizationRepository
     refresh_token_repository: RefreshTokenRepository
     config: Config
 
@@ -63,6 +67,31 @@ class UserService:
             hashed_password=hash_text(password),
         )
         return self.user_repository.save(user)
+
+    def create_user(self, data: AdminUserCreate) -> User:
+        validate_strong_password(data.password)
+        user = User(
+            email=data.email,
+            full_name=data.full_name,
+            hashed_password=hash_text(data.password),
+        )
+        self.user_repository.save(user)
+
+        default_org = self.organization_repository.find_default()
+        if not default_org:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Default organization not found",
+            )
+
+        self.organization_user_repository.save(
+            OrganizationUser(
+                user_id=user.id,
+                organization_id=default_org.id,
+                role=OrganizationRole.MEMBER,
+            )
+        )
+        return user
 
     def get_user_by_id_and_organization_id(
         self, user_id: UUID, organization_id: UUID
@@ -143,7 +172,12 @@ class UserService:
         user.security_stamp = uuid7().hex
         self.user_repository.save(user)
 
-    def delete_user(self, user_id: UUID) -> None:
+    def delete_user(self, user_id: UUID, actor_id: UUID) -> None:
+        if user_id == actor_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot delete your own account",
+            )
         user = self.get_user(user_id)
 
         refresh_tokens = self.refresh_token_repository.get_by_user(user.id)

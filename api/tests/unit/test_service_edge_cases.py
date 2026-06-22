@@ -10,6 +10,7 @@ from pydantic import PostgresDsn
 from api.core.config import Config
 from api.domains.auth.repository import RefreshTokenRepository
 from api.domains.organizations.models import OrganizationUpdate
+from api.domains.organizations.repository import OrganizationRepository
 from api.domains.organizations.service import OrganizationService
 from api.domains.users.models import User
 from api.domains.users.organization_users.repository import OrganizationUserRepository
@@ -28,6 +29,7 @@ def build_user_service() -> tuple[
     user_repository = Mock(spec=UserRepository)
     organization_user_service = Mock(spec=OrganizationUserService)
     organization_user_repository = Mock(spec=OrganizationUserRepository)
+    organization_repository = Mock(spec=OrganizationRepository)
     refresh_token_repository = Mock(spec=RefreshTokenRepository)
     config = Config(
         db_connection_url=cast(
@@ -46,6 +48,7 @@ def build_user_service() -> tuple[
         organization_user_repository=cast(
             OrganizationUserRepository, organization_user_repository
         ),
+        organization_repository=cast(OrganizationRepository, organization_repository),
         refresh_token_repository=cast(RefreshTokenRepository, refresh_token_repository),
         config=config,
     )
@@ -94,7 +97,7 @@ def test_delete_user_deletes_refresh_tokens_memberships_and_user():
     user_repository.get.return_value = user
     refresh_token_repository.get_by_user.return_value = refresh_tokens
 
-    service.delete_user(user.id)
+    service.delete_user(user.id, uuid7())
 
     refresh_token_repository.delete_all_by.assert_called_once_with(refresh_tokens)
     organization_user_repository.delete_all_by_user_id.assert_called_once_with(user.id)

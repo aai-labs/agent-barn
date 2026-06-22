@@ -6,7 +6,7 @@ from fastapi_injector import Injected
 
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import get_current_user
-from api.domains.users.models import UserFilter, UserRead, get_user_filter
+from api.domains.users.models import AdminUserCreate, UserFilter, UserRead, get_user_filter
 from api.domains.users.service import UserService
 from api.infrastructure.shared.models import PaginatedItems
 
@@ -26,11 +26,25 @@ def list_users(
     )
 
 
+@users_router.post("", response_model=UserRead, status_code=status.HTTP_201_CREATED)
+def create_user(
+    data: AdminUserCreate,
+    context: Annotated[
+        CurrentUserContext, Depends(get_current_user(check_superuser=True))
+    ],
+    user_service: UserService = Injected(UserService),
+):
+    user = user_service.create_user(data)
+    return user_service.to_user_read(user)
+
+
 @users_router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_user(
     user_id: UUID,
-    _: Annotated[CurrentUserContext, Depends(get_current_user(check_superuser=True))],
+    context: Annotated[
+        CurrentUserContext, Depends(get_current_user(check_superuser=True))
+    ],
     user_service: UserService = Injected(UserService),
 ):
-    user_service.delete_user(user_id)
+    user_service.delete_user(user_id, context.user.id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
