@@ -17,6 +17,7 @@ test.describe("Users Page — Create & Delete", () => {
     await data.users.interceptGetUsersRequest();
     await data.users.interceptCreateUserRequest();
     await data.users.interceptDeleteUserRequest();
+    await data.users.interceptResetUserPasswordRequest();
   });
 
   test("Create user button opens dialog", async ({ page }) => {
@@ -79,5 +80,25 @@ test.describe("Users Page — Create & Delete", () => {
     await page.getByRole("button", { name: /^delete$/i }).click();
 
     await expect(page.getByText(/user deleted/i)).toBeVisible();
+  });
+
+  test("Reset password button opens dialog", async ({ page }) => {
+    await page.goto(USERS_URL);
+
+    await page.getByRole("button", { name: /reset password/i }).first().click();
+    await expect(
+      page.getByRole("heading", { name: /reset password/i }),
+    ).toBeVisible();
+  });
+
+  test("Resetting a user password shows success toast", async ({ page }) => {
+    await page.goto(USERS_URL);
+
+    await page.getByRole("button", { name: /reset password/i }).first().click();
+    await page.getByLabel(/^new password$/i).fill("NewStrong456");
+
+    await page.getByRole("button", { name: /^reset$/i }).click();
+
+    await expect(page.getByText(/password reset/i)).toBeVisible();
   });
 });

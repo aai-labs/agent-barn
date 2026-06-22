@@ -168,6 +168,34 @@ export class UserDataSupport {
     });
   }
 
+  async interceptResetUserPasswordRequest({
+    success = true,
+    status = 400,
+    detail = "Password must be at least 8 characters",
+  }: {
+    success?: boolean;
+    status?: number;
+    detail?: string;
+  } = {}) {
+    await this.page.route("**/api/v1/users/*/reset-password", async (route) => {
+      if (route.request().method() !== "POST") {
+        await route.fallback();
+        return;
+      }
+
+      if (!success) {
+        await route.fulfill({
+          status,
+          contentType: "application/json",
+          body: JSON.stringify({ detail }),
+        });
+        return;
+      }
+
+      await route.fulfill({ status: 204 });
+    });
+  }
+
   async interceptChangePasswordRequest({
     success = true,
     status = 400,

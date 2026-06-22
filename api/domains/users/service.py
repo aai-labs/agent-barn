@@ -39,23 +39,11 @@ class UserService:
     config: Config
 
     def ensure_default_superuser(self) -> User:
-        email, password = self.config.super_user_credentials.split(":")
-        full_name = self.config.super_user_full_name
         existing = self.user_repository.get_superuser()
         if existing:
-            updated = False
-            if existing.email != email:
-                existing.email = email
-                updated = True
-            if existing.full_name != full_name:
-                existing.full_name = full_name
-                updated = True
-            if not check_hash(password, existing.hashed_password):
-                existing.hashed_password = hash_text(password)
-                updated = True
-            if updated:
-                self.user_repository.save(existing)
             return existing
+        email, password = self.config.super_user_credentials.split(":")
+        full_name = self.config.super_user_full_name
         return self.create_superuser(
             email=email, password=password, full_name=full_name
         )
@@ -172,6 +160,13 @@ class UserService:
 
         validate_strong_password(password_data.new_password)
         user.hashed_password = hash_text(password_data.new_password)
+        user.security_stamp = uuid7().hex
+        self.user_repository.save(user)
+
+    def reset_user_password(self, user_id: UUID, new_password: str) -> None:
+        validate_strong_password(new_password)
+        user = self.get_user(user_id)
+        user.hashed_password = hash_text(new_password)
         user.security_stamp = uuid7().hex
         self.user_repository.save(user)
 

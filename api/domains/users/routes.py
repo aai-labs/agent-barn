@@ -7,6 +7,7 @@ from fastapi_injector import Injected
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import get_current_user
 from api.domains.users.models import (
+    AdminPasswordReset,
     AdminUserCreate,
     UserFilter,
     UserRead,
@@ -41,6 +42,19 @@ def create_user(
 ):
     user = user_service.create_user(data)
     return user_service.to_user_read(user)
+
+
+@users_router.post("/{user_id}/reset-password", status_code=status.HTTP_204_NO_CONTENT)
+def reset_user_password(
+    user_id: UUID,
+    data: AdminPasswordReset,
+    _: Annotated[
+        CurrentUserContext, Depends(get_current_user(check_superuser=True))
+    ],
+    user_service: UserService = Injected(UserService),
+):
+    user_service.reset_user_password(user_id, data.new_password)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @users_router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)

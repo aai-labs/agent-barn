@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Loader2, PlusIcon, Shield, Trash2, UserRound } from "lucide-react";
+import { KeyRound, Loader2, PlusIcon, Shield, Trash2, UserRound } from "lucide-react";
 import { useDebouncedValue } from "@tanstack/react-pacer";
 
 import { useCurrentUser } from "@/auth/providers/user-context-provider";
@@ -13,6 +13,7 @@ import type { UserRead } from "../schemas";
 
 import { CreateUserDialog } from "./create-user-dialog";
 import { DeleteUserDialog } from "./delete-user-dialog";
+import { ResetPasswordDialog } from "./reset-password-dialog";
 
 function formatDate(date: string | null | undefined) {
   if (!date) return "Not verified";
@@ -36,6 +37,7 @@ export function UsersGrid() {
   const [debouncedSearch] = useDebouncedValue(search, { wait: 300 });
   const [createOpen, setCreateOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<UserRead | null>(null);
+  const [resetTarget, setResetTarget] = useState<UserRead | null>(null);
   const { user: currentUser } = useCurrentUser();
 
   const {
@@ -110,17 +112,30 @@ export function UsersGrid() {
               </div>
 
               {user.id !== currentUser.id && (
-                <button
-                  className="absolute top-3 right-3 p-1.5 rounded-lg transition-colors"
-                  style={{ color: "var(--ink-4)" }}
-                  onClick={() => setDeleteTarget(user)}
-                  title="Delete user"
-                  aria-label="Delete user"
-                  onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = "var(--err)"; }}
-                  onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = "var(--ink-4)"; }}
-                >
-                  <Trash2 width={14} height={14} />
-                </button>
+                <div className="absolute top-3 right-3 flex items-center gap-0.5">
+                  <button
+                    className="p-1.5 rounded-lg transition-colors"
+                    style={{ color: "var(--ink-4)" }}
+                    onClick={() => setResetTarget(user)}
+                    title="Reset password"
+                    aria-label="Reset password"
+                    onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = "var(--ink)"; }}
+                    onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = "var(--ink-4)"; }}
+                  >
+                    <KeyRound width={14} height={14} />
+                  </button>
+                  <button
+                    className="p-1.5 rounded-lg transition-colors"
+                    style={{ color: "var(--ink-4)" }}
+                    onClick={() => setDeleteTarget(user)}
+                    title="Delete user"
+                    aria-label="Delete user"
+                    onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = "var(--err)"; }}
+                    onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = "var(--ink-4)"; }}
+                  >
+                    <Trash2 width={14} height={14} />
+                  </button>
+                </div>
               )}
             </div>
           ))}
@@ -152,6 +167,11 @@ export function UsersGrid() {
         user={deleteTarget}
         open={deleteTarget !== null}
         onOpenChange={(v) => { if (!v) setDeleteTarget(null); }}
+      />
+      <ResetPasswordDialog
+        user={resetTarget}
+        open={resetTarget !== null}
+        onOpenChange={(v) => { if (!v) setResetTarget(null); }}
       />
     </div>
   );

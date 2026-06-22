@@ -259,3 +259,137 @@ def test_super_admin_can_delete_another_user():
             assert_that(
                 login_response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED)
             )
+
+
+def test_super_admin_can_reset_user_password():
+    super_id = uuid7()
+    target_id = uuid7()
+    org_id = uuid7()
+
+    with given(
+        [
+            prepare_injector(),
+            prepare_api_server(),
+            create_test_client(),
+            database_repo_is_ready(),
+            database_is_clean(),
+            there_is_a_user(
+                id=super_id,
+                email="super-reset@example.com",
+                is_superuser=True,
+            ),
+            there_is_a_user(
+                id=target_id,
+                email="target-reset@example.com",
+                password="OldPass123",
+            ),
+            there_is_a_default_organization(id=org_id),
+            there_is_an_access_token_for_user(user_id=super_id),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("super admin resets another user's password"):
+            response = client.post(
+                f"/api/v1/users/{target_id}/reset-password",
+                json={"new_password": "NewStrong456"},
+                headers={"Authorization": f"Bearer {context.access_token}"},
+            )
+
+        with then("it returns 204"):
+            assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+
+        with then("the user can login with the new password"):
+            login_response = client.post(
+                "/api/v1/auth/login",
+                data={
+                    "username": "target-reset@example.com",
+                    "password": "NewStrong456",
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            assert_that(login_response.status_code, equal_to(status.HTTP_200_OK))
+
+        with then("the old password no longer works"):
+            old_login = client.post(
+                "/api/v1/auth/login",
+                data={
+                    "username": "target-reset@example.com",
+                    "password": "OldPass123",
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            assert_that(old_login.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
+
+
+def test_non_super_admin_cannot_reset_password():
+    org_id = uuid7()
+    target_id = uuid7()
+
+    with given(
+        [
+            prepare_injector(),
+            prepare_api_server(),
+            create_test_client(),
+            database_repo_is_ready(),
+            database_is_clean(),
+            there_is_a_user(
+                id=target_id,
+                email="target-noreset@example.com",
+            ),
+            there_is_a_default_organization(id=org_id),
+            there_is_authenticated_user(
+                email="regular-noreset@example.com",
+                is_superuser=False,
+                organization_id=org_id,
+                role=OrganizationRole.MEMBER,
+            ),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("a non-super-admin tries to reset a password"):
+            response = client.post(
+                f"/api/v1/users/{target_id}/reset-password",
+                json={"new_password": "StrongPass123"},
+                headers={"Authorization": f"Bearer {context.access_token}"},
+            )
+
+        with then("it returns 403 forbidden"):
+            assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_reset_password_with_weak_password_returns_400():
+    super_id = uuid7()
+    target_id = uuid7()
+
+    with given(
+        [
+            prepare_injector(),
+            prepare_api_server(),
+            create_test_client(),
+            database_repo_is_ready(),
+            database_is_clean(),
+            there_is_a_user(
+                id=super_id,
+                email="super-weakreset@example.com",
+                is_superuser=True,
+            ),
+            there_is_a_user(
+                id=target_id,
+                email="target-weakreset@example.com",
+            ),
+            there_is_an_access_token_for_user(user_id=super_id),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("super admin resets with a weak password"):
+            response = client.post(
+                f"/api/v1/users/{target_id}/reset-password",
+                json={"new_password": "123"},
+                headers={"Authorization": f"Bearer {context.access_token}"},
+            )
+
+        with then("it returns 400 bad request"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))

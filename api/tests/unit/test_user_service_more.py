@@ -83,6 +83,22 @@ def test_ensure_default_superuser_returns_existing_user():
     user_repository.save.assert_not_called()
 
 
+def test_ensure_default_superuser_does_not_update_existing():
+    service, user_repository, _, _, _ = build_user_service()
+    existing = User(
+        email="different@example.com",
+        hashed_password=hash_text("DifferentPass999"),
+        full_name="Different Name",
+    )
+    user_repository.get_superuser.return_value = existing
+
+    result = service.ensure_default_superuser()
+
+    assert_that(result, equal_to(existing))
+    assert_that(result.email, equal_to("different@example.com"))
+    user_repository.save.assert_not_called()
+
+
 def test_ensure_default_superuser_creates_when_missing():
     service, user_repository, _, _, _ = build_user_service()
     user_repository.get_superuser.return_value = None

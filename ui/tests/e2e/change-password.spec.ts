@@ -12,26 +12,22 @@ test.describe("Change Password", () => {
 
     await data.auth.interceptRefreshRequest();
     await data.users.interceptGetUserContextRequest();
-    await data.agents.interceptGetAgentsRequest();
     await data.users.interceptChangePasswordRequest();
   });
 
-  test("Change password opens from user menu dropdown", async ({ page }) => {
-    await page.goto("/dashboard");
-    await page.getByTitle("Super User").click();
-    await page.getByRole("button", { name: /change password/i }).click();
+  test("Account page shows change password form", async ({ page }) => {
+    await page.goto("/dashboard/account");
 
     await expect(
       page.getByRole("heading", { name: /change password/i }),
     ).toBeVisible();
+    await expect(page.getByLabel(/old password/i)).toBeVisible();
   });
 
   test("Submitting form with correct old password succeeds", async ({
     page,
   }) => {
-    await page.goto("/dashboard");
-    await page.getByTitle("Super User").click();
-    await page.getByRole("button", { name: /change password/i }).click();
+    await page.goto("/dashboard/account");
 
     await page.getByLabel(/old password/i).fill("OldPass123");
     await page.getByLabel(/^new password$/i).fill("NewStrong456");
@@ -40,5 +36,16 @@ test.describe("Change Password", () => {
     await page.getByRole("button", { name: /^change password$/i }).click();
 
     await expect(page.getByText(/password changed/i)).toBeVisible();
+  });
+
+  test("Account link in user menu navigates to account page", async ({
+    page,
+  }) => {
+    await data.agents.interceptGetAgentsRequest();
+    await page.goto("/dashboard");
+    await page.getByTitle("Super User").click();
+    await page.getByRole("link", { name: /account/i }).click();
+
+    await expect(page).toHaveURL(/\/dashboard\/account/);
   });
 });
