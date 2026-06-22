@@ -192,7 +192,15 @@ export class UserDataSupport {
         return;
       }
 
-      await route.fulfill({ status: 204 });
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          access_token: "new-access-token",
+          refresh_token: "new-refresh-token",
+          token_type: "bearer",
+        }),
+      });
     });
   }
 

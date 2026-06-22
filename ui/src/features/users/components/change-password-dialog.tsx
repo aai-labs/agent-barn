@@ -6,6 +6,8 @@ import { toast } from "sonner";
 import { z } from "zod";
 
 import { api } from "@/shared/api";
+import { Token, TokenSchema } from "@/auth/schemas";
+import { useAuthStore } from "@/auth/providers/auth-store";
 import {
   Dialog,
   DialogContent,
@@ -51,10 +53,11 @@ export function ChangePasswordDialog({ open, onOpenChange }: ChangePasswordDialo
 
   const onSubmit = async (values: ChangePasswordData) => {
     try {
-      await api.post("/api/v1/auth/me/change-password", {
+      const response = await api.post<Token>("/api/v1/auth/me/change-password", {
         old_password: values.oldPassword,
         new_password: values.newPassword,
-      });
+      }, { schema: TokenSchema });
+      useAuthStore.getState().setToken(response.data);
       toast.success("Password changed successfully");
       reset();
       onOpenChange(false);
