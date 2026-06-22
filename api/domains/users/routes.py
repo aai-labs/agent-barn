@@ -6,7 +6,12 @@ from fastapi_injector import Injected
 
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import get_current_user
-from api.domains.users.models import AdminUserCreate, UserFilter, UserRead, get_user_filter
+from api.domains.users.models import (
+    AdminUserCreate,
+    UserFilter,
+    UserRead,
+    get_user_filter,
+)
 from api.domains.users.service import UserService
 from api.infrastructure.shared.models import PaginatedItems
 

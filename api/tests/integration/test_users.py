@@ -1,7 +1,7 @@
 from uuid import uuid7
 
 from fastapi import status
-from hamcrest import assert_that, equal_to, has_key, is_not, none
+from hamcrest import assert_that, equal_to, has_key
 from starlette.testclient import TestClient
 
 from api.tests.core.givenpy import given, when, then

@@ -18,7 +18,10 @@ from api.domains.users.models import (
     UserRead,
     UserUpdate,
 )
-from api.domains.users.organization_users.models import OrganizationRole, OrganizationUser
+from api.domains.users.organization_users.models import (
+    OrganizationRole,
+    OrganizationUser,
+)
 from api.domains.users.organization_users.repository import OrganizationUserRepository
 from api.domains.users.organization_users.service import OrganizationUserService
 from api.domains.users.repository import UserRepository

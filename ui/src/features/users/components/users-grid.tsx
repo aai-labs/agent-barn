@@ -1,13 +1,18 @@
 "use client";
 
 import { useState } from "react";
-import { Loader2, Shield, UserRound } from "lucide-react";
+import { Loader2, PlusIcon, Shield, Trash2, UserRound } from "lucide-react";
 import { useDebouncedValue } from "@tanstack/react-pacer";
 
+import { useCurrentUser } from "@/auth/providers/user-context-provider";
 import { AppErrorState } from "@/components/app-error-state";
 import { ListPageHeader } from "@/components/list-page-header";
 
 import { useInfiniteUsers } from "../hooks/use-infinite-users";
+import type { UserRead } from "../schemas";
+
+import { CreateUserDialog } from "./create-user-dialog";
+import { DeleteUserDialog } from "./delete-user-dialog";
 
 function formatDate(date: string | null | undefined) {
   if (!date) return "Not verified";
@@ -29,6 +34,10 @@ function LoadingCard() {
 export function UsersGrid() {
   const [search, setSearch] = useState("");
   const [debouncedSearch] = useDebouncedValue(search, { wait: 300 });
+  const [createOpen, setCreateOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<UserRead | null>(null);
+  const { user: currentUser } = useCurrentUser();
+
   const {
     users,
     total,
@@ -42,15 +51,23 @@ export function UsersGrid() {
 
   return (
     <div className="max-w-[1200px] mx-auto px-10 pt-9 pb-24">
-      <ListPageHeader
-        title="Users"
-        description="Super admin view of all users."
-        count={total}
-        noun="user"
-        search={search}
-        onSearch={setSearch}
-        searchPlaceholder="Search by name or email"
-      />
+      <div className="flex items-start justify-between gap-4 mb-0">
+        <ListPageHeader
+          title="Users"
+          description="Super admin view of all users."
+          count={total}
+          noun="user"
+          search={search}
+          onSearch={setSearch}
+          searchPlaceholder="Search by name or email"
+        />
+        <button
+          className="af-btn af-btn-primary mt-1 flex-shrink-0"
+          onClick={() => setCreateOpen(true)}
+        >
+          <PlusIcon width={15} height={15} /> Create user
+        </button>
+      </div>
 
       {isLoading ? (
         <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))" }}>
@@ -68,7 +85,7 @@ export function UsersGrid() {
       ) : (
         <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))" }}>
           {users.map((user) => (
-            <div key={user.id} className="af-card af-card-hover px-5 py-[18px]">
+            <div key={user.id} className="af-card af-card-hover px-5 py-[18px] relative">
               <div className="flex items-center gap-2 mb-1">
                 <UserRound width={14} height={14} style={{ color: "var(--ink-4)", flexShrink: 0 }} />
                 <span className="font-semibold text-[14.5px] truncate" style={{ color: "var(--ink)" }}>
@@ -91,6 +108,20 @@ export function UsersGrid() {
               >
                 Email verified: {formatDate(user.emailVerifiedAt)}
               </div>
+
+              {user.id !== currentUser.id && (
+                <button
+                  className="absolute top-3 right-3 p-1.5 rounded-lg transition-colors"
+                  style={{ color: "var(--ink-4)" }}
+                  onClick={() => setDeleteTarget(user)}
+                  title="Delete user"
+                  aria-label="Delete user"
+                  onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = "var(--err)"; }}
+                  onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = "var(--ink-4)"; }}
+                >
+                  <Trash2 width={14} height={14} />
+                </button>
+              )}
             </div>
           ))}
         </div>
@@ -115,6 +146,13 @@ export function UsersGrid() {
           </button>
         </div>
       )}
+
+      <CreateUserDialog open={createOpen} onOpenChange={setCreateOpen} />
+      <DeleteUserDialog
+        user={deleteTarget}
+        open={deleteTarget !== null}
+        onOpenChange={(v) => { if (!v) setDeleteTarget(null); }}
+      />
     </div>
   );
 }

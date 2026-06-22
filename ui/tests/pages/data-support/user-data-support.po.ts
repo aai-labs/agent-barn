@@ -96,6 +96,106 @@ export class UserDataSupport {
     });
   }
 
+  async interceptCreateUserRequest({
+    success = true,
+    status = 201,
+    detail = "Email is already taken",
+    user,
+  }: {
+    success?: boolean;
+    status?: number;
+    detail?: string;
+    user?: unknown;
+  } = {}) {
+    await this.page.route("**/api/v1/users", async (route) => {
+      if (route.request().method() !== "POST") {
+        await route.fallback();
+        return;
+      }
+
+      if (!success) {
+        await route.fulfill({
+          status,
+          contentType: "application/json",
+          body: JSON.stringify({ detail }),
+        });
+        return;
+      }
+
+      await route.fulfill({
+        status,
+        contentType: "application/json",
+        body: JSON.stringify(
+          user ?? {
+            id: "22222222-2222-4222-8222-222222222222",
+            created_at: "2024-01-01T00:00:00Z",
+            updated_at: "2024-01-01T00:00:00Z",
+            full_name: "New User",
+            email: "new@example.com",
+            is_superuser: false,
+            email_verified_at: null,
+          },
+        ),
+      });
+    });
+  }
+
+  async interceptDeleteUserRequest({
+    success = true,
+    status = 400,
+    detail = "Cannot delete your own account",
+  }: {
+    success?: boolean;
+    status?: number;
+    detail?: string;
+  } = {}) {
+    await this.page.route("**/api/v1/users/**", async (route) => {
+      if (route.request().method() !== "DELETE") {
+        await route.fallback();
+        return;
+      }
+
+      if (!success) {
+        await route.fulfill({
+          status,
+          contentType: "application/json",
+          body: JSON.stringify({ detail }),
+        });
+        return;
+      }
+
+      await route.fulfill({ status: 204 });
+    });
+  }
+
+  async interceptChangePasswordRequest({
+    success = true,
+    status = 400,
+    detail = "Old password is incorrect",
+  }: {
+    success?: boolean;
+    status?: number;
+    detail?: string;
+  } = {}) {
+    await this.page.route("**/api/v1/auth/me/change-password", async (route) => {
+      if (route.request().method() !== "POST") {
+        await route.fallback();
+        return;
+      }
+
+      if (!success) {
+        await route.fulfill({
+          status,
+          contentType: "application/json",
+          body: JSON.stringify({ detail }),
+        });
+        return;
+      }
+
+      await route.fulfill({ status: 204 });
+    });
+  }
+
   async interceptGetOrganizationsRequest({
     status = 200,
     detail = "Unable to load organizations",

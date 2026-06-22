@@ -5,7 +5,8 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useCurrentUser } from "@/auth/providers/user-context-provider";
 import { useLogout } from "@/auth/hooks/use-logout";
-import { PlusIcon, UserIcon, UsersIcon, BuildingIcon, LogOutIcon } from "@/components/icons";
+import { PlusIcon, UserIcon, UsersIcon, BuildingIcon, LogOutIcon, KeyIcon } from "@/components/icons";
+import { ChangePasswordDialog } from "@/features/users/components/change-password-dialog";
 
 interface TopNavProps {
   onHire: () => void;
@@ -24,6 +25,7 @@ export function TopNav({ onHire, orgName }: TopNavProps) {
   const { user } = useCurrentUser();
   const { logout, isLoggingOut } = useLogout();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [changePasswordOpen, setChangePasswordOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -134,6 +136,16 @@ export function TopNav({ onHire, orgName }: TopNavProps) {
                 >
                   <UserIcon /> Account
                 </button>
+                <button
+                  className="af-hover-bg w-full text-left flex items-center gap-2.5 px-3.5 py-2 text-[13.5px]"
+                  style={{ color: "var(--ink-2)" }}
+                  onClick={() => {
+                    setMenuOpen(false);
+                    setChangePasswordOpen(true);
+                  }}
+                >
+                  <KeyIcon /> Change password
+                </button>
               </div>
 
               {user.isSuperuser && (
@@ -178,6 +190,7 @@ export function TopNav({ onHire, orgName }: TopNavProps) {
           )}
         </div>
       </div>
+      <ChangePasswordDialog open={changePasswordOpen} onOpenChange={setChangePasswordOpen} />
     </header>
   );
 }
