@@ -16,8 +16,10 @@ export function AccountPage() {
         Personal settings and credentials.
       </p>
 
-      <ChangePasswordSection />
-      <SlackTokenSection />
+      <div className="flex flex-col gap-6">
+        <ChangePasswordSection />
+        <SlackTokenSection />
+      </div>
     </div>
   );
 }
