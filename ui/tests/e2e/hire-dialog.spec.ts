@@ -38,7 +38,7 @@ test.describe("Hire Dialog", () => {
           contentType: "application/json",
           body: JSON.stringify({
             app_id: "A_TEST_123",
-            bot_token_url: "https://api.slack.com/apps/A_TEST_123/oauth",
+            bot_token_url: "https://api.slack.com/apps/A_TEST_123/install-on-team",
             app_token_url: "https://api.slack.com/apps/A_TEST_123/general",
           }),
         });

@@ -531,6 +531,11 @@ export function SlackTokensStep({
             onToggle={onToggleAppToken}
             placeholder="xapp-1-…"
           />
+          {slackAppToken && !slackAppToken.startsWith("xapp-") && (
+            <div className="text-[0.75rem] mt-1" style={{ color: "var(--err)" }}>
+              App-level tokens start with xapp-
+            </div>
+          )}
         </FormField>
 
         <FormField label="Bot token" hint="Starts with xoxb- · required for API calls">
@@ -541,6 +546,11 @@ export function SlackTokensStep({
             onToggle={onToggleBotToken}
             placeholder="xoxb-…"
           />
+          {slackBotToken && !slackBotToken.startsWith("xoxb-") && (
+            <div className="text-[0.75rem] mt-1" style={{ color: "var(--err)" }}>
+              Bot tokens start with xoxb-
+            </div>
+          )}
         </FormField>
 
         {error && (
@@ -558,20 +568,7 @@ export function SlackTokensStep({
           <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
             Your Slack app is created!
           </div>
-          <NextStep n={1} label="Install the app to your workspace">
-            Go to{" "}
-            <a
-              href={botTokenUrl ?? "#"}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="underline"
-              style={{ color: "var(--ink-2)" }}
-            >
-              OAuth &amp; Permissions ↗
-            </a>
-            {" "}and click <b>Install to Workspace</b>. After installing, the page will show a <b>Bot User OAuth Token</b> (<span className="font-mono text-xs">xoxb-…</span>) — copy it.
-          </NextStep>
-          <NextStep n={2} label="Generate an App-Level Token">
+          <NextStep n={1} label="Generate an App-Level Token">
             Go to{" "}
             <a
               href={appTokenUrl ?? "#"}
@@ -583,6 +580,19 @@ export function SlackTokensStep({
               Basic Information ↗
             </a>
             {" "}→ scroll to <b>App-Level Tokens</b> → click <b>Generate Token and Scopes</b>. Name it anything, add the <span className="font-mono text-xs">connections:write</span> scope, and copy the generated <span className="font-mono text-xs">xapp-…</span> token.
+          </NextStep>
+          <NextStep n={2} label="Install the app to your workspace">
+            Go to{" "}
+            <a
+              href={botTokenUrl ?? "#"}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline"
+              style={{ color: "var(--ink-2)" }}
+            >
+              Install App ↗
+            </a>
+            {" "}and click <b>Install to Workspace</b>. After installing, the page will show a <b>Bot User OAuth Token</b> (<span className="font-mono text-xs">xoxb-…</span>) — copy it.
           </NextStep>
           <NextStep n={3} label="Paste both tokens above" />
         </div>

@@ -45,6 +45,6 @@ def create_slack_app_route(
     app_id = create_slack_app(access_token, manifest)
     return CreateSlackAppResponse(
         app_id=app_id,
-        bot_token_url=f"https://api.slack.com/apps/{app_id}/oauth",
+        bot_token_url=f"https://api.slack.com/apps/{app_id}/install-on-team",
         app_token_url=f"https://api.slack.com/apps/{app_id}/general",
     )

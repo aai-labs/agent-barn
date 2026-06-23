@@ -185,6 +185,14 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
       setTokenError("Both tokens are required to continue.");
       return;
     }
+    if (!slackAppToken.trim().startsWith("xapp-")) {
+      setTokenError("App-level token should start with xapp-");
+      return;
+    }
+    if (!slackBotToken.trim().startsWith("xoxb-")) {
+      setTokenError("Bot token should start with xoxb-");
+      return;
+    }
     setStep("details");
   }
 
