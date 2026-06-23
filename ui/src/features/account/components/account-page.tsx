@@ -1,6 +1,7 @@
 "use client";
 
 import { ChangePasswordSection } from "./change-password-section";
+import { SlackTokenSection } from "./slack-token-section";
 
 export function AccountPage() {
   return (
@@ -16,6 +17,7 @@ export function AccountPage() {
       </p>
 
       <ChangePasswordSection />
+      <SlackTokenSection />
     </div>
   );
 }
