@@ -48,9 +48,7 @@ def create_user(
 def reset_user_password(
     user_id: UUID,
     data: AdminPasswordReset,
-    _: Annotated[
-        CurrentUserContext, Depends(get_current_user(check_superuser=True))
-    ],
+    _: Annotated[CurrentUserContext, Depends(get_current_user(check_superuser=True))],
     user_service: UserService = Injected(UserService),
 ):
     user_service.reset_user_password(user_id, data.new_password)
