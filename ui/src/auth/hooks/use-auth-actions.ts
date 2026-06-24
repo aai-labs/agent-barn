@@ -5,7 +5,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ApiError } from "@/shared/api/error/errors";
 import { api } from "@/shared/api";
 
-import { Signup, Token, TokenSchema } from "../schemas";
+import { Token, TokenSchema } from "../schemas";
 import { useAuthStore } from "../providers/auth-store";
 import { currentUserContextKey, currentUserKey } from "../utils";
 
@@ -32,28 +32,6 @@ export function useAuthActions() {
     });
   };
 
-  const signup = ({
-    email,
-    fullName,
-    password,
-  }: Signup & {
-    onSuccess?: () => void;
-    onError?: (error: ApiError) => void;
-  }) => {
-    return api.post<Token>(
-      "/api/v1/auth/signup",
-      {
-        email,
-        full_name: fullName,
-        password,
-      },
-      {
-        schema: TokenSchema,
-        skipAuth: true,
-      },
-    );
-  };
-
   const logout = (_variables: { onSuccess?: () => void } = {}) => {
     void _variables;
     return api.post("/api/v1/auth/logout", undefined, { skipAuth: true });
@@ -61,19 +39,6 @@ export function useAuthActions() {
 
   const loginMutation = useMutation({
     mutationFn: login,
-    onSuccess: (data, variables) => {
-      setToken(data.data);
-      queryClient.invalidateQueries({ queryKey: currentUserKey.all });
-      queryClient.invalidateQueries({ queryKey: currentUserContextKey.all });
-      variables.onSuccess?.();
-    },
-    onError: (error: ApiError, variables) => {
-      variables.onError?.(error);
-    },
-  });
-
-  const signupMutation = useMutation({
-    mutationFn: signup,
     onSuccess: (data, variables) => {
       setToken(data.data);
       queryClient.invalidateQueries({ queryKey: currentUserKey.all });
@@ -104,9 +69,6 @@ export function useAuthActions() {
     login: loginMutation.mutate,
     isLoggingIn: loginMutation.isPending,
     loginError: loginMutation.error as ApiError | null,
-    signup: signupMutation.mutate,
-    isSigningUp: signupMutation.isPending,
-    signupError: signupMutation.error as ApiError | null,
     logout: logoutMutation.mutate,
     isLoggingOut: logoutMutation.isPending,
   };

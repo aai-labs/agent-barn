@@ -2,7 +2,6 @@ from typing import Annotated
 
 from fastapi import (
     APIRouter,
-    BackgroundTasks,
     Depends,
     HTTPException,
     Request,
@@ -19,11 +18,13 @@ from api.domains.auth.models import (
     ForgotPasswordRequest,
     PasswordResetRequest,
     RefreshTokenRequest,
-    SignupRequest,
+    SlackConfigTokenRead,
+    SlackConfigTokenSave,
     Token,
     TokenData,
 )
 from api.domains.auth.service import AuthService
+from api.domains.auth.token_service import SlackConfigTokenService
 from api.domains.auth.utils import get_current_user
 from api.domains.users.models import UserPasswordChange, UserRead, UserUpdate
 from api.domains.users.service import UserService
@@ -134,13 +135,21 @@ def update_current_user_profile(
     return user_service.update_current_user(context.user.id, user_update)
 
 
-@auth_router.post("/me/change-password", status_code=status.HTTP_204_NO_CONTENT)
+@auth_router.post("/me/change-password", response_model=Token)
 def change_current_user_password(
     password_data: UserPasswordChange,
+    response: Response,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     user_service: UserService = Injected(UserService),
+    auth_service: AuthService = Injected(AuthService),
+    config: Config = Injected(Config),
 ):
     user_service.change_password(context.user.id, password_data)
+    user = user_service.get_user(context.user.id)
+    token_data = TokenData(user_id=str(user.id), stamp=user.security_stamp)
+    token_pair = auth_service.create_token_pair(token_data)
+    _set_refresh_token_cookie(response, token_pair.refresh_token, config)
+    return token_pair
 
 
 @auth_router.post("/forgot-password")
@@ -152,17 +161,12 @@ def forgot_password(
     return {"message": "Password reset email sent if user exists."}
 
 
-@auth_router.post("/signup", response_model=Token, status_code=status.HTTP_201_CREATED)
-def signup(
-    response: Response,
-    background_tasks: BackgroundTasks,
-    signup_request: SignupRequest,
-    auth_service: AuthService = Injected(AuthService),
-    config: Config = Injected(Config),
-):
-    token_pair = auth_service.signup(signup_request, background_tasks)
-    _set_refresh_token_cookie(response, token_pair.refresh_token, config)
-    return token_pair
+@auth_router.post("/signup")
+def signup():
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail="Self-registration is disabled. Contact an administrator.",
+    )
 
 
 @auth_router.post("/reset-password")
@@ -184,3 +188,30 @@ def logout(response: Response, config: Config = Injected(Config)):
         samesite="lax" if is_local_like else "none",
     )
     return {"message": "Successfully logged out"}
+
+
+@auth_router.get("/me/slack-config-token", response_model=SlackConfigTokenRead)
+def get_slack_config_token(
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: SlackConfigTokenService = Injected(SlackConfigTokenService),
+) -> SlackConfigTokenRead:
+    return service.get_config_token_read(context.user.id)
+
+
+@auth_router.put("/me/slack-config-token", response_model=SlackConfigTokenRead)
+def save_slack_config_token(
+    body: SlackConfigTokenSave,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: SlackConfigTokenService = Injected(SlackConfigTokenService),
+) -> SlackConfigTokenRead:
+    return service.save_config_token(
+        context.user.id, body.access_token, body.refresh_token
+    )
+
+
+@auth_router.delete("/me/slack-config-token", status_code=status.HTTP_204_NO_CONTENT)
+def delete_slack_config_token(
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: SlackConfigTokenService = Injected(SlackConfigTokenService),
+) -> None:
+    service.delete_config_token(context.user.id)
