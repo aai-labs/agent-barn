@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { PROVIDERS, SKILLS } from "@/features/agents/data";
+import { PROVIDERS } from "@/features/agents/data";
 import { TemplatesPanel } from "@/features/agents/components/templates-panel";
+import { SkillsPanel } from "@/features/skills/components/skills-panel";
 import { PlusIcon, LockIcon, ShieldIcon, EyeIcon, ServerIcon, SearchIcon } from "@/components/icons";
 
 type SectionKey =
@@ -24,7 +25,7 @@ const SECTIONS: [SectionKey, string, string, boolean][] = [
   ["models",    "Models",          "Which LLMs your agents are allowed to use.",                   false],
   ["providers", "Integrations",    "Slack, GitHub, Jira and other third parties.",                 false],
   ["templates", "Templates",       "Reusable agent definitions.",                                   true],
-  ["skills",    "Skills",          "Vetted tools your agents can call.",                           false],
+  ["skills",    "Skills",          "Vetted tools your agents can call.",                           true],
   ["budgets",   "Budgets",         "Spend caps and alerts.",                                       false],
   ["audit",     "Audit log",       "Searchable history of every conversation and tool call.",      false],
   ["infra",     "Infrastructure",  "Cluster, storage, and proxy details.",                         false],
@@ -279,32 +280,6 @@ function ProvidersPanel() {
   );
 }
 
-function SkillsPanel() {
-  return (
-    <div>
-      <Hint>
-        <ShieldIcon style={{ flexShrink: 0, marginTop: 1 }} />
-        Every skill is sandboxed and routes credentials through the vault. Submit your own to add to this list — review takes about a day.
-      </Hint>
-      <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))" }}>
-        {SKILLS.map((s) => (
-          <div key={s.id} className="af-card p-4">
-            <div className="flex items-center justify-between mb-0.5">
-              <div className="font-semibold text-[13.5px]" style={{ color: "var(--ink)" }}>{s.name}</div>
-              <span className="font-mono text-[11px]" style={{ color: "var(--ink-4)" }}>v{s.version}</span>
-            </div>
-            <div className="text-[12px]" style={{ color: "var(--ink-3)" }}>{s.cat}</div>
-            <div className="text-[13px] mt-2 leading-[1.45]" style={{ color: "var(--ink-2)" }}>{s.desc}</div>
-            <div className="flex items-center mt-2.5">
-              <span className="text-[12px]" style={{ color: "var(--ink-4)" }}>{s.installs} installs</span>
-              <button className="af-btn af-btn-sm ml-auto">Install</button>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 function BudgetsPanel() {
   return (
