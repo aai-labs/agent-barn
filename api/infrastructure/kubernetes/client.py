@@ -2,17 +2,21 @@ from __future__ import annotations
 
 import http.client
 import json
-import socket
-import subprocess
-import time
+import os
+import tempfile
 from dataclasses import dataclass, field
 
+import yaml
 from injector import inject, singleton
 from kubernetes import client
 from kubernetes import config as k8s_config
 from kubernetes.client.exceptions import ApiException
+from kubernetes.stream import portforward as k8s_portforward
+from kubernetes.stream import stream as k8s_stream
 
 from api.core.config import Config
+
+_SERVICE_ACCOUNT_TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token"
 
 
 @inject
@@ -22,10 +26,15 @@ class KubernetesClient:
     config: Config
     _apps_v1: client.AppsV1Api = field(init=False)
     _core_v1: client.CoreV1Api = field(init=False)
+    _stream_core_v1: client.CoreV1Api = field(init=False)
+    _kubeconfig_path: str | None = field(init=False, default=None)
 
     def __post_init__(self) -> None:
         if self.config.k8s_kubeconfig_path:
-            k8s_config.load_kube_config(config_file=self.config.k8s_kubeconfig_path)
+            self._kubeconfig_path = self._resolve_kubeconfig(
+                self.config.k8s_kubeconfig_path
+            )
+            k8s_config.load_kube_config(config_file=self._kubeconfig_path)
         else:
             try:
                 k8s_config.load_incluster_config()
@@ -33,6 +42,61 @@ class KubernetesClient:
                 k8s_config.load_kube_config()
         self._apps_v1 = client.AppsV1Api()
         self._core_v1 = client.CoreV1Api()
+        if self.config.k8s_kubeconfig_path:
+            stream_api_client = k8s_config.new_client_from_config(
+                config_file=self._kubeconfig_path
+            )
+        else:
+            stream_api_client = client.ApiClient()
+        self._stream_core_v1 = client.CoreV1Api(api_client=stream_api_client)
+
+    @staticmethod
+    def _incluster_apiserver() -> str | None:
+        """The in-cluster API server URL when running inside a pod, else None.
+
+        Detection mirrors the official client's load_incluster_config: the kubelet
+        injects KUBERNETES_SERVICE_HOST into every pod and mounts the service
+        account token at a well-known path. Both must be present, so a stray
+        KUBERNETES_SERVICE_HOST exported in a local shell does not trigger a
+        rewrite.
+        """
+        host = os.environ.get("KUBERNETES_SERVICE_HOST")
+        if not host or not os.path.exists(_SERVICE_ACCOUNT_TOKEN_PATH):
+            return None
+        port = os.environ.get("KUBERNETES_SERVICE_PORT_HTTPS") or os.environ.get(
+            "KUBERNETES_SERVICE_PORT", "443"
+        )
+        if ":" in host:  # IPv6 literal
+            host = f"[{host}]"
+        return f"https://{host}:{port}"
+
+    @staticmethod
+    def _resolve_kubeconfig(path: str) -> str:
+        """Returns a kubeconfig path whose server host points at the in-cluster API
+        when running inside a pod. The mounted kubeconfig may carry an external or
+        loopback host (e.g. k3s's 127.0.0.1) that is unreachable from a pod; the
+        cluster CA still validates the in-cluster host, so only the server changes.
+        Off-cluster the original path is returned unchanged.
+        """
+        apiserver = KubernetesClient._incluster_apiserver()
+        if not apiserver:
+            return path
+        with open(path) as f:
+            kubeconfig = yaml.safe_load(f)
+        changed = False
+        for entry in kubeconfig.get("clusters", []):
+            cluster = entry.get("cluster", {})
+            if cluster.get("server") != apiserver:
+                cluster["server"] = apiserver
+                changed = True
+        if not changed:
+            return path
+        patched = os.path.join(
+            tempfile.gettempdir(), "agentfarm-kubeconfig-incluster.yaml"
+        )
+        with open(patched, "w") as f:
+            yaml.safe_dump(kubeconfig, f)
+        return patched
 
     def _create_or_get(self, create_fn, read_fn, namespace: str, manifest):
         try:
@@ -244,29 +308,32 @@ class KubernetesClient:
         return None, None
 
     def exec_command(self, pod_name: str, namespace: str, command: list[str]) -> str:
-        kubectl_args = self._kubectl_args(["exec", pod_name, "-n", namespace, "--"])
-        result = subprocess.run(
-            [*kubectl_args, *command],
-            capture_output=True,
-            text=True,
-            timeout=30,
+        ws = k8s_stream(
+            self._stream_core_v1.connect_get_namespaced_pod_exec,
+            pod_name,
+            namespace,
+            command=command,
+            stdout=True,
+            stderr=True,
+            stdin=False,
+            tty=False,
+            _preload_content=False,
+            _request_timeout=30,
         )
-        if result.returncode != 0:
-            raise RuntimeError(
-                result.stderr.strip()
-                or f"kubectl exec failed with code {result.returncode}"
-            )
-        return result.stdout
-
-    def _kubectl_args(self, args: list[str]) -> list[str]:
-        if self.config.k8s_kubeconfig_path:
-            return [
-                "kubectl",
-                "--kubeconfig",
-                self.config.k8s_kubeconfig_path,
-                *args,
-            ]
-        return ["kubectl", *args]
+        ws.run_forever(timeout=30)
+        if ws.is_open():
+            ws.close()
+            raise RuntimeError("exec timed out")
+        stdout = ws.read_channel(1)  # STDOUT_CHANNEL
+        stderr = ws.read_channel(2)  # STDERR_CHANNEL
+        try:
+            rc = ws.returncode
+        except Exception:
+            rc = -1
+        ws.close()
+        if rc != 0:
+            raise RuntimeError(stderr.strip() or f"exec failed with code {rc}")
+        return stdout
 
     def fetch_agent_healthz(self, service_name: str, namespace: str) -> dict:
         host = f"{service_name}.{namespace}"
@@ -285,25 +352,16 @@ class KubernetesClient:
         if not pod_name:
             raise RuntimeError(f"No running pod found for {service_name}")
 
-        local_port = self._free_local_port()
-        kubectl_args = self._kubectl_args(
-            [
-                "port-forward",
-                f"pod/{pod_name}",
-                "-n",
-                namespace,
-                f"{local_port}:8081",
-            ]
-        )
-        process = subprocess.Popen(
-            kubectl_args,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
+        pf = k8s_portforward(
+            self._stream_core_v1.connect_get_namespaced_pod_portforward,
+            pod_name,
+            namespace,
+            ports=str(8081),
         )
         try:
-            self._wait_for_local_port(local_port, process)
-            conn = http.client.HTTPConnection("127.0.0.1", local_port, timeout=5)
+            sock = pf.socket(8081)
+            conn = http.client.HTTPConnection("localhost", 8081, timeout=5)
+            conn.sock = sock
             conn.request("GET", "/healthz")
             response = conn.getresponse()
             return json.loads(response.read())
@@ -312,12 +370,7 @@ class KubernetesClient:
                 f"healthz unreachable for {service_name}: {exc}"
             ) from exc
         finally:
-            process.terminate()
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=5)
+            pf.close()
 
     def proxy_to_agent(
         self,
@@ -354,60 +407,18 @@ class KubernetesClient:
         if not pod_name:
             raise RuntimeError(f"No running pod found for {service_name}")
 
-        local_port = self._free_local_port()
-        kubectl_args = self._kubectl_args(
-            [
-                "port-forward",
-                f"pod/{pod_name}",
-                "-n",
-                namespace,
-                f"{local_port}:{port}",
-            ]
-        )
-        process = subprocess.Popen(
-            kubectl_args,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
+        pf = k8s_portforward(
+            self._stream_core_v1.connect_get_namespaced_pod_portforward,
+            pod_name,
+            namespace,
+            ports=str(port),
         )
         try:
-            self._wait_for_local_port(local_port, process)
-            conn = http.client.HTTPConnection("127.0.0.1", local_port, timeout=30)
+            sock = pf.socket(port)
+            conn = http.client.HTTPConnection("localhost", port, timeout=30)
+            conn.sock = sock
             conn.request(method, path, body=body, headers=headers)
             resp = conn.getresponse()
             return resp.status, resp.read(), dict(resp.getheaders())
         finally:
-            process.terminate()
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=5)
-
-    @staticmethod
-    def _free_local_port() -> int:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.bind(("127.0.0.1", 0))
-            return sock.getsockname()[1]
-
-    @staticmethod
-    def _wait_for_local_port(
-        port: int, process: subprocess.Popen, timeout: float = 10
-    ) -> None:
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if process.poll() is not None:
-                stdout, stderr = process.communicate()
-                raise RuntimeError(
-                    stderr.strip()
-                    or stdout.strip()
-                    or f"kubectl port-forward exited with code {process.returncode}"
-                )
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-                sock.settimeout(0.25)
-                try:
-                    sock.connect(("127.0.0.1", port))
-                    return
-                except OSError:
-                    time.sleep(0.1)
-        raise RuntimeError(f"kubectl port-forward did not open localhost:{port}")
+            pf.close()

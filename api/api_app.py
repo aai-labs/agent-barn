@@ -12,6 +12,7 @@ from sqlmodel import Session, select
 from api.core.config import get_config
 from api.core.utils import create_injector
 from api.domains.agents.routes import agents_router
+from api.domains.agents.slack_routes import slack_router
 from api.domains.agents.webhook_routes import webhook_router
 from api.domains.auth.routes import auth_router
 from api.domains.conversations.routes import conversations_router
@@ -113,6 +114,7 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(templates_router)
     subapi.include_router(tool_calls_router)
     subapi.include_router(users_router)
+    subapi.include_router(slack_router)
 
     attach_injector(app_v1, injector)
     attach_injector(subapi, injector)

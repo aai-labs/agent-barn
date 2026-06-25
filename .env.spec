@@ -19,6 +19,12 @@ EMAIL_SMTP_SERVER=
 # Path to kubeconfig file. If unset, tries in-cluster auth then ~/.kube/config.
 K8S_KUBECONFIG_PATH=
 K8S_NAMESPACE=agent-farm
+# StorageClass for PVCs (Postgres + agent pods). Empty falls through to the
+# cluster's default StorageClass. aai-labs default is local-path; set to a
+# network-replicated class (e.g. rook-ceph-block-main, GKE premium-rwo) for
+# node-loss durability. Note: changing this on an existing Postgres deployment
+# requires a data migration (StatefulSet volumeClaimTemplates are immutable).
+STORAGE_CLASS=
 
 # Agents
 # Full image ref for agent pods, e.g. {REGISTRY_URL}/agentfarm-openclaw-base:{VERSION}
@@ -35,5 +41,11 @@ LITELLM_BASE_URL=
 AGENT_LITELLM_BASE_URL=
 # Name of the k8s Secret containing LITELLM_MASTER_KEY. Defaults to "litellm".
 LITELLM_SECRET_NAME=litellm
-# Default model for openclaw agents when agent.model is not set. Format: provider/model-name
-AGENT_DEFAULT_MODEL=litellm/gpt-5-mini
+# Default model for openclaw agents when agent.model is not set. Format: litellm/openrouter/<slug>
+AGENT_DEFAULT_MODEL=litellm/openrouter/qwen/qwen3.6-plus
+# OpenRouter API key used to fetch the model catalogue for the picker. Optional —
+# the public catalogue endpoint works unauthenticated.
+OPENROUTER_API_KEY=
+# Comma-separated fnmatch globs limiting which OpenRouter models the picker offers,
+# e.g. "qwen/*,openai/gpt-5*". Empty offers the full catalogue.
+AGENT_MODEL_ALLOWLIST=

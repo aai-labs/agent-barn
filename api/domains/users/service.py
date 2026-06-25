@@ -8,13 +8,19 @@ from api.core.config import Config
 from api.domains.auth.hashing import check_hash, hash_text
 from api.domains.auth.password_validation import validate_strong_password
 from api.domains.auth.repository import RefreshTokenRepository
+from api.domains.organizations.repository import OrganizationRepository
 from api.domains.users.models import (
+    AdminUserCreate,
     User,
     UserCreateSuperAdmin,
     UserFilter,
     UserPasswordChange,
     UserRead,
     UserUpdate,
+)
+from api.domains.users.organization_users.models import (
+    OrganizationRole,
+    OrganizationUser,
 )
 from api.domains.users.organization_users.repository import OrganizationUserRepository
 from api.domains.users.organization_users.service import OrganizationUserService
@@ -28,27 +34,16 @@ class UserService:
     user_repository: UserRepository
     organization_user_service: OrganizationUserService
     organization_user_repository: OrganizationUserRepository
+    organization_repository: OrganizationRepository
     refresh_token_repository: RefreshTokenRepository
     config: Config
 
     def ensure_default_superuser(self) -> User:
-        email, password = self.config.super_user_credentials.split(":")
-        full_name = self.config.super_user_full_name
         existing = self.user_repository.get_superuser()
         if existing:
-            updated = False
-            if existing.email != email:
-                existing.email = email
-                updated = True
-            if existing.full_name != full_name:
-                existing.full_name = full_name
-                updated = True
-            if not check_hash(password, existing.hashed_password):
-                existing.hashed_password = hash_text(password)
-                updated = True
-            if updated:
-                self.user_repository.save(existing)
             return existing
+        email, password = self.config.super_user_credentials.split(":")
+        full_name = self.config.super_user_full_name
         return self.create_superuser(
             email=email, password=password, full_name=full_name
         )
@@ -63,6 +58,31 @@ class UserService:
             hashed_password=hash_text(password),
         )
         return self.user_repository.save(user)
+
+    def create_user(self, data: AdminUserCreate) -> User:
+        validate_strong_password(data.password)
+        user = User(
+            email=data.email,
+            full_name=data.full_name,
+            hashed_password=hash_text(data.password),
+        )
+        self.user_repository.save(user)
+
+        default_org = self.organization_repository.find_default()
+        if not default_org:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Default organization not found",
+            )
+
+        self.organization_user_repository.save(
+            OrganizationUser(
+                user_id=user.id,
+                organization_id=default_org.id,
+                role=OrganizationRole.MEMBER,
+            )
+        )
+        return user
 
     def get_user_by_id_and_organization_id(
         self, user_id: UUID, organization_id: UUID
@@ -143,7 +163,19 @@ class UserService:
         user.security_stamp = uuid7().hex
         self.user_repository.save(user)
 
-    def delete_user(self, user_id: UUID) -> None:
+    def reset_user_password(self, user_id: UUID, new_password: str) -> None:
+        validate_strong_password(new_password)
+        user = self.get_user(user_id)
+        user.hashed_password = hash_text(new_password)
+        user.security_stamp = uuid7().hex
+        self.user_repository.save(user)
+
+    def delete_user(self, user_id: UUID, actor_id: UUID) -> None:
+        if user_id == actor_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot delete your own account",
+            )
         user = self.get_user(user_id)
 
         refresh_tokens = self.refresh_token_repository.get_by_user(user.id)

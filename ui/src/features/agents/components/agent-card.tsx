@@ -1,6 +1,7 @@
 "use client";
 
 import type { Agent } from "../schemas";
+import { formatModelName } from "../utils";
 import { useAgentHealth } from "../hooks/use-agent-health";
 import { AgentAvatar } from "./agent-avatar";
 import { AgentMetaBadges } from "./agent-meta-badges";
@@ -27,7 +28,7 @@ export function AgentCard({ agent, onOpen }: AgentCardProps) {
           </div>
           {agent.model && (
             <div className="text-[0.844rem] mt-0.5 font-mono truncate" style={{ color: "var(--ink-3)" }}>
-              {agent.model}
+              {formatModelName(agent.model)}
             </div>
           )}
           <AgentMetaBadges agent={agent} className="mt-2" />

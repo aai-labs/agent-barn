@@ -20,7 +20,8 @@ from api.tests.core.modules import (
 )
 from api.tests.mocks.email import MockEmailModule
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
-from api.tests.steps.user import there_is_a_user
+from api.tests.steps.organization import there_is_an_organization
+from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
 
 
 def _extract_token_from_email(email_html: str) -> str:
@@ -84,7 +85,7 @@ def test_refresh_requires_token():
         assert_that(response.json()["detail"], equal_to("Refresh token is required"))
 
 
-def test_signup_grants_access_to_organizations_immediately():
+def test_signup_is_disabled():
     with given(
         [
             prepare_injector(),
@@ -96,7 +97,7 @@ def test_signup_grants_access_to_organizations_immediately():
     ) as context:
         client: TestClient = context.client
 
-        signup_response = client.post(
+        response = client.post(
             "/api/v1/auth/signup",
             json={
                 "email": "verify-flow@example.com",
@@ -104,13 +105,7 @@ def test_signup_grants_access_to_organizations_immediately():
                 "full_name": "Verify Flow",
             },
         )
-        access_token = signup_response.json()["access_token"]
-
-        allowed_response = client.get(
-            "/api/v1/organizations", headers={"Authorization": f"Bearer {access_token}"}
-        )
-        assert_that(allowed_response.status_code, equal_to(status.HTTP_200_OK))
-        assert_that(allowed_response.json(), has_key("items"))
+        assert_that(response.status_code, equal_to(status.HTTP_410_GONE))
 
 
 def test_me_returns_safe_user_and_organizations():
@@ -121,22 +116,19 @@ def test_me_returns_safe_user_and_organizations():
             create_test_client(),
             database_repo_is_ready(),
             database_is_clean(),
+            there_is_a_user(
+                name="Me Contract",
+                email="me-contract@example.com",
+            ),
+            there_is_an_organization(name="Test Organization", owner_id=None),
+            there_is_an_access_token_for_user(),
         ]
     ) as context:
         client: TestClient = context.client
 
-        signup_response = client.post(
-            "/api/v1/auth/signup",
-            json={
-                "email": "me-contract@example.com",
-                "password": "StrongPass123",
-                "full_name": "Me Contract",
-            },
-        )
-        access_token = signup_response.json()["access_token"]
-
         me_response = client.get(
-            "/api/v1/auth/me", headers={"Authorization": f"Bearer {access_token}"}
+            "/api/v1/auth/me",
+            headers={"Authorization": f"Bearer {context.access_token}"},
         )
 
         assert_that(me_response.status_code, equal_to(status.HTTP_200_OK))
@@ -147,14 +139,6 @@ def test_me_returns_safe_user_and_organizations():
         assert_that(
             payload["organization_users"][0]["organization"]["name"],
             contains_string("Organization"),
-        )
-        assert_that(
-            payload["organization_users"][0]["organization"]["owner_email"],
-            equal_to("me-contract@example.com"),
-        )
-        assert_that(
-            payload["organization_users"][0]["organization"]["owner_name"],
-            equal_to("Me Contract"),
         )
         assert_that(payload, is_not(has_key("hashed_password")))
         assert_that(payload, is_not(has_key("security_stamp")))

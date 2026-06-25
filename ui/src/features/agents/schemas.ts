@@ -159,6 +159,14 @@ export const SlackUserSchema = z.object({
   displayName: z.string(),
 });
 
+export const ModelOptionSchema = z.object({
+  value: z.string(),
+  label: z.string(),
+  contextLength: z.number().nullish(),
+  pricing: z.unknown().nullish(),
+  isDefault: z.boolean().optional(),
+});
+
 export type Agent = z.infer<typeof AgentSchema>;
 export type AgentAssignedSkill = z.infer<typeof AgentAssignedSkillSchema>;
 export type AgentSlackConfig = z.infer<typeof AgentSlackConfigSchema>;
@@ -178,3 +186,4 @@ export type ToolCall = z.infer<typeof ToolCallSchema>;
 export type PaginatedToolCalls = z.infer<typeof PaginatedToolCallsSchema>;
 export type SlackChannel = z.infer<typeof SlackChannelSchema>;
 export type SlackUser = z.infer<typeof SlackUserSchema>;
+export type ModelOption = z.infer<typeof ModelOptionSchema>;

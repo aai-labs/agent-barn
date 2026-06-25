@@ -15,6 +15,7 @@ def build_pvc(
     agent_id: UUID,
     org_id: UUID,
     namespace: str,
+    storage_class: str | None = None,
 ) -> client.V1PersistentVolumeClaim:
     return client.V1PersistentVolumeClaim(
         metadata=client.V1ObjectMeta(
@@ -24,6 +25,8 @@ def build_pvc(
         ),
         spec=client.V1PersistentVolumeClaimSpec(
             access_modes=["ReadWriteOnce"],
+            # None omits the field so the cluster default StorageClass applies.
+            storage_class_name=storage_class or None,
             resources=client.V1ResourceRequirements(
                 requests={"storage": "1Gi"},
             ),
