@@ -15,7 +15,9 @@ from api.domains.agents.models import SecretProvider
 from .bitbucket import BITBUCKET_SKILLS
 from .confluence import CONFLUENCE_SKILLS
 from .github import GITHUB_SKILLS
+from .gmail import GMAIL_SKILLS
 from .jira import JIRA_SKILLS
+from .zoho_mail import ZOHO_MAIL_SKILLS
 
 
 # One entry per aai-cli provider skill seeded into the DB on startup.
@@ -43,6 +45,18 @@ AAI_CLI_PROVIDER_SKILLS: list[dict] = [
         "required_providers": [SecretProvider.BITBUCKET],
         "files": BITBUCKET_SKILLS,
         "tools_pointer": "\nFor Bitbucket, use the aai-cli tool. See ./skills/aai-cli/bitbucket_skill.md\n",
+    },
+    {
+        "name": "Gmail",
+        "required_providers": [SecretProvider.GMAIL],
+        "files": GMAIL_SKILLS,
+        "tools_pointer": "\nFor Gmail, use the aai-cli tool. See ./skills/aai-cli/gmail_skill.md\n",
+    },
+    {
+        "name": "Zoho Mail",
+        "required_providers": [SecretProvider.ZOHO_MAIL],
+        "files": ZOHO_MAIL_SKILLS,
+        "tools_pointer": "\nFor Zoho Mail, use the aai-cli tool. See ./skills/aai-cli/zoho_mail_skill.md\n",
     },
 ]
 
