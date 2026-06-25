@@ -129,11 +129,14 @@ export function TopNav({ onHire, orgName }: TopNavProps) {
               </div>
 
               <div className="py-1">
-                <button className="af-hover-bg w-full text-left flex items-center gap-2.5 px-3.5 py-2 text-[13.5px]"
+                <Link
+                  href="/dashboard/account"
+                  className="af-hover-bg w-full text-left flex items-center gap-2.5 px-3.5 py-2 text-[13.5px]"
                   style={{ color: "var(--ink-2)" }}
+                  onClick={() => setMenuOpen(false)}
                 >
                   <UserIcon /> Account
-                </button>
+                </Link>
               </div>
 
               {user.isSuperuser && (

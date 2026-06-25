@@ -11,6 +11,7 @@ from api.core.config import Config
 from api.domains.auth.hashing import hash_text
 from api.domains.auth.repository import RefreshTokenRepository
 from api.domains.organizations.models import OrganizationRead
+from api.domains.organizations.repository import OrganizationRepository
 from api.domains.users.models import User, UserPasswordChange, UserUpdate
 from api.domains.users.organization_users.models import (
     OrganizationRole,
@@ -32,6 +33,7 @@ def build_user_service() -> tuple[
     user_repository = Mock(spec=UserRepository)
     organization_user_service = Mock(spec=OrganizationUserService)
     organization_user_repository = Mock(spec=OrganizationUserRepository)
+    organization_repository = Mock(spec=OrganizationRepository)
     refresh_token_repository = Mock(spec=RefreshTokenRepository)
     config = Config(
         db_connection_url=cast(
@@ -51,6 +53,7 @@ def build_user_service() -> tuple[
         organization_user_repository=cast(
             OrganizationUserRepository, organization_user_repository
         ),
+        organization_repository=cast(OrganizationRepository, organization_repository),
         refresh_token_repository=cast(RefreshTokenRepository, refresh_token_repository),
         config=config,
     )
@@ -77,6 +80,22 @@ def test_ensure_default_superuser_returns_existing_user():
     result = service.ensure_default_superuser()
 
     assert_that(result, equal_to(existing))
+    user_repository.save.assert_not_called()
+
+
+def test_ensure_default_superuser_does_not_update_existing():
+    service, user_repository, _, _, _ = build_user_service()
+    existing = User(
+        email="different@example.com",
+        hashed_password=hash_text("DifferentPass999"),
+        full_name="Different Name",
+    )
+    user_repository.get_superuser.return_value = existing
+
+    result = service.ensure_default_superuser()
+
+    assert_that(result, equal_to(existing))
+    assert_that(result.email, equal_to("different@example.com"))
     user_repository.save.assert_not_called()
 
 

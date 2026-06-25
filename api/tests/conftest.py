@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from testcontainers.postgres import PostgresContainer
 
 from api.core.config import get_config
+from api.infrastructure.openrouter.client import clear_models_cache
 from api.infrastructure.slack.client import clear_directory_cache
 
 logger = logging.getLogger(__name__)
@@ -47,4 +48,11 @@ def setup_test_database():
 def clear_slack_directory_cache():
     """Slack directory cache is process-global; reset it between tests."""
     clear_directory_cache()
+    yield
+
+
+@pytest.fixture(autouse=True)
+def clear_openrouter_models_cache():
+    """OpenRouter catalogue cache is process-global; reset it between tests."""
+    clear_models_cache()
     yield

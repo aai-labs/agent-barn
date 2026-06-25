@@ -8,8 +8,10 @@ import { useUpdateAgent } from "../hooks/use-update-agent";
 import { useDeleteAgent } from "../hooks/use-delete-agent";
 import { XIcon, LockIcon } from "@/components/icons";
 import { TokenInput } from "./hire-dialog-primitives";
-import { MODELS, IntegrationsStep, TemplateSourceBadge, VersionSelect } from "./hire-dialog-steps";
+import { IntegrationsStep, TemplateSourceBadge, VersionSelect } from "./hire-dialog-steps";
+import { ModelSelect } from "./model-select";
 import {
+  expandGithubContent,
   getIntegrationProvider,
   hasIncompleteIntegration,
   type IntegrationDraft,
@@ -172,7 +174,7 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
         agentId: agent.id,
         secrets: secretDrafts.map((d) => ({
           provider: d.provider,
-          content: d.content,
+          content: d.provider === "github" ? expandGithubContent(d.content) : d.content,
         })),
         removedSecretProviders: removedProviders.filter(
           (p) => !draftProviders.has(p),
@@ -280,16 +282,11 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                 </div>
                 <div className="flex flex-col gap-1.5">
                   <label className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>Model</label>
-                  <select
-                    className="af-input"
+                  <ModelSelect
                     value={model}
-                    onChange={(e) => setModel(e.target.value)}
+                    onChange={setModel}
                     disabled={isRunning}
-                  >
-                    {MODELS.map((m) => (
-                      <option key={m.value} value={m.value}>{m.label}</option>
-                    ))}
-                  </select>
+                  />
                 </div>
                 <div className="flex gap-2 items-center">
                   <button

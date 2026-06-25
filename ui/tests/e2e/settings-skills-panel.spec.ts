@@ -86,7 +86,7 @@ test.describe("Settings — Skills panel", () => {
     await page.getByRole("button", { name: "View" }).first().click();
 
     await expect(page.getByRole("heading", { name: "github" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Close", exact: true })).toBeVisible();
+    await expect(page.getByLabel("Close")).toBeVisible();
     await expect(page.getByRole("button", { name: "Save changes" })).not.toBeVisible();
   });
 
@@ -181,7 +181,7 @@ test.describe("Settings — Skills panel", () => {
     await page.getByRole("button", { name: "Delete" }).click();
     await page.getByRole("button", { name: "Delete", exact: true }).click();
 
-    await expect(page.getByText("my-tool")).not.toBeVisible();
+    await expect(page.getByRole("heading", { name: "my-tool" })).not.toBeVisible();
   });
 });
 

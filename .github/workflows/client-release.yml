@@ -1,0 +1,119 @@
+name: Client Release
+
+# Builds every agent-farm image and pushes it to the client-facing registry.
+# Manual only. Distinct from deploy.yml: it uses the docker/* actions (no hand
+# -rolled docker login/build/push) and a matrix over the images rather than a
+# step per image.
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: client-release
+  cancel-in-progress: false
+
+env:
+  # Baked into the UI bundle at build time. The bare in-cluster Service name is
+  # portable across any client cluster: the browser hits same-origin /api/*, and
+  # the UI server proxies to this address from inside the agent-farm namespace
+  # (same namespace as the API, so the short name resolves).
+  UI_BACKEND_URL: http://agentfarm-api:8000
+
+jobs:
+  release:
+    name: Build and push ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: api
+            context: .
+            file: api/Dockerfile
+            version_file: helm/agentfarm-api/Chart.yaml
+            version_kind: chart
+          - name: ui
+            context: ui
+            file: ui/Dockerfile
+            version_file: helm/agentfarm-ui/Chart.yaml
+            version_kind: chart
+          - name: hermes-base
+            context: hermes-base
+            file: hermes-base/Dockerfile
+            version_file: hermes-base/VERSION
+            version_kind: file
+            needs_token: true
+            smoke: hermes-base/smoke-test.sh
+          - name: openclaw-base
+            context: openclaw-base
+            file: openclaw-base/Dockerfile
+            version_file: openclaw-base/VERSION
+            version_kind: file
+            needs_token: true
+            smoke: openclaw-base/smoke-test.sh
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to the client registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ vars.CLIENT_REGISTRY_URL }}
+          username: ${{ secrets.CLIENT_REGISTRY_USERNAME }}
+          password: ${{ secrets.CLIENT_REGISTRY_PASSWORD }}
+
+      - name: Resolve image version
+        id: ver
+        run: |
+          if [ "${{ matrix.version_kind }}" = "chart" ]; then
+            version=$(grep '^appVersion:' "${{ matrix.version_file }}" | awk '{print $2}' | tr -d '"')
+          else
+            version=$(tr -d '[:space:]' < "${{ matrix.version_file }}")
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Compute tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ vars.CLIENT_REGISTRY_URL }}/agent-farm/${{ matrix.name }}
+          tags: |
+            type=raw,value=${{ steps.ver.outputs.version }}
+            type=raw,value=latest
+
+      # Build into the local daemon first so base images can be smoke-tested
+      # before anything is published.
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          load: true
+          push: false
+          tags: ${{ steps.meta.outputs.tags }}
+          build-args: ${{ matrix.name == 'ui' && format('NEXT_PUBLIC_BACKEND_URL={0}', env.UI_BACKEND_URL) || '' }}
+          secrets: ${{ matrix.needs_token && format('gh_token={0}', secrets.AAI_CLI_REPO_ACCESS_TOKEN) || '' }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+      - name: Smoke test
+        if: matrix.smoke
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}/${{ matrix.smoke }}:/smoke-test.sh:ro" \
+            "${{ vars.CLIENT_REGISTRY_URL }}/agent-farm/${{ matrix.name }}:${{ steps.ver.outputs.version }}" \
+            /bin/sh /smoke-test.sh
+
+      - name: Push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          build-args: ${{ matrix.name == 'ui' && format('NEXT_PUBLIC_BACKEND_URL={0}', env.UI_BACKEND_URL) || '' }}
+          secrets: ${{ matrix.needs_token && format('gh_token={0}', secrets.AAI_CLI_REPO_ACCESS_TOKEN) || '' }}
+          cache-from: type=gha,scope=${{ matrix.name }}

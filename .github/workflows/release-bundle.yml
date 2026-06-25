@@ -1,0 +1,67 @@
+name: Release Deploy Bundle
+
+# Packages the deployment artifacts (helm charts, k8s/ prerequisites, the
+# helmfile and deploy.sh) plus a ready-to-edit .env.deploy, and attaches the
+# tarball to a GitHub Release. A client downloads it, fills in the credentials,
+# and runs ./deploy.sh. Manual only.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag (e.g. v0.15.0)
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  bundle:
+    name: Build and publish deploy bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve image versions
+        id: ver
+        run: |
+          chart_version() { grep '^appVersion:' "$1" | awk '{print $2}' | tr -d '"'; }
+          {
+            echo "api=$(chart_version helm/agentfarm-api/Chart.yaml)"
+            echo "ui=$(chart_version helm/agentfarm-ui/Chart.yaml)"
+            echo "hermes=$(tr -d '[:space:]' < hermes-base/VERSION)"
+            echo "openclaw=$(tr -d '[:space:]' < openclaw-base/VERSION)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Assemble bundle
+        run: |
+          set -euo pipefail
+          root=agent-farm-deploy
+          mkdir -p "$root"
+          cp -r helm k8s helmfile.yaml.gotmpl deploy.sh "$root"/
+
+          # Generate .env.deploy from the spec: retarget to the client registry
+          # and pin image tags. Credentials are intentionally left blank for the
+          # client to fill in.
+          sed \
+            -e 's|^REGISTRY_PREFIX=.*|REGISTRY_PREFIX=clients.registry.k8s.aai-labs.com/agent-farm|' \
+            -e 's|^REGISTRY_SERVER=.*|REGISTRY_SERVER=clients.registry.k8s.aai-labs.com|' \
+            -e 's|^API_IMAGE_REPOSITORY=.*|API_IMAGE_REPOSITORY=api|' \
+            -e 's|^UI_IMAGE_REPOSITORY=.*|UI_IMAGE_REPOSITORY=ui|' \
+            -e 's|^HERMES_IMAGE_REPOSITORY=.*|HERMES_IMAGE_REPOSITORY=hermes-base|' \
+            -e 's|^OPENCLAW_IMAGE_REPOSITORY=.*|OPENCLAW_IMAGE_REPOSITORY=openclaw-base|' \
+            -e 's|^API_IMAGE_TAG=.*|API_IMAGE_TAG=${{ steps.ver.outputs.api }}|' \
+            -e 's|^UI_IMAGE_TAG=.*|UI_IMAGE_TAG=${{ steps.ver.outputs.ui }}|' \
+            -e 's|^HERMES_IMAGE_TAG=.*|HERMES_IMAGE_TAG=${{ steps.ver.outputs.hermes }}|' \
+            -e 's|^OPENCLAW_IMAGE_TAG=.*|OPENCLAW_IMAGE_TAG=${{ steps.ver.outputs.openclaw }}|' \
+            .env.deploy.spec > "$root/.env.deploy"
+
+          tar -czf "agent-farm-deploy-${{ inputs.tag }}.tar.gz" "$root"
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag }}
+          name: ${{ inputs.tag }}
+          files: agent-farm-deploy-${{ inputs.tag }}.tar.gz
+          generate_release_notes: true

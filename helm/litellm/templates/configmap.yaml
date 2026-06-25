@@ -8,13 +8,15 @@ metadata:
 data:
   config.yaml: |
     model_list:
-      {{- range .Values.models }}
-      - model_name: {{ .name }}
+      # Wildcard passthrough: route any OpenRouter model on demand so the
+      # available models are driven by OpenRouter, not a hand-maintained list.
+      # Agents request openrouter/<slug>; the picker is governed by the API's
+      # AGENT_MODEL_ALLOWLIST.
+      - model_name: "openrouter/*"
         litellm_params:
-          model: openrouter/{{ .openrouterModel }}
+          model: "openrouter/*"
           api_key: os.environ/OPENROUTER_API_KEY
           api_base: https://openrouter.ai/api/v1
-      {{- end }}
 
     general_settings:
       master_key: os.environ/LITELLM_MASTER_KEY

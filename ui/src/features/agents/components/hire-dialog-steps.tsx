@@ -24,6 +24,7 @@ import {
 import type { AgentTemplateRead } from "../schemas";
 import { useTemplates } from "../hooks/use-templates";
 import { ChoiceCard, FormField, NextStep, TokenInput } from "./hire-dialog-primitives";
+import { ModelSelect } from "./model-select";
 import { Pagination } from "./pagination";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
@@ -34,6 +35,7 @@ export type WizardStep =
   | "agent-type"
   | "platform-choice"
   | "slack-choice"
+  | "config-token"
   | "bot-builder"
   | "slack-tokens"
   | "teams-bot-builder"
@@ -57,8 +59,6 @@ export type TemplateFileKey = (typeof TEMPLATE_FILE_KEYS)[number];
 export function templateFileLabel(key: TemplateFileKey): string {
   return key.replace("Md", "").toUpperCase() + ".md";
 }
-
-export const MODELS = [{ value: "litellm/qwen3.6-plus", label: "Qwen3.6 Plus" }, { value: "litellm/gpt-5-mini", label: "GPT-5 mini" }] as const;
 
 export const BOT_COLOR_PRESETS = ["#4A154B", "#1264A3", "#2BAC76", "#E8912D", "#CC4400"];
 
@@ -102,63 +102,6 @@ export function TemplateSourceBadge({ source }: { source: AgentTemplateRead["tem
     >
       Pre-defined
     </span>
-  );
-}
-
-function generateManifest(name: string, description: string, color: string): string {
-  return JSON.stringify(
-    {
-      display_information: { name, description, background_color: color },
-      features: {
-        app_home: {
-          home_tab_enabled: false,
-          messages_tab_enabled: true,
-          messages_tab_read_only_enabled: false,
-        },
-        bot_user: { display_name: name, always_online: true },
-      },
-      oauth_config: {
-        scopes: {
-          bot: [
-            "app_mentions:read",
-            "channels:history",
-            "channels:join",
-            "channels:read",
-            "chat:write",
-            "chat:write.public",
-            "groups:history",
-            "groups:read",
-            "im:history",
-            "im:read",
-            "im:write",
-            "mpim:history",
-            "mpim:read",
-            "mpim:write",
-            "reactions:read",
-            "reactions:write",
-            "users:read",
-            "users:read.email",
-          ],
-        },
-      },
-      settings: {
-        event_subscriptions: {
-          bot_events: [
-            "app_mention",
-            "message.channels",
-            "message.groups",
-            "message.im",
-            "message.mpim",
-          ],
-        },
-        interactivity: { is_enabled: true },
-        org_deploy_enabled: false,
-        socket_mode_enabled: true,
-        token_rotation_enabled: false,
-      },
-    },
-    null,
-    2,
   );
 }
 
@@ -362,6 +305,97 @@ export function TemplateStep({
   );
 }
 
+export function ConfigTokenStep({
+  tokenInput,
+  onTokenInputChange,
+  showToken,
+  onToggleToken,
+  refreshInput,
+  onRefreshInputChange,
+  showRefresh,
+  onToggleRefresh,
+  isSaving,
+  error,
+}: {
+  tokenInput: string;
+  onTokenInputChange: (v: string) => void;
+  showToken: boolean;
+  onToggleToken: () => void;
+  refreshInput: string;
+  onRefreshInputChange: (v: string) => void;
+  showRefresh: boolean;
+  onToggleRefresh: () => void;
+  isSaving: boolean;
+  error: string | null;
+}) {
+  return (
+    <div className="flex flex-col gap-5">
+      <p className="text-[0.8125rem] leading-[1.5]" style={{ color: "var(--ink-3)" }}>
+        To create the Slack app automatically, you need configuration tokens.
+      </p>
+
+      <FormField label="Access token" hint="Configuration access token from Slack">
+        <TokenInput
+          value={tokenInput}
+          onChange={onTokenInputChange}
+          visible={showToken}
+          onToggle={onToggleToken}
+          placeholder="Configuration access token..."
+          disabled={isSaving}
+        />
+      </FormField>
+
+      <FormField label="Refresh token" hint="Starts with xoxe- · enables automatic renewal">
+        <TokenInput
+          value={refreshInput}
+          onChange={onRefreshInputChange}
+          visible={showRefresh}
+          onToggle={onToggleRefresh}
+          placeholder="xoxe-…"
+          disabled={isSaving}
+        />
+      </FormField>
+
+      {error && (
+        <div className="text-[0.8125rem]" style={{ color: "var(--err)" }}>
+          {error}
+        </div>
+      )}
+
+      <div
+        className="flex flex-col gap-3 rounded-2xl p-4"
+        style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
+      >
+        <NextStep n={1} label="Go to your Slack apps">
+          Open{" "}
+          <a
+            href="https://api.slack.com/apps"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline"
+            style={{ color: "var(--ink-2)" }}
+          >
+            api.slack.com/apps ↗
+          </a>
+        </NextStep>
+        <NextStep n={2} label="Open any app's Basic Information page">
+          Scroll to <b>App Configuration Tokens</b> and click <b>Generate Token</b>. You will get both an access token and a refresh token.
+        </NextStep>
+        <NextStep n={3} label="Paste both tokens above">
+          They will be saved to your account and reused for future bot creation.
+        </NextStep>
+      </div>
+
+      <p className="text-[0.75rem]" style={{ color: "var(--ink-4)" }}>
+        You can update these tokens later in{" "}
+        <a href="/dashboard/account" className="underline" style={{ color: "var(--ink-3)" }}>
+          Account settings
+        </a>.
+      </p>
+    </div>
+  );
+}
+
 export function SlackChoiceStep({
   setupNewBot,
   onChange,
@@ -402,26 +436,6 @@ export function BotBuilderStep({
   botColor: string;
   onBotColorChange: (v: string) => void;
 }) {
-  const [copied, setCopied] = useState(false);
-  const manifest = generateManifest(botName, botDescription, botColor);
-
-  function copyManifest() {
-    void navigator.clipboard.writeText(manifest).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
-  }
-
-  function downloadManifest() {
-    const blob = new Blob([manifest], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${botName.toLowerCase().replace(/\s+/g, "-")}-manifest.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }
-
   return (
     <div className="flex flex-col gap-5">
       <FormField label="Bot display name" hint="Shown in Slack — can be changed later">
@@ -467,86 +481,6 @@ export function BotBuilderStep({
           />
         </div>
       </FormField>
-
-      <div>
-        <div className="flex items-center justify-between mb-2">
-          <span className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>
-            Generated manifest
-          </span>
-          <div className="flex gap-1.5">
-            <button className="af-btn af-btn-sm" onClick={copyManifest}>
-              {copied ? "Copied!" : "Copy"}
-            </button>
-            <button className="af-btn af-btn-sm" onClick={downloadManifest}>
-              Download
-            </button>
-          </div>
-        </div>
-        <pre
-          className="rounded-xl font-mono text-[0.719rem] leading-[1.6] p-4 overflow-x-auto"
-          style={{
-            background: "var(--bg-elev)",
-            border: "1px solid var(--line)",
-            color: "var(--ink-2)",
-            maxHeight: "14rem",
-          }}
-        >
-          {manifest}
-        </pre>
-      </div>
-
-      <div
-        className="flex flex-col gap-3 rounded-2xl p-4"
-        style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
-      >
-        <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
-          What to do next
-        </div>
-        <NextStep n={1} label="Create your Slack app from this manifest">
-          Copy the manifest above, then click the link to open Slack&apos;s app creation page.
-          Choose <b>From an app manifest</b>, paste it in, and create the app.{" "}
-          <a
-            href="https://api.slack.com/apps?new_app=1"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline"
-            style={{ color: "var(--ink-2)" }}
-          >
-            Create app ↗
-          </a>
-        </NextStep>
-        <NextStep n={2} label="Install the app to your workspace">
-          In your new app&apos;s settings, go to <b>Install App</b> and click{" "}
-          <b>Install to [your workspace name]</b>. Slack will generate a{" "}
-          <span className="font-mono text-xs">xoxb-…</span> bot token automatically.{" "}
-          <a
-            href="https://api.slack.com/apps"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline"
-            style={{ color: "var(--ink-2)" }}
-          >
-            Your apps ↗
-          </a>
-        </NextStep>
-        <NextStep n={3} label="Create an App-Level Token">
-          Go to <b>Basic Information</b> → <b>App-Level Tokens</b> → <b>Generate Token and Scopes</b>.
-          Name it anything and add the <span className="font-mono text-xs">connections:write</span> scope.
-          This creates your <span className="font-mono text-xs">xapp-…</span> token, required for Socket Mode.{" "}
-          <a
-            href="https://api.slack.com/apps"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline"
-            style={{ color: "var(--ink-2)" }}
-          >
-            Your apps ↗
-          </a>
-        </NextStep>
-        <NextStep n={4} label="Come back and enter both tokens">
-          You&apos;ll paste them on the next screen.
-        </NextStep>
-      </div>
     </div>
   );
 }
@@ -561,6 +495,9 @@ export function SlackTokensStep({
   showBotToken,
   onToggleBotToken,
   error,
+  appId,
+  botTokenUrl,
+  appTokenUrl,
 }: {
   slackAppToken: string;
   onAppTokenChange: (v: string) => void;
@@ -571,6 +508,9 @@ export function SlackTokensStep({
   showBotToken: boolean;
   onToggleBotToken: () => void;
   error: string | null;
+  appId?: string | null;
+  botTokenUrl?: string | null;
+  appTokenUrl?: string | null;
 }) {
   return (
     <form autoComplete="off" className="flex flex-col gap-5" onSubmit={(e) => e.preventDefault()}>
@@ -595,6 +535,11 @@ export function SlackTokensStep({
             onToggle={onToggleAppToken}
             placeholder="xapp-1-…"
           />
+          {slackAppToken && !slackAppToken.startsWith("xapp-") && (
+            <div className="text-[0.75rem] mt-1" style={{ color: "var(--err)" }}>
+              App-level tokens start with xapp-
+            </div>
+          )}
         </FormField>
 
         <FormField label="Bot token" hint="Starts with xoxb- · required for API calls">
@@ -605,6 +550,11 @@ export function SlackTokensStep({
             onToggle={onToggleBotToken}
             placeholder="xoxb-…"
           />
+          {slackBotToken && !slackBotToken.startsWith("xoxb-") && (
+            <div className="text-[0.75rem] mt-1" style={{ color: "var(--err)" }}>
+              Bot tokens start with xoxb-
+            </div>
+          )}
         </FormField>
 
         {error && (
@@ -613,6 +563,44 @@ export function SlackTokensStep({
           </div>
         )}
       </div>
+
+      {appId && (
+        <div
+          className="flex flex-col gap-3 rounded-2xl p-4"
+          style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
+        >
+          <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
+            Your Slack app is created!
+          </div>
+          <NextStep n={1} label="Generate an App-Level Token">
+            Go to{" "}
+            <a
+              href={appTokenUrl ?? "#"}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline"
+              style={{ color: "var(--ink-2)" }}
+            >
+              Basic Information ↗
+            </a>
+            {" "}→ scroll to <b>App-Level Tokens</b> → click <b>Generate Token and Scopes</b>. Name it anything, add the <span className="font-mono text-xs">connections:write</span> scope, and copy the generated <span className="font-mono text-xs">xapp-…</span> token.
+          </NextStep>
+          <NextStep n={2} label="Install the app to your workspace">
+            Go to{" "}
+            <a
+              href={botTokenUrl ?? "#"}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline"
+              style={{ color: "var(--ink-2)" }}
+            >
+              Install App ↗
+            </a>
+            {" "}and click <b>Install to Workspace</b>. After installing, the page will show a <b>Bot User OAuth Token</b> (<span className="font-mono text-xs">xoxb-…</span>) — copy it.
+          </NextStep>
+          <NextStep n={3} label="Paste both tokens above" />
+        </div>
+      )}
     </form>
   );
 }
@@ -1014,16 +1002,7 @@ export function DetailsStep({
       </FormField>
 
       <FormField label="Model">
-        <select
-          className="af-input"
-          aria-label="Model"
-          value={model}
-          onChange={(e) => onModelChange(e.target.value)}
-        >
-          {MODELS.map((m) => (
-            <option key={m.value} value={m.value}>{m.label}</option>
-          ))}
-        </select>
+        <ModelSelect value={model} onChange={onModelChange} aria-label="Model" />
       </FormField>
 
       {platform === "slack" && (
@@ -1182,7 +1161,7 @@ export function SkillsStep({
         />
       </div>
 
-      <div style={{ minHeight: "22rem" }}>
+      <div style={isLoading ? { minHeight: "22rem" } : undefined}>
         {isLoading && (
           <div className="text-[0.8125rem] py-8 text-center" style={{ color: "var(--ink-3)" }}>
             Loading skills…

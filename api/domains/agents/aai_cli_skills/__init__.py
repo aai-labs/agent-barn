@@ -21,25 +21,25 @@ from .jira import JIRA_SKILLS
 # One entry per aai-cli provider skill seeded into the DB on startup.
 AAI_CLI_PROVIDER_SKILLS: list[dict] = [
     {
-        "name": "aai-cli-jira",
+        "name": "Jira",
         "required_providers": [SecretProvider.JIRA],
         "files": JIRA_SKILLS,
         "tools_pointer": "\nFor Jira, use the aai-cli tool. See ./skills/aai-cli/jira_skill.md\n",
     },
     {
-        "name": "aai-cli-confluence",
+        "name": "Confluence",
         "required_providers": [SecretProvider.CONFLUENCE],
         "files": CONFLUENCE_SKILLS,
         "tools_pointer": "\nFor Confluence, use the aai-cli tool. See ./skills/aai-cli/confluence_skill.md\n",
     },
     {
-        "name": "aai-cli-github",
+        "name": "GitHub",
         "required_providers": [SecretProvider.GITHUB],
         "files": GITHUB_SKILLS,
         "tools_pointer": "\nFor GitHub, use the aai-cli tool. See ./skills/aai-cli/github_skill.md\n",
     },
     {
-        "name": "aai-cli-bitbucket",
+        "name": "Bitbucket",
         "required_providers": [SecretProvider.BITBUCKET],
         "files": BITBUCKET_SKILLS,
         "tools_pointer": "\nFor Bitbucket, use the aai-cli tool. See ./skills/aai-cli/bitbucket_skill.md\n",

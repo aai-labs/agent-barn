@@ -51,6 +51,16 @@ class UserRead(BaseModel):
     organization_users: list[OrganizationUserRead] | None = None
 
 
+class AdminUserCreate(PydanticBaseModel):
+    email: EmailStr
+    password: str
+    full_name: str | None = None
+
+
+class AdminPasswordReset(PydanticBaseModel):
+    new_password: str
+
+
 class UserUpdate(PydanticBaseModel):
     full_name: str | None = None
 

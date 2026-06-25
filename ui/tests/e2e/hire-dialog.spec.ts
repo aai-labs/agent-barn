@@ -21,6 +21,32 @@ test.describe("Hire Dialog", () => {
     await dataSupportPage.agents.interceptGetAgentsRequest();
     await dataSupportPage.agents.interceptGetTemplatesRequest();
     await dataSupportPage.agents.interceptGetTemplateVersionsRequest();
+    await page.route("**/api/v1/auth/me/slack-config-token", async (route) => {
+      if (route.request().method() === "GET") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ has_token: true, token_preview: "xoxe.****test" }),
+        });
+      } else {
+        await route.fallback();
+      }
+    });
+    await page.route("**/api/v1/slack/apps", async (route) => {
+      if (route.request().method() === "POST") {
+        await route.fulfill({
+          status: 201,
+          contentType: "application/json",
+          body: JSON.stringify({
+            app_id: "A_TEST_123",
+            bot_token_url: "https://api.slack.com/apps/A_TEST_123/install-on-team",
+            app_token_url: "https://api.slack.com/apps/A_TEST_123/general",
+          }),
+        });
+      } else {
+        await route.fallback();
+      }
+    });
 
     await dashboardPage.goto();
     await page.getByRole("button", { name: /hire agent/i }).click();
@@ -80,15 +106,15 @@ test.describe("Hire Dialog", () => {
     await expect(page.getByText(/step 4 of 7/i)).toBeVisible();
   });
 
-  test("should show manifest in bot builder step", async ({ page }) => {
+  test("should show bot builder fields when choosing new bot", async ({ page }) => {
     await page.getByText("General Purpose", { exact: true }).click();
     await page.getByRole("button", { name: /continue/i }).click();
     await page.getByRole("button", { name: /continue/i }).click();
     await page.getByText("Set up a new Slack bot").click();
     await page.getByRole("button", { name: /continue/i }).click();
 
-    await expect(page.getByText("Generated manifest")).toBeVisible();
-    await expect(page.getByRole("link", { name: /create app/i })).toBeVisible();
+    await expect(page.getByPlaceholder("Aria")).toBeVisible();
+    await expect(page.getByText("Bot display name")).toBeVisible();
   });
 
   test("should advance to details step (path: skip bot builder)", async ({ page }) => {
@@ -115,10 +141,15 @@ test.describe("Hire Dialog", () => {
     await page.getByPlaceholder(/xoxb-/i).fill("xoxb-test");
     await page.getByRole("button", { name: /continue/i }).click();
 
-    await expect(page.getByRole("combobox", { name: /model/i })).toBeVisible();
-    await expect(page.getByRole("combobox", { name: /model/i })).toHaveValue("litellm/qwen3.6-plus");
-    await expect(page.getByRole("option", { name: /qwen3\.6 plus/i })).toBeAttached();
-    await expect(page.getByRole("option", { name: /gpt-5 mini/i })).toBeAttached();
+    // The model picker is a searchable combobox: the trigger button shows the
+    // default model's label, and options render once it is opened.
+    const modelTrigger = page.getByRole("button", { name: /model/i });
+    await expect(modelTrigger).toBeVisible();
+    await expect(modelTrigger).toContainText(/qwen3\.6 plus/i);
+
+    await modelTrigger.click();
+    await expect(page.getByRole("option", { name: /qwen3\.6 plus/i })).toBeVisible();
+    await expect(page.getByRole("option", { name: /gpt-5 mini/i })).toBeVisible();
   });
 
   test("should populate agent name from slack bot name", async ({ page }) => {
@@ -297,6 +328,7 @@ test.describe("Hire Dialog — Skills step", () => {
   test.use({ storageState: { cookies: [], origins: [] } });
 
   async function navigateToSkillsStep(page: Page) {
+    await page.getByText("General Purpose", { exact: true }).click();
     await page.getByRole("button", { name: /continue/i }).click(); // role → agent-type
     await page.getByRole("button", { name: /continue/i }).click(); // agent-type → slack-choice
     await page.getByText("I already have a Slack app").click();
@@ -314,6 +346,8 @@ test.describe("Hire Dialog — Skills step", () => {
     await dataSupportPage.auth.interceptRefreshRequest();
     await dataSupportPage.users.interceptGetUserContextRequest();
     await dataSupportPage.agents.interceptGetAgentsRequest();
+    await dataSupportPage.agents.interceptGetTemplatesRequest();
+    await dataSupportPage.agents.interceptGetTemplateVersionsRequest();
     await dataSupportPage.skills.interceptGetSkillsRequest();
 
     await dashboardPage.goto();

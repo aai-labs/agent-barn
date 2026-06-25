@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useQueryState, parseAsStringEnum, parseAsString } from "nuqs";
+import { formatModelName } from "../utils";
 import { useAgent } from "../hooks/use-agent";
 import { useAgentHealth } from "../hooks/use-agent-health";
 import { useStartAgent } from "../hooks/use-start-agent";
@@ -111,7 +112,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
                 </h1>
                 {agent.model && (
                   <div className="text-[0.906rem] font-mono" style={{ color: "var(--ink-3)" }}>
-                    {agent.model}
+                    {formatModelName(agent.model)}
                   </div>
                 )}
                 <AgentMetaBadges agent={agent} variant="full" className="mt-2" />

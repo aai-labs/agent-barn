@@ -14,7 +14,8 @@ db:
 
 storage:
   size: 5Gi
-  storageClass: local-path
+  # Empty falls through to the cluster's default StorageClass.
+  storageClass: ""
 
 service:
   port: 5432
