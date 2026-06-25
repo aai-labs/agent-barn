@@ -1182,7 +1182,7 @@ export function SkillsStep({
         />
       </div>
 
-      <div style={{ minHeight: "22rem" }}>
+      <div style={isLoading ? { minHeight: "22rem" } : undefined}>
         {isLoading && (
           <div className="text-[0.8125rem] py-8 text-center" style={{ color: "var(--ink-3)" }}>
             Loading skills…

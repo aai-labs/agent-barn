@@ -11,6 +11,7 @@ import { SkillSourceBadge } from "@/features/skills/components/skill-drawer";
 import type { Skill } from "@/features/skills/schemas";
 
 import {
+  expandGithubContent,
   getIntegrationProvider,
   hasIncompleteIntegration,
   parseGithubRepoUrl,
@@ -119,7 +120,7 @@ export function AgentSkillsTab({ agent, isRunning }: AgentSkillsTabProps) {
           ? {
               secrets: newSecretDrafts.map((d) => ({
                 provider: d.provider,
-                content: d.content,
+                content: d.provider === "github" ? expandGithubContent(d.content) : d.content,
               })),
             }
           : {}),

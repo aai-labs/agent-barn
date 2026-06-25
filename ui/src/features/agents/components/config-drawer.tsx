@@ -10,6 +10,7 @@ import { XIcon, LockIcon } from "@/components/icons";
 import { TokenInput } from "./hire-dialog-primitives";
 import { MODELS, IntegrationsStep, TemplateSourceBadge, VersionSelect } from "./hire-dialog-steps";
 import {
+  expandGithubContent,
   getIntegrationProvider,
   hasIncompleteIntegration,
   type IntegrationDraft,
@@ -172,7 +173,7 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
         agentId: agent.id,
         secrets: secretDrafts.map((d) => ({
           provider: d.provider,
-          content: d.content,
+          content: d.provider === "github" ? expandGithubContent(d.content) : d.content,
         })),
         removedSecretProviders: removedProviders.filter(
           (p) => !draftProviders.has(p),
