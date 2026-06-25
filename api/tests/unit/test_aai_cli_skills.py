@@ -9,10 +9,10 @@ from api.domains.agents.aai_cli_skills import (
 )
 
 _EXPECTED_PROVIDER_NAMES = {
-    "aai-cli-jira",
-    "aai-cli-confluence",
-    "aai-cli-github",
-    "aai-cli-bitbucket",
+    "Jira",
+    "Confluence",
+    "GitHub",
+    "Bitbucket",
 }
 
 
