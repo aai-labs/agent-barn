@@ -328,6 +328,7 @@ test.describe("Hire Dialog — Skills step", () => {
   test.use({ storageState: { cookies: [], origins: [] } });
 
   async function navigateToSkillsStep(page: Page) {
+    await page.getByText("General Purpose", { exact: true }).click();
     await page.getByRole("button", { name: /continue/i }).click(); // role → agent-type
     await page.getByRole("button", { name: /continue/i }).click(); // agent-type → slack-choice
     await page.getByText("I already have a Slack app").click();
@@ -345,6 +346,8 @@ test.describe("Hire Dialog — Skills step", () => {
     await dataSupportPage.auth.interceptRefreshRequest();
     await dataSupportPage.users.interceptGetUserContextRequest();
     await dataSupportPage.agents.interceptGetAgentsRequest();
+    await dataSupportPage.agents.interceptGetTemplatesRequest();
+    await dataSupportPage.agents.interceptGetTemplateVersionsRequest();
     await dataSupportPage.skills.interceptGetSkillsRequest();
 
     await dashboardPage.goto();

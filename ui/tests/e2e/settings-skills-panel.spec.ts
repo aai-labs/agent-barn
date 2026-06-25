@@ -86,7 +86,7 @@ test.describe("Settings — Skills panel", () => {
     await page.getByRole("button", { name: "View" }).first().click();
 
     await expect(page.getByRole("heading", { name: "github" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Close" })).toBeVisible();
+    await expect(page.getByLabel("Close")).toBeVisible();
     await expect(page.getByRole("button", { name: "Save changes" })).not.toBeVisible();
   });
 
@@ -181,7 +181,7 @@ test.describe("Settings — Skills panel", () => {
     await page.getByRole("button", { name: "Delete" }).click();
     await page.getByRole("button", { name: "Delete", exact: true }).click();
 
-    await expect(page.getByText("my-tool")).not.toBeVisible();
+    await expect(page.getByRole("heading", { name: "my-tool" })).not.toBeVisible();
   });
 });
 
@@ -247,8 +247,8 @@ test.describe("Settings — Skills panel (pagination)", () => {
     await page.goto("/dashboard/settings");
     await page.getByRole("button", { name: "Skills" }).click();
 
-    await expect(page.getByRole("button", { name: "Next" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Previous" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Next", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Previous", exact: true })).toBeVisible();
   });
 
   test("pagination controls are hidden when all results fit on one page", async ({ page }) => {
@@ -257,8 +257,8 @@ test.describe("Settings — Skills panel (pagination)", () => {
     await page.goto("/dashboard/settings");
     await page.getByRole("button", { name: "Skills" }).click();
 
-    await expect(page.getByRole("button", { name: "Next" })).not.toBeVisible();
-    await expect(page.getByRole("button", { name: "Previous" })).not.toBeVisible();
+    await expect(page.getByRole("button", { name: "Next", exact: true })).not.toBeVisible();
+    await expect(page.getByRole("button", { name: "Previous", exact: true })).not.toBeVisible();
   });
 
   test("clicking Next requests page 2 from the API", async ({ page }) => {
@@ -291,7 +291,7 @@ test.describe("Settings — Skills panel (pagination)", () => {
 
     await expect(page.getByText("skill-page1-0")).toBeVisible();
 
-    await page.getByRole("button", { name: "Next" }).click();
+    await page.getByRole("button", { name: "Next", exact: true }).click();
 
     await expect(page.getByText("skill-page2-0")).toBeVisible();
     await expect(page.getByText("skill-page1-0")).not.toBeVisible();
@@ -326,11 +326,11 @@ test.describe("Settings — Skills panel (pagination)", () => {
     await page.getByRole("button", { name: "Skills" }).click();
 
     // Advance to page 2.
-    await page.getByRole("button", { name: "Next" }).click();
+    await page.getByRole("button", { name: "Next", exact: true }).click();
     await expect(page.getByText("2 / 2")).toBeVisible();
 
     // Typing in search should reset back to page 1.
     await page.getByLabel("Search skills").fill("skill-0");
-    await expect(page.getByRole("button", { name: "Next" })).not.toBeVisible();
+    await expect(page.getByRole("button", { name: "Next", exact: true })).not.toBeVisible();
   });
 });
