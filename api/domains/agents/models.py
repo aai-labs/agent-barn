@@ -206,6 +206,7 @@ class Agent(BaseModel, table=True):
         nullable=True,
         sa_type=sa.Text,
     )
+    ingest_key_encrypted: str | None = SqlField(default=None, nullable=True)
 
 
 class AgentSlackConfig(BaseModel, table=True):
