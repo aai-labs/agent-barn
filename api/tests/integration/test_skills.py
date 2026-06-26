@@ -28,6 +28,7 @@ from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import (
     there_is_an_organization_with_user_and_access_token,
 )
+from api.tests.steps.template import there_is_a_template, there_is_a_template_skill
 
 _BASE = "/api/v1/skills"
 
@@ -666,3 +667,29 @@ def test_delete_skill_requires_auth():
 
         with then("request is rejected with 401"):
             assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
+
+
+def test_delete_skill_required_by_template_returns_409():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(),
+            there_is_a_template(),
+            there_is_a_template_skill(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("I try to delete a skill required by a template"):
+            response = client.delete(
+                f"{_BASE}/{context.skill.id}", headers=_auth(context)
+            )
+
+        with then("it returns 409 with a descriptive message"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+            assert_that(
+                response.json()["detail"],
+                equal_to(
+                    "Skill is required by one or more templates and cannot be deleted"
+                ),
+            )

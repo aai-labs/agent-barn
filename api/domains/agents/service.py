@@ -276,6 +276,7 @@ class AgentService:
         teams_config: AgentTeamsConfig | None = None,
         secrets: list[AgentSecret] | None = None,
         skills: list[Skill] | None = None,
+        required_skill_ids: set[UUID] | None = None,
     ) -> AgentRead:
         slack_config_read = (
             AgentSlackConfigRead.model_validate(slack_config) if slack_config else None
@@ -286,8 +287,12 @@ class AgentService:
         secrets_read = [
             AgentSecretRead.model_validate(secret) for secret in (secrets or [])
         ]
+        req_ids = required_skill_ids or set()
         skills_read = [
-            AgentAssignedSkillRead.model_validate(skill) for skill in (skills or [])
+            AgentAssignedSkillRead.model_validate(skill).model_copy(
+                update={"required": skill.id in req_ids}
+            )
+            for skill in (skills or [])
         ]
         webhook_url = (
             f"{self.config.api_external_url}/api/v1/webhooks/teams/{agent.id}/messages"
@@ -324,8 +329,15 @@ class AgentService:
         skills = [
             s for _, s in self.skill_repository.get_agent_skills_with_details(agent.id)
         ]
+        template = self.template_repository.get_template_by_slug_and_version(
+            agent.organization_id, agent.template_slug, agent.template_version
+        )
+        required_ids = (
+            self.template_repository.get_required_skill_ids(template.id)
+            if template else set()
+        )
         return self._build_agent_read(
-            agent, slack_config, teams_config, secrets, skills
+            agent, slack_config, teams_config, secrets, skills, required_ids
         )
 
     def create_agent(self, data: AgentCreate, context: CurrentUserContext) -> AgentRead:
@@ -441,6 +453,16 @@ class AgentService:
                 )
             )
 
+        # Validate that all template-required skills are present in the request.
+        required_ids = self.template_repository.get_required_skill_ids(template.id)
+        if required_ids:
+            missing = required_ids - set(data.skill_ids)
+            if missing:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Required template skills must be included in skill_ids",
+                )
+
         # Resolve and validate skills before any DB writes.
         skills_to_assign = self._resolve_skills(data.skill_ids, data.secrets, org_id)
 
@@ -452,7 +474,7 @@ class AgentService:
         if data.platform == AgentPlatform.TEAMS:
             return self.start_agent(agent.id, context)
         return self._build_agent_read(
-            agent, slack_config, teams_config, secrets, skills_to_assign
+            agent, slack_config, teams_config, secrets, skills_to_assign, required_ids
         )
 
     def get_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
@@ -492,6 +514,19 @@ class AgentService:
         secrets_by_agent = self.repository.get_secrets_for_agents(agent_ids)
         skills_by_agent = self.skill_repository.get_skills_for_agents(agent_ids)
 
+        slug_versions = list({(a.template_slug, a.template_version) for a in agents})
+        template_id_map = self.template_repository.get_template_ids_for_slug_versions(
+            org_id, slug_versions
+        )
+        template_ids = list(template_id_map.values())
+        req_ids_by_template = self.template_repository.get_required_skill_ids_for_templates(
+            template_ids
+        )
+
+        def _required_ids(agent: Agent) -> set[UUID]:
+            tid = template_id_map.get((agent.template_slug, agent.template_version))
+            return req_ids_by_template.get(tid, set()) if tid else set()
+
         items = [
             self._build_agent_read(
                 agent,
@@ -499,6 +534,7 @@ class AgentService:
                 teams_configs.get(agent.id),
                 secrets_by_agent.get(agent.id, []),
                 skills_by_agent.get(agent.id, []),
+                _required_ids(agent),
             )
             for agent in agents
         ]
@@ -541,11 +577,12 @@ class AgentService:
 
         # Re-pin the agent to a different template (slug, version). The model
         # validator guarantees both keys appear together.
+        effective_template = None
         if "template_slug" in updated:
-            target = self.template_repository.get_template_by_slug_and_version(
+            effective_template = self.template_repository.get_template_by_slug_and_version(
                 org_id, updated["template_slug"], updated["template_version"]
             )
-            if target is None:
+            if effective_template is None:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=(
@@ -553,8 +590,8 @@ class AgentService:
                         f"v{updated['template_version']} not found"
                     ),
                 )
-            agent.template_slug = target.template_slug
-            agent.template_version = target.version
+            agent.template_slug = effective_template.template_slug
+            agent.template_version = effective_template.version
 
         if "name" in updated:
             agent.name = updated["name"]
@@ -620,6 +657,41 @@ class AgentService:
                 if "teams_tenant_id" in updated:
                     teams_config.tenant_id = updated["teams_tenant_id"]
                 self.repository.save_teams_config(teams_config)
+
+        # Validate skill changes against the effective template's required skills.
+        if effective_template is None:
+            effective_template = self.template_repository.get_template_by_slug_and_version(
+                org_id, agent.template_slug, agent.template_version
+            )
+        required_ids = (
+            self.template_repository.get_required_skill_ids(effective_template.id)
+            if effective_template else set()
+        )
+        if required_ids:
+            # Block removal of required skills.
+            if data.removed_skill_ids:
+                blocked = required_ids & set(data.removed_skill_ids)
+                if blocked:
+                    blocked_skills = self.skill_repository.get_many_by_ids(list(blocked))
+                    names = ", ".join(s.name for s in blocked_skills)
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail=f"Cannot remove skills required by the template: {names}",
+                    )
+            # When re-pinning, validate that required skills will be present.
+            if "template_slug" in updated:
+                existing_skill_ids = {
+                    s.id
+                    for _, s in self.skill_repository.get_agent_skills_with_details(agent.id)
+                }
+                effective_skill_ids = (
+                    existing_skill_ids | set(data.skill_ids)
+                ) - set(data.removed_skill_ids)
+                if required_ids - effective_skill_ids:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Required template skills must be included in skill_ids",
+                    )
 
         # Validate skills accessibility and secret coverage
         if data.skill_ids or data.removed_secret_providers:

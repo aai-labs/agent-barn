@@ -279,6 +279,22 @@ class AgentSkill(BaseModel, table=True):
     )
 
 
+class AgentTemplateSkill(BaseModel, table=True):
+    __tablename__: str = "agent_template_skill"
+
+    __table_args__ = (
+        sa.UniqueConstraint("template_id", "skill_id", name="uq_agent_template_skill"),
+        sa.Index("ix_agent_template_skill_template", "template_id"),
+    )
+
+    template_id: UUID = SqlField(
+        foreign_key="agent_template.id", nullable=False, ondelete="CASCADE"
+    )
+    skill_id: UUID = SqlField(
+        foreign_key="skill.id", nullable=False, ondelete="RESTRICT"
+    )
+
+
 class AgentSecretCreate(PydanticBaseModel):  # no secret_name — backend stamps it
     provider: SecretProvider
     content: dict
@@ -430,6 +446,7 @@ class AgentAssignedSkillRead(PydanticBaseModel):
     tools_pointer: str | None
     created_at: datetime
     updated_at: datetime
+    required: bool = False
 
 
 class AgentRead(PydanticBaseModel):

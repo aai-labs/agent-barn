@@ -6,6 +6,8 @@ from sqlalchemy import case, func, or_
 from sqlalchemy.orm import aliased
 from sqlmodel import Session, col, select
 
+from api.domains.agents.models import AgentTemplateSkill
+from api.domains.skills.models import Skill
 from api.domains.templates.models import AgentTemplate, TemplateFilter, TemplateSource
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.infrastructure.shared.models import Pagination
@@ -123,3 +125,95 @@ class TemplateRepository:
     def save_template(self, template: AgentTemplate) -> AgentTemplate:
         self.delegate.save(template)
         return template
+
+    def save_template_skills(self, template_id: UUID, skill_ids: list[UUID]) -> None:
+        with Session(self.delegate.engine) as session:
+            existing_rows = session.exec(
+                select(AgentTemplateSkill).where(
+                    col(AgentTemplateSkill.template_id) == template_id
+                )
+            ).all()
+            existing_ids = {row.skill_id for row in existing_rows}
+            target_ids = set(skill_ids)
+            for row in existing_rows:
+                if row.skill_id not in target_ids:
+                    session.delete(row)
+            for skill_id in target_ids - existing_ids:
+                session.add(
+                    AgentTemplateSkill(template_id=template_id, skill_id=skill_id)
+                )
+            session.commit()
+
+    def get_required_skills(self, template_id: UUID) -> list[Skill]:
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(Skill)
+                .join(
+                    AgentTemplateSkill,
+                    col(AgentTemplateSkill.skill_id) == col(Skill.id),
+                )
+                .where(col(AgentTemplateSkill.template_id) == template_id)
+            )
+            return list(session.exec(query).all())
+
+    def get_required_skill_ids(self, template_id: UUID) -> set[UUID]:
+        with Session(self.delegate.engine) as session:
+            query = select(AgentTemplateSkill.skill_id).where(
+                col(AgentTemplateSkill.template_id) == template_id
+            )
+            return set(session.exec(query).all())
+
+    def get_required_skill_ids_for_templates(
+        self, template_ids: list[UUID]
+    ) -> dict[UUID, set[UUID]]:
+        if not template_ids:
+            return {}
+        with Session(self.delegate.engine) as session:
+            query = select(AgentTemplateSkill).where(
+                col(AgentTemplateSkill.template_id).in_(template_ids)
+            )
+            result: dict[UUID, set[UUID]] = {}
+            for row in session.exec(query).all():
+                result.setdefault(row.template_id, set()).add(row.skill_id)
+            return result
+
+    def is_skill_required_by_any_template(self, skill_id: UUID) -> bool:
+        with Session(self.delegate.engine) as session:
+            query = select(AgentTemplateSkill).where(
+                col(AgentTemplateSkill.skill_id) == skill_id
+            )
+            return session.exec(query).first() is not None
+
+    def get_required_skills_for_templates(
+        self, template_ids: list[UUID]
+    ) -> dict[UUID, list[Skill]]:
+        if not template_ids:
+            return {}
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(AgentTemplateSkill, Skill)
+                .join(Skill, col(AgentTemplateSkill.skill_id) == col(Skill.id))
+                .where(col(AgentTemplateSkill.template_id).in_(template_ids))
+            )
+            result: dict[UUID, list[Skill]] = {}
+            for ats, skill in session.exec(query).all():
+                result.setdefault(ats.template_id, []).append(skill)
+            return result
+
+    def get_template_ids_for_slug_versions(
+        self, org_id: UUID, slug_versions: list[tuple[str, int]]
+    ) -> dict[tuple[str, int], UUID]:
+        if not slug_versions:
+            return {}
+        with Session(self.delegate.engine) as session:
+            result: dict[tuple[str, int], UUID] = {}
+            for slug, version in slug_versions:
+                row = session.exec(
+                    select(AgentTemplate.id)
+                    .where(col(AgentTemplate.organization_id) == org_id)
+                    .where(col(AgentTemplate.template_slug) == slug)
+                    .where(col(AgentTemplate.version) == version)
+                ).first()
+                if row is not None:
+                    result[(slug, version)] = row
+            return result

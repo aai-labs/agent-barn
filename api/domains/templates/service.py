@@ -5,6 +5,8 @@ from fastapi import HTTPException, status
 from injector import inject, singleton
 
 from api.domains.auth.models import CurrentUserContext
+from api.domains.skills.models import SkillRead
+from api.domains.skills.repository import SkillRepository
 from api.domains.templates.defaults import (
     DEFAULT_AGENTS_MD,
     DEFAULT_BOOT_MD,
@@ -23,6 +25,7 @@ from api.domains.templates.models import (
     TemplateSource,
     TemplateUpdate,
 )
+from api.domains.templates.predefined import PREDEFINED_TEMPLATES
 from api.domains.templates.repository import TemplateRepository
 from api.domains.templates.seeding import build_predefined_templates
 from api.domains.templates.slug import slugify
@@ -34,9 +37,25 @@ from api.infrastructure.shared.models import PaginatedItems, Pagination
 @dataclass
 class TemplateService:
     repository: TemplateRepository
+    skill_repository: SkillRepository
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
+
+    def _validate_skill_ids(self, skill_ids: list[UUID], org_id: UUID) -> None:
+        accessible = {s.id for s in self.skill_repository.find_accessible_for_org(org_id)}
+        for skill_id in skill_ids:
+            if skill_id not in accessible:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Skill {skill_id} not found",
+                )
+
+    def _with_required_skills(self, read: TemplateRead) -> TemplateRead:
+        skills = self.repository.get_required_skills(read.id)
+        return read.model_copy(
+            update={"required_skills": [SkillRead.model_validate(s) for s in skills]}
+        )
 
     def _get_latest_or_404(self, org_id: UUID, slug: str) -> AgentTemplate:
         template = self.repository.get_latest_template(org_id, slug)
@@ -57,16 +76,27 @@ class TemplateService:
         templates, total = self.repository.find_latest_templates(
             org_id, template_filter, pagination
         )
+        template_ids = [t.id for t in templates]
+        skills_by_template = self.repository.get_required_skills_for_templates(template_ids)
+        items = []
+        for t in templates:
+            read = TemplateRead.model_validate(t)
+            skills = skills_by_template.get(t.id, [])
+            read = read.model_copy(
+                update={"required_skills": [SkillRead.model_validate(s) for s in skills]}
+            )
+            items.append(read)
         return PaginatedItems(
             page=pagination.page,
             page_size=pagination.size,
             total=total,
-            items=[TemplateRead.model_validate(t) for t in templates],
+            items=items,
         )
 
     def get_template(self, slug: str, context: CurrentUserContext) -> TemplateRead:
         org_id = self._org_id(context)
-        return TemplateRead.model_validate(self._get_latest_or_404(org_id, slug))
+        read = TemplateRead.model_validate(self._get_latest_or_404(org_id, slug))
+        return self._with_required_skills(read)
 
     def list_template_versions(
         self, slug: str, context: CurrentUserContext
@@ -78,7 +108,17 @@ class TemplateService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Template {slug} not found",
             )
-        return [TemplateRead.model_validate(v) for v in versions]
+        template_ids = [v.id for v in versions]
+        skills_by_template = self.repository.get_required_skills_for_templates(template_ids)
+        result = []
+        for v in versions:
+            read = TemplateRead.model_validate(v)
+            skills = skills_by_template.get(v.id, [])
+            read = read.model_copy(
+                update={"required_skills": [SkillRead.model_validate(s) for s in skills]}
+            )
+            result.append(read)
+        return result
 
     def create_template(
         self, data: TemplateCreate, context: CurrentUserContext
@@ -95,6 +135,8 @@ class TemplateService:
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"A template with slug {slug} already exists",
             )
+        if data.required_skill_ids:
+            self._validate_skill_ids(data.required_skill_ids, org_id)
         template = AgentTemplate(
             organization_id=org_id,
             template_slug=slug,
@@ -112,7 +154,9 @@ class TemplateService:
             heartbeat_md=data.heartbeat_md or DEFAULT_HEARTBEAT_MD,
         )
         self.repository.save_template(template)
-        return TemplateRead.model_validate(template)
+        if data.required_skill_ids:
+            self.repository.save_template_skills(template.id, data.required_skill_ids)
+        return self._with_required_skills(TemplateRead.model_validate(template))
 
     def update_template(
         self, slug: str, data: TemplateUpdate, context: CurrentUserContext
@@ -139,13 +183,31 @@ class TemplateService:
             heartbeat_md=updated.get("heartbeat_md", old.heartbeat_md),
         )
         self.repository.save_template(new_template)
-        return TemplateRead.model_validate(new_template)
+        if data.required_skill_ids is None:
+            resolved_ids = list(self.repository.get_required_skill_ids(old.id))
+        else:
+            if data.required_skill_ids:
+                self._validate_skill_ids(data.required_skill_ids, org_id)
+            resolved_ids = data.required_skill_ids
+        self.repository.save_template_skills(new_template.id, resolved_ids)
+        return self._with_required_skills(TemplateRead.model_validate(new_template))
 
     def seed_predefined_templates(self, org_id: UUID) -> None:
         """Insert pre-defined templates the org doesn't have yet (idempotent)."""
-        for template in build_predefined_templates(org_id):
-            existing = self.repository.get_latest_template(
-                org_id, template.template_slug
-            )
+        template_map = {t.template_slug: t for t in build_predefined_templates(org_id)}
+        for predefined in PREDEFINED_TEMPLATES:
+            existing = self.repository.get_latest_template(org_id, predefined.slug)
             if existing is None:
-                self.repository.save_template(template)
+                self.repository.save_template(template_map[predefined.slug])
+                existing = template_map[predefined.slug]
+            if predefined.required_skill_names:
+                existing_ids = self.repository.get_required_skill_ids(existing.id)
+                if not existing_ids:
+                    skill_ids = [
+                        skill.id
+                        for name in predefined.required_skill_names
+                        if (skill := self.skill_repository.get_by_name_global(name))
+                        is not None
+                    ]
+                    if skill_ids:
+                        self.repository.save_template_skills(existing.id, skill_ids)
