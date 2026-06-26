@@ -4,7 +4,7 @@
 
 Currently, conversations and tool calls are fetched by kubectl-exec'ing into agent pods to read JSONL session files. This is fragile (depends on pod being live), adds latency (triggered on-demand when the UI requests data), and couples the API to filesystem details of two different agent runtimes.
 
-The goal is to replace this with a push-based model: plugins inside agent pods intercept messages and tool calls in real-time and POST them to an internal-only ingest endpoint on the API server. During transition, both push and pull coexist safely (existing upsert/dedup logic is idempotent).
+The goal is to replace this with a push-based model: plugins inside agent pods intercept messages and tool calls in real-time and POST them to an internal-only ingest endpoint on the API server. The pull-based kubectl exec sync is removed entirely.
 
 ## Decisions
 
@@ -308,7 +308,7 @@ Single endpoint: `POST /ingest/v1/agents/{agent_id}/events`
 - **Repository upsert**: `ConversationRepository.upsert_messages()`, `ToolCallRepository.upsert_pending()` / `.complete()` — idempotent, dedup via unique constraints
 - **DI pattern**: `@inject @singleton @dataclass` with `fastapi-injector`
 - **Fernet encryption**: `api/infrastructure/crypto.py` — `encrypt_token()` / `decrypt_token()`
-- **Slack name resolution**: `ConversationSyncService._platform_maps()` pattern — decrypt bot token, call SlackClient, build user_map/channel_map
+- **Slack name resolution**: Extract the `_platform_maps()` logic from `ConversationSyncService` into `IngestService` before deleting the sync service — decrypt bot token, call SlackClient, build user_map/channel_map
 
 ---
 
@@ -319,3 +319,4 @@ Single endpoint: `POST /ingest/v1/agents/{agent_id}/events`
 3. Start a Hermes agent → verify ingest endpoint receives events → data appears in conversations/tool-calls UI
 4. Start an OpenClaw agent → verify the same
 5. Verify port 8001 is NOT reachable from outside the cluster (curl from external → connection refused)
+6. Verify no remaining references to `ToolCallSyncService`, `ConversationSyncService`, or kubectl exec for message/tool-call fetching
