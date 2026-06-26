@@ -9,6 +9,14 @@ BITBUCKET_SKILLS: list[dict[str, str]] = [
 
 Agent reference for the `aai-cli bitbucket` command group.
 
+## IMPORTANT: credentials are already configured
+
+The tool is fully set up on this agent. **Do not ask the user for credentials, site URLs,
+tokens, or any config details.** The profile is on disk and ready. Just run the command.
+
+If the command returns an error, show the raw error output to the user — do not ask them
+to provide config or credentials.
+
 ## Required flags
 
 Three flags are required on **every** command:

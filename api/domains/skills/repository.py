@@ -1,0 +1,121 @@
+from dataclasses import dataclass
+from uuid import UUID
+
+from injector import inject, singleton
+from sqlalchemy import func
+from sqlmodel import Session, col, or_, select
+
+from api.domains.agents.models import AgentSkill
+from api.domains.skills.models import Skill, SkillFilter, SkillSource
+from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
+from api.infrastructure.shared.models import Pagination
+
+
+@inject
+@singleton
+@dataclass
+class SkillRepository:
+    delegate: PostgresRepositoryDelegate
+
+    def get_by_id(self, skill_id: UUID) -> Skill | None:
+        return self.delegate.find_by_id(Skill, skill_id)
+
+    def get_aai_cli_skills(self) -> list[Skill]:
+        with Session(self.delegate.engine) as session:
+            query = select(Skill).where(col(Skill.source) == SkillSource.AAI_CLI)
+            return list(session.exec(query).all())
+
+    def get_by_name_global(self, name: str) -> Skill | None:
+        """Find a global (org_id=None) skill by name — used for seeder dedup."""
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(Skill)
+                .where(col(Skill.name) == name)
+                .where(col(Skill.organization_id).is_(None))
+            )
+            return session.exec(query).first()
+
+    def find_accessible_for_org(self, org_id: UUID) -> list[Skill]:
+        """Return all org-scoped + global skills without filtering or pagination."""
+        with Session(self.delegate.engine) as session:
+            query = select(Skill).where(
+                or_(
+                    col(Skill.organization_id) == org_id,
+                    col(Skill.organization_id).is_(None),
+                )
+            )
+            return list(session.exec(query).all())
+
+    def find_all_for_org(
+        self,
+        org_id: UUID,
+        skill_filter: SkillFilter,
+        pagination: Pagination,
+    ) -> tuple[list[Skill], int]:
+        """Return org-scoped skills + global AAI_CLI skills, filtered and paginated."""
+        with Session(self.delegate.engine) as session:
+            conditions = [
+                or_(
+                    col(Skill.organization_id) == org_id,
+                    col(Skill.organization_id).is_(None),
+                )
+            ]
+            if skill_filter.search:
+                conditions.append(col(Skill.name).ilike(f"%{skill_filter.search}%"))
+            if skill_filter.source is not None:
+                conditions.append(col(Skill.source) == skill_filter.source)
+
+            count_query = select(func.count()).select_from(Skill)
+            for condition in conditions:
+                count_query = count_query.where(condition)
+            total = session.scalar(count_query) or 0
+
+            query = select(Skill)
+            for condition in conditions:
+                query = query.where(condition)
+            query = (
+                query.order_by(col(Skill.created_at).asc())
+                .offset((pagination.page - 1) * pagination.size)
+                .limit(pagination.size)
+            )
+            return list(session.exec(query).all()), total
+
+    def save(self, skill: Skill) -> Skill:
+        self.delegate.save(skill)
+        return skill
+
+    def delete(self, skill: Skill) -> None:
+        self.delegate.delete(skill)
+
+    def is_assigned_to_any_agent(self, skill_id: UUID) -> bool:
+        with Session(self.delegate.engine) as session:
+            query = select(AgentSkill).where(col(AgentSkill.skill_id) == skill_id)
+            return session.exec(query).first() is not None
+
+    def get_agent_skills_with_details(
+        self, agent_id: UUID
+    ) -> list[tuple[AgentSkill, Skill]]:
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(AgentSkill, Skill)
+                .join(Skill, col(AgentSkill.skill_id) == col(Skill.id))
+                .where(col(AgentSkill.agent_id) == agent_id)
+            )
+            return list(session.exec(query).all())
+
+    def get_many_by_ids(self, skill_ids: list[UUID]) -> list[Skill]:
+        return self.delegate.find_many(Skill, skill_ids)
+
+    def get_skills_for_agents(self, agent_ids: list[UUID]) -> dict[UUID, list[Skill]]:
+        if not agent_ids:
+            return {}
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(AgentSkill, Skill)
+                .join(Skill, col(AgentSkill.skill_id) == col(Skill.id))
+                .where(col(AgentSkill.agent_id).in_(agent_ids))
+            )
+            result: dict[UUID, list[Skill]] = {}
+            for agent_skill, skill in session.exec(query).all():
+                result.setdefault(agent_skill.agent_id, []).append(skill)
+            return result

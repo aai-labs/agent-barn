@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 
-import { MOCK_AGENT_ID, mockAgent, mockToolCall } from "../pages/data-support/agent-data-support.po";
+import { MOCK_AGENT_ID, mockAgent, mockAssignedSkill, mockSecret, mockToolCall } from "../pages/data-support/agent-data-support.po";
+import { mockCustomSkill, mockPlatformSkill } from "../pages/data-support/skill-data-support.po";
 import { DataSupport } from "../pages/data-support/data-support.po";
 import { AgentDetailPage } from "../pages/agent-detail-page.po";
 
@@ -271,5 +272,280 @@ test.describe("Agent Detail Page — Channels tab", () => {
     await expect(
       page.getByRole("button", { name: /#engineering/ }),
     ).toBeVisible();
+  });
+});
+
+test.describe("Agent Detail Page — Skills tab", () => {
+  test.describe.configure({ mode: "serial" });
+  let agentDetailPage: AgentDetailPage;
+  let dataSupportPage: DataSupport;
+
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  test.beforeEach(async ({ page }) => {
+    agentDetailPage = new AgentDetailPage(page);
+    dataSupportPage = new DataSupport(page);
+
+    await dataSupportPage.auth.interceptRefreshRequest();
+    await dataSupportPage.users.interceptGetUserContextRequest();
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, status: "STOPPED" },
+    });
+    await dataSupportPage.agents.interceptGetAgentTemplateRequest();
+    await dataSupportPage.skills.interceptGetSkillsRequest();
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.configureButton().click();
+    await agentDetailPage.skillsTab().click();
+  });
+
+  test("Skills tab is clickable and shows the tab panel", async ({ page }) => {
+    await expect(page.getByText("No skills assigned yet.")).toBeVisible();
+  });
+
+  test("shows assigned skills when agent has skills", async ({ page }) => {
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, status: "STOPPED", skills: [mockAssignedSkill] },
+    });
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.configureButton().click();
+    await agentDetailPage.skillsTab().click();
+
+    await expect(page.getByText("Assigned")).toBeVisible();
+    await expect(agentDetailPage.removeSkillButton()).toBeVisible();
+  });
+
+  test("shows available skills with source badges", async ({ page }) => {
+    await expect(page.getByText("Add skills")).toBeVisible();
+    await expect(page.getByText(mockPlatformSkill.name, { exact: true })).toBeVisible();
+    await expect(page.getByText(mockCustomSkill.name)).toBeVisible();
+    await expect(agentDetailPage.skillsSearchInput()).toBeVisible();
+  });
+
+  test("search filters available skills", async ({ page }) => {
+    await agentDetailPage.skillsSearchInput().fill(mockCustomSkill.name);
+    await expect(page.getByText(mockCustomSkill.name)).toBeVisible();
+    await expect(page.getByText(mockPlatformSkill.name, { exact: true })).not.toBeVisible();
+  });
+
+  test("adding a skill moves it to the pending Assigned section", async ({ page }) => {
+    await agentDetailPage.addSkillButton().first().click();
+
+    await expect(page.getByText("Assigned")).toBeVisible();
+    await expect(page.getByText("· Adding")).toBeVisible();
+    await expect(agentDetailPage.cancelSkillButton()).toBeVisible();
+    await expect(agentDetailPage.saveSkillsButton()).toBeVisible();
+  });
+
+  test("cancelling a pending add removes it from the list", async ({ page }) => {
+    await agentDetailPage.addSkillButton().first().click();
+    await expect(page.getByText("· Adding")).toBeVisible();
+
+    await agentDetailPage.cancelSkillButton().click();
+
+    await expect(page.getByText("· Adding")).not.toBeVisible();
+    await expect(agentDetailPage.saveSkillsButton()).not.toBeVisible();
+  });
+
+  test("removing an assigned skill shows it struck-through with Undo", async () => {
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, status: "STOPPED", skills: [mockAssignedSkill] },
+    });
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.configureButton().click();
+    await agentDetailPage.skillsTab().click();
+
+    await agentDetailPage.removeSkillButton().click();
+
+    await expect(agentDetailPage.undoSkillButton()).toBeVisible();
+    await expect(agentDetailPage.saveSkillsButton()).toBeVisible();
+  });
+
+  test("undoing a removal restores the skill row", async () => {
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, status: "STOPPED", skills: [mockAssignedSkill] },
+    });
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.configureButton().click();
+    await agentDetailPage.skillsTab().click();
+
+    await agentDetailPage.removeSkillButton().click();
+    await agentDetailPage.undoSkillButton().click();
+
+    await expect(agentDetailPage.removeSkillButton()).toBeVisible();
+    await expect(agentDetailPage.saveSkillsButton()).not.toBeVisible();
+  });
+
+  test("adding a skill with required providers shows credentials section", async ({ page }) => {
+    // github skill requires "github" provider — click Add for it
+    await agentDetailPage.addSkillButton().first().click();
+
+    await expect(page.getByText("Required credentials")).toBeVisible();
+    await expect(page.getByText("GitHub", { exact: true })).toBeVisible();
+  });
+
+  test("save button is disabled when required credentials are incomplete", async () => {
+    await agentDetailPage.addSkillButton().first().click();
+
+    await expect(agentDetailPage.saveSkillsButton()).toBeDisabled();
+  });
+
+  test("saving skills calls the update API", async ({ page }) => {
+    await dataSupportPage.agents.interceptUpdateAgentRequest();
+
+    await agentDetailPage.addSkillButton().last().click(); // custom skill — no required providers
+
+    const updatePromise = page.waitForRequest(
+      (req) =>
+        req.url().includes(`/agents/${MOCK_AGENT_ID}`) &&
+        req.method() === "PATCH",
+    );
+    await agentDetailPage.saveSkillsButton().click();
+    await updatePromise;
+  });
+});
+
+test.describe("Agent Detail Page — Keys tab", () => {
+  test.describe.configure({ mode: "serial" });
+  let agentDetailPage: AgentDetailPage;
+  let dataSupportPage: DataSupport;
+
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  test.beforeEach(async ({ page }) => {
+    agentDetailPage = new AgentDetailPage(page);
+    dataSupportPage = new DataSupport(page);
+
+    await dataSupportPage.auth.interceptRefreshRequest();
+    await dataSupportPage.users.interceptGetUserContextRequest();
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, status: "STOPPED" },
+    });
+    await dataSupportPage.agents.interceptGetAgentTemplateRequest();
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.configureButton().click();
+    await agentDetailPage.keysTab().click();
+  });
+
+  test("shows app-level token and bot token inputs", async () => {
+    await expect(agentDetailPage.appTokenInput()).toBeVisible();
+    await expect(agentDetailPage.botTokenInput()).toBeVisible();
+  });
+
+  test("Save tokens button is disabled when both fields are empty", async () => {
+    await expect(agentDetailPage.saveTokensButton()).toBeDisabled();
+  });
+
+  test("filling a token field enables Save tokens", async () => {
+    await agentDetailPage.appTokenInput().fill("xapp-1-test");
+    await expect(agentDetailPage.saveTokensButton()).toBeEnabled();
+  });
+
+  test("saving tokens calls the update API", async ({ page }) => {
+    await dataSupportPage.agents.interceptUpdateAgentRequest();
+
+    await agentDetailPage.appTokenInput().fill("xapp-1-test");
+
+    const updatePromise = page.waitForRequest(
+      (req) => req.url().includes(`/agents/${MOCK_AGENT_ID}`) && req.method() === "PATCH",
+    );
+    await agentDetailPage.saveTokensButton().click();
+    await updatePromise;
+  });
+
+  test("shows error near Save tokens when token save fails", async ({ page }) => {
+    await dataSupportPage.agents.interceptUpdateAgentRequest({
+      status: 422,
+      detail: "Invalid token format",
+    });
+
+    await agentDetailPage.appTokenInput().fill("bad-token");
+    await agentDetailPage.saveTokensButton().click();
+
+    await expect(page.getByText("Invalid token format")).toBeVisible();
+  });
+
+  test("shows Integrations section", async ({ page }) => {
+    await expect(page.getByText("Integrations", { exact: true })).toBeVisible();
+  });
+
+  test("Save integrations is disabled when nothing is staged", async () => {
+    await expect(agentDetailPage.saveIntegrationsButton()).toBeDisabled();
+  });
+
+  test("shows configured secret when agent has one", async ({ page }) => {
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, status: "STOPPED", secrets: [mockSecret] },
+    });
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.configureButton().click();
+    await agentDetailPage.keysTab().click();
+
+    await expect(page.getByText("· configured")).toBeVisible();
+    await expect(agentDetailPage.removeCredentialButton()).toBeVisible();
+  });
+
+  test("clicking Remove shows credential as pending removal with Undo", async ({ page }) => {
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, status: "STOPPED", secrets: [mockSecret] },
+    });
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.configureButton().click();
+    await agentDetailPage.keysTab().click();
+
+    await agentDetailPage.removeCredentialButton().click();
+
+    await expect(page.getByText("· will be removed")).toBeVisible();
+    await expect(agentDetailPage.undoCredentialButton()).toBeVisible();
+    await expect(agentDetailPage.saveIntegrationsButton()).toBeEnabled();
+  });
+
+  test("clicking Undo reverts credential to normal state", async ({ page }) => {
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, status: "STOPPED", secrets: [mockSecret] },
+    });
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.configureButton().click();
+    await agentDetailPage.keysTab().click();
+
+    await agentDetailPage.removeCredentialButton().click();
+    await agentDetailPage.undoCredentialButton().click();
+
+    await expect(page.getByText("· configured")).toBeVisible();
+    await expect(agentDetailPage.removeCredentialButton()).toBeVisible();
+    await expect(agentDetailPage.saveIntegrationsButton()).toBeDisabled();
+  });
+
+  test("when integrations save fails, credential is restored and error is shown", async ({ page }) => {
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, status: "STOPPED", secrets: [mockSecret] },
+    });
+    await dataSupportPage.agents.interceptUpdateAgentRequest({
+      status: 409,
+      detail: "Secret is used by a skill",
+    });
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.configureButton().click();
+    await agentDetailPage.keysTab().click();
+
+    await agentDetailPage.removeCredentialButton().click();
+    await agentDetailPage.saveIntegrationsButton().click();
+
+    await expect(page.getByText("Secret is used by a skill")).toBeVisible();
+    await expect(page.getByText("· configured")).toBeVisible();
+  });
+
+  test("error from token save does not appear in integrations section", async ({ page }) => {
+    await dataSupportPage.agents.interceptUpdateAgentRequest({
+      status: 500,
+      detail: "Token save failed",
+    });
+
+    await agentDetailPage.appTokenInput().fill("xapp-1-test");
+    await agentDetailPage.saveTokensButton().click();
+
+    await expect(page.getByText("Token save failed")).toHaveCount(1);
+    await expect(agentDetailPage.saveIntegrationsButton()).toBeDisabled();
   });
 });

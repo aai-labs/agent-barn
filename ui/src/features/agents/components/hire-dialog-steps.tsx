@@ -11,6 +11,10 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { useSkills } from "@/features/skills/hooks/use-skills";
+import { SKILL_PROVIDER_LABELS } from "@/features/skills/utils";
+import type { Skill } from "@/features/skills/schemas";
+import { SkillSourceBadge } from "@/features/skills/components/skill-drawer";
 import {
   INTEGRATION_PROVIDERS,
   getIntegrationProvider,
@@ -37,7 +41,7 @@ export type WizardStep =
   | "teams-bot-builder"
   | "teams-credentials"
   | "details"
-  | "integrations";
+  | "skills";
 
 export const TEMPLATE_FILE_KEYS = [
   "soulMd",
@@ -1182,6 +1186,250 @@ export function DetailsStep({
           />
         </div>
       </details>
+    </div>
+  );
+}
+
+export function SkillsStep({
+  selectedSkillIds,
+  skillCredentials,
+  onSkillIdsChange,
+  onSkillCredentialsChange,
+}: {
+  selectedSkillIds: string[];
+  skillCredentials: IntegrationDraft[];
+  onSkillIdsChange: (ids: string[]) => void;
+  onSkillCredentialsChange: (drafts: IntegrationDraft[]) => void;
+}) {
+  const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
+  const [visible, setVisible] = useState<Record<string, boolean>>({});
+
+  const { skills, total, isLoading } = useSkills({
+    search: search || undefined,
+    page,
+    pageSize: HIRE_DIALOG_PAGE_SIZE,
+  });
+
+  const totalPages = Math.max(1, Math.ceil(total / HIRE_DIALOG_PAGE_SIZE));
+
+  // Track full Skill objects for selected skills so we can compute requiredProviders
+  // across pages. Users can only toggle visible skills, so this stays in sync.
+  const [selectedSkillObjects, setSelectedSkillObjects] = useState<Skill[]>([]);
+  const requiredProviderIds: string[] = [
+    ...new Set(selectedSkillObjects.flatMap((s) => s.requiredProviders)),
+  ];
+
+  function handleSearchChange(value: string) {
+    setSearch(value);
+    setPage(1);
+  }
+
+  function toggleSkill(skill: Skill) {
+    const isSelected = selectedSkillIds.includes(skill.id);
+    const newIds = isSelected
+      ? selectedSkillIds.filter((id) => id !== skill.id)
+      : [...selectedSkillIds, skill.id];
+    const newObjects = isSelected
+      ? selectedSkillObjects.filter((s) => s.id !== skill.id)
+      : [...selectedSkillObjects, skill];
+
+    const newRequired = new Set(newObjects.flatMap((s) => s.requiredProviders));
+    const newCreds = skillCredentials.filter((c) => newRequired.has(c.provider));
+    for (const p of newRequired) {
+      if (!newCreds.find((c) => c.provider === p)) {
+        newCreds.push({ provider: p, content: {} });
+      }
+    }
+
+    onSkillIdsChange(newIds);
+    onSkillCredentialsChange(newCreds);
+    setSelectedSkillObjects(newObjects);
+  }
+
+  function setField(providerId: string, key: string, value: string) {
+    onSkillCredentialsChange(
+      skillCredentials.map((c) =>
+        c.provider === providerId
+          ? { ...c, content: { ...c.content, [key]: value } }
+          : c,
+      ),
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-5">
+      <p className="text-[0.8125rem] leading-[1.5]" style={{ color: "var(--ink-3)" }}>
+        Choose skills to assign to this agent. Required credentials will appear below as you select skills.
+      </p>
+
+      <div
+        className="flex items-center gap-2 px-3 py-2 rounded-xl"
+        style={{ border: "1px solid var(--line)", background: "var(--bg-elev)" }}
+      >
+        <SearchIcon size={14} style={{ color: "var(--ink-4)", flexShrink: 0 }} />
+        <input
+          className="flex-1 text-[0.8125rem] outline-none bg-transparent"
+          style={{ color: "var(--ink)" }}
+          placeholder="Search skills…"
+          value={search}
+          onChange={(e) => handleSearchChange(e.target.value)}
+        />
+      </div>
+
+      <div style={isLoading ? { minHeight: "22rem" } : undefined}>
+        {isLoading && (
+          <div className="text-[0.8125rem] py-8 text-center" style={{ color: "var(--ink-3)" }}>
+            Loading skills…
+          </div>
+        )}
+        {!isLoading && total === 0 && !search && (
+          <div
+            className="text-[0.8125rem] py-6 text-center rounded-2xl"
+            style={{ border: "1px dashed var(--line-strong)", color: "var(--ink-4)" }}
+          >
+            No skills available. Create skills in <strong>Settings → Skills</strong> first.
+          </div>
+        )}
+        {!isLoading && total === 0 && search && (
+          <div className="text-[0.8125rem] py-8 text-center" style={{ color: "var(--ink-3)" }}>
+            No skills match.
+          </div>
+        )}
+        {!isLoading && skills.length > 0 && (
+          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+            {skills.map((skill) => {
+              const selected = selectedSkillIds.includes(skill.id);
+              return (
+                <div
+                  key={skill.id}
+                  className="flex flex-col gap-1.5 p-4 rounded-2xl cursor-default transition-colors min-h-[4.5rem]"
+                  style={{
+                    border: selected ? "1.5px solid var(--ink)" : "1.5px solid var(--line)",
+                    background: selected ? "var(--bg-soft)" : "var(--bg-elev)",
+                  }}
+                  onClick={() => toggleSkill(skill)}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
+                      {skill.name}
+                    </div>
+                    <SkillSourceBadge source={skill.source} />
+                  </div>
+                  {skill.requiredProviders.length > 0 && (
+                    <div className="text-[0.75rem]" style={{ color: "var(--ink-4)" }}>
+                      {skill.requiredProviders.map((p) => SKILL_PROVIDER_LABELS[p] ?? p).join(", ")}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <Pagination page={page} totalPages={totalPages} onPageChange={setPage} />
+
+      {requiredProviderIds.length > 0 && (
+        <div className="flex flex-col gap-3.5">
+          <div className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>
+            Required credentials
+          </div>
+          {requiredProviderIds.map((providerId) => {
+            const providerSpec = getIntegrationProvider(providerId);
+            const draft = skillCredentials.find((c) => c.provider === providerId);
+            if (!draft) return null;
+
+            if (!providerSpec) {
+              return (
+                <div
+                  key={providerId}
+                  className="px-4 py-3 rounded-2xl text-[0.8125rem]"
+                  style={{ border: "1px solid var(--line)", background: "var(--bg-soft)", color: "var(--ink-3)" }}
+                >
+                  <span className="font-medium" style={{ color: "var(--ink)" }}>
+                    {SKILL_PROVIDER_LABELS[providerId] ?? providerId}
+                  </span>{" "}
+                  — not yet configurable from the UI.
+                </div>
+              );
+            }
+
+            return (
+              <div
+                key={providerId}
+                className="flex flex-col gap-3.5 p-4 rounded-2xl"
+                style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
+              >
+                <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
+                  {providerSpec.label}
+                  <span
+                    className="ml-2 text-[0.6875rem] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full"
+                    style={{ color: "var(--ink-3)", background: "var(--line)" }}
+                  >
+                    Required
+                  </span>
+                </div>
+                {providerSpec.fields.map((field) => {
+                  const value = draft.content[field.key] ?? "";
+                  const label = field.required ? field.label : `${field.label} (optional)`;
+                  if (field.type === "secret") {
+                    const vkey = `${providerId}:${field.key}`;
+                    return (
+                      <FormField key={field.key} label={label} hint={field.hint}>
+                        <TokenInput
+                          value={value}
+                          onChange={(v) => setField(providerId, field.key, v)}
+                          visible={!!visible[vkey]}
+                          onToggle={() => setVisible((s) => ({ ...s, [vkey]: !s[vkey] }))}
+                          placeholder={field.placeholder}
+                        />
+                      </FormField>
+                    );
+                  }
+                  if (field.type === "repo-url") {
+                    const parsed = parseGithubRepoUrl(value);
+                    const invalid = value.length > 0 && !parsed;
+                    return (
+                      <FormField key={field.key} label={label} hint={field.hint}>
+                        <input
+                          className={`af-input${invalid ? " border-red-400" : ""}`}
+                          value={value}
+                          onChange={(e) => setField(providerId, field.key, e.target.value)}
+                          placeholder={field.placeholder}
+                          autoComplete="off"
+                        />
+                        {parsed && (
+                          <p className="text-[0.75rem] mt-1" style={{ color: "var(--ink-3)" }}>
+                            owner: <strong>{parsed.owner}</strong> · repo:{" "}
+                            <strong>{parsed.repo}</strong>
+                          </p>
+                        )}
+                        {invalid && (
+                          <p className="text-[0.75rem] mt-1 text-red-500">
+                            Must be a valid GitHub URL, e.g. https://github.com/owner/repo.git
+                          </p>
+                        )}
+                      </FormField>
+                    );
+                  }
+                  return (
+                    <FormField key={field.key} label={label} hint={field.hint}>
+                      <input
+                        className="af-input"
+                        value={value}
+                        onChange={(e) => setField(providerId, field.key, e.target.value)}
+                        placeholder={field.placeholder}
+                        autoComplete="off"
+                      />
+                    </FormField>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

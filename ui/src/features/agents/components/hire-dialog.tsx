@@ -10,10 +10,9 @@ import { useStartAgent } from "../hooks/use-start-agent";
 import { useTemplateVersions } from "../hooks/use-template-versions";
 import { DialogShell } from "./hire-dialog-primitives";
 import {
-  WizardStep,TemplateStep, AgentTypeStep, PlatformChoiceStep, SlackChoiceStep, 
+  WizardStep,TemplateStep, AgentTypeStep, PlatformChoiceStep, SlackChoiceStep,
   ConfigTokenStep, BotBuilderStep, SlackTokensStep,
-  
-  TeamsBotBuilderStep, TeamsCredentialsStep, DetailsStep, IntegrationsStep,
+  TeamsBotBuilderStep, TeamsCredentialsStep, DetailsStep, SkillsStep,
   downloadTeamsAppPackage, generateTeamsManifest,
 } from "./hire-dialog-steps";
 import { SlackConfigPanel } from "./slack-config-panel";
@@ -49,22 +48,22 @@ function getSteps(
 ): WizardStep[] {
   if (agentType === "hermes") {
     if (!setupNewBot) {
-      return ["template", "agent-type", "slack-choice", "slack-tokens", "details", "integrations"];
+      return ["template", "agent-type", "slack-choice", "slack-tokens", "details", "skills"];
     }
     const base: WizardStep[] = ["template", "agent-type", "slack-choice"];
     if (!configTokenReady) base.push("config-token");
-    base.push("bot-builder", "slack-tokens", "details", "integrations");
+    base.push("bot-builder", "slack-tokens", "details", "skills");
     return base;
   }
   if (platform === "teams") {
-    return ["template", "agent-type", "platform-choice", "teams-credentials", "teams-bot-builder", "details", "integrations"];
+    return ["template", "agent-type", "platform-choice", "teams-credentials", "teams-bot-builder", "details", "skills"];
   }
   if (!setupNewBot) {
-    return ["template", "agent-type", "platform-choice", "slack-choice", "slack-tokens", "details", "integrations"];
+    return ["template", "agent-type", "platform-choice", "slack-choice", "slack-tokens", "details", "skills"];
   }
   const base: WizardStep[] = ["template", "agent-type", "platform-choice", "slack-choice"];
   if (!configTokenReady) base.push("config-token");
-  base.push("bot-builder", "slack-tokens", "details", "integrations");
+  base.push("bot-builder", "slack-tokens", "details", "skills");
   return base;
 }
 
@@ -91,7 +90,7 @@ function stepTitle(step: WizardStep): string {
     case "teams-bot-builder": return "Build your Teams bot";
     case "teams-credentials": return "Connect to Azure";
     case "details": return "A few details and we'll get them set up.";
-    case "integrations": return "Connect integrations";
+    case "skills": return "Assign skills";
   }
 }
 
@@ -125,7 +124,6 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   const [showTeamsAppPassword, setShowTeamsAppPassword] = useState(false);
   const [teamsTenantId, setTeamsTenantId] = useState("");
   const [teamsTokenError, setTeamsTokenError] = useState<string | null>(null);
-  const [integrations, setIntegrations] = useState<IntegrationDraft[]>([]);
   const [configTokenInput, setConfigTokenInput] = useState("");
   const [configRefreshInput, setConfigRefreshInput] = useState("");
   const [showConfigToken, setShowConfigToken] = useState(false);
@@ -137,6 +135,8 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   const [botTokenUrl, setBotTokenUrl] = useState<string | null>(null);
   const [appTokenUrl, setAppTokenUrl] = useState<string | null>(null);
   const [createAppError, setCreateAppError] = useState<string | null>(null);
+  const [selectedSkillIds, setSelectedSkillIds] = useState<string[]>([]);
+  const [skillCredentials, setSkillCredentials] = useState<IntegrationDraft[]>([]);
   const [provisioning, setProvisioning] = useState(false);
   const [progress, setProgress] = useState(0);
   const [provisionError, setProvisionError] = useState<string | null>(null);
@@ -260,9 +260,10 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
         agentType,
         templateSlug: effectiveTemplate.templateSlug,
         ...(resolvedVersion != null ? { templateVersion: resolvedVersion } : {}),
-        secrets: integrations.map((i) => ({
-          provider: i.provider,
-          content: i.provider === "github" ? expandGithubContent(i.content) : i.content,
+        skillIds: selectedSkillIds,
+        secrets: skillCredentials.map((c) => ({
+          provider: c.provider,
+          content: c.provider === "github" ? expandGithubContent(c.content) : c.content,
         })),
         ...(platform === "slack"
           ? { slackBotToken, slackAppToken, slackGroupPolicy, slackDmPolicy }
@@ -590,10 +591,12 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
             onChangeTemplate={() => setStep("template")}
           />
         )}
-        {step === "integrations" && (
-          <IntegrationsStep
-            integrations={integrations}
-            onChange={setIntegrations}
+        {step === "skills" && (
+          <SkillsStep
+            selectedSkillIds={selectedSkillIds}
+            skillCredentials={skillCredentials}
+            onSkillIdsChange={setSelectedSkillIds}
+            onSkillCredentialsChange={setSkillCredentials}
           />
         )}
       </div>
@@ -681,15 +684,15 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
           <button
             className="af-btn af-btn-primary af-btn-lg"
             disabled={!name.trim()}
-            onClick={() => setStep("integrations")}
+            onClick={() => setStep("skills")}
           >
             Continue
           </button>
         )}
-        {step === "integrations" && (
+        {step === "skills" && (
           <button
             className="af-btn af-btn-primary af-btn-lg"
-            disabled={!name.trim() || hasIncompleteIntegration(integrations)}
+            disabled={!name.trim() || hasIncompleteIntegration(skillCredentials)}
             onClick={() => { void startHiring(); }}
           >
             Hire {name}
