@@ -24,25 +24,25 @@ AAI_CLI_PROVIDER_SKILLS: list[dict] = [
         "name": "Jira",
         "required_providers": [SecretProvider.JIRA],
         "files": JIRA_SKILLS,
-        "tools_pointer": "\nFor Jira, use the aai-cli tool. See ./skills/aai-cli/jira_skill/jira_skill.md\n",
+        "tools_pointer": "\nFor Jira, use the aai-cli tool. See ./skills/aai-cli/jira_skill.md\n",
     },
     {
         "name": "Confluence",
         "required_providers": [SecretProvider.CONFLUENCE],
         "files": CONFLUENCE_SKILLS,
-        "tools_pointer": "\nFor Confluence, use the aai-cli tool. See ./skills/aai-cli/confluence_skill/confluence_skill.md\n",
+        "tools_pointer": "\nFor Confluence, use the aai-cli tool. See ./skills/aai-cli/confluence_skill.md\n",
     },
     {
         "name": "GitHub",
         "required_providers": [SecretProvider.GITHUB],
         "files": GITHUB_SKILLS,
-        "tools_pointer": "\nFor GitHub, use the aai-cli tool. See ./skills/aai-cli/github_skill/github_skill.md\n",
+        "tools_pointer": "\nFor GitHub, use the aai-cli tool. See ./skills/aai-cli/github_skill.md\n",
     },
     {
         "name": "Bitbucket",
         "required_providers": [SecretProvider.BITBUCKET],
         "files": BITBUCKET_SKILLS,
-        "tools_pointer": "\nFor Bitbucket, use the aai-cli tool. See ./skills/aai-cli/bitbucket_skill/bitbucket_skill.md\n",
+        "tools_pointer": "\nFor Bitbucket, use the aai-cli tool. See ./skills/aai-cli/bitbucket_skill.md\n",
     },
 ]
 
