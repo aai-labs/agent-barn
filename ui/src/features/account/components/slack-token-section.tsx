@@ -97,8 +97,7 @@ export function SlackTokenSection() {
                   api.slack.com/apps
                 </a>
               </li>
-              <li>Click any app (or create a temporary one)</li>
-              <li>Go to &quot;Basic Information&quot; &rarr; scroll to &quot;App Configuration Tokens&quot;</li>
+              <li>Scroll to &quot;App Configuration Tokens&quot; at the bottom of the page</li>
               <li>Click &quot;Generate Token&quot; — you will get an access token and a refresh token</li>
               <li>Copy and paste both below</li>
             </ol>
