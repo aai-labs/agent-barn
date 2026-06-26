@@ -38,7 +38,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index(
-        "ix_agent_template_skill_template", table_name="agent_template_skill"
-    )
+    op.drop_index("ix_agent_template_skill_template", table_name="agent_template_skill")
     op.drop_table("agent_template_skill")

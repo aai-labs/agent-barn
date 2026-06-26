@@ -308,7 +308,9 @@ def test_list_template_versions_includes_required_skills():
         with when("I list versions of the template"):
             response = client.get(f"{_BASE}/alpha/versions", headers=_auth(context))
 
-        with then("v1 includes the required skill; v2 has none (new version, no inherit via API)"):
+        with then(
+            "v1 includes the required skill; v2 has none (new version, no inherit via API)"
+        ):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             versions = {v["version"]: v for v in response.json()}
             assert_that(len(versions[1]["required_skills"]), equal_to(1))
@@ -431,7 +433,9 @@ def test_create_template_with_required_skills_stores_them():
             assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             body = response.json()
             assert_that(len(body["required_skills"]), equal_to(1))
-            assert_that(body["required_skills"][0]["id"], equal_to(str(context.skill.id)))
+            assert_that(
+                body["required_skills"][0]["id"], equal_to(str(context.skill.id))
+            )
             assert_that(body["required_skills"][0]["name"], equal_to("Jira"))
 
         with then("GET also returns the required skill"):

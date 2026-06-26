@@ -43,7 +43,9 @@ class TemplateService:
         return context.require_current_user_organization().organization_id
 
     def _validate_skill_ids(self, skill_ids: list[UUID], org_id: UUID) -> None:
-        accessible = {s.id for s in self.skill_repository.find_accessible_for_org(org_id)}
+        accessible = {
+            s.id for s in self.skill_repository.find_accessible_for_org(org_id)
+        }
         for skill_id in skill_ids:
             if skill_id not in accessible:
                 raise HTTPException(
@@ -77,13 +79,17 @@ class TemplateService:
             org_id, template_filter, pagination
         )
         template_ids = [t.id for t in templates]
-        skills_by_template = self.repository.get_required_skills_for_templates(template_ids)
+        skills_by_template = self.repository.get_required_skills_for_templates(
+            template_ids
+        )
         items = []
         for t in templates:
             read = TemplateRead.model_validate(t)
             skills = skills_by_template.get(t.id, [])
             read = read.model_copy(
-                update={"required_skills": [SkillRead.model_validate(s) for s in skills]}
+                update={
+                    "required_skills": [SkillRead.model_validate(s) for s in skills]
+                }
             )
             items.append(read)
         return PaginatedItems(
@@ -109,13 +115,17 @@ class TemplateService:
                 detail=f"Template {slug} not found",
             )
         template_ids = [v.id for v in versions]
-        skills_by_template = self.repository.get_required_skills_for_templates(template_ids)
+        skills_by_template = self.repository.get_required_skills_for_templates(
+            template_ids
+        )
         result = []
         for v in versions:
             read = TemplateRead.model_validate(v)
             skills = skills_by_template.get(v.id, [])
             read = read.model_copy(
-                update={"required_skills": [SkillRead.model_validate(s) for s in skills]}
+                update={
+                    "required_skills": [SkillRead.model_validate(s) for s in skills]
+                }
             )
             result.append(read)
         return result

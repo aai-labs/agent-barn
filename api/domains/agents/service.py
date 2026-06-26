@@ -334,7 +334,8 @@ class AgentService:
         )
         required_ids = (
             self.template_repository.get_required_skill_ids(template.id)
-            if template else set()
+            if template
+            else set()
         )
         return self._build_agent_read(
             agent, slack_config, teams_config, secrets, skills, required_ids
@@ -519,8 +520,8 @@ class AgentService:
             org_id, slug_versions
         )
         template_ids = list(template_id_map.values())
-        req_ids_by_template = self.template_repository.get_required_skill_ids_for_templates(
-            template_ids
+        req_ids_by_template = (
+            self.template_repository.get_required_skill_ids_for_templates(template_ids)
         )
 
         def _required_ids(agent: Agent) -> set[UUID]:
@@ -579,8 +580,10 @@ class AgentService:
         # validator guarantees both keys appear together.
         effective_template = None
         if "template_slug" in updated:
-            effective_template = self.template_repository.get_template_by_slug_and_version(
-                org_id, updated["template_slug"], updated["template_version"]
+            effective_template = (
+                self.template_repository.get_template_by_slug_and_version(
+                    org_id, updated["template_slug"], updated["template_version"]
+                )
             )
             if effective_template is None:
                 raise HTTPException(
@@ -660,19 +663,24 @@ class AgentService:
 
         # Validate skill changes against the effective template's required skills.
         if effective_template is None:
-            effective_template = self.template_repository.get_template_by_slug_and_version(
-                org_id, agent.template_slug, agent.template_version
+            effective_template = (
+                self.template_repository.get_template_by_slug_and_version(
+                    org_id, agent.template_slug, agent.template_version
+                )
             )
         required_ids = (
             self.template_repository.get_required_skill_ids(effective_template.id)
-            if effective_template else set()
+            if effective_template
+            else set()
         )
         if required_ids:
             # Block removal of required skills.
             if data.removed_skill_ids:
                 blocked = required_ids & set(data.removed_skill_ids)
                 if blocked:
-                    blocked_skills = self.skill_repository.get_many_by_ids(list(blocked))
+                    blocked_skills = self.skill_repository.get_many_by_ids(
+                        list(blocked)
+                    )
                     names = ", ".join(s.name for s in blocked_skills)
                     raise HTTPException(
                         status_code=status.HTTP_409_CONFLICT,
@@ -682,11 +690,13 @@ class AgentService:
             if "template_slug" in updated:
                 existing_skill_ids = {
                     s.id
-                    for _, s in self.skill_repository.get_agent_skills_with_details(agent.id)
+                    for _, s in self.skill_repository.get_agent_skills_with_details(
+                        agent.id
+                    )
                 }
-                effective_skill_ids = (
-                    existing_skill_ids | set(data.skill_ids)
-                ) - set(data.removed_skill_ids)
+                effective_skill_ids = (existing_skill_ids | set(data.skill_ids)) - set(
+                    data.removed_skill_ids
+                )
                 if required_ids - effective_skill_ids:
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
