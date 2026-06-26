@@ -379,7 +379,7 @@ export function ConfigTokenStep({
           </a>
         </NextStep>
         <NextStep n={2} label="Scroll to App Configuration Tokens">
-          It's at the bottom of the page. Click <b>Generate Token</b> — you will get both an access token and a refresh token.
+          It&apos;s at the bottom of the page. Click <b>Generate Token</b> — you will get both an access token and a refresh token.
         </NextStep>
         <NextStep n={3} label="Paste both tokens above">
           They will be saved to your account and reused for future bot creation.
