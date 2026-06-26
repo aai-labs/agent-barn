@@ -1,8 +1,6 @@
 from fastapi import status
-from hamcrest import assert_that, equal_to, has_key, is_not, none
+from hamcrest import assert_that, equal_to, has_key
 from starlette.testclient import TestClient
-
-from api.domains.users.repository import UserRepository
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
     create_test_client,
@@ -45,7 +43,7 @@ def test_i_can_login_and_get_tokens():
                 assert_that(payload["token_type"], equal_to("bearer"))
 
 
-def test_i_can_signup_and_user_is_created():
+def test_signup_is_disabled():
     with given(
         [
             prepare_injector(),
@@ -56,9 +54,8 @@ def test_i_can_signup_and_user_is_created():
         ]
     ) as context:
         client: TestClient = context.client
-        user_repository: UserRepository = context.injector.get(UserRepository)
 
-        with when("I sign up"):
+        with when("someone tries to sign up"):
             response = client.post(
                 "/api/v1/auth/signup",
                 json={
@@ -68,13 +65,5 @@ def test_i_can_signup_and_user_is_created():
                 },
             )
 
-            with then("tokens should be returned"):
-                assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
-                payload = response.json()
-                assert_that(payload["access_token"], is_not(none()))
-                assert_that(payload["refresh_token"], is_not(none()))
-
-            with then("a user should exist with no email verification timestamp"):
-                user = user_repository.get_by_email("signup@example.com")
-                assert_that(user, is_not(none()))
-                assert_that(user.email_verified_at, none())
+        with then("it returns 410 gone"):
+            assert_that(response.status_code, equal_to(status.HTTP_410_GONE))

@@ -117,12 +117,6 @@ export function LoginForm() {
           </div>
         </form>
 
-        <p className="text-center text-[13px] mt-5 m-0" style={{ color: "var(--ink-3)" }}>
-          Don&apos;t have an account?{" "}
-          <Link href="/signup" style={{ color: "var(--ink)", fontWeight: 500 }}>
-            Sign up
-          </Link>
-        </p>
       </div>
 
       <p className="text-center text-[12.5px] mt-5 px-4" style={{ color: "var(--ink-4)" }}>

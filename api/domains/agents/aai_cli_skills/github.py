@@ -2,12 +2,19 @@
 
 GITHUB_SKILLS: list[dict[str, str]] = [
     {
-        "skill_name": "aai-cli",
-        "skill_file_path": "aai-cli/github_skill/github_skill.md",
-        "skill_content": """\
+        "skill_file_path": "aai-cli/github_skill.md",
+        "skill_content": r"""\
 # aai-cli GitHub Skill
 
 Agent reference for the `aai-cli github` command group.
+
+## IMPORTANT: credentials are already configured
+
+The tool is fully set up on this agent. **Do not ask the user for credentials, site URLs,
+tokens, or any config details.** The profile is on disk and ready. Just run the command.
+
+If the command returns an error, show the raw error output to the user — do not ask them
+to provide config or credentials.
 
 ## Required flags
 
@@ -109,27 +116,9 @@ GitHub's REST API has three distinct comment resources:
 
 Inline review comments require `--commit-id SHA`, `--path FILE`, and `--line N` (with optional `--side LEFT|RIGHT`, `--start-line N`, `--start-side LEFT|RIGHT` for multi-line ranges). Replies use `--in-reply-to COMMENT_ID --body TEXT` and route to the `replies` endpoint.
 
-## Resource reference
-
-Read the file for the resource you need:
-
-| Resource | Commands | File |
-|---|---|---|
-| Repositories | list, get | [github_repo_skill/github_repo_skill.md](github_repo_skill/github_repo_skill.md) |
-| Issues | list, get, create, update, delete | [github_issue_skill/github_issue_skill.md](github_issue_skill/github_issue_skill.md) |
-| Pull requests | list, get, create, close/decline/delete, diff, files, commits, timeline, comments, review-comments, reviews | [github_pr_skill/github_pr_skill.md](github_pr_skill/github_pr_skill.md) |
-| Branches | list, get | [github_branch_skill/github_branch_skill.md](github_branch_skill/github_branch_skill.md) |
-| Source | get, history | [github_source_skill/github_source_skill.md](github_source_skill/github_source_skill.md) |
-| Actions | runs list/get/logs download, jobs list/get/logs download | [github_actions_skill/github_actions_skill.md](github_actions_skill/github_actions_skill.md) |
-""",
-    },
-    {
-        "skill_name": "aai-cli",
-        "skill_file_path": "aai-cli/github_skill/github_actions_skill/github_actions_skill.md",
-        "skill_content": """\
 # GitHub Actions Skill
 
-Commands under `aai-cli github actions`. For global flags, profile/owner-repo selection, and error shapes see [../github_skill.md](../github_skill.md).
+Commands under `aai-cli github actions`.
 
 These commands return raw GitHub provider responses except for log downloads, which write bytes to disk and return `{ output, bytes }`.
 
@@ -223,15 +212,10 @@ aai-cli github actions jobs logs download <JOB_ID> --output PATH [--owner OWNER]
 ```json
 { "output": "local/logs/github-job.txt", "bytes": 12345 }
 ```
-""",
-    },
-    {
-        "skill_name": "aai-cli",
-        "skill_file_path": "aai-cli/github_skill/github_branch_skill/github_branch_skill.md",
-        "skill_content": """\
+
 # GitHub Branches Skill
 
-Commands under `aai-cli github branches`. For global flags, profile/owner-repo selection, and error shapes see [../github_skill.md](../github_skill.md).
+Commands under `aai-cli github branches`.
 
 ---
 
@@ -298,15 +282,10 @@ aai-cli github branches get <BRANCH_NAME> [--owner OWNER] [--repo REPO] --profil
 ```
 aai-cli github branches get main --owner my-org --repo my-repo --profile github-work
 ```
-""",
-    },
-    {
-        "skill_name": "aai-cli",
-        "skill_file_path": "aai-cli/github_skill/github_issue_skill/github_issue_skill.md",
-        "skill_content": """\
+
 # GitHub Issues Skill
 
-Commands under `aai-cli github issues`. For global flags, profile/owner-repo selection, and error shapes see [../github_skill.md](../github_skill.md).
+Commands under `aai-cli github issues`.
 
 All issue commands accept `--owner OWNER --repo REPO`; both fall back to `profile.owner` / `profile.repo`.
 
@@ -375,15 +354,10 @@ aai-cli github issues delete <NUMBER> [--owner OWNER] [--repo REPO] --profile gi
 ```
 
 Verify with `issues get` before relying on this command.
-""",
-    },
-    {
-        "skill_name": "aai-cli",
-        "skill_file_path": "aai-cli/github_skill/github_pr_skill/github_pr_skill.md",
-        "skill_content": r"""\
+
 # GitHub Pull Requests Skill
 
-Commands under `aai-cli github prs`. For global flags, profile/owner-repo selection, and error shapes see [../github_skill.md](../github_skill.md).
+Commands under `aai-cli github prs`.
 
 All commands accept `--owner OWNER --repo REPO`; both fall back to `profile.owner` / `profile.repo`.
 
@@ -643,15 +617,10 @@ aai-cli github prs reviews list 42 --limit 5 --profile github-work
 ```
 
 Use `prs review-comments create` when you only have one inline note; use `prs reviews create` when you want to bundle a summary plus several inline comments in a single API call.
-""",
-    },
-    {
-        "skill_name": "aai-cli",
-        "skill_file_path": "aai-cli/github_skill/github_repo_skill/github_repo_skill.md",
-        "skill_content": """\
+
 # GitHub Repositories Skill
 
-Commands under `aai-cli github repos`. For global flags, profile/owner-repo selection, and error shapes see [../github_skill.md](../github_skill.md).
+Commands under `aai-cli github repos`.
 
 ---
 
@@ -693,15 +662,10 @@ aai-cli github repos get [--owner OWNER] [--repo REPO] --profile github-work
 ```
 aai-cli github repos get --owner my-org --repo my-repo --profile github-work
 ```
-""",
-    },
-    {
-        "skill_name": "aai-cli",
-        "skill_file_path": "aai-cli/github_skill/github_source_skill/github_source_skill.md",
-        "skill_content": """\
+
 # GitHub Source Skill
 
-Commands under `aai-cli github source`. For global flags, profile/owner-repo selection, and error shapes see [../github_skill.md](../github_skill.md).
+Commands under `aai-cli github source`.
 
 `COMMIT` can be a branch name, tag, or commit SHA accepted by GitHub. File paths are encoded path segment by path segment; a leading slash is ignored.
 

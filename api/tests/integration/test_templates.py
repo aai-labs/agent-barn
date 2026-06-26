@@ -15,8 +15,6 @@ from api.domains.templates.models import TemplateSource
 from api.domains.templates.predefined import PREDEFINED_TEMPLATES
 from api.domains.templates.repository import TemplateRepository
 from api.domains.templates.service import TemplateService
-from api.domains.users.organization_users.repository import OrganizationUserRepository
-from api.domains.users.repository import UserRepository
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
     create_test_client,
@@ -568,42 +566,6 @@ def test_seed_does_not_clobber_edited_predefined_template():
             assert latest is not None
             assert_that(latest.version, equal_to(2))
             assert_that(latest.soul_md, equal_to("# Edited Soul"))
-
-
-def test_signup_seeds_predefined_templates_for_new_org():
-    with given(_GIVEN) as context:
-        client: TestClient = context.client
-
-        with when("a new user signs up"):
-            response = client.post(
-                "/api/v1/auth/signup",
-                json={
-                    "email": "newbie@example.com",
-                    "password": "StrongPass123",
-                    "full_name": "Newbie User",
-                },
-            )
-
-        with then("their fresh org has the three pre-defined templates"):
-            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
-            user = context.injector.get(UserRepository).get_by_email(
-                "newbie@example.com"
-            )
-            assert user is not None
-            org_users = context.injector.get(OrganizationUserRepository).get_by_user_id(
-                user.id
-            )
-            assert_that(len(org_users), equal_to(1))
-            repository: TemplateRepository = context.injector.get(TemplateRepository)
-            for slug in ("general-purpose", "scrum-master", "code-reviewer"):
-                template = repository.get_latest_template(
-                    org_users[0].organization_id, slug
-                )
-                assert_that(template, is_not(none()))
-                assert template is not None
-                assert_that(
-                    template.template_source, equal_to(TemplateSource.PRE_DEFINED)
-                )
 
 
 def test_predefined_content_keeps_raw_placeholders():

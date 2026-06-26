@@ -6,8 +6,10 @@ export const handleError = (error: any): ApiError => {
   if (axios.isAxiosError(error)) {
     if (error.response) {
       const { status, data } = error.response;
-      const message =
-        data?.detail || data?.message || data?.error || error.message;
+      const detail = data?.detail;
+      const message = Array.isArray(detail)
+        ? detail.map((e: any) => e?.msg ?? JSON.stringify(e)).join("; ")
+        : detail || data?.message || data?.error || error.message;
       const code = data?.code || `HTTP_${status}`;
 
       return new ApiError(message, status, code, data, error);

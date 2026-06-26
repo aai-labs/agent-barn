@@ -19,10 +19,9 @@ from api.domains.agents.aai_cli_artifacts import (
     build_setup_sh,
     provider_to_secret_name_map,
 )
-from api.domains.agents.aai_cli_skills import (
-    build_skills_manifest,
-    load_aai_cli_skills,
-)
+from api.domains.agents.aai_cli_skills import build_skills_manifest_from_zips
+from api.domains.skills.models import Skill
+from api.domains.skills.repository import SkillRepository
 from api.domains.agents.builders import (
     build_config_map,
     build_deployment,
@@ -40,6 +39,7 @@ from api.domains.agents.builders import (
 from api.domains.agents.models import (
     PROVIDER_DISPLAY_NAMES,
     Agent,
+    AgentAssignedSkillRead,
     AgentCreate,
     AgentFilter,
     AgentHealthRead,
@@ -48,6 +48,7 @@ from api.domains.agents.models import (
     AgentSecret,
     AgentSecretCreate,
     AgentSecretRead,
+    AgentSkill,
     AgentSlackConfig,
     AgentSlackConfigRead,
     AgentStatus,
@@ -153,6 +154,7 @@ class AgentService:
     config: Config
     conversation_sync_service: ConversationSyncService
     sync_service: ToolCallSyncService
+    skill_repository: SkillRepository
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
@@ -167,6 +169,96 @@ class AgentService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Model '{model}' is not in the allowed model list",
             )
+
+    @staticmethod
+    def _build_skill_pointers(skills: list[Skill]) -> str:
+        return "".join(s.tools_pointer for s in skills if s.tools_pointer)
+
+    def _resolve_skills(
+        self,
+        skill_ids: list[UUID],
+        secrets_data: list[AgentSecretCreate],
+        org_id: UUID,
+    ) -> list[Skill]:
+        if not skill_ids:
+            return []
+        submitted_providers = {item.provider for item in secrets_data}
+        accessible = {
+            s.id: s for s in self.skill_repository.find_accessible_for_org(org_id)
+        }
+        skills = []
+        for skill_id in dict.fromkeys(skill_ids):
+            skill = accessible.get(skill_id)
+            if skill is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Skill {skill_id} not found",
+                )
+            missing = [
+                p for p in skill.required_providers if p not in submitted_providers
+            ]
+            if missing:
+                names = ", ".join(p for p in missing)
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        f"Skill '{skill.name}' requires providers not covered "
+                        f"by submitted secrets: {names}"
+                    ),
+                )
+            skills.append(skill)
+        return skills
+
+    def _validate_skill_update(
+        self,
+        agent: Agent,
+        data: "AgentUpdate",
+        org_id: UUID,
+    ) -> None:
+        """Validate that new skills are accessible and that all remaining skills
+        have their required providers covered after the update is applied."""
+        if data.skill_ids:
+            accessible = {
+                s.id for s in self.skill_repository.find_accessible_for_org(org_id)
+            }
+            for skill_id in data.skill_ids:
+                if skill_id not in accessible:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=f"Skill {skill_id} not found",
+                    )
+
+        current_skill_rows = self.repository.get_skills_for_agent(agent.id)
+        current_skill_ids = {row.skill_id for row in current_skill_rows}
+        remaining_skill_ids = (current_skill_ids - set(data.removed_skill_ids)) | set(
+            data.skill_ids
+        )
+
+        if not remaining_skill_ids:
+            return
+
+        current_secrets = self.repository.get_secrets_for_agent(agent.id)
+        current_providers = {s.provider for s in current_secrets}
+        upsert_providers = {s.provider for s in data.secrets or []}
+        removed_providers = set(data.removed_secret_providers or [])
+        remaining_providers = (current_providers - removed_providers) | upsert_providers
+
+        remaining_skills = self.skill_repository.get_many_by_ids(
+            list(remaining_skill_ids)
+        )
+        for skill in remaining_skills:
+            missing = [
+                p for p in skill.required_providers if p not in remaining_providers
+            ]
+            if missing:
+                names = ", ".join(p for p in missing)
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        f"Skill '{skill.name}' requires providers that would no longer "
+                        f"be available: {names}"
+                    ),
+                )
 
     def _get_active_or_404(self, agent_id: UUID, org_id: UUID) -> Agent:
         agent = self.repository.get_active(agent_id, org_id)
@@ -183,6 +275,7 @@ class AgentService:
         slack_config: AgentSlackConfig | None = None,
         teams_config: AgentTeamsConfig | None = None,
         secrets: list[AgentSecret] | None = None,
+        skills: list[Skill] | None = None,
     ) -> AgentRead:
         slack_config_read = (
             AgentSlackConfigRead.model_validate(slack_config) if slack_config else None
@@ -192,6 +285,9 @@ class AgentService:
         )
         secrets_read = [
             AgentSecretRead.model_validate(secret) for secret in (secrets or [])
+        ]
+        skills_read = [
+            AgentAssignedSkillRead.model_validate(skill) for skill in (skills or [])
         ]
         webhook_url = (
             f"{self.config.api_external_url}/api/v1/webhooks/teams/{agent.id}/messages"
@@ -211,6 +307,7 @@ class AgentService:
             slack_config=slack_config_read,
             teams_config=teams_config_read,
             secrets=secrets_read,
+            skills=skills_read,
             webhook_url=webhook_url,
             created_at=agent.created_at,
             updated_at=agent.updated_at,
@@ -224,7 +321,12 @@ class AgentService:
         elif agent.platform == AgentPlatform.TEAMS:
             teams_config = self.repository.get_teams_config(agent.id)
         secrets = self.repository.get_secrets_for_agent(agent.id)
-        return self._build_agent_read(agent, slack_config, teams_config, secrets)
+        skills = [
+            s for _, s in self.skill_repository.get_agent_skills_with_details(agent.id)
+        ]
+        return self._build_agent_read(
+            agent, slack_config, teams_config, secrets, skills
+        )
 
     def create_agent(self, data: AgentCreate, context: CurrentUserContext) -> AgentRead:
         org_id = self._org_id(context)
@@ -339,11 +441,19 @@ class AgentService:
                 )
             )
 
-        self.repository.save_skills(load_aai_cli_skills(agent.id))
+        # Resolve and validate skills before any DB writes.
+        skills_to_assign = self._resolve_skills(data.skill_ids, data.secrets, org_id)
+
+        if skills_to_assign:
+            self.repository.save_skills(
+                [AgentSkill(agent_id=agent.id, skill_id=s.id) for s in skills_to_assign]
+            )
 
         if data.platform == AgentPlatform.TEAMS:
             return self.start_agent(agent.id, context)
-        return self._build_agent_read(agent, slack_config, teams_config, secrets)
+        return self._build_agent_read(
+            agent, slack_config, teams_config, secrets, skills_to_assign
+        )
 
     def get_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
         org_id = self._org_id(context)
@@ -380,6 +490,7 @@ class AgentService:
         slack_configs = self.repository.get_slack_configs_for_agents(agent_ids)
         teams_configs = self.repository.get_teams_configs_for_agents(agent_ids)
         secrets_by_agent = self.repository.get_secrets_for_agents(agent_ids)
+        skills_by_agent = self.skill_repository.get_skills_for_agents(agent_ids)
 
         items = [
             self._build_agent_read(
@@ -387,6 +498,7 @@ class AgentService:
                 slack_configs.get(agent.id),
                 teams_configs.get(agent.id),
                 secrets_by_agent.get(agent.id, []),
+                skills_by_agent.get(agent.id, []),
             )
             for agent in agents
         ]
@@ -509,6 +621,10 @@ class AgentService:
                     teams_config.tenant_id = updated["teams_tenant_id"]
                 self.repository.save_teams_config(teams_config)
 
+        # Validate skills accessibility and secret coverage
+        if data.skill_ids or data.removed_secret_providers:
+            self._validate_skill_update(agent, data, org_id)
+
         # Integration secrets: platform-independent. Remove first, then upsert
         # (the AgentUpdate validator already forbids a provider in both lists).
         # Validate and encrypt all upserts before touching the DB so that a
@@ -539,6 +655,12 @@ class AgentService:
                             content=encrypted,
                         )
                     )
+
+        # Apply skill changes
+        for skill_id in data.removed_skill_ids:
+            self.repository.remove_skill(agent.id, skill_id)
+        for skill_id in dict.fromkeys(data.skill_ids):
+            self.repository.add_skill(agent.id, skill_id)
 
         self.repository.save(agent)
         return self._get_agent_read(agent)
@@ -717,8 +839,13 @@ class AgentService:
         if store:
             secret.string_data.update(build_env(store))
 
-        skills = self.repository.get_skills_for_agent(agent.id)
-        skills_json = build_skills_manifest(skills) if skills else None
+        agent_skills = self.skill_repository.get_agent_skills_with_details(agent.id)
+        skills_json = (
+            build_skills_manifest_from_zips(agent_skills) if agent_skills else None
+        )
+        tools_md = rendered.tools_md + self._build_skill_pointers(
+            [s for _, s in agent_skills]
+        )
 
         if agent.agent_type == AgentType.HERMES:
             assert hermes_cfg is not None
@@ -729,7 +856,7 @@ class AgentService:
                 soul_md=rendered.soul_md,
                 identity_md=rendered.identity_md,
                 user_md=rendered.user_md,
-                tools_md=rendered.tools_md,
+                tools_md=tools_md,
                 agents_md=rendered.agents_md,
                 boot_md=rendered.boot_md,
                 heartbeat_md=rendered.heartbeat_md,
@@ -746,7 +873,7 @@ class AgentService:
                 soul_md=rendered.soul_md,
                 identity_md=rendered.identity_md,
                 user_md=rendered.user_md,
-                tools_md=rendered.tools_md,
+                tools_md=tools_md,
                 agents_md=rendered.agents_md,
                 boot_md=rendered.boot_md,
                 bootstrap_md=rendered.bootstrap_md,

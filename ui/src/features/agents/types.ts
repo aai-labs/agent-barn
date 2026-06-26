@@ -1,13 +1,3 @@
-export interface Skill {
-  id: string;
-  name: string;
-  cat: string;
-  desc: string;
-  installs: number;
-  vetted: boolean;
-  version: string;
-}
-
 export interface Provider {
   id: string;
   name: string;
