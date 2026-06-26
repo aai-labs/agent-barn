@@ -2,12 +2,19 @@
 
 CONFLUENCE_SKILLS: list[dict[str, str]] = [
     {
-        "skill_name": "aai-cli",
-        "skill_file_path": "aai-cli/confluence_skill/confluence_skill.md",
+        "skill_file_path": "aai-cli/confluence_skill.md",
         "skill_content": """\
 # aai-cli Confluence Skill
 
 Agent reference for the `aai-cli confluence` command group.
+
+## IMPORTANT: credentials are already configured
+
+The tool is fully set up on this agent. **Do not ask the user for credentials, site URLs,
+tokens, or any config details.** The profile is on disk and ready. Just run the command.
+
+If the command returns an error, show the raw error output to the user — do not ask them
+to provide config or credentials.
 
 ## Required flag
 
@@ -47,25 +54,9 @@ All errors print to stderr as a single JSON line:
 
 Exit code is non-zero on any error.
 
-## Resource reference
-
-Read the file for the resource you need:
-
-| Resource | Commands | File |
-|---|---|---|
-| Spaces | list, get | [confluence_space_skill/confluence_space_skill.md](confluence_space_skill/confluence_space_skill.md) |
-| Pages | list, get, create, update | [confluence_page_skill/confluence_page_skill.md](confluence_page_skill/confluence_page_skill.md) |
-| Page Comments | list, create | [confluence_page_comment_skill/confluence_page_comment_skill.md](confluence_page_comment_skill/confluence_page_comment_skill.md) |
-| Page Attachments | list, download, upload | [confluence_page_attachment_skill/confluence_page_attachment_skill.md](confluence_page_attachment_skill/confluence_page_attachment_skill.md) |
-""",
-    },
-    {
-        "skill_name": "aai-cli",
-        "skill_file_path": "aai-cli/confluence_skill/confluence_page_attachment_skill/confluence_page_attachment_skill.md",
-        "skill_content": """\
 # Confluence Page Attachments Skill
 
-Commands under `aai-cli confluence pages attachments`. For global flags and error shapes see [../confluence_skill.md](../confluence_skill.md).
+Commands under `aai-cli confluence pages attachments`.
 
 ---
 
@@ -193,15 +184,10 @@ aai-cli confluence pages attachments upload 3964929 --file /tmp/skill_doc_test.t
   }
 }
 ```
-""",
-    },
-    {
-        "skill_name": "aai-cli",
-        "skill_file_path": "aai-cli/confluence_skill/confluence_page_comment_skill/confluence_page_comment_skill.md",
-        "skill_content": """\
+
 # Confluence Page Comments Skill
 
-Commands under `aai-cli confluence pages comments`. For global flags and error shapes see [../confluence_skill.md](../confluence_skill.md).
+Commands under `aai-cli confluence pages comments`.
 
 ---
 
@@ -347,15 +333,10 @@ aai-cli confluence pages comments create 3964929 --body "This is a reply comment
   }
 }
 ```
-""",
-    },
-    {
-        "skill_name": "aai-cli",
-        "skill_file_path": "aai-cli/confluence_skill/confluence_page_skill/confluence_page_skill.md",
-        "skill_content": """\
+
 # Confluence Pages Skill
 
-Commands under `aai-cli confluence pages`. For global flags and error shapes see [../confluence_skill.md](../confluence_skill.md).
+Commands under `aai-cli confluence pages`.
 
 ---
 
@@ -609,15 +590,10 @@ aai-cli confluence pages update 3964929 --title "aai-cli skill doc test page (up
   }
 }
 ```
-""",
-    },
-    {
-        "skill_name": "aai-cli",
-        "skill_file_path": "aai-cli/confluence_skill/confluence_space_skill/confluence_space_skill.md",
-        "skill_content": """\
+
 # Confluence Spaces Skill
 
-Commands under `aai-cli confluence spaces`. For global flags and error shapes see [../confluence_skill.md](../confluence_skill.md).
+Commands under `aai-cli confluence spaces`.
 
 ---
 

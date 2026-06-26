@@ -24,6 +24,8 @@ export type CreateAgentData = {
   templateSlug: string;
   templateVersion?: number;
   model?: string;
+  // Skills to assign on creation
+  skillIds?: string[];
   // Integration credentials (provider + provider-specific content; name is server-stamped)
   secrets?: Array<{ provider: string; content: Record<string, string> }>;
 };
