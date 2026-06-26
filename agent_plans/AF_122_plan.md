@@ -88,11 +88,11 @@ Create `api/domains/ingest/` following AGENTS.md domain playbook:
 - See "Payload Schema" section below for exact fields
 
 **`service.py`** — `IngestService` with:
-- `authenticate(agent_id, authorization_header)` — load agent, decrypt `ingest_key_encrypted`, constant-time compare with `secrets.compare_digest()`
-- `process(agent_id, batch)` — convert events to existing model objects, delegate to existing repos:
-  - Messages → `AgentChatMessage` objects → `ConversationRepository.upsert_messages()`
-  - Tool calls → `ToolCallRepository.upsert_pending()`
-  - Tool results → `ToolCallRepository.complete()`
+- `authenticate(agent_id, authorization_header)` — load agent, decrypt `ingest_key_encrypted`, constant-time compare with `secrets.compare_digest()`. Returns the agent record (needed for `organization_id` and bot token).
+- `process(agent, batch)` — convert events to existing model objects, delegate to existing repos:
+  - Messages → `AgentChatMessage` objects → `ConversationRepository.upsert_messages(messages)`
+  - Tool calls → `ToolCallRepository.upsert_pending(session, organization_id, agent_id, session_id, external_id, tool_name, arguments, occurred_at)` — note: requires `organization_id` (from agent record) and a SQLAlchemy `session`
+  - Tool results → `ToolCallRepository.complete(session, agent_id, external_id, result, is_error, completed_at)` — also requires `session`
 - Name resolution: for messages with `sender_id`/`channel_id` but no names, call `SlackClient` to resolve (using the agent's decrypted bot token, same as `ConversationSyncService._platform_maps()`)
 
 **`routes.py`** — single endpoint:
@@ -153,10 +153,15 @@ description: Push messages and tool calls to the ingest API
 - All HTTP errors are caught and logged, never propagated
 - Reads `AGENT_ID`, `INGEST_URL`, `INGEST_API_KEY` from env vars; if any missing, `register()` returns immediately (plugin disables itself)
 
+**session_key construction for Hermes** (verified from `hermes_parser.py` and `service.py`):
+- DM: `f"agent:main:slack:dm:{event.source.chat_id}"`
+- Channel/group: `f"agent:main:slack:group:{event.source.chat_id}"`
+- Determine from `event.source.chat_type`: `"dm"` → dm prefix, anything else → group prefix
+
 **Dedup ID generation for Hermes** (no native msg_id available):
 - Messages: `f"hermes:{session_id}:{direction}:{int(occurred_at.timestamp()*1000)}"`
 - Tool calls: `f"hermes:{task_id}:{tool_name}:{int(time.time()*1000)}:{monotonic_counter}"`
-- These become `openclaw_msg_id` / `external_id` in the DB, caught by existing unique constraints
+- These become `openclaw_msg_id` / `external_id` in the DB, caught by existing unique constraints on `(agent_id, openclaw_msg_id)` and `(agent_id, external_id)`
 
 **Builder/config changes**:
 - Add `"telemetry-push"` to `enabled_plugins` list in `build_hermes_config()` (unconditionally — plugin self-disables via env check)
