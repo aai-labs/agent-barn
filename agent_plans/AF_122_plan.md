@@ -232,8 +232,9 @@ Per acceptance criteria: "Kubectl exec is no longer used for fetching messages a
 - `list_channels()` — remove the pod-read branch that calls `_read_sessions_json()` / `_read_hermes_sessions_json()` via kubectl exec. Only read from DB.
 - `list_threads()` — remove the `submit_sync_channel()` call. Only read from DB.
 
-**Simplify `stop_agent`** (`api/domains/agents/service.py`, lines 796-826):
+**Simplify `stop_agent`** (`api/domains/agents/service.py`, lines 913-959):
 - Remove the entire pre-deletion sync block (futures, wait, timeout). Push handles real-time delivery; no need to flush from pod before teardown.
+- Move ConfigMap and Secret deletion from `start_agent` to `stop_agent` — add `self.k8s.delete_config_map(name, ns)` and `self.k8s.delete_secret(name, ns)` next to the existing `delete_deployment` call. Both use `_delete_ignoring_not_found` so double-deletes are safe. `start_agent` keeps its delete calls as a no-op safety net.
 - Remove `conversation_sync_service` and `sync_service` fields from `AgentService`
 - Remove imports of `ConversationSyncService` and `ToolCallSyncService`
 
@@ -311,6 +312,10 @@ Single endpoint: `POST /ingest/v1/agents/{agent_id}/events`
 - **Slack name resolution**: Extract the `_platform_maps()` logic from `ConversationSyncService` into `IngestService` before deleting the sync service — decrypt bot token, call SlackClient, build user_map/channel_map
 
 ---
+
+## Deployment Note
+
+After deploying, all running agents must be manually stopped and started (via UI or API) to pick up the telemetry-push plugin and ingest credentials. Until restarted, existing agents will have no conversation or tool call logging (push plugin not installed, pull sync removed).
 
 ## Verification
 
