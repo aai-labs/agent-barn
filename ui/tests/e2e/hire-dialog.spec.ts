@@ -3,7 +3,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { mockAgent } from "../pages/data-support/agent-data-support.po";
 import { DataSupport } from "../pages/data-support/data-support.po";
 import { DashboardPage } from "../pages/dashboard-page.po";
-import { mockPlatformSkill, mockCustomSkill } from "../pages/data-support/skill-data-support.po";
+import { mockPlatformSkill, mockCustomSkill, mockJiraSkill, mockGmailSkill } from "../pages/data-support/skill-data-support.po";
 
 test.describe("Hire Dialog", () => {
   test.describe.configure({ mode: "serial" });
@@ -418,5 +418,40 @@ test.describe("Hire Dialog — Skills step", () => {
 
     await page.getByText(mockPlatformSkill.name, { exact: true }).click();
     await expect(page.getByText("Required credentials", { exact: true })).not.toBeVisible();
+  });
+
+  test("selecting a jira skill reveals jira credential fields", async ({ page }) => {
+    await navigateToSkillsStep(page);
+
+    await page.getByText(mockJiraSkill.name, { exact: true }).click();
+
+    await expect(page.getByText("Required credentials", { exact: true })).toBeVisible();
+    await expect(page.getByPlaceholder(/atlassian\.net/)).toBeVisible();
+    await expect(page.getByPlaceholder("you@example.com")).toBeVisible();
+  });
+
+  test("hire button is disabled when jira credentials are incomplete", async ({ page }) => {
+    await navigateToSkillsStep(page);
+
+    await page.getByText(mockJiraSkill.name, { exact: true }).click();
+
+    await expect(page.getByRole("button", { name: /hire aria/i })).toBeDisabled();
+  });
+
+  test("selecting a gmail skill reveals gmail credential fields", async ({ page }) => {
+    await navigateToSkillsStep(page);
+
+    await page.getByText(mockGmailSkill.name, { exact: true }).click();
+
+    await expect(page.getByText("Required credentials", { exact: true })).toBeVisible();
+    await expect(page.getByPlaceholder(/apps\.googleusercontent\.com/)).toBeVisible();
+  });
+
+  test("hire button is disabled when gmail credentials are incomplete", async ({ page }) => {
+    await navigateToSkillsStep(page);
+
+    await page.getByText(mockGmailSkill.name, { exact: true }).click();
+
+    await expect(page.getByRole("button", { name: /hire aria/i })).toBeDisabled();
   });
 });

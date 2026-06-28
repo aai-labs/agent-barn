@@ -66,6 +66,26 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
       { key: "apiToken", label: "API token", type: "secret", required: true },
     ],
   },
+  {
+    id: "gmail",
+    label: "Gmail",
+    fields: [
+      { key: "clientId", label: "Client ID", type: "text", required: true, placeholder: "…apps.googleusercontent.com", hint: "Google OAuth 2.0 client ID" },
+      { key: "clientSecret", label: "Client secret", type: "secret", required: true, hint: "Google OAuth 2.0 client secret" },
+      { key: "refreshToken", label: "Refresh token", type: "secret", required: true, hint: "OAuth 2.0 refresh token for the Gmail account" },
+    ],
+  },
+  {
+    id: "zoho_mail",
+    label: "Zoho Mail",
+    fields: [
+      { key: "email", label: "Email", type: "text", required: true, placeholder: "you@yourdomain.com", hint: "Zoho Mail account email address" },
+      { key: "accountId", label: "Account ID", type: "text", required: true, placeholder: "56218000000008002", hint: "Zoho Mail account ID (from API console)" },
+      { key: "clientId", label: "Client ID", type: "text", required: true, placeholder: "1000.…", hint: "Zoho OAuth 2.0 client ID" },
+      { key: "clientSecret", label: "Client secret", type: "secret", required: true, hint: "Zoho OAuth 2.0 client secret" },
+      { key: "refreshToken", label: "Refresh token", type: "secret", required: true, hint: "OAuth 2.0 refresh token for the Zoho Mail account" },
+    ],
+  },
 ];
 
 export function getIntegrationProvider(id: string): IntegrationProvider | undefined {

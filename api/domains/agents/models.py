@@ -100,8 +100,9 @@ class BitbucketContent(SecretContent):
 
 
 class GmailContent(SecretContent):
-    access_token: str
-    user_id: str
+    client_id: str
+    client_secret: str
+    refresh_token: str
 
 
 class GoogleCalendarContent(SecretContent):
@@ -110,16 +111,11 @@ class GoogleCalendarContent(SecretContent):
 
 
 class ZohoMailContent(SecretContent):
-    username: str
     email: str
-    from_address: str
-    app_password: str
-    smtp_host: str = "smtp.zoho.com"
-    smtp_port: int = 465
-    imap_host: str = "imap.zoho.com"
-    imap_port: int = 993
-    mail_folder: str = "INBOX"
-    sent_folder: str = "Sent"
+    account_id: str
+    client_id: str
+    client_secret: str
+    refresh_token: str
 
 
 class ZohoCalendarContent(SecretContent):

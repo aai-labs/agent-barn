@@ -17,7 +17,7 @@ from api.domains.agents.aai_cli_artifacts import (
     build_config_toml,
     build_env,
     build_setup_sh,
-    provider_to_secret_name_map,
+    provider_secrets_map,
 )
 from api.domains.agents.aai_cli_skills import build_skills_manifest_from_zips
 from api.domains.skills.models import Skill
@@ -827,7 +827,7 @@ class AgentService:
             for s in agent_secrets
         }
         store = {
-            p: c for p, c in decrypted.items() if p.value in provider_to_secret_name_map
+            p: c for p, c in decrypted.items() if p.value in provider_secrets_map
         }
         aai_home = "/opt/data" if agent.agent_type == AgentType.HERMES else "/home/node"
         aai_config_toml = (
