@@ -30,7 +30,7 @@ export const mockCustomSkill = {
 export const mockJiraSkill = {
   id: MOCK_JIRA_SKILL_ID,
   organizationId: null,
-  name: "Jira",
+  name: "jira",
   source: "aai_cli",
   requiredProviders: ["jira"],
   toolsPointer: null,
@@ -41,7 +41,7 @@ export const mockJiraSkill = {
 export const mockGmailSkill = {
   id: MOCK_GMAIL_SKILL_ID,
   organizationId: null,
-  name: "Gmail",
+  name: "gmail",
   source: "aai_cli",
   requiredProviders: ["gmail"],
   toolsPointer: null,

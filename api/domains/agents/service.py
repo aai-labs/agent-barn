@@ -826,9 +826,7 @@ class AgentService:
             )
             for s in agent_secrets
         }
-        store = {
-            p: c for p, c in decrypted.items() if p.value in provider_secrets_map
-        }
+        store = {p: c for p, c in decrypted.items() if p.value in provider_secrets_map}
         aai_home = "/opt/data" if agent.agent_type == AgentType.HERMES else "/home/node"
         aai_config_toml = (
             build_config_toml(decrypted, home_dir=aai_home) if decrypted else None

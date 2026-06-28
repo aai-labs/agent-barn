@@ -5,7 +5,14 @@ from api.domains.agents.aai_cli_artifacts import (
     build_setup_sh,
     env_var_for,
 )
-from api.domains.agents.models import SecretProvider, validate_content
+from typing import cast
+
+from api.domains.agents.models import (
+    GmailContent,
+    SecretProvider,
+    ZohoMailContent,
+    validate_content,
+)
 
 _GITHUB = validate_content(
     SecretProvider.GITHUB,
@@ -27,23 +34,29 @@ _CONFLUENCE = validate_content(
         "api_token": "conf_tok",
     },
 )
-_GMAIL = validate_content(
-    SecretProvider.GMAIL,
-    {
-        "client_id": "132806748841-abc.apps.googleusercontent.com",
-        "client_secret": "g_client_secret",
-        "refresh_token": "g_refresh_tok",
-    },
+_GMAIL = cast(
+    GmailContent,
+    validate_content(
+        SecretProvider.GMAIL,
+        {
+            "client_id": "132806748841-abc.apps.googleusercontent.com",
+            "client_secret": "g_client_secret",
+            "refresh_token": "g_refresh_tok",
+        },
+    ),
 )
-_ZOHO_MAIL = validate_content(
-    SecretProvider.ZOHO_MAIL,
-    {
-        "email": "samuel@aai-labs.com",
-        "account_id": "56218000000008002",
-        "client_id": "1000.WNPJ721D9UHU9SIHFSU4WA2P04W9LI",
-        "client_secret": "z_client_secret",
-        "refresh_token": "z_refresh_tok",
-    },
+_ZOHO_MAIL = cast(
+    ZohoMailContent,
+    validate_content(
+        SecretProvider.ZOHO_MAIL,
+        {
+            "email": "samuel@aai-labs.com",
+            "account_id": "56218000000008002",
+            "client_id": "1000.WNPJ721D9UHU9SIHFSU4WA2P04W9LI",
+            "client_secret": "z_client_secret",
+            "refresh_token": "z_refresh_tok",
+        },
+    ),
 )
 _GOOGLE_CALENDAR = validate_content(
     SecretProvider.GOOGLE_CALENDAR,
@@ -55,9 +68,14 @@ def test_env_var_for():
     assert env_var_for("jira.api_token") == "AAI_SECRET_JIRA_API_TOKEN"
     assert env_var_for("github.token") == "AAI_SECRET_GITHUB_TOKEN"
     assert env_var_for("google.client_secret") == "AAI_SECRET_GOOGLE_CLIENT_SECRET"
-    assert env_var_for("google.gmail_refresh_token") == "AAI_SECRET_GOOGLE_GMAIL_REFRESH_TOKEN"
+    assert (
+        env_var_for("google.gmail_refresh_token")
+        == "AAI_SECRET_GOOGLE_GMAIL_REFRESH_TOKEN"
+    )
     assert env_var_for("zoho.client_secret") == "AAI_SECRET_ZOHO_CLIENT_SECRET"
-    assert env_var_for("zoho.mail_refresh_token") == "AAI_SECRET_ZOHO_MAIL_REFRESH_TOKEN"
+    assert (
+        env_var_for("zoho.mail_refresh_token") == "AAI_SECRET_ZOHO_MAIL_REFRESH_TOKEN"
+    )
 
 
 def test_config_toml_emits_only_present_store_profiles():
@@ -136,7 +154,8 @@ def test_setup_sh_gmail_sets_both_secrets():
     )
     assert (
         f"printf '%s' \"$AAI_SECRET_GOOGLE_GMAIL_REFRESH_TOKEN\" | "
-        f"aai-cli --config {CONFIG_PATH} secrets set google.gmail_refresh_token" in setup
+        f"aai-cli --config {CONFIG_PATH} secrets set google.gmail_refresh_token"
+        in setup
     )
 
 
