@@ -487,7 +487,7 @@ test.describe("Agent Detail Page — Keys tab", () => {
     await agentDetailPage.configureButton().click();
     await agentDetailPage.keysTab().click();
 
-    await expect(page.getByText("· configured")).toBeVisible();
+    await expect(page.getByText("· not yet validated")).toBeVisible();
     await expect(agentDetailPage.removeCredentialButton()).toBeVisible();
   });
 
@@ -517,7 +517,7 @@ test.describe("Agent Detail Page — Keys tab", () => {
     await agentDetailPage.removeCredentialButton().click();
     await agentDetailPage.undoCredentialButton().click();
 
-    await expect(page.getByText("· configured")).toBeVisible();
+    await expect(page.getByText("· not yet validated")).toBeVisible();
     await expect(agentDetailPage.removeCredentialButton()).toBeVisible();
     await expect(agentDetailPage.saveIntegrationsButton()).toBeDisabled();
   });
@@ -538,7 +538,7 @@ test.describe("Agent Detail Page — Keys tab", () => {
     await agentDetailPage.saveIntegrationsButton().click();
 
     await expect(page.getByText("Secret is used by a skill")).toBeVisible();
-    await expect(page.getByText("· configured")).toBeVisible();
+    await expect(page.getByText("· not yet validated")).toBeVisible();
   });
 
   test("error from token save does not appear in integrations section", async ({ page }) => {

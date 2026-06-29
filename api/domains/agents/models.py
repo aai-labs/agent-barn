@@ -401,6 +401,7 @@ class AgentSlackConfigRead(PydanticBaseModel):
     dm_user_ids: list[str]
     group_policy: SlackGroupPolicy
     dm_policy: SlackDmPolicy
+    bot_display_name: str | None = None  # fetched live from Slack, not persisted
 
 
 class AgentTeamsConfigRead(PydanticBaseModel):

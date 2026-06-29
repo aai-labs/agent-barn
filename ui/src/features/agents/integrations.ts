@@ -21,6 +21,7 @@ export interface IntegrationField {
 export interface IntegrationProvider {
   id: string;
   label: string;
+  scopeNote?: string;
   fields: IntegrationField[];
 }
 
@@ -33,6 +34,7 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
   {
     id: "github",
     label: "GitHub",
+    scopeNote: "Classic PAT: repo, read:user, read:org — Fine-grained PAT: Contents (read), Pull requests (read + write), Metadata (read, mandatory)",
     fields: [
       { key: "token", label: "Personal access token", type: "secret", required: true, placeholder: "github_pat_… or ghp_…" },
       { key: "repoUrl", label: "Repository URL", type: "repo-url", required: true, placeholder: "https://github.com/owner/repo.git" },
@@ -41,6 +43,7 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
   {
     id: "jira",
     label: "Jira",
+    scopeNote: "API token inherits your Atlassian account's project permissions — account needs Browse Projects and Add Comments on the target project",
     fields: [
       { key: "siteUrl", label: "Site URL", type: "text", required: true, placeholder: "https://your-domain.atlassian.net" },
       { key: "email", label: "Email", type: "text", required: true, placeholder: "you@example.com" },
@@ -50,6 +53,7 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
   {
     id: "confluence",
     label: "Confluence",
+    scopeNote: "API token inherits your Atlassian account's space permissions — account needs Space View and Add Page Comments on the target space",
     fields: [
       { key: "siteUrl", label: "Site URL", type: "text", required: true, placeholder: "https://your-domain.atlassian.net" },
       { key: "email", label: "Email", type: "text", required: true, placeholder: "you@example.com" },
@@ -59,6 +63,7 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
   {
     id: "bitbucket",
     label: "Bitbucket",
+    scopeNote: "App password scopes: Account (read), Repositories (read), Pull requests (read + write)",
     fields: [
       { key: "workspace", label: "Workspace", type: "text", required: true, placeholder: "workspace id" },
       { key: "repo", label: "Repository", type: "text", required: true, placeholder: "repository" },
@@ -101,7 +106,8 @@ export function expandGithubContent(content: Record<string, string>): Record<str
   const parsed = parseGithubRepoUrl(content.repoUrl ?? "");
   if (!parsed) return content;
   const { owner, repo } = parsed;
-  const { repoUrl: _, ...rest } = content;
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { repoUrl: _repoUrl, ...rest } = content;
   return { ...rest, owner, repo, org: owner };
 }
 

@@ -3,6 +3,7 @@ from api.domains.agents.aai_cli_artifacts import (
     build_config_toml,
     build_env,
     build_setup_sh,
+    build_tool_context_md,
     env_var_for,
 )
 from typing import cast
@@ -32,6 +33,15 @@ _CONFLUENCE = validate_content(
         "site_url": "https://x.atlassian.net",
         "email": "a@b.com",
         "api_token": "conf_tok",
+    },
+)
+_BITBUCKET = validate_content(
+    SecretProvider.BITBUCKET,
+    {
+        "workspace": "my-workspace",
+        "repo": "my-repo",
+        "email": "a@b.com",
+        "api_token": "bb_tok",
     },
 )
 _GMAIL = cast(
@@ -232,3 +242,68 @@ def test_setup_sh_hermes_home_dir_exports_opt_data():
 def test_setup_sh_default_home_dir_is_home_node():
     setup = build_setup_sh([])
     assert "export HOME=/home/node" in setup
+
+
+# --- build_tool_context_md ----------------------------------------------------
+
+
+def test_tool_context_md_empty_when_no_secrets():
+    assert build_tool_context_md({}) == ""
+
+
+def test_tool_context_md_lists_github_profile():
+    md = build_tool_context_md({SecretProvider.GITHUB: _GITHUB})
+    assert "github-work" in md
+    assert "aai-labs/agent-farm" in md
+    assert "Do not ask the user to re-provide" in md
+
+
+def test_tool_context_md_lists_jira_profile():
+    md = build_tool_context_md({SecretProvider.JIRA: _JIRA})
+    assert "jira-work" in md
+    assert "https://x.atlassian.net" in md
+    assert "a@b.com" in md
+
+
+def test_tool_context_md_lists_confluence_profile():
+    md = build_tool_context_md({SecretProvider.CONFLUENCE: _CONFLUENCE})
+    assert "confluence-work" in md
+    assert "https://x.atlassian.net" in md
+
+
+def test_tool_context_md_lists_bitbucket_profile():
+    md = build_tool_context_md({SecretProvider.BITBUCKET: _BITBUCKET})
+    assert "bitbucket-work" in md
+    assert "my-workspace/my-repo" in md
+
+
+def test_tool_context_md_omits_non_aai_cli_providers():
+    md = build_tool_context_md({SecretProvider.GMAIL: _GMAIL})
+    # Gmail is not listed as a named profile in the context block
+    assert "gmail-work" not in md
+
+
+def test_tool_context_md_never_leaks_tokens():
+    md = build_tool_context_md(
+        {
+            SecretProvider.GITHUB: _GITHUB,
+            SecretProvider.JIRA: _JIRA,
+            SecretProvider.BITBUCKET: _BITBUCKET,
+        }
+    )
+    assert "ghp_tok" not in md
+    assert "jira_tok" not in md
+    assert "bb_tok" not in md
+
+
+def test_tool_context_md_lists_multiple_providers():
+    md = build_tool_context_md(
+        {
+            SecretProvider.GITHUB: _GITHUB,
+            SecretProvider.JIRA: _JIRA,
+            SecretProvider.CONFLUENCE: _CONFLUENCE,
+        }
+    )
+    assert "github-work" in md
+    assert "jira-work" in md
+    assert "confluence-work" in md

@@ -1,50 +1,48 @@
 # Agent Farm
 
-Monorepo with:
+Platform for hiring, managing, and running AI agents on Slack and Microsoft Teams.
 
-- `api/`: FastAPI, SQLModel/SQLAlchemy, Alembic, Injector DI, pytest
-- `ui/`: Next.js App Router, React, TypeScript, TanStack Query, Playwright
+Monorepo layout:
 
-API is served under `/api/v1` and frontend requests to `/api/*` are proxied to backend.
+- `api/` — FastAPI, SQLModel/SQLAlchemy, Alembic, Injector DI, pytest
+- `ui/` — Next.js App Router, React, TypeScript, TanStack Query
+- `helm/` — Helm chart for Kubernetes deployment
+- `k8s/` — Kubernetes manifests and helper scripts
+- `hermes-base/` — base config for Hermes agents
+- `openclaw-base/` — base config for OpenClaw agents
 
-## Features Included
+API is served under `/api/v1`; frontend requests to `/api/*` are proxied to the backend.
 
-Authentication:
+## Features
 
-- Sign up and login
-- Access + refresh token flow (refresh token cookie support)
-- Current-user profile read/update (`/auth/me`)
-- Change password
-- Forgot/reset password endpoints
-- Logout
+**Agents**
+- Hire agents on Slack or Microsoft Teams
+- Two runtimes: Hermes (Slack-only, lightweight) and OpenClaw (Slack + Teams)
+- Automatic Slack app creation via configuration tokens
+- Manual Slack app setup with manifest export
+- Start, stop, and monitor agents
+- Per-agent channel allowlist and DM policies
+- Webhook support for agent events
 
-Users:
+**Templates**
+- Versioned agent templates (soul, identity, user, tools, agents, boot, bootstrap, heartbeat files)
+- Pre-defined templates (general purpose, code reviewer, scrum master)
+- Template seeding on startup
 
-- Paginated user listing (super admin only)
-- User deletion (super admin only)
+**Conversations & Tool Calls**
+- Conversation history per agent
+- Tool call tracking and audit log
 
-Organizations:
+**Auth & Users**
+- Sign-up, login, logout
+- Access + refresh token flow (httpOnly cookie)
+- Password change and forgot/reset password
+- Super-admin user management (list, delete users)
+- Organization management
 
-- Single default organization
-- List, get, update, and delete organizations
-- Organization filtering support
-
-Authorization and role-aware UX:
-
-- Super-admin-gated pages/components (users and organizations admin screens)
-- Different dashboard experience for super admins vs regular users
-
-Frontend foundations:
-
-- App Router auth pages (`/login`, `/signup`)
-- Protected dashboard shell with sidebar navigation
-- TanStack Query + centralized query-key patterns + Zod schemas
-
-Backend foundations:
-
-- Versioned API routing under `/api/v1`
-- Health endpoint (`/api/v1/health`) checks connectivity to db
-- Startup bootstrap for default superuser and default organization
+**Infrastructure**
+- Slack config token vault (encrypted, auto-renewed)
+- Kubernetes deployment via Helm + helmfile
 
 ## Project Structure
 
@@ -52,99 +50,110 @@ Backend foundations:
 .
 ├── api/
 ├── ui/
+├── helm/
+├── k8s/
+├── hermes-base/
+├── openclaw-base/
+├── scripts/
 ├── compose.yml
+├── helmfile.yaml.gotmpl
+├── deploy.sh
 ├── Makefile
-└── AGENTS.md
+├── AGENTS.md
+└── CLAUDE.md
 ```
 
 ## Prerequisites
 
-- Python `>=3.14`
-- [uv](https://github.com/astral-sh/uv)
-- Node.js `>=20`
-- [pnpm](https://pnpm.io/)
+- Python `>=3.14` + [uv](https://github.com/astral-sh/uv)
+- Node.js `>=20` + [pnpm](https://pnpm.io/)
 - Docker (required for Postgres)
 
 ## Setup
-
-Install dependencies:
 
 ```bash
 cd api && uv sync
 cd ../ui && pnpm install
 ```
 
-Environment:
+Environment: API reads env from repo root `.env`. Optional test env: `.env.spec`.
 
-- API reads env from repo root `.env`
-- Optional test env file: `.env.spec`
-
-## First-Time Run (Required)
-
-Postgres is run via Docker for this project. Before starting API/UI for the first time:
+## First-Time Run
 
 ```bash
 make db-up
 make migrate
 ```
 
-Then choose how to run API/UI:
+## Running Locally
 
-1. Run API + UI directly on host:
-   - API: `make dev-api`
-   - UI: `make dev-ui`
-2. Run full stack in Docker (db + api + ui):
-   - `make up`
-
-## Run Locally
-
-From repo root:
-
-- API: `make dev-api`
-- UI: `make dev-ui`
+```bash
+make dev-api    # API on :8000
+make dev-ui     # UI on :3000
+```
 
 With Docker (db + api + ui):
 
-- Start: `make up`
-- Stop: `make down`
-- DB only: `make db-up`
+```bash
+make up         # start all
+make down       # stop all
+make restart    # rebuild and restart
+make logs       # tail all logs
+make clean      # stop and remove volumes
+```
 
-## Database Migrations (API)
+Database only:
 
-- Apply latest: `make migrate`
-- Roll back one: `make rollback`
-- Create migration: `make makemigrations`
+```bash
+make db-up
+make db-down
+make db-logs
+make db-restart
+```
+
+## Database Migrations
+
+```bash
+make migrate         # apply latest
+make rollback        # roll back one
+make makemigrations  # create new migration (prompts for message)
+```
 
 ## Tests
 
-- API tests: `make test-api`
-- API coverage: `make coverage`
-- UI tests: `make test-ui`
-- UI E2E headed/debug:
+```bash
+make test-api        # API tests (excludes k8s integration)
+make test-api-k8s    # k8s integration tests
+make test-ui         # UI tests (Playwright)
+make coverage        # API coverage report
+```
+
+UI watch/debug:
 
 ```bash
-cd ui
-pnpm test:watch
-pnpm test:debug
+cd ui && pnpm test:watch
+cd ui && pnpm test:debug
 ```
 
 ## Lint and Type Checks
 
-- API checks: `make check-api`
-- API auto-fix: `make fix-api`
-- UI lint: `make lint-ui`
-- UI typecheck:
-
 ```bash
-cd ui
-pnpm -s tsc --noEmit
+make check-api   # ruff check + format check + ty check
+make fix-api     # ruff autofix + format
+make lint-ui     # ESLint
+make check-ui    # TypeScript type check
 ```
+
+## Deployment
+
+Deployed to Kubernetes via Helm + helmfile. See `helm/`, `k8s/`, `helmfile.yaml.gotmpl`, and `deploy.sh`.
 
 ## Development Conventions
 
-See [AGENTS.md](./AGENTS.md) for detailed implementation standards, including:
+See [AGENTS.md](./AGENTS.md) for detailed implementation standards:
 
 - how to create new API and UI domains
-- architecture boundaries (routes/services/repositories)
+- architecture boundaries (routes → services → repositories)
 - query key and API client patterns
-- testing patterns and examples
+- testing requirements and examples
+- Helm chart versioning and release process

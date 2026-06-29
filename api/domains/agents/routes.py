@@ -11,6 +11,7 @@ from api.domains.agents.models import (
     AgentRead,
     AgentUpdate,
     PairRequest,
+    SecretProvider,
     get_agent_filter,
 )
 from api.domains.agents.service import AgentService
@@ -149,3 +150,13 @@ def list_slack_users(
     search: Annotated[str | None, Query()] = None,
 ):
     return service.list_slack_users(agent_id, context, search=search)
+
+
+@agents_router.post("/{agent_id}/integrations/{provider}/validate")
+def validate_integration(
+    agent_id: UUID,
+    provider: SecretProvider,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentService, Injected(AgentService)],
+):
+    return service.validate_integration(agent_id, provider, context)

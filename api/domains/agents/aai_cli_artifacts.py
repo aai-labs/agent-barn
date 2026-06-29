@@ -167,6 +167,44 @@ _PROFILE_BUILDERS: dict[SecretProvider, Callable[..., str]] = {
 }
 
 
+def build_tool_context_md(decrypted: Mapping[SecretProvider, SecretContent]) -> str:
+    """Render a markdown section listing each configured integration's key metadata.
+
+    Injected into tools_md at start_agent time so the agent knows what is already
+    set up and doesn't ask the user for credentials that are already configured.
+    """
+    if not decrypted:
+        return ""
+
+    lines: list[str] = [
+        "\n## Configured Integrations\n",
+        "The following integrations are pre-configured via aai-cli. "
+        "Use aai-cli to interact with them — credentials are already in place. "
+        "Do not ask the user to re-provide them.\n",
+    ]
+    for provider in SecretProvider:
+        content = decrypted.get(provider)
+        if content is None:
+            continue
+        if isinstance(content, GithubContent):
+            lines.append(
+                f"- **GitHub** (`github-work`): {content.owner}/{content.repo}"
+            )
+        elif isinstance(content, JiraContent):
+            lines.append(
+                f"- **Jira** (`jira-work`): {content.site_url} ({content.email})"
+            )
+        elif isinstance(content, ConfluenceContent):
+            lines.append(
+                f"- **Confluence** (`confluence-work`): {content.site_url} ({content.email})"
+            )
+        elif isinstance(content, BitbucketContent):
+            lines.append(
+                f"- **Bitbucket** (`bitbucket-work`): {content.workspace}/{content.repo} ({content.email})"
+            )
+    return "\n".join(lines) + "\n"
+
+
 def build_config_toml(
     decrypted: Mapping[SecretProvider, SecretContent],
     home_dir: str = "/home/node",
