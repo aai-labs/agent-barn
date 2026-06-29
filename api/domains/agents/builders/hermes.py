@@ -217,7 +217,6 @@ def build_hermes_deployment(
                         client.V1Container(
                             name="agent",
                             image=image,
-                            image_pull_policy="Never",
                             command=["sh", "/app/config/start.sh"],
                             readiness_probe=client.V1Probe(
                                 http_get=client.V1HTTPGetAction(
