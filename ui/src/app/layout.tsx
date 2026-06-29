@@ -21,7 +21,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Agent Farm",
+  title: "Agent Barn",
   description: "Manage your AI agent workforce.",
 };
 

@@ -6,6 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useCurrentUser } from "@/auth/providers/user-context-provider";
 import { useLogout } from "@/auth/hooks/use-logout";
 import { PlusIcon, UserIcon, UsersIcon, BuildingIcon, LogOutIcon } from "@/components/icons";
+import { LogoMark } from "@/components/logo-mark";
 
 interface TopNavProps {
   onHire: () => void;
@@ -56,13 +57,8 @@ export function TopNav({ onHire, orgName }: TopNavProps) {
       style={{ borderBottom: "1px solid var(--line)", background: "var(--bg)" }}
     >
       <div className="flex items-center gap-2.5 font-semibold text-[15.5px] tracking-tight" style={{ color: "var(--ink)" }}>
-        <div
-          className="w-[26px] h-[26px] rounded-lg grid place-items-center font-mono text-[12px] font-semibold flex-shrink-0"
-          style={{ background: "var(--ink)", color: "var(--bg)" }}
-        >
-          AF
-        </div>
-        Agent Farm
+        <LogoMark size={26} />
+        Agent Barn
       </div>
 
       {orgName && (

@@ -1,0 +1,561 @@
+"""
+TDD: failing tests for api/infrastructure/integration_validators/*.
+Run these first — they should all fail until the implementation exists.
+"""
+
+from unittest.mock import patch
+
+import httpx
+
+from api.domains.agents.models import (
+    BitbucketContent,
+    ConfluenceContent,
+    GithubContent,
+    JiraContent,
+)
+from api.infrastructure.integration_validators.bitbucket import validate_bitbucket
+from api.infrastructure.integration_validators.confluence import validate_confluence
+from api.infrastructure.integration_validators.github import validate_github
+from api.infrastructure.integration_validators.jira import validate_jira
+from api.infrastructure.integration_validators.result import IntegrationValidationResult
+
+# ── fixtures ──────────────────────────────────────────────────────────────────
+
+_REQUEST = httpx.Request("GET", "https://example.com")
+
+
+def _resp(
+    body: dict | list, *, status: int = 200, headers: dict | None = None
+) -> httpx.Response:
+    return httpx.Response(status, json=body, headers=headers or {}, request=_REQUEST)
+
+
+def _connect_error() -> httpx.ConnectError:
+    return httpx.ConnectError("connection refused", request=_REQUEST)
+
+
+_GH = GithubContent(token="ghp_test", owner="acme", repo="backend", org="acme-org")
+_JIRA = JiraContent(
+    site_url="https://acme.atlassian.net", email="alice@acme.com", api_token="jira-tok"
+)
+_CONFLUENCE = ConfluenceContent(
+    site_url="https://acme.atlassian.net", email="alice@acme.com", api_token="conf-tok"
+)
+_BB = BitbucketContent(
+    workspace="acme", repo="backend", email="alice@acme.com", api_token="bb-tok"
+)
+
+# ── IntegrationValidationResult ───────────────────────────────────────────────
+
+
+def test_result_valid_defaults():
+    r = IntegrationValidationResult(valid=True)
+    assert r.valid is True
+    assert r.identity is None
+    assert r.missing_scopes == []
+    assert r.error is None
+
+
+def test_result_invalid_with_error():
+    r = IntegrationValidationResult(valid=False, error="bad token")
+    assert r.valid is False
+    assert r.error == "bad token"
+
+
+def test_result_warning_has_missing_scopes():
+    r = IntegrationValidationResult(valid=True, missing_scopes=["read:org"])
+    assert r.missing_scopes == ["read:org"]
+
+
+# ── GitHub ────────────────────────────────────────────────────────────────────
+
+_GH_MOD = "api.infrastructure.integration_validators.github.httpx.get"
+
+
+def test_github_classic_pat_all_scopes_present():
+    user_resp = _resp(
+        {"login": "alice"}, headers={"X-OAuth-Scopes": "repo, read:user, read:org"}
+    )
+    with patch(_GH_MOD, return_value=user_resp):
+        result = validate_github(_GH)
+
+    assert result.valid is True
+    assert result.identity == "alice"
+    assert result.missing_scopes == []
+    assert result.error is None
+
+
+def test_github_classic_pat_missing_repo_scope():
+    user_resp = _resp(
+        {"login": "alice"}, headers={"X-OAuth-Scopes": "read:user, read:org"}
+    )
+    with patch(_GH_MOD, return_value=user_resp):
+        result = validate_github(_GH)
+
+    assert result.valid is True
+    assert any("repo" in s.lower() for s in result.missing_scopes)
+
+
+def test_github_classic_pat_missing_read_user_scope():
+    user_resp = _resp({"login": "alice"}, headers={"X-OAuth-Scopes": "repo, read:org"})
+    with patch(_GH_MOD, return_value=user_resp):
+        result = validate_github(_GH)
+
+    assert result.valid is True
+    assert any("read:user" in s for s in result.missing_scopes)
+
+
+def test_github_classic_pat_missing_read_org_scope():
+    user_resp = _resp({"login": "alice"}, headers={"X-OAuth-Scopes": "repo, read:user"})
+    with patch(_GH_MOD, return_value=user_resp):
+        result = validate_github(_GH)
+
+    assert result.valid is True
+    assert any("read:org" in s for s in result.missing_scopes)
+
+
+def test_github_classic_pat_broad_user_scope_covers_read_user():
+    """'user' scope is a superset of read:user — should not warn."""
+    user_resp = _resp(
+        {"login": "alice"}, headers={"X-OAuth-Scopes": "repo, user, read:org"}
+    )
+    with patch(_GH_MOD, return_value=user_resp):
+        result = validate_github(_GH)
+
+    assert result.valid is True
+    assert not any("read:user" in s for s in result.missing_scopes)
+
+
+def test_github_fine_grained_pat_repo_accessible():
+    """Fine-grained PATs have no X-OAuth-Scopes header; test the repo and pulls endpoints."""
+    user_resp = _resp({"login": "alice"})  # no X-OAuth-Scopes header
+    repo_resp = _resp({"full_name": "acme/backend"})
+    pulls_resp = _resp([])
+
+    with patch(_GH_MOD, side_effect=[user_resp, repo_resp, pulls_resp]):
+        result = validate_github(_GH)
+
+    assert result.valid is True
+    assert result.missing_scopes == []
+
+
+def test_github_fine_grained_pat_repo_access_denied():
+    user_resp = _resp({"login": "alice"})
+    repo_resp = _resp(
+        {"message": "forbidden"},
+        status=403,
+        headers={"X-Accepted-GitHub-Permissions": "contents=read"},
+    )
+    pulls_resp = _resp([])
+
+    with patch(_GH_MOD, side_effect=[user_resp, repo_resp, pulls_resp]):
+        result = validate_github(_GH)
+
+    assert result.valid is True
+    assert len(result.missing_scopes) > 0
+    assert any("contents=read" in s for s in result.missing_scopes)
+
+
+def test_github_fine_grained_pat_pr_access_denied():
+    user_resp = _resp({"login": "alice"})
+    repo_resp = _resp({"full_name": "acme/backend"})
+    pulls_resp = _resp({"message": "forbidden"}, status=403)
+
+    with patch(_GH_MOD, side_effect=[user_resp, repo_resp, pulls_resp]):
+        result = validate_github(_GH)
+
+    assert result.valid is True
+    assert any("Pull requests" in s for s in result.missing_scopes)
+
+
+def test_github_invalid_token_401():
+    with patch(_GH_MOD, return_value=_resp({}, status=401)):
+        result = validate_github(_GH)
+
+    assert result.valid is False
+    assert result.error is not None
+    assert "invalid" in result.error.lower() or "expired" in result.error.lower()
+
+
+def test_github_unexpected_status_returns_error():
+    with patch(_GH_MOD, return_value=_resp({}, status=500)):
+        result = validate_github(_GH)
+
+    assert result.valid is False
+    assert "500" in (result.error or "")
+
+
+def test_github_network_error_returns_error():
+    with patch(_GH_MOD, side_effect=_connect_error()):
+        result = validate_github(_GH)
+
+    assert result.valid is False
+    assert result.error is not None
+    assert "github" in result.error.lower()
+
+
+# ── Jira ──────────────────────────────────────────────────────────────────────
+
+_JIRA_MOD = "api.infrastructure.integration_validators.jira.httpx.get"
+
+
+def test_jira_valid_credentials_returns_identity():
+    body = {
+        "displayName": "Alice",
+        "emailAddress": "alice@acme.com",
+        "active": True,
+        "accountType": "atlassian",
+    }
+    with patch(_JIRA_MOD, return_value=_resp(body)):
+        result = validate_jira(_JIRA)
+
+    assert result.valid is True
+    assert "Alice" in (result.identity or "")
+    assert "alice@acme.com" in (result.identity or "")
+    assert result.error is None
+
+
+def test_jira_invalid_credentials_401():
+    with patch(_JIRA_MOD, return_value=_resp({}, status=401)):
+        result = validate_jira(_JIRA)
+
+    assert result.valid is False
+    assert result.error is not None
+    assert "invalid" in result.error.lower() or "token" in result.error.lower()
+
+
+def test_jira_no_product_access_403():
+    with patch(_JIRA_MOD, return_value=_resp({}, status=403)):
+        result = validate_jira(_JIRA)
+
+    assert result.valid is False
+    assert result.error is not None
+    assert "access" in result.error.lower() or "jira" in result.error.lower()
+
+
+def test_jira_inactive_account_returns_error():
+    body = {"displayName": "Alice", "emailAddress": "alice@acme.com", "active": False}
+    with patch(_JIRA_MOD, return_value=_resp(body)):
+        result = validate_jira(_JIRA)
+
+    assert result.valid is False
+    assert result.error is not None
+    assert "inactive" in result.error.lower()
+
+
+def test_jira_unexpected_status_returns_error():
+    with patch(_JIRA_MOD, return_value=_resp({}, status=502)):
+        result = validate_jira(_JIRA)
+
+    assert result.valid is False
+    assert "502" in (result.error or "")
+
+
+def test_jira_network_error_returns_error():
+    with patch(_JIRA_MOD, side_effect=_connect_error()):
+        result = validate_jira(_JIRA)
+
+    assert result.valid is False
+    assert result.error is not None
+    assert "jira" in result.error.lower()
+
+
+# ── Confluence ────────────────────────────────────────────────────────────────
+
+_CONF_MOD = "api.infrastructure.integration_validators.confluence.httpx.get"
+
+
+def test_confluence_valid_credentials_returns_identity():
+    body = {"type": "known", "displayName": "Alice", "email": "alice@acme.com"}
+    with patch(_CONF_MOD, return_value=_resp(body)):
+        result = validate_confluence(_CONFLUENCE)
+
+    assert result.valid is True
+    assert "Alice" in (result.identity or "")
+    assert "alice@acme.com" in (result.identity or "")
+    assert result.error is None
+
+
+def test_confluence_anonymous_type_means_auth_rejected():
+    body = {"type": "anonymous"}
+    with patch(_CONF_MOD, return_value=_resp(body)):
+        result = validate_confluence(_CONFLUENCE)
+
+    assert result.valid is False
+    assert result.error is not None
+    assert "auth" in result.error.lower() or "anonymous" in result.error.lower()
+
+
+def test_confluence_invalid_credentials_401():
+    with patch(_CONF_MOD, return_value=_resp({}, status=401)):
+        result = validate_confluence(_CONFLUENCE)
+
+    assert result.valid is False
+    assert result.error is not None
+
+
+def test_confluence_no_product_access_403():
+    with patch(_CONF_MOD, return_value=_resp({}, status=403)):
+        result = validate_confluence(_CONFLUENCE)
+
+    assert result.valid is False
+    assert result.error is not None
+    assert "confluence" in result.error.lower() or "access" in result.error.lower()
+
+
+def test_confluence_unexpected_status_returns_error():
+    with patch(_CONF_MOD, return_value=_resp({}, status=503)):
+        result = validate_confluence(_CONFLUENCE)
+
+    assert result.valid is False
+    assert "503" in (result.error or "")
+
+
+def test_confluence_network_error_returns_error():
+    with patch(_CONF_MOD, side_effect=_connect_error()):
+        result = validate_confluence(_CONFLUENCE)
+
+    assert result.valid is False
+    assert result.error is not None
+    assert "confluence" in result.error.lower()
+
+
+# ── Bitbucket ─────────────────────────────────────────────────────────────────
+
+_BB_MOD = "api.infrastructure.integration_validators.bitbucket.httpx.get"
+
+_BB_USER_BODY = {
+    "type": "user",
+    "display_name": "Alice",
+    "nickname": "alice",
+    "account_id": "abc123",
+    "uuid": "{uuid}",
+}
+
+
+def test_bitbucket_valid_bearer_token_returns_identity():
+    user_resp = _resp(_BB_USER_BODY)
+    repo_resp = _resp({"values": []})  # workspace repos accessible
+
+    with patch(_BB_MOD, side_effect=[user_resp, repo_resp]):
+        result = validate_bitbucket(_BB)
+
+    assert result.valid is True
+    assert "Alice" in (result.identity or "")
+    assert result.missing_scopes == []
+    assert result.error is None
+
+
+def test_bitbucket_falls_back_to_basic_auth_when_bearer_fails():
+    """If Bearer auth returns 401, retry with Basic auth (email:api_token)."""
+    bearer_fail = _resp({}, status=401)
+    basic_ok = _resp(_BB_USER_BODY)
+    repo_resp = _resp({"values": []})
+
+    with patch(_BB_MOD, side_effect=[bearer_fail, basic_ok, repo_resp]) as mock_get:
+        result = validate_bitbucket(_BB)
+
+    assert result.valid is True
+    # Second call must use Basic auth — verify the call was made differently
+    calls = mock_get.call_args_list
+    assert len(calls) >= 2
+
+
+def test_bitbucket_missing_repo_read_scope_warns():
+    """Workspace repo list returns 403 → missing_scopes includes repository read."""
+    user_resp = _resp(_BB_USER_BODY)
+    repo_403 = _resp({"type": "error"}, status=403)
+
+    with patch(_BB_MOD, side_effect=[user_resp, repo_403]):
+        result = validate_bitbucket(_BB)
+
+    assert result.valid is True
+    assert len(result.missing_scopes) > 0
+    assert any("repositor" in s.lower() for s in result.missing_scopes)
+
+
+def test_bitbucket_invalid_token_both_auth_methods_fail():
+    with patch(_BB_MOD, return_value=_resp({}, status=401)):
+        result = validate_bitbucket(_BB)
+
+    assert result.valid is False
+    assert result.error is not None
+    assert "invalid" in result.error.lower() or "token" in result.error.lower()
+
+
+def test_bitbucket_403_on_user_with_repo_scopes_is_valid():
+    """Token missing read:user but has repo scopes — treat as valid with no missing scopes."""
+    body = {
+        "type": "error",
+        "error": {
+            "message": "Your credentials lack one or more required privilege scopes.",
+            "detail": {
+                "required": ["read:user:bitbucket"],
+                "granted": [
+                    "read:repository:bitbucket",
+                    "read:pullrequest:bitbucket",
+                    "write:pullrequest:bitbucket",
+                ],
+            },
+        },
+    }
+    with patch(_BB_MOD, return_value=_resp(body, status=403)):
+        result = validate_bitbucket(_BB)
+
+    assert result.valid is True
+    assert result.missing_scopes == []
+
+
+def test_bitbucket_403_on_user_missing_repo_scope():
+    """Token missing read:user AND repo scopes — report missing repo scope."""
+    body = {
+        "type": "error",
+        "error": {
+            "message": "Your credentials lack one or more required privilege scopes.",
+            "detail": {"required": ["read:user:bitbucket"], "granted": []},
+        },
+    }
+    with patch(_BB_MOD, return_value=_resp(body, status=403)):
+        result = validate_bitbucket(_BB)
+
+    assert result.valid is True
+    assert any("repositor" in s.lower() for s in result.missing_scopes)
+
+
+def test_bitbucket_network_error_returns_error():
+    with patch(_BB_MOD, side_effect=_connect_error()):
+        result = validate_bitbucket(_BB)
+
+    assert result.valid is False
+    assert result.error is not None
+    assert "bitbucket" in result.error.lower()
+
+
+def test_bitbucket_identity_includes_nickname():
+    user_resp = _resp({**_BB_USER_BODY, "nickname": "al"})
+    repo_resp = _resp({"values": []})
+
+    with patch(_BB_MOD, side_effect=[user_resp, repo_resp]):
+        result = validate_bitbucket(_BB)
+
+    assert result.valid is True
+    assert "al" in (result.identity or "")
+
+
+def test_bitbucket_no_workspace_skips_repo_check():
+    """If workspace is empty, skip the repo read scope probe."""
+    no_workspace = BitbucketContent(
+        workspace="", repo="be", email="a@b.com", api_token="t"
+    )
+    user_resp = _resp(_BB_USER_BODY)
+
+    with patch(_BB_MOD, side_effect=[user_resp]) as mock_get:
+        result = validate_bitbucket(no_workspace)
+
+    assert result.valid is True
+    assert result.missing_scopes == []
+    assert mock_get.call_count == 1  # only /user, no /repositories probe
+
+
+_BB_SCOPED_401 = {
+    "type": "error",
+    "error": {
+        "message": "Token is invalid, expired, or not supported for this endpoint."
+    },
+}
+
+
+_BASIC_401 = _resp({}, status=401)
+
+
+def test_bitbucket_scoped_token_valid():
+    """Workspace HTTP access token: Bearer fails, Basic fails, Bearer on /repositories works."""
+    bearer_fail = _resp(_BB_SCOPED_401, status=401)
+    repos_ok = _resp({"values": []})
+    pr_ok = _resp({"values": []})
+
+    with patch(_BB_MOD, side_effect=[bearer_fail, _BASIC_401, repos_ok, pr_ok]):
+        result = validate_bitbucket(_BB)
+
+    assert result.valid is True
+    assert result.missing_scopes == []
+
+
+def test_bitbucket_scoped_token_missing_repo_scope():
+    """Scoped token with no read scope: workspace listing AND specific repo both denied."""
+    bearer_fail = _resp(_BB_SCOPED_401, status=401)
+    workspace_403 = _resp({"type": "error"}, status=403)
+    repo_403 = _resp({"type": "error"}, status=403)
+
+    with patch(_BB_MOD, side_effect=[bearer_fail, _BASIC_401, workspace_403, repo_403]):
+        result = validate_bitbucket(_BB)
+
+    assert result.valid is False
+    assert result.error is not None
+    assert "repositor" in result.error.lower()
+
+
+def test_bitbucket_scoped_token_missing_pr_scope():
+    """Workspace access token: repos OK but pull requests scope missing."""
+    bearer_fail = _resp(_BB_SCOPED_401, status=401)
+    repos_ok = _resp({"values": []})
+    pr_403 = _resp({"type": "error"}, status=403)
+
+    with patch(_BB_MOD, side_effect=[bearer_fail, _BASIC_401, repos_ok, pr_403]):
+        result = validate_bitbucket(_BB)
+
+    assert result.valid is True
+    assert any("pull request" in s.lower() for s in result.missing_scopes)
+
+
+def test_bitbucket_repo_scoped_token_valid():
+    """Repository-scoped token: workspace listing returns 403, specific repo probe succeeds."""
+    bearer_fail = _resp(_BB_SCOPED_401, status=401)
+    workspace_403 = _resp({"type": "error"}, status=403)
+    repo_ok = _resp({"full_name": "acme/backend"})
+    pr_ok = _resp({"values": []})
+
+    with patch(
+        _BB_MOD, side_effect=[bearer_fail, _BASIC_401, workspace_403, repo_ok, pr_ok]
+    ):
+        result = validate_bitbucket(_BB)
+
+    assert result.valid is True
+    assert result.missing_scopes == []
+
+
+def test_bitbucket_scoped_token_no_workspace_returns_error():
+    """Scoped token with no workspace configured cannot be validated."""
+    no_workspace = BitbucketContent(
+        workspace="", repo="be", email="a@b.com", api_token="t"
+    )
+    bearer_fail = _resp(_BB_SCOPED_401, status=401)
+
+    with patch(_BB_MOD, side_effect=[bearer_fail]):
+        result = validate_bitbucket(no_workspace)
+
+    assert result.valid is False
+    assert result.error is not None
+
+
+def test_github_fine_grained_no_owner_skips_repo_probe():
+    """Fine-grained PAT with no owner/repo configured — skip the repo probe."""
+    no_repo = GithubContent(token="ghp_fine", owner="", repo="", org="")
+    user_resp = _resp({"login": "alice"})  # no X-OAuth-Scopes
+
+    with patch(_GH_MOD, side_effect=[user_resp]) as mock_get:
+        result = validate_github(no_repo)
+
+    assert result.valid is True
+    assert result.missing_scopes == []
+    assert mock_get.call_count == 1  # only /user, no /repos probe
+
+
+def test_confluence_identity_falls_back_to_content_email_when_absent():
+    """Confluence may omit 'email' from the response body; fall back to the stored email."""
+    body = {"type": "known", "displayName": "Alice"}  # no email field
+    with patch(_CONF_MOD, return_value=_resp(body)):
+        result = validate_confluence(_CONFLUENCE)
+
+    assert result.valid is True
+    assert _CONFLUENCE.email in (result.identity or "")
