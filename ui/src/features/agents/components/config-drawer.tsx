@@ -2,18 +2,19 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import type { Agent } from "../schemas";
+import type { Agent, AgentAssignedSkill } from "../schemas";
 import { useAgentTemplate } from "../hooks/use-agent-template";
 import { useUpdateAgent } from "../hooks/use-update-agent";
 import { useDeleteAgent } from "../hooks/use-delete-agent";
 import { XIcon, LockIcon } from "@/components/icons";
-import { TokenInput } from "./hire-dialog-primitives";
+import { FormField, TokenInput } from "./hire-dialog-primitives";
 import { IntegrationsStep, TemplateSourceBadge, VersionSelect } from "./hire-dialog-steps";
 import { ModelSelect } from "./model-select";
 import {
   expandGithubContent,
   getIntegrationProvider,
   hasIncompleteIntegration,
+  parseGithubRepoUrl,
   type IntegrationDraft,
 } from "../integrations";
 import { SlackConfigPanel } from "./slack-config-panel";
@@ -82,6 +83,8 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
   const [savedSecrets, setSavedSecrets] = useState(false);
   const [errorSection, setErrorSection] = useState<"tokens" | "secrets" | null>(null);
   const [pendingSection, setPendingSection] = useState<"tokens" | "secrets" | null>(null);
+  const [repinSecretDrafts, setRepinSecretDrafts] = useState<IntegrationDraft[]>([]);
+  const [repinVisible, setRepinVisible] = useState<Record<string, boolean>>({});
 
   const tabs = getTabs(agent.platform);
   // Clamp the URL-provided tab to one that's actually reachable for this agent
@@ -107,6 +110,40 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
     repinSlug === agent.templateSlug &&
     resolvedRepinVersion === agent.templateVersion;
 
+  // Required skills for the currently selected re-pin version.
+  const newTemplateRequiredSkills: AgentAssignedSkill[] =
+    repinSlug != null && resolvedRepinVersion != null
+      ? (repinVersions.find((v) => v.version === resolvedRepinVersion)?.requiredSkills ?? [])
+      : [];
+
+  const existingSecretProviders = new Set((agent.secrets ?? []).map((s) => s.provider));
+
+  // Required providers not already covered by the agent's existing secrets.
+  const newRequiredProviderIds = [
+    ...new Set(
+      newTemplateRequiredSkills
+        .flatMap((s) => s.requiredProviders)
+        .filter((p) => !existingSecretProviders.has(p)),
+    ),
+  ];
+
+  // Always include a draft entry for every newly required provider so forms render.
+  const effectiveRepinSecretDrafts: IntegrationDraft[] = newRequiredProviderIds.map(
+    (p) => repinSecretDrafts.find((d) => d.provider === p) ?? { provider: p, content: {} },
+  );
+
+  function setRepinSecretField(provider: string, key: string, value: string) {
+    setRepinSecretDrafts((prev) => {
+      const existing = prev.find((d) => d.provider === provider);
+      if (existing) {
+        return prev.map((d) =>
+          d.provider === provider ? { ...d, content: { ...d.content, [key]: value } } : d,
+        );
+      }
+      return [...prev, { provider, content: { [key]: value } }];
+    });
+  }
+
   async function handleSave() {
     try {
       await updateAgent.mutateAsync({ agentId: agent.id, name, model });
@@ -124,9 +161,20 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
         agentId: agent.id,
         templateSlug: repinSlug,
         templateVersion: resolvedRepinVersion,
+        skillIds: newTemplateRequiredSkills.map((s) => s.id),
+        ...(effectiveRepinSecretDrafts.length > 0
+          ? {
+              secrets: effectiveRepinSecretDrafts.map((d) => ({
+                provider: d.provider,
+                content: d.provider === "github" ? expandGithubContent(d.content) : d.content,
+              })),
+            }
+          : {}),
       });
       setRepinSlug(null);
       setRepinVersion(null);
+      setRepinSecretDrafts([]);
+      setRepinVisible({});
       setSavedTemplate(true);
       setTimeout(() => setSavedTemplate(false), 2500);
     } catch {
@@ -346,7 +394,12 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                           borderBottom: "1px solid var(--line)",
                           background: selected ? "var(--bg-soft)" : "transparent",
                         }}
-                        onClick={() => { setRepinSlug(t.templateSlug); setRepinVersion(null); }}
+                        onClick={() => {
+                          setRepinSlug(t.templateSlug);
+                          setRepinVersion(null);
+                          setRepinSecretDrafts([]);
+                          setRepinVisible({});
+                        }}
                       >
                         <span className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>
                           {t.templateName}
@@ -373,7 +426,11 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                       <VersionSelect
                         versions={repinVersions}
                         selectedVersion={resolvedRepinVersion}
-                        onChange={setRepinVersion}
+                        onChange={(v) => {
+                          setRepinVersion(v);
+                          setRepinSecretDrafts([]);
+                          setRepinVisible({});
+                        }}
                         disabled={isRunning}
                       />
                     </div>
@@ -381,10 +438,146 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                 </div>
               )}
 
+              {newTemplateRequiredSkills.length > 0 && (
+                <div className="flex flex-col gap-3">
+                  <div className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>
+                    Required skills
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    {newTemplateRequiredSkills.map((skill) => {
+                      const missingProviders = skill.requiredProviders.filter(
+                        (p) => !existingSecretProviders.has(p),
+                      );
+                      return (
+                        <div
+                          key={skill.id}
+                          className="flex items-center gap-2 px-3.5 py-2.5 rounded-2xl text-[0.8125rem]"
+                          style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
+                        >
+                          <span className="font-medium flex-1" style={{ color: "var(--ink)" }}>
+                            {skill.name}
+                          </span>
+                          {missingProviders.length > 0 && (
+                            <span style={{ color: "var(--ink-4)" }}>
+                              · needs {missingProviders
+                                .map((p) => getIntegrationProvider(p)?.label ?? p)
+                                .join(", ")} credential
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {newRequiredProviderIds.map((providerId) => {
+                    const providerSpec = getIntegrationProvider(providerId);
+                    const draft = effectiveRepinSecretDrafts.find((d) => d.provider === providerId);
+                    if (!draft) return null;
+
+                    if (!providerSpec) {
+                      return (
+                        <div
+                          key={providerId}
+                          className="px-4 py-3 rounded-2xl text-[0.8125rem]"
+                          style={{ border: "1px solid var(--line)", background: "var(--bg-soft)", color: "var(--ink-3)" }}
+                        >
+                          <span className="font-medium" style={{ color: "var(--ink)" }}>
+                            {providerId}
+                          </span>{" "}
+                          — not yet configurable from the UI.
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div
+                        key={providerId}
+                        className="flex flex-col gap-3.5 p-4 rounded-2xl"
+                        style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
+                      >
+                        <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
+                          {providerSpec.label}
+                        </div>
+                        {providerSpec.fields.map((field) => {
+                          const value = draft.content[field.key] ?? "";
+                          const label = field.required ? field.label : `${field.label} (optional)`;
+                          if (field.type === "secret") {
+                            const vkey = `${providerId}:${field.key}`;
+                            return (
+                              <FormField key={field.key} label={label} hint={field.hint}>
+                                <TokenInput
+                                  value={value}
+                                  onChange={(v) => setRepinSecretField(providerId, field.key, v)}
+                                  visible={!!repinVisible[vkey]}
+                                  onToggle={() =>
+                                    setRepinVisible((s) => ({ ...s, [vkey]: !s[vkey] }))
+                                  }
+                                  placeholder={field.placeholder}
+                                  disabled={isRunning}
+                                />
+                              </FormField>
+                            );
+                          }
+                          if (field.type === "repo-url") {
+                            const parsed = parseGithubRepoUrl(value);
+                            const invalid = value.length > 0 && !parsed;
+                            return (
+                              <FormField key={field.key} label={label} hint={field.hint}>
+                                <input
+                                  className={`af-input${invalid ? " border-red-400" : ""}`}
+                                  value={value}
+                                  onChange={(e) =>
+                                    setRepinSecretField(providerId, field.key, e.target.value)
+                                  }
+                                  placeholder={field.placeholder}
+                                  autoComplete="off"
+                                  disabled={isRunning}
+                                />
+                                {parsed && (
+                                  <p className="text-[0.75rem] mt-1" style={{ color: "var(--ink-3)" }}>
+                                    owner: <strong>{parsed.owner}</strong> · repo:{" "}
+                                    <strong>{parsed.repo}</strong>
+                                  </p>
+                                )}
+                                {invalid && (
+                                  <p className="text-[0.75rem] mt-1 text-red-500">
+                                    Must be a valid GitHub URL, e.g. https://github.com/owner/repo.git
+                                  </p>
+                                )}
+                              </FormField>
+                            );
+                          }
+                          return (
+                            <FormField key={field.key} label={label} hint={field.hint}>
+                              <input
+                                className="af-input"
+                                value={value}
+                                onChange={(e) =>
+                                  setRepinSecretField(providerId, field.key, e.target.value)
+                                }
+                                placeholder={field.placeholder}
+                                autoComplete="off"
+                                disabled={isRunning}
+                              />
+                            </FormField>
+                          );
+                        })}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
               <div className="flex gap-2 items-center">
                 <button
                   className="af-btn af-btn-sm"
-                  disabled={isRunning || updateAgent.isPending || !repinSlug || repinIsNoop}
+                  disabled={
+                    isRunning ||
+                    updateAgent.isPending ||
+                    !repinSlug ||
+                    repinIsNoop ||
+                    hasIncompleteIntegration(effectiveRepinSecretDrafts)
+                  }
                   title={isRunning ? "Stop the agent before changing its template" : undefined}
                   onClick={() => { void handleApplyTemplate(); }}
                 >
