@@ -81,7 +81,7 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
   const [secretDrafts, setSecretDrafts] = useState<IntegrationDraft[]>([]);
   const [removedProviders, setRemovedProviders] = useState<string[]>([]);
   const [savedSecrets, setSavedSecrets] = useState(false);
-  const [errorSection, setErrorSection] = useState<"tokens" | "secrets" | null>(null);
+  const [errorSection, setErrorSection] = useState<"tokens" | "secrets" | "template" | null>(null);
   const [pendingSection, setPendingSection] = useState<"tokens" | "secrets" | null>(null);
   const [repinSecretDrafts, setRepinSecretDrafts] = useState<IntegrationDraft[]>([]);
   const [repinVisible, setRepinVisible] = useState<Record<string, boolean>>({});
@@ -156,6 +156,8 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
 
   async function handleApplyTemplate() {
     if (!repinSlug || resolvedRepinVersion == null) return;
+    updateAgent.reset();
+    setErrorSection(null);
     try {
       await updateAgent.mutateAsync({
         agentId: agent.id,
@@ -178,7 +180,7 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
       setSavedTemplate(true);
       setTimeout(() => setSavedTemplate(false), 2500);
     } catch {
-      // error displayed via updateAgent.error
+      setErrorSection("template");
     }
   }
 
@@ -240,6 +242,12 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
     }
   }
 
+  function handleTabChange(newTab: TabKey) {
+    updateAgent.reset();
+    setErrorSection(null);
+    onTabChange(newTab);
+  }
+
   async function handleRetire() {
     try {
       await deleteAgent.mutateAsync(agent.id);
@@ -287,7 +295,7 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
               className="af-drawer-tab"
               data-active={tab === k}
               disabled={!enabled}
-              onClick={() => enabled && onTabChange(k as TabKey)}
+              onClick={() => enabled && handleTabChange(k as TabKey)}
               style={!enabled ? { opacity: 0.35, cursor: "default" } : undefined}
             >
               {l}
@@ -583,7 +591,7 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                 >
                   {savedTemplate ? "Applied!" : "Apply template"}
                 </button>
-                {updateAgent.error && (
+                {updateAgent.error && errorSection === "template" && (
                   <span className="text-xs" style={{ color: "var(--err)" }}>
                     {updateAgent.error instanceof Error ? updateAgent.error.message : "Update failed"}
                   </span>
