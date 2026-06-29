@@ -322,6 +322,59 @@ Single endpoint: `POST /ingest/v1/agents/{agent_id}/events`
 
 After deploying, all running agents must be manually stopped and started (via UI or API) to pick up the telemetry-push plugin and ingest credentials. Until restarted, existing agents will have no conversation or tool call logging (push plugin not installed, pull sync removed).
 
+## Bugs Found During Local Testing
+
+Three issues found when testing with Cloudflare tunnel + Hermes agent:
+
+### Bug A: Ingest app 500 on tool call batches (SQLAlchemy FK resolution)
+
+**Root cause**: `ingest_app.py` only imports `ingest_router`, which transitively imports `ToolCall` but NOT `Organization`. When `complete()` loads a ToolCall via ORM → modifies it → `session.commit()` → SQLAlchemy flush tries to sort tables → can't resolve `tool_call.organization_id` FK → `NoReferencedTableError`.
+
+The main app works because `api_app.py` imports all domain routers which registers all SQLModel tables.
+
+**Fix**: In `api/ingest_app.py`, import all SQLModel model modules so metadata is complete.
+
+**File**: `api/ingest_app.py`
+
+### Bug B: Missing outbound (agent) messages — FIXED
+
+**Root cause**: `post_llm_call` receives Hermes's internal session_id (`20260629_115310_f09185f9`), not the `agent:main:slack:dm:CHANNEL_ID` format. Parsing it for channel_id produces empty string.
+
+**Fix**: Store channel context from `_on_pre_gateway_dispatch` (has `event.source.chat_id`) in a `_last_channel` dict. In `_on_post_llm_call`, read from `_last_channel` to get correct `channel_id`, `conversation_type`, and `session_key`.
+
+### Bug C: Tool calls stuck on pending — FIXED (consequence of Bug A)
+
+### Bug D: Thread context leaking into message content
+
+**Root cause**: Hermes prepends thread context metadata to `event.text`:
+```
+[Thread context — prior messages in this thread (not yet in conversation history):]
+[thread parent] dominykas: Hi
+[End of thread context]
+
+actual message
+```
+The plugin captures `event.text` raw, so the metadata appears as message content. The old pull-based sync read the session export which had original text only.
+
+**Fix**: In `_on_pre_gateway_dispatch`, strip everything up to and including `[End of thread context]` from `text` before storing.
+
+**File**: `api/domains/agents/scripts/hermes/plugins/telemetry-push/__init__.py`
+
+### Bug E: No thread grouping in UI
+
+**Root cause**: Plugin sets `thread_id: None` for all messages. Old sync extracted Slack thread timestamps from session keys (`agent:main:slack:dm:CHANNEL:THREAD_TS`) and used them as `thread_id`. The UI uses `thread_id` to group messages into threads.
+
+**Fix**: Extract `thread_ts` from the Hermes event object (likely `getattr(event, "thread_ts", None)` or `getattr(event.source, "thread_ts", None)`). Need to inspect event first via debug logging. Once found, set `thread_id` to thread_ts and append to session_key.
+
+**File**: `api/domains/agents/scripts/hermes/plugins/telemetry-push/__init__.py`
+
+### Fix order
+1. ~~Bug A (model imports)~~ DONE
+2. ~~Bug B (outbound channel_id)~~ DONE
+3. ~~Bug C (tool calls pending)~~ DONE (consequence of A)
+4. Bug D (strip thread context) — next
+5. Bug E (thread grouping) — requires event inspection first
+
 ## Verification
 
 1. Run `make test-api` after each sub-task

@@ -16,6 +16,9 @@ _tool_call_ids_lock = threading.Lock()
 _counter = 0
 _counter_lock = threading.Lock()
 
+_last_channel = {}
+_last_channel_lock = threading.Lock()
+
 _agent_id = None
 _ingest_url = None
 _ingest_api_key = None
@@ -97,11 +100,23 @@ def _on_pre_gateway_dispatch(event, **kwargs):
     chat_type = str(getattr(source, "chat_type", "") or "").lower()
     chat_id = str(getattr(source, "chat_id", "") or "")
     user_id = str(getattr(source, "user_id", "") or "")
+    thread_id = str(getattr(source, "thread_id", "") or "") or None
     text = str(getattr(event, "text", "") or "")
+    _thread_ctx_end = "[End of thread context]"
+    idx = text.find(_thread_ctx_end)
+    if idx != -1:
+        text = text[idx + len(_thread_ctx_end):].strip()
     ts = _now_iso()
     msg_id = f"hermes:in:{chat_id}:{int(time.time() * 1000)}:{_next_counter()}"
     session_key = _build_session_key(chat_type, chat_id)
+    if thread_id:
+        session_key = f"{session_key}:{thread_id}"
     conv_type = "DM" if chat_type == "dm" else "CHANNEL"
+
+    with _last_channel_lock:
+        _last_channel["channel_id"] = chat_id
+        _last_channel["chat_type"] = chat_type
+        _last_channel["thread_id"] = thread_id
 
     with _buffer_lock:
         _buffer.append({
@@ -110,7 +125,7 @@ def _on_pre_gateway_dispatch(event, **kwargs):
                 "msg_id": msg_id,
                 "session_key": session_key,
                 "channel_id": chat_id,
-                "thread_id": None,
+                "thread_id": thread_id,
                 "direction": "INBOUND",
                 "conversation_type": conv_type,
                 "sender_id": user_id,
@@ -126,20 +141,29 @@ def _on_pre_gateway_dispatch(event, **kwargs):
 def _on_post_llm_call(session_id=None, user_message=None, assistant_response=None, **kwargs):
     if not assistant_response:
         return
-    platform = str(kwargs.get("platform", "") or "")
     ts = _now_iso()
-    msg_id = f"hermes:out:{session_id}:{int(time.time() * 1000)}:{_next_counter()}"
+
+    with _last_channel_lock:
+        channel_id = _last_channel.get("channel_id", "")
+        chat_type = _last_channel.get("chat_type", "dm")
+        thread_id = _last_channel.get("thread_id")
+
+    conv_type = "DM" if chat_type == "dm" else "CHANNEL"
+    session_key = _build_session_key(chat_type, channel_id)
+    if thread_id:
+        session_key = f"{session_key}:{thread_id}"
+    msg_id = f"hermes:out:{channel_id}:{int(time.time() * 1000)}:{_next_counter()}"
 
     with _buffer_lock:
         _buffer.append({
             "type": "message",
             "data": {
                 "msg_id": msg_id,
-                "session_key": session_id or "",
-                "channel_id": "",
-                "thread_id": None,
+                "session_key": session_key,
+                "channel_id": channel_id,
+                "thread_id": thread_id,
                 "direction": "OUTBOUND",
-                "conversation_type": "DM",
+                "conversation_type": conv_type,
                 "sender_id": None,
                 "sender_name": None,
                 "channel_name": None,

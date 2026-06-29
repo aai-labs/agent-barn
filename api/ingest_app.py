@@ -2,6 +2,9 @@ from fastapi import FastAPI
 from fastapi_injector import attach_injector
 from injector import Injector
 
+import api.domains.agents.models
+import api.domains.organizations.models
+import api.domains.conversations.models
 from api.core.utils import create_injector
 from api.domains.ingest.routes import ingest_router
 
