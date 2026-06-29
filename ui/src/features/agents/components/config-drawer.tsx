@@ -1,11 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import type { Agent, AgentAssignedSkill } from "../schemas";
+import type { Agent, IntegrationValidationResult, AgentAssignedSkill } from "../schemas";
 import { useAgentTemplate } from "../hooks/use-agent-template";
 import { useUpdateAgent } from "../hooks/use-update-agent";
 import { useDeleteAgent } from "../hooks/use-delete-agent";
+import { useValidateIntegration } from "../hooks/use-validate-integration";
 import { XIcon, LockIcon } from "@/components/icons";
 import { FormField, TokenInput } from "./hire-dialog-primitives";
 import { IntegrationsStep, TemplateSourceBadge, VersionSelect } from "./hire-dialog-steps";
@@ -95,6 +96,43 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
   const tab: TabKey = enabledKeys.includes(activeTab) ? activeTab : "personality";
 
   const configuredSecrets = agent.secrets ?? [];
+  const validateIntegration = useValidateIntegration();
+  const [validationState, setValidationState] = useState<
+    Record<string, IntegrationValidationResult | "loading">
+  >({});
+
+  function triggerValidation(providers?: string[]) {
+    const targets = providers ?? configuredSecrets.map((s) => s.provider);
+    for (const provider of targets) {
+      setValidationState((vs) => ({ ...vs, [provider]: "loading" }));
+      validateIntegration
+        .mutateAsync({ agentId: agent.id, provider })
+        .then(({ provider: p, result }) =>
+          setValidationState((vs) => ({ ...vs, [p]: result })),
+        )
+        .catch(() =>
+          setValidationState((vs) => {
+            const next = { ...vs };
+            delete next[provider];
+            return next;
+          }),
+        );
+    }
+  }
+
+  // Validate all secrets when the secrets tab is already active on mount.
+  useEffect(() => {
+    if (tab === "secrets" && configuredSecrets.length > 0) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      triggerValidation();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function handleTabChange(newTab: TabKey) {
+    onTabChange(newTab);
+    if (newTab === "secrets" && configuredSecrets.length > 0) triggerValidation();
+  }
 
   const isRunning = agent.status === "RUNNING";
 
@@ -220,6 +258,7 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
       // If a provider is both re-added (draft) and removed, treat it as a
       // replace — the upsert wins (the backend rejects a provider in both lists).
       const draftProviders = new Set(secretDrafts.map((d) => d.provider));
+      const updatedProviders = [...draftProviders];
       await updateAgent.mutateAsync({
         agentId: agent.id,
         secrets: secretDrafts.map((d) => ({
@@ -234,18 +273,13 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
       setRemovedProviders([]);
       setSavedSecrets(true);
       setTimeout(() => setSavedSecrets(false), 2000);
+      if (updatedProviders.length > 0) triggerValidation(updatedProviders);
     } catch {
       setRemovedProviders([]);
       setErrorSection("secrets");
     } finally {
       setPendingSection(null);
     }
-  }
-
-  function handleTabChange(newTab: TabKey) {
-    updateAgent.reset();
-    setErrorSection(null);
-    onTabChange(newTab);
   }
 
   async function handleRetire() {
@@ -616,6 +650,11 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
               <Hint>
                 Tokens are write-only — leave a field blank to keep the existing value.
               </Hint>
+              {agent.slackConfig?.botDisplayName && (
+                <div className="text-[0.844rem]" style={{ color: "var(--ink-3)" }}>
+                  Slack bot name: <span className="font-mono" style={{ color: "var(--ink-2)" }}>@{agent.slackConfig.botDisplayName}</span>
+                </div>
+              )}
               <div className="flex flex-col gap-3.5">
                 <div className="flex flex-col gap-1.5">
                   <label className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>App-level token</label>
@@ -756,24 +795,27 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                     ) : (
                       <div
                         key={s.provider}
-                        className="flex items-center justify-between p-3 rounded-2xl"
+                        className="flex items-center justify-between p-3 rounded-2xl gap-3"
                         style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
                       >
-                        <div className="flex flex-col">
+                        <div className="flex flex-col gap-0.5 min-w-0">
                           <span className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
                             {label}
                           </span>
-                          <span className="text-xs" style={{ color: "var(--ink-4)" }}>
-                            {s.secretName} · configured
-                          </span>
+                          <ValidationBadge
+                            secretName={s.secretName}
+                            result={validationState[s.provider]}
+                          />
                         </div>
-                        <button
-                          className="af-btn af-btn-ghost af-btn-sm"
-                          disabled={isRunning}
-                          onClick={() => setRemovedProviders((r) => [...r, s.provider])}
-                        >
-                          Remove
-                        </button>
+                        <div className="flex gap-1.5 shrink-0">
+                          <button
+                            className="af-btn af-btn-ghost af-btn-sm"
+                            disabled={isRunning}
+                            onClick={() => setRemovedProviders((r) => [...r, s.provider])}
+                          >
+                            Remove
+                          </button>
+                        </div>
                       </div>
                     );
                   })}
@@ -868,8 +910,6 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
             <div>
               <Hint>Permanent actions. Pause first if you&apos;re not sure.</Hint>
               <div className="flex gap-2 flex-wrap mt-2">
-                <button className="af-btn">Restart agent</button>
-                <button className="af-btn">Reset workspace</button>
                 <button
                   className="af-btn"
                   style={{ borderColor: "var(--err)", color: "var(--err)" }}
@@ -936,6 +976,59 @@ function Hint({ children }: { children: React.ReactNode }) {
     >
       {children}
     </div>
+  );
+}
+
+function ValidationBadge({
+  secretName,
+  result,
+}: {
+  secretName: string;
+  result: IntegrationValidationResult | "loading" | undefined;
+}) {
+  if (result === undefined) {
+    return (
+      <span className="text-xs" style={{ color: "var(--ink-4)" }}>
+        {secretName} · not yet validated
+      </span>
+    );
+  }
+
+  if (result === "loading") {
+    return (
+      <span className="text-xs" style={{ color: "var(--ink-4)" }}>
+        Checking…
+      </span>
+    );
+  }
+
+  if (result.validationStatus === "valid") {
+    return (
+      <span className="text-xs" style={{ color: "var(--ok)" }}>
+        ✓ {result.validationIdentity ?? "Connected"}
+      </span>
+    );
+  }
+
+  if (result.validationStatus === "warning") {
+    return (
+      <div className="flex flex-col gap-0.5">
+        <span className="text-xs" style={{ color: "var(--warn)" }}>
+          ⚠ {result.validationIdentity ?? "Connected"} — missing scopes
+        </span>
+        {result.missingScopes.length > 0 && (
+          <span className="text-xs" style={{ color: "var(--ink-4)" }}>
+            {result.missingScopes.join(", ")}
+          </span>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <span className="text-xs" style={{ color: "var(--err)" }}>
+      ✕ {result.validationError ?? "Invalid credentials"}
+    </span>
   );
 }
 

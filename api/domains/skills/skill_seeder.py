@@ -8,18 +8,25 @@ logger = logging.getLogger(__name__)
 
 
 def seed_aai_cli_skills(repository: SkillRepository) -> None:
-    """Ensure all built-in AAI_CLI skills exist in the DB."""
+    """Ensure all built-in AAI_CLI skills exist in the DB, updating content when changed."""
     for skill_def in AAI_CLI_PROVIDER_SKILLS:
         name = skill_def["name"]
-        if repository.get_by_name_global(name) is not None:
+        new_zip = build_zip(skill_def["files"])
+        new_pointer = skill_def.get("tools_pointer")
+        existing = repository.get_by_name_global(name)
+        if existing is not None:
+            existing.zip_content = new_zip
+            existing.tools_pointer = new_pointer
+            repository.save(existing)
+            logger.warning("Updated AAI_CLI skill: %s", name)
             continue
         skill = Skill(
             organization_id=None,
             name=name,
             source=SkillSource.AAI_CLI,
             required_providers=skill_def["required_providers"],
-            zip_content=build_zip(skill_def["files"]),
-            tools_pointer=skill_def.get("tools_pointer"),
+            zip_content=new_zip,
+            tools_pointer=new_pointer,
         )
         repository.save(skill)
-        logger.info("Seeded AAI_CLI skill: %s", name)
+        logger.warning("Seeded AAI_CLI skill: %s", name)
