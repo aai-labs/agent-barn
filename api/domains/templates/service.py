@@ -1,3 +1,4 @@
+import logging
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -31,6 +32,8 @@ from api.domains.templates.seeding import (
 )
 from api.domains.templates.slug import slugify
 from api.infrastructure.shared.models import PaginatedItems, Pagination
+
+logger = logging.getLogger(__name__)
 
 
 @inject
@@ -160,6 +163,9 @@ class TemplateService:
             )
             if existing is None:
                 self.repository.save_template(template)
+                logger.warning(
+                    "Seeded predefined template: %s v1", template.template_slug
+                )
             elif (
                 existing.version == 1
                 and existing.template_source == TemplateSource.PRE_DEFINED
@@ -167,3 +173,7 @@ class TemplateService:
             ):
                 copy_predefined_content(existing, template)
                 self.repository.save_template(existing)
+                logger.warning(
+                    "Refreshed predefined template in place: %s v1",
+                    template.template_slug,
+                )
