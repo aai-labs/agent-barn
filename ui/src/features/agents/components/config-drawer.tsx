@@ -119,7 +119,10 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
 
   // Validate all secrets when the secrets tab is already active on mount.
   useEffect(() => {
-    if (tab === "secrets" && configuredSecrets.length > 0) triggerValidation();
+    if (tab === "secrets" && configuredSecrets.length > 0) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      triggerValidation();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

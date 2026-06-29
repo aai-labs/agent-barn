@@ -86,7 +86,8 @@ export function expandGithubContent(content: Record<string, string>): Record<str
   const parsed = parseGithubRepoUrl(content.repoUrl ?? "");
   if (!parsed) return content;
   const { owner, repo } = parsed;
-  const { repoUrl: _, ...rest } = content;
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { repoUrl: _repoUrl, ...rest } = content;
   return { ...rest, owner, repo, org: owner };
 }
 
