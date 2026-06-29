@@ -1099,6 +1099,12 @@ export function SkillsStep({
 
   const totalPages = Math.max(1, Math.ceil(total / HIRE_DIALOG_PAGE_SIZE));
 
+  const requiredSkillIds = new Set(templateRequiredSkills.map((s) => s.id));
+  const orderedSkills = [
+    ...skills.filter((s) => requiredSkillIds.has(s.id)),
+    ...skills.filter((s) => !requiredSkillIds.has(s.id)),
+  ];
+
   // Track full Skill objects for selected skills so we can compute requiredProviders
   // across pages. Users can only toggle visible skills, so this stays in sync.
   const [selectedSkillObjects, setSelectedSkillObjects] = useState<Skill[]>([]);
@@ -1190,8 +1196,8 @@ export function SkillsStep({
         )}
         {!isLoading && skills.length > 0 && (
           <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
-            {skills.map((skill) => {
-              const isRequired = templateRequiredSkills.some((s) => s.id === skill.id);
+            {orderedSkills.map((skill) => {
+              const isRequired = requiredSkillIds.has(skill.id);
               const selected = isRequired || selectedSkillIds.includes(skill.id);
               return (
                 <div
