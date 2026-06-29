@@ -24,7 +24,11 @@ from api.domains.templates.models import (
     TemplateUpdate,
 )
 from api.domains.templates.repository import TemplateRepository
-from api.domains.templates.seeding import build_predefined_templates
+from api.domains.templates.seeding import (
+    build_predefined_templates,
+    copy_predefined_content,
+    predefined_content_differs,
+)
 from api.domains.templates.slug import slugify
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
@@ -142,10 +146,24 @@ class TemplateService:
         return TemplateRead.model_validate(new_template)
 
     def seed_predefined_templates(self, org_id: UUID) -> None:
-        """Insert pre-defined templates the org doesn't have yet (idempotent)."""
+        """Insert missing pre-defined templates and refresh stale ones in place.
+
+        Pre-defined templates are system-managed. When the code's content changes,
+        the original v1 seed is overwritten in place so both new agents (created
+        from the latest version) and existing agents (which re-render their pinned
+        template on every start) pick up the change. A lineage the user has edited
+        (version > 1) is left untouched so customizations are never clobbered.
+        """
         for template in build_predefined_templates(org_id):
             existing = self.repository.get_latest_template(
                 org_id, template.template_slug
             )
             if existing is None:
                 self.repository.save_template(template)
+            elif (
+                existing.version == 1
+                and existing.template_source == TemplateSource.PRE_DEFINED
+                and predefined_content_differs(existing, template)
+            ):
+                copy_predefined_content(existing, template)
+                self.repository.save_template(existing)
