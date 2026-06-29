@@ -260,7 +260,10 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
         agentType,
         templateSlug: effectiveTemplate.templateSlug,
         ...(resolvedVersion != null ? { templateVersion: resolvedVersion } : {}),
-        skillIds: selectedSkillIds,
+        skillIds: [
+          ...(versionTemplate?.requiredSkills?.map((s) => s.id) ?? []),
+          ...selectedSkillIds,
+        ],
         secrets: skillCredentials.map((c) => ({
           provider: c.provider,
           content: c.provider === "github" ? expandGithubContent(c.content) : c.content,
@@ -597,6 +600,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
             skillCredentials={skillCredentials}
             onSkillIdsChange={setSelectedSkillIds}
             onSkillCredentialsChange={setSkillCredentials}
+            templateRequiredSkills={versionTemplate?.requiredSkills ?? []}
           />
         )}
       </div>
@@ -684,7 +688,21 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
           <button
             className="af-btn af-btn-primary af-btn-lg"
             disabled={!name.trim()}
-            onClick={() => setStep("skills")}
+            onClick={() => {
+              // Pre-populate credential drafts for template required skills.
+              const requiredProviders = [
+                ...new Set(
+                  (versionTemplate?.requiredSkills ?? []).flatMap((s) => s.requiredProviders),
+                ),
+              ];
+              setSkillCredentials((prev) => {
+                const existing = new Set(prev.map((c) => c.provider));
+                const toAdd = requiredProviders.filter((p) => !existing.has(p));
+                if (toAdd.length === 0) return prev;
+                return [...prev, ...toAdd.map((p) => ({ provider: p, content: {} }))];
+              });
+              setStep("skills");
+            }}
           >
             Continue
           </button>
