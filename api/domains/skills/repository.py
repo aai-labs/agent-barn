@@ -5,7 +5,7 @@ from injector import inject, singleton
 from sqlalchemy import func
 from sqlmodel import Session, col, or_, select
 
-from api.domains.agents.models import AgentSkill, AgentTemplateSkill
+from api.domains.agents.models import Agent, AgentSkill, AgentTemplateSkill
 from api.domains.skills.models import Skill, SkillFilter, SkillSource
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.infrastructure.shared.models import Pagination
@@ -89,7 +89,12 @@ class SkillRepository:
 
     def is_assigned_to_any_agent(self, skill_id: UUID) -> bool:
         with Session(self.delegate.engine) as session:
-            query = select(AgentSkill).where(col(AgentSkill.skill_id) == skill_id)
+            query = (
+                select(AgentSkill)
+                .join(Agent, col(AgentSkill.agent_id) == col(Agent.id))
+                .where(col(AgentSkill.skill_id) == skill_id)
+                .where(col(Agent.deleted_at).is_(None))
+            )
             return session.exec(query).first() is not None
 
     def is_required_by_any_template(self, skill_id: UUID) -> bool:
