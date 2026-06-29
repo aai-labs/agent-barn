@@ -116,6 +116,20 @@ class SlackClient:
         code = body.get("error", "unknown_error")
         return False, error_map.get(code, f"Slack {label} token error: {code}")
 
+    def get_bot_info(self) -> dict:
+        """Returns app_id, bot username, and team from auth.test. Empty dict on failure."""
+        try:
+            body = self._post("auth.test", {})
+            if not body.get("ok"):
+                return {}
+            return {
+                "app_id": body.get("app_id", ""),
+                "bot_name": body.get("user", ""),
+                "team": body.get("team", ""),
+            }
+        except Exception:
+            return {}
+
     # --- channel actions ---------------------------------------------------
 
     def join_channel(self, channel_id: str) -> bool:

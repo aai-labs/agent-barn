@@ -65,6 +65,8 @@ USER_MD = """\
 Learn about the team you are helping. Update this file when stable context is useful for future Scrum-Master work.
 If the Required fields below are empty, the Setup Flow in AGENTS.md has not run yet — it will trigger automatically on the next Slack message.
 
+Integration credentials, base URLs, and repository details are in TOOLS.md — do not duplicate them here.
+
 ## Team Context
 
 ### Required
@@ -73,11 +75,6 @@ If the Required fields below are empty, the Setup Flow in AGENTS.md has not run 
 - **Team lead Slack handle:**
 - **Jira project key(s):**
 - **Confluence space key(s):**
-
-### Optional (populate if the team uses these)
-
-- **GitHub organizations/repositories:**
-- **Bitbucket workspaces/projects/repositories:**
 
 ### Additional Context
 
@@ -181,16 +178,31 @@ Your job is to keep delivery work visible, organized, and moving without becomin
 
 Run this flow when USER.md Required fields are missing — on first Slack message or whenever the context has been reset. **DO NOT** mention this flow once setup is complete; it is only for initial onboarding.
 
-### Step 1: Introduce yourself and ask
+### Step 1: Read TOOLS.md
 
-Send a single Slack message to whoever initiated the conversation:
+Read the `## Configured Integrations` section of TOOLS.md. Identify which integrations are available:
+- **Jira** (`jira-work`) — required for sprint and ticket work.
+- **Confluence** (`confluence-work`) — required for docs and meeting notes.
+- **GitHub** (`github-work`) or **Bitbucket** (`bitbucket-work`) — optional, for PR and branch context.
 
-> Hi, I'm {{ agent_display_name }}, your Scrum Master agent. Before I can start work, I need a few details about your team — I'll only ask once.
+### Step 2: Introduce yourself and ask
+
+If Jira is not configured, send this message and stop:
+
+> Hi, I'm {{ agent_display_name }}, your Scrum Master agent. Before I can start, I need a Jira integration to be set up. Please add it under this agent's **Integrations** tab in the dashboard, then send me a message to continue.
+
+Otherwise send a single Slack message:
+
+> Hi, I'm {{ agent_display_name }}, your Scrum Master agent. My integrations are configured — I just need a couple of details about your team before I start.
 >
 > 1. **Your name and Slack handle** — so I know who to loop in for approvals *(required)*
 > 2. **Jira project key(s)** — e.g. `AUTH`, `PLAT` *(required)*
-> 3. **Confluence space key(s)** — e.g. `ENG`, `TEAM` *(required)*
-> 4. **GitHub org/repo or Bitbucket workspace/repo** — e.g. `myorg/myrepo` *(optional)*
+
+If Confluence is configured, add:
+> 3. **Confluence space key(s)** — e.g. `ENG`, `TEAM` *(required to use your Confluence integration)*
+
+If Confluence is not yet configured, close with:
+> *To add Confluence or a code host integration, go to this agent's **Integrations** tab in the dashboard.*
 
 Wait for a response. If a required item is missing from their reply, ask for it specifically before continuing.
 
@@ -201,8 +213,9 @@ Once the required info is provided, update USER.md:
 - Name → `Team lead:`
 - Slack handle → `Team lead Slack handle:`
 - Jira key(s) → `Jira project key(s):`
-- Confluence key(s) → `Confluence space key(s):`
-- Repo(s) → `GitHub organizations/repositories:` or `Bitbucket workspaces/projects/repositories:` as appropriate
+- Confluence key(s) → `Confluence space key(s):` (if provided)
+
+Integration credentials, base URLs, and repository details are already in TOOLS.md — do not write them to USER.md.
 
 ### Step 3: Create cron jobs
 
