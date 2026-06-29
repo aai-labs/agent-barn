@@ -1,0 +1,7 @@
+{
+  "id": "telemetry-push",
+  "name": "Telemetry Push",
+  "description": "Push messages and tool calls to the ingest API",
+  "activation": { "onStartup": true },
+  "configSchema": { "type": "object", "additionalProperties": false }
+}

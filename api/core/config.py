@@ -38,6 +38,7 @@ class Config(BaseSettings):
     agent_image_pull_secret: str = ""
     agent_default_model: str = "litellm/openrouter/qwen/qwen3.6-plus"
     api_external_url: str = ""
+    ingest_base_url: str = "http://agentfarm-api.agent-farm.svc.cluster.local:8001/ingest/v1"
     skip_slack_token_validation: bool = False
     slack_directory_cache_ttl_seconds: int = 600
     # Socket timeout for Slack Web API calls. Large sweeps (e.g. users.list can be

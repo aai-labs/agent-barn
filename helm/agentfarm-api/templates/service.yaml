@@ -11,5 +11,8 @@ spec:
     - name: http
       port: {{ .Values.service.port }}
       targetPort: 8000
+    - name: ingest
+      port: {{ .Values.service.ingestPort }}
+      targetPort: {{ .Values.service.ingestPort }}
   selector:
     {{- include "agentfarm-api.selectorLabels" . | nindent 4 }}

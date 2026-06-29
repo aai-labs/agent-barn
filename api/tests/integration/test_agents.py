@@ -1,5 +1,4 @@
 import json
-import time
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -14,11 +13,9 @@ from hamcrest import (
 )
 from starlette.testclient import TestClient
 
-from api.domains.agents import service as agent_service
 from api.domains.agents.models import AgentStatus
 from api.domains.agents.repository import AgentRepository
 from api.domains.templates.repository import TemplateRepository
-from api.domains.conversations.service import ConversationSyncService
 from api.infrastructure.kubernetes.client import KubernetesClient
 from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
 from api.tests.core.givenpy import given, then, when
@@ -625,46 +622,6 @@ def test_stop_agent_no_auth_returns_401():
 
         with then("it returns 401"):
             assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
-
-
-def test_stop_agent_succeeds_when_presync_raises():
-    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
-        client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
-        conv = context.injector.get(ConversationSyncService)
-
-        with when("the pre-stop conversation sync raises but I stop the agent"):
-            conv.sync_all_channels = MagicMock(side_effect=RuntimeError("slack 429"))
-            response = client.post(
-                f"{_BASE}/{context.agent.id}/stop", headers=_auth(context)
-            )
-
-        with then("stop still tears down and marks the agent STOPPED"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            assert_that(response.json()["status"], equal_to(AgentStatus.STOPPED.value))
-            k8s.delete_deployment.assert_called_once()
-
-
-def test_stop_agent_is_bounded_when_presync_hangs(monkeypatch):
-    monkeypatch.setattr(agent_service, "_STOP_SYNC_TIMEOUT_SECONDS", 0.3)
-    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
-        client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
-        conv = context.injector.get(ConversationSyncService)
-        conv.sync_all_channels = MagicMock(side_effect=lambda agent_id: time.sleep(0.5))
-
-        with when("a pre-stop sync hangs far past the budget"):
-            started = time.monotonic()
-            response = client.post(
-                f"{_BASE}/{context.agent.id}/stop", headers=_auth(context)
-            )
-            elapsed = time.monotonic() - started
-
-        with then("stop is bounded by the budget and still tears down + STOPPED"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            assert_that(response.json()["status"], equal_to(AgentStatus.STOPPED.value))
-            k8s.delete_deployment.assert_called_once()
-            assert elapsed < 2.0, f"stop took {elapsed:.2f}s, expected < 2s"
 
 
 def test_delete_agent_soft_deletes():

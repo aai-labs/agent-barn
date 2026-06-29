@@ -13,7 +13,6 @@ from api.domains.tool_calls.models import (
     ToolCallFilter,
     ToolCallRead,
     ToolCallStatus,
-    ToolCallSyncState,
 )
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.infrastructure.shared.models import PaginatedItems, Pagination
@@ -127,51 +126,6 @@ class ToolCallRepository:
             target.duration_ms = int(delta.total_seconds() * 1000)
         session.add(target)
         return True
-
-    def get_sync_state(
-        self, agent_id: UUID, session_file_path: str
-    ) -> ToolCallSyncState | None:
-        with Session(self.delegate.engine) as session:
-            return session.exec(
-                select(ToolCallSyncState)
-                .where(col(ToolCallSyncState.agent_id) == agent_id)
-                .where(col(ToolCallSyncState.session_file_path) == session_file_path)
-            ).first()
-
-    def save_sync_state(
-        self,
-        session: Session,
-        agent_id: UUID,
-        session_file_path: str,
-        last_byte_offset: int,
-    ) -> None:
-        existing = session.exec(
-            select(ToolCallSyncState)
-            .where(col(ToolCallSyncState.agent_id) == agent_id)
-            .where(col(ToolCallSyncState.session_file_path) == session_file_path)
-        ).first()
-        now = datetime.datetime.now(datetime.timezone.utc)
-        if existing is None:
-            session.add(
-                ToolCallSyncState(
-                    agent_id=agent_id,
-                    session_file_path=session_file_path,
-                    last_byte_offset=last_byte_offset,
-                    last_synced_at=now,
-                )
-            )
-        else:
-            existing.last_byte_offset = last_byte_offset
-            existing.last_synced_at = now
-            session.add(existing)
-
-    def get_most_recent_sync_time(self, agent_id: UUID) -> datetime.datetime | None:
-        with Session(self.delegate.engine) as session:
-            return session.exec(
-                select(func.max(col(ToolCallSyncState.last_synced_at))).where(
-                    col(ToolCallSyncState.agent_id) == agent_id
-                )
-            ).first()
 
     def get_session(self) -> Session:
         return Session(self.delegate.engine)

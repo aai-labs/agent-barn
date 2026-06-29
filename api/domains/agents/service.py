@@ -1,4 +1,3 @@
-import concurrent.futures
 import datetime
 import fnmatch
 import logging
@@ -68,8 +67,6 @@ from api.domains.auth.models import CurrentUserContext
 from api.domains.templates.models import TemplateRead
 from api.domains.templates.renderer import render_template
 from api.domains.templates.repository import TemplateRepository
-from api.domains.conversations.service import ConversationSyncService
-from api.domains.tool_calls.sync_service import ToolCallSyncService
 from api.infrastructure.crypto import decrypt_token, encrypt_token
 from api.infrastructure.kubernetes.client import KubernetesClient
 from api.infrastructure.shared.models import PaginatedItems, Pagination
@@ -79,15 +76,6 @@ from api.infrastructure.slack.client import (
 )
 
 logger = logging.getLogger(__name__)
-
-# Pre-stop conversation/tool-call flush is best-effort and must not block the
-# teardown. We run both syncs in a shared pool and wait at most this long;
-# anything still running is abandoned (the orphaned thread finishes harmlessly
-# in the background). Module-level so tests can monkeypatch the budget.
-_STOP_SYNC_TIMEOUT_SECONDS = 20
-_stop_sync_pool = concurrent.futures.ThreadPoolExecutor(
-    max_workers=4, thread_name_prefix="agent-stop-sync"
-)
 
 _SLACK_CONFIG_FIELDS = frozenset(
     {
@@ -152,8 +140,6 @@ class AgentService:
     litellm: LiteLLMClient
     openrouter: OpenRouterClient
     config: Config
-    conversation_sync_service: ConversationSyncService
-    sync_service: ToolCallSyncService
     skill_repository: SkillRepository
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
@@ -839,6 +825,13 @@ class AgentService:
         if store:
             secret.string_data.update(build_env(store))
 
+        ingest_key = secrets.token_urlsafe(32)
+        secret.string_data.update({
+            "AGENT_ID": str(agent.id),
+            "INGEST_URL": self.config.ingest_base_url,
+            "INGEST_API_KEY": ingest_key,
+        })
+
         agent_skills = self.skill_repository.get_agent_skills_with_details(agent.id)
         skills_json = (
             build_skills_manifest_from_zips(agent_skills) if agent_skills else None
@@ -907,6 +900,9 @@ class AgentService:
 
         agent.status = AgentStatus.RUNNING
         agent.last_error = None
+        agent.ingest_key_encrypted = encrypt_token(
+            ingest_key, self.config.agent_token_encryption_key
+        )
         self.repository.save(agent)
         return self._get_agent_read(agent)
 
@@ -920,39 +916,11 @@ class AgentService:
                 detail=f"Agent {agent_id} is not running",
             )
 
-        # Best-effort flush of conversation + tool-call state before teardown,
-        # bounded so a rate-limited/slow Slack can never block the stop. Both
-        # syncs run concurrently and share one timeout budget; whatever doesn't
-        # finish in time is abandoned and teardown proceeds regardless.
-        futures = {
-            _stop_sync_pool.submit(
-                self.conversation_sync_service.sync_all_channels, agent_id
-            ): "conversation sync",
-            _stop_sync_pool.submit(
-                self.sync_service.sync_agent, agent.id, org_id, force=True
-            ): "tool-call sync",
-        }
-        done, not_done = concurrent.futures.wait(
-            futures, timeout=_STOP_SYNC_TIMEOUT_SECONDS
-        )
-        for fut in done:
-            exc = fut.exception()
-            if exc is not None:
-                logger.warning(
-                    "%s before stop failed for agent %s: %s",
-                    futures[fut],
-                    agent_id,
-                    exc,
-                )
-        for fut in not_done:
-            logger.warning(
-                "%s exceeded %ss during stop of agent %s; proceeding with teardown",
-                futures[fut],
-                _STOP_SYNC_TIMEOUT_SECONDS,
-                agent_id,
-            )
-
-        self.k8s.delete_deployment(f"agent-{agent.id}", self.config.k8s_namespace)
+        name = f"agent-{agent.id}"
+        ns = self.config.k8s_namespace
+        self.k8s.delete_deployment(name, ns)
+        self.k8s.delete_config_map(name, ns)
+        self.k8s.delete_secret(name, ns)
 
         agent.status = AgentStatus.STOPPED
         self.repository.save(agent)

@@ -7,10 +7,14 @@ from kubernetes import client
 from .common import _labels, _resource_name
 
 _SCRIPTS = Path(__file__).parent.parent / "scripts" / "openclaw"
+_TELEMETRY_PUSH = _SCRIPTS / "plugins" / "telemetry-push"
 
 INIT_OPENCLAW_JS: str = (_SCRIPTS / "init-openclaw.js").read_text()
 HEALTHZ_SERVER_JS: str = (_SCRIPTS / "healthz-server.js").read_text()
 START_SH: str = (_SCRIPTS / "start.sh").read_text()
+TELEMETRY_PUSH_INDEX_JS: str = (_TELEMETRY_PUSH / "index.js").read_text()
+TELEMETRY_PUSH_PACKAGE_JSON: str = (_TELEMETRY_PUSH / "package.json").read_text()
+TELEMETRY_PUSH_PLUGIN_JSON: str = (_TELEMETRY_PUSH / "openclaw.plugin.json").read_text()
 
 
 def build_openclaw_config_overlay(
@@ -87,7 +91,7 @@ def build_openclaw_config_overlay(
         "tools": {"profile": "full"},
         "memory": {"backend": "builtin"},
         "plugins": {
-            "allow": ["memory-core", "active-memory"],
+            "allow": ["memory-core", "active-memory", "telemetry-push"],
             "slots": {"memory": "memory-core"},
             "entries": {
                 "memory-core": {"enabled": True},
@@ -105,6 +109,7 @@ def build_openclaw_config_overlay(
                         "logging": True,
                     },
                 },
+                "telemetry-push": {"enabled": True},
             },
         },
     }
@@ -148,7 +153,7 @@ def build_openclaw_config_overlay_teams(
         "tools": {"profile": "full"},
         "memory": {"backend": "builtin"},
         "plugins": {
-            "allow": ["memory-core", "active-memory"],
+            "allow": ["memory-core", "active-memory", "telemetry-push"],
             "slots": {"memory": "memory-core"},
             "entries": {
                 "memory-core": {"enabled": True},
@@ -166,6 +171,7 @@ def build_openclaw_config_overlay_teams(
                         "logging": True,
                     },
                 },
+                "telemetry-push": {"enabled": True},
             },
         },
     }
@@ -203,6 +209,9 @@ def build_config_map(
         data["init-openclaw.js"] = INIT_OPENCLAW_JS
         data["healthz-server.js"] = HEALTHZ_SERVER_JS
         data["start.sh"] = START_SH
+        data["telemetry-push-index.js"] = TELEMETRY_PUSH_INDEX_JS
+        data["telemetry-push-package.json"] = TELEMETRY_PUSH_PACKAGE_JSON
+        data["telemetry-push-plugin.json"] = TELEMETRY_PUSH_PLUGIN_JSON
     if aai_cli_config_toml is not None:
         data["aai-cli-config.toml"] = aai_cli_config_toml
     if aai_cli_setup_sh is not None:
