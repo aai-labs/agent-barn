@@ -48,7 +48,7 @@
   --radius-4xl: calc(var(--radius) * 2.6);
 }
 
-/* ─── Agent Farm design tokens (warm cream palette) ──────────────── */
+/* ─── Agent Barn design tokens (warm cream palette) ──────────────── */
 :root {
   /* shadcn vars — mapped to warm palette */
   --card: #ffffff;
@@ -84,7 +84,7 @@
   --background: #fbfaf8;
   --foreground: #1a1815;
 
-  /* Agent Farm custom tokens */
+  /* Agent Barn custom tokens */
   --bg:            #fbfaf8;
   --bg-elev:       #ffffff;
   --bg-soft:       #f4f2ee;
@@ -133,7 +133,7 @@
   }
 }
 
-/* ─── Agent Farm utility classes ─────────────────────────────────── */
+/* ─── Agent Barn utility classes ─────────────────────────────────── */
 
 .af-card {
   background: var(--bg-elev);

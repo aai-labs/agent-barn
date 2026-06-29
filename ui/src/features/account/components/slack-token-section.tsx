@@ -92,7 +92,7 @@ export function SlackTokenSection() {
                   target="_blank"
                   rel="noopener noreferrer"
                   className="underline"
-                  style={{ color: "var(--accent)" }}
+                  style={{ color: "var(--ink-2)" }}
                 >
                   api.slack.com/apps
                 </a>

@@ -19,7 +19,6 @@ type TemplateFiles = Record<TemplateFileKey, string>;
 const EMPTY_FILES: TemplateFiles = {
   soulMd: "",
   identityMd: "",
-  userMd: "",
   toolsMd: "",
   agentsMd: "",
   bootMd: "",
@@ -31,7 +30,6 @@ function filesFrom(template: AgentTemplateRead): TemplateFiles {
   return {
     soulMd: template.soulMd,
     identityMd: template.identityMd,
-    userMd: template.userMd,
     toolsMd: template.toolsMd,
     agentsMd: template.agentsMd,
     bootMd: template.bootMd,

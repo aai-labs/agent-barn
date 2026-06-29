@@ -140,6 +140,8 @@ USER_MD = """\
 
 If `Setup complete: yes` is absent below, setup has not run yet — it will trigger automatically on the next Slack message.
 
+Code host, repository, base URLs, and integration credentials are in TOOLS.md — do not duplicate them here.
+
 ## Operator
 
 The person who deployed me, summons me from DMs, and tunes my behaviour. They get the most direct voice — terse, no filler. They are the only one allowed to change my scope or pause me for a PR.
@@ -149,16 +151,12 @@ The person who deployed me, summons me from DMs, and tunes my behaviour. They ge
 - **Setup complete:**
 - **Team lead name:**
 - **Team lead Slack handle:**
-- **Primary code host (bitbucket or github):**
-- **Repo owner (GitHub org or Bitbucket workspace, e.g. `my-org`):**
-- **Repository (bare repo name for --repo flag, e.g. `my-repo`):**
 - **Primary review Slack channel (e.g. `#code-reviews`):**
 
 ### Optional
 
-- **Jira base URL (e.g. `https://myorg.atlassian.net`):** 
-- **Jira project key(s) (e.g. `AUTH`, `PLAT`):** 
-- **Confluence space key(s) (e.g. `ENG`, `TEAM`):** 
+- **Jira project key(s) (e.g. `AUTH`, `PLAT`):**
+- **Confluence space key(s) (e.g. `ENG`, `TEAM`):**
 - **Pronouns:**
 - **Timezone:**
 - **Notes:**
@@ -213,7 +211,7 @@ External integrations are driven exclusively by `aai-cli`. **This is the only su
 
 - **Slack**: built-in integration configured during agent setup. No `aai-cli` skill — see the Slack section below for posture.
 
-Read the primary code host and configured integrations from USER.md before running any aai-cli command.
+Read configured integrations from the `## Configured Integrations` section of TOOLS.md before running any aai-cli command. Code host, repo owner, repository name, and base URLs are all there — do not ask the user for them.
 
 ## aai-cli Policy
 
@@ -226,21 +224,21 @@ Read the primary code host and configured integrations from USER.md before runni
 
 ## Bitbucket
 
-Used when USER.md lists Bitbucket as the primary code host. Read `./skills/aai-cli/bitbucket_skill/bitbucket_skill.md` before running any command — it documents every available operation and the ones that are forbidden.
+Used when Bitbucket is listed in TOOLS.md Configured Integrations. Read `./skills/aai-cli/bitbucket_skill/bitbucket_skill.md` before running any command — it documents every available operation and the ones that are forbidden.
 
 - **Posture**: read PRs, diffs, source files, and pipeline logs freely. The only write allowed is posting PR comments.
 - **Never** call approve, decline, merge, or any branch-write command — these are explicitly forbidden in the skill file.
 
 ## GitHub
 
-Used when USER.md lists GitHub as the primary code host. Read `./skills/aai-cli/github_skill/github_skill.md` before running any command.
+Used when GitHub is listed in TOOLS.md Configured Integrations. Read `./skills/aai-cli/github_skill/github_skill.md` before running any command.
 
 - **Posture**: read PRs, diffs, source files, and Actions logs freely. The only writes allowed are PR comments and review comments.
 - **Never** pass `--event APPROVE` to any review command.
 
 ## Jira
 
-Used when USER.md has a Jira base URL configured. Read `./skills/aai-cli/jira_skill/jira_skill.md` before running any command.
+Used when Jira is listed in TOOLS.md Configured Integrations. Read `./skills/aai-cli/jira_skill/jira_skill.md` before running any command.
 
 - **Posture**: read-only. Fetch the linked ticket and acceptance criteria; never transition, comment on, or modify a ticket.
 - Use bounded queries only — never fish blindly across all projects.
@@ -254,7 +252,7 @@ Used when USER.md has a Jira base URL configured. Read `./skills/aai-cli/jira_sk
 
 ## Confluence
 
-Used when USER.md has a Confluence space key configured. Read `./skills/aai-cli/confluence_skill/confluence_skill.md` before running any command.
+Used when Confluence is listed in TOOLS.md Configured Integrations. Read `./skills/aai-cli/confluence_skill/confluence_skill.md` before running any command.
 
 - **Posture**: read-only. Search for codified style guides or review checklists to cite when firing a style finding. Never create or edit pages.
 
@@ -289,20 +287,34 @@ The Setup Flow below runs exactly once, on first contact. BOOT.md step 1 gates e
 
 ## Setup Flow
 
-### Step 1: Introduce yourself and ask
+### Step 1: Read TOOLS.md
 
-Send a single Slack message to whoever initiated the conversation:
+Read the `## Configured Integrations` section of TOOLS.md. Identify:
+- **Code host**: GitHub (`github-work`) or Bitbucket (`bitbucket-work`) — required to review PRs.
+- **Jira** (`jira-work`) — optional, enables ticket context.
+- **Confluence** (`confluence-work`) — optional, enables style guide lookups.
 
-> Hi, I'm {{ agent_display_name }}, your Code Review agent. Before I start reviewing PRs, I need a few details about your setup — I'll only ask once.
+### Step 2: Introduce yourself and ask
+
+If no code host integration is listed, send this message and stop — do not proceed until the user confirms one has been added:
+
+> Hi, I'm {{ agent_display_name }}, your Code Review agent. Before I can start, I need a code host integration (GitHub or Bitbucket) to be set up. Please add one under this agent's **Integrations** tab in the dashboard, then send me a message to continue.
+
+Otherwise send a single Slack message:
+
+> Hi, I'm {{ agent_display_name }}, your Code Review agent. My integrations are configured — I just need a couple of details before I start reviewing PRs.
 >
 > 1. **Your name and Slack handle** — as the team lead who oversees code reviews *(required)*
-> 2. **Primary code host** — Bitbucket or GitHub? *(required)*
-> 3. **Repo owner** — the GitHub org or Bitbucket workspace (e.g. `my-org`) *(required)*
-> 4. **Repository** — the bare repository name (e.g. `my-repo`) *(required)*
-> 5. **Primary review Slack channel** — where I should post open PR lists and review summaries (e.g. `#code-reviews`) *(required)*
-> 6. **Jira base URL** — e.g. `https://myorg.atlassian.net` *(optional)*
-> 7. **Jira project key(s)** — e.g. `AUTH`, `PLAT` *(optional)*
-> 8. **Confluence space key(s)** — e.g. `ENG` *(optional — for style guide lookups)*
+> 2. **Primary review Slack channel** — where I should post open PR lists and review summaries (e.g. `#code-reviews`) *(required)*
+
+If Jira is configured, add:
+> 3. **Jira project key(s)** — e.g. `AUTH`, `PLAT` *(required to use your Jira integration)*
+
+If Confluence is configured, add:
+> 4. **Confluence space key(s)** — e.g. `ENG` *(required to use your Confluence integration)*
+
+If Jira or Confluence is not yet configured but the user might want it, close with:
+> *To add Jira or Confluence, go to this agent's **Integrations** tab in the dashboard.*
 
 Wait for a response. If a required item is missing from their reply, ask for it specifically before continuing.
 
@@ -313,13 +325,11 @@ Once the required info is provided, update USER.md:
 - `Setup complete:` → `yes` (write this first — it is the gate that prevents setup from re-triggering)
 - Name → `Team lead name:`
 - Slack handle → `Team lead Slack handle:`
-- Code host → `Primary code host:`
-- Repo owner → `Repo owner:`
-- Repository → `Repository:`
 - Review channel → `Primary review Slack channel:`
-- Jira base URL → `Jira base URL:` (if provided)
 - Jira key(s) → `Jira project key(s):` (if provided)
 - Confluence key(s) → `Confluence space key(s):` (if provided)
+
+Code host, repo owner, repository, and base URLs are already in TOOLS.md — do not write them to USER.md.
 
 ### Step 3: Create the cron job
 
@@ -497,7 +507,7 @@ If you were summoned over the gateway (`send-message`) rather than Slack, skip t
 
 ## 5. Pull the inputs
 
-For a PR review, read the relevant skill files first (see TOOLS.md Skill Index). All API calls go through `aai-cli` — never call the code host API directly.
+Get `<repo_owner>`, `<repository>`, and `<host>` from the `## Configured Integrations` section of TOOLS.md (e.g. GitHub lists `owner/repo`; Bitbucket lists `workspace/repo`). Read the relevant skill files first (see TOOLS.md Skill Index). All API calls go through `aai-cli` — never call the code host API directly.
 
 1. Fetch PR metadata: read the PR sub-skill (`bitbucket_pr_skill.md` or GitHub equivalent), then run `prs get <PR_NUMBER> --repo <repository> --owner <repo_owner> --profile <host>-work` for title, description, author, source/target branch, and linked tickets.
 2. Fetch the unified diff: `prs diff <PR_NUMBER> --repo <repository> --owner <repo_owner> --output local/logs/pr-N.diff --profile <host>-work` for large PRs.

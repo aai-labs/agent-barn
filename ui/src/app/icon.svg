@@ -1,4 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
   <rect width="32" height="32" rx="7" fill="#1a1714"/>
-  <text x="16" y="22" font-family="monospace" font-size="13" font-weight="600" fill="#fbfaf8" text-anchor="middle">AF</text>
+  <path d="M16,3 L26.5,9.5 L27.5,29 L4.5,29 L5.5,9.5 Z" stroke="#fbfaf8" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" fill="none"/>
+  <path d="M16,10.5 L22.5,14.5 L22.5,23 L9.5,23 L9.5,14.5 Z" stroke="#fbfaf8" stroke-width="1.6" stroke-linejoin="round" fill="none"/>
+  <circle cx="16" cy="18.5" r="2" fill="#fbfaf8"/>
 </svg>

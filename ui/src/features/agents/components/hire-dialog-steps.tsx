@@ -46,7 +46,6 @@ export type WizardStep =
 export const TEMPLATE_FILE_KEYS = [
   "soulMd",
   "identityMd",
-  "userMd",
   "toolsMd",
   "agentsMd",
   "bootMd",
@@ -786,15 +785,15 @@ export function generateTeamsManifest(
       id: appId || "{{YOUR_APP_ID}}",
       packageName: "com.agentfarm.bot",
       developer: {
-        name: "Agent Farm",
+        name: "Agent Barn",
         websiteUrl: "https://agent-farm.k8s.aai-labs.com",
         privacyUrl: "https://agent-farm.k8s.aai-labs.com",
         termsOfUseUrl: "https://agent-farm.k8s.aai-labs.com",
       },
-      name: { short: botName, full: `${botName} - Agent Farm` },
+      name: { short: botName, full: `${botName} - Agent Barn` },
       description: {
         short: botDescription,
-        full: `${botDescription}\n\nPowered by Agent Farm.`,
+        full: `${botDescription}\n\nPowered by Agent Barn.`,
       },
       icons: { color: "color.png", outline: "outline.png" },
       accentColor,
@@ -1370,6 +1369,11 @@ export function SkillsStep({
                     Required
                   </span>
                 </div>
+                {providerSpec.scopeNote && (
+                  <p className="text-[0.75rem] leading-[1.4]" style={{ color: "var(--ink-3)" }}>
+                    {providerSpec.scopeNote}
+                  </p>
+                )}
                 {providerSpec.fields.map((field) => {
                   const value = draft.content[field.key] ?? "";
                   const label = field.required ? field.label : `${field.label} (optional)`;
@@ -1492,6 +1496,11 @@ export function IntegrationsStep({
                 <XIcon size={15} />
               </button>
             </div>
+            {provider.scopeNote && (
+              <p className="text-[0.75rem] leading-[1.4]" style={{ color: "var(--ink-3)" }}>
+                {provider.scopeNote}
+              </p>
+            )}
 
             {provider.fields.map((field) => {
               const value = draft.content[field.key] ?? "";

@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { ChevronDownIcon } from "lucide-react";
-import { PlusIcon, SearchIcon } from "@/components/icons";
+import { PlusIcon } from "@/components/icons";
 import {
   DropdownMenu,
   DropdownMenuContent,
