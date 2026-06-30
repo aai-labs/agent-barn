@@ -15,6 +15,7 @@ from api.domains.agents.routes import agents_router
 from api.domains.agents.webhook_routes import webhook_router
 from api.domains.auth.routes import auth_router
 from api.domains.conversations.routes import conversations_router
+from api.domains.costs.routes import costs_router
 from api.domains.organizations.routes import org_router
 from api.domains.templates.routes import templates_router
 from api.domains.templates.service import TemplateService
@@ -103,6 +104,7 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(webhook_router)
     subapi.include_router(auth_router)
     subapi.include_router(conversations_router)
+    subapi.include_router(costs_router)
     subapi.include_router(org_router)
     subapi.include_router(templates_router)
     subapi.include_router(tool_calls_router)

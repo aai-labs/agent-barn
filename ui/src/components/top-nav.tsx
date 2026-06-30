@@ -14,6 +14,7 @@ interface TopNavProps {
 
 const NAV_TABS = [
   { href: "/dashboard", label: "Home" },
+  { href: "/dashboard/costs", label: "Costs" },
   // { href: "/dashboard/activity", label: "Activity" },
   { href: "/dashboard/settings", label: "Settings" },
 ];

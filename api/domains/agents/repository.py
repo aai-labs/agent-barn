@@ -80,6 +80,16 @@ class AgentRepository:
             agents = list(session.exec(query).all())
             return agents, total
 
+    def find_all_active_for_org(self, org_id: UUID) -> list[Agent]:
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(Agent)
+                .where(col(Agent.organization_id) == org_id)
+                .where(col(Agent.deleted_at).is_(None))
+                .order_by(col(Agent.created_at).asc())
+            )
+            return list(session.exec(query).all())
+
     # --- Slack config ---
 
     def get_slack_config(self, agent_id: UUID) -> AgentSlackConfig | None:

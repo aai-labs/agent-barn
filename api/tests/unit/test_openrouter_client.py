@@ -135,6 +135,7 @@ def _service(openrouter, allowlist="", default_model=""):
         config=config,
         conversation_sync_service=MagicMock(),
         sync_service=MagicMock(),
+        cost_service=MagicMock(),
     )
 
 
