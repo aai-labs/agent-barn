@@ -228,7 +228,8 @@ class CostService:
 
     def snapshot_agent_cost(self, agent: Agent, org_id: UUID, key: str) -> None:
         """Persist a cost snapshot before the agent is deleted."""
-        import hashlib, json
+        import hashlib
+        import json
         start_str, end_str = self._date_range(days=365)
         try:
             spend = self.litellm.get_key_spend(key)
