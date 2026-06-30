@@ -770,7 +770,9 @@ def test_create_agent_calls_litellm_generate_key():
             assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             agent_id = response.json()["id"]
             # the test uses _VALID_CREATE where name is "Test Agent"
-            litellm.generate_key.assert_called_once_with(agent_id, _VALID_CREATE["name"])
+            litellm.generate_key.assert_called_once_with(
+                agent_id, _VALID_CREATE["name"]
+            )
 
 
 def test_create_agent_litellm_failure_returns_503():

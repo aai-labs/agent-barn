@@ -23,7 +23,9 @@ def get_cost_summary(
     start_date: str | None = None,
     end_date: str | None = None,
 ):
-    return service.get_org_cost_summary(context, start_date=start_date, end_date=end_date)
+    return service.get_org_cost_summary(
+        context, start_date=start_date, end_date=end_date
+    )
 
 
 @costs_router.get("/agents/{agent_id}", response_model=AgentCostRead)

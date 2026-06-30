@@ -5,6 +5,7 @@ Revises: 0dfb8ab409db
 Create Date: 2026-06-13 13:25:39.639368
 
 """
+
 from typing import Sequence, Union
 
 import sqlalchemy as sa
@@ -32,16 +33,37 @@ def upgrade() -> None:
         sa.Column("prompt_tokens", sa.Integer(), nullable=False),
         sa.Column("completion_tokens", sa.Integer(), nullable=False),
         sa.Column("snapshotted_at", sa.DateTime(timezone=True), nullable=False),
-        sa.ForeignKeyConstraint(["organization_id"], ["organization.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(
+            ["organization_id"], ["organization.id"], ondelete="CASCADE"
+        ),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index("ix_agent_cost_snapshot_agent_id", "agent_cost_snapshot", ["agent_id"], unique=False)
-    op.create_index("ix_agent_cost_snapshot_organization_id", "agent_cost_snapshot", ["organization_id"], unique=False)
-    op.create_index("ix_agent_cost_snapshot_snapshotted_at", "agent_cost_snapshot", ["snapshotted_at"], unique=False)
+    op.create_index(
+        "ix_agent_cost_snapshot_agent_id",
+        "agent_cost_snapshot",
+        ["agent_id"],
+        unique=False,
+    )
+    op.create_index(
+        "ix_agent_cost_snapshot_organization_id",
+        "agent_cost_snapshot",
+        ["organization_id"],
+        unique=False,
+    )
+    op.create_index(
+        "ix_agent_cost_snapshot_snapshotted_at",
+        "agent_cost_snapshot",
+        ["snapshotted_at"],
+        unique=False,
+    )
 
 
 def downgrade() -> None:
-    op.drop_index("ix_agent_cost_snapshot_snapshotted_at", table_name="agent_cost_snapshot")
-    op.drop_index("ix_agent_cost_snapshot_organization_id", table_name="agent_cost_snapshot")
+    op.drop_index(
+        "ix_agent_cost_snapshot_snapshotted_at", table_name="agent_cost_snapshot"
+    )
+    op.drop_index(
+        "ix_agent_cost_snapshot_organization_id", table_name="agent_cost_snapshot"
+    )
     op.drop_index("ix_agent_cost_snapshot_agent_id", table_name="agent_cost_snapshot")
     op.drop_table("agent_cost_snapshot")

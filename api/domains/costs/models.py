@@ -43,6 +43,7 @@ class AgentCostSnapshot(BaseModel, table=True):
 
     def get_models_breakdown(self) -> list[dict]:
         import json
+
         if not self.models_breakdown_json:
             return []
         try:

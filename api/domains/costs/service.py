@@ -59,17 +59,20 @@ class CostService:
         # build per-model breakdown
         models_breakdown = []
         for model_name, m in details.get("models", {}).items():
-            models_breakdown.append(AgentModelBreakdown(
-                model=model_name,
-                total_cost=float(m.get("spend", 0.0)),
-                prompt_tokens=int(m.get("prompt_tokens", 0)),
-                completion_tokens=int(m.get("completion_tokens", 0)),
-            ))
+            models_breakdown.append(
+                AgentModelBreakdown(
+                    model=model_name,
+                    total_cost=float(m.get("spend", 0.0)),
+                    prompt_tokens=int(m.get("prompt_tokens", 0)),
+                    completion_tokens=int(m.get("completion_tokens", 0)),
+                )
+            )
 
         status_map = {"RUNNING": "active", "STOPPED": "stopped", "ERROR": "error"}
         mapped_status = (
             status_map.get(agent.status.value, "unknown")
-            if hasattr(agent, "status") else "unknown"
+            if hasattr(agent, "status")
+            else "unknown"
         )
         return AgentCostRead(
             agent_id=agent.id,
@@ -105,6 +108,7 @@ class CostService:
         active_agent_ids: set[UUID] = set()
 
         import hashlib
+
         global_spend = self.litellm.get_global_spend_report(start_str, end_str)
 
         for agent in active_agents:
@@ -117,23 +121,27 @@ class CostService:
                 key_hash = hashlib.sha256(key.encode()).hexdigest()
                 details = global_spend.get(key_hash, {})
             except Exception as exc:
-                logger.warning("Failed to fetch spend details for agent %s: %s", agent.id, exc)
+                logger.warning(
+                    "Failed to fetch spend details for agent %s: %s", agent.id, exc
+                )
                 details = {}
 
             spend = float(details.get("spend", 0.0))
-            
+
             cost_read = self._build_agent_cost_read_from_info(agent, details)
             agent_costs.append(cost_read)
             total_cost += spend
 
             # Extract the actual models used from the LiteLLM details dictionary
             models_dict = details.get("models", {})
-            
+
             if models_dict:
                 # If we have a breakdown, distribute the spend to the actual models used
                 for actual_model_name, m_data in models_dict.items():
                     m_spend = float(m_data.get("spend", 0.0))
-                    by_model[actual_model_name] = by_model.get(actual_model_name, 0.0) + m_spend
+                    by_model[actual_model_name] = (
+                        by_model.get(actual_model_name, 0.0) + m_spend
+                    )
             else:
                 # Fallback: if there is spend but no model breakdown data is available yet
                 model_key = agent.model or "unknown"
@@ -180,8 +188,7 @@ class CostService:
             by_model[snap.model] = by_model.get(snap.model, 0.0) + snap.total_cost
 
         time_series = [
-            CostTimeSeriesPoint(date=d, cost=c)
-            for d, c in sorted(daily_costs.items())
+            CostTimeSeriesPoint(date=d, cost=c) for d, c in sorted(daily_costs.items())
         ]
         by_model_list = [
             CostByModelRead(model=m, total_cost=c) for m, c in by_model.items()
@@ -230,6 +237,7 @@ class CostService:
         """Persist a cost snapshot before the agent is deleted."""
         import hashlib
         import json
+
         start_str, end_str = self._date_range(days=365)
         try:
             spend = self.litellm.get_key_spend(key)
