@@ -61,7 +61,13 @@ class IngestService:
 
             channel_name = event.channel_name
             if not channel_name and event.channel_id:
-                channel_name = channel_map.get(event.channel_id)
+                raw_id = event.channel_id
+                if raw_id.startswith("USER:"):
+                    channel_name = user_map.get(raw_id[5:])
+                elif raw_id.startswith("CHANNEL:"):
+                    channel_name = channel_map.get(raw_id[8:])
+                else:
+                    channel_name = channel_map.get(raw_id)
 
             messages.append(
                 AgentChatMessage(
@@ -131,7 +137,5 @@ class IngestService:
             }
             return user_map, channel_map
         except Exception as e:
-            logger.warning(
-                "Failed to fetch Slack maps for agent %s: %s", agent.id, e
-            )
+            logger.warning("Failed to fetch Slack maps for agent %s: %s", agent.id, e)
             return {}, {}

@@ -51,7 +51,9 @@ def _auth(context) -> dict:
     return {"Authorization": f"Bearer {context.access_token}"}
 
 
-def _seed_tool_call(context, external_id, tool_name, arguments, status_val, result=None):
+def _seed_tool_call(
+    context, external_id, tool_name, arguments, status_val, result=None
+):
     repo: ToolCallRepository = context.injector.get(ToolCallRepository)
     now = datetime.now(timezone.utc)
     with repo.get_session() as session:
@@ -116,8 +118,12 @@ def test_list_tool_calls_empty_returns_200():
 def test_list_tool_calls_returns_seeded_results():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         _seed_tool_call(
-            context, "call_abc123", "read", {"path": "/tmp/test.txt"},
-            ToolCallStatus.SUCCESS, result="hello",
+            context,
+            "call_abc123",
+            "read",
+            {"path": "/tmp/test.txt"},
+            ToolCallStatus.SUCCESS,
+            result="hello",
         )
 
         with when("I request tool calls"):
@@ -138,7 +144,10 @@ def test_list_tool_calls_returns_seeded_results():
 def test_list_tool_calls_pending_status():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         _seed_tool_call(
-            context, "call_pending1", "bash", {"command": "sleep 10"},
+            context,
+            "call_pending1",
+            "bash",
+            {"command": "sleep 10"},
             ToolCallStatus.PENDING,
         )
 
@@ -175,8 +184,12 @@ def test_list_tool_calls_filter_by_tool_name():
 def test_list_tool_calls_filter_by_status():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         _seed_tool_call(
-            context, "call_abc123", "read", {"path": "/tmp/test.txt"},
-            ToolCallStatus.SUCCESS, result="hello",
+            context,
+            "call_abc123",
+            "read",
+            {"path": "/tmp/test.txt"},
+            ToolCallStatus.SUCCESS,
+            result="hello",
         )
 
         with when("I filter by status=PENDING"):

@@ -75,9 +75,7 @@ def test_register_hooks_with_env_vars():
                 mod = _load_plugin()
                 ctx = MagicMock()
                 mod.register(ctx)
-                hook_names = [
-                    call.args[0] for call in ctx.register_hook.call_args_list
-                ]
+                hook_names = [call.args[0] for call in ctx.register_hook.call_args_list]
 
         with then("all five hooks are registered"):
             assert_that("pre_gateway_dispatch" in hook_names, equal_to(True))
@@ -172,8 +170,7 @@ def test_post_llm_call_buffers_outbound_message():
             outbound = [
                 e
                 for e in mod._buffer
-                if e["type"] == "message"
-                and e["data"]["direction"] == "OUTBOUND"
+                if e["type"] == "message" and e["data"]["direction"] == "OUTBOUND"
             ]
             assert_that(outbound, has_length(1))
             assert_that(outbound[0]["data"]["content"], equal_to("hello back"))
@@ -220,9 +217,7 @@ def test_post_tool_call_buffers_tool_result():
         with then("a tool result is buffered with the correct external_id"):
             results = [e for e in mod._buffer if e["type"] == "tool_result"]
             assert_that(results, has_length(1))
-            assert_that(
-                results[0]["data"]["result"], equal_to("file1.txt\nfile2.txt")
-            )
+            assert_that(results[0]["data"]["result"], equal_to("file1.txt\nfile2.txt"))
 
 
 # --- flush ---

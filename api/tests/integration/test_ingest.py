@@ -4,12 +4,9 @@ from fastapi import status
 from hamcrest import assert_that, equal_to, has_length
 from starlette.testclient import TestClient
 
-from api.domains.agents.models import AgentStatus
 from api.domains.agents.repository import AgentRepository
 from api.domains.conversations.models import (
     ConversationsFilter,
-    ConversationType,
-    MessageDirection,
 )
 from api.domains.conversations.repository import ConversationRepository
 from api.domains.tool_calls.repository import ToolCallRepository
@@ -126,12 +123,12 @@ def test_ingest_no_auth_returns_422():
         [*_GIVEN, there_is_an_agent(), _set_ingest_key(), _create_ingest_client()]
     ) as context:
         with when("I post without authorization header"):
-            response = context.ingest_client.post(
-                _url(context), json={"messages": []}
-            )
+            response = context.ingest_client.post(_url(context), json={"messages": []})
 
         with then("it returns 422"):
-            assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
+            assert_that(
+                response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY)
+            )
 
 
 def test_ingest_wrong_key_returns_401():

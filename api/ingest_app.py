@@ -2,9 +2,9 @@ from fastapi import FastAPI
 from fastapi_injector import attach_injector
 from injector import Injector
 
-import api.domains.agents.models
-import api.domains.organizations.models
-import api.domains.conversations.models
+import api.domains.agents.models  # noqa: F401 — register SQLModel tables for FK resolution
+import api.domains.organizations.models  # noqa: F401
+import api.domains.conversations.models  # noqa: F401
 from api.core.utils import create_injector
 from api.domains.ingest.routes import ingest_router
 

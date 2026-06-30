@@ -1,5 +1,4 @@
 import json
-import os
 from pathlib import Path
 
 from hamcrest import assert_that, contains_string, equal_to, has_key
@@ -99,7 +98,9 @@ def test_teams_overlay_includes_telemetry_push_in_plugins():
         from api.domains.agents.builders import build_openclaw_config_overlay_teams
 
         with when("I build a Teams overlay"):
-            overlay = build_openclaw_config_overlay_teams("litellm/qwen3", "http://x:4000")
+            overlay = build_openclaw_config_overlay_teams(
+                "litellm/qwen3", "http://x:4000"
+            )
 
         with then("telemetry-push is in the plugins allow list and entries"):
             assert_that("telemetry-push" in overlay["plugins"]["allow"], equal_to(True))
@@ -112,7 +113,9 @@ def test_config_map_includes_telemetry_push_files():
 
         with when("I build an OpenClaw config map"):
             cm = build_config_map(
-                agent_id=__import__("uuid").UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
+                agent_id=__import__("uuid").UUID(
+                    "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+                ),
                 org_id=__import__("uuid").UUID("11111111-2222-3333-4444-555555555555"),
                 namespace="agent-farm",
                 soul_md="# Soul",

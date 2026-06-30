@@ -107,12 +107,11 @@ export default {
     });
 
     api.on("agent_end", (event, ctx) => {
-      if (ctx.agentId !== "main") return;
+      if (ctx.trigger !== "user") return;
       const msgs = event.messages || [];
       const conversationId =
         lastConversationId || (ctx.channelId || "").toUpperCase();
 
-      // Outbound capture
       for (let i = msgs.length - 1; i >= 0; i--) {
         if (msgs[i].role !== "assistant") continue;
         const content = extractText(msgs[i]);
@@ -136,7 +135,6 @@ export default {
         });
         break;
       }
-
     });
 
     api.on("before_tool_call", (event, ctx) => {

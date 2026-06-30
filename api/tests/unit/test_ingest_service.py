@@ -160,7 +160,11 @@ def test_process_messages_calls_upsert(mock_maps):
             assert_that(messages[0].content, equal_to("hello"))
 
 
-@patch.object(IngestService, "_platform_maps", return_value=({"U123": "Alice"}, {"C456": "general"}))
+@patch.object(
+    IngestService,
+    "_platform_maps",
+    return_value=({"U123": "Alice"}, {"C456": "general"}),
+)
 def test_process_messages_resolves_names_from_slack(mock_maps):
     with given():
         conv_repo = MagicMock()

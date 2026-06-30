@@ -826,11 +826,13 @@ class AgentService:
             secret.string_data.update(build_env(store))
 
         ingest_key = secrets.token_urlsafe(32)
-        secret.string_data.update({
-            "AGENT_ID": str(agent.id),
-            "INGEST_URL": self.config.ingest_base_url,
-            "INGEST_API_KEY": ingest_key,
-        })
+        secret.string_data.update(
+            {
+                "AGENT_ID": str(agent.id),
+                "INGEST_URL": self.config.ingest_base_url,
+                "INGEST_API_KEY": ingest_key,
+            }
+        )
 
         agent_skills = self.skill_repository.get_agent_skills_with_details(agent.id)
         skills_json = (
