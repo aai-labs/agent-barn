@@ -24,7 +24,9 @@ def _load_plugin():
     spec = importlib.util.spec_from_file_location(
         "telemetry_push", os.path.abspath(path)
     )
+    assert spec is not None
     mod = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
     spec.loader.exec_module(mod)
     return mod
 
