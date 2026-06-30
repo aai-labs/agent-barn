@@ -197,6 +197,7 @@ def there_is_a_skill(
     name: str = "Test Skill",
     required_providers: list | None = None,
     global_skill: bool = False,
+    tools_pointer: str | None = None,
 ):
     def step(context):
         import io
@@ -207,11 +208,9 @@ def there_is_a_skill(
 
         org_id = None if global_skill else context.organization.id
         source = SkillSource.AAI_CLI if global_skill else SkillSource.CUSTOM
-        tools_pointer = (
-            None
-            if global_skill
-            else f'You can use "{name}" skill in the ./skills folder'
-        )
+        pointer = tools_pointer
+        if pointer is None and not global_skill:
+            pointer = f'You can use "{name}" skill in the ./skills folder'
 
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w") as zf:
@@ -223,7 +222,7 @@ def there_is_a_skill(
             source=source,
             required_providers=required_providers or [],
             zip_content=buf.getvalue(),
-            tools_pointer=tools_pointer,
+            tools_pointer=pointer,
         )
         repo: SkillRepository = context.injector.get(SkillRepository)
         repo.save(skill)
