@@ -126,10 +126,10 @@ Use service-specific skills before calling any external integration CLI. Do not 
 
 Read the relevant skill file first:
 
-- Jira: `./skills/aai-cli/jira_skill/jira_skill.md` for the `aai-cli jira` commands (always pass `--profile jira-work`).
-- Confluence: `./skills/aai-cli/confluence_skill/confluence_skill.md` for the `aai-cli confluence` commands (always pass `--profile confluence-work`).
-- GitHub: `./skills/aai-cli/github_skill/github_skill.md` for the `aai-cli github` commands (always pass `--profile github-work`).
-- Bitbucket: `./skills/aai-cli/bitbucket_skill/bitbucket_skill.md` for the `aai-cli bitbucket` commands (always pass `--profile bitbucket-work`).
+- Jira: `./skills/aai-cli/jira_skill.md` for the `aai-cli jira` commands (always pass `--profile jira-work`).
+- Confluence: `./skills/aai-cli/confluence_skill.md` for the `aai-cli confluence` commands (always pass `--profile confluence-work`).
+- GitHub: `./skills/aai-cli/github_skill.md` for the `aai-cli github` commands (always pass `--profile github-work`).
+- Bitbucket: `./skills/aai-cli/bitbucket_skill.md` for the `aai-cli bitbucket` commands (always pass `--profile bitbucket-work`).
 - Slack: use the built-in Slack integration configured during agent setup.
 
 ## CLI Policy
@@ -243,7 +243,7 @@ Three cron jobs drive all recurring work. They are created by the Setup Flow and
 ### cron:blocker-scan — Daily Blocker Detection
 
 1. Read the current sprint goal from USER.md and memory.
-2. Pull active Jira tickets (read the skill file first: `./skills/aai-cli/jira_skill/jira_skill.md`), ticket threads, and linked Confluence context.
+2. Pull active Jira tickets (read the skill file first: `./skills/aai-cli/jira_skill.md`), ticket threads, and linked Confluence context.
 3. Pull related GitHub/Bitbucket PRs: review state, failing checks, unanswered comments, blocked merge state.
 4. Decide whether anything is blocked, waiting on a stakeholder, missing an owner, or stale enough to need attention.
 5. If action is needed: send a focused stakeholder ping with blocker, evidence, owner, and a specific requested next step. Add low-risk clarifying comments to Jira tickets or PRs when they point to a delivery inconsistency.
