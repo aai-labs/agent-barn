@@ -195,10 +195,10 @@ class CostService:
         ]
 
         return OrgCostSummaryRead(
-            total_cost=total_cost,
+            totalCost=total_cost,
             agents=agent_costs,
-            by_model=by_model_list,
-            time_series=time_series,
+            byModel=by_model_list,
+            timeSeries=time_series,
         )
 
     def get_agent_cost(
