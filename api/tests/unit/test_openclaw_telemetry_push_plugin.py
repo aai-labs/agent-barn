@@ -72,7 +72,7 @@ def test_index_js_registers_hooks():
 
         with then("it registers message and tool call hooks"):
             assert_that(source, contains_string("message_received"))
-            assert_that(source, contains_string("message_sent"))
+            assert_that(source, contains_string("agent_end"))
             assert_that(source, contains_string("before_tool_call"))
             assert_that(source, contains_string("after_tool_call"))
             assert_that(source, contains_string("session_end"))

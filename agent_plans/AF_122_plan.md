@@ -48,16 +48,15 @@ The goal is to replace this with a push-based model: plugins inside agent pods i
 **`on_session_end(session_id, completed, interrupted, model, platform, **kwargs)`**
 - Used for final buffer flush before session teardown
 
-### OpenClaw (TypeScript) — source: docs.openclaw.ai/plugins/hooks
+### OpenClaw (TypeScript) — source: docs.openclaw.ai/plugins/hooks + debug logging
 
 **`message_received` (Observation)**
-- `content`, `sender`, `threadId`, `messageId`, `senderId`
-- Context: `ctx.sessionKey`, `ctx.channelId`, `ctx.agentId`
-- `messageId` available for dedup
+- Event: `from`, `content`, `timestamp`, `threadId`, `messageId`, `senderId`, `sessionKey`, `runId`, `metadata`
+- `metadata`: `to`, `provider`, `surface`, `threadId`, `originatingChannel`, `originatingTo`, `messageId`, `senderId`, `senderName`, `guildId`
+- Context: `ctx.channelId` (platform name "slack", NOT channel ID), `ctx.conversationId` (actual conversation ID e.g. "user:U0B42HWREBT"), `ctx.sessionKey`, `ctx.accountId`, `ctx.messageId`, `ctx.senderId`
 
-**`message_sent` (Observation)**
-- Final success/failure status, delivery metadata
-- Fire-and-forget; handler failures are logged
+**`message_sent` — DOES NOT FIRE** (confirmed by debug logging, zero occurrences)
+- Use `message_sending` instead (decision hook, safe if handler doesn't return `{ cancel: true }`)
 
 **`before_tool_call` (Decision)**
 - `event.toolName`, `event.params`, `event.toolCallId`, `event.runId`
@@ -212,11 +211,37 @@ Create `api/domains/agents/scripts/openclaw/plugins/telemetry-push/`:
 - All HTTP errors caught and logged via `api.logger.warn()`
 - Reads `AGENT_ID`, `INGEST_URL`, `INGEST_API_KEY` from `process.env`; if missing, `register()` returns early
 
-**Installation in container**:
-- Plugin files are added to ConfigMap via `build_config_map()` in `openclaw.py`
-- `init-openclaw.js` is updated to copy plugin files to a local directory (e.g., `/home/node/.openclaw/local-plugins/telemetry-push/`)
-- `start.sh` is updated to run `openclaw plugins install /home/node/.openclaw/local-plugins/telemetry-push` before `exec openclaw gateway`
-- Config overlay builders add `"telemetry-push"` to `plugins.allow` and `plugins.entries` with `{ "enabled": true }`
+**Entry point format** — default export with plugin entry shape (docs: "every plugin exports a default entry object"):
+```javascript
+export default {
+  id: "telemetry-push",
+  name: "Telemetry Push",
+  description: "Push messages and tool calls to the ingest API",
+  register(api) {
+    // hook registration via api.on(...)
+  },
+};
+```
+Plain object matching the shape `definePluginEntry()` returns at runtime. No import needed — avoids ESM resolution issues with globally-installed `openclaw` package.
+
+**Plugin loading — use `plugins.load.paths` (NOT `openclaw plugins install`)**:
+- `openclaw plugins install` hangs in non-interactive shells — blocks gateway startup entirely
+- OpenClaw docs: `plugins.load.paths` is a first-class config option that tells the gateway to load plugins directly from filesystem paths at startup
+- Added to config overlay in `openclaw.py` (both Slack and Teams builders):
+  ```python
+  "plugins": {
+      "load": {"paths": ["/home/node/.openclaw/local-plugins/telemetry-push"]},
+      # ... allow, entries, slots unchanged
+  }
+  ```
+- `init-openclaw.js` deep-merges this into `openclaw.json` — `load` is a new key, added as-is
+- `start.sh` keeps `cp` commands, removes `openclaw plugins install` line
+
+**Installation in container** (updated flow):
+- Plugin files added to ConfigMap via `build_config_map()` in `openclaw.py` (already done)
+- `start.sh` copies files from ConfigMap to `/home/node/.openclaw/local-plugins/telemetry-push/` (keep)
+- Gateway reads `plugins.load.paths` from merged config and loads the plugin directly (replaces install)
+- No `openclaw plugins install`, no `installs.json` manipulation
 
 ### 7. Remove pull-based sync (kubectl exec)
 Per acceptance criteria: "Kubectl exec is no longer used for fetching messages and tool calls."
@@ -368,18 +393,94 @@ The plugin captures `event.text` raw, so the metadata appears as message content
 
 **File**: `api/domains/agents/scripts/hermes/plugins/telemetry-push/__init__.py`
 
+### Bug F: OpenClaw telemetry-push plugin not loading (gateway never starts)
+
+**Root cause**: `openclaw plugins install` hangs in non-interactive container shell. The gateway (`exec openclaw gateway`) is on the next line so it never executes. Pod shows 1/1 because `healthz-server.js` runs independently on port 8081.
+
+**Root cause detail**: The CLI expects an interactive TTY. Neither `--force`, `< /dev/null`, nor `2>/dev/null` prevents the hang. Reordering (before/after init-openclaw.js) also fails.
+
+**Secondary issue**: `index.js` uses `export function register(api)` (named export) but OpenClaw gateway expects a default export with `{id, name, description, register}` shape per docs.
+
+**Fix** (3 files):
+
+1. **`api/domains/agents/builders/openclaw.py`** — Add `"load": {"paths": ["/home/node/.openclaw/local-plugins/telemetry-push"]}` to the `plugins` dict in BOTH `build_openclaw_config_overlay()` and `build_openclaw_config_overlay_teams()`.
+
+2. **`api/domains/agents/scripts/openclaw/start.sh`** — Remove the `openclaw plugins install` line. Keep the `mkdir -p` and `cp` commands.
+
+3. **`api/domains/agents/scripts/openclaw/plugins/telemetry-push/index.js`** — Change from `export function register(api)` to `export default { id, name, description, register(api) {...} }`.
+
+**What stays the same**: health server, init-openclaw.js, skills, AAI CLI setup, msteams plugin, memory-core/active-memory — all unaffected. All 478 tests continue to pass.
+
+### Bug G: OpenClaw — wrong channel_id and no outbound messages
+
+**Evidence** (DB query after Bug F fix):
+- 4 INBOUND rows with `channel_id = "slack"` (platform name, not Slack channel ID)
+- 0 OUTBOUND rows
+- `session_key = "agent:main:main"` (OpenClaw internal format)
+
+**Diagnosis** (debug logging added to plugin, pod logs inspected):
+
+`message_received` event object:
+```json
+{
+  "from": "slack:U0B42HWREBT",
+  "content": "...",
+  "timestamp": 1782805457852,
+  "threadId": "1782805422.140459",
+  "messageId": "1782805457.851989",
+  "senderId": "U0B42HWREBT",
+  "sessionKey": "agent:main:main:thread:1782805422.140459",
+  "metadata": {
+    "to": "user:U0B42HWREBT",
+    "provider": "slack",
+    "senderName": "dominykas",
+    "guildId": "T0B3XB9M269"
+  }
+}
+```
+
+`message_received` ctx object:
+```json
+{
+  "channelId": "slack",
+  "accountId": "default",
+  "conversationId": "user:U0B42HWREBT",
+  "sessionKey": "agent:main:main:thread:1782805422.140459",
+  "messageId": "1782805457.851989",
+  "senderId": "U0B42HWREBT"
+}
+```
+
+**Findings**:
+- `ctx.channelId` = `"slack"` — platform name, useless as channel identifier
+- `ctx.conversationId` = `"user:U0B42HWREBT"` — actual conversation identifier (DM format)
+- `event.metadata.senderName` = `"dominykas"` — display name available for free
+- `message_sent` hook **NEVER fires** — zero occurrences in pod logs
+- Must use `message_sending` hook instead (decision hook per SDK docs; safe as long as handler doesn't return `{ cancel: true }`)
+
+**Fix** (in `index.js`):
+1. `channel_id`: `ctx.channelId` → `ctx.conversationId` (e.g. `"user:U0B42HWREBT"` for DMs)
+2. `conversation_type`: derive from conversationId prefix — `"user:"` → DM, else → CHANNEL
+3. Outbound hook: `message_sent` → `message_sending` (with initial debug logging to verify it fires)
+4. `sender_name`: extract from `event.metadata.senderName` when available
+5. Remove all debug `console.log` lines after verification
+
+**Test impact**: `test_index_js_registers_hooks` checks `contains_string("message_sent")` — `"message_sending"` contains `"message_sent"` as substring prefix, so the test still passes.
+
 ### Fix order
 1. ~~Bug A (model imports)~~ DONE
 2. ~~Bug B (outbound channel_id)~~ DONE
 3. ~~Bug C (tool calls pending)~~ DONE (consequence of A)
-4. Bug D (strip thread context) — next
-5. Bug E (thread grouping) — requires event inspection first
+4. ~~Bug D (strip thread context)~~ DONE
+5. ~~Bug E (thread grouping via source.thread_id)~~ DONE
+6. ~~Bug F (OpenClaw plugin loading)~~ DONE
+7. Bug G (OpenClaw channel_id + outbound messages) — IN PROGRESS
 
 ## Verification
 
-1. Run `make test-api` after each sub-task
-2. Run `make check-api` for lint/type checks
-3. Start a Hermes agent → verify ingest endpoint receives events → data appears in conversations/tool-calls UI
-4. Start an OpenClaw agent → verify the same
-5. Verify port 8001 is NOT reachable from outside the cluster (curl from external → connection refused)
-6. Verify no remaining references to `ToolCallSyncService`, `ConversationSyncService`, or kubectl exec for message/tool-call fetching
+1. Run `uv run pytest tests/ -x -q` after each fix — all 478 tests must pass
+2. Re-test locally: tunnel + Hermes agent + message on Slack
+3. Verify: inbound messages, outbound messages, tool calls all appear in UI for Hermes
+4. Start an OpenClaw agent → verify conversations and tool calls appear in UI
+5. Verify port 8001 is NOT reachable from outside the cluster
+6. Verify no remaining references to `ToolCallSyncService`, `ConversationSyncService`, or kubectl exec

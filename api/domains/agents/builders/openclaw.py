@@ -92,6 +92,7 @@ def build_openclaw_config_overlay(
         "memory": {"backend": "builtin"},
         "plugins": {
             "allow": ["memory-core", "active-memory", "telemetry-push"],
+            "load": {"paths": ["/home/node/.openclaw/local-plugins/telemetry-push"]},
             "slots": {"memory": "memory-core"},
             "entries": {
                 "memory-core": {"enabled": True},
@@ -109,7 +110,10 @@ def build_openclaw_config_overlay(
                         "logging": True,
                     },
                 },
-                "telemetry-push": {"enabled": True},
+                "telemetry-push": {
+                    "enabled": True,
+                    "hooks": {"allowConversationAccess": True},
+                },
             },
         },
     }
@@ -154,6 +158,7 @@ def build_openclaw_config_overlay_teams(
         "memory": {"backend": "builtin"},
         "plugins": {
             "allow": ["memory-core", "active-memory", "telemetry-push"],
+            "load": {"paths": ["/home/node/.openclaw/local-plugins/telemetry-push"]},
             "slots": {"memory": "memory-core"},
             "entries": {
                 "memory-core": {"enabled": True},
@@ -171,7 +176,10 @@ def build_openclaw_config_overlay_teams(
                         "logging": True,
                     },
                 },
-                "telemetry-push": {"enabled": True},
+                "telemetry-push": {
+                    "enabled": True,
+                    "hooks": {"allowConversationAccess": True},
+                },
             },
         },
     }
