@@ -11,6 +11,10 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { useSkills } from "@/features/skills/hooks/use-skills";
+import { SKILL_PROVIDER_LABELS } from "@/features/skills/utils";
+import type { Skill } from "@/features/skills/schemas";
+import { SkillSourceBadge } from "@/features/skills/components/skill-drawer";
 import {
   INTEGRATION_PROVIDERS,
   getIntegrationProvider,
@@ -31,17 +35,17 @@ export type WizardStep =
   | "agent-type"
   | "platform-choice"
   | "slack-choice"
+  | "config-token"
   | "bot-builder"
   | "slack-tokens"
   | "teams-bot-builder"
   | "teams-credentials"
   | "details"
-  | "integrations";
+  | "skills";
 
 export const TEMPLATE_FILE_KEYS = [
   "soulMd",
   "identityMd",
-  "userMd",
   "toolsMd",
   "agentsMd",
   "bootMd",
@@ -97,63 +101,6 @@ export function TemplateSourceBadge({ source }: { source: AgentTemplateRead["tem
     >
       Pre-defined
     </span>
-  );
-}
-
-function generateManifest(name: string, description: string, color: string): string {
-  return JSON.stringify(
-    {
-      display_information: { name, description, background_color: color },
-      features: {
-        app_home: {
-          home_tab_enabled: false,
-          messages_tab_enabled: true,
-          messages_tab_read_only_enabled: false,
-        },
-        bot_user: { display_name: name, always_online: true },
-      },
-      oauth_config: {
-        scopes: {
-          bot: [
-            "app_mentions:read",
-            "channels:history",
-            "channels:join",
-            "channels:read",
-            "chat:write",
-            "chat:write.public",
-            "groups:history",
-            "groups:read",
-            "im:history",
-            "im:read",
-            "im:write",
-            "mpim:history",
-            "mpim:read",
-            "mpim:write",
-            "reactions:read",
-            "reactions:write",
-            "users:read",
-            "users:read.email",
-          ],
-        },
-      },
-      settings: {
-        event_subscriptions: {
-          bot_events: [
-            "app_mention",
-            "message.channels",
-            "message.groups",
-            "message.im",
-            "message.mpim",
-          ],
-        },
-        interactivity: { is_enabled: true },
-        org_deploy_enabled: false,
-        socket_mode_enabled: true,
-        token_rotation_enabled: false,
-      },
-    },
-    null,
-    2,
   );
 }
 
@@ -357,6 +304,97 @@ export function TemplateStep({
   );
 }
 
+export function ConfigTokenStep({
+  tokenInput,
+  onTokenInputChange,
+  showToken,
+  onToggleToken,
+  refreshInput,
+  onRefreshInputChange,
+  showRefresh,
+  onToggleRefresh,
+  isSaving,
+  error,
+}: {
+  tokenInput: string;
+  onTokenInputChange: (v: string) => void;
+  showToken: boolean;
+  onToggleToken: () => void;
+  refreshInput: string;
+  onRefreshInputChange: (v: string) => void;
+  showRefresh: boolean;
+  onToggleRefresh: () => void;
+  isSaving: boolean;
+  error: string | null;
+}) {
+  return (
+    <div className="flex flex-col gap-5">
+      <p className="text-[0.8125rem] leading-[1.5]" style={{ color: "var(--ink-3)" }}>
+        To create the Slack app automatically, you need configuration tokens.
+      </p>
+
+      <FormField label="Access token" hint="Configuration access token from Slack">
+        <TokenInput
+          value={tokenInput}
+          onChange={onTokenInputChange}
+          visible={showToken}
+          onToggle={onToggleToken}
+          placeholder="Configuration access token..."
+          disabled={isSaving}
+        />
+      </FormField>
+
+      <FormField label="Refresh token" hint="Starts with xoxe- · enables automatic renewal">
+        <TokenInput
+          value={refreshInput}
+          onChange={onRefreshInputChange}
+          visible={showRefresh}
+          onToggle={onToggleRefresh}
+          placeholder="xoxe-…"
+          disabled={isSaving}
+        />
+      </FormField>
+
+      {error && (
+        <div className="text-[0.8125rem]" style={{ color: "var(--err)" }}>
+          {error}
+        </div>
+      )}
+
+      <div
+        className="flex flex-col gap-3 rounded-2xl p-4"
+        style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
+      >
+        <NextStep n={1} label="Go to your Slack apps">
+          Open{" "}
+          <a
+            href="https://api.slack.com/apps"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline"
+            style={{ color: "var(--ink-2)" }}
+          >
+            api.slack.com/apps ↗
+          </a>
+        </NextStep>
+        <NextStep n={2} label="Scroll to App Configuration Tokens">
+          It&apos;s at the bottom of the page. Click <b>Generate Token</b> — you will get both an access token and a refresh token.
+        </NextStep>
+        <NextStep n={3} label="Paste both tokens above">
+          They will be saved to your account and reused for future bot creation.
+        </NextStep>
+      </div>
+
+      <p className="text-[0.75rem]" style={{ color: "var(--ink-4)" }}>
+        You can update these tokens later in{" "}
+        <a href="/dashboard/account" className="underline" style={{ color: "var(--ink-3)" }}>
+          Account settings
+        </a>.
+      </p>
+    </div>
+  );
+}
+
 export function SlackChoiceStep({
   setupNewBot,
   onChange,
@@ -370,7 +408,7 @@ export function SlackChoiceStep({
         selected={setupNewBot}
         onClick={() => onChange(true)}
         title="Set up a new Slack bot"
-        description="We'll generate a manifest so you can create one in seconds."
+        description="We'll automatically create your Slack app in seconds."
       />
       <ChoiceCard
         selected={!setupNewBot}
@@ -397,26 +435,6 @@ export function BotBuilderStep({
   botColor: string;
   onBotColorChange: (v: string) => void;
 }) {
-  const [copied, setCopied] = useState(false);
-  const manifest = generateManifest(botName, botDescription, botColor);
-
-  function copyManifest() {
-    void navigator.clipboard.writeText(manifest).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
-  }
-
-  function downloadManifest() {
-    const blob = new Blob([manifest], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${botName.toLowerCase().replace(/\s+/g, "-")}-manifest.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }
-
   return (
     <div className="flex flex-col gap-5">
       <FormField label="Bot display name" hint="Shown in Slack — can be changed later">
@@ -462,89 +480,65 @@ export function BotBuilderStep({
           />
         </div>
       </FormField>
-
-      <div>
-        <div className="flex items-center justify-between mb-2">
-          <span className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>
-            Generated manifest
-          </span>
-          <div className="flex gap-1.5">
-            <button className="af-btn af-btn-sm" onClick={copyManifest}>
-              {copied ? "Copied!" : "Copy"}
-            </button>
-            <button className="af-btn af-btn-sm" onClick={downloadManifest}>
-              Download
-            </button>
-          </div>
-        </div>
-        <pre
-          className="rounded-xl font-mono text-[0.719rem] leading-[1.6] p-4 overflow-x-auto"
-          style={{
-            background: "var(--bg-elev)",
-            border: "1px solid var(--line)",
-            color: "var(--ink-2)",
-            maxHeight: "14rem",
-          }}
-        >
-          {manifest}
-        </pre>
-      </div>
-
-      <div
-        className="flex flex-col gap-3 rounded-2xl p-4"
-        style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
-      >
-        <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
-          What to do next
-        </div>
-        <NextStep n={1} label="Create your Slack app from this manifest">
-          Copy the manifest above, then click the link to open Slack&apos;s app creation page.
-          Choose <b>From an app manifest</b>, paste it in, and create the app.{" "}
-          <a
-            href="https://api.slack.com/apps?new_app=1"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline"
-            style={{ color: "var(--ink-2)" }}
-          >
-            Create app ↗
-          </a>
-        </NextStep>
-        <NextStep n={2} label="Install the app to your workspace">
-          In your new app&apos;s settings, go to <b>Install App</b> and click{" "}
-          <b>Install to [your workspace name]</b>. Slack will generate a{" "}
-          <span className="font-mono text-xs">xoxb-…</span> bot token automatically.{" "}
-          <a
-            href="https://api.slack.com/apps"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline"
-            style={{ color: "var(--ink-2)" }}
-          >
-            Your apps ↗
-          </a>
-        </NextStep>
-        <NextStep n={3} label="Create an App-Level Token">
-          Go to <b>Basic Information</b> → <b>App-Level Tokens</b> → <b>Generate Token and Scopes</b>.
-          Name it anything and add the <span className="font-mono text-xs">connections:write</span> scope.
-          This creates your <span className="font-mono text-xs">xapp-…</span> token, required for Socket Mode.{" "}
-          <a
-            href="https://api.slack.com/apps"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline"
-            style={{ color: "var(--ink-2)" }}
-          >
-            Your apps ↗
-          </a>
-        </NextStep>
-        <NextStep n={4} label="Come back and enter both tokens">
-          You&apos;ll paste them on the next screen.
-        </NextStep>
-      </div>
     </div>
   );
 }
+
+const SLACK_EXAMPLE_MANIFEST = JSON.stringify(
+  {
+    display_information: {
+      name: "Your Bot Name",
+      description: "Your bot description.",
+      background_color: "#4A154B",
+    },
+    features: {
+      app_home: {
+        home_tab_enabled: false,
+        messages_tab_enabled: true,
+        messages_tab_read_only_enabled: false,
+      },
+      bot_user: {
+        display_name: "Your Bot Name",
+        always_online: true,
+      },
+    },
+    oauth_config: {
+      scopes: {
+        bot: [
+          "app_mentions:read", "canvases:read", "canvases:write",
+          "channels:history", "channels:join", "channels:read",
+          "chat:write", "chat:write.customize", "chat:write.public",
+          "emoji:read", "files:read", "files:write",
+          "groups:history", "groups:read",
+          "im:history", "im:read", "im:write",
+          "mpim:history", "mpim:read", "mpim:write",
+          "pins:read", "pins:write",
+          "reactions:read", "reactions:write",
+          "search:read.users", "users:read", "users:read.email",
+        ],
+      },
+      pkce_enabled: false,
+    },
+    settings: {
+      event_subscriptions: {
+        bot_events: [
+          "app_mention", "channel_rename",
+          "member_joined_channel", "member_left_channel",
+          "message.channels", "message.groups", "message.im", "message.mpim",
+          "pin_added", "pin_removed",
+          "reaction_added", "reaction_removed",
+        ],
+      },
+      interactivity: { is_enabled: true },
+      org_deploy_enabled: false,
+      socket_mode_enabled: true,
+      token_rotation_enabled: false,
+      is_mcp_enabled: false,
+    },
+  },
+  null,
+  2,
+);
 
 export function SlackTokensStep({
   slackAppToken,
@@ -556,6 +550,9 @@ export function SlackTokensStep({
   showBotToken,
   onToggleBotToken,
   error,
+  appId,
+  botTokenUrl,
+  appTokenUrl,
 }: {
   slackAppToken: string;
   onAppTokenChange: (v: string) => void;
@@ -566,7 +563,19 @@ export function SlackTokensStep({
   showBotToken: boolean;
   onToggleBotToken: () => void;
   error: string | null;
+  appId?: string | null;
+  botTokenUrl?: string | null;
+  appTokenUrl?: string | null;
 }) {
+  const [manifestCopied, setManifestCopied] = useState(false);
+
+  function copyManifest() {
+    void navigator.clipboard.writeText(SLACK_EXAMPLE_MANIFEST).then(() => {
+      setManifestCopied(true);
+      setTimeout(() => setManifestCopied(false), 2000);
+    });
+  }
+
   return (
     <form autoComplete="off" className="flex flex-col gap-5" onSubmit={(e) => e.preventDefault()}>
       <div
@@ -590,6 +599,11 @@ export function SlackTokensStep({
             onToggle={onToggleAppToken}
             placeholder="xapp-1-…"
           />
+          {slackAppToken && !slackAppToken.startsWith("xapp-") && (
+            <div className="text-[0.75rem] mt-1" style={{ color: "var(--err)" }}>
+              App-level tokens start with xapp-
+            </div>
+          )}
         </FormField>
 
         <FormField label="Bot token" hint="Starts with xoxb- · required for API calls">
@@ -600,6 +614,11 @@ export function SlackTokensStep({
             onToggle={onToggleBotToken}
             placeholder="xoxb-…"
           />
+          {slackBotToken && !slackBotToken.startsWith("xoxb-") && (
+            <div className="text-[0.75rem] mt-1" style={{ color: "var(--err)" }}>
+              Bot tokens start with xoxb-
+            </div>
+          )}
         </FormField>
 
         {error && (
@@ -608,6 +627,95 @@ export function SlackTokensStep({
           </div>
         )}
       </div>
+
+      {!appId && (
+        <div
+          className="flex flex-col gap-3 rounded-2xl p-4"
+          style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
+        >
+          <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
+            Configure your existing Slack app
+          </div>
+          <NextStep n={1} label="Apply the manifest">
+            Go to{" "}
+            <a
+              href="https://api.slack.com/apps"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline"
+              style={{ color: "var(--ink-2)" }}
+            >
+              api.slack.com/apps ↗
+            </a>
+            {" "}→ open your app → <b>Features → App Manifest</b>. Paste the manifest below (or merge the scopes and settings into your existing one) and click <b>Save Changes</b>. Update the <span className="font-mono text-xs">name</span> and <span className="font-mono text-xs">description</span> fields to match your bot.
+          </NextStep>
+          <NextStep n={2} label="Generate an App-Level Token">
+            Go to <b>Basic Information</b> → scroll to <b>App-Level Tokens</b> → click <b>Generate Token and Scopes</b>. Name it anything, add the <span className="font-mono text-xs">connections:write</span> scope, and copy the generated <span className="font-mono text-xs">xapp-…</span> token.
+          </NextStep>
+          <NextStep n={3} label="Install the app to your workspace">
+            Go to <b>Install App</b> and click <b>Install to Workspace</b>. After installing, copy the <b>Bot User OAuth Token</b> (<span className="font-mono text-xs">xoxb-…</span>).
+          </NextStep>
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <span className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>
+                Manifest
+              </span>
+              <button type="button" className="af-btn af-btn-sm" onClick={copyManifest}>
+                {manifestCopied ? "Copied!" : "Copy"}
+              </button>
+            </div>
+            <pre
+              className="rounded-xl font-mono text-[0.719rem] leading-[1.6] p-4 overflow-x-auto"
+              style={{
+                background: "var(--bg-elev)",
+                border: "1px solid var(--line)",
+                color: "var(--ink-2)",
+                maxHeight: "14rem",
+              }}
+            >
+              {SLACK_EXAMPLE_MANIFEST}
+            </pre>
+          </div>
+        </div>
+      )}
+
+      {appId && (
+        <div
+          className="flex flex-col gap-3 rounded-2xl p-4"
+          style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
+        >
+          <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
+            Your Slack app is created!
+          </div>
+          <NextStep n={1} label="Generate an App-Level Token">
+            Go to{" "}
+            <a
+              href={appTokenUrl ?? "#"}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline"
+              style={{ color: "var(--ink-2)" }}
+            >
+              Basic Information ↗
+            </a>
+            {" "}→ scroll to <b>App-Level Tokens</b> → click <b>Generate Token and Scopes</b>. Name it anything, add the <span className="font-mono text-xs">connections:write</span> scope, and copy the generated <span className="font-mono text-xs">xapp-…</span> token.
+          </NextStep>
+          <NextStep n={2} label="Install the app to your workspace">
+            Go to{" "}
+            <a
+              href={botTokenUrl ?? "#"}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline"
+              style={{ color: "var(--ink-2)" }}
+            >
+              Install App ↗
+            </a>
+            {" "}and click <b>Install to Workspace</b>. After installing, the page will show a <b>Bot User OAuth Token</b> (<span className="font-mono text-xs">xoxb-…</span>) — copy it.
+          </NextStep>
+          <NextStep n={3} label="Paste both tokens above" />
+        </div>
+      )}
     </form>
   );
 }
@@ -677,15 +785,15 @@ export function generateTeamsManifest(
       id: appId || "{{YOUR_APP_ID}}",
       packageName: "com.agentfarm.bot",
       developer: {
-        name: "Agent Farm",
+        name: "Agent Barn",
         websiteUrl: "https://agent-farm.k8s.aai-labs.com",
         privacyUrl: "https://agent-farm.k8s.aai-labs.com",
         termsOfUseUrl: "https://agent-farm.k8s.aai-labs.com",
       },
-      name: { short: botName, full: `${botName} - Agent Farm` },
+      name: { short: botName, full: `${botName} - Agent Barn` },
       description: {
         short: botDescription,
-        full: `${botDescription}\n\nPowered by Agent Farm.`,
+        full: `${botDescription}\n\nPowered by Agent Barn.`,
       },
       icons: { color: "color.png", outline: "outline.png" },
       accentColor,
@@ -1081,6 +1189,255 @@ export function DetailsStep({
   );
 }
 
+export function SkillsStep({
+  selectedSkillIds,
+  skillCredentials,
+  onSkillIdsChange,
+  onSkillCredentialsChange,
+}: {
+  selectedSkillIds: string[];
+  skillCredentials: IntegrationDraft[];
+  onSkillIdsChange: (ids: string[]) => void;
+  onSkillCredentialsChange: (drafts: IntegrationDraft[]) => void;
+}) {
+  const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
+  const [visible, setVisible] = useState<Record<string, boolean>>({});
+
+  const { skills, total, isLoading } = useSkills({
+    search: search || undefined,
+    page,
+    pageSize: HIRE_DIALOG_PAGE_SIZE,
+  });
+
+  const totalPages = Math.max(1, Math.ceil(total / HIRE_DIALOG_PAGE_SIZE));
+
+  // Track full Skill objects for selected skills so we can compute requiredProviders
+  // across pages. Users can only toggle visible skills, so this stays in sync.
+  const [selectedSkillObjects, setSelectedSkillObjects] = useState<Skill[]>([]);
+  const requiredProviderIds: string[] = [
+    ...new Set(selectedSkillObjects.flatMap((s) => s.requiredProviders)),
+  ];
+
+  function handleSearchChange(value: string) {
+    setSearch(value);
+    setPage(1);
+  }
+
+  function toggleSkill(skill: Skill) {
+    const isSelected = selectedSkillIds.includes(skill.id);
+    const newIds = isSelected
+      ? selectedSkillIds.filter((id) => id !== skill.id)
+      : [...selectedSkillIds, skill.id];
+    const newObjects = isSelected
+      ? selectedSkillObjects.filter((s) => s.id !== skill.id)
+      : [...selectedSkillObjects, skill];
+
+    const newRequired = new Set(newObjects.flatMap((s) => s.requiredProviders));
+    const newCreds = skillCredentials.filter((c) => newRequired.has(c.provider));
+    for (const p of newRequired) {
+      if (!newCreds.find((c) => c.provider === p)) {
+        newCreds.push({ provider: p, content: {} });
+      }
+    }
+
+    onSkillIdsChange(newIds);
+    onSkillCredentialsChange(newCreds);
+    setSelectedSkillObjects(newObjects);
+  }
+
+  function setField(providerId: string, key: string, value: string) {
+    onSkillCredentialsChange(
+      skillCredentials.map((c) =>
+        c.provider === providerId
+          ? { ...c, content: { ...c.content, [key]: value } }
+          : c,
+      ),
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-5">
+      <p className="text-[0.8125rem] leading-[1.5]" style={{ color: "var(--ink-3)" }}>
+        Choose skills to assign to this agent. Required credentials will appear below as you select skills.
+      </p>
+
+      <div
+        className="flex items-center gap-2 px-3 py-2 rounded-xl"
+        style={{ border: "1px solid var(--line)", background: "var(--bg-elev)" }}
+      >
+        <SearchIcon size={14} style={{ color: "var(--ink-4)", flexShrink: 0 }} />
+        <input
+          className="flex-1 text-[0.8125rem] outline-none bg-transparent"
+          style={{ color: "var(--ink)" }}
+          placeholder="Search skills…"
+          value={search}
+          onChange={(e) => handleSearchChange(e.target.value)}
+        />
+      </div>
+
+      <div style={isLoading ? { minHeight: "22rem" } : undefined}>
+        {isLoading && (
+          <div className="text-[0.8125rem] py-8 text-center" style={{ color: "var(--ink-3)" }}>
+            Loading skills…
+          </div>
+        )}
+        {!isLoading && total === 0 && !search && (
+          <div
+            className="text-[0.8125rem] py-6 text-center rounded-2xl"
+            style={{ border: "1px dashed var(--line-strong)", color: "var(--ink-4)" }}
+          >
+            No skills available. Create skills in <strong>Settings → Skills</strong> first.
+          </div>
+        )}
+        {!isLoading && total === 0 && search && (
+          <div className="text-[0.8125rem] py-8 text-center" style={{ color: "var(--ink-3)" }}>
+            No skills match.
+          </div>
+        )}
+        {!isLoading && skills.length > 0 && (
+          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+            {skills.map((skill) => {
+              const selected = selectedSkillIds.includes(skill.id);
+              return (
+                <div
+                  key={skill.id}
+                  className="flex flex-col gap-1.5 p-4 rounded-2xl cursor-default transition-colors min-h-[4.5rem]"
+                  style={{
+                    border: selected ? "1.5px solid var(--ink)" : "1.5px solid var(--line)",
+                    background: selected ? "var(--bg-soft)" : "var(--bg-elev)",
+                  }}
+                  onClick={() => toggleSkill(skill)}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
+                      {skill.name}
+                    </div>
+                    <SkillSourceBadge source={skill.source} />
+                  </div>
+                  {skill.requiredProviders.length > 0 && (
+                    <div className="text-[0.75rem]" style={{ color: "var(--ink-4)" }}>
+                      {skill.requiredProviders.map((p) => SKILL_PROVIDER_LABELS[p] ?? p).join(", ")}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <Pagination page={page} totalPages={totalPages} onPageChange={setPage} />
+
+      {requiredProviderIds.length > 0 && (
+        <div className="flex flex-col gap-3.5">
+          <div className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>
+            Required credentials
+          </div>
+          {requiredProviderIds.map((providerId) => {
+            const providerSpec = getIntegrationProvider(providerId);
+            const draft = skillCredentials.find((c) => c.provider === providerId);
+            if (!draft) return null;
+
+            if (!providerSpec) {
+              return (
+                <div
+                  key={providerId}
+                  className="px-4 py-3 rounded-2xl text-[0.8125rem]"
+                  style={{ border: "1px solid var(--line)", background: "var(--bg-soft)", color: "var(--ink-3)" }}
+                >
+                  <span className="font-medium" style={{ color: "var(--ink)" }}>
+                    {SKILL_PROVIDER_LABELS[providerId] ?? providerId}
+                  </span>{" "}
+                  — not yet configurable from the UI.
+                </div>
+              );
+            }
+
+            return (
+              <div
+                key={providerId}
+                className="flex flex-col gap-3.5 p-4 rounded-2xl"
+                style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
+              >
+                <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
+                  {providerSpec.label}
+                  <span
+                    className="ml-2 text-[0.6875rem] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full"
+                    style={{ color: "var(--ink-3)", background: "var(--line)" }}
+                  >
+                    Required
+                  </span>
+                </div>
+                {providerSpec.scopeNote && (
+                  <p className="text-[0.75rem] leading-[1.4]" style={{ color: "var(--ink-3)" }}>
+                    {providerSpec.scopeNote}
+                  </p>
+                )}
+                {providerSpec.fields.map((field) => {
+                  const value = draft.content[field.key] ?? "";
+                  const label = field.required ? field.label : `${field.label} (optional)`;
+                  if (field.type === "secret") {
+                    const vkey = `${providerId}:${field.key}`;
+                    return (
+                      <FormField key={field.key} label={label} hint={field.hint}>
+                        <TokenInput
+                          value={value}
+                          onChange={(v) => setField(providerId, field.key, v)}
+                          visible={!!visible[vkey]}
+                          onToggle={() => setVisible((s) => ({ ...s, [vkey]: !s[vkey] }))}
+                          placeholder={field.placeholder}
+                        />
+                      </FormField>
+                    );
+                  }
+                  if (field.type === "repo-url") {
+                    const parsed = parseGithubRepoUrl(value);
+                    const invalid = value.length > 0 && !parsed;
+                    return (
+                      <FormField key={field.key} label={label} hint={field.hint}>
+                        <input
+                          className={`af-input${invalid ? " border-red-400" : ""}`}
+                          value={value}
+                          onChange={(e) => setField(providerId, field.key, e.target.value)}
+                          placeholder={field.placeholder}
+                          autoComplete="off"
+                        />
+                        {parsed && (
+                          <p className="text-[0.75rem] mt-1" style={{ color: "var(--ink-3)" }}>
+                            owner: <strong>{parsed.owner}</strong> · repo:{" "}
+                            <strong>{parsed.repo}</strong>
+                          </p>
+                        )}
+                        {invalid && (
+                          <p className="text-[0.75rem] mt-1 text-red-500">
+                            Must be a valid GitHub URL, e.g. https://github.com/owner/repo.git
+                          </p>
+                        )}
+                      </FormField>
+                    );
+                  }
+                  return (
+                    <FormField key={field.key} label={label} hint={field.hint}>
+                      <input
+                        className="af-input"
+                        value={value}
+                        onChange={(e) => setField(providerId, field.key, e.target.value)}
+                        placeholder={field.placeholder}
+                        autoComplete="off"
+                      />
+                    </FormField>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function IntegrationsStep({
   integrations,
   onChange,
@@ -1139,6 +1496,11 @@ export function IntegrationsStep({
                 <XIcon size={15} />
               </button>
             </div>
+            {provider.scopeNote && (
+              <p className="text-[0.75rem] leading-[1.4]" style={{ color: "var(--ink-3)" }}>
+                {provider.scopeNote}
+              </p>
+            )}
 
             {provider.fields.map((field) => {
               const value = draft.content[field.key] ?? "";

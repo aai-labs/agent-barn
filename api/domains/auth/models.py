@@ -3,7 +3,7 @@ from uuid import UUID
 
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic import EmailStr
-from sqlalchemy import Column, DateTime, Index
+from sqlalchemy import Column, DateTime, Index, UniqueConstraint
 from sqlmodel.main import Field
 
 from api.domains.auth.exceptions import ForbiddenException
@@ -68,6 +68,27 @@ class PasswordResetToken(BaseModel, table=True):
     expires_at: datetime = Field(
         sa_column=Column(DateTime(timezone=True), nullable=False)
     )
+
+
+class UserSlackConfigToken(BaseModel, table=True):
+    __tablename__: str = "user_slack_config_token"
+    __table_args__ = (
+        UniqueConstraint("user_id", name="uq_user_slack_config_token_user"),
+    )
+
+    user_id: UUID = Field(foreign_key="user.id", nullable=False, ondelete="CASCADE")
+    access_token_encrypted: str = Field(nullable=False)
+    refresh_token_encrypted: str = Field(nullable=False, default="")
+
+
+class SlackConfigTokenSave(PydanticBaseModel):
+    access_token: str = Field(min_length=1)
+    refresh_token: str = Field(min_length=1)
+
+
+class SlackConfigTokenRead(PydanticBaseModel):
+    has_token: bool
+    token_preview: str | None = None
 
 
 class CurrentUserContext(PydanticBaseModel):

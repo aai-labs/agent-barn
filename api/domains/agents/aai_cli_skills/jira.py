@@ -2,12 +2,19 @@
 
 JIRA_SKILLS: list[dict[str, str]] = [
     {
-        "skill_name": "aai-cli",
-        "skill_file_path": "aai-cli/jira_skill/jira_skill.md",
+        "skill_file_path": "aai-cli/jira_skill.md",
         "skill_content": """\
 # aai-cli Jira Skill
 
 Agent reference for the `aai-cli jira` command group.
+
+## IMPORTANT: credentials are already configured
+
+The tool is fully set up on this agent. **Do not ask the user for credentials, site URLs,
+tokens, or any config details.** The profile is on disk and ready. Just run the command.
+
+If the command returns an error, show the raw error output to the user — do not ask them
+to provide config or credentials.
 
 ## Required flag
 
@@ -47,26 +54,9 @@ All errors print to stderr as a single JSON line:
 
 Exit code is non-zero on any error.
 
-## Resource reference
-
-Read the file for the resource you need:
-
-| Resource | Commands | File |
-|---|---|---|
-| Issues | list, get, create, update, comments list/get/create, attachments list/download/upload | [jira_issue_skill/jira_issue_skill.md](jira_issue_skill/jira_issue_skill.md) |
-| Projects | list, get | [jira_project_skill/jira_project_skill.md](jira_project_skill/jira_project_skill.md) |
-| Sprints | list, get, create, issues add | [jira_sprint_skill/jira_sprint_skill.md](jira_sprint_skill/jira_sprint_skill.md) |
-| Boards | list, get | [jira_board_skill/jira_board_skill.md](jira_board_skill/jira_board_skill.md) |
-| Users | get | [jira_user_skill/jira_user_skill.md](jira_user_skill/jira_user_skill.md) |
-""",
-    },
-    {
-        "skill_name": "aai-cli",
-        "skill_file_path": "aai-cli/jira_skill/jira_board_skill/jira_board_skill.md",
-        "skill_content": """\
 # Jira Boards Skill
 
-Commands under `aai-cli jira boards`. For global flags and error shapes see [../jira_skill.md](../jira_skill.md).
+Commands under `aai-cli jira boards`.
 
 ---
 
@@ -150,15 +140,10 @@ aai-cli jira boards get 1 --profile jira-work
   "type": "simple"
 }
 ```
-""",
-    },
-    {
-        "skill_name": "aai-cli",
-        "skill_file_path": "aai-cli/jira_skill/jira_issue_skill/jira_issue_skill.md",
-        "skill_content": """\
+
 # Jira Issues Skill
 
-Commands under `aai-cli jira issues`. For global flags and error shapes see [../jira_skill.md](../jira_skill.md).
+Commands under `aai-cli jira issues`.
 
 ---
 
@@ -627,15 +612,10 @@ aai-cli jira issues attachments upload SCRUM-1 --file /tmp/report.pdf --profile 
   }
 ]
 ```
-""",
-    },
-    {
-        "skill_name": "aai-cli",
-        "skill_file_path": "aai-cli/jira_skill/jira_project_skill/jira_project_skill.md",
-        "skill_content": """\
+
 # Jira Projects Skill
 
-Commands under `aai-cli jira projects`. For global flags and error shapes see [../jira_skill.md](../jira_skill.md).
+Commands under `aai-cli jira projects`.
 
 ---
 
@@ -712,15 +692,10 @@ aai-cli jira projects get SCRUM --profile jira-work
   "style": "classic"
 }
 ```
-""",
-    },
-    {
-        "skill_name": "aai-cli",
-        "skill_file_path": "aai-cli/jira_skill/jira_sprint_skill/jira_sprint_skill.md",
-        "skill_content": """\
+
 # Jira Sprints Skill
 
-Commands under `aai-cli jira sprints`. For global flags and error shapes see [../jira_skill.md](../jira_skill.md).
+Commands under `aai-cli jira sprints`.
 
 ---
 
@@ -889,15 +864,10 @@ aai-cli jira sprints issues add 2 --issues SCRUM-5,SCRUM-6 --profile jira-work
 ```
 
 An empty `{}` response means success.
-""",
-    },
-    {
-        "skill_name": "aai-cli",
-        "skill_file_path": "aai-cli/jira_skill/jira_user_skill/jira_user_skill.md",
-        "skill_content": """\
+
 # Jira Users Skill
 
-Commands under `aai-cli jira users`. For global flags and error shapes see [../jira_skill.md](../jira_skill.md).
+Commands under `aai-cli jira users`.
 
 ---
 

@@ -5,6 +5,7 @@ export const AgentSlackConfigSchema = z.object({
   dmUserIds: z.array(z.string()),
   groupPolicy: z.enum(["open", "allowlist"]),
   dmPolicy: z.enum(["off", "open", "allowlist"]),
+  botDisplayName: z.string().nullable().optional(),
 });
 
 export const AgentTeamsConfigSchema = z.object({
@@ -14,6 +15,26 @@ export const AgentTeamsConfigSchema = z.object({
 export const AgentSecretReadSchema = z.object({
   provider: z.string(),
   secretName: z.string(),
+});
+
+export const IntegrationValidationResultSchema = z.object({
+  validationStatus: z.enum(["valid", "warning", "invalid"]),
+  validationIdentity: z.string().nullable().optional(),
+  validationError: z.string().nullable().optional(),
+  missingScopes: z.array(z.string()).default([]),
+});
+
+export type AgentSecretRead = z.infer<typeof AgentSecretReadSchema>;
+export type IntegrationValidationResult = z.infer<typeof IntegrationValidationResultSchema>;
+
+export const AgentAssignedSkillSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+  source: z.string(),
+  requiredProviders: z.array(z.string()),
+  toolsPointer: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
 });
 
 export const AgentSchema = z.object({
@@ -29,6 +50,7 @@ export const AgentSchema = z.object({
   slackConfig: AgentSlackConfigSchema.nullable().optional(),
   teamsConfig: AgentTeamsConfigSchema.nullable().optional(),
   secrets: z.array(AgentSecretReadSchema).optional(),
+  skills: z.array(AgentAssignedSkillSchema).default([]),
   webhookUrl: z.string().nullable().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -157,6 +179,7 @@ export const ModelOptionSchema = z.object({
 });
 
 export type Agent = z.infer<typeof AgentSchema>;
+export type AgentAssignedSkill = z.infer<typeof AgentAssignedSkillSchema>;
 export type AgentSlackConfig = z.infer<typeof AgentSlackConfigSchema>;
 export type AgentTeamsConfig = z.infer<typeof AgentTeamsConfigSchema>;
 export type AgentHealth = z.infer<typeof AgentHealthSchema>;

@@ -52,4 +52,60 @@ export class AgentDetailPage {
       .locator("aside")
       .getByPlaceholder(/search channels|loading channels/i);
   }
+
+  skillsTab(): Locator {
+    return this.page.getByRole("button", { name: /^skills$/i });
+  }
+
+  skillsSearchInput(): Locator {
+    return this.page.getByPlaceholder("Search skills…");
+  }
+
+  addSkillButton(): Locator {
+    return this.page.getByRole("button", { name: "Add" });
+  }
+
+  removeSkillButton(): Locator {
+    return this.page.getByRole("button", { name: "Remove" });
+  }
+
+  undoSkillButton(): Locator {
+    return this.page.getByRole("button", { name: "Undo" });
+  }
+
+  cancelSkillButton(): Locator {
+    return this.page.getByRole("button", { name: "Cancel" });
+  }
+
+  saveSkillsButton(): Locator {
+    return this.page.getByRole("button", { name: "Save changes" });
+  }
+
+  keysTab(): Locator {
+    return this.page.getByRole("button", { name: /^keys$/i });
+  }
+
+  appTokenInput(): Locator {
+    return this.page.getByPlaceholder(/xapp-/);
+  }
+
+  botTokenInput(): Locator {
+    return this.page.getByPlaceholder(/xoxb-/);
+  }
+
+  saveTokensButton(): Locator {
+    return this.page.getByRole("button", { name: "Save tokens" });
+  }
+
+  saveIntegrationsButton(): Locator {
+    return this.page.getByRole("button", { name: "Save integrations" });
+  }
+
+  removeCredentialButton(): Locator {
+    return this.page.getByRole("button", { name: "Remove" });
+  }
+
+  undoCredentialButton(): Locator {
+    return this.page.getByRole("button", { name: "Undo" });
+  }
 }

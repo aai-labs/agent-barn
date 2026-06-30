@@ -7,6 +7,7 @@ from sqlalchemy import engine_from_config, pool
 from sqlmodel import SQLModel
 
 import api.domains.agents.models  # noqa: F401
+import api.domains.skills.models  # noqa: F401
 import api.domains.auth.models  # noqa: F401
 import api.domains.conversations.models  # noqa: F401
 import api.domains.costs.models  # noqa: F401

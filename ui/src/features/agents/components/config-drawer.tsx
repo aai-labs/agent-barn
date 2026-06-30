@@ -1,16 +1,18 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import type { Agent } from "../schemas";
+import type { Agent, IntegrationValidationResult } from "../schemas";
 import { useAgentTemplate } from "../hooks/use-agent-template";
 import { useUpdateAgent } from "../hooks/use-update-agent";
 import { useDeleteAgent } from "../hooks/use-delete-agent";
+import { useValidateIntegration } from "../hooks/use-validate-integration";
 import { XIcon, LockIcon } from "@/components/icons";
 import { TokenInput } from "./hire-dialog-primitives";
 import { IntegrationsStep, TemplateSourceBadge, VersionSelect } from "./hire-dialog-steps";
 import { ModelSelect } from "./model-select";
 import {
+  expandGithubContent,
   getIntegrationProvider,
   hasIncompleteIntegration,
   type IntegrationDraft,
@@ -18,6 +20,7 @@ import {
 import { SlackConfigPanel } from "./slack-config-panel";
 import { useTemplates } from "../hooks/use-templates";
 import { useTemplateVersions } from "../hooks/use-template-versions";
+import { AgentSkillsTab } from "./agent-skills-tab";
 
 interface ConfigDrawerProps {
   agent: Agent;
@@ -32,7 +35,7 @@ function getTabs(platform: "slack" | "teams"): [string, string, boolean][] {
     ["secrets", "Keys", true],
     ...(platform === "slack" ? [["channels", "Channels", true] as [string, string, boolean]] : []),
     ...(platform === "teams" ? [["endpoint", "Endpoint", true] as [string, string, boolean]] : []),
-    ["skills", "Skills", false],
+    ["skills", "Skills", true],
     ["k8s", "Infrastructure", false],
     ["danger", "Danger zone", true],
   ];
@@ -78,6 +81,8 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
   const [secretDrafts, setSecretDrafts] = useState<IntegrationDraft[]>([]);
   const [removedProviders, setRemovedProviders] = useState<string[]>([]);
   const [savedSecrets, setSavedSecrets] = useState(false);
+  const [errorSection, setErrorSection] = useState<"tokens" | "secrets" | null>(null);
+  const [pendingSection, setPendingSection] = useState<"tokens" | "secrets" | null>(null);
 
   const tabs = getTabs(agent.platform);
   // Clamp the URL-provided tab to one that's actually reachable for this agent
@@ -87,9 +92,44 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
     .map(([k]) => k as TabKey);
   const tab: TabKey = enabledKeys.includes(activeTab) ? activeTab : "personality";
 
-  const configuredSecrets = (agent.secrets ?? []).filter(
-    (s) => !removedProviders.includes(s.provider),
-  );
+  const configuredSecrets = agent.secrets ?? [];
+  const validateIntegration = useValidateIntegration();
+  const [validationState, setValidationState] = useState<
+    Record<string, IntegrationValidationResult | "loading">
+  >({});
+
+  function triggerValidation(providers?: string[]) {
+    const targets = providers ?? configuredSecrets.map((s) => s.provider);
+    for (const provider of targets) {
+      setValidationState((vs) => ({ ...vs, [provider]: "loading" }));
+      validateIntegration
+        .mutateAsync({ agentId: agent.id, provider })
+        .then(({ provider: p, result }) =>
+          setValidationState((vs) => ({ ...vs, [p]: result })),
+        )
+        .catch(() =>
+          setValidationState((vs) => {
+            const next = { ...vs };
+            delete next[provider];
+            return next;
+          }),
+        );
+    }
+  }
+
+  // Validate all secrets when the secrets tab is already active on mount.
+  useEffect(() => {
+    if (tab === "secrets" && configuredSecrets.length > 0) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      triggerValidation();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function handleTabChange(newTab: TabKey) {
+    onTabChange(newTab);
+    if (newTab === "secrets" && configuredSecrets.length > 0) triggerValidation();
+  }
 
   const isRunning = agent.status === "RUNNING";
 
@@ -134,6 +174,8 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
 
   async function handleSaveTokens() {
     updateAgent.reset();
+    setErrorSection(null);
+    setPendingSection("tokens");
     try {
       if (agent.platform === "teams") {
         await updateAgent.mutateAsync({
@@ -152,21 +194,26 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
       setSavedTokens(true);
       setTimeout(() => setSavedTokens(false), 2000);
     } catch {
-      // error displayed via updateAgent.error
+      setErrorSection("tokens");
+    } finally {
+      setPendingSection(null);
     }
   }
 
   async function handleSaveSecrets() {
     updateAgent.reset();
+    setErrorSection(null);
+    setPendingSection("secrets");
     try {
       // If a provider is both re-added (draft) and removed, treat it as a
       // replace — the upsert wins (the backend rejects a provider in both lists).
       const draftProviders = new Set(secretDrafts.map((d) => d.provider));
+      const updatedProviders = [...draftProviders];
       await updateAgent.mutateAsync({
         agentId: agent.id,
         secrets: secretDrafts.map((d) => ({
           provider: d.provider,
-          content: d.content,
+          content: d.provider === "github" ? expandGithubContent(d.content) : d.content,
         })),
         removedSecretProviders: removedProviders.filter(
           (p) => !draftProviders.has(p),
@@ -176,8 +223,12 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
       setRemovedProviders([]);
       setSavedSecrets(true);
       setTimeout(() => setSavedSecrets(false), 2000);
+      if (updatedProviders.length > 0) triggerValidation(updatedProviders);
     } catch {
-      // error displayed via updateAgent.error
+      setRemovedProviders([]);
+      setErrorSection("secrets");
+    } finally {
+      setPendingSection(null);
     }
   }
 
@@ -228,7 +279,7 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
               className="af-drawer-tab"
               data-active={tab === k}
               disabled={!enabled}
-              onClick={() => enabled && onTabChange(k as TabKey)}
+              onClick={() => enabled && handleTabChange(k as TabKey)}
               style={!enabled ? { opacity: 0.35, cursor: "default" } : undefined}
             >
               {l}
@@ -396,14 +447,7 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
           )}
 
           {tab === "skills" && (
-            <div
-              className="flex flex-col items-center justify-center text-center py-14 rounded-2xl"
-              style={{ border: "1px dashed var(--line-strong)" }}
-            >
-              <div className="text-2xl mb-2">🚧</div>
-              <div className="font-medium text-sm mb-1" style={{ color: "var(--ink)" }}>Coming soon</div>
-              <div className="text-[0.8125rem]" style={{ color: "var(--ink-3)" }}>Skill management will appear here soon.</div>
-            </div>
+            <AgentSkillsTab agent={agent} isRunning={isRunning} />
           )}
 
           {tab === "secrets" && agent.platform === "slack" && (
@@ -411,6 +455,11 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
               <Hint>
                 Tokens are write-only — leave a field blank to keep the existing value.
               </Hint>
+              {agent.slackConfig?.botDisplayName && (
+                <div className="text-[0.844rem]" style={{ color: "var(--ink-3)" }}>
+                  Slack bot name: <span className="font-mono" style={{ color: "var(--ink-2)" }}>@{agent.slackConfig.botDisplayName}</span>
+                </div>
+              )}
               <div className="flex flex-col gap-3.5">
                 <div className="flex flex-col gap-1.5">
                   <label className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>App-level token</label>
@@ -440,12 +489,12 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
               <div className="flex gap-2 items-center">
                 <button
                   className="af-btn af-btn-sm"
-                  disabled={isRunning || updateAgent.isPending || (!slackAppToken.trim() && !slackBotToken.trim())}
+                  disabled={isRunning || pendingSection === "tokens" || (!slackAppToken.trim() && !slackBotToken.trim())}
                   onClick={() => { void handleSaveTokens(); }}
                 >
-                  {updateAgent.isPending ? "Saving…" : savedTokens ? "Saved!" : "Save tokens"}
+                  {pendingSection === "tokens" ? "Saving…" : savedTokens ? "Saved!" : "Save tokens"}
                 </button>
-                {updateAgent.error && (
+                {updateAgent.error && errorSection === "tokens" && (
                   <span className="text-xs" style={{ color: "var(--err)" }}>
                     {updateAgent.error instanceof Error ? updateAgent.error.message : "Save failed"}
                   </span>
@@ -498,12 +547,12 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
               <div className="flex gap-2 items-center">
                 <button
                   className="af-btn af-btn-sm"
-                  disabled={isRunning || updateAgent.isPending || (!teamsAppId.trim() && !teamsAppPassword.trim() && !teamsTenantId.trim())}
+                  disabled={isRunning || pendingSection === "tokens" || (!teamsAppId.trim() && !teamsAppPassword.trim() && !teamsTenantId.trim())}
                   onClick={() => { void handleSaveTokens(); }}
                 >
-                  {updateAgent.isPending ? "Saving…" : savedTokens ? "Saved!" : "Save credentials"}
+                  {pendingSection === "tokens" ? "Saving…" : savedTokens ? "Saved!" : "Save credentials"}
                 </button>
-                {updateAgent.error && (
+                {updateAgent.error && errorSection === "tokens" && (
                   <span className="text-xs" style={{ color: "var(--err)" }}>
                     {updateAgent.error instanceof Error ? updateAgent.error.message : "Save failed"}
                   </span>
@@ -526,27 +575,52 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                 <div className="flex flex-col gap-2">
                   {configuredSecrets.map((s) => {
                     const label = getIntegrationProvider(s.provider)?.label ?? s.provider;
-                    return (
+                    const isPendingRemoval = removedProviders.includes(s.provider);
+                    return isPendingRemoval ? (
                       <div
                         key={s.provider}
                         className="flex items-center justify-between p-3 rounded-2xl"
-                        style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
+                        style={{ border: "1px dashed var(--line)", opacity: 0.55 }}
                       >
                         <div className="flex flex-col">
-                          <span className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
+                          <span className="font-semibold text-[0.844rem] line-through" style={{ color: "var(--ink-3)" }}>
                             {label}
                           </span>
                           <span className="text-xs" style={{ color: "var(--ink-4)" }}>
-                            {s.secretName} · configured
+                            {s.secretName} · will be removed
                           </span>
                         </div>
                         <button
                           className="af-btn af-btn-ghost af-btn-sm"
-                          disabled={isRunning}
-                          onClick={() => setRemovedProviders((r) => [...r, s.provider])}
+                          onClick={() => setRemovedProviders((r) => r.filter((p) => p !== s.provider))}
                         >
-                          Remove
+                          Undo
                         </button>
+                      </div>
+                    ) : (
+                      <div
+                        key={s.provider}
+                        className="flex items-center justify-between p-3 rounded-2xl gap-3"
+                        style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
+                      >
+                        <div className="flex flex-col gap-0.5 min-w-0">
+                          <span className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
+                            {label}
+                          </span>
+                          <ValidationBadge
+                            secretName={s.secretName}
+                            result={validationState[s.provider]}
+                          />
+                        </div>
+                        <div className="flex gap-1.5 shrink-0">
+                          <button
+                            className="af-btn af-btn-ghost af-btn-sm"
+                            disabled={isRunning}
+                            onClick={() => setRemovedProviders((r) => [...r, s.provider])}
+                          >
+                            Remove
+                          </button>
+                        </div>
                       </div>
                     );
                   })}
@@ -570,15 +644,15 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                   className="af-btn af-btn-sm"
                   disabled={
                     isRunning ||
-                    updateAgent.isPending ||
+                    pendingSection === "secrets" ||
                     hasIncompleteIntegration(secretDrafts) ||
                     (secretDrafts.length === 0 && removedProviders.length === 0)
                   }
                   onClick={() => { void handleSaveSecrets(); }}
                 >
-                  {updateAgent.isPending ? "Saving…" : savedSecrets ? "Saved!" : "Save integrations"}
+                  {pendingSection === "secrets" ? "Saving…" : savedSecrets ? "Saved!" : "Save integrations"}
                 </button>
-                {updateAgent.error && (
+                {updateAgent.error && errorSection === "secrets" && (
                   <span className="text-xs" style={{ color: "var(--err)" }}>
                     {updateAgent.error instanceof Error ? updateAgent.error.message : "Save failed"}
                   </span>
@@ -641,8 +715,6 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
             <div>
               <Hint>Permanent actions. Pause first if you&apos;re not sure.</Hint>
               <div className="flex gap-2 flex-wrap mt-2">
-                <button className="af-btn">Restart agent</button>
-                <button className="af-btn">Reset workspace</button>
                 <button
                   className="af-btn"
                   style={{ borderColor: "var(--err)", color: "var(--err)" }}
@@ -709,6 +781,59 @@ function Hint({ children }: { children: React.ReactNode }) {
     >
       {children}
     </div>
+  );
+}
+
+function ValidationBadge({
+  secretName,
+  result,
+}: {
+  secretName: string;
+  result: IntegrationValidationResult | "loading" | undefined;
+}) {
+  if (result === undefined) {
+    return (
+      <span className="text-xs" style={{ color: "var(--ink-4)" }}>
+        {secretName} · not yet validated
+      </span>
+    );
+  }
+
+  if (result === "loading") {
+    return (
+      <span className="text-xs" style={{ color: "var(--ink-4)" }}>
+        Checking…
+      </span>
+    );
+  }
+
+  if (result.validationStatus === "valid") {
+    return (
+      <span className="text-xs" style={{ color: "var(--ok)" }}>
+        ✓ {result.validationIdentity ?? "Connected"}
+      </span>
+    );
+  }
+
+  if (result.validationStatus === "warning") {
+    return (
+      <div className="flex flex-col gap-0.5">
+        <span className="text-xs" style={{ color: "var(--warn)" }}>
+          ⚠ {result.validationIdentity ?? "Connected"} — missing scopes
+        </span>
+        {result.missingScopes.length > 0 && (
+          <span className="text-xs" style={{ color: "var(--ink-4)" }}>
+            {result.missingScopes.join(", ")}
+          </span>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <span className="text-xs" style={{ color: "var(--err)" }}>
+      ✕ {result.validationError ?? "Invalid credentials"}
+    </span>
   );
 }
 

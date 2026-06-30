@@ -54,13 +54,6 @@ class SecretProvider(str, enum.Enum):
     ZOHO_CALENDAR = "zoho_calendar"
 
 
-class SkillSource(str, enum.Enum):
-    # Predefined skill docs for the baked-in aai-cli tool.
-    AAI_CLI = "aai_cli"
-    # User-entered skills (future; reuse the same table + injection).
-    CUSTOM = "custom"
-
-
 # Predefined display labels — NOT user-entered; the backend stamps these by provider.
 PROVIDER_DISPLAY_NAMES: dict[SecretProvider, str] = {
     SecretProvider.GITHUB: "GitHub credential",
@@ -275,24 +268,15 @@ class AgentSkill(BaseModel, table=True):
     __tablename__: str = "agent_skill"
 
     __table_args__ = (
-        sa.UniqueConstraint(
-            "agent_id", "skill_file_path", name="uq_agent_skill_agent_file_path"
-        ),
+        sa.UniqueConstraint("agent_id", "skill_id", name="uq_agent_skill_agent_skill"),
     )
 
     agent_id: UUID = SqlField(
         foreign_key="agent.id", nullable=False, ondelete="CASCADE"
     )
-    source: SkillSource = SqlField(
-        sa_column=Column(sa.String(), nullable=False)
-    )  # aai_cli | custom
-    skill_name: str = SqlField(
-        nullable=False, max_length=255
-    )  # UI label (out of scope now)
-    skill_file_path: str = SqlField(
-        nullable=False, max_length=1024
-    )  # rel path, reconstructs the workspace dir tree
-    skill_content: str = SqlField(sa_column=Column(sa.Text(), nullable=False))
+    skill_id: UUID = SqlField(
+        foreign_key="skill.id", nullable=False, ondelete="CASCADE"
+    )
 
 
 class AgentSecretCreate(PydanticBaseModel):  # no secret_name — backend stamps it
@@ -327,6 +311,8 @@ class AgentCreate(PydanticBaseModel):
     model: str | None = None
     # Integration credentials (optional)
     secrets: list[AgentSecretCreate] = Field(default_factory=list)
+    # Custom org skills to assign on creation (optional)
+    skill_ids: list[UUID] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_platform_credentials(self) -> "AgentCreate":
@@ -376,10 +362,20 @@ class AgentUpdate(PydanticBaseModel):
     template_slug: str | None = Field(default=None, min_length=1, max_length=255)
     template_version: int | None = None
     model: str | None = None
+    skill_ids: list[UUID] = Field(default_factory=list)
+    removed_skill_ids: list[UUID] = Field(default_factory=list)
     # Integration credentials: upsert (add/replace) + explicit removal.
     # Providers not mentioned in either list are left untouched.
     secrets: list[AgentSecretCreate] | None = None
     removed_secret_providers: list[SecretProvider] | None = None
+
+    @model_validator(mode="after")
+    def validate_skill_operations(self) -> "AgentUpdate":
+        overlap = set(self.skill_ids) & set(self.removed_skill_ids)
+        if overlap:
+            ids = ", ".join(str(i) for i in overlap)
+            raise ValueError(f"Skill ID(s) cannot be both added and removed: {ids}")
+        return self
 
     @model_validator(mode="after")
     def validate_template_repin(self) -> "AgentUpdate":
@@ -409,6 +405,7 @@ class AgentSlackConfigRead(PydanticBaseModel):
     dm_user_ids: list[str]
     group_policy: SlackGroupPolicy
     dm_policy: SlackDmPolicy
+    bot_display_name: str | None = None  # fetched live from Slack, not persisted
 
 
 class AgentTeamsConfigRead(PydanticBaseModel):
@@ -422,6 +419,18 @@ class AgentSecretRead(PydanticBaseModel):  # label + provider only — no secret
 
     provider: SecretProvider
     secret_name: str
+
+
+class AgentAssignedSkillRead(PydanticBaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    name: str
+    source: str
+    required_providers: list[str]
+    tools_pointer: str | None
+    created_at: datetime
+    updated_at: datetime
 
 
 class AgentRead(PydanticBaseModel):
@@ -439,6 +448,7 @@ class AgentRead(PydanticBaseModel):
     slack_config: AgentSlackConfigRead | None = None
     teams_config: AgentTeamsConfigRead | None = None
     secrets: list[AgentSecretRead] = Field(default_factory=list)
+    skills: list[AgentAssignedSkillRead] = Field(default_factory=list)
     webhook_url: str | None = None
     created_at: datetime
     updated_at: datetime

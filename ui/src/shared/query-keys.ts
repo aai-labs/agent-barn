@@ -16,3 +16,5 @@ export const createQueryKeyStructure = (baseKey: string) => ({
   details: () => [baseKey, "detail"] as const,
   detail: (id: string) => [baseKey, id] as const,
 });
+
+export const slackConfigTokenKey = createQueryKeyStructure("slack-config-token");

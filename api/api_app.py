@@ -12,17 +12,21 @@ from sqlmodel import Session, select
 from api.core.config import get_config
 from api.core.utils import create_injector
 from api.domains.agents.routes import agents_router
+from api.domains.agents.slack_routes import slack_router
 from api.domains.agents.webhook_routes import webhook_router
 from api.domains.auth.routes import auth_router
 from api.domains.conversations.routes import conversations_router
 from api.domains.costs.routes import costs_router
 from api.domains.organizations.routes import org_router
+from api.domains.skills.routes import skills_router
+from api.domains.skills.skill_seeder import seed_aai_cli_skills
 from api.domains.templates.routes import templates_router
 from api.domains.templates.service import TemplateService
 from api.domains.tool_calls.routes import tool_calls_router
 from api.domains.users.routes import users_router
 from api.domains.users.service import UserService
 from api.domains.organizations.service import OrganizationService
+from api.domains.skills.repository import SkillRepository
 from api.domains.auth.utils import set_default_org_id
 from api.domains.users.organization_users.models import (
     OrganizationRole,
@@ -67,6 +71,8 @@ async def lifespan(_: FastAPI):
                     role=OrganizationRole.OWNER,
                 )
             )
+
+        seed_aai_cli_skills(injector.get(SkillRepository))
     except Exception:
         logger.error("Error during startup bootstrap: %s", traceback.format_exc())
         raise HTTPException(
@@ -106,9 +112,11 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(conversations_router)
     subapi.include_router(costs_router)
     subapi.include_router(org_router)
+    subapi.include_router(skills_router)
     subapi.include_router(templates_router)
     subapi.include_router(tool_calls_router)
     subapi.include_router(users_router)
+    subapi.include_router(slack_router)
 
     attach_injector(app_v1, injector)
     attach_injector(subapi, injector)

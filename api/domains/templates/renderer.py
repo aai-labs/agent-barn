@@ -2,7 +2,6 @@ import re
 from dataclasses import dataclass
 from datetime import date
 
-from api.domains.templates.defaults import AAI_CLI_TOOLS_POINTER
 from api.domains.templates.models import AgentTemplate
 from api.domains.templates.slug import slugify
 
@@ -36,8 +35,6 @@ def render_template(template: AgentTemplate, agent_name: str) -> RenderedTemplat
         "deploy_date": date.today().isoformat(),
     }
     tools_md = _fill(template.tools_md, variables)
-    if AAI_CLI_TOOLS_POINTER not in tools_md:
-        tools_md += AAI_CLI_TOOLS_POINTER
     return RenderedTemplate(
         soul_md=_fill(template.soul_md, variables),
         identity_md=_fill(template.identity_md, variables),

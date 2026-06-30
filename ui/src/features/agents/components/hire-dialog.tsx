@@ -2,14 +2,17 @@
 
 import { useState, useEffect, useRef } from "react";
 import { XIcon, CheckIcon } from "@/components/icons";
+import { useSlackConfigToken } from "@/features/account/hooks/use-slack-config-token";
+import { useSlackConfigTokenActions } from "@/features/account/hooks/use-slack-config-token-actions";
 import { useCreateAgent } from "../hooks/use-create-agent";
+import { useCreateSlackApp } from "../hooks/use-create-slack-app";
 import { useStartAgent } from "../hooks/use-start-agent";
 import { useTemplateVersions } from "../hooks/use-template-versions";
 import { DialogShell } from "./hire-dialog-primitives";
 import {
-  WizardStep,
-  TemplateStep, AgentTypeStep, PlatformChoiceStep, SlackChoiceStep, BotBuilderStep, SlackTokensStep,
-  TeamsBotBuilderStep, TeamsCredentialsStep, DetailsStep, IntegrationsStep,
+  WizardStep,TemplateStep, AgentTypeStep, PlatformChoiceStep, SlackChoiceStep,
+  ConfigTokenStep, BotBuilderStep, SlackTokensStep,
+  TeamsBotBuilderStep, TeamsCredentialsStep, DetailsStep, SkillsStep,
   downloadTeamsAppPackage, generateTeamsManifest,
 } from "./hire-dialog-steps";
 import { SlackConfigPanel } from "./slack-config-panel";
@@ -37,22 +40,41 @@ const PROVISION_STEPS = [
   { at: 96, text: "", isPending: true },
 ];
 
-function getSteps(agentType: "openclaw" | "hermes", platform: "slack" | "teams", setupNewBot: boolean): WizardStep[] {
+function getSteps(
+  agentType: "openclaw" | "hermes",
+  platform: "slack" | "teams",
+  setupNewBot: boolean,
+  configTokenReady: boolean,
+): WizardStep[] {
   if (agentType === "hermes") {
-    return setupNewBot
-      ? ["template", "agent-type", "slack-choice", "bot-builder", "slack-tokens", "details", "integrations"]
-      : ["template", "agent-type", "slack-choice", "slack-tokens", "details", "integrations"];
+    if (!setupNewBot) {
+      return ["template", "agent-type", "slack-choice", "slack-tokens", "details", "skills"];
+    }
+    const base: WizardStep[] = ["template", "agent-type", "slack-choice"];
+    if (!configTokenReady) base.push("config-token");
+    base.push("bot-builder", "slack-tokens", "details", "skills");
+    return base;
   }
   if (platform === "teams") {
-    return ["template", "agent-type", "platform-choice", "teams-credentials", "teams-bot-builder", "details", "integrations"];
+    return ["template", "agent-type", "platform-choice", "teams-credentials", "teams-bot-builder", "details", "skills"];
   }
-  return setupNewBot
-    ? ["template", "agent-type", "platform-choice", "slack-choice", "bot-builder", "slack-tokens", "details", "integrations"]
-    : ["template", "agent-type", "platform-choice", "slack-choice", "slack-tokens", "details", "integrations"];
+  if (!setupNewBot) {
+    return ["template", "agent-type", "platform-choice", "slack-choice", "slack-tokens", "details", "skills"];
+  }
+  const base: WizardStep[] = ["template", "agent-type", "platform-choice", "slack-choice"];
+  if (!configTokenReady) base.push("config-token");
+  base.push("bot-builder", "slack-tokens", "details", "skills");
+  return base;
 }
 
-function stepOrdinal(step: WizardStep, agentType: "openclaw" | "hermes", platform: "slack" | "teams", setupNewBot: boolean): string {
-  const seq = getSteps(agentType, platform, setupNewBot);
+function stepOrdinal(
+  step: WizardStep,
+  agentType: "openclaw" | "hermes",
+  platform: "slack" | "teams",
+  setupNewBot: boolean,
+  configTokenReady: boolean,
+): string {
+  const seq = getSteps(agentType, platform, setupNewBot, configTokenReady);
   return `step ${seq.indexOf(step) + 1} of ${seq.length}`;
 }
 
@@ -62,18 +84,22 @@ function stepTitle(step: WizardStep): string {
     case "agent-type": return "Choose your agent runtime";
     case "platform-choice": return "Choose your platform";
     case "slack-choice": return "Set up your Slack app";
+    case "config-token": return "Set up Slack app creation";
     case "bot-builder": return "Build your Slack bot";
     case "slack-tokens": return "Connect Slack";
     case "teams-bot-builder": return "Build your Teams bot";
     case "teams-credentials": return "Connect to Azure";
     case "details": return "A few details and we'll get them set up.";
-    case "integrations": return "Connect integrations";
+    case "skills": return "Assign skills";
   }
 }
 
 export function HireDialog({ onClose, onHired }: HireDialogProps) {
   const createAgent = useCreateAgent();
+  const createSlackApp = useCreateSlackApp();
   const startAgent = useStartAgent();
+  const { hasToken: hasConfigToken, isLoading: isLoadingConfigToken } = useSlackConfigToken();
+  const { saveToken } = useSlackConfigTokenActions();
 
   const [step, setStep] = useState<WizardStep>("template");
   const [selectedTemplate, setSelectedTemplate] = useState<AgentTemplateRead | null>(null);
@@ -98,11 +124,24 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   const [showTeamsAppPassword, setShowTeamsAppPassword] = useState(false);
   const [teamsTenantId, setTeamsTenantId] = useState("");
   const [teamsTokenError, setTeamsTokenError] = useState<string | null>(null);
-  const [integrations, setIntegrations] = useState<IntegrationDraft[]>([]);
+  const [configTokenInput, setConfigTokenInput] = useState("");
+  const [configRefreshInput, setConfigRefreshInput] = useState("");
+  const [showConfigToken, setShowConfigToken] = useState(false);
+  const [showConfigRefresh, setShowConfigRefresh] = useState(false);
+  const [configTokenError, setConfigTokenError] = useState<string | null>(null);
+  const [configTokenSaved, setConfigTokenSaved] = useState(false);
+  const configTokenReady = configTokenSaved || (!isLoadingConfigToken && hasConfigToken);
+  const [slackAppId, setSlackAppId] = useState<string | null>(null);
+  const [botTokenUrl, setBotTokenUrl] = useState<string | null>(null);
+  const [appTokenUrl, setAppTokenUrl] = useState<string | null>(null);
+  const [createAppError, setCreateAppError] = useState<string | null>(null);
+  const [selectedSkillIds, setSelectedSkillIds] = useState<string[]>([]);
+  const [skillCredentials, setSkillCredentials] = useState<IntegrationDraft[]>([]);
   const [provisioning, setProvisioning] = useState(false);
   const [progress, setProgress] = useState(0);
   const [provisionError, setProvisionError] = useState<string | null>(null);
   const [createdAgent, setCreatedAgent] = useState<Agent | null>(null);
+
 
   const progressRef = useRef(0);
   const apiDoneRef = useRef(false);
@@ -131,7 +170,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   }
 
   function handleBack() {
-    const steps = getSteps(agentType, platform, setupNewBot);
+    const steps = getSteps(agentType, platform, setupNewBot, configTokenReady);
     const idx = steps.indexOf(step);
     if (idx > 0) setStep(steps[idx - 1]);
   }
@@ -146,7 +185,55 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
       setTokenError("Both tokens are required to continue.");
       return;
     }
+    if (!slackAppToken.trim().startsWith("xapp-")) {
+      setTokenError("App-level token should start with xapp-");
+      return;
+    }
+    if (!slackBotToken.trim().startsWith("xoxb-")) {
+      setTokenError("Bot token should start with xoxb-");
+      return;
+    }
     setStep("details");
+  }
+
+  async function handleSaveConfigToken() {
+    if (!configTokenInput.trim()) return;
+    setConfigTokenError(null);
+    try {
+      await saveToken.mutateAsync({
+        accessToken: configTokenInput.trim(),
+        refreshToken: configRefreshInput.trim(),
+      });
+      setConfigTokenSaved(true);
+      setConfigTokenInput("");
+      setConfigRefreshInput("");
+      setStep("bot-builder");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to save token";
+      setConfigTokenError(msg);
+    }
+  }
+
+  async function handleContinueFromBotBuilder() {
+    if (configTokenReady && setupNewBot) {
+      setCreateAppError(null);
+      try {
+        const result = await createSlackApp.mutateAsync({
+          name: botName,
+          description: botDescription,
+          backgroundColor: botColor,
+        });
+        setSlackAppId(result.appId);
+        setBotTokenUrl(result.botTokenUrl);
+        setAppTokenUrl(result.appTokenUrl);
+        setStep("slack-tokens");
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Failed to create Slack app";
+        setCreateAppError(msg);
+      }
+    } else {
+      setStep("slack-tokens");
+    }
   }
 
   function handleContinueFromTeamsCredentials() {
@@ -173,9 +260,10 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
         agentType,
         templateSlug: effectiveTemplate.templateSlug,
         ...(resolvedVersion != null ? { templateVersion: resolvedVersion } : {}),
-        secrets: integrations.map((i) => ({
-          provider: i.provider,
-          content: i.provider === "github" ? expandGithubContent(i.content) : i.content,
+        skillIds: selectedSkillIds,
+        secrets: skillCredentials.map((c) => ({
+          provider: c.provider,
+          content: c.provider === "github" ? expandGithubContent(c.content) : c.content,
         })),
         ...(platform === "slack"
           ? { slackBotToken, slackAppToken, slackGroupPolicy, slackDmPolicy }
@@ -404,7 +492,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
       >
         <div>
           <div className="text-xs uppercase tracking-[0.08em] font-semibold mb-1" style={{ color: "var(--ink-3)" }}>
-            Hire · {stepOrdinal(step, agentType, platform, setupNewBot)}
+            Hire · {stepOrdinal(step, agentType, platform, setupNewBot, configTokenReady)}
           </div>
           <h2 className="text-xl font-semibold tracking-tight m-0" style={{ color: "var(--ink)" }}>
             {stepTitle(step)}
@@ -429,12 +517,33 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
         {step === "agent-type" && <AgentTypeStep agentType={agentType} onChange={handleAgentTypeChange} />}
         {step === "platform-choice" && <PlatformChoiceStep platform={platform} onChange={setPlatform} />}
         {step === "slack-choice" && <SlackChoiceStep setupNewBot={setupNewBot} onChange={setSetupNewBot} />}
-        {step === "bot-builder" && (
-          <BotBuilderStep
-            botName={botName} onBotNameChange={(v) => { setBotName(v); setName(v); }}
-            botDescription={botDescription} onBotDescriptionChange={setBotDescription}
-            botColor={botColor} onBotColorChange={setBotColor}
+        {step === "config-token" && (
+          <ConfigTokenStep
+            tokenInput={configTokenInput}
+            onTokenInputChange={(v) => { setConfigTokenInput(v); setConfigTokenError(null); }}
+            showToken={showConfigToken}
+            onToggleToken={() => setShowConfigToken((v) => !v)}
+            refreshInput={configRefreshInput}
+            onRefreshInputChange={(v) => { setConfigRefreshInput(v); setConfigTokenError(null); }}
+            showRefresh={showConfigRefresh}
+            onToggleRefresh={() => setShowConfigRefresh((v) => !v)}
+            isSaving={saveToken.isPending}
+            error={configTokenError}
           />
+        )}
+        {step === "bot-builder" && (
+          <>
+            <BotBuilderStep
+              botName={botName} onBotNameChange={(v) => { setBotName(v); setName(v); }}
+              botDescription={botDescription} onBotDescriptionChange={setBotDescription}
+              botColor={botColor} onBotColorChange={setBotColor}
+            />
+            {createAppError && (
+              <div className="mt-3 text-[0.8125rem]" style={{ color: "var(--err)" }}>
+                {createAppError}
+              </div>
+            )}
+          </>
         )}
         {step === "slack-tokens" && (
           <SlackTokensStep
@@ -445,6 +554,9 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
             showAppToken={showAppToken} onToggleAppToken={() => setShowAppToken((v) => !v)}
             showBotToken={showBotToken} onToggleBotToken={() => setShowBotToken((v) => !v)}
             error={tokenError}
+            appId={slackAppId}
+            botTokenUrl={botTokenUrl}
+            appTokenUrl={appTokenUrl}
           />
         )}
         {step === "teams-bot-builder" && (
@@ -479,10 +591,12 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
             onChangeTemplate={() => setStep("template")}
           />
         )}
-        {step === "integrations" && (
-          <IntegrationsStep
-            integrations={integrations}
-            onChange={setIntegrations}
+        {step === "skills" && (
+          <SkillsStep
+            selectedSkillIds={selectedSkillIds}
+            skillCredentials={skillCredentials}
+            onSkillIdsChange={setSelectedSkillIds}
+            onSkillCredentialsChange={setSkillCredentials}
           />
         )}
       </div>
@@ -525,14 +639,30 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
         {step === "slack-choice" && (
           <button
             className="af-btn af-btn-primary af-btn-lg"
-            onClick={() => setStep(setupNewBot ? "bot-builder" : "slack-tokens")}
+            onClick={() => {
+              if (!setupNewBot) { setStep("slack-tokens"); return; }
+              setStep(configTokenReady ? "bot-builder" : "config-token");
+            }}
           >
             Continue
           </button>
         )}
+        {step === "config-token" && (
+          <button
+            className="af-btn af-btn-primary af-btn-lg"
+            disabled={!configTokenInput.trim() || !configRefreshInput.trim() || saveToken.isPending}
+            onClick={() => { void handleSaveConfigToken(); }}
+          >
+            {saveToken.isPending ? "Validating..." : "Save & continue"}
+          </button>
+        )}
         {step === "bot-builder" && (
-          <button className="af-btn af-btn-primary af-btn-lg" onClick={() => setStep("slack-tokens")}>
-            Continue
+          <button
+            className="af-btn af-btn-primary af-btn-lg"
+            disabled={!botName.trim() || createSlackApp.isPending}
+            onClick={() => { void handleContinueFromBotBuilder(); }}
+          >
+            {createSlackApp.isPending ? "Creating app..." : "Continue"}
           </button>
         )}
         {step === "slack-tokens" && (
@@ -554,15 +684,15 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
           <button
             className="af-btn af-btn-primary af-btn-lg"
             disabled={!name.trim()}
-            onClick={() => setStep("integrations")}
+            onClick={() => setStep("skills")}
           >
             Continue
           </button>
         )}
-        {step === "integrations" && (
+        {step === "skills" && (
           <button
             className="af-btn af-btn-primary af-btn-lg"
-            disabled={!name.trim() || hasIncompleteIntegration(integrations)}
+            disabled={!name.trim() || hasIncompleteIntegration(skillCredentials)}
             onClick={() => { void startHiring(); }}
           >
             Hire {name}

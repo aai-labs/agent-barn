@@ -129,6 +129,7 @@ def _service(openrouter, allowlist="", default_model=""):
     return AgentService(
         repository=MagicMock(),
         template_repository=MagicMock(),
+        skill_repository=MagicMock(),
         k8s=MagicMock(),
         litellm=MagicMock(),
         openrouter=openrouter,
@@ -136,6 +137,7 @@ def _service(openrouter, allowlist="", default_model=""):
         conversation_sync_service=MagicMock(),
         sync_service=MagicMock(),
         cost_service=MagicMock(),
+        slack_token_service=MagicMock(),
     )
 
 

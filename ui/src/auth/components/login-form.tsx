@@ -8,6 +8,7 @@ import { toast } from "sonner";
 
 import { useAuthActions } from "@/auth/hooks/use-auth-actions";
 import { LoginFormData, LoginSchema } from "@/auth/schemas";
+import { LogoMark } from "@/components/logo-mark";
 
 export function LoginForm() {
   const router = useRouter();
@@ -49,11 +50,8 @@ export function LoginForm() {
         style={{ background: "var(--bg-elev)", border: "1px solid var(--line)", boxShadow: "var(--shadow)" }}
       >
         <div className="text-center mb-7">
-          <div
-            className="w-9 h-9 rounded-xl grid place-items-center font-mono text-[14px] font-semibold text-white mx-auto mb-4"
-            style={{ background: "var(--ink)" }}
-          >
-            AF
+          <div className="flex justify-center mb-4">
+            <LogoMark size={36} />
           </div>
           <h1 className="text-[22px] font-semibold tracking-tight m-0 mb-1" style={{ color: "var(--ink)" }}>
             Welcome back
@@ -117,12 +115,6 @@ export function LoginForm() {
           </div>
         </form>
 
-        <p className="text-center text-[13px] mt-5 m-0" style={{ color: "var(--ink-3)" }}>
-          Don&apos;t have an account?{" "}
-          <Link href="/signup" style={{ color: "var(--ink)", fontWeight: 500 }}>
-            Sign up
-          </Link>
-        </p>
       </div>
 
       <p className="text-center text-[12.5px] mt-5 px-4" style={{ color: "var(--ink-4)" }}>

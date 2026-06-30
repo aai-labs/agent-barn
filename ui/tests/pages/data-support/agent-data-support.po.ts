@@ -21,9 +21,26 @@ export const mockAgent = {
     dm_policy: "off",
   },
   teams_config: null,
+  secrets: [],
+  skills: [],
   webhook_url: null,
   created_at: "2026-03-14T00:00:00Z",
   updated_at: "2026-05-14T09:14:00Z",
+};
+
+export const mockSecret = {
+  provider: "github",
+  secret_name: "github-secret",
+};
+
+export const mockAssignedSkill = {
+  id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+  name: "github",
+  source: "aai_cli",
+  required_providers: ["github"],
+  tools_pointer: null,
+  created_at: "2026-01-01T00:00:00Z",
+  updated_at: "2026-01-01T00:00:00Z",
 };
 
 export const mockToolCall = {

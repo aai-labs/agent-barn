@@ -1,8 +1,9 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 import { mockAgent } from "../pages/data-support/agent-data-support.po";
 import { DataSupport } from "../pages/data-support/data-support.po";
 import { DashboardPage } from "../pages/dashboard-page.po";
+import { mockPlatformSkill, mockCustomSkill } from "../pages/data-support/skill-data-support.po";
 
 test.describe("Hire Dialog", () => {
   test.describe.configure({ mode: "serial" });
@@ -20,6 +21,32 @@ test.describe("Hire Dialog", () => {
     await dataSupportPage.agents.interceptGetAgentsRequest();
     await dataSupportPage.agents.interceptGetTemplatesRequest();
     await dataSupportPage.agents.interceptGetTemplateVersionsRequest();
+    await page.route("**/api/v1/auth/me/slack-config-token", async (route) => {
+      if (route.request().method() === "GET") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ has_token: true, token_preview: "xoxe.****test" }),
+        });
+      } else {
+        await route.fallback();
+      }
+    });
+    await page.route("**/api/v1/slack/apps", async (route) => {
+      if (route.request().method() === "POST") {
+        await route.fulfill({
+          status: 201,
+          contentType: "application/json",
+          body: JSON.stringify({
+            app_id: "A_TEST_123",
+            bot_token_url: "https://api.slack.com/apps/A_TEST_123/install-on-team",
+            app_token_url: "https://api.slack.com/apps/A_TEST_123/general",
+          }),
+        });
+      } else {
+        await route.fallback();
+      }
+    });
 
     await dashboardPage.goto();
     await page.getByRole("button", { name: /hire agent/i }).click();
@@ -79,15 +106,15 @@ test.describe("Hire Dialog", () => {
     await expect(page.getByText(/step 4 of 7/i)).toBeVisible();
   });
 
-  test("should show manifest in bot builder step", async ({ page }) => {
+  test("should show bot builder fields when choosing new bot", async ({ page }) => {
     await page.getByText("General Purpose", { exact: true }).click();
     await page.getByRole("button", { name: /continue/i }).click();
     await page.getByRole("button", { name: /continue/i }).click();
     await page.getByText("Set up a new Slack bot").click();
     await page.getByRole("button", { name: /continue/i }).click();
 
-    await expect(page.getByText("Generated manifest")).toBeVisible();
-    await expect(page.getByRole("link", { name: /create app/i })).toBeVisible();
+    await expect(page.getByPlaceholder("Aria")).toBeVisible();
+    await expect(page.getByText("Bot display name")).toBeVisible();
   });
 
   test("should advance to details step (path: skip bot builder)", async ({ page }) => {
@@ -274,7 +301,9 @@ test.describe("Hire Dialog", () => {
     await page.getByPlaceholder(/xapp-/i).fill("xapp-1-test");
     await page.getByPlaceholder(/xoxb-/i).fill("xoxb-test");
     await page.getByRole("button", { name: /continue/i }).click(); // tokens → details
-    await page.getByRole("button", { name: /continue/i }).click(); // details → integrations
+    await page.getByRole("button", { name: /continue/i }).click(); // details → skills
+
+    await expect(page.getByText("Assign skills")).toBeVisible();
 
     const createPromise = page.waitForRequest(
       (req) => req.url().includes("/api/v1/agents") && req.method() === "POST",
@@ -288,5 +317,106 @@ test.describe("Hire Dialog", () => {
     expect(body.template_version).toBe(1);
     expect(body.soul_md).toBeUndefined();
     expect(body.identity_md).toBeUndefined();
+  });
+});
+
+test.describe("Hire Dialog — Skills step", () => {
+  test.describe.configure({ mode: "serial" });
+  let dataSupportPage: DataSupport;
+  let dashboardPage: DashboardPage;
+
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  async function navigateToSkillsStep(page: Page) {
+    await page.getByText("General Purpose", { exact: true }).click();
+    await page.getByRole("button", { name: /continue/i }).click(); // role → agent-type
+    await page.getByRole("button", { name: /continue/i }).click(); // agent-type → slack-choice
+    await page.getByText("I already have a Slack app").click();
+    await page.getByRole("button", { name: /continue/i }).click(); // slack-choice → tokens
+    await page.getByPlaceholder(/xapp-/i).fill("xapp-1-test");
+    await page.getByPlaceholder(/xoxb-/i).fill("xoxb-test");
+    await page.getByRole("button", { name: /continue/i }).click(); // tokens → details
+    await page.getByRole("button", { name: /continue/i }).click(); // details → skills
+  }
+
+  test.beforeEach(async ({ page }) => {
+    dashboardPage = new DashboardPage(page);
+    dataSupportPage = new DataSupport(page);
+
+    await dataSupportPage.auth.interceptRefreshRequest();
+    await dataSupportPage.users.interceptGetUserContextRequest();
+    await dataSupportPage.agents.interceptGetAgentsRequest();
+    await dataSupportPage.agents.interceptGetTemplatesRequest();
+    await dataSupportPage.agents.interceptGetTemplateVersionsRequest();
+    await dataSupportPage.skills.interceptGetSkillsRequest();
+
+    await dashboardPage.goto();
+    await page.getByRole("button", { name: /hire agent/i }).click();
+  });
+
+  test("shows Assign skills title and correct step number", async ({ page }) => {
+    await navigateToSkillsStep(page);
+
+    await expect(page.getByText("Assign skills")).toBeVisible();
+    await expect(page.getByText(/step 6 of 6/i)).toBeVisible();
+  });
+
+  test("shows skills as cards with source badges and search input", async ({ page }) => {
+    await navigateToSkillsStep(page);
+
+    await expect(page.getByText(mockPlatformSkill.name, { exact: true })).toBeVisible();
+    await expect(page.getByText(mockCustomSkill.name, { exact: true })).toBeVisible();
+    await expect(page.getByPlaceholder("Search skills…")).toBeVisible();
+  });
+
+  test("search filters skills", async ({ page }) => {
+    await navigateToSkillsStep(page);
+
+    await page.getByPlaceholder("Search skills…").fill(mockCustomSkill.name);
+    await expect(page.getByText(mockCustomSkill.name, { exact: true })).toBeVisible();
+    await expect(page.getByText(mockPlatformSkill.name, { exact: true })).not.toBeVisible();
+  });
+
+  test("shows empty state when no skills are available", async ({ page }) => {
+    await dataSupportPage.skills.interceptGetSkillsRequest({ body: [] });
+
+    await navigateToSkillsStep(page);
+
+    await expect(page.getByText(/No skills available/)).toBeVisible();
+    await expect(page.getByText(/Settings.*Skills/)).toBeVisible();
+  });
+
+  test("selecting a skill with required providers reveals credentials section", async ({ page }) => {
+    await navigateToSkillsStep(page);
+
+    await page.getByText(mockPlatformSkill.name, { exact: true }).click();
+
+    await expect(page.getByText("Required credentials", { exact: true })).toBeVisible();
+    await expect(page.getByPlaceholder(/github_pat_/)).toBeVisible();
+  });
+
+  test("hire button is disabled when selected skill has incomplete credentials", async ({ page }) => {
+    await navigateToSkillsStep(page);
+
+    await page.getByText(mockPlatformSkill.name, { exact: true }).click();
+
+    // GitHub requires token + repo URL; both empty → button disabled
+    await expect(page.getByRole("button", { name: /hire aria/i })).toBeDisabled();
+  });
+
+  test("hire button is enabled when no skills are selected", async ({ page }) => {
+    await navigateToSkillsStep(page);
+
+    await expect(page.getByRole("button", { name: /hire aria/i })).toBeEnabled();
+  });
+
+  test("deselecting a skill removes its credentials section", async ({ page }) => {
+    await navigateToSkillsStep(page);
+
+    await page.getByText(mockPlatformSkill.name, { exact: true }).click();
+    await expect(page.getByText("Required credentials", { exact: true })).toBeVisible();
+
+    await page.getByText(mockPlatformSkill.name, { exact: true }).click();
+    await expect(page.getByText("Required credentials", { exact: true })).not.toBeVisible();
   });
 });
