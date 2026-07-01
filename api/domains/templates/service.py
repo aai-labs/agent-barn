@@ -218,7 +218,9 @@ class TemplateService:
         template on every start) pick up the change. A lineage the user has edited
         (version > 1) is left untouched so customizations are never clobbered.
         """
-        for predefined, template in zip(PREDEFINED_TEMPLATES, build_predefined_templates(org_id)):
+        for predefined, template in zip(
+            PREDEFINED_TEMPLATES, build_predefined_templates(org_id)
+        ):
             existing = self.repository.get_latest_template(
                 org_id, template.template_slug
             )
