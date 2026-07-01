@@ -26,14 +26,16 @@ export function CostsDashboard() {
   const toggleAgent = (id: string) => {
     setExpandedAgents((prev) => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
       return next;
     });
   };
 
-  // Pad the time series so every single day has an entry. This ensures
-  // the BarChart correctly shows empty gaps for days with no spend.
-  // Must be before early returns to satisfy Rules of Hooks.
+  // Pad the time series so every single day has an entry.
   const paddedTimeSeries = React.useMemo(() => {
     const series = summary?.timeSeries ?? [];
     if (series.length === 0) return series;
@@ -47,9 +49,9 @@ export function CostsDashboard() {
     const costMap = new Map(series.map((p) => [p.date, p.cost]));
     const padded: { date: string; cost: number }[] = [];
 
-    let current = new Date(startD + "T00:00:00Z");
+    const current = new Date(startD + "T00:00:00Z");
     const end = new Date(endD + "T00:00:00Z");
-    let maxDays = 365 * 5; // Safety limit
+    let maxDays = 365 * 5;
 
     while (current <= end && maxDays-- > 0) {
       const dateStr = current.toISOString().split("T")[0];
@@ -62,10 +64,13 @@ export function CostsDashboard() {
 
   if (isLoadingSummary) {
     return (
-      <div className="p-10 flex flex-col items-center justify-center min-h-[400px]">
-        <div className="w-8 h-8 border-4 border-indigo-500/30 border-t-indigo-500 rounded-full animate-spin mb-4" />
-        <div className="text-[14px] text-gray-500 font-medium">
-          Loading costs summary...
+      <div className="max-w-[75rem] mx-auto px-10 pt-9 pb-24 flex flex-col items-center justify-center min-h-[400px]">
+        <div
+          className="w-7 h-7 rounded-full border-2 border-t-transparent animate-spin mb-4"
+          style={{ borderColor: "var(--line-strong)", borderTopColor: "transparent" }}
+        />
+        <div className="text-[0.875rem]" style={{ color: "var(--ink-3)" }}>
+          Loading costs…
         </div>
       </div>
     );
@@ -87,122 +92,147 @@ export function CostsDashboard() {
     return null;
   }
 
-  const sortedByModel = [...summary.byModel].sort(
-    (a, b) => b.totalCost - a.totalCost
-  );
+  // Deduplicate by short display name — LiteLLM can report the same model
+  // under different full paths (e.g. "qwen/qwen3-6-plus" vs
+  // "openrouter/qwen/qwen3-6-plus"). We merge them by their last segment.
+  const modelMap = new Map<string, number>();
+  for (const entry of summary.byModel) {
+    const shortName = entry.model.split("/").pop() ?? entry.model;
+    modelMap.set(shortName, (modelMap.get(shortName) ?? 0) + entry.totalCost);
+  }
+  const sortedByModel = [...modelMap.entries()]
+    .map(([model, totalCost]) => ({ model, totalCost }))
+    .sort((a, b) => b.totalCost - a.totalCost);
   const maxModelCost = sortedByModel[0]?.totalCost ?? 0;
 
+
   return (
-    <div className="p-10 max-w-6xl mx-auto flex flex-col gap-8">
-      <header>
-        <h1 className="text-[28px] font-semibold tracking-tight text-gray-900 mb-2">
+    <div className="max-w-[75rem] mx-auto px-10 pt-9 pb-24">
+      {/* Page header */}
+      <div className="mb-14">
+        <h1
+          className="text-4xl font-medium tracking-[-0.028em] leading-[1.18] m-0 mb-3"
+          style={{ color: "var(--ink)" }}
+        >
           Usage &amp; Billing
         </h1>
-        <p className="text-[14px] text-gray-500">
+        <div className="text-[0.906rem]" style={{ color: "var(--ink-3)" }}>
           Track API usage and token costs across all your agents.
-        </p>
-      </header>
+        </div>
+      </div>
 
-      {/* Overview Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      {/* Overview stat cards */}
+      <div className="mb-12">
         <div
-          className="rounded-2xl p-6 relative overflow-hidden"
-          style={{
-            background: "linear-gradient(145deg, #1e1b4b, #312e81)",
-            boxShadow: "0 10px 40px -10px rgba(49, 46, 129, 0.5)",
-          }}
+          className="grid gap-4"
+          style={{ gridTemplateColumns: "repeat(auto-fill, minmax(22rem, 1fr))" }}
         >
-          <div className="absolute top-0 right-0 -mr-10 -mt-10 w-40 h-40 rounded-full bg-white opacity-5 blur-2xl" />
-          <div className="text-[13px] font-medium text-indigo-200 mb-1 tracking-wide uppercase">
-            Total Spend
+          <div className="af-card px-5.5 py-5 flex flex-col gap-1">
+            <div className="text-[0.813rem] font-medium uppercase tracking-wide" style={{ color: "var(--ink-4)" }}>
+              Total Spend
+            </div>
+            <div className="text-[2rem] font-semibold tracking-tight" style={{ color: "var(--ink)" }}>
+              <span className="text-[1.25rem]" style={{ color: "var(--ink-4)" }}>$</span>
+              {summary.totalCost.toFixed(4)}
+            </div>
           </div>
-          <div className="text-[36px] font-bold text-white tracking-tight flex items-baseline gap-1">
-            <span className="text-[24px] text-indigo-300">$</span>
-            {summary.totalCost.toFixed(4)}
-          </div>
-        </div>
 
-        <div className="rounded-2xl p-6 bg-white border border-gray-200/60 shadow-sm">
-          <div className="text-[13px] font-medium text-gray-500 mb-1 tracking-wide uppercase">
-            Active Agents
+          <div className="af-card px-5.5 py-5 flex flex-col gap-1">
+            <div className="text-[0.813rem] font-medium uppercase tracking-wide" style={{ color: "var(--ink-4)" }}>
+              Active Agents
+            </div>
+            <div className="text-[2rem] font-semibold tracking-tight" style={{ color: "var(--ink)" }}>
+              {summary.agents.filter((a) => a.status !== "deleted").length}
+            </div>
           </div>
-          <div className="text-[32px] font-bold text-gray-900 tracking-tight">
-            {summary.agents.filter((a) => a.status !== "deleted").length}
-          </div>
-        </div>
 
-        <div className="rounded-2xl p-6 bg-white border border-gray-200/60 shadow-sm">
-          <div className="text-[13px] font-medium text-gray-500 mb-1 tracking-wide uppercase">
-            Most Used Model
-          </div>
-          <div
-            className="text-[24px] font-bold text-gray-900 tracking-tight leading-tight mt-1 truncate"
-            title={sortedByModel[0]?.model ?? "None"}
-          >
-            {sortedByModel[0]?.model.split("/").pop() ?? "None"}
+          <div className="af-card px-5.5 py-5 flex flex-col gap-1">
+            <div className="text-[0.813rem] font-medium uppercase tracking-wide" style={{ color: "var(--ink-4)" }}>
+              Top Model
+            </div>
+            <div
+              className="text-[1.375rem] font-semibold tracking-tight leading-tight mt-1 truncate"
+              style={{ color: "var(--ink)" }}
+              title={sortedByModel[0]?.model ?? "None"}
+            >
+              {sortedByModel[0]?.model.split("/").pop() ?? "None"}
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Cost Over Time Chart */}
+
+      {/* Cost Over Time */}
       {summary.timeSeries.length > 0 && (
-        <div className="bg-white rounded-2xl border border-gray-200/60 shadow-sm overflow-hidden">
-          <div className="px-6 py-5 border-b border-gray-100 bg-gray-50/50 flex flex-wrap items-center justify-between gap-4">
+        <div className="mb-12">
+          <div className="mb-5 flex flex-wrap items-center justify-between gap-4">
             <div>
-              <h2 className="text-[16px] font-semibold text-gray-900">
-                Cost Over Time
+              <h2 className="text-lg font-semibold tracking-tight m-0" style={{ color: "var(--ink)" }}>
+                Cost over time
               </h2>
-              <p className="text-[13px] text-gray-400 mt-0.5">
+              <div className="text-[0.844rem] mt-0.5" style={{ color: "var(--ink-3)" }}>
                 Daily spend across all agents
                 {appliedStartDate && appliedEndDate
                   ? ` — ${appliedStartDate} to ${appliedEndDate}`
                   : " — all time"}
-              </p>
+              </div>
             </div>
+            {/* Date filter */}
             <div className="flex items-center gap-2 flex-wrap">
-              <label className="text-[12px] text-gray-500 font-medium">From</label>
+              <label className="text-[0.8125rem]" style={{ color: "var(--ink-3)" }}>From</label>
               <input
                 type="date"
                 value={draftStartDate}
                 max={draftEndDate || today}
                 onChange={(e) => setDraftStartDate(e.target.value)}
-                className="text-[13px] border border-gray-200 rounded-lg px-3 py-1.5 text-gray-700 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-transparent"
+                className="text-[0.8125rem] rounded-lg px-3 py-1.5 focus:outline-none"
+                style={{
+                  border: "1px solid var(--line-strong)",
+                  background: "var(--bg-elev)",
+                  color: "var(--ink-2)",
+                }}
               />
-              <label className="text-[12px] text-gray-500 font-medium">To</label>
+              <label className="text-[0.8125rem]" style={{ color: "var(--ink-3)" }}>To</label>
               <input
                 type="date"
                 value={draftEndDate}
                 min={draftStartDate || undefined}
                 max={today}
                 onChange={(e) => setDraftEndDate(e.target.value)}
-                className="text-[13px] border border-gray-200 rounded-lg px-3 py-1.5 text-gray-700 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-transparent"
+                className="text-[0.8125rem] rounded-lg px-3 py-1.5 focus:outline-none"
+                style={{
+                  border: "1px solid var(--line-strong)",
+                  background: "var(--bg-elev)",
+                  color: "var(--ink-2)",
+                }}
               />
               <button
+                className="af-btn"
                 onClick={() => {
                   setAppliedStartDate(draftStartDate);
                   setAppliedEndDate(draftEndDate);
                 }}
                 disabled={!draftStartDate || !draftEndDate}
-                className="text-[12px] bg-indigo-50 text-indigo-700 hover:bg-indigo-100 disabled:bg-gray-50 disabled:text-gray-400 disabled:border-gray-200 px-3 py-1.5 rounded-lg font-medium border border-indigo-200 transition-colors"
               >
-                OK
+                Apply
               </button>
               {(appliedStartDate || draftStartDate) && (
                 <button
+                  className="af-btn af-btn-ghost"
                   onClick={() => {
                     setDraftStartDate("");
                     setDraftEndDate(today);
                     setAppliedStartDate("");
                     setAppliedEndDate(today);
                   }}
-                  className="text-[12px] text-indigo-500 hover:text-indigo-700 underline"
                 >
                   Reset
                 </button>
               )}
             </div>
           </div>
-          <div className="px-4 pt-6 pb-4">
+
+          <div className="af-card px-4 pt-6 pb-4">
             <CostsChart timeSeries={paddedTimeSeries} />
           </div>
         </div>
@@ -210,35 +240,41 @@ export function CostsDashboard() {
 
       {/* Cost by Model */}
       {sortedByModel.length > 0 && (
-        <div className="bg-white rounded-2xl border border-gray-200/60 shadow-sm overflow-hidden">
-          <div className="px-6 py-5 border-b border-gray-100 bg-gray-50/50">
-            <h2 className="text-[16px] font-semibold text-gray-900">
-              Cost by Model
+        <div className="mb-12">
+          <div className="mb-5">
+            <h2 className="text-lg font-semibold tracking-tight m-0" style={{ color: "var(--ink)" }}>
+              Cost by model
             </h2>
-            <p className="text-[13px] text-gray-400 mt-0.5">
+            <div className="text-[0.844rem] mt-0.5" style={{ color: "var(--ink-3)" }}>
               Total spend grouped by AI model
-            </p>
+            </div>
           </div>
-          <div className="px-6 py-5 flex flex-col gap-4">
+
+          <div className="af-card px-5.5 py-5 flex flex-col gap-4">
             {sortedByModel.map((entry) => {
               const pct = maxModelCost > 0 ? (entry.totalCost / maxModelCost) * 100 : 0;
-              const shortName = entry.model.split("/").pop() ?? entry.model;
               return (
                 <div key={entry.model} className="flex items-center gap-4">
                   <div
-                    className="text-[13px] font-medium text-gray-700 shrink-0"
-                    style={{ width: 160 }}
+                    className="text-[0.8125rem] font-medium shrink-0"
+                    style={{ width: 160, color: "var(--ink-2)" }}
                     title={entry.model}
                   >
-                    {shortName}
+                    {entry.model}
                   </div>
-                  <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
+                  <div
+                    className="flex-1 h-1.5 rounded-full overflow-hidden"
+                    style={{ background: "var(--bg-sunken)" }}
+                  >
                     <div
-                      className="h-2 rounded-full bg-indigo-500 transition-all duration-500"
-                      style={{ width: `${pct}%` }}
+                      className="h-1.5 rounded-full transition-all duration-500"
+                      style={{ width: `${pct}%`, background: "var(--ink-3)" }}
                     />
                   </div>
-                  <div className="text-[13px] font-semibold text-gray-900 shrink-0 font-mono w-24 text-right">
+                  <div
+                    className="text-[0.8125rem] font-semibold shrink-0 font-mono w-24 text-right"
+                    style={{ color: "var(--ink)" }}
+                  >
                     ${entry.totalCost.toFixed(5)}
                   </div>
                 </div>
@@ -248,155 +284,155 @@ export function CostsDashboard() {
         </div>
       )}
 
-      {/* Agents Cost Breakdown */}
-      <div className="bg-white rounded-2xl border border-gray-200/60 shadow-sm overflow-hidden">
-        <div className="px-6 py-5 border-b border-gray-100 bg-gray-50/50">
-          <h2 className="text-[16px] font-semibold text-gray-900">
-            Agent Breakdown
+      {/* Agent Breakdown table */}
+      <div>
+        <div className="mb-5">
+          <h2 className="text-lg font-semibold tracking-tight m-0" style={{ color: "var(--ink)" }}>
+            Agent breakdown
           </h2>
         </div>
 
-        {summary.agents.length === 0 ? (
-          <div className="p-10 text-center text-[14px] text-gray-500">
-            No agent cost data found.
-          </div>
-        ) : (
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="border-b border-gray-100">
-                <th className="px-6 py-3 text-[12px] font-medium text-gray-500 uppercase tracking-wider">
-                  Agent
-                </th>
-                <th className="px-6 py-3 text-[12px] font-medium text-gray-500 uppercase tracking-wider">
-                  Status
-                </th>
-                <th className="px-6 py-3 text-[12px] font-medium text-gray-500 uppercase tracking-wider">
-                  Model
-                </th>
-                <th className="px-6 py-3 text-[12px] font-medium text-gray-500 uppercase tracking-wider text-right">
-                  Input Tokens
-                </th>
-                <th className="px-6 py-3 text-[12px] font-medium text-gray-500 uppercase tracking-wider text-right">
-                  Output Tokens
-                </th>
-                <th className="px-6 py-3 text-[12px] font-medium text-gray-500 uppercase tracking-wider text-right">
-                  Cost
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-50">
-              {summary.agents.map((agent) => {
-                // Fallback for deleted/older agents
-                const effectiveBreakdown = agent.modelsBreakdown?.length > 0
-                  ? agent.modelsBreakdown
-                  : agent.model
-                    ? [
-                      {
-                        model: agent.model,
-                        totalCost: agent.totalCost,
-                        promptTokens: agent.promptTokens,
-                        completionTokens: agent.completionTokens,
-                      },
-                    ]
-                    : [];
-
-                // NEW: Calculate the true totals from the breakdown array
-                // If the top-level agent stats are missing/0, this pulls the real numbers from the sub-models
-                const displayPromptTokens = Math.max(
-                  agent.promptTokens,
-                  effectiveBreakdown.reduce((sum, m) => sum + m.promptTokens, 0)
-                );
-                const displayCompletionTokens = Math.max(
-                  agent.completionTokens,
-                  effectiveBreakdown.reduce((sum, m) => sum + m.completionTokens, 0)
-                );
-
-                return (
-                  <React.Fragment key={agent.agentId}>
-                    {/* Main agent row */}
-                    <tr
-                      className="hover:bg-gray-50/50 transition-colors cursor-pointer"
-                      onClick={() => effectiveBreakdown.length > 0 && toggleAgent(agent.agentId)}
+        <div className="af-card overflow-hidden">
+          {summary.agents.length === 0 ? (
+            <div className="p-10 text-center text-[0.875rem]" style={{ color: "var(--ink-3)" }}>
+              No agent cost data found.
+            </div>
+          ) : (
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr style={{ borderBottom: "1px solid var(--line)" }}>
+                  {["Agent", "Status", "Model", "Input Tokens", "Output Tokens", "Cost"].map((h, i) => (
+                    <th
+                      key={h}
+                      className={`px-6 py-3 text-[0.75rem] font-medium uppercase tracking-wider${i >= 3 ? " text-right" : ""}`}
+                      style={{ color: "var(--ink-4)" }}
                     >
-                      <td className="px-6 py-4">
-                        <div className="text-[14px] font-medium text-gray-900">
-                          {agent.agentName}
-                        </div>
-                        <div className="text-[12px] text-gray-400 font-mono mt-0.5">
-                          {agent.agentId.split("-")[0]}...
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div
-                          className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium uppercase tracking-wider
-                            ${agent.status === "active" ? "bg-green-50 text-green-700 border border-green-200" : ""}
-                            ${agent.status === "stopped" ? "bg-yellow-50 text-yellow-700 border border-yellow-200" : ""}
-                            ${agent.status === "deleted" ? "bg-red-50 text-red-700 border border-red-200" : ""}
-                            ${agent.status === "error" ? "bg-orange-50 text-orange-700 border border-orange-200" : ""}
-                            ${agent.status === "unknown" ? "bg-gray-50 text-gray-700 border border-gray-200" : ""}
-                          `}
-                        >
-                          {agent.status}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 text-[13px] text-gray-500">
-                        {effectiveBreakdown.length > 0 ? (
-                          <span className="flex items-center gap-1">
-                            {expandedAgents.has(agent.agentId) ? "▾" : "▸"}
-                            {effectiveBreakdown.length} model(s)
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {summary.agents.map((agent) => {
+                  const effectiveBreakdown = agent.modelsBreakdown?.length > 0
+                    ? agent.modelsBreakdown
+                    : agent.model
+                      ? [
+                        {
+                          model: agent.model,
+                          totalCost: agent.totalCost,
+                          promptTokens: agent.promptTokens,
+                          completionTokens: agent.completionTokens,
+                        },
+                      ]
+                      : [];
+
+                  const displayPromptTokens = Math.max(
+                    agent.promptTokens,
+                    effectiveBreakdown.reduce((sum, m) => sum + m.promptTokens, 0)
+                  );
+                  const displayCompletionTokens = Math.max(
+                    agent.completionTokens,
+                    effectiveBreakdown.reduce((sum, m) => sum + m.completionTokens, 0)
+                  );
+
+                  const statusColor: Record<string, string> = {
+                    active:  "#15803d",
+                    stopped: "var(--ink-3)",
+                    deleted: "#b42318",
+                    error:   "#c2410c",
+                    unknown: "var(--ink-4)",
+                  };
+                  const sc = statusColor[agent.status] ?? statusColor.unknown;
+
+                  return (
+                    <React.Fragment key={agent.agentId}>
+                      <tr
+                        className="transition-colors cursor-pointer"
+                        style={{ borderBottom: "1px solid var(--line)" }}
+                        onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-soft)")}
+                        onMouseLeave={(e) => (e.currentTarget.style.background = "")}
+                        onClick={() => effectiveBreakdown.length > 0 && toggleAgent(agent.agentId)}
+                      >
+                        <td className="px-6 py-4">
+                          <div className="text-[0.875rem] font-medium" style={{ color: "var(--ink)" }}>
+                            {agent.agentName}
+                          </div>
+                          <div className="text-[0.75rem] font-mono mt-0.5" style={{ color: "var(--ink-4)" }}>
+                            {agent.agentId.split("-")[0]}…
+                          </div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <span
+                            className="text-[0.8125rem] font-medium capitalize"
+                            style={{ color: sc }}
+                          >
+                            {agent.status}
                           </span>
-                        ) : agent.model ? (
-                          <span className="inline-flex px-2 py-0.5 rounded bg-gray-50 text-gray-700 text-[11px] border border-gray-200">
-                            {agent.model.split("/").pop()}
-                          </span>
-                        ) : (
-                          <span className="text-gray-300">—</span>
-                        )}
-                      </td>
-
-                      {/* UPDATED: Using the calculated display tokens */}
-                      <td className="px-6 py-4 text-right text-[13px] font-mono">
-                        {displayPromptTokens.toLocaleString()}
-                      </td>
-                      <td className="px-6 py-4 text-right text-[13px] font-mono">
-                        {displayCompletionTokens.toLocaleString()}
-                      </td>
-
-                      <td className="px-6 py-4 text-right font-semibold">
-                        ${agent.totalCost.toFixed(5)}
-                      </td>
-                    </tr>
-
-                    {/* Per-model sub-rows */}
-                    {expandedAgents.has(agent.agentId) &&
-                      effectiveBreakdown.map((m) => (
-                        <tr key={`${agent.agentId}-${m.model}`} className="bg-gray-50/30">
-                          <td className="px-6 py-2 pl-12 text-[12px] text-gray-400">
-                            ↳ {m.model.split("/").pop()}
-                          </td>
-                          <td />
-                          <td className="px-6 py-2">
-                            <span className="inline-flex px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 text-[11px] border border-indigo-100">
-                              {m.model.split("/").pop()}
+                        </td>
+                        <td className="px-6 py-4 text-[0.8125rem]" style={{ color: "var(--ink-3)" }}>
+                          {effectiveBreakdown.length > 0 ? (
+                            <span className="flex items-center gap-1">
+                              {expandedAgents.has(agent.agentId) ? "▾" : "▸"}
+                              {effectiveBreakdown.length} model(s)
                             </span>
-                          </td>
-                          <td className="px-6 py-2 text-right text-[12px] font-mono text-gray-500">
-                            {m.promptTokens.toLocaleString()}
-                          </td>
-                          <td className="px-6 py-2 text-right text-[12px] font-mono text-gray-500">
-                            {m.completionTokens.toLocaleString()}
-                          </td>
-                          <td className="px-6 py-2 text-right text-[12px] font-mono text-gray-600">
-                            ${m.totalCost.toFixed(5)}
-                          </td>
-                        </tr>
-                      ))}
-                  </React.Fragment>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
+                          ) : agent.model ? (
+                            <span
+                              className="inline-flex px-2 py-0.5 rounded text-[0.6875rem]"
+                              style={{ background: "var(--bg-soft)", color: "var(--ink-3)", border: "1px solid var(--line)" }}
+                            >
+                              {agent.model.split("/").pop()}
+                            </span>
+                          ) : (
+                            <span style={{ color: "var(--ink-5)" }}>—</span>
+                          )}
+                        </td>
+                        <td className="px-6 py-4 text-right text-[0.8125rem] font-mono" style={{ color: "var(--ink-2)" }}>
+                          {displayPromptTokens.toLocaleString()}
+                        </td>
+                        <td className="px-6 py-4 text-right text-[0.8125rem] font-mono" style={{ color: "var(--ink-2)" }}>
+                          {displayCompletionTokens.toLocaleString()}
+                        </td>
+                        <td className="px-6 py-4 text-right font-semibold text-[0.875rem]" style={{ color: "var(--ink)" }}>
+                          ${agent.totalCost.toFixed(5)}
+                        </td>
+                      </tr>
+
+                      {expandedAgents.has(agent.agentId) &&
+                        effectiveBreakdown.map((m) => (
+                          <tr
+                            key={`${agent.agentId}-${m.model}`}
+                            style={{ background: "var(--bg-elev)", borderBottom: "1px solid var(--line)" }}
+                          >
+                            <td className="px-6 py-2 pl-12 text-[0.75rem]" style={{ color: "var(--ink-4)" }}>
+                            </td>
+                            <td />
+                            <td className="px-6 py-2">
+                              <span
+                                className="inline-flex px-2 py-0.5 rounded text-[0.6875rem]"
+                                style={{ background: "var(--bg-sunken)", color: "var(--ink-3)", border: "1px solid var(--line)" }}
+                              >
+                                {m.model.split("/").pop()}
+                              </span>
+                            </td>
+                            <td className="px-6 py-2 text-right text-[0.75rem] font-mono" style={{ color: "var(--ink-3)" }}>
+                              {m.promptTokens.toLocaleString()}
+                            </td>
+                            <td className="px-6 py-2 text-right text-[0.75rem] font-mono" style={{ color: "var(--ink-3)" }}>
+                              {m.completionTokens.toLocaleString()}
+                            </td>
+                            <td className="px-6 py-2 text-right text-[0.75rem] font-mono" style={{ color: "var(--ink-2)" }}>
+                              ${m.totalCost.toFixed(5)}
+                            </td>
+                          </tr>
+                        ))}
+                    </React.Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
       </div>
     </div>
   );

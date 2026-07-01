@@ -139,13 +139,13 @@ class CostService:
                 # If we have a breakdown, distribute the spend to the actual models used
                 for actual_model_name, m_data in models_dict.items():
                     m_spend = float(m_data.get("spend", 0.0))
-                    by_model[actual_model_name] = (
-                        by_model.get(actual_model_name, 0.0) + m_spend
-                    )
+                    short_model = actual_model_name.split("/")[-1]
+                    by_model[short_model] = by_model.get(short_model, 0.0) + m_spend
             else:
                 # Fallback: if there is spend but no model breakdown data is available yet
                 model_key = agent.model or "unknown"
-                by_model[model_key] = by_model.get(model_key, 0.0) + spend
+                short_model = model_key.split("/")[-1]
+                by_model[short_model] = by_model.get(short_model, 0.0) + spend
 
             agent_daily = details.get("daily_spend", {})
             for date_str, row_spend in agent_daily.items():
@@ -185,7 +185,8 @@ class CostService:
                 )
             )
             total_cost += snap.total_cost
-            by_model[snap.model] = by_model.get(snap.model, 0.0) + snap.total_cost
+            short_model = snap.model.split("/")[-1] if snap.model else "unknown"
+            by_model[short_model] = by_model.get(short_model, 0.0) + snap.total_cost
 
         time_series = [
             CostTimeSeriesPoint(date=d, cost=c) for d, c in sorted(daily_costs.items())

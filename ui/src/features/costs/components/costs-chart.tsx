@@ -87,7 +87,7 @@ export function CostsChart({ timeSeries }: CostsChartProps) {
         <XAxis
           dataKey="date"
           tickFormatter={formatDate}
-          tick={{ fontSize: 12, fill: "#94a3b8" }}
+          tick={{ fontSize: 11, fill: "var(--ink-4)" }}
           axisLine={false}
           tickLine={false}
           ticks={uniqueTicks}
@@ -95,7 +95,7 @@ export function CostsChart({ timeSeries }: CostsChartProps) {
         />
         <YAxis
           tickFormatter={(v: number) => `$${v.toFixed(3)}`}
-          tick={{ fontSize: 11, fill: "#94a3b8" }}
+          tick={{ fontSize: 11, fill: "var(--ink-4)" }}
           axisLine={false}
           tickLine={false}
           width={60}
@@ -103,7 +103,7 @@ export function CostsChart({ timeSeries }: CostsChartProps) {
         <Tooltip content={<CustomTooltip />} cursor={{ fill: "#f8fafc" }} />
         <Bar
           dataKey="cost"
-          fill="#6366f1"
+          fill="var(--ink-3)"
           radius={[4, 4, 0, 0]}
           maxBarSize={40}
         />
