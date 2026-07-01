@@ -838,3 +838,103 @@ After all sub-tasks:
 ```
 
 Sub-tasks 1–5 are sequential (API). Sub-tasks 6–10 are sequential (UI). Sub-task 6 can start as soon as Sub-task 2 defines the response shape. Tests are written before implementation in each sub-task per TDD.
+
+---
+
+# Bug Fixes (found during local testing)
+
+Sub-tasks 1–10 are implemented and all tests pass. Three bugs found during local testing (API+DB+UI local, cluster remote).
+
+## Bugs
+
+1. **Logs don't stream in real-time** — user must refresh to see new lines
+2. **"Streaming"/"Disconnected" indicator appears random** — no clear trigger
+3. **Logs don't survive stop/start** — old session logs disappear after restart
+
+## API Log Analysis
+
+- Every `/logs/stream` request completes with 200 immediately (stream doesn't stay open)
+- `/logs/stream` + `/logs` called ~15 times in pairs at ~10s intervals (component remounts on health polling re-renders)
+- No `WARNING Failed to capture logs` during stop → capture either succeeded silently or returned early on empty `log_text`
+
+## Root Causes
+
+- **Next.js rewrite proxy buffers SSE** (Bug 1): `next.config.ts` proxies `/api/*` → backend via Node.js HTTP proxy, which accumulates the full response before forwarding. SSE never arrives in real-time. Confirmed by Next.js GitHub Issue #66263 ("browser receives data only after the response ends") and Discussion #76266 (identical rewrite pattern, same problem). No workaround exists for the rewrite proxy path — must bypass it entirely.
+- ~~**urllib3 chunk buffering**~~: Originally suspected `for raw_line in resp:` used ~10KB chunks. **Disproved** — urllib3 2.x `__iter__` already splits on `\n` and yields complete lines (see urllib3 source `response.py`). The underlying `stream()` reads 64KB socket chunks but `read(amt)` returns as soon as data is available, so lines are yielded in real-time. No backend fix needed.
+- **No reconnect / no "connecting" state** (Bug 2): Frontend SSE hook starts with `isConnected=false`, only becomes `true` after the fetch succeeds, and has no retry on disconnect. Confirmed by reading `use-agent-log-stream.ts`.
+- **Live mode hides historical snapshots** (Bug 3): After restart, `get_agent_logs` sees `RUNNING` and returns only live pod logs from the new pod. Saved snapshots exist in DB but are never surfaced. Confirmed by reading `service.py` → `get_agent_logs`.
+
+---
+
+## Bug Fix 1: SSE hook must bypass the Next.js proxy
+
+**File:** `ui/src/features/agents/hooks/use-agent-log-stream.ts`
+
+The SSE `fetch()` call currently uses a relative URL `/api/v1/agents/...` which goes through the Next.js rewrite proxy. Change it to use `NEXT_PUBLIC_BACKEND_URL` directly for the SSE connection, bypassing the proxy. REST calls can stay on the proxy (they don't need streaming).
+
+- Read `process.env.NEXT_PUBLIC_BACKEND_URL` (falls back to empty string for production where both run behind the same reverse proxy)
+- Build the SSE URL as `${backendUrl}/api/v1/agents/${agentId}/logs/stream?tail_lines=0`
+
+## ~~Bug Fix 2: Use line-based reading in K8s client~~ — REMOVED
+
+Disproved during root cause verification. urllib3 2.x `__iter__` already yields complete lines split on `\n`. No backend change needed.
+
+## Bug Fix 3: Add reconnect logic and "Connecting" state
+
+**File:** `ui/src/features/agents/hooks/use-agent-log-stream.ts`
+
+- Add a `"connecting"` state so the UI can show "Connecting..." instead of "Disconnected" during the initial fetch
+- Auto-reconnect with exponential backoff when the connection drops (unless explicitly aborted via unmount)
+- Expose connection state as a union type `"idle" | "connecting" | "streaming" | "disconnected"` instead of boolean
+
+**File:** `ui/src/features/agents/components/logs-tab.tsx`
+
+- Update the status indicator to show "Connecting..." when state is `"connecting"`, "Streaming" when `"streaming"`, "Disconnected" when `"disconnected"`
+
+## Bug Fix 4: Logs don't survive stop/start cycles
+
+Two sub-issues:
+
+**4a: Add success logging to `_capture_logs_before_stop`**
+
+**File:** `api/domains/agents/service.py` → `_capture_logs_before_stop`
+
+Add `logger.info` when a snapshot is successfully saved, and `logger.info` when `log_text` is empty (returns early). This lets us confirm whether capture works or silently skips.
+
+**4b: After restart, live mode hides historical snapshots**
+
+**File:** `api/domains/agents/service.py` → `get_agent_logs`
+
+Currently when `agent.status == RUNNING`, the method only returns live pod logs. After a restart, the new pod only has post-restart logs — old session logs are invisible even though they're saved in the DB.
+
+Fix: Add a `has_snapshots: bool = False` field to `AgentLogsRead` that is `True` when the agent has at least one saved snapshot. Populate it with a `repository.get_latest_log_snapshot(agent_id) is not None` check in both the running and stopped branches.
+
+**File:** `api/domains/agents/models.py` → `AgentLogsRead`
+
+Add `has_snapshots: bool = False` field.
+
+**File:** `ui/src/features/agents/schemas.ts` → `AgentLogsReadSchema`
+
+Add `hasSnapshots: z.boolean().optional().default(false)` field.
+
+**File:** `ui/src/features/agents/components/logs-tab.tsx`
+
+When `logs.hasSnapshots` is true and agent is running, show a "Previous sessions available" note at the top of the log viewport. For MVP, this is informational only.
+
+## Bug Fix Implementation Order
+
+1. Bug Fix 4a (backend: add logging to capture method)
+2. Bug Fix 4b (backend+frontend: has_snapshots field)
+3. Bug Fix 1 + 3 (frontend: bypass proxy + reconnect + connection states)
+
+## Bug Fix Verification
+
+1. Start the UI dev server and API locally
+2. Open agent detail → Logs tab for a running agent
+3. Trigger agent activity (send a message)
+4. Confirm new log lines appear in real-time without page refresh
+5. Confirm indicator shows "Connecting..." → "Streaming"
+6. Kill and restart the API — confirm the hook reconnects automatically
+7. Stop agent → confirm API logs show "Captured log snapshot for agent ..."
+8. Start agent again → confirm "Previous sessions available" note appears
+9. Run existing unit tests to check for regressions
