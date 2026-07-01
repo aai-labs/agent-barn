@@ -47,7 +47,7 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
     fields: [
       { key: "siteUrl", label: "Site URL", type: "text", required: true, placeholder: "https://your-domain.atlassian.net" },
       { key: "email", label: "Email", type: "text", required: true, placeholder: "you@example.com" },
-      { key: "apiToken", label: "API token", type: "secret", required: true },
+      { key: "apiToken", label: "API token", type: "secret", required: true, hint: "Use a classic (unscoped) API token. Scoped tokens won't work — they only authenticate via Atlassian's api.atlassian.com gateway, not your site URL." },
     ],
   },
   {
@@ -57,7 +57,7 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
     fields: [
       { key: "siteUrl", label: "Site URL", type: "text", required: true, placeholder: "https://your-domain.atlassian.net" },
       { key: "email", label: "Email", type: "text", required: true, placeholder: "you@example.com" },
-      { key: "apiToken", label: "API token", type: "secret", required: true },
+      { key: "apiToken", label: "API token", type: "secret", required: true, hint: "Use a classic (unscoped) API token. Scoped tokens won't work — they only authenticate via Atlassian's api.atlassian.com gateway, not your site URL." },
     ],
   },
   {
