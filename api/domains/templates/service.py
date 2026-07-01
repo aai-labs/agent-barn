@@ -242,13 +242,15 @@ class TemplateService:
                     template.template_slug,
                 )
 
-            if predefined.required_skill_names:
+            if (
+                existing.version == 1
+                and existing.template_source == TemplateSource.PRE_DEFINED
+            ):
+                desired_ids = [
+                    skill.id
+                    for name in predefined.required_skill_names
+                    if (skill := self.skill_repository.get_by_name_global(name))
+                ]
                 existing_ids = self.repository.get_required_skill_ids(existing.id)
-                if not existing_ids:
-                    skill_ids = [
-                        skill.id
-                        for name in predefined.required_skill_names
-                        if (skill := self.skill_repository.get_by_name_global(name))
-                    ]
-                    if skill_ids:
-                        self.repository.save_template_skills(existing.id, skill_ids)
+                if set(desired_ids) != existing_ids:
+                    self.repository.save_template_skills(existing.id, desired_ids)

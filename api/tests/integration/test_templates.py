@@ -811,6 +811,52 @@ def test_seed_predefined_templates_does_not_duplicate_skill_rows():
             assert_that(len(skill_ids), equal_to(2))
 
 
+def test_seed_predefined_templates_seeds_code_reviewer_skill():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="GitHub", global_skill=True),
+        ]
+    ) as context:
+        service: TemplateService = context.injector.get(TemplateService)
+        client: TestClient = context.client
+        org_id = context.organization.id
+
+        with when("I seed the org"):
+            service.seed_predefined_templates(org_id)
+
+        with then("code-reviewer has GitHub as a required skill"):
+            response = client.get(f"{_BASE}/code-reviewer", headers=_auth(context))
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            skill_names = [s["name"] for s in response.json()["required_skills"]]
+            assert_that(skill_names, has_items("GitHub"))
+
+
+def test_seed_predefined_templates_refreshes_stale_skills():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="GitHub", global_skill=True),
+        ]
+    ) as context:
+        service: TemplateService = context.injector.get(TemplateService)
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+        org_id = context.organization.id
+        service.seed_predefined_templates(org_id)
+
+        with when("the seeded skills are cleared from the DB then we reseed"):
+            template = repository.get_latest_template(org_id, "code-reviewer")
+            assert template is not None
+            repository.save_template_skills(template.id, [])
+            service.seed_predefined_templates(org_id)
+
+        with then("the required skills are restored to match the code declaration"):
+            template = repository.get_latest_template(org_id, "code-reviewer")
+            assert template is not None
+            skill_ids = repository.get_required_skill_ids(template.id)
+            assert_that(len(skill_ids), equal_to(1))
+
+
 def test_predefined_content_keeps_raw_placeholders():
     with given(_GIVEN) as context:
         service: TemplateService = context.injector.get(TemplateService)

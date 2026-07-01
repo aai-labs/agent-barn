@@ -69,5 +69,6 @@ PREDEFINED_TEMPLATES: tuple[PredefinedTemplate, ...] = (
         boot_md=code_reviewer.BOOT_MD,
         bootstrap_md=DEFAULT_BOOTSTRAP_MD,
         heartbeat_md=code_reviewer.HEARTBEAT_MD,
+        required_skill_names=("GitHub",),
     ),
 )
