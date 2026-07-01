@@ -8,6 +8,7 @@ from sqlmodel import Session, col, select
 from api.domains.agents.models import (
     Agent,
     AgentFilter,
+    AgentLogSnapshot,
     AgentSecret,
     AgentSkill,
     AgentSlackConfig,
@@ -204,6 +205,43 @@ class AgentRepository:
     def get_skills_for_agent(self, agent_id: UUID) -> list[AgentSkill]:
         with Session(self.delegate.engine) as session:
             query = select(AgentSkill).where(col(AgentSkill.agent_id) == agent_id)
+            return list(session.exec(query).all())
+
+    # --- Log snapshots ---
+
+    def save_log_snapshot(self, snapshot: AgentLogSnapshot) -> AgentLogSnapshot:
+        self.delegate.save(snapshot)
+        return snapshot
+
+    def get_latest_log_snapshot(self, agent_id: UUID) -> AgentLogSnapshot | None:
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(AgentLogSnapshot)
+                .where(col(AgentLogSnapshot.agent_id) == agent_id)
+                .order_by(col(AgentLogSnapshot.session_ended_at).desc())
+                .limit(1)
+            )
+            return session.exec(query).first()
+
+    def get_log_snapshots(
+        self,
+        agent_id: UUID,
+        before_id: UUID | None = None,
+        limit: int = 5,
+    ) -> list[AgentLogSnapshot]:
+        with Session(self.delegate.engine) as session:
+            query = select(AgentLogSnapshot).where(
+                col(AgentLogSnapshot.agent_id) == agent_id
+            )
+            if before_id is not None:
+                pivot = session.get(AgentLogSnapshot, before_id)
+                if pivot:
+                    query = query.where(
+                        col(AgentLogSnapshot.session_ended_at) < pivot.session_ended_at
+                    )
+            query = query.order_by(col(AgentLogSnapshot.session_ended_at).desc()).limit(
+                limit
+            )
             return list(session.exec(query).all())
 
     def save(self, agent: Agent) -> Agent:

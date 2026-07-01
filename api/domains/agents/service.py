@@ -3,6 +3,7 @@ import datetime as dt
 import fnmatch
 import logging
 import secrets
+from collections.abc import Generator
 from dataclasses import dataclass
 from typing import Any, cast
 from uuid import UUID
@@ -44,6 +45,9 @@ from api.domains.agents.models import (
     AgentCreate,
     AgentFilter,
     AgentHealthRead,
+    AgentLogSnapshot,
+    AgentLogsRead,
+    AgentLogSnapshotRead,
     AgentPlatform,
     AgentRead,
     AgentSecret,
@@ -121,6 +125,8 @@ _TEAMS_CONFIG_FIELDS = frozenset(
     }
 )
 
+
+_MAX_LOG_SNAPSHOT_BYTES = 1_048_576  # 1 MB
 
 _OPENROUTER_MODEL_PREFIX = "litellm/openrouter/"
 
@@ -987,6 +993,98 @@ class AgentService:
         self.repository.save(agent)
         return self._get_agent_read(agent)
 
+    def get_agent_logs(
+        self,
+        agent_id: UUID,
+        context: CurrentUserContext,
+        tail_lines: int = 100,
+    ) -> AgentLogsRead:
+        org_id = self._org_id(context)
+        agent = self._get_active_or_404(agent_id, org_id)
+
+        if agent.status == AgentStatus.RUNNING:
+            log_text = self.k8s.read_pod_logs(
+                f"agent-{agent.id}",
+                self.config.k8s_namespace,
+                tail_lines=tail_lines,
+            )
+            lines = log_text.splitlines() if log_text else []
+            return AgentLogsRead(lines=lines, source="live")
+
+        snapshot = self.repository.get_latest_log_snapshot(agent_id)
+        if snapshot is None:
+            return AgentLogsRead(lines=[], source="snapshot")
+        all_lines = snapshot.log_text.splitlines()
+        lines = all_lines[-tail_lines:]
+        return AgentLogsRead(
+            lines=lines,
+            source="snapshot",
+            snapshot_id=snapshot.id,
+            session_started_at=snapshot.session_started_at,
+            session_ended_at=snapshot.session_ended_at,
+        )
+
+    def stream_agent_logs(
+        self,
+        agent_id: UUID,
+        context: CurrentUserContext,
+        tail_lines: int = 0,
+    ) -> Generator[str, None, None]:
+        org_id = self._org_id(context)
+        agent = self._get_active_or_404(agent_id, org_id)
+        if agent.status != AgentStatus.RUNNING:
+            return
+        yield from self.k8s.stream_pod_logs(
+            f"agent-{agent.id}",
+            self.config.k8s_namespace,
+            tail_lines=tail_lines,
+        )
+
+    def get_log_snapshots(
+        self,
+        agent_id: UUID,
+        context: CurrentUserContext,
+        before_id: UUID | None = None,
+        limit: int = 5,
+    ) -> list[AgentLogSnapshotRead]:
+        org_id = self._org_id(context)
+        self._get_active_or_404(agent_id, org_id)
+        snapshots = self.repository.get_log_snapshots(agent_id, before_id, limit)
+        return [AgentLogSnapshotRead.model_validate(s) for s in snapshots]
+
+    def _capture_logs_before_stop(self, agent: "Agent") -> None:
+        try:
+            log_text = self.k8s.read_pod_logs(
+                f"agent-{agent.id}",
+                self.config.k8s_namespace,
+                tail_lines=50_000,
+            )
+            if not log_text:
+                return
+            encoded = log_text.encode("utf-8")
+            if len(encoded) > _MAX_LOG_SNAPSHOT_BYTES:
+                truncated = encoded[-_MAX_LOG_SNAPSHOT_BYTES:]
+                log_text = truncated.decode("utf-8", errors="replace")
+                idx = log_text.find("\n")
+                if idx > 0:
+                    log_text = log_text[idx + 1 :]
+            now = dt.datetime.now(dt.timezone.utc)
+            self.repository.save_log_snapshot(
+                AgentLogSnapshot(
+                    agent_id=agent.id,
+                    session_started_at=agent.updated_at,
+                    session_ended_at=now,
+                    log_text=log_text,
+                    byte_size=len(log_text.encode("utf-8")),
+                )
+            )
+        except Exception:
+            logger.warning(
+                "Failed to capture logs before stop for agent %s",
+                agent.id,
+                exc_info=True,
+            )
+
     def stop_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
         org_id = self._org_id(context)
         agent = self._get_active_or_404(agent_id, org_id)
@@ -1029,6 +1127,7 @@ class AgentService:
                 agent_id,
             )
 
+        self._capture_logs_before_stop(agent)
         self.k8s.delete_deployment(f"agent-{agent.id}", self.config.k8s_namespace)
 
         agent.status = AgentStatus.STOPPED

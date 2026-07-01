@@ -2,12 +2,15 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Response, status
+from fastapi.responses import StreamingResponse
 from fastapi_injector import Injected
 
 from api.domains.agents.models import (
     AgentCreate,
     AgentFilter,
     AgentHealthRead,
+    AgentLogSnapshotRead,
+    AgentLogsRead,
     AgentRead,
     AgentUpdate,
     PairRequest,
@@ -53,6 +56,54 @@ def list_models(
     service: Annotated[AgentService, Injected(AgentService)],
 ):
     return service.list_models(context)
+
+
+@agents_router.get("/{agent_id}/logs/stream")
+def stream_agent_logs(
+    agent_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentService, Injected(AgentService)],
+    tail_lines: Annotated[int, Query(ge=0, le=1000)] = 0,
+):
+    def event_generator():
+        for line in service.stream_agent_logs(agent_id, context, tail_lines=tail_lines):
+            yield f"data: {line}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@agents_router.get(
+    "/{agent_id}/logs/snapshots",
+    response_model=list[AgentLogSnapshotRead],
+)
+def get_agent_log_snapshots(
+    agent_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentService, Injected(AgentService)],
+    before_id: Annotated[UUID | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=20)] = 5,
+):
+    return service.get_log_snapshots(
+        agent_id, context, before_id=before_id, limit=limit
+    )
+
+
+@agents_router.get("/{agent_id}/logs", response_model=AgentLogsRead)
+def get_agent_logs(
+    agent_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentService, Injected(AgentService)],
+    tail_lines: Annotated[int, Query(ge=1, le=10000)] = 100,
+):
+    return service.get_agent_logs(agent_id, context, tail_lines=tail_lines)
 
 
 @agents_router.get("/{agent_id}", response_model=AgentRead)

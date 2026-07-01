@@ -1,0 +1,125 @@
+import datetime as dt
+from uuid import UUID
+
+from hamcrest import assert_that, equal_to, has_length, none, not_none
+from sqlmodel import Session
+
+from api.domains.agents.models import AgentLogSnapshot
+from api.domains.agents.repository import AgentRepository
+from api.tests.core.givenpy import given, then, when
+from api.tests.core.modules import prepare_injector, set_env_variable
+from api.tests.steps.agent import (
+    TEST_ENCRYPTION_KEY,
+    MockK8sModule,
+    MockLiteLLMModule,
+    there_is_an_agent,
+)
+from api.tests.steps.database import database_is_clean, database_repo_is_ready
+from api.tests.steps.organization import there_is_an_organization
+
+_GIVEN = [
+    set_env_variable({"AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY}),
+    prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
+    database_repo_is_ready(),
+    database_is_clean(),
+    there_is_an_organization(),
+]
+
+
+def _now() -> dt.datetime:
+    return dt.datetime.now(dt.timezone.utc)
+
+
+def _make_snapshot(
+    agent_id: UUID,
+    log_text: str = "line1\nline2\n",
+    session_started_at: dt.datetime | None = None,
+    session_ended_at: dt.datetime | None = None,
+) -> AgentLogSnapshot:
+    now = _now()
+    return AgentLogSnapshot(
+        agent_id=agent_id,
+        session_started_at=session_started_at or now,
+        session_ended_at=session_ended_at or now,
+        log_text=log_text,
+        byte_size=len(log_text.encode("utf-8")),
+    )
+
+
+def test_save_log_snapshot_persists():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        repo: AgentRepository = context.injector.get(AgentRepository)
+
+        with when("I save a log snapshot"):
+            snapshot = _make_snapshot(context.agent.id)
+            result = repo.save_log_snapshot(snapshot)
+
+            with then("it is persisted with an id"):
+                assert_that(result.id, not_none())
+                assert_that(result.agent_id, equal_to(context.agent.id))
+                assert_that(result.log_text, equal_to("line1\nline2\n"))
+
+
+def test_get_latest_log_snapshot_returns_most_recent():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        repo: AgentRepository = context.injector.get(AgentRepository)
+        agent_id = context.agent.id
+
+        t1 = dt.datetime(2026, 6, 1, tzinfo=dt.timezone.utc)
+        t2 = dt.datetime(2026, 6, 10, tzinfo=dt.timezone.utc)
+        t3 = dt.datetime(2026, 6, 20, tzinfo=dt.timezone.utc)
+
+        repo.save_log_snapshot(_make_snapshot(agent_id, "old", session_ended_at=t1))
+        repo.save_log_snapshot(_make_snapshot(agent_id, "middle", session_ended_at=t2))
+        repo.save_log_snapshot(_make_snapshot(agent_id, "newest", session_ended_at=t3))
+
+        with when("I get the latest log snapshot"):
+            result = repo.get_latest_log_snapshot(agent_id)
+
+            with then("the most recently ended session is returned"):
+                assert_that(result, not_none())
+                assert result is not None
+                assert_that(result.log_text, equal_to("newest"))
+
+
+def test_get_latest_log_snapshot_returns_none_when_empty():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        repo: AgentRepository = context.injector.get(AgentRepository)
+
+        with when("I get the latest log snapshot for an agent with none"):
+            result = repo.get_latest_log_snapshot(context.agent.id)
+
+            with then("None is returned"):
+                assert_that(result, none())
+
+
+def test_get_log_snapshots_paginated_by_cursor():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        repo: AgentRepository = context.injector.get(AgentRepository)
+        agent_id = context.agent.id
+
+        snapshots = []
+        for day in range(1, 6):
+            ended = dt.datetime(2026, 6, day, tzinfo=dt.timezone.utc)
+            s = _make_snapshot(agent_id, f"day-{day}", session_ended_at=ended)
+            repo.save_log_snapshot(s)
+            snapshots.append(s)
+
+        with when("I fetch the first page of snapshots"):
+            page1 = repo.get_log_snapshots(agent_id, limit=2)
+
+            with then("the two most recent are returned"):
+                assert_that(page1, has_length(2))
+                assert_that(page1[0].log_text, equal_to("day-5"))
+                assert_that(page1[1].log_text, equal_to("day-4"))
+
+        with when("I fetch the next page using cursor"):
+            page2 = repo.get_log_snapshots(agent_id, before_id=page1[1].id, limit=2)
+
+            with then("the next two are returned"):
+                assert_that(page2, has_length(2))
+                assert_that(page2[0].log_text, equal_to("day-3"))
+                assert_that(page2[1].log_text, equal_to("day-2"))
+
+
+_ = (Session, MockLiteLLMModule)

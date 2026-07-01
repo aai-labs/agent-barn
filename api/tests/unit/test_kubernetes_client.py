@@ -16,6 +16,14 @@ from kubernetes.client.exceptions import ApiException
 from api.core.config import Config
 from api.infrastructure.kubernetes import client as k8s_client_module
 from api.infrastructure.kubernetes.client import KubernetesClient
+from api.tests.core.givenpy import then, when
+
+
+def _running_pod(name="agent-pod-abc"):
+    return SimpleNamespace(
+        metadata=SimpleNamespace(name=name),
+        status=SimpleNamespace(phase="Running"),
+    )
 
 
 class _FakeAppsApi:
@@ -43,11 +51,38 @@ class _FakeAppsApi:
 
 
 class _FakeCoreApi:
-    def __init__(self, resource=None):
+    def __init__(self, resource=None, pods=None, log_text=None, raises_on=None):
         self._resource = resource
+        self._pods = pods or []
+        self._log_text = log_text
+        self._raises_on = raises_on or {}
 
     def list_namespaced_service(self, *_, label_selector=""):
         return SimpleNamespace(items=[self._resource] if self._resource else [])
+
+    def list_namespaced_pod(self, namespace, label_selector=""):
+        return SimpleNamespace(items=self._pods)
+
+    def read_namespaced_pod_log(self, pod_name, namespace, **kwargs):
+        if "read_log" in self._raises_on:
+            raise self._raises_on["read_log"]
+        if kwargs.get("follow") and not kwargs.get("_preload_content", True):
+            return _FakeStreamResponse(self._log_text or "")
+        return self._log_text or ""
+
+
+class _FakeStreamResponse:
+    def __init__(self, text: str):
+        self._lines = [line.encode() for line in text.splitlines(keepends=True)]
+
+    def __iter__(self):
+        return iter(self._lines)
+
+    def close(self):
+        pass
+
+    def release_conn(self):
+        pass
 
 
 def _make_client(apps_api=None, core_api=None) -> KubernetesClient:
@@ -187,3 +222,67 @@ def test_resolve_kubeconfig_rewrites_server_in_cluster(monkeypatch, tmp_path):
     assert_that(
         patched["clusters"][0]["cluster"]["server"], equal_to("https://10.0.0.1:443")
     )
+
+
+# --- read_pod_logs ---
+
+
+def test_read_pod_logs_returns_text_when_pod_exists():
+    pod = _running_pod()
+    core = _FakeCoreApi(pods=[pod], log_text="line1\nline2\n")
+    k8s = _make_client(core_api=core)
+
+    with when("I read pod logs for an existing deployment"):
+        result = k8s.read_pod_logs("agent-abc", "agent-farm")
+
+        with then("the log text is returned"):
+            assert_that(result, equal_to("line1\nline2\n"))
+
+
+def test_read_pod_logs_returns_none_when_no_pod():
+    core = _FakeCoreApi(pods=[])
+    k8s = _make_client(core_api=core)
+
+    with when("I read pod logs for a deployment with no running pod"):
+        result = k8s.read_pod_logs("agent-abc", "agent-farm")
+
+        with then("None is returned"):
+            assert_that(result, none())
+
+
+def test_read_pod_logs_returns_none_on_404():
+    pod = _running_pod()
+    core = _FakeCoreApi(pods=[pod], raises_on={"read_log": ApiException(status=404)})
+    k8s = _make_client(core_api=core)
+
+    with when("the pod disappears between lookup and log read"):
+        result = k8s.read_pod_logs("agent-abc", "agent-farm")
+
+        with then("None is returned instead of raising"):
+            assert_that(result, none())
+
+
+# --- stream_pod_logs ---
+
+
+def test_stream_pod_logs_yields_lines():
+    pod = _running_pod()
+    core = _FakeCoreApi(pods=[pod], log_text="alpha\nbeta\ngamma\n")
+    k8s = _make_client(core_api=core)
+
+    with when("I stream pod logs for a running deployment"):
+        lines = list(k8s.stream_pod_logs("agent-abc", "agent-farm"))
+
+        with then("each log line is yielded"):
+            assert_that(lines, equal_to(["alpha", "beta", "gamma"]))
+
+
+def test_stream_pod_logs_returns_empty_when_no_pod():
+    core = _FakeCoreApi(pods=[])
+    k8s = _make_client(core_api=core)
+
+    with when("I stream pod logs for a deployment with no running pod"):
+        lines = list(k8s.stream_pod_logs("agent-abc", "agent-farm"))
+
+        with then("no lines are yielded"):
+            assert_that(lines, equal_to([]))

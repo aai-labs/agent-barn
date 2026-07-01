@@ -178,6 +178,24 @@ export const ModelOptionSchema = z.object({
   isDefault: z.boolean().optional(),
 });
 
+export const AgentLogsReadSchema = z.object({
+  lines: z.array(z.string()),
+  source: z.enum(["live", "snapshot"]),
+  snapshotId: z.string().uuid().nullable().optional(),
+  sessionStartedAt: z.string().nullable().optional(),
+  sessionEndedAt: z.string().nullable().optional(),
+});
+
+export const AgentLogSnapshotReadSchema = z.object({
+  id: z.string().uuid(),
+  agentId: z.string().uuid(),
+  sessionStartedAt: z.string(),
+  sessionEndedAt: z.string(),
+  logText: z.string(),
+  byteSize: z.number().int(),
+  createdAt: z.string(),
+});
+
 export type Agent = z.infer<typeof AgentSchema>;
 export type AgentAssignedSkill = z.infer<typeof AgentAssignedSkillSchema>;
 export type AgentSlackConfig = z.infer<typeof AgentSlackConfigSchema>;
@@ -198,3 +216,5 @@ export type PaginatedToolCalls = z.infer<typeof PaginatedToolCallsSchema>;
 export type SlackChannel = z.infer<typeof SlackChannelSchema>;
 export type SlackUser = z.infer<typeof SlackUserSchema>;
 export type ModelOption = z.infer<typeof ModelOptionSchema>;
+export type AgentLogsRead = z.infer<typeof AgentLogsReadSchema>;
+export type AgentLogSnapshotRead = z.infer<typeof AgentLogSnapshotReadSchema>;
