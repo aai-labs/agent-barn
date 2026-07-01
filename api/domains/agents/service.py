@@ -195,6 +195,28 @@ class AgentService:
     def _build_skill_pointers(skills: list[Skill]) -> str:
         return "".join(s.tools_pointer for s in skills if s.tools_pointer)
 
+    def _auto_attached_aai_cli_skills(
+        self,
+        configured_providers: set[SecretProvider],
+        already_assigned_ids: set[UUID],
+    ) -> list[Skill]:
+        """aai-cli skills whose required providers are all configured.
+
+        Configuring a provider secret implicitly mounts its aai-cli skill (docs +
+        tools pointer) at start time, so an agent can use a configured integration
+        even when the skill was not explicitly assigned. Skills already explicitly
+        assigned are skipped to avoid duplicate mounts.
+        """
+        if not configured_providers:
+            return []
+        return [
+            skill
+            for skill in self.skill_repository.get_aai_cli_skills()
+            if skill.id not in already_assigned_ids
+            and skill.required_providers
+            and all(p in configured_providers for p in skill.required_providers)
+        ]
+
     def _resolve_skills(
         self,
         skill_ids: list[UUID],
@@ -887,12 +909,18 @@ class AgentService:
             secret.string_data.update(build_env(store))
 
         agent_skills = self.skill_repository.get_agent_skills_with_details(agent.id)
+        assigned_skills = [s for _, s in agent_skills]
+        # Implicitly mount the aai-cli skill for any configured provider.
+        mounted_skills = assigned_skills + self._auto_attached_aai_cli_skills(
+            set(decrypted.keys()),
+            {s.id for s in assigned_skills},
+        )
         skills_json = (
-            build_skills_manifest_from_zips(agent_skills) if agent_skills else None
+            build_skills_manifest_from_zips(mounted_skills) if mounted_skills else None
         )
         tools_md = (
             rendered.tools_md
-            + self._build_skill_pointers([s for _, s in agent_skills])
+            + self._build_skill_pointers(mounted_skills)
             + build_tool_context_md(decrypted)
         )
 
