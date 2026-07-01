@@ -13,16 +13,20 @@ spec:
   ingressClassName: traefik
   tls:
     - hosts:
-        - {{ .Values.ingress.host }}
+        {{- range splitList "," .Values.ingress.hosts }}
+        - {{ . | trim }}
+        {{- end }}
       secretName: {{ .Values.ingress.tlsSecretName }}
   rules:
-    - host: {{ .Values.ingress.host }}
+    {{- range splitList "," .Values.ingress.hosts }}
+    - host: {{ . | trim }}
       http:
         paths:
           - path: /
             pathType: Prefix
             backend:
               service:
-                name: {{ .Release.Name }}
+                name: {{ $.Release.Name }}
                 port:
-                  number: {{ .Values.service.port }}
+                  number: {{ $.Values.service.port }}
+    {{- end }}

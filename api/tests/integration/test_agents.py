@@ -2480,6 +2480,124 @@ def test_start_agent_with_skill_pointer_injects_pointer_into_tools_md():
             )
 
 
+# --- aai-cli skills auto-attach from configured providers ---
+
+_JIRA_POINTER = "\nFor Jira, use the aai-cli tool. See ./skills/aai-cli/jira_skill.md\n"
+
+
+def test_start_agent_auto_attaches_aai_cli_skill_for_configured_provider():
+    import json as _json
+
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(),
+            there_is_a_skill(
+                name="Jira",
+                required_providers=[SecretProvider.JIRA],
+                global_skill=True,
+                tools_pointer=_JIRA_POINTER,
+            ),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+
+        with when(
+            "a jira secret is configured but the skill is not explicitly assigned"
+        ):
+            client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"secrets": [{"provider": "jira", "content": _JIRA_CONTENT}]},
+                headers=_auth(context),
+            )
+            response = client.post(
+                f"{_BASE}/{context.agent.id}/start", headers=_auth(context)
+            )
+
+        with then("the aai-cli Jira skill is mounted and its pointer injected"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            assert_that(config_map.data, has_key("skills.json"))
+            entries = _json.loads(config_map.data["skills.json"])
+            assert_that(len(entries), equal_to(1))
+            assert_that(entries[0]["path"], equal_to("skill.md"))
+            assert_that(config_map.data["TOOLS.md"], contains_string(_JIRA_POINTER))
+
+
+def test_start_agent_does_not_auto_attach_skill_for_unconfigured_provider():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(),
+            there_is_a_skill(
+                name="GitHub",
+                required_providers=[SecretProvider.GITHUB],
+                global_skill=True,
+                tools_pointer="\nFor GitHub, use the aai-cli tool.\n",
+            ),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+
+        with when("a jira secret is configured but no github secret"):
+            client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"secrets": [{"provider": "jira", "content": _JIRA_CONTENT}]},
+                headers=_auth(context),
+            )
+            response = client.post(
+                f"{_BASE}/{context.agent.id}/start", headers=_auth(context)
+            )
+
+        with then("the GitHub skill is not mounted (its provider is not configured)"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            assert_that(config_map.data, is_not(has_key("skills.json")))
+            assert_that(
+                config_map.data["TOOLS.md"],
+                is_not(contains_string("For GitHub, use the aai-cli tool")),
+            )
+
+
+def test_start_agent_auto_attach_does_not_duplicate_explicitly_assigned_skill():
+    import json as _json
+
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(),
+            there_is_a_skill(
+                name="Jira",
+                required_providers=[SecretProvider.JIRA],
+                global_skill=True,
+                tools_pointer=_JIRA_POINTER,
+            ),
+            skill_is_assigned_to_agent(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+
+        with when("the jira skill is both explicitly assigned and provider-configured"):
+            client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"secrets": [{"provider": "jira", "content": _JIRA_CONTENT}]},
+                headers=_auth(context),
+            )
+            response = client.post(
+                f"{_BASE}/{context.agent.id}/start", headers=_auth(context)
+            )
+
+        with then("the skill is mounted exactly once and the pointer appears once"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            entries = _json.loads(config_map.data["skills.json"])
+            assert_that(len(entries), equal_to(1))
+            assert_that(config_map.data["TOOLS.md"].count(_JIRA_POINTER), equal_to(1))
+
+
 # --- template required skills ---
 
 

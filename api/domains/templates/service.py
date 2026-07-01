@@ -1,3 +1,4 @@
+import logging
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -27,9 +28,15 @@ from api.domains.templates.models import (
 )
 from api.domains.templates.predefined import PREDEFINED_TEMPLATES
 from api.domains.templates.repository import TemplateRepository
-from api.domains.templates.seeding import build_predefined_templates
+from api.domains.templates.seeding import (
+    build_predefined_templates,
+    copy_predefined_content,
+    predefined_content_differs,
+)
 from api.domains.templates.slug import slugify
 from api.infrastructure.shared.models import PaginatedItems, Pagination
+
+logger = logging.getLogger(__name__)
 
 
 @inject
@@ -203,13 +210,36 @@ class TemplateService:
         return self._with_required_skills(TemplateRead.model_validate(new_template))
 
     def seed_predefined_templates(self, org_id: UUID) -> None:
-        """Insert pre-defined templates the org doesn't have yet (idempotent)."""
-        template_map = {t.template_slug: t for t in build_predefined_templates(org_id)}
-        for predefined in PREDEFINED_TEMPLATES:
-            existing = self.repository.get_latest_template(org_id, predefined.slug)
+        """Insert missing pre-defined templates and refresh stale ones in place.
+
+        Pre-defined templates are system-managed. When the code's content changes,
+        the original v1 seed is overwritten in place so both new agents (created
+        from the latest version) and existing agents (which re-render their pinned
+        template on every start) pick up the change. A lineage the user has edited
+        (version > 1) is left untouched so customizations are never clobbered.
+        """
+        for predefined, template in zip(PREDEFINED_TEMPLATES, build_predefined_templates(org_id)):
+            existing = self.repository.get_latest_template(
+                org_id, template.template_slug
+            )
             if existing is None:
-                self.repository.save_template(template_map[predefined.slug])
-                existing = template_map[predefined.slug]
+                self.repository.save_template(template)
+                existing = template
+                logger.warning(
+                    "Seeded predefined template: %s v1", template.template_slug
+                )
+            elif (
+                existing.version == 1
+                and existing.template_source == TemplateSource.PRE_DEFINED
+                and predefined_content_differs(existing, template)
+            ):
+                copy_predefined_content(existing, template)
+                self.repository.save_template(existing)
+                logger.warning(
+                    "Refreshed predefined template in place: %s v1",
+                    template.template_slug,
+                )
+
             if predefined.required_skill_names:
                 existing_ids = self.repository.get_required_skill_ids(existing.id)
                 if not existing_ids:
@@ -217,7 +247,6 @@ class TemplateService:
                         skill.id
                         for name in predefined.required_skill_names
                         if (skill := self.skill_repository.get_by_name_global(name))
-                        is not None
                     ]
                     if skill_ids:
                         self.repository.save_template_skills(existing.id, skill_ids)

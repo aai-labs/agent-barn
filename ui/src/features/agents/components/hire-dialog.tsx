@@ -47,10 +47,14 @@ function getSteps(
   configTokenReady: boolean,
 ): WizardStep[] {
   if (agentType === "hermes") {
+    // The runtime picker (agent-type) and platform picker (platform-choice) are
+    // intentionally skipped: creation is locked to Hermes + Slack from the
+    // frontend. The picker components and the openclaw/teams branches below stay
+    // in place but are unreachable.
     if (!setupNewBot) {
-      return ["template", "agent-type", "slack-choice", "slack-tokens", "details", "skills"];
+      return ["template", "slack-choice", "slack-tokens", "details", "skills"];
     }
-    const base: WizardStep[] = ["template", "agent-type", "slack-choice"];
+    const base: WizardStep[] = ["template", "slack-choice"];
     if (!configTokenReady) base.push("config-token");
     base.push("bot-builder", "slack-tokens", "details", "skills");
     return base;
@@ -619,7 +623,10 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
           <button
             className="af-btn af-btn-primary af-btn-lg"
             disabled={!effectiveTemplate}
-            onClick={() => setStep("agent-type")}
+            // Skip the runtime (agent-type) and platform (platform-choice) pickers:
+            // creation is locked to Hermes + Slack (the state defaults). Those steps'
+            // components and Continue handlers below stay but are now unreachable.
+            onClick={() => setStep("slack-choice")}
           >
             Continue
           </button>

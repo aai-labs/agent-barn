@@ -744,6 +744,28 @@ def test_seed_does_not_clobber_edited_predefined_template():
             assert_that(latest.soul_md, equal_to("# Edited Soul"))
 
 
+def test_seed_refreshes_stale_predefined_v1_in_place():
+    with given(_GIVEN) as context:
+        service: TemplateService = context.injector.get(TemplateService)
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+        org_id = context.organization.id
+        service.seed_predefined_templates(org_id)
+
+        with when("the seeded v1 drifts from the code (an old seed) then we reseed"):
+            seeded = repository.get_latest_template(org_id, "scrum-master")
+            assert seeded is not None
+            seeded.user_md = "# STALE - asks for credentials"
+            repository.save_template(seeded)
+            service.seed_predefined_templates(org_id)
+
+        with then("the v1 row is refreshed in place to the current code content"):
+            latest = repository.get_latest_template(org_id, "scrum-master")
+            assert latest is not None
+            assert_that(latest.version, equal_to(1))
+            assert_that(latest.user_md, is_not(contains_string("STALE")))
+            assert_that(latest.template_source, equal_to(TemplateSource.PRE_DEFINED))
+
+
 def test_seed_predefined_templates_seeds_scrum_master_skills():
     with given(
         [
