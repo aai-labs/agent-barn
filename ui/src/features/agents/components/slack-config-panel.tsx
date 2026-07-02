@@ -35,6 +35,8 @@ export function SlackConfigPanel({ agent, onSaved }: SlackConfigPanelProps) {
   const [channelFocused, setChannelFocused] = useState(false);
   const [userFocused, setUserFocused] = useState(false);
   const [saved, setSaved] = useState(false);
+  const shouldShowHermesHomeChannelMessage =
+    agent.agentType === "hermes" && channelIds.length === 0;
 
   const selectedChannels = channelIds
     .map((id) => channels.find((c) => c.id === id))
@@ -94,6 +96,12 @@ export function SlackConfigPanel({ agent, onSaved }: SlackConfigPanelProps) {
             <option value="allowlist">Allowlist — only allowed channels</option>
           </select>
         </div>
+
+        {shouldShowHermesHomeChannelMessage && (
+          <p className="text-[0.781rem]" style={{ color: "var(--err)" }}>
+            Set up a home channel for Hermes if you want scheduled or proactive Slack delivery.
+          </p>
+        )}
 
         {groupPolicy === "allowlist" && (
           <div className="flex flex-col gap-2">
