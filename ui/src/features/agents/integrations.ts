@@ -7,7 +7,7 @@
 // (smtp/imap host+port, folders, …) are NOT inputs here — the backend fills them
 // as schema defaults.
 
-export type IntegrationFieldType = "text" | "secret" | "repo-url";
+export type IntegrationFieldType = "text" | "secret" | "repo-list";
 
 export interface IntegrationField {
   key: string;
@@ -27,7 +27,7 @@ export interface IntegrationProvider {
 
 export interface IntegrationDraft {
   provider: string;
-  content: Record<string, string>;
+  content: Record<string, string | string[]>;
 }
 
 export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
@@ -37,7 +37,8 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
     scopeNote: "Classic PAT: repo, read:user, read:org — Fine-grained PAT: Contents (read), Pull requests (read + write), Metadata (read, mandatory)",
     fields: [
       { key: "token", label: "Personal access token", type: "secret", required: true, placeholder: "github_pat_… or ghp_…" },
-      { key: "repoUrl", label: "Repository URL", type: "repo-url", required: true, placeholder: "https://github.com/owner/repo.git" },
+      { key: "owner", label: "Owner / Org", type: "text", required: true, placeholder: "owner-or-org" },
+      { key: "repos", label: "Repositories", type: "repo-list", required: false, placeholder: "repository name", hint: "Leave empty to allow access to any repository the token can reach — the agent will need to pass a repo name explicitly." },
     ],
   },
   {
@@ -66,7 +67,7 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
     scopeNote: "App password scopes: Account (read), Repositories (read), Pull requests (read + write)",
     fields: [
       { key: "workspace", label: "Workspace", type: "text", required: true, placeholder: "workspace id" },
-      { key: "repo", label: "Repository", type: "text", required: true, placeholder: "repository" },
+      { key: "repos", label: "Repositories", type: "repo-list", required: false, placeholder: "repository name", hint: "Leave empty to allow access to any repository the token can reach — the agent will need to pass a repo name explicitly." },
       { key: "email", label: "Email", type: "text", required: true, placeholder: "you@example.com" },
       { key: "apiToken", label: "API token", type: "secret", required: true },
     ],
@@ -77,18 +78,12 @@ export function getIntegrationProvider(id: string): IntegrationProvider | undefi
   return INTEGRATION_PROVIDERS.find((p) => p.id === id);
 }
 
-export function parseGithubRepoUrl(url: string): { owner: string; repo: string } | null {
-  const m = url.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?$/);
-  return m ? { owner: m[1], repo: m[2] } : null;
-}
-
-export function expandGithubContent(content: Record<string, string>): Record<string, string> {
-  const parsed = parseGithubRepoUrl(content.repoUrl ?? "");
-  if (!parsed) return content;
-  const { owner, repo } = parsed;
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { repoUrl: _repoUrl, ...rest } = content;
-  return { ...rest, owner, repo, org: owner };
+export function expandGithubContent(
+  content: Record<string, string | string[]>,
+): Record<string, string | string[]> {
+  const owner = typeof content.owner === "string" ? content.owner : "";
+  const repos = Array.isArray(content.repos) ? content.repos : [];
+  return { ...content, owner, org: owner, repos };
 }
 
 // True if any added integration is missing a required field — used to gate "Hire".
@@ -98,10 +93,8 @@ export function hasIncompleteIntegration(integrations: IntegrationDraft[]): bool
     if (!provider) return true;
     return provider.fields.some((f) => {
       if (!f.required) return false;
-      const value = (draft.content[f.key] ?? "").trim();
-      if (!value) return true;
-      if (f.type === "repo-url") return parseGithubRepoUrl(value) === null;
-      return false;
+      const value = draft.content[f.key];
+      return typeof value !== "string" || value.trim().length === 0;
     });
   });
 }

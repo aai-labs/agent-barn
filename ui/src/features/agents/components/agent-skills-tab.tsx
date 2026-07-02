@@ -14,10 +14,10 @@ import {
   expandGithubContent,
   getIntegrationProvider,
   hasIncompleteIntegration,
-  parseGithubRepoUrl,
   type IntegrationDraft,
 } from "../integrations";
 import { FormField, TokenInput } from "./hire-dialog-primitives";
+import { RepoListField } from "./hire-dialog-steps";
 import { useUpdateAgent } from "../hooks/use-update-agent";
 import type { Agent, AgentAssignedSkill } from "../schemas";
 
@@ -104,6 +104,16 @@ export function AgentSkillsTab({ agent, isRunning }: AgentSkillsTabProps) {
       prev.map((d) =>
         d.provider === provider
           ? { ...d, content: { ...d.content, [key]: value } }
+          : d,
+      ),
+    );
+  }
+
+  function setRepos(provider: string, key: string, repos: string[]) {
+    setNewSecretDrafts((prev) =>
+      prev.map((d) =>
+        d.provider === provider
+          ? { ...d, content: { ...d.content, [key]: repos } }
           : d,
       ),
     );
@@ -281,10 +291,27 @@ export function AgentSkillsTab({ agent, isRunning }: AgentSkillsTabProps) {
                   {providerSpec.label}
                 </div>
                 {providerSpec.fields.map((field) => {
-                  const value = draft.content[field.key] ?? "";
                   const label = field.required
                     ? field.label
                     : `${field.label} (optional)`;
+
+                  if (field.type === "repo-list") {
+                    const repos = Array.isArray(draft.content[field.key])
+                      ? (draft.content[field.key] as string[])
+                      : [];
+                    return (
+                      <FormField key={field.key} label={label} hint={field.hint}>
+                        <RepoListField
+                          repos={repos}
+                          onChange={(next) => setRepos(providerId, field.key, next)}
+                          placeholder={field.placeholder}
+                        />
+                      </FormField>
+                    );
+                  }
+
+                  const rawValue = draft.content[field.key];
+                  const value = typeof rawValue === "string" ? rawValue : "";
 
                   if (field.type === "secret") {
                     const vkey = `${providerId}:${field.key}`;
@@ -299,39 +326,6 @@ export function AgentSkillsTab({ agent, isRunning }: AgentSkillsTabProps) {
                           }
                           placeholder={field.placeholder}
                         />
-                      </FormField>
-                    );
-                  }
-
-                  if (field.type === "repo-url") {
-                    const parsed = parseGithubRepoUrl(value);
-                    const invalid = value.length > 0 && !parsed;
-                    return (
-                      <FormField key={field.key} label={label} hint={field.hint}>
-                        <input
-                          className={`af-input${invalid ? " border-red-400" : ""}`}
-                          value={value}
-                          onChange={(e) =>
-                            setField(providerId, field.key, e.target.value)
-                          }
-                          placeholder={field.placeholder}
-                          autoComplete="off"
-                        />
-                        {parsed && (
-                          <p
-                            className="text-[0.75rem] mt-1"
-                            style={{ color: "var(--ink-3)" }}
-                          >
-                            owner: <strong>{parsed.owner}</strong> · repo:{" "}
-                            <strong>{parsed.repo}</strong>
-                          </p>
-                        )}
-                        {invalid && (
-                          <p className="text-[0.75rem] mt-1 text-red-500">
-                            Must be a valid GitHub URL, e.g.
-                            https://github.com/owner/repo.git
-                          </p>
-                        )}
                       </FormField>
                     );
                   }

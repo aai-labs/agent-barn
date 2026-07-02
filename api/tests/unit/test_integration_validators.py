@@ -34,7 +34,7 @@ def _connect_error() -> httpx.ConnectError:
     return httpx.ConnectError("connection refused", request=_REQUEST)
 
 
-_GH = GithubContent(token="ghp_test", owner="acme", repo="backend", org="acme-org")
+_GH = GithubContent(token="ghp_test", owner="acme", repos=["backend"], org="acme-org")
 _JIRA = JiraContent(
     site_url="https://acme.atlassian.net", email="alice@acme.com", api_token="jira-tok"
 )
@@ -42,7 +42,7 @@ _CONFLUENCE = ConfluenceContent(
     site_url="https://acme.atlassian.net", email="alice@acme.com", api_token="conf-tok"
 )
 _BB = BitbucketContent(
-    workspace="acme", repo="backend", email="alice@acme.com", api_token="bb-tok"
+    workspace="acme", repos=["backend"], email="alice@acme.com", api_token="bb-tok"
 )
 
 # ── IntegrationValidationResult ───────────────────────────────────────────────
@@ -192,6 +192,45 @@ def test_github_network_error_returns_error():
     assert result.valid is False
     assert result.error is not None
     assert "github" in result.error.lower()
+
+
+def test_github_fine_grained_empty_repos_skips_repo_probe():
+    """Fine-grained PAT with an owner but no repos configured — skip the repo probe."""
+    no_repos = GithubContent(token="ghp_fine", owner="acme", repos=[], org="acme")
+    user_resp = _resp({"login": "alice"})  # no X-OAuth-Scopes
+
+    with patch(_GH_MOD, side_effect=[user_resp]) as mock_get:
+        result = validate_github(no_repos)
+
+    assert result.valid is True
+    assert result.missing_scopes == []
+    assert mock_get.call_count == 1  # only /user, no /repos probe
+
+
+def test_github_fine_grained_multiple_repos_aggregates_missing_scopes():
+    """Two configured repos: one denied (403), one missing (404) — both surface, valid stays True."""
+    multi_repo = GithubContent(
+        token="ghp_fine", owner="acme", repos=["backend", "frontend"], org="acme"
+    )
+    user_resp = _resp({"login": "alice"})
+    repo1_resp = _resp(
+        {"message": "forbidden"},
+        status=403,
+        headers={"X-Accepted-GitHub-Permissions": "contents=read"},
+    )
+    pulls1_resp = _resp([])
+    repo2_resp = _resp({"message": "not found"}, status=404)
+    pulls2_resp = _resp([])
+
+    with patch(
+        _GH_MOD,
+        side_effect=[user_resp, repo1_resp, pulls1_resp, repo2_resp, pulls2_resp],
+    ):
+        result = validate_github(multi_repo)
+
+    assert result.valid is True
+    assert any("backend" in s for s in result.missing_scopes)
+    assert any("frontend" in s for s in result.missing_scopes)
 
 
 # ── Jira ──────────────────────────────────────────────────────────────────────
@@ -445,7 +484,7 @@ def test_bitbucket_identity_includes_nickname():
 def test_bitbucket_no_workspace_skips_repo_check():
     """If workspace is empty, skip the repo read scope probe."""
     no_workspace = BitbucketContent(
-        workspace="", repo="be", email="a@b.com", api_token="t"
+        workspace="", repos=["be"], email="a@b.com", api_token="t"
     )
     user_resp = _resp(_BB_USER_BODY)
 
@@ -527,7 +566,7 @@ def test_bitbucket_repo_scoped_token_valid():
 def test_bitbucket_scoped_token_no_workspace_returns_error():
     """Scoped token with no workspace configured cannot be validated."""
     no_workspace = BitbucketContent(
-        workspace="", repo="be", email="a@b.com", api_token="t"
+        workspace="", repos=["be"], email="a@b.com", api_token="t"
     )
     bearer_fail = _resp(_BB_SCOPED_401, status=401)
 
@@ -538,9 +577,67 @@ def test_bitbucket_scoped_token_no_workspace_returns_error():
     assert result.error is not None
 
 
+def test_bitbucket_scoped_token_no_repos_skips_repo_probe():
+    """Scoped token, workspace listing denied, zero repos configured — nothing left to
+    fall back to, so treat as missing the read scope rather than probing anything."""
+    no_repos = BitbucketContent(
+        workspace="acme", repos=[], email="a@b.com", api_token="t"
+    )
+    bearer_fail = _resp(_BB_SCOPED_401, status=401)
+    workspace_403 = _resp({"type": "error"}, status=403)
+
+    with patch(_BB_MOD, side_effect=[bearer_fail, _BASIC_401, workspace_403]):
+        result = validate_bitbucket(no_repos)
+
+    assert result.valid is False
+    assert result.error is not None
+
+
+def test_bitbucket_scoped_token_multiple_repos_partial_failure_still_valid():
+    """One of two configured repos succeeds — token is valid; the failing repo shows
+    up as a missing scope instead of failing validation outright."""
+    multi_repo = BitbucketContent(
+        workspace="acme", repos=["backend", "frontend"], email="a@b.com", api_token="t"
+    )
+    bearer_fail = _resp(_BB_SCOPED_401, status=401)
+    workspace_403 = _resp({"type": "error"}, status=403)
+    repo1_ok = _resp({"full_name": "acme/backend"})
+    repo2_403 = _resp({"type": "error"}, status=403)
+    pr1_ok = _resp({"values": []})
+
+    with patch(
+        _BB_MOD,
+        side_effect=[bearer_fail, _BASIC_401, workspace_403, repo1_ok, repo2_403, pr1_ok],
+    ):
+        result = validate_bitbucket(multi_repo)
+
+    assert result.valid is True
+    assert any("frontend" in s for s in result.missing_scopes)
+
+
+def test_bitbucket_scoped_token_all_repos_fail_returns_invalid():
+    """All configured repos fail the probe — no proof of access at all, so invalid."""
+    multi_repo = BitbucketContent(
+        workspace="acme", repos=["backend", "frontend"], email="a@b.com", api_token="t"
+    )
+    bearer_fail = _resp(_BB_SCOPED_401, status=401)
+    workspace_403 = _resp({"type": "error"}, status=403)
+    repo1_403 = _resp({"type": "error"}, status=403)
+    repo2_403 = _resp({"type": "error"}, status=403)
+
+    with patch(
+        _BB_MOD,
+        side_effect=[bearer_fail, _BASIC_401, workspace_403, repo1_403, repo2_403],
+    ):
+        result = validate_bitbucket(multi_repo)
+
+    assert result.valid is False
+    assert result.error is not None
+
+
 def test_github_fine_grained_no_owner_skips_repo_probe():
     """Fine-grained PAT with no owner/repo configured — skip the repo probe."""
-    no_repo = GithubContent(token="ghp_fine", owner="", repo="", org="")
+    no_repo = GithubContent(token="ghp_fine", owner="", repos=[], org="")
     user_resp = _resp({"login": "alice"})  # no X-OAuth-Scopes
 
     with patch(_GH_MOD, side_effect=[user_resp]) as mock_get:
