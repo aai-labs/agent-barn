@@ -20,7 +20,7 @@ export function AgentCard({ agent, onOpen }: AgentCardProps) {
       className="af-card af-card-hover flex flex-col gap-5 p-5.5 pb-4.5 cursor-default min-h-[14.375rem]"
       onClick={() => onOpen(agent)}
     >
-      <div className="flex items-center gap-4">
+      <div className="flex items-start gap-4">
         <AgentAvatar agent={agent} size="lg" />
         <div className="flex-1 min-w-0">
           <div className="font-semibold text-[1.1875rem] tracking-tight" style={{ color: "var(--ink)" }}>

@@ -101,7 +101,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
 
         {agent && (
           <>
-            <div className="flex items-center gap-5.5 pb-8">
+            <div className="flex items-start gap-5.5 pb-8">
               <AgentAvatar agent={agent} size="xl" />
               <div className="flex-1 min-w-0">
                 <h1

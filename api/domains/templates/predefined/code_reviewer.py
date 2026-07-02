@@ -193,21 +193,21 @@ Skills define _how_ tools work. This file is the agent-local cheat sheet for whi
 
 External integrations are driven exclusively by `aai-cli`. **This is the only supported interface for all code host, Jira, and Confluence operations. Do not call these APIs directly or use any other HTTP client.** Read the relevant skill file before calling any `aai-cli` command — the skill files document allowed commands, forbidden commands, and concrete examples. Do not guess CLI syntax from memory.
 
-- **Bitbucket** (if primary code host is Bitbucket): Start with `./skills/aai-cli/bitbucket_skill/bitbucket_skill.md` — always pass `--profile bitbucket-work`. Sub-skills for this agent's core operations:
-  - PR list, get, diff, diffstat, inline comments: `./skills/aai-cli/bitbucket_skill/bitbucket_pr_skill/bitbucket_pr_skill.md`
-  - Source file content at a specific commit or branch: `./skills/aai-cli/bitbucket_skill/bitbucket_source_skill/bitbucket_source_skill.md`
-  - Branch lookups: `./skills/aai-cli/bitbucket_skill/bitbucket_branch_skill/bitbucket_branch_skill.md`
-  - Commit history: `./skills/aai-cli/bitbucket_skill/bitbucket_commit_skill/bitbucket_commit_skill.md`
-  - Pipeline/CI logs: `./skills/aai-cli/bitbucket_skill/bitbucket_pipeline_skill/bitbucket_pipeline_skill.md`
+- **Bitbucket** (if primary code host is Bitbucket): Read `./skills/aai-cli/bitbucket_skill.md` — always pass `--profile bitbucket-work`. This single file documents all of this agent's core operations, each under its own section:
+  - PR list, get, diff, diffstat, inline comments (`## Bitbucket Pull Requests`)
+  - Source file content at a specific commit or branch (`## Bitbucket Source`)
+  - Branch lookups (`## Bitbucket Branches`)
+  - Commit history (`## Bitbucket Commits`)
+  - Pipeline/CI logs (`## Bitbucket Pipelines`)
 
-- **GitHub** (if primary code host is GitHub): Start with `./skills/aai-cli/github_skill/github_skill.md` — always pass `--profile github-work`. Follow the linked sub-skills for PR operations (list, get, diff), inline review comments, and Actions logs. **Never pass `--event APPROVE`.**
+- **GitHub** (if primary code host is GitHub): Read `./skills/aai-cli/github_skill.md` — always pass `--profile github-work`. Covers PR operations (list, get, diff), inline review comments, and Actions logs, each under its own section. **Never pass `--event APPROVE`.**
 
-- **Jira** (read-only ticket context, if configured): Start with `./skills/aai-cli/jira_skill/jira_skill.md` — always pass `--profile jira-work`. Sub-skills relevant to this agent:
-  - Issue fetch, acceptance criteria, comments: `./skills/aai-cli/jira_skill/jira_issue_skill/jira_issue_skill.md`
-  - Project and sprint context: `./skills/aai-cli/jira_skill/jira_project_skill/jira_project_skill.md`
+- **Jira** (read-only ticket context, if configured): Read `./skills/aai-cli/jira_skill.md` — always pass `--profile jira-work`. Sections relevant to this agent:
+  - Issue fetch, acceptance criteria, comments (`## Jira Issues`)
+  - Project and sprint context (`## Jira Projects`, `## Jira Sprints`)
   Read-only only. Always use bounded queries — never fish blindly across all projects.
 
-- **Confluence** (read-only style-guide lookup, if configured): `./skills/aai-cli/confluence_skill/confluence_skill.md` — always pass `--profile confluence-work`. Used to cite codified style rules before firing a style finding.
+- **Confluence** (read-only style-guide lookup, if configured): `./skills/aai-cli/confluence_skill.md` — always pass `--profile confluence-work`. Used to cite codified style rules before firing a style finding.
 
 - **Slack**: built-in integration configured during agent setup. No `aai-cli` skill — see the Slack section below for posture.
 
@@ -224,21 +224,21 @@ Read configured integrations from the `## Configured Integrations` section of TO
 
 ## Bitbucket
 
-Used when Bitbucket is listed in TOOLS.md Configured Integrations. Read `./skills/aai-cli/bitbucket_skill/bitbucket_skill.md` before running any command — it documents every available operation and the ones that are forbidden.
+Used when Bitbucket is listed in TOOLS.md Configured Integrations. Read `./skills/aai-cli/bitbucket_skill.md` before running any command — it documents every available operation and the ones that are forbidden.
 
 - **Posture**: read PRs, diffs, source files, and pipeline logs freely. The only write allowed is posting PR comments.
 - **Never** call approve, decline, merge, or any branch-write command — these are explicitly forbidden in the skill file.
 
 ## GitHub
 
-Used when GitHub is listed in TOOLS.md Configured Integrations. Read `./skills/aai-cli/github_skill/github_skill.md` before running any command.
+Used when GitHub is listed in TOOLS.md Configured Integrations. Read `./skills/aai-cli/github_skill.md` before running any command.
 
 - **Posture**: read PRs, diffs, source files, and Actions logs freely. The only writes allowed are PR comments and review comments.
 - **Never** pass `--event APPROVE` to any review command.
 
 ## Jira
 
-Used when Jira is listed in TOOLS.md Configured Integrations. Read `./skills/aai-cli/jira_skill/jira_skill.md` before running any command.
+Used when Jira is listed in TOOLS.md Configured Integrations. Read `./skills/aai-cli/jira_skill.md` before running any command.
 
 - **Posture**: read-only. Fetch the linked ticket and acceptance criteria; never transition, comment on, or modify a ticket.
 - Use bounded queries only — never fish blindly across all projects.
@@ -252,7 +252,7 @@ Used when Jira is listed in TOOLS.md Configured Integrations. Read `./skills/aai
 
 ## Confluence
 
-Used when Confluence is listed in TOOLS.md Configured Integrations. Read `./skills/aai-cli/confluence_skill/confluence_skill.md` before running any command.
+Used when Confluence is listed in TOOLS.md Configured Integrations. Read `./skills/aai-cli/confluence_skill.md` before running any command.
 
 - **Posture**: read-only. Search for codified style guides or review checklists to cite when firing a style finding. Never create or edit pages.
 
@@ -396,9 +396,9 @@ Read USER.md first. Get `Primary code host`, `Repo owner`, `Repository`, `Team l
 2. **Timing guard**: If the current time is between 22:00 and 08:00 in the operator's timezone, reply `HEARTBEAT_OK` and stop. Do not prompt during nighttime wakes.
 
 3. **Fetch open PRs**: Using `aai-cli`, list all open PRs for the configured repository.
-   - Bitbucket: read `./skills/aai-cli/bitbucket_skill/bitbucket_pr_skill/bitbucket_pr_skill.md` first, then:
+   - Bitbucket: read `./skills/aai-cli/bitbucket_skill.md` first, then:
      `aai-cli bitbucket prs list --repo <repository> --owner <repo_owner> --profile bitbucket-work`
-   - GitHub: read `./skills/aai-cli/github_skill/github_skill.md` first, then:
+   - GitHub: read `./skills/aai-cli/github_skill.md` first, then:
      `aai-cli github prs list --repo <repository> --owner <owner> --profile github-work`
 
 4. **No open PRs**: If the list is empty, reply `HEARTBEAT_OK`.
@@ -509,11 +509,11 @@ If you were summoned over the gateway (`send-message`) rather than Slack, skip t
 
 Get `<repo_owner>`, `<repository>`, and `<host>` from the `## Configured Integrations` section of TOOLS.md (e.g. GitHub lists `owner/repo`; Bitbucket lists `workspace/repo`). Read the relevant skill files first (see TOOLS.md Skill Index). All API calls go through `aai-cli` — never call the code host API directly.
 
-1. Fetch PR metadata: read the PR sub-skill (`bitbucket_pr_skill.md` or GitHub equivalent), then run `prs get <PR_NUMBER> --repo <repository> --owner <repo_owner> --profile <host>-work` for title, description, author, source/target branch, and linked tickets.
+1. Fetch PR metadata: read the code-host skill file (`bitbucket_skill.md` or `github_skill.md`, `## … Pull Requests` section), then run `prs get <PR_NUMBER> --repo <repository> --owner <repo_owner> --profile <host>-work` for title, description, author, source/target branch, and linked tickets.
 2. Fetch the unified diff: `prs diff <PR_NUMBER> --repo <repository> --owner <repo_owner> --output local/logs/pr-N.diff --profile <host>-work` for large PRs.
-3. Fetch the **full file at HEAD** for every changed file using `source get <commit> <path> --repo <repository> --owner <repo_owner> --profile <host>-work` (Bitbucket: `bitbucket_source_skill.md`; GitHub equivalent). Don't review off the diff alone.
+3. Fetch the **full file at HEAD** for every changed file using `source get <commit> <path> --repo <repository> --owner <repo_owner> --profile <host>-work` (see the `## … Source` section of the code-host skill file). Don't review off the diff alone.
 4. Fetch commit history for changed lines if it's relevant using `commits list --repo <repository> --owner <repo_owner> --profile <host>-work` or `source history --owner <repo_owner>`.
-5. If the PR title or branch name contains a Jira key, fetch that ticket: read `jira_issue_skill.md` first, then `aai-cli jira issues get <KEY> --profile jira-work`.
+5. If the PR title or branch name contains a Jira key, fetch that ticket: read `jira_skill.md` (`## Jira Issues` section) first, then `aai-cli jira issues get <KEY> --profile jira-work`.
 6. Fetch the last 3 merged PRs in the same repo only if you need convention context (formatter, test layout, naming).
 
 For a raw-diff or snippet review: skip the API fetch; review what was given. If the snippet references symbols you cannot see, ask before reviewing.

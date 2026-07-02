@@ -5,6 +5,7 @@ import { useDebouncedValue } from "@tanstack/react-pacer";
 
 import { AppErrorState } from "@/components/app-error-state";
 import { SearchIcon } from "@/components/icons";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useSkills } from "@/features/skills/hooks/use-skills";
 import { SKILL_PROVIDER_LABELS } from "@/features/skills/utils";
 import { SkillSourceBadge } from "@/features/skills/components/skill-drawer";
@@ -469,14 +470,37 @@ function AssignedSkillRow({
           {skill.name}
         </span>
         <SkillSourceBadge source={skill.source} />
+        {skill.required && (
+          <span
+            className="text-[0.6875rem] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full"
+            style={{ color: "var(--ink-3)", background: "var(--line)" }}
+          >
+            Required
+          </span>
+        )}
       </div>
-      <button
-        className="af-btn af-btn-sm af-btn-ghost"
-        disabled={isRunning}
-        onClick={onRemove}
-      >
-        Remove
-      </button>
+      {skill.required ? (
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span>
+                <button className="af-btn af-btn-sm af-btn-ghost" disabled>
+                  Remove
+                </button>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>Required by template</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      ) : (
+        <button
+          className="af-btn af-btn-sm af-btn-ghost"
+          disabled={isRunning}
+          onClick={onRemove}
+        >
+          Remove
+        </button>
+      )}
     </div>
   );
 }

@@ -50,17 +50,15 @@ def test_build_zip_produces_valid_zip():
 
 
 def test_build_skills_manifest_from_zips_returns_sorted_path_content():
-    # Build fake (AgentSkill, Skill) tuples using simple namespaces.
+    # Build fake Skill objects using simple namespaces.
     from types import SimpleNamespace
 
-    entries = []
+    skills = []
     for skill_def in AAI_CLI_PROVIDER_SKILLS:
         zip_content = build_zip(skill_def["files"])
-        fake_skill = SimpleNamespace(zip_content=zip_content)
-        fake_agent_skill = SimpleNamespace()
-        entries.append((fake_agent_skill, fake_skill))
+        skills.append(SimpleNamespace(zip_content=zip_content))
 
-    manifest_str = build_skills_manifest_from_zips(entries)
+    manifest_str = build_skills_manifest_from_zips(skills)
     manifest = json.loads(manifest_str)
 
     paths = [m["path"] for m in manifest]

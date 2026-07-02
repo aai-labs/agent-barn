@@ -33,6 +33,7 @@ export const AgentAssignedSkillSchema = z.object({
   source: z.string(),
   requiredProviders: z.array(z.string()),
   toolsPointer: z.string().nullable(),
+  required: z.boolean().default(false),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -72,6 +73,7 @@ export const AgentTemplateReadSchema = z.object({
   bootMd: z.string(),
   bootstrapMd: z.string(),
   heartbeatMd: z.string(),
+  requiredSkills: z.array(AgentAssignedSkillSchema).default([]),
   createdAt: z.string(),
   updatedAt: z.string(),
 });

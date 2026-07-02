@@ -87,7 +87,7 @@ releases:
       - name: webAppUrl
         value: {{ env "WEB_APP_URL" | required "WEB_APP_URL is required" | quote }}
       - name: apiExternalUrl
-        value: {{ printf "https://%s" (env "API_HOST" | required "API_HOST is required") | quote }}
+        value: {{ printf "https://%s" (env "API_HOST" | required "API_HOST is required" | splitList "," | first | trim) | quote }}
       - name: kubeconfigB64
         value: {{ env "POD_KUBECONFIG_B64" | required "POD_KUBECONFIG_B64 is required" | quote }}
       - name: storageClass
@@ -102,7 +102,7 @@ releases:
         value: {{ env "REGISTRY_USERNAME" | required "REGISTRY_USERNAME is required" | quote }}
       - name: registry.password
         value: {{ env "REGISTRY_PASSWORD" | required "REGISTRY_PASSWORD is required" | quote }}
-      - name: ingress.host
+      - name: ingress.hosts
         value: {{ env "API_HOST" | required "API_HOST is required" | quote }}
     needs:
       - agent-farm/postgres-app
@@ -118,7 +118,7 @@ releases:
         value: {{ env "REGISTRY_PREFIX" | default "registry.k8s.aai-labs.com" | quote }}
       - name: image.repository
         value: {{ env "UI_IMAGE_REPOSITORY" | default "agentfarm-ui" | quote }}
-      - name: ingress.host
+      - name: ingress.hosts
         value: {{ env "UI_HOST" | required "UI_HOST is required" | quote }}
     needs:
       - agent-farm/agentfarm-api

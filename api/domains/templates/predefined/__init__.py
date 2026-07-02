@@ -27,6 +27,7 @@ class PredefinedTemplate:
     boot_md: str
     bootstrap_md: str
     heartbeat_md: str
+    required_skill_names: tuple[str, ...] = ()
 
 
 PREDEFINED_TEMPLATES: tuple[PredefinedTemplate, ...] = (
@@ -55,6 +56,7 @@ PREDEFINED_TEMPLATES: tuple[PredefinedTemplate, ...] = (
         boot_md=scrum_master.BOOT_MD,
         bootstrap_md=DEFAULT_BOOTSTRAP_MD,
         heartbeat_md=scrum_master.HEARTBEAT_MD,
+        required_skill_names=("Jira", "Confluence"),
     ),
     PredefinedTemplate(
         slug="code-reviewer",
@@ -68,6 +70,7 @@ PREDEFINED_TEMPLATES: tuple[PredefinedTemplate, ...] = (
         boot_md=code_reviewer.BOOT_MD,
         bootstrap_md=DEFAULT_BOOTSTRAP_MD,
         heartbeat_md=code_reviewer.HEARTBEAT_MD,
+        required_skill_names=("GitHub",),
     ),
     PredefinedTemplate(
         slug="email-reminder",
