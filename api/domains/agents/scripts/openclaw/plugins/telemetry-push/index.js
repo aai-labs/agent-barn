@@ -4,8 +4,19 @@ const AGENT_ID = process.env.AGENT_ID || "";
 const INGEST_URL = process.env.INGEST_URL || "";
 const INGEST_API_KEY = process.env.INGEST_API_KEY || "";
 
+const MAX_BUFFER_SIZE = 500;
+const MAX_RETRIES = 3;
+
 let buffer = [];
 let flushTimer = null;
+
+function bufferPush(event) {
+  if (buffer.length >= MAX_BUFFER_SIZE) {
+    const dropped = buffer.shift();
+    console.error(`[telemetry-push] buffer full, dropping oldest event: ${dropped.type}`);
+  }
+  buffer.push(event);
+}
 
 function flush() {
   if (buffer.length === 0) return;
@@ -40,14 +51,27 @@ function flush() {
     },
   };
 
+  function requeue() {
+    for (const e of events) e._retries = (e._retries || 0) + 1;
+    const retryable = events.filter((e) => e._retries <= MAX_RETRIES);
+    const dropped = events.length - retryable.length;
+    if (dropped) {
+      console.error(`[telemetry-push] dropped ${dropped} events after ${MAX_RETRIES} retries`);
+    }
+    const space = MAX_BUFFER_SIZE - buffer.length;
+    if (space > 0) buffer.unshift(...retryable.slice(0, space));
+  }
+
   const req = http.request(options, (res) => {
     res.resume();
     if (res.statusCode >= 400) {
       console.error(`[telemetry-push] flush failed: HTTP ${res.statusCode}`);
+      requeue();
     }
   });
   req.on("error", (err) => {
     console.error(`[telemetry-push] flush error: ${err.message}`);
+    requeue();
   });
   req.write(body);
   req.end();
@@ -88,7 +112,7 @@ export default {
       lastThreadId = event.threadId || null;
       const msgId =
         event.messageId || `oc:in:${conversationId}:${Date.now()}:${++counter}`;
-      buffer.push({
+      bufferPush({
         type: "message",
         data: {
           msg_id: msgId,
@@ -117,7 +141,7 @@ export default {
         const content = extractText(msgs[i]);
         if (!content) continue;
         const msgId = `oc:out:${conversationId}:${Date.now()}:${++counter}`;
-        buffer.push({
+        bufferPush({
           type: "message",
           data: {
             msg_id: msgId,
@@ -140,7 +164,7 @@ export default {
     api.on("before_tool_call", (event, ctx) => {
       const externalId =
         event.toolCallId || `oc:tc:${Date.now()}:${++counter}`;
-      buffer.push({
+      bufferPush({
         type: "tool_call",
         data: {
           external_id: externalId,
@@ -155,7 +179,7 @@ export default {
     api.on("after_tool_call", (event, ctx) => {
       const externalId =
         event.toolCallId || `oc:tr:${Date.now()}:${++counter}`;
-      buffer.push({
+      bufferPush({
         type: "tool_result",
         data: {
           external_id: externalId,

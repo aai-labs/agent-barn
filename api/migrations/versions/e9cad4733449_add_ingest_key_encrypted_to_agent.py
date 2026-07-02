@@ -1,7 +1,7 @@
 """add ingest_key_encrypted to agent
 
 Revision ID: e9cad4733449
-Revises: 032ff9a474bb
+Revises: c89367ccd358
 Create Date: 2026-06-26 13:28:39.245115
 
 """
@@ -14,7 +14,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = "e9cad4733449"
-down_revision: Union[str, None] = "032ff9a474bb"
+down_revision: Union[str, None] = "c89367ccd358"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
