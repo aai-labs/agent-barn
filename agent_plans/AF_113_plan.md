@@ -866,14 +866,26 @@ Sub-tasks 1–10 are implemented and all tests pass. Three bugs found during loc
 
 ---
 
-## Bug Fix 1: SSE hook must bypass the Next.js proxy
+## Bug Fix 1: SSE must bypass the Next.js rewrite proxy
 
-**File:** `ui/src/features/agents/hooks/use-agent-log-stream.ts`
+~~Original plan: use `NEXT_PUBLIC_BACKEND_URL` directly from browser.~~ **Rejected** — in production the backend URL is an internal Docker hostname (`http://api:8000`) not resolvable from the browser. Also exposes backend URL and needs CORS.
 
-The SSE `fetch()` call currently uses a relative URL `/api/v1/agents/...` which goes through the Next.js rewrite proxy. Change it to use `NEXT_PUBLIC_BACKEND_URL` directly for the SSE connection, bypassing the proxy. REST calls can stay on the proxy (they don't need streaming).
+**Correct fix: Create a Next.js App Router API route** that proxies SSE using `TransformStream` (per https://medium.com/@oyetoketoby80/fixing-slow-sse-server-sent-events-streaming-in-next-js-and-vercel-99f42fbdb996).
 
-- Read `process.env.NEXT_PUBLIC_BACKEND_URL` (falls back to empty string for production where both run behind the same reverse proxy)
-- Build the SSE URL as `${backendUrl}/api/v1/agents/${agentId}/logs/stream?tail_lines=0`
+**New file:** `ui/src/app/api/v1/agents/[agentId]/logs/stream/route.ts`
+
+The route handler:
+1. Reads the `Authorization` header from the incoming request and forwards it to the backend
+2. Fetches from backend SSE endpoint server-side (where `http://api:8000` resolves)
+3. Pipes response body through a `TransformStream` — returns the `Response` immediately so Next.js doesn't buffer
+4. Sets `runtime = 'nodejs'`, `dynamic = 'force-dynamic'`
+5. Sets response headers: `Content-Type: text/event-stream`, `Cache-Control: no-cache, no-transform`, `X-Accel-Buffering: no`, `Connection: keep-alive`
+
+**File:** `ui/next.config.ts`
+
+Add `compress: false` to prevent Next.js gzip buffering on SSE responses. (Alternative: set `Content-Encoding: none` per-route, but `compress: false` is simpler and the project doesn't rely on Next.js compression — nginx/CDN handles it in production.)
+
+Since this new API route matches `/api/v1/agents/[agentId]/logs/stream`, Next.js will use it instead of the rewrite rule for this specific path. All other `/api/*` requests continue through the rewrite as before.
 
 ## ~~Bug Fix 2: Use line-based reading in K8s client~~ — REMOVED
 

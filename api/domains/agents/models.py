@@ -505,6 +505,7 @@ class AgentLogsRead(PydanticBaseModel):
 
     lines: list[str]
     source: str
+    has_snapshots: bool = False
     snapshot_id: UUID | None = None
     session_started_at: datetime | None = None
     session_ended_at: datetime | None = None

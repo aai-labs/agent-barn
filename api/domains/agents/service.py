@@ -1002,6 +1002,9 @@ class AgentService:
         org_id = self._org_id(context)
         agent = self._get_active_or_404(agent_id, org_id)
 
+        latest_snapshot = self.repository.get_latest_log_snapshot(agent_id)
+        has_snapshots = latest_snapshot is not None
+
         if agent.status == AgentStatus.RUNNING:
             log_text = self.k8s.read_pod_logs(
                 f"agent-{agent.id}",
@@ -1009,19 +1012,21 @@ class AgentService:
                 tail_lines=tail_lines,
             )
             lines = log_text.splitlines() if log_text else []
-            return AgentLogsRead(lines=lines, source="live")
+            return AgentLogsRead(
+                lines=lines, source="live", has_snapshots=has_snapshots
+            )
 
-        snapshot = self.repository.get_latest_log_snapshot(agent_id)
-        if snapshot is None:
-            return AgentLogsRead(lines=[], source="snapshot")
-        all_lines = snapshot.log_text.splitlines()
+        if latest_snapshot is None:
+            return AgentLogsRead(lines=[], source="snapshot", has_snapshots=False)
+        all_lines = latest_snapshot.log_text.splitlines()
         lines = all_lines[-tail_lines:]
         return AgentLogsRead(
             lines=lines,
             source="snapshot",
-            snapshot_id=snapshot.id,
-            session_started_at=snapshot.session_started_at,
-            session_ended_at=snapshot.session_ended_at,
+            has_snapshots=True,
+            snapshot_id=latest_snapshot.id,
+            session_started_at=latest_snapshot.session_started_at,
+            session_ended_at=latest_snapshot.session_ended_at,
         )
 
     def stream_agent_logs(
@@ -1060,6 +1065,7 @@ class AgentService:
                 tail_lines=50_000,
             )
             if not log_text:
+                logger.info("No logs to capture for agent %s (empty response)", agent.id)
                 return
             encoded = log_text.encode("utf-8")
             if len(encoded) > _MAX_LOG_SNAPSHOT_BYTES:
@@ -1069,14 +1075,18 @@ class AgentService:
                 if idx > 0:
                     log_text = log_text[idx + 1 :]
             now = dt.datetime.now(dt.timezone.utc)
+            byte_size = len(log_text.encode("utf-8"))
             self.repository.save_log_snapshot(
                 AgentLogSnapshot(
                     agent_id=agent.id,
                     session_started_at=agent.updated_at,
                     session_ended_at=now,
                     log_text=log_text,
-                    byte_size=len(log_text.encode("utf-8")),
+                    byte_size=byte_size,
                 )
+            )
+            logger.info(
+                "Captured log snapshot for agent %s (%d bytes)", agent.id, byte_size
             )
         except Exception:
             logger.warning(

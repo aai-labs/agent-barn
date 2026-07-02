@@ -181,6 +181,7 @@ export const ModelOptionSchema = z.object({
 export const AgentLogsReadSchema = z.object({
   lines: z.array(z.string()),
   source: z.enum(["live", "snapshot"]),
+  hasSnapshots: z.boolean().optional().default(false),
   snapshotId: z.string().uuid().nullable().optional(),
   sessionStartedAt: z.string().nullable().optional(),
   sessionEndedAt: z.string().nullable().optional(),

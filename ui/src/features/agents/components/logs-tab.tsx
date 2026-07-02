@@ -44,7 +44,7 @@ export function LogsTab({ agent }: LogsTabProps) {
     });
   }, []);
 
-  const { isConnected } = useAgentLogStream({
+  const { status: streamStatus } = useAgentLogStream({
     agentId: agent.id,
     enabled: isRunning,
     onLine: handleNewLine,
@@ -97,12 +97,36 @@ export function LogsTab({ agent }: LogsTabProps) {
           <span className="flex items-center gap-1.5 text-[0.75rem]" style={{ color: "var(--ink-3)" }}>
             <span
               className="w-1.5 h-1.5 rounded-full"
-              style={{ background: isConnected ? "var(--ok)" : "var(--ink-4)" }}
+              style={{
+                background:
+                  streamStatus === "streaming"
+                    ? "var(--ok)"
+                    : streamStatus === "connecting"
+                      ? "var(--warn, #f59e0b)"
+                      : "var(--ink-4)",
+              }}
             />
-            {isConnected ? "Streaming" : "Disconnected"}
+            {streamStatus === "streaming"
+              ? "Streaming"
+              : streamStatus === "connecting"
+                ? "Connecting..."
+                : "Disconnected"}
           </span>
         )}
       </div>
+
+      {isRunning && logs?.hasSnapshots && (
+        <div
+          className="px-4 py-2 text-[0.75rem]"
+          style={{
+            background: "color-mix(in srgb, var(--accent) 8%, transparent)",
+            borderBottom: "1px solid var(--line)",
+            color: "var(--ink-3)",
+          }}
+        >
+          Previous session logs available via snapshots
+        </div>
+      )}
 
       <div
         ref={scrollRef}
