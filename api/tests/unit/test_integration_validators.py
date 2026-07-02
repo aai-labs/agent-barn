@@ -607,7 +607,14 @@ def test_bitbucket_scoped_token_multiple_repos_partial_failure_still_valid():
 
     with patch(
         _BB_MOD,
-        side_effect=[bearer_fail, _BASIC_401, workspace_403, repo1_ok, repo2_403, pr1_ok],
+        side_effect=[
+            bearer_fail,
+            _BASIC_401,
+            workspace_403,
+            repo1_ok,
+            repo2_403,
+            pr1_ok,
+        ],
     ):
         result = validate_bitbucket(multi_repo)
 

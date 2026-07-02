@@ -61,7 +61,9 @@ def _q(value: str) -> str:
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def _profile_repo_pairs(base_name: str, repos: list[str]) -> list[tuple[str, str | None]]:
+def _profile_repo_pairs(
+    base_name: str, repos: list[str]
+) -> list[tuple[str, str | None]]:
     """Map a list of repo names to (profile_name, repo) pairs.
 
     [] -> [(base_name, None)] (profile with no `repo =` line — aai-cli falls back to
@@ -238,7 +240,9 @@ def build_tool_context_md(decrypted: Mapping[SecretProvider, SecretContent]) -> 
             if content.repos:
                 pairs = "; ".join(
                     f"`{name}`: {content.workspace}/{repo}"
-                    for name, repo in _profile_repo_pairs("bitbucket-work", content.repos)
+                    for name, repo in _profile_repo_pairs(
+                        "bitbucket-work", content.repos
+                    )
                 )
                 lines.append(f"- **Bitbucket**: {pairs} ({content.email})")
             else:

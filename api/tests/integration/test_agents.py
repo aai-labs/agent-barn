@@ -601,7 +601,10 @@ def test_patch_agent_adds_bitbucket_secret_without_repos():
                 f"{_BASE}/{context.agent.id}",
                 json={
                     "secrets": [
-                        {"provider": "bitbucket", "content": _BITBUCKET_CONTENT_NO_REPOS}
+                        {
+                            "provider": "bitbucket",
+                            "content": _BITBUCKET_CONTENT_NO_REPOS,
+                        }
                     ]
                 },
                 headers=_auth(context),
@@ -646,9 +649,7 @@ def test_validate_integration_with_no_repos_returns_valid():
         client.patch(
             f"{_BASE}/{context.agent.id}",
             json={
-                "secrets": [
-                    {"provider": "github", "content": _GITHUB_CONTENT_NO_REPOS}
-                ]
+                "secrets": [{"provider": "github", "content": _GITHUB_CONTENT_NO_REPOS}]
             },
             headers=_auth(context),
         )
@@ -669,7 +670,9 @@ def test_validate_integration_with_no_repos_returns_valid():
                     headers=_auth(context),
                 )
 
-        with then("it returns a valid status, not invalid, despite no repos configured"):
+        with then(
+            "it returns a valid status, not invalid, despite no repos configured"
+        ):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             assert_that(response.json()["validation_status"], equal_to("valid"))
 
