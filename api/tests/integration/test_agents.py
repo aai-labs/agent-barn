@@ -45,7 +45,7 @@ from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import (
     there_is_an_organization_with_user_and_access_token,
 )
-from api.tests.steps.template import there_is_a_template
+from api.tests.steps.template import there_is_a_template, there_is_a_template_skill
 
 _BASE = "/api/v1/agents"
 
@@ -2596,3 +2596,170 @@ def test_start_agent_auto_attach_does_not_duplicate_explicitly_assigned_skill():
             entries = _json.loads(config_map.data["skills.json"])
             assert_that(len(entries), equal_to(1))
             assert_that(config_map.data["TOOLS.md"].count(_JIRA_POINTER), equal_to(1))
+
+
+# --- template required skills ---
+
+
+def test_create_agent_with_required_skill_marks_it_required():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Jira"),
+            there_is_a_template_skill(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        skill_id = str(context.skill.id)
+        payload = {**_VALID_CREATE, "skill_ids": [skill_id]}
+
+        with when("I create an agent including the required skill in skill_ids"):
+            response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("it returns 201 and the skill is marked required=true"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            skills = response.json()["skills"]
+            assert_that(len(skills), equal_to(1))
+            assert_that(skills[0]["id"], equal_to(skill_id))
+            assert_that(skills[0]["required"], equal_to(True))
+
+
+def test_create_agent_missing_required_skill_returns_400():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Jira"),
+            there_is_a_template_skill(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("I create an agent without including the required skill"):
+            response = client.post(_BASE, json=_VALID_CREATE, headers=_auth(context))
+
+        with then("it returns 400"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+
+
+def test_update_agent_cannot_remove_required_skill_returns_409():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Jira"),
+            there_is_a_template_skill(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        skill_id = str(context.skill.id)
+
+        with when("I create an agent with the required skill"):
+            agent = client.post(
+                _BASE,
+                json={**_VALID_CREATE, "skill_ids": [skill_id]},
+                headers=_auth(context),
+            ).json()
+
+        with when("I try to remove the required skill via PATCH"):
+            response = client.patch(
+                f"{_BASE}/{agent['id']}",
+                json={"removed_skill_ids": [skill_id]},
+                headers=_auth(context),
+            )
+
+        with then("it returns 409"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+
+
+def test_update_agent_repin_missing_required_skill_returns_400():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Jira"),
+            there_is_a_template(slug="with-skill", name="With Skill"),
+            there_is_a_template_skill(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("I create an agent using a template with no required skills"):
+            agent = client.post(
+                _BASE,
+                json={**_VALID_CREATE, "template_slug": "test-template"},
+                headers=_auth(context),
+            ).json()
+
+        with when("I repin to a template that requires a skill I haven't provided"):
+            response = client.patch(
+                f"{_BASE}/{agent['id']}",
+                json={"template_slug": "with-skill", "template_version": 1},
+                headers=_auth(context),
+            )
+
+        with then("it returns 400"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+
+
+def test_update_agent_repin_with_required_skill_marks_it_required():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Jira"),
+            there_is_a_template(slug="with-skill", name="With Skill"),
+            there_is_a_template_skill(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        skill_id = str(context.skill.id)
+
+        with when("I create an agent using a template with no required skills"):
+            agent = client.post(
+                _BASE,
+                json={**_VALID_CREATE, "template_slug": "test-template"},
+                headers=_auth(context),
+            ).json()
+
+        with when("I repin providing the required skill in skill_ids"):
+            response = client.patch(
+                f"{_BASE}/{agent['id']}",
+                json={
+                    "template_slug": "with-skill",
+                    "template_version": 1,
+                    "skill_ids": [skill_id],
+                },
+                headers=_auth(context),
+            )
+
+        with then("it returns 200 and the skill is marked required=true"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            skills = response.json()["skills"]
+            jira = next(s for s in skills if s["id"] == skill_id)
+            assert_that(jira["required"], equal_to(True))
+
+
+def test_list_agents_marks_required_skills():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Jira"),
+            there_is_a_template_skill(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        skill_id = str(context.skill.id)
+
+        with when("I create an agent with the required skill"):
+            client.post(
+                _BASE,
+                json={**_VALID_CREATE, "skill_ids": [skill_id]},
+                headers=_auth(context),
+            )
+
+        with when("I list agents"):
+            response = client.get(_BASE, headers=_auth(context))
+
+        with then("the skill appears with required=true in the list response"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            agents = response.json()["items"]
+            assert_that(len(agents), equal_to(1))
+            jira = next(s for s in agents[0]["skills"] if s["id"] == skill_id)
+            assert_that(jira["required"], equal_to(True))

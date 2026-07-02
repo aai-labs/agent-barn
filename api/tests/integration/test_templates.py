@@ -3,6 +3,7 @@ from hamcrest import (
     assert_that,
     contains_string,
     equal_to,
+    has_items,
     is_not,
     none,
 )
@@ -26,13 +27,14 @@ from api.tests.steps.agent import (
     TEST_ENCRYPTION_KEY,
     MockK8sModule,
     MockLiteLLMModule,
+    there_is_a_skill,
     use_org_for_auth,
 )
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import (
     there_is_an_organization_with_user_and_access_token,
 )
-from api.tests.steps.template import there_is_a_template
+from api.tests.steps.template import there_is_a_template, there_is_a_template_skill
 
 _BASE = "/api/v1/templates"
 _AGENTS_BASE = "/api/v1/agents"
@@ -189,6 +191,28 @@ def test_list_templates_no_auth_returns_401():
             assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
 
 
+def test_list_templates_includes_required_skills():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Jira"),
+            there_is_a_template(slug="alpha", name="Alpha"),
+            there_is_a_template_skill(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("I list templates"):
+            response = client.get(_BASE, headers=_auth(context))
+
+        with then("the template includes its required skills"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            items = response.json()["items"]
+            assert_that(len(items), equal_to(1))
+            skill_names = [s["name"] for s in items[0]["required_skills"]]
+            assert_that(skill_names, equal_to(["Jira"]))
+
+
 # --- get ---
 
 
@@ -267,6 +291,31 @@ def test_list_template_versions_no_auth_returns_401():
 
         with then("it returns 401"):
             assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
+
+
+def test_list_template_versions_includes_required_skills():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Jira"),
+            there_is_a_template(slug="alpha", name="Alpha", version=1),
+            there_is_a_template_skill(),
+            there_is_a_template(slug="alpha", name="Alpha", version=2),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("I list versions of the template"):
+            response = client.get(f"{_BASE}/alpha/versions", headers=_auth(context))
+
+        with then(
+            "v1 includes the required skill; v2 has none (new version, no inherit via API)"
+        ):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            versions = {v["version"]: v for v in response.json()}
+            assert_that(len(versions[1]["required_skills"]), equal_to(1))
+            assert_that(versions[1]["required_skills"][0]["name"], equal_to("Jira"))
+            assert_that(versions[2]["required_skills"], equal_to([]))
 
 
 # --- create ---
@@ -364,6 +413,54 @@ def test_create_template_empty_name_returns_422():
             assert_that(
                 response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY)
             )
+
+
+def test_create_template_with_required_skills_stores_them():
+    with given([*_GIVEN, there_is_a_skill(name="Jira")]) as context:
+        client: TestClient = context.client
+
+        with when("I create a template with a required skill"):
+            response = client.post(
+                _BASE,
+                json={
+                    "template_name": "My Template",
+                    "required_skill_ids": [str(context.skill.id)],
+                },
+                headers=_auth(context),
+            )
+
+        with then("it returns 201 with required_skills populated"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            body = response.json()
+            assert_that(len(body["required_skills"]), equal_to(1))
+            assert_that(
+                body["required_skills"][0]["id"], equal_to(str(context.skill.id))
+            )
+            assert_that(body["required_skills"][0]["name"], equal_to("Jira"))
+
+        with then("GET also returns the required skill"):
+            get_resp = client.get(f"{_BASE}/my-template", headers=_auth(context))
+            assert_that(len(get_resp.json()["required_skills"]), equal_to(1))
+
+
+def test_create_template_with_unknown_skill_returns_404():
+    from uuid import uuid4
+
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I create a template with a non-existent skill ID"):
+            response = client.post(
+                _BASE,
+                json={
+                    "template_name": "My Template",
+                    "required_skill_ids": [str(uuid4())],
+                },
+                headers=_auth(context),
+            )
+
+        with then("it returns 404"):
+            assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
 # --- update ---
@@ -501,6 +598,85 @@ def test_update_template_empty_body_returns_422():
             )
 
 
+def test_update_template_inherits_skills_by_default():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Jira"),
+            there_is_a_template(slug="alpha", name="Alpha"),
+            there_is_a_template_skill(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("I update the template without specifying required_skill_ids"):
+            response = client.patch(
+                f"{_BASE}/alpha",
+                json={"soul_md": "# Updated"},
+                headers=_auth(context),
+            )
+
+        with then("the new version carries over the required skills from v1"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            body = response.json()
+            assert_that(body["version"], equal_to(2))
+            assert_that(len(body["required_skills"]), equal_to(1))
+            assert_that(body["required_skills"][0]["name"], equal_to("Jira"))
+
+
+def test_update_template_replaces_skills():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Jira"),
+            there_is_a_template(slug="alpha", name="Alpha"),
+            there_is_a_template_skill(),
+            there_is_a_skill(name="Confluence"),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        confluence_id = str(context.skill.id)
+
+        with when("I update the template replacing required skills"):
+            response = client.patch(
+                f"{_BASE}/alpha",
+                json={"soul_md": "# Updated", "required_skill_ids": [confluence_id]},
+                headers=_auth(context),
+            )
+
+        with then("the new version has only the replacement skill"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            body = response.json()
+            assert_that(body["version"], equal_to(2))
+            assert_that(len(body["required_skills"]), equal_to(1))
+            assert_that(body["required_skills"][0]["name"], equal_to("Confluence"))
+
+
+def test_update_template_clears_skills():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Jira"),
+            there_is_a_template(slug="alpha", name="Alpha"),
+            there_is_a_template_skill(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("I update the template clearing required skills"):
+            response = client.patch(
+                f"{_BASE}/alpha",
+                json={"soul_md": "# Updated", "required_skill_ids": []},
+                headers=_auth(context),
+            )
+
+        with then("the new version has no required skills"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            body = response.json()
+            assert_that(body["version"], equal_to(2))
+            assert_that(body["required_skills"], equal_to([]))
+
+
 # --- seeding ---
 
 
@@ -588,6 +764,97 @@ def test_seed_refreshes_stale_predefined_v1_in_place():
             assert_that(latest.version, equal_to(1))
             assert_that(latest.user_md, is_not(contains_string("STALE")))
             assert_that(latest.template_source, equal_to(TemplateSource.PRE_DEFINED))
+
+
+def test_seed_predefined_templates_seeds_scrum_master_skills():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Jira", global_skill=True),
+            there_is_a_skill(name="Confluence", global_skill=True),
+        ]
+    ) as context:
+        service: TemplateService = context.injector.get(TemplateService)
+        client: TestClient = context.client
+        org_id = context.organization.id
+
+        with when("I seed the org"):
+            service.seed_predefined_templates(org_id)
+
+        with then("scrum-master has Jira and Confluence as required skills"):
+            response = client.get(f"{_BASE}/scrum-master", headers=_auth(context))
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            skill_names = [s["name"] for s in response.json()["required_skills"]]
+            assert_that(skill_names, has_items("Jira", "Confluence"))
+
+
+def test_seed_predefined_templates_does_not_duplicate_skill_rows():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Jira", global_skill=True),
+            there_is_a_skill(name="Confluence", global_skill=True),
+        ]
+    ) as context:
+        service: TemplateService = context.injector.get(TemplateService)
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+        org_id = context.organization.id
+
+        with when("I seed twice"):
+            service.seed_predefined_templates(org_id)
+            service.seed_predefined_templates(org_id)
+
+        with then("scrum-master still has exactly two required skills"):
+            template = repository.get_latest_template(org_id, "scrum-master")
+            assert template is not None
+            skill_ids = repository.get_required_skill_ids(template.id)
+            assert_that(len(skill_ids), equal_to(2))
+
+
+def test_seed_predefined_templates_seeds_code_reviewer_skill():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="GitHub", global_skill=True),
+        ]
+    ) as context:
+        service: TemplateService = context.injector.get(TemplateService)
+        client: TestClient = context.client
+        org_id = context.organization.id
+
+        with when("I seed the org"):
+            service.seed_predefined_templates(org_id)
+
+        with then("code-reviewer has GitHub as a required skill"):
+            response = client.get(f"{_BASE}/code-reviewer", headers=_auth(context))
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            skill_names = [s["name"] for s in response.json()["required_skills"]]
+            assert_that(skill_names, has_items("GitHub"))
+
+
+def test_seed_predefined_templates_refreshes_stale_skills():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="GitHub", global_skill=True),
+        ]
+    ) as context:
+        service: TemplateService = context.injector.get(TemplateService)
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+        org_id = context.organization.id
+        service.seed_predefined_templates(org_id)
+
+        with when("the seeded skills are cleared from the DB then we reseed"):
+            template = repository.get_latest_template(org_id, "code-reviewer")
+            assert template is not None
+            repository.save_template_skills(template.id, [])
+            service.seed_predefined_templates(org_id)
+
+        with then("the required skills are restored to match the code declaration"):
+            template = repository.get_latest_template(org_id, "code-reviewer")
+            assert template is not None
+            skill_ids = repository.get_required_skill_ids(template.id)
+            assert_that(len(skill_ids), equal_to(1))
 
 
 def test_predefined_content_keeps_raw_placeholders():

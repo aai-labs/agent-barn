@@ -1,9 +1,9 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { mockAgent } from "../pages/data-support/agent-data-support.po";
+import { mockAgent, mockVersionsForSlug } from "../pages/data-support/agent-data-support.po";
 import { DataSupport } from "../pages/data-support/data-support.po";
 import { DashboardPage } from "../pages/dashboard-page.po";
-import { mockPlatformSkill, mockCustomSkill } from "../pages/data-support/skill-data-support.po";
+import { mockPlatformSkill, mockCustomSkill, MOCK_PLATFORM_SKILL_ID } from "../pages/data-support/skill-data-support.po";
 
 test.describe("Hire Dialog", () => {
   test.describe.configure({ mode: "serial" });
@@ -346,5 +346,97 @@ test.describe("Hire Dialog — Skills step", () => {
 
     await page.getByText(mockPlatformSkill.name, { exact: true }).click();
     await expect(page.getByText("Required credentials", { exact: true })).not.toBeVisible();
+  });
+
+  test("required skill card is shown as locked-selected with 'Required by template' label", async ({ page }) => {
+    await dataSupportPage.agents.interceptGetTemplateVersionsRequest({
+      body: mockVersionsForSlug("general-purpose").map((v) => ({
+        ...v,
+        required_skills: [{
+          id: MOCK_PLATFORM_SKILL_ID,
+          name: "github",
+          source: "aai_cli",
+          required_providers: ["github"],
+          tools_pointer: null,
+          required: true,
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+        }],
+      })),
+    });
+
+    await navigateToSkillsStep(page);
+
+    await expect(page.getByText(mockPlatformSkill.name, { exact: true })).toBeVisible();
+    await expect(page.getByText("Required by template")).toBeVisible();
+  });
+
+  test("clicking a required skill card does not deselect it", async ({ page }) => {
+    await dataSupportPage.agents.interceptGetTemplateVersionsRequest({
+      body: mockVersionsForSlug("general-purpose").map((v) => ({
+        ...v,
+        required_skills: [{
+          id: MOCK_PLATFORM_SKILL_ID,
+          name: "github",
+          source: "aai_cli",
+          required_providers: ["github"],
+          tools_pointer: null,
+          required: true,
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+        }],
+      })),
+    });
+
+    await navigateToSkillsStep(page);
+
+    await page.getByText(mockPlatformSkill.name, { exact: true }).click();
+
+    await expect(page.getByText("Required by template")).toBeVisible();
+  });
+
+  test("credential form appears for required skill provider without selecting the skill", async ({ page }) => {
+    await dataSupportPage.agents.interceptGetTemplateVersionsRequest({
+      body: mockVersionsForSlug("general-purpose").map((v) => ({
+        ...v,
+        required_skills: [{
+          id: MOCK_PLATFORM_SKILL_ID,
+          name: "github",
+          source: "aai_cli",
+          required_providers: ["github"],
+          tools_pointer: null,
+          required: true,
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+        }],
+      })),
+    });
+
+    await navigateToSkillsStep(page);
+
+    await expect(page.getByText("Required credentials", { exact: true })).toBeVisible();
+    await expect(page.getByPlaceholder(/github_pat_/)).toBeVisible();
+  });
+
+  test("hire button is disabled when required skill credentials are incomplete", async ({ page }) => {
+    await dataSupportPage.agents.interceptGetTemplateVersionsRequest({
+      body: mockVersionsForSlug("general-purpose").map((v) => ({
+        ...v,
+        required_skills: [{
+          id: MOCK_PLATFORM_SKILL_ID,
+          name: "github",
+          source: "aai_cli",
+          required_providers: ["github"],
+          tools_pointer: null,
+          required: true,
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+        }],
+      })),
+    });
+
+    await navigateToSkillsStep(page);
+
+    await expect(page.getByRole("button", { name: /hire aria/i })).toBeDisabled();
   });
 });

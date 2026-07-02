@@ -18,6 +18,7 @@ export type CreateTemplateData = {
   bootMd?: string;
   bootstrapMd?: string;
   heartbeatMd?: string;
+  requiredSkillIds?: string[];
 };
 
 export function useCreateTemplate() {
