@@ -5,6 +5,7 @@ export const AgentSlackConfigSchema = z.object({
   dmUserIds: z.array(z.string()),
   groupPolicy: z.enum(["open", "allowlist"]),
   dmPolicy: z.enum(["off", "open", "allowlist"]),
+  botDisplayName: z.string().nullable().optional(),
 });
 
 export const AgentTeamsConfigSchema = z.object({
@@ -16,12 +17,23 @@ export const AgentSecretReadSchema = z.object({
   secretName: z.string(),
 });
 
+export const IntegrationValidationResultSchema = z.object({
+  validationStatus: z.enum(["valid", "warning", "invalid"]),
+  validationIdentity: z.string().nullable().optional(),
+  validationError: z.string().nullable().optional(),
+  missingScopes: z.array(z.string()).default([]),
+});
+
+export type AgentSecretRead = z.infer<typeof AgentSecretReadSchema>;
+export type IntegrationValidationResult = z.infer<typeof IntegrationValidationResultSchema>;
+
 export const AgentAssignedSkillSchema = z.object({
   id: z.string().uuid(),
   name: z.string(),
   source: z.string(),
   requiredProviders: z.array(z.string()),
   toolsPointer: z.string().nullable(),
+  required: z.boolean().default(false),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -61,6 +73,7 @@ export const AgentTemplateReadSchema = z.object({
   bootMd: z.string(),
   bootstrapMd: z.string(),
   heartbeatMd: z.string(),
+  requiredSkills: z.array(AgentAssignedSkillSchema).default([]),
   createdAt: z.string(),
   updatedAt: z.string(),
 });

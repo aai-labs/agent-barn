@@ -67,7 +67,7 @@ service:
 apiExternalUrl: "https://api.agent-farm.k8s.aai-labs.com"
 
 ingress:
-  host: api.agent-farm.k8s.aai-labs.com
+  hosts: "api.agent-farm.k8s.aai-labs.com"
   clusterIssuer: letsencrypt-http01
   tlsSecretName: agentfarm-api-tls
 

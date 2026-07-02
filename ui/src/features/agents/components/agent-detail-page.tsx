@@ -101,7 +101,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
 
         {agent && (
           <>
-            <div className="flex items-center gap-5.5 pb-8">
+            <div className="flex items-start gap-5.5 pb-8">
               <AgentAvatar agent={agent} size="xl" />
               <div className="flex-1 min-w-0">
                 <h1
@@ -113,6 +113,11 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
                 {agent.model && (
                   <div className="text-[0.906rem] font-mono" style={{ color: "var(--ink-3)" }}>
                     {formatModelName(agent.model)}
+                  </div>
+                )}
+                {agent.slackConfig?.botDisplayName && (
+                  <div className="text-[0.875rem] mt-0.5" style={{ color: "var(--ink-4)" }}>
+                    @{agent.slackConfig.botDisplayName}
                   </div>
                 )}
                 <AgentMetaBadges agent={agent} variant="full" className="mt-2" />

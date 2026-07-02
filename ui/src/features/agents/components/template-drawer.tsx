@@ -1,7 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { XIcon } from "@/components/icons";
+import { useDebouncedValue } from "@tanstack/react-pacer";
+import { SearchIcon, XIcon } from "@/components/icons";
+import { useSkills } from "@/features/skills/hooks/use-skills";
+import { SkillSourceBadge } from "@/features/skills/components/skill-drawer";
+import { SKILL_PROVIDER_LABELS } from "@/features/skills/utils";
 import { useTemplateVersions } from "../hooks/use-template-versions";
 import { useCreateTemplate } from "../hooks/use-create-template";
 import { useUpdateTemplate } from "../hooks/use-update-template";
@@ -19,7 +23,6 @@ type TemplateFiles = Record<TemplateFileKey, string>;
 const EMPTY_FILES: TemplateFiles = {
   soulMd: "",
   identityMd: "",
-  userMd: "",
   toolsMd: "",
   agentsMd: "",
   bootMd: "",
@@ -31,7 +34,6 @@ function filesFrom(template: AgentTemplateRead): TemplateFiles {
   return {
     soulMd: template.soulMd,
     identityMd: template.identityMd,
-    userMd: template.userMd,
     toolsMd: template.toolsMd,
     agentsMd: template.agentsMd,
     bootMd: template.bootMd,
@@ -39,6 +41,8 @@ function filesFrom(template: AgentTemplateRead): TemplateFiles {
     heartbeatMd: template.heartbeatMd,
   };
 }
+
+type SkillEntry = { id: string; name: string; source: string; requiredProviders: string[] };
 
 function deriveSlug(name: string): string {
   return name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
@@ -66,6 +70,13 @@ export function TemplateDrawer({
   const [file, setFile] = useState<TemplateFileKey>("soulMd");
   const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
   const [savedVersion, setSavedVersion] = useState<number | null>(null);
+  const [selectedSkillDetails, setSelectedSkillDetails] = useState<SkillEntry[]>([]);
+  const [skillSearch, setSkillSearch] = useState("");
+  const [debouncedSkillSearch] = useDebouncedValue(skillSearch, { wait: 300 });
+
+  const { skills, isLoading: skillsLoading } = useSkills({ search: debouncedSkillSearch || undefined, pageSize: 100 });
+  const requiredSkillIds = selectedSkillDetails.map((s) => s.id);
+  const unselectedSkills = skills.filter((s) => !requiredSkillIds.includes(s.id));
 
   // The version currently being displayed/edited (defaults to latest).
   const resolvedVersion = selectedVersion ?? versions[0]?.version ?? null;
@@ -83,9 +94,26 @@ export function TemplateDrawer({
     if (current) {
       setFiles(filesFrom(current));
       setDescription(current.description ?? "");
+      setSelectedSkillDetails(
+        current.requiredSkills.map((s) => ({
+          id: s.id,
+          name: s.name,
+          source: s.source,
+          requiredProviders: s.requiredProviders,
+        })),
+      );
     }
+    setSkillSearch("");
     setSavedVersion(null);
     setEditing(true);
+  }
+
+  function addRequiredSkill(skill: SkillEntry) {
+    setSelectedSkillDetails((prev) => [...prev, skill]);
+  }
+
+  function removeRequiredSkill(id: string) {
+    setSelectedSkillDetails((prev) => prev.filter((s) => s.id !== id));
   }
 
   async function handleSave() {
@@ -93,12 +121,12 @@ export function TemplateDrawer({
     updateTemplate.reset();
     try {
       if (mode === "create") {
-        await createTemplate.mutateAsync({ templateName: name, description: description || null, ...files });
+        await createTemplate.mutateAsync({ templateName: name, description: description || null, ...files, requiredSkillIds });
         onClose();
         return;
       }
       // Saving publishes a new immutable version; the name is inherited.
-      const updated = await updateTemplate.mutateAsync({ slug: slug!, description: description || null, ...files });
+      const updated = await updateTemplate.mutateAsync({ slug: slug!, description: description || null, ...files, requiredSkillIds });
       await refetch();
       setSelectedVersion(updated.version);
       setEditing(false);
@@ -222,10 +250,138 @@ export function TemplateDrawer({
                   </div>
                 </div>
               )}
+
+              {mode === "view" && !editing && (
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>
+                    Required skills
+                  </label>
+                  {current && current.requiredSkills.length > 0 ? (
+                    <div className="flex flex-wrap gap-1.5">
+                      {current.requiredSkills.map((skill) => (
+                        <span
+                          key={skill.id}
+                          className="text-[12px] font-medium px-2.5 py-0.5 rounded-full"
+                          style={{ background: "var(--bg-soft)", color: "var(--ink-2)", border: "1px solid var(--line)" }}
+                        >
+                          {skill.name}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-[13px]" style={{ color: "var(--ink-4)" }}>None</div>
+                  )}
+                </div>
+              )}
+
               {mode === "view" && editing && (
                 <div className="text-[12.5px]" style={{ color: "var(--ink-3)" }}>
                   Editing from <span className="font-mono">v{current?.version}</span>. Saving publishes a new
                   version. <span className="font-mono">{"{{ … }}"}</span> placeholders are rendered when an agent starts.
+                </div>
+              )}
+
+              {editing && (
+                <div className="flex flex-col gap-2">
+                  <label className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>
+                    Required skills
+                  </label>
+
+                  {selectedSkillDetails.length > 0 ? (
+                    <div className="flex flex-col gap-2 overflow-y-auto" style={{ maxHeight: "15rem" }}>
+                      {selectedSkillDetails.map((skill) => (
+                        <div
+                          key={skill.id}
+                          className="flex items-center gap-2 px-3.5 py-2.5 rounded-2xl flex-shrink-0"
+                          style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
+                        >
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>
+                                {skill.name}
+                              </span>
+                              <SkillSourceBadge source={skill.source} />
+                            </div>
+                            {skill.requiredProviders.length > 0 && (
+                              <span className="text-[0.75rem]" style={{ color: "var(--ink-4)" }}>
+                                Requires:{" "}
+                                {skill.requiredProviders.map((p) => SKILL_PROVIDER_LABELS[p] ?? p).join(", ")}
+                              </span>
+                            )}
+                          </div>
+                          <button
+                            className="af-btn af-btn-sm af-btn-ghost"
+                            onClick={() => removeRequiredSkill(skill.id)}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div
+                      className="py-4 text-center rounded-2xl text-[0.8125rem]"
+                      style={{ border: "1px dashed var(--line-strong)", color: "var(--ink-4)" }}
+                    >
+                      No required skills.
+                    </div>
+                  )}
+
+                  <div
+                    className="flex items-center gap-2 px-3 py-2 rounded-xl mt-1"
+                    style={{ border: "1px solid var(--line)", background: "var(--bg-elev)" }}
+                  >
+                    <SearchIcon size={14} style={{ color: "var(--ink-4)", flexShrink: 0 }} />
+                    <input
+                      className="flex-1 text-[0.8125rem] outline-none bg-transparent"
+                      style={{ color: "var(--ink)" }}
+                      placeholder="Search skills to add…"
+                      value={skillSearch}
+                      onChange={(e) => setSkillSearch(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="flex flex-col gap-2 overflow-y-auto" style={{ maxHeight: "14rem" }}>
+                    {skillsLoading && (
+                      <div className="text-[0.8125rem] py-2 text-center" style={{ color: "var(--ink-3)" }}>
+                        Loading…
+                      </div>
+                    )}
+                    {!skillsLoading && unselectedSkills.length === 0 ? (
+                      <div className="text-[0.8125rem] py-2 text-center" style={{ color: "var(--ink-3)" }}>
+                        {skillSearch ? "No skills match." : "No more skills to add."}
+                      </div>
+                    ) : (
+                      unselectedSkills.map((skill) => (
+                        <div
+                          key={skill.id}
+                          className="flex items-center gap-2 px-3.5 py-2.5 rounded-2xl flex-shrink-0"
+                          style={{ border: "1px solid var(--line)" }}
+                        >
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>
+                                {skill.name}
+                              </span>
+                              <SkillSourceBadge source={skill.source} />
+                            </div>
+                            {skill.requiredProviders.length > 0 && (
+                              <span className="text-[0.75rem]" style={{ color: "var(--ink-4)" }}>
+                                Requires:{" "}
+                                {skill.requiredProviders.map((p) => SKILL_PROVIDER_LABELS[p] ?? p).join(", ")}
+                              </span>
+                            )}
+                          </div>
+                          <button
+                            className="af-btn af-btn-sm af-btn-ghost"
+                            onClick={() => addRequiredSkill({ id: skill.id, name: skill.name, source: skill.source, requiredProviders: skill.requiredProviders })}
+                          >
+                            Add
+                          </button>
+                        </div>
+                      ))
+                    )}
+                  </div>
                 </div>
               )}
 
@@ -247,8 +403,8 @@ export function TemplateDrawer({
               </div>
 
               <textarea
-                className="af-input font-mono text-[0.781rem] leading-[1.65] resize-none flex-1"
-                rows={18}
+                className="af-input font-mono text-[0.781rem] leading-[1.65] resize-none"
+                style={{ minHeight: "40rem" }}
                 readOnly={!editing}
                 aria-label={`${templateFileLabel(file)} content`}
                 value={displayFiles[file]}

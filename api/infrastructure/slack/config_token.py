@@ -51,7 +51,7 @@ def validate_config_access_token(token: str) -> None:
 
     manifest = {
         "display_information": {
-            "name": "Agent Farm Validation",
+            "name": "Agent Barn Validation",
             "description": "Temporary manifest validation",
         },
         "features": {
@@ -61,7 +61,7 @@ def validate_config_access_token(token: str) -> None:
                 "messages_tab_read_only_enabled": False,
             },
             "bot_user": {
-                "display_name": "Agent Farm Validation",
+                "display_name": "Agent Barn Validation",
                 "always_online": False,
             },
         },
@@ -131,6 +131,29 @@ def rotate_refresh_token(refresh_token: str) -> tuple[str, str]:
 
     validate_config_access_token(access_token)
     return access_token, new_refresh_token
+
+
+def update_slack_app_name(access_token: str, app_id: str, new_name: str) -> bool:
+    """Best-effort rename of a Slack app's display name. Returns True on success, never raises."""
+    try:
+        export_body = _post_form(
+            access_token, "apps.manifest.export", {"app_id": app_id}
+        )
+        if not export_body.get("ok"):
+            return False
+        manifest = export_body.get("manifest", {})
+        manifest.setdefault("display_information", {})["name"] = new_name
+        manifest.setdefault("features", {}).setdefault("bot_user", {})[
+            "display_name"
+        ] = new_name
+        update_body = _post_form(
+            access_token,
+            "apps.manifest.update",
+            {"app_id": app_id, "manifest": json.dumps(manifest)},
+        )
+        return bool(update_body.get("ok"))
+    except Exception:
+        return False
 
 
 def create_slack_app(access_token: str, manifest: dict) -> str:

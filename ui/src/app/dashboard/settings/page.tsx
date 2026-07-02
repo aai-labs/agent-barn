@@ -4,7 +4,7 @@ import { useState } from "react";
 import { PROVIDERS } from "@/features/agents/data";
 import { TemplatesPanel } from "@/features/agents/components/templates-panel";
 import { SkillsPanel } from "@/features/skills/components/skills-panel";
-import { PlusIcon, LockIcon, ShieldIcon, EyeIcon, ServerIcon, SearchIcon } from "@/components/icons";
+import { PlusIcon, LockIcon, EyeIcon, ServerIcon, SearchIcon } from "@/components/icons";
 
 type SectionKey =
   | "general"
@@ -357,7 +357,7 @@ function InfraPanel() {
     <div>
       <Hint>
         <ServerIcon style={{ flexShrink: 0, marginTop: 1 }} />
-        Agent Farm runs on your Kubernetes. You usually don&apos;t need to touch this — but here it is.
+        Agent Barn runs on your Kubernetes. You usually don&apos;t need to touch this — but here it is.
       </Hint>
       <Field label="Cluster" hint="Where agents are scheduled.">
         <div className="flex items-center gap-2.5">

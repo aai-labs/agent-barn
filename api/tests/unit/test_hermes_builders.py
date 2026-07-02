@@ -152,6 +152,7 @@ def test_build_secret_hermes_slack_contains_required_keys():
     assert_that(data["SLACK_BOT_TOKEN"], equal_to("xoxb-bot"))
     assert_that(data["SLACK_APP_TOKEN"], equal_to("xapp-app"))
     assert_that(data["API_SERVER_KEY"], equal_to("secret-key-123"))
+    assert_that(data["SLACK_HOME_CHANNEL"], equal_to("C001"))
     assert_that(data["SLACK_CHANNEL_IDS"], equal_to("C001,C002"))
     assert_that(data["SLACK_DM_ALLOWED_USERS"], equal_to("U001,U002"))
     assert_that(data["SLACK_ALLOW_ALL_USERS"], equal_to("true"))
@@ -174,6 +175,7 @@ def test_build_secret_hermes_slack_empty_lists_give_empty_strings():
         channel_ids=[],
         dm_user_ids=[],
     )
+    assert_that(secret.string_data["SLACK_HOME_CHANNEL"], equal_to("C0000000000"))
     assert_that(secret.string_data["SLACK_CHANNEL_IDS"], equal_to(""))
     assert_that(secret.string_data["SLACK_DM_ALLOWED_USERS"], equal_to(""))
 

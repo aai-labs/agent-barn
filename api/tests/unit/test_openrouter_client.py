@@ -134,6 +134,7 @@ def _service(openrouter, allowlist="", default_model=""):
         litellm=MagicMock(),
         openrouter=openrouter,
         config=config,
+        slack_token_service=MagicMock(),
     )
 
 

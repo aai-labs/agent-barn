@@ -63,30 +63,33 @@ jobs:
       - name: Log in to registry
         run: |
           printf '%s' '${{ secrets.REGISTRY_PASSWORD }}' \
-            | docker login '${{ secrets.REGISTRY_URL }}' \
-              --username '${{ secrets.REGISTRY_USERNAME }}' \
+            | docker login '${{ vars.REGISTRY_URL }}' \
+              --username '${{ vars.REGISTRY_USERNAME }}' \
               --password-stdin
 
       - name: Build and push API image
         run: |
           docker build \
-            -t '${{ secrets.REGISTRY_URL }}/agentfarm-api:${{ env.API_IMAGE_TAG }}' \
-            -t '${{ secrets.REGISTRY_URL }}/agentfarm-api:latest' \
+            -t '${{ vars.REGISTRY_URL }}/agentfarm-api:${{ env.API_IMAGE_TAG }}' \
+            -t '${{ vars.REGISTRY_URL }}/agentfarm-api:latest' \
             -f api/Dockerfile \
             .
-          docker push '${{ secrets.REGISTRY_URL }}/agentfarm-api:${{ env.API_IMAGE_TAG }}'
-          docker push '${{ secrets.REGISTRY_URL }}/agentfarm-api:latest'
+          docker push '${{ vars.REGISTRY_URL }}/agentfarm-api:${{ env.API_IMAGE_TAG }}'
+          docker push '${{ vars.REGISTRY_URL }}/agentfarm-api:latest'
+
+      - name: Extract primary API host
+        run: echo "PRIMARY_API_HOST=$(echo '${{ vars.API_HOST }}' | cut -d',' -f1 | tr -d ' ')" >> $GITHUB_ENV
 
       - name: Build and push UI image
         run: |
           docker build \
-            --build-arg NEXT_PUBLIC_BACKEND_URL=https://${{ secrets.API_HOST }} \
-            -t '${{ secrets.REGISTRY_URL }}/agentfarm-ui:${{ env.UI_IMAGE_TAG }}' \
-            -t '${{ secrets.REGISTRY_URL }}/agentfarm-ui:latest' \
+            --build-arg NEXT_PUBLIC_BACKEND_URL=https://${{ env.PRIMARY_API_HOST }} \
+            -t '${{ vars.REGISTRY_URL }}/agentfarm-ui:${{ env.UI_IMAGE_TAG }}' \
+            -t '${{ vars.REGISTRY_URL }}/agentfarm-ui:latest' \
             -f ui/Dockerfile \
             ui/
-          docker push '${{ secrets.REGISTRY_URL }}/agentfarm-ui:${{ env.UI_IMAGE_TAG }}'
-          docker push '${{ secrets.REGISTRY_URL }}/agentfarm-ui:latest'
+          docker push '${{ vars.REGISTRY_URL }}/agentfarm-ui:${{ env.UI_IMAGE_TAG }}'
+          docker push '${{ vars.REGISTRY_URL }}/agentfarm-ui:latest'
 
       - name: Build, smoke test, and push hermes-base image
         env:
@@ -95,17 +98,17 @@ jobs:
           printf '%s' '${{ secrets.AAI_CLI_REPO_ACCESS_TOKEN }}' > /tmp/gh_token
           docker build \
             --secret id=gh_token,src=/tmp/gh_token \
-            -t '${{ secrets.REGISTRY_URL }}/agentfarm-hermes-base:${{ env.HERMES_IMAGE_TAG }}' \
-            -t '${{ secrets.REGISTRY_URL }}/agentfarm-hermes-base:latest' \
+            -t '${{ vars.REGISTRY_URL }}/agentfarm-hermes-base:${{ env.HERMES_IMAGE_TAG }}' \
+            -t '${{ vars.REGISTRY_URL }}/agentfarm-hermes-base:latest' \
             -f hermes-base/Dockerfile \
             hermes-base/
           rm -f /tmp/gh_token
           docker run --rm \
             -v "${{ github.workspace }}/hermes-base/smoke-test.sh:/smoke-test.sh:ro" \
-            '${{ secrets.REGISTRY_URL }}/agentfarm-hermes-base:${{ env.HERMES_IMAGE_TAG }}' \
+            '${{ vars.REGISTRY_URL }}/agentfarm-hermes-base:${{ env.HERMES_IMAGE_TAG }}' \
             /bin/sh /smoke-test.sh
-          docker push '${{ secrets.REGISTRY_URL }}/agentfarm-hermes-base:${{ env.HERMES_IMAGE_TAG }}'
-          docker push '${{ secrets.REGISTRY_URL }}/agentfarm-hermes-base:latest'
+          docker push '${{ vars.REGISTRY_URL }}/agentfarm-hermes-base:${{ env.HERMES_IMAGE_TAG }}'
+          docker push '${{ vars.REGISTRY_URL }}/agentfarm-hermes-base:latest'
 
       - name: Build, smoke test, and push openclaw-base image
         env:
@@ -114,17 +117,17 @@ jobs:
           printf '%s' '${{ secrets.AAI_CLI_REPO_ACCESS_TOKEN }}' > /tmp/gh_token
           docker build \
             --secret id=gh_token,src=/tmp/gh_token \
-            -t '${{ secrets.REGISTRY_URL }}/agentfarm-openclaw-base:${{ env.OPENCLAW_IMAGE_TAG }}' \
-            -t '${{ secrets.REGISTRY_URL }}/agentfarm-openclaw-base:latest' \
+            -t '${{ vars.REGISTRY_URL }}/agentfarm-openclaw-base:${{ env.OPENCLAW_IMAGE_TAG }}' \
+            -t '${{ vars.REGISTRY_URL }}/agentfarm-openclaw-base:latest' \
             -f openclaw-base/Dockerfile \
             openclaw-base/
           rm -f /tmp/gh_token
           docker run --rm \
             -v "${{ github.workspace }}/openclaw-base/smoke-test.sh:/smoke-test.sh:ro" \
-            '${{ secrets.REGISTRY_URL }}/agentfarm-openclaw-base:${{ env.OPENCLAW_IMAGE_TAG }}' \
+            '${{ vars.REGISTRY_URL }}/agentfarm-openclaw-base:${{ env.OPENCLAW_IMAGE_TAG }}' \
             /bin/sh /smoke-test.sh
-          docker push '${{ secrets.REGISTRY_URL }}/agentfarm-openclaw-base:${{ env.OPENCLAW_IMAGE_TAG }}'
-          docker push '${{ secrets.REGISTRY_URL }}/agentfarm-openclaw-base:latest'
+          docker push '${{ vars.REGISTRY_URL }}/agentfarm-openclaw-base:${{ env.OPENCLAW_IMAGE_TAG }}'
+          docker push '${{ vars.REGISTRY_URL }}/agentfarm-openclaw-base:latest'
 
       - name: Set up SSH tunnel to k3s
         run: |
@@ -154,12 +157,12 @@ jobs:
           UI_IMAGE_TAG: ${{ env.UI_IMAGE_TAG }}
           OPENCLAW_IMAGE_TAG: ${{ env.OPENCLAW_IMAGE_TAG }}
           HERMES_IMAGE_TAG: ${{ env.HERMES_IMAGE_TAG }}
-          POSTGRES_APP_USER: ${{ secrets.POSTGRES_APP_USER }}
+          POSTGRES_APP_USER: ${{ vars.POSTGRES_APP_USER }}
           POSTGRES_APP_PASSWORD: ${{ secrets.POSTGRES_APP_PASSWORD }}
-          POSTGRES_APP_DB: ${{ secrets.POSTGRES_APP_DB }}
-          POSTGRES_LITELLM_USER: ${{ secrets.POSTGRES_LITELLM_USER }}
+          POSTGRES_APP_DB: ${{ vars.POSTGRES_APP_DB }}
+          POSTGRES_LITELLM_USER: ${{ vars.POSTGRES_LITELLM_USER }}
           POSTGRES_LITELLM_PASSWORD: ${{ secrets.POSTGRES_LITELLM_PASSWORD }}
-          POSTGRES_LITELLM_DB: ${{ secrets.POSTGRES_LITELLM_DB }}
+          POSTGRES_LITELLM_DB: ${{ vars.POSTGRES_LITELLM_DB }}
           LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           AGENT_DEFAULT_MODEL: ${{ vars.AGENT_DEFAULT_MODEL }}
@@ -169,12 +172,12 @@ jobs:
           SUPER_USER_CREDENTIALS: ${{ secrets.SUPER_USER_CREDENTIALS }}
           AGENT_TOKEN_ENCRYPTION_KEY: ${{ secrets.AGENT_TOKEN_ENCRYPTION_KEY }}
           ENVIRONMENT: production
-          WEB_APP_URL: ${{ secrets.WEB_APP_URL }}
-          API_HOST: ${{ secrets.API_HOST }}
-          UI_HOST: ${{ secrets.UI_HOST }}
+          WEB_APP_URL: ${{ vars.WEB_APP_URL }}
+          API_HOST: ${{ vars.API_HOST }}
+          UI_HOST: ${{ vars.UI_HOST }}
           KUBECONFIG_B64: ${{ secrets.KUBECONFIG_B64 }}
           POD_KUBECONFIG_B64: ${{ secrets.POD_KUBECONFIG_B64 }}
-          REGISTRY_SERVER: ${{ secrets.REGISTRY_URL }}
-          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_SERVER: ${{ vars.REGISTRY_URL }}
+          REGISTRY_USERNAME: ${{ vars.REGISTRY_USERNAME }}
           REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
         run: helmfile -f helmfile.yaml.gotmpl sync --wait

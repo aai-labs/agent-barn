@@ -86,10 +86,18 @@ function restorePreinstalledMsteamsPlugin(overlay) {
   console.log('[init-openclaw] Restored preinstalled Microsoft Teams npm plugin');
 }
 
+// Files the agent writes runtime state to — never overwrite on restart.
+const AGENT_OWNED_FILES = new Set(['USER.md']);
+
 fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
 for (const file of fs.readdirSync(TEMPLATE_DIR)) {
   if (!file.endsWith('.md')) continue;
-  fs.copyFileSync(path.join(TEMPLATE_DIR, file), path.join(WORKSPACE_DIR, file));
+  const dest = path.join(WORKSPACE_DIR, file);
+  if (AGENT_OWNED_FILES.has(file) && fs.existsSync(dest)) {
+    console.log(`[init-openclaw] Preserving workspace/${file} (agent-owned)`);
+    continue;
+  }
+  fs.copyFileSync(path.join(TEMPLATE_DIR, file), dest);
   console.log(`[init-openclaw] Copied workspace/${file}`);
 }
 
