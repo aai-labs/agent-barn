@@ -19,6 +19,7 @@ export type UpdateTemplateData = {
   bootMd?: string;
   bootstrapMd?: string;
   heartbeatMd?: string;
+  requiredSkillIds?: string[];
 };
 
 export function useUpdateTemplate() {

@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
-import { MOCK_AGENT_ID, mockAgent, mockAssignedSkill, mockSecret, mockToolCall } from "../pages/data-support/agent-data-support.po";
-import { mockCustomSkill, mockPlatformSkill } from "../pages/data-support/skill-data-support.po";
+import { MOCK_AGENT_ID, mockAgent, mockAssignedSkill, mockSecret, mockToolCall, mockVersionsForSlug } from "../pages/data-support/agent-data-support.po";
+import { mockCustomSkill, mockPlatformSkill, MOCK_PLATFORM_SKILL_ID } from "../pages/data-support/skill-data-support.po";
 import { DataSupport } from "../pages/data-support/data-support.po";
 import { AgentDetailPage } from "../pages/agent-detail-page.po";
 
@@ -228,6 +228,77 @@ test.describe("Agent Detail Page — Template tab (re-pin)", () => {
     // No per-agent markdown is ever sent.
     expect(body.soul_md).toBeUndefined();
   });
+
+  test("shows Required skills section when re-pinning to template with required skills", async ({ page }) => {
+    await dataSupportPage.agents.interceptGetTemplateVersionsRequest({
+      body: mockVersionsForSlug("scrum-master").map((v) => ({
+        ...v,
+        required_skills: [{
+          id: MOCK_PLATFORM_SKILL_ID,
+          name: "github",
+          source: "aai_cli",
+          required_providers: ["github"],
+          tools_pointer: null,
+          required: true,
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+        }],
+      })),
+    });
+
+    await page.getByRole("button", { name: /Scrum Master/ }).click();
+
+    await expect(page.getByText("Required skills", { exact: true })).toBeVisible();
+    await expect(page.getByText(mockPlatformSkill.name, { exact: true })).toBeVisible();
+    await expect(page.getByText(/needs.*credential/)).toBeVisible();
+  });
+
+  test("Apply button is disabled when required skill credential form is incomplete", async ({ page }) => {
+    await dataSupportPage.agents.interceptGetTemplateVersionsRequest({
+      body: mockVersionsForSlug("scrum-master").map((v) => ({
+        ...v,
+        required_skills: [{
+          id: MOCK_PLATFORM_SKILL_ID,
+          name: "github",
+          source: "aai_cli",
+          required_providers: ["github"],
+          tools_pointer: null,
+          required: true,
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+        }],
+      })),
+    });
+
+    await page.getByRole("button", { name: /Scrum Master/ }).click();
+
+    await expect(page.getByRole("button", { name: "Apply template" })).toBeDisabled();
+  });
+
+  test("Apply button enables after filling required skill credentials", async ({ page }) => {
+    await dataSupportPage.agents.interceptGetTemplateVersionsRequest({
+      body: mockVersionsForSlug("scrum-master").map((v) => ({
+        ...v,
+        required_skills: [{
+          id: MOCK_PLATFORM_SKILL_ID,
+          name: "github",
+          source: "aai_cli",
+          required_providers: ["github"],
+          tools_pointer: null,
+          required: true,
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+        }],
+      })),
+    });
+
+    await page.getByRole("button", { name: /Scrum Master/ }).click();
+
+    await page.getByPlaceholder(/github_pat_/).fill("github_pat_test_token");
+    await page.getByPlaceholder("owner-or-org").fill("acme");
+
+    await expect(page.getByRole("button", { name: "Apply template" })).toBeEnabled();
+  });
 });
 
 test.describe("Agent Detail Page — Channels tab", () => {
@@ -402,6 +473,31 @@ test.describe("Agent Detail Page — Skills tab", () => {
     );
     await agentDetailPage.saveSkillsButton().click();
     await updatePromise;
+  });
+
+  test("required skill shows 'Required' badge and disabled Remove button", async ({ page }) => {
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, status: "STOPPED", skills: [{ ...mockAssignedSkill, required: true }] },
+    });
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.configureButton().click();
+    await agentDetailPage.skillsTab().click();
+
+    await expect(page.getByText("Required", { exact: true })).toBeVisible();
+    await expect(agentDetailPage.removeSkillButton()).toBeDisabled();
+  });
+
+  test("hovering disabled Remove button for required skill shows tooltip", async ({ page }) => {
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, status: "STOPPED", skills: [{ ...mockAssignedSkill, required: true }] },
+    });
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.configureButton().click();
+    await agentDetailPage.skillsTab().click();
+
+    await agentDetailPage.removeSkillButton().hover();
+
+    await expect(page.getByText("Required by template")).toBeVisible();
   });
 });
 

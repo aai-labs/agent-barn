@@ -20,7 +20,7 @@ import {
   getIntegrationProvider,
   type IntegrationDraft,
 } from "../integrations";
-import type { AgentTemplateRead } from "../schemas";
+import type { AgentAssignedSkill, AgentTemplateRead } from "../schemas";
 import { useTemplates } from "../hooks/use-templates";
 import { ChoiceCard, FormField, NextStep, TokenInput } from "./hire-dialog-primitives";
 import { ModelSelect } from "./model-select";
@@ -1264,11 +1264,13 @@ export function SkillsStep({
   skillCredentials,
   onSkillIdsChange,
   onSkillCredentialsChange,
+  templateRequiredSkills = [],
 }: {
   selectedSkillIds: string[];
   skillCredentials: IntegrationDraft[];
   onSkillIdsChange: (ids: string[]) => void;
   onSkillCredentialsChange: (drafts: IntegrationDraft[]) => void;
+  templateRequiredSkills?: AgentAssignedSkill[];
 }) {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
@@ -1282,11 +1284,20 @@ export function SkillsStep({
 
   const totalPages = Math.max(1, Math.ceil(total / HIRE_DIALOG_PAGE_SIZE));
 
+  const requiredSkillIds = new Set(templateRequiredSkills.map((s) => s.id));
+  const orderedSkills = [
+    ...skills.filter((s) => requiredSkillIds.has(s.id)),
+    ...skills.filter((s) => !requiredSkillIds.has(s.id)),
+  ];
+
   // Track full Skill objects for selected skills so we can compute requiredProviders
   // across pages. Users can only toggle visible skills, so this stays in sync.
   const [selectedSkillObjects, setSelectedSkillObjects] = useState<Skill[]>([]);
   const requiredProviderIds: string[] = [
-    ...new Set(selectedSkillObjects.flatMap((s) => s.requiredProviders)),
+    ...new Set([
+      ...templateRequiredSkills.flatMap((s) => s.requiredProviders),
+      ...selectedSkillObjects.flatMap((s) => s.requiredProviders),
+    ]),
   ];
 
   function handleSearchChange(value: string) {
@@ -1303,7 +1314,10 @@ export function SkillsStep({
       ? selectedSkillObjects.filter((s) => s.id !== skill.id)
       : [...selectedSkillObjects, skill];
 
-    const newRequired = new Set(newObjects.flatMap((s) => s.requiredProviders));
+    const newRequired = new Set([
+      ...templateRequiredSkills.flatMap((s) => s.requiredProviders),
+      ...newObjects.flatMap((s) => s.requiredProviders),
+    ]);
     const newCreds = skillCredentials.filter((c) => newRequired.has(c.provider));
     for (const p of newRequired) {
       if (!newCreds.find((c) => c.provider === p)) {
@@ -1377,17 +1391,19 @@ export function SkillsStep({
         )}
         {!isLoading && skills.length > 0 && (
           <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
-            {skills.map((skill) => {
-              const selected = selectedSkillIds.includes(skill.id);
+            {orderedSkills.map((skill) => {
+              const isRequired = requiredSkillIds.has(skill.id);
+              const selected = isRequired || selectedSkillIds.includes(skill.id);
               return (
                 <div
                   key={skill.id}
-                  className="flex flex-col gap-1.5 p-4 rounded-2xl cursor-default transition-colors min-h-[4.5rem]"
+                  className="flex flex-col gap-1.5 p-4 rounded-2xl transition-colors min-h-[4.5rem]"
                   style={{
+                    cursor: isRequired ? "default" : "pointer",
                     border: selected ? "1.5px solid var(--ink)" : "1.5px solid var(--line)",
                     background: selected ? "var(--bg-soft)" : "var(--bg-elev)",
                   }}
-                  onClick={() => toggleSkill(skill)}
+                  onClick={() => { if (!isRequired) toggleSkill(skill); }}
                 >
                   <div className="flex items-center justify-between gap-2">
                     <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
@@ -1395,6 +1411,11 @@ export function SkillsStep({
                     </div>
                     <SkillSourceBadge source={skill.source} />
                   </div>
+                  {isRequired && (
+                    <div className="text-[0.6875rem]" style={{ color: "var(--ink-3)" }}>
+                      Required by template
+                    </div>
+                  )}
                   {skill.requiredProviders.length > 0 && (
                     <div className="text-[0.75rem]" style={{ color: "var(--ink-4)" }}>
                       {skill.requiredProviders.map((p) => SKILL_PROVIDER_LABELS[p] ?? p).join(", ")}
