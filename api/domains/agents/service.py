@@ -463,6 +463,16 @@ class AgentService:
                     detail="LiteLLM key generation failed; cannot create agent.",
                 ) from exc
 
+        # Validate that all template-required skills are present in the request.
+        required_ids = self.template_repository.get_required_skill_ids(template.id)
+        if required_ids:
+            missing = required_ids - set(data.skill_ids)
+            if missing:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Required template skills must be included in skill_ids",
+                )
+
         self.repository.save(agent)
 
         slack_config = None
@@ -519,16 +529,6 @@ class AgentService:
                 )
             )
             secrets.append(saved)
-
-        # Validate that all template-required skills are present in the request.
-        required_ids = self.template_repository.get_required_skill_ids(template.id)
-        if required_ids:
-            missing = required_ids - set(data.skill_ids)
-            if missing:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Required template skills must be included in skill_ids",
-                )
 
         # Resolve and validate skills before any DB writes.
         skills_to_assign = self._resolve_skills(data.skill_ids, data.secrets, org_id)
@@ -671,6 +671,48 @@ class AgentService:
             self._ensure_model_allowed(updated["model"])
             agent.model = updated["model"]
 
+        # Validate skill changes against the effective template's required skills
+        if effective_template is None:
+            effective_template = (
+                self.template_repository.get_template_by_slug_and_version(
+                    org_id, agent.template_slug, agent.template_version
+                )
+            )
+        required_ids = (
+            self.template_repository.get_required_skill_ids(effective_template.id)
+            if effective_template
+            else set()
+        )
+        if required_ids:
+            # Block removal of required skills.
+            if data.removed_skill_ids:
+                blocked = required_ids & set(data.removed_skill_ids)
+                if blocked:
+                    blocked_skills = self.skill_repository.get_many_by_ids(
+                        list(blocked)
+                    )
+                    names = ", ".join(s.name for s in blocked_skills)
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail=f"Cannot remove skills required by the template: {names}",
+                    )
+            # When re-pinning, validate that required skills will be present.
+            if "template_slug" in updated:
+                existing_skill_ids = {
+                    s.id
+                    for _, s in self.skill_repository.get_agent_skills_with_details(
+                        agent.id
+                    )
+                }
+                effective_skill_ids = (existing_skill_ids | set(data.skill_ids)) - set(
+                    data.removed_skill_ids
+                )
+                if required_ids - effective_skill_ids:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Required template skills must be included in skill_ids",
+                    )
+
         # Slack config updates
         if agent.platform == AgentPlatform.SLACK and (
             _SLACK_CONFIG_FIELDS & updated.keys()
@@ -729,48 +771,6 @@ class AgentService:
                 if "teams_tenant_id" in updated:
                     teams_config.tenant_id = updated["teams_tenant_id"]
                 self.repository.save_teams_config(teams_config)
-
-        # Validate skill changes against the effective template's required skills.
-        if effective_template is None:
-            effective_template = (
-                self.template_repository.get_template_by_slug_and_version(
-                    org_id, agent.template_slug, agent.template_version
-                )
-            )
-        required_ids = (
-            self.template_repository.get_required_skill_ids(effective_template.id)
-            if effective_template
-            else set()
-        )
-        if required_ids:
-            # Block removal of required skills.
-            if data.removed_skill_ids:
-                blocked = required_ids & set(data.removed_skill_ids)
-                if blocked:
-                    blocked_skills = self.skill_repository.get_many_by_ids(
-                        list(blocked)
-                    )
-                    names = ", ".join(s.name for s in blocked_skills)
-                    raise HTTPException(
-                        status_code=status.HTTP_409_CONFLICT,
-                        detail=f"Cannot remove skills required by the template: {names}",
-                    )
-            # When re-pinning, validate that required skills will be present.
-            if "template_slug" in updated:
-                existing_skill_ids = {
-                    s.id
-                    for _, s in self.skill_repository.get_agent_skills_with_details(
-                        agent.id
-                    )
-                }
-                effective_skill_ids = (existing_skill_ids | set(data.skill_ids)) - set(
-                    data.removed_skill_ids
-                )
-                if required_ids - effective_skill_ids:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="Required template skills must be included in skill_ids",
-                    )
 
         # Validate skills accessibility and secret coverage
         if data.skill_ids or data.removed_secret_providers:

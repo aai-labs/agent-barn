@@ -199,13 +199,13 @@ class TemplateService:
             bootstrap_md=updated.get("bootstrap_md", old.bootstrap_md),
             heartbeat_md=updated.get("heartbeat_md", old.heartbeat_md),
         )
-        self.repository.save_template(new_template)
         if data.required_skill_ids is None:
             resolved_ids = list(self.repository.get_required_skill_ids(old.id))
         else:
             if data.required_skill_ids:
                 self._validate_skill_ids(data.required_skill_ids, org_id)
             resolved_ids = data.required_skill_ids
+        self.repository.save_template(new_template)
         self.repository.save_template_skills(new_template.id, resolved_ids)
         return self._with_required_skills(TemplateRead.model_validate(new_template))
 
