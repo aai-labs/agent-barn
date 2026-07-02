@@ -71,6 +71,46 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
       { key: "apiToken", label: "API token", type: "secret", required: true },
     ],
   },
+  {
+    id: "gmail",
+    label: "Gmail",
+    scopeNote: "OAuth2 access token with Gmail API scopes (gmail.readonly, gmail.send or gmail.modify as needed)",
+    fields: [
+      { key: "accessToken", label: "Access token", type: "secret", required: true },
+      { key: "userId", label: "User ID", type: "text", required: true, placeholder: "me or user@example.com" },
+    ],
+  },
+  {
+    id: "google_calendar",
+    label: "Google Calendar",
+    scopeNote: "OAuth2 access token with calendar.readonly or calendar scope",
+    fields: [
+      { key: "accessToken", label: "Access token", type: "secret", required: true },
+      { key: "calendarId", label: "Calendar ID", type: "text", required: true, placeholder: "primary or calendar@group.calendar.google.com" },
+    ],
+  },
+  {
+    id: "zoho_mail",
+    label: "Zoho Mail",
+    scopeNote: "App password from Zoho account security settings (two-factor must be enabled)",
+    fields: [
+      { key: "username", label: "Username", type: "text", required: true, placeholder: "you@zoho.com" },
+      { key: "email", label: "Email", type: "text", required: true, placeholder: "you@zoho.com" },
+      { key: "fromAddress", label: "From address", type: "text", required: true, placeholder: "you@zoho.com" },
+      { key: "appPassword", label: "App password", type: "secret", required: true },
+    ],
+  },
+  {
+    id: "zoho_calendar",
+    label: "Zoho Calendar",
+    scopeNote: "App password from Zoho account security settings (two-factor must be enabled)",
+    fields: [
+      { key: "username", label: "Username", type: "text", required: true, placeholder: "you@zoho.com" },
+      { key: "email", label: "Email", type: "text", required: true, placeholder: "you@zoho.com" },
+      { key: "appPassword", label: "App password", type: "secret", required: true },
+      { key: "caldavUrl", label: "CalDAV URL", type: "text", required: true, placeholder: "https://calendar.zoho.com/caldav/..." },
+    ],
+  },
 ];
 
 export function getIntegrationProvider(id: string): IntegrationProvider | undefined {

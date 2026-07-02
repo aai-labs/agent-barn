@@ -8,6 +8,7 @@ from pydantic import BaseModel as PydanticBaseModel
 from pydantic import ConfigDict, Field, model_validator
 from sqlmodel import Column, Field as SqlField
 
+from api.domains.skills.models import SkillRead
 from api.infrastructure.postgres.models import BaseModel
 
 
@@ -70,6 +71,7 @@ class TemplateRead(PydanticBaseModel):
     heartbeat_md: str
     created_at: datetime
     updated_at: datetime
+    required_skills: list[SkillRead] = Field(default_factory=list)
 
 
 class TemplateCreate(PydanticBaseModel):
@@ -83,6 +85,7 @@ class TemplateCreate(PydanticBaseModel):
     boot_md: str | None = None
     bootstrap_md: str | None = None
     heartbeat_md: str | None = None
+    required_skill_ids: list[UUID] = Field(default_factory=list)
 
 
 class TemplateUpdate(PydanticBaseModel):
@@ -97,6 +100,7 @@ class TemplateUpdate(PydanticBaseModel):
     boot_md: str | None = None
     bootstrap_md: str | None = None
     heartbeat_md: str | None = None
+    required_skill_ids: list[UUID] | None = None
 
     @model_validator(mode="after")
     def validate_not_empty(self) -> "TemplateUpdate":
