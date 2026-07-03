@@ -64,6 +64,7 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
   const [retireConfirm, setRetireConfirm] = useState(false);
   const [name, setName] = useState(agent.name);
   const [model, setModel] = useState(agent.model);
+  const [approvalMode, setApprovalMode] = useState(agent.approvalMode ?? "auto");
   const [saved, setSaved] = useState(false);
   // Template re-pin browsing state.
   const [templateSearch, setTemplateSearch] = useState("");
@@ -184,7 +185,7 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
 
   async function handleSave() {
     try {
-      await updateAgent.mutateAsync({ agentId: agent.id, name, model });
+      await updateAgent.mutateAsync({ agentId: agent.id, name, model, approvalMode });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch {
@@ -378,6 +379,19 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                     disabled={isRunning}
                   />
                 </div>
+                <div className="flex flex-col gap-1.5">
+                  <label className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>Command approval</label>
+                  <select
+                    className="af-input"
+                    value={approvalMode}
+                    onChange={(e) => setApprovalMode(e.target.value as "manual" | "auto" | "off")}
+                    disabled={isRunning}
+                  >
+                    <option value="auto">Auto — approve low-risk commands automatically</option>
+                    <option value="manual">Manual — always ask before running commands</option>
+                    <option value="off">Off — skip all approval prompts</option>
+                  </select>
+                </div>
                 <div className="flex gap-2 items-center">
                   <button
                     className="af-btn af-btn-sm"
@@ -385,7 +399,7 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                     title={isRunning ? "Stop the agent before saving changes" : undefined}
                     onClick={() => { void handleSave(); }}
                   >
-                    {updateAgent.isPending ? "Saving…" : saved ? "Saved!" : "Save name & model"}
+                    {updateAgent.isPending ? "Saving…" : saved ? "Saved!" : "Save"}
                   </button>
                 </div>
               </div>
