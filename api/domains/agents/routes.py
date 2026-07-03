@@ -85,10 +85,9 @@ def get_agent_log_history(
     agent_id: UUID,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[AgentService, Injected(AgentService)],
-    offset: Annotated[int, Query(ge=0)] = 0,
-    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    snapshot_id: Annotated[UUID | None, Query()] = None,
 ):
-    return service.get_log_history(agent_id, context, offset=offset, limit=limit)
+    return service.get_log_history(agent_id, context, snapshot_id=snapshot_id)
 
 
 @agents_router.get("/{agent_id}/logs", response_model=AgentLogsRead)

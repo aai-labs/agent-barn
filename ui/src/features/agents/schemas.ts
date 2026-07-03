@@ -191,6 +191,7 @@ export const AgentLogHistoryReadSchema = z.object({
   lines: z.array(z.string()),
   hasMore: z.boolean(),
   sessionEndedAt: z.string().nullable().optional(),
+  nextSnapshotId: z.string().uuid().nullable().optional(),
 });
 
 

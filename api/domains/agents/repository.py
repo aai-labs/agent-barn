@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import datetime
 from uuid import UUID
 
 from injector import inject, singleton
@@ -218,6 +219,31 @@ class AgentRepository:
             query = (
                 select(AgentLogSnapshot)
                 .where(col(AgentLogSnapshot.agent_id) == agent_id)
+                .order_by(col(AgentLogSnapshot.session_ended_at).desc())
+                .limit(1)
+            )
+            return session.exec(query).first()
+
+    def get_snapshot_by_id(
+        self, agent_id: UUID, snapshot_id: UUID
+    ) -> AgentLogSnapshot | None:
+        with Session(self.delegate.engine) as session:
+            query = select(AgentLogSnapshot).where(
+                col(AgentLogSnapshot.agent_id) == agent_id,
+                col(AgentLogSnapshot.id) == snapshot_id,
+            )
+            return session.exec(query).first()
+
+    def get_previous_snapshot(
+        self, agent_id: UUID, before: datetime
+    ) -> AgentLogSnapshot | None:
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(AgentLogSnapshot)
+                .where(
+                    col(AgentLogSnapshot.agent_id) == agent_id,
+                    col(AgentLogSnapshot.session_ended_at) < before,
+                )
                 .order_by(col(AgentLogSnapshot.session_ended_at).desc())
                 .limit(1)
             )

@@ -24,14 +24,12 @@ export function LogsTab({ agent }: LogsTabProps) {
   const sentinelRef = useRef<HTMLDivElement>(null);
   const prevStatusRef = useRef(agent.status);
   const prevScrollHeightRef = useRef(0);
-  const separatorInsertedRef = useRef(false);
 
   const { hasMore, isLoading: isLoadingHistory, loadMore, reset } = useAgentLogHistory(agent.id);
 
   useEffect(() => {
     if (logs?.lines && logs.source === "live") {
       setLines(logs.lines);
-      separatorInsertedRef.current = false;
     }
   }, [logs]);
 
@@ -40,7 +38,6 @@ export function LogsTab({ agent }: LogsTabProps) {
       prevStatusRef.current = agent.status;
       reset();
       setLines([]);
-      separatorInsertedRef.current = false;
       void refetch();
     }
   }, [agent.status, refetch, reset]);
@@ -68,12 +65,10 @@ export function LogsTab({ agent }: LogsTabProps) {
     if (!result) return;
 
     setLines((prev) => {
-      if (!separatorInsertedRef.current && result.sessionEndedAt) {
-        const ts = new Date(result.sessionEndedAt).toLocaleString();
-        separatorInsertedRef.current = true;
-        return [...result.lines, "", `=== Previous session ended ${ts} ===`, "", ...prev];
-      }
-      return [...result.lines, ...prev];
+      const separator = result.sessionEndedAt
+        ? ["", `===  Session ended ${new Date(result.sessionEndedAt).toLocaleString()}   ===`, ""]
+        : [];
+      return [...result.lines, ...separator, ...prev];
     });
   }, [loadMore]);
 

@@ -1049,24 +1049,27 @@ class AgentService:
         self,
         agent_id: UUID,
         context: CurrentUserContext,
-        offset: int = 0,
-        limit: int = 50,
+        snapshot_id: UUID | None = None,
     ) -> AgentLogHistoryRead:
         org_id = self._org_id(context)
         self._get_active_or_404(agent_id, org_id)
-        snapshot = self.repository.get_latest_log_snapshot(agent_id)
+
+        if snapshot_id is not None:
+            snapshot = self.repository.get_snapshot_by_id(agent_id, snapshot_id)
+        else:
+            snapshot = self.repository.get_latest_log_snapshot(agent_id)
+
         if snapshot is None:
             return AgentLogHistoryRead(lines=[], has_more=False)
-        all_lines = snapshot.log_text.splitlines()
-        total = len(all_lines)
-        end_idx = total - offset
-        start_idx = max(end_idx - limit, 0)
-        if end_idx <= 0:
-            return AgentLogHistoryRead(lines=[], has_more=False)
+
+        older = self.repository.get_previous_snapshot(
+            agent_id, snapshot.session_ended_at
+        )
         return AgentLogHistoryRead(
-            lines=all_lines[start_idx:end_idx],
-            has_more=start_idx > 0,
+            lines=snapshot.log_text.splitlines(),
+            has_more=older is not None,
             session_ended_at=snapshot.session_ended_at,
+            next_snapshot_id=older.id if older is not None else None,
         )
 
     def _capture_logs_before_stop(self, agent: "Agent") -> None:
