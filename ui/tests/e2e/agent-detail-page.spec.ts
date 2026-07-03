@@ -692,7 +692,7 @@ test.describe("Agent Detail Page — Personality tab (approval mode)", () => {
         req.url().includes(`/api/v1/agents/${MOCK_AGENT_ID}`) &&
         req.method() === "PATCH",
     );
-    await page.getByRole("button", { name: /save name & model/i }).click();
+    await page.getByRole("button", { name: /^save$/i }).click();
     const body = (await patchPromise).postDataJSON() as Record<string, unknown>;
 
     expect(body.approval_mode).toBe("off");
