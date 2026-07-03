@@ -9,13 +9,12 @@ import { useDeleteAgent } from "../hooks/use-delete-agent";
 import { useValidateIntegration } from "../hooks/use-validate-integration";
 import { XIcon, LockIcon } from "@/components/icons";
 import { FormField, TokenInput } from "./hire-dialog-primitives";
-import { IntegrationsStep, TemplateSourceBadge, VersionSelect } from "./hire-dialog-steps";
+import { IntegrationsStep, RepoListField, TemplateSourceBadge, VersionSelect } from "./hire-dialog-steps";
 import { ModelSelect } from "./model-select";
 import {
   expandGithubContent,
   getIntegrationProvider,
   hasIncompleteIntegration,
-  parseGithubRepoUrl,
   type IntegrationDraft,
 } from "../integrations";
 import { SlackConfigPanel } from "./slack-config-panel";
@@ -179,6 +178,18 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
         );
       }
       return [...prev, { provider, content: { [key]: value } }];
+    });
+  }
+
+  function setRepinRepos(provider: string, key: string, repos: string[]) {
+    setRepinSecretDrafts((prev) => {
+      const existing = prev.find((d) => d.provider === provider);
+      if (existing) {
+        return prev.map((d) =>
+          d.provider === provider ? { ...d, content: { ...d.content, [key]: repos } } : d,
+        );
+      }
+      return [...prev, { provider, content: { [key]: repos } }];
     });
   }
 
@@ -541,8 +552,25 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                           {providerSpec.label}
                         </div>
                         {providerSpec.fields.map((field) => {
-                          const value = draft.content[field.key] ?? "";
                           const label = field.required ? field.label : `${field.label} (optional)`;
+
+                          if (field.type === "repo-list") {
+                            const repos = Array.isArray(draft.content[field.key])
+                              ? (draft.content[field.key] as string[])
+                              : [];
+                            return (
+                              <FormField key={field.key} label={label} hint={field.hint}>
+                                <RepoListField
+                                  repos={repos}
+                                  onChange={(next) => setRepinRepos(providerId, field.key, next)}
+                                  placeholder={field.placeholder}
+                                />
+                              </FormField>
+                            );
+                          }
+
+                          const rawValue = draft.content[field.key];
+                          const value = typeof rawValue === "string" ? rawValue : "";
                           if (field.type === "secret") {
                             const vkey = `${providerId}:${field.key}`;
                             return (
@@ -557,35 +585,6 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                                   placeholder={field.placeholder}
                                   disabled={isRunning}
                                 />
-                              </FormField>
-                            );
-                          }
-                          if (field.type === "repo-url") {
-                            const parsed = parseGithubRepoUrl(value);
-                            const invalid = value.length > 0 && !parsed;
-                            return (
-                              <FormField key={field.key} label={label} hint={field.hint}>
-                                <input
-                                  className={`af-input${invalid ? " border-red-400" : ""}`}
-                                  value={value}
-                                  onChange={(e) =>
-                                    setRepinSecretField(providerId, field.key, e.target.value)
-                                  }
-                                  placeholder={field.placeholder}
-                                  autoComplete="off"
-                                  disabled={isRunning}
-                                />
-                                {parsed && (
-                                  <p className="text-[0.75rem] mt-1" style={{ color: "var(--ink-3)" }}>
-                                    owner: <strong>{parsed.owner}</strong> · repo:{" "}
-                                    <strong>{parsed.repo}</strong>
-                                  </p>
-                                )}
-                                {invalid && (
-                                  <p className="text-[0.75rem] mt-1 text-red-500">
-                                    Must be a valid GitHub URL, e.g. https://github.com/owner/repo.git
-                                  </p>
-                                )}
                               </FormField>
                             );
                           }

@@ -531,6 +531,152 @@ def test_patch_agent_invalid_secret_content_returns_422():
             )
 
 
+# --- optional/multi repos for GitHub and Bitbucket secrets (AF-162) ---
+
+_GITHUB_CONTENT_NO_REPOS = {
+    "token": "ghp_token",
+    "owner": "my-org",
+    "org": "my-org",
+}
+
+_BITBUCKET_CONTENT_NO_REPOS = {
+    "workspace": "my-workspace",
+    "email": "a@b.com",
+    "api_token": "bb-tok",
+}
+
+
+def test_patch_agent_adds_github_secret_without_repos():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I patch the agent with a GitHub secret and no repos"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={
+                    "secrets": [
+                        {"provider": "github", "content": _GITHUB_CONTENT_NO_REPOS}
+                    ]
+                },
+                headers=_auth(context),
+            )
+
+        with then("it returns 200 and the agent exposes the github secret"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(_providers(response), equal_to(["github"]))
+
+
+def test_patch_agent_adds_github_secret_with_multiple_repos():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I patch the agent with a GitHub secret listing multiple repos"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={
+                    "secrets": [
+                        {
+                            "provider": "github",
+                            "content": {
+                                **_GITHUB_CONTENT_NO_REPOS,
+                                "repos": ["repo-a", "repo-b"],
+                            },
+                        }
+                    ]
+                },
+                headers=_auth(context),
+            )
+
+        with then("it returns 200 and the agent exposes the github secret"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(_providers(response), equal_to(["github"]))
+
+
+def test_patch_agent_adds_bitbucket_secret_without_repos():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I patch the agent with a Bitbucket secret and no repos"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={
+                    "secrets": [
+                        {
+                            "provider": "bitbucket",
+                            "content": _BITBUCKET_CONTENT_NO_REPOS,
+                        }
+                    ]
+                },
+                headers=_auth(context),
+            )
+
+        with then("it returns 200 and the agent exposes the bitbucket secret"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(_providers(response), equal_to(["bitbucket"]))
+
+
+def test_patch_agent_adds_bitbucket_secret_with_multiple_repos():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I patch the agent with a Bitbucket secret listing multiple repos"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={
+                    "secrets": [
+                        {
+                            "provider": "bitbucket",
+                            "content": {
+                                **_BITBUCKET_CONTENT_NO_REPOS,
+                                "repos": ["repo-a", "repo-b"],
+                            },
+                        }
+                    ]
+                },
+                headers=_auth(context),
+            )
+
+        with then("it returns 200 and the agent exposes the bitbucket secret"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(_providers(response), equal_to(["bitbucket"]))
+
+
+def test_validate_integration_with_no_repos_returns_valid():
+    """A credential with zero configured repos is a legitimate config — the validate
+    endpoint must not report it as invalid."""
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        client.patch(
+            f"{_BASE}/{context.agent.id}",
+            json={
+                "secrets": [{"provider": "github", "content": _GITHUB_CONTENT_NO_REPOS}]
+            },
+            headers=_auth(context),
+        )
+
+        user_resp = httpx.Response(
+            200,
+            json={"login": "alice"},
+            request=httpx.Request("GET", "https://api.github.com/user"),
+        )
+
+        with when("I validate the GitHub integration"):
+            with patch(
+                "api.infrastructure.integration_validators.github.httpx.get",
+                return_value=user_resp,
+            ):
+                response = client.post(
+                    f"{_BASE}/{context.agent.id}/integrations/github/validate",
+                    headers=_auth(context),
+                )
+
+        with then(
+            "it returns a valid status, not invalid, despite no repos configured"
+        ):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["validation_status"], equal_to("valid"))
+
+
 def test_start_agent_sets_status_running():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         client: TestClient = context.client

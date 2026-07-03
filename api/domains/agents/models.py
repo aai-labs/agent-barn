@@ -73,10 +73,24 @@ class SecretContent(PydanticBaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class GithubContent(SecretContent):
+class _RepoListCompat(SecretContent):
+    """Upgrades legacy singular `repo` -> `repos: list[str]` on read, so old
+    encrypted blobs (repo: "single-string") decrypt transparently."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_legacy_repo(cls, data):
+        if isinstance(data, dict) and "repo" in data and "repos" not in data:
+            data = dict(data)
+            legacy = data.pop("repo")
+            data["repos"] = [legacy] if legacy else []
+        return data
+
+
+class GithubContent(_RepoListCompat):
     token: str
     owner: str
-    repo: str
+    repos: list[str] = Field(default_factory=list)
     org: str
 
 
@@ -92,9 +106,9 @@ class ConfluenceContent(SecretContent):
     api_token: str
 
 
-class BitbucketContent(SecretContent):
+class BitbucketContent(_RepoListCompat):
     workspace: str
-    repo: str
+    repos: list[str] = Field(default_factory=list)
     email: str
     api_token: str
 

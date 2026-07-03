@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from cryptography.fernet import Fernet
 from pydantic import ValidationError
@@ -5,6 +7,8 @@ from pydantic import ValidationError
 from api.domains.agents.models import (
     PROVIDER_DISPLAY_NAMES,
     AgentCreate,
+    BitbucketContent,
+    GithubContent,
     JiraContent,
     SecretProvider,
     ZohoMailContent,
@@ -12,6 +16,7 @@ from api.domains.agents.models import (
     encrypt_content,
     validate_content,
 )
+from api.infrastructure.crypto import encrypt_token
 
 _KEY = Fernet.generate_key().decode()
 
@@ -27,6 +32,10 @@ _JIRA = {
     "email": "a@b.com",
     "api_token": "secret-token",
 }
+
+_GITHUB_BASE = {"token": "ghp_x", "owner": "acme", "org": "acme"}
+
+_BITBUCKET_BASE = {"workspace": "acme", "email": "a@b.com", "api_token": "secret-token"}
 
 
 def test_validate_content_parses_known_provider():
@@ -95,3 +104,86 @@ def test_agent_create_rejects_duplicate_providers():
 def test_agent_create_rejects_invalid_secret_content():
     with pytest.raises(ValidationError):
         _create_with_secrets([{"provider": "jira", "content": {"site_url": "x"}}])
+
+
+# --- optional/multi repos (AF-162) ---
+
+
+def test_github_content_defaults_repos_to_empty_list():
+    content = validate_content(SecretProvider.GITHUB, _GITHUB_BASE)
+    assert isinstance(content, GithubContent)
+    assert content.repos == []
+
+
+def test_github_content_accepts_multiple_repos():
+    content = validate_content(
+        SecretProvider.GITHUB, {**_GITHUB_BASE, "repos": ["repo-a", "repo-b"]}
+    )
+    assert isinstance(content, GithubContent)
+    assert content.repos == ["repo-a", "repo-b"]
+
+
+def test_github_content_legacy_repo_field_upgrades_to_repos_list():
+    content = validate_content(
+        SecretProvider.GITHUB, {**_GITHUB_BASE, "repo": "legacy-repo"}
+    )
+    assert isinstance(content, GithubContent)
+    assert content.repos == ["legacy-repo"]
+
+
+def test_github_content_legacy_empty_repo_upgrades_to_empty_list():
+    content = validate_content(SecretProvider.GITHUB, {**_GITHUB_BASE, "repo": ""})
+    assert isinstance(content, GithubContent)
+    assert content.repos == []
+
+
+def test_bitbucket_content_defaults_repos_to_empty_list():
+    content = validate_content(SecretProvider.BITBUCKET, _BITBUCKET_BASE)
+    assert isinstance(content, BitbucketContent)
+    assert content.repos == []
+
+
+def test_bitbucket_content_accepts_multiple_repos():
+    content = validate_content(
+        SecretProvider.BITBUCKET, {**_BITBUCKET_BASE, "repos": ["repo-a", "repo-b"]}
+    )
+    assert isinstance(content, BitbucketContent)
+    assert content.repos == ["repo-a", "repo-b"]
+
+
+def test_bitbucket_content_legacy_repo_field_upgrades_to_repos_list():
+    content = validate_content(
+        SecretProvider.BITBUCKET, {**_BITBUCKET_BASE, "repo": "legacy-repo"}
+    )
+    assert isinstance(content, BitbucketContent)
+    assert content.repos == ["legacy-repo"]
+
+
+def test_decrypt_content_upgrades_legacy_github_blob():
+    """Old encrypted blobs shaped {"repo": "x"} must decrypt transparently into repos: [x]."""
+    legacy_blob = encrypt_token(
+        json.dumps(
+            {"token": "t", "owner": "acme", "repo": "legacy-repo", "org": "acme"}
+        ),
+        _KEY,
+    )
+    content = decrypt_content(SecretProvider.GITHUB, legacy_blob, _KEY)
+    assert isinstance(content, GithubContent)
+    assert content.repos == ["legacy-repo"]
+
+
+def test_decrypt_content_upgrades_legacy_bitbucket_blob():
+    legacy_blob = encrypt_token(
+        json.dumps(
+            {
+                "workspace": "acme",
+                "repo": "legacy-repo",
+                "email": "a@b.com",
+                "api_token": "secret-token",
+            }
+        ),
+        _KEY,
+    )
+    content = decrypt_content(SecretProvider.BITBUCKET, legacy_blob, _KEY)
+    assert isinstance(content, BitbucketContent)
+    assert content.repos == ["legacy-repo"]

@@ -61,19 +61,40 @@ def _q(value: str) -> str:
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
+def _profile_repo_pairs(
+    base_name: str, repos: list[str]
+) -> list[tuple[str, str | None]]:
+    """Map a list of repo names to (profile_name, repo) pairs.
+
+    [] -> [(base_name, None)] (profile with no `repo =` line — aai-cli falls back to
+    a `--repo` CLI flag). [r1, r2, ...] -> [(base_name, r1), (f"{base_name}-2", r2), ...].
+    """
+    if not repos:
+        return [(base_name, None)]
+    return [
+        (base_name if i == 0 else f"{base_name}-{i + 1}", repo)
+        for i, repo in enumerate(repos)
+    ]
+
+
 # --- per-provider profile blocks (rendered from the decrypted content model) ---
 
 
 def _github_block(c: GithubContent) -> str:
-    return (
-        "[profiles.github-work]\n"
-        'provider = "github"\n'
-        'auth_type = "bearer_token"\n'
-        'token_secret = "github.token"\n'
-        f"owner = {_q(c.owner)}\n"
-        f"repo = {_q(c.repo)}\n"
-        f"org = {_q(c.org)}\n"
-    )
+    blocks = []
+    for name, repo in _profile_repo_pairs("github-work", c.repos):
+        lines = [
+            f"[profiles.{name}]\n",
+            'provider = "github"\n',
+            'auth_type = "bearer_token"\n',
+            'token_secret = "github.token"\n',
+            f"owner = {_q(c.owner)}\n",
+        ]
+        if repo is not None:
+            lines.append(f"repo = {_q(repo)}\n")
+        lines.append(f"org = {_q(c.org)}\n")
+        blocks.append("".join(lines))
+    return "\n".join(blocks)
 
 
 def _jira_block(c: JiraContent) -> str:
@@ -97,14 +118,19 @@ def _confluence_block(c: ConfluenceContent) -> str:
 
 
 def _bitbucket_block(c: BitbucketContent) -> str:
-    return (
-        "[profiles.bitbucket-work]\n"
-        'auth_type = "basic_api_token"\n'
-        f"workspace = {_q(c.workspace)}\n"
-        f"repo = {_q(c.repo)}\n"
-        f"email = {_q(c.email)}\n"
-        'api_token_secret = "bitbucket.api_token"\n'
-    )
+    blocks = []
+    for name, repo in _profile_repo_pairs("bitbucket-work", c.repos):
+        lines = [
+            f"[profiles.{name}]\n",
+            'auth_type = "basic_api_token"\n',
+            f"workspace = {_q(c.workspace)}\n",
+        ]
+        if repo is not None:
+            lines.append(f"repo = {_q(repo)}\n")
+        lines.append(f"email = {_q(c.email)}\n")
+        lines.append('api_token_secret = "bitbucket.api_token"\n')
+        blocks.append("".join(lines))
+    return "\n".join(blocks)
 
 
 def _gmail_block(c: GmailContent) -> str:
@@ -187,9 +213,17 @@ def build_tool_context_md(decrypted: Mapping[SecretProvider, SecretContent]) -> 
         if content is None:
             continue
         if isinstance(content, GithubContent):
-            lines.append(
-                f"- **GitHub** (`github-work`): {content.owner}/{content.repo}"
-            )
+            if content.repos:
+                pairs = "; ".join(
+                    f"`{name}`: {content.owner}/{repo}"
+                    for name, repo in _profile_repo_pairs("github-work", content.repos)
+                )
+                lines.append(f"- **GitHub**: {pairs}")
+            else:
+                lines.append(
+                    f"- **GitHub** (`github-work`): owner/org `{content.owner}` — "
+                    "no repository configured; pass --repo explicitly"
+                )
         elif isinstance(content, JiraContent):
             lines.append(
                 f"- **Jira** (`jira-work`): {content.site_url} ({content.email})"
@@ -199,9 +233,19 @@ def build_tool_context_md(decrypted: Mapping[SecretProvider, SecretContent]) -> 
                 f"- **Confluence** (`confluence-work`): {content.site_url} ({content.email})"
             )
         elif isinstance(content, BitbucketContent):
-            lines.append(
-                f"- **Bitbucket** (`bitbucket-work`): {content.workspace}/{content.repo} ({content.email})"
-            )
+            if content.repos:
+                pairs = "; ".join(
+                    f"`{name}`: {content.workspace}/{repo}"
+                    for name, repo in _profile_repo_pairs(
+                        "bitbucket-work", content.repos
+                    )
+                )
+                lines.append(f"- **Bitbucket**: {pairs} ({content.email})")
+            else:
+                lines.append(
+                    f"- **Bitbucket** (`bitbucket-work`): workspace `{content.workspace}` "
+                    f"({content.email}) — no repository configured; pass --repo explicitly"
+                )
     return "\n".join(lines) + "\n"
 
 
