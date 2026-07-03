@@ -24,6 +24,8 @@ export function LogsTab({ agent }: LogsTabProps) {
   const sentinelRef = useRef<HTMLDivElement>(null);
   const prevStatusRef = useRef(agent.status);
   const prevScrollHeightRef = useRef(0);
+  const isRunningRef = useRef(isRunning);
+  isRunningRef.current = isRunning;
 
   const { hasMore, isLoading: isLoadingHistory, loadMore, reset } = useAgentLogHistory(agent.id);
 
@@ -62,7 +64,7 @@ export function LogsTab({ agent }: LogsTabProps) {
     prevScrollHeightRef.current = scrollRef.current.scrollHeight;
 
     const result = await loadMore();
-    if (!result) return;
+    if (!result || !isRunningRef.current) return;
 
     setLines((prev) => {
       const separator = result.sessionEndedAt

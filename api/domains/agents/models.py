@@ -518,5 +518,3 @@ class AgentLogHistoryRead(PydanticBaseModel):
     has_more: bool
     session_ended_at: datetime | None = None
     next_snapshot_id: UUID | None = None
-
-

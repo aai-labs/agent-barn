@@ -1,7 +1,7 @@
 import datetime as dt
 from uuid import UUID
 
-from hamcrest import assert_that, equal_to, has_length, none, not_none
+from hamcrest import assert_that, equal_to, none, not_none
 from sqlmodel import Session
 
 from api.domains.agents.models import AgentLogSnapshot

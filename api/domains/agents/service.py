@@ -1080,7 +1080,9 @@ class AgentService:
                 tail_lines=50_000,
             )
             if not log_text:
-                logger.info("No logs to capture for agent %s (empty response)", agent.id)
+                logger.info(
+                    "No logs to capture for agent %s (empty response)", agent.id
+                )
                 return
             encoded = log_text.encode("utf-8")
             if len(encoded) > _MAX_LOG_SNAPSHOT_BYTES:

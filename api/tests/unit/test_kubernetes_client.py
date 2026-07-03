@@ -21,7 +21,7 @@ from api.tests.core.givenpy import then, when
 
 def _running_pod(name="agent-pod-abc"):
     return SimpleNamespace(
-        metadata=SimpleNamespace(name=name),
+        metadata=SimpleNamespace(name=name, deletion_timestamp=None),
         status=SimpleNamespace(phase="Running"),
     )
 
