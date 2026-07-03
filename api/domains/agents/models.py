@@ -295,11 +295,11 @@ class AgentLogSnapshot(BaseModel, table=True):
     )
     session_started_at: datetime = SqlField(
         nullable=False,
-        sa_type=sa.DateTime(timezone=True),
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
     )
     session_ended_at: datetime = SqlField(
         nullable=False,
-        sa_type=sa.DateTime(timezone=True),
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
     )
     log_text: str = SqlField(sa_column=Column(sa.Text(), nullable=False))
     byte_size: int = SqlField(nullable=False)

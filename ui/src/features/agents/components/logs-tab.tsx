@@ -22,27 +22,30 @@ export function LogsTab({ agent }: LogsTabProps) {
   const [isAtBottom, setIsAtBottom] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
-  const prevStatusRef = useRef(agent.status);
   const prevScrollHeightRef = useRef(0);
   const isRunningRef = useRef(isRunning);
-  isRunningRef.current = isRunning;
+  const [prevStatus, setPrevStatus] = useState(agent.status);
+  const [prevLogs, setPrevLogs] = useState(logs);
+
+  useEffect(() => {
+    isRunningRef.current = isRunning;
+  }, [isRunning]);
 
   const { hasMore, isLoading: isLoadingHistory, loadMore, reset } = useAgentLogHistory(agent.id);
 
-  useEffect(() => {
+  if (logs !== prevLogs) {
+    setPrevLogs(logs);
     if (logs?.lines && logs.source === "live") {
       setLines(logs.lines);
     }
-  }, [logs]);
+  }
 
-  useEffect(() => {
-    if (prevStatusRef.current !== agent.status) {
-      prevStatusRef.current = agent.status;
-      reset();
-      setLines([]);
-      void refetch();
-    }
-  }, [agent.status, refetch, reset]);
+  if (prevStatus !== agent.status) {
+    setPrevStatus(agent.status);
+    reset();
+    setLines([]);
+    void refetch();
+  }
 
   const handleNewLine = useCallback((line: string) => {
     setLines((prev) => {

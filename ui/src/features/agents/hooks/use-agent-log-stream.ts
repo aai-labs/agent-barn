@@ -26,6 +26,14 @@ export function useAgentLogStream({
   onLineRef.current = onLine;
   const retriesRef = useRef(0);
   const mountedRef = useRef(true);
+  const [prevEnabled, setPrevEnabled] = useState(enabled);
+
+  if (enabled !== prevEnabled) {
+    setPrevEnabled(enabled);
+    if (!enabled) {
+      setStatus("idle");
+    }
+  }
 
   const disconnect = useCallback(() => {
     abortRef.current?.abort();
@@ -37,7 +45,6 @@ export function useAgentLogStream({
 
     if (!enabled) {
       disconnect();
-      setStatus("idle");
       retriesRef.current = 0;
       return;
     }
