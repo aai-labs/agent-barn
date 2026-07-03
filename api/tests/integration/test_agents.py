@@ -210,6 +210,34 @@ def test_create_agent_does_not_create_template_rows():
             assert_that(latest.version, equal_to(1))
 
 
+def test_create_agent_default_approval_mode_is_auto():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I create an agent without specifying approval_mode"):
+            response = client.post(_BASE, json=_VALID_CREATE, headers=_auth(context))
+
+        with then("the response has approval_mode set to auto"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(response.json()["approval_mode"], equal_to("auto"))
+
+
+def test_create_agent_with_approval_mode_off():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I create an agent with approval_mode off"):
+            response = client.post(
+                _BASE,
+                json={**_VALID_CREATE, "approval_mode": "off"},
+                headers=_auth(context),
+            )
+
+        with then("the response has approval_mode set to off"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(response.json()["approval_mode"], equal_to("off"))
+
+
 def test_list_agents_returns_active_only():
     with given(
         [
@@ -392,6 +420,23 @@ def test_patch_agent_no_auth_returns_401():
 
         with then("it returns 401"):
             assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
+
+
+def test_patch_agent_approval_mode():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        agent_id = str(context.agent.id)
+
+        with when("I update the agent's approval_mode to manual"):
+            response = client.patch(
+                f"{_BASE}/{agent_id}",
+                json={"approval_mode": "manual"},
+                headers=_auth(context),
+            )
+
+        with then("the response reflects the new approval_mode"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["approval_mode"], equal_to("manual"))
 
 
 _JIRA_CONTENT = {

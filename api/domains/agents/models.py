@@ -19,6 +19,12 @@ class AgentStatus(str, enum.Enum):
     ERROR = "ERROR"
 
 
+class CommandApprovalMode(str, enum.Enum):
+    MANUAL = "manual"
+    AUTO = "auto"
+    OFF = "off"
+
+
 class AgentPlatform(str, enum.Enum):
     SLACK = "slack"
     TEAMS = "teams"
@@ -202,6 +208,10 @@ class Agent(BaseModel, table=True):
         nullable=True,
         sa_type=sa.Text,
     )
+    approval_mode: CommandApprovalMode = SqlField(
+        default=CommandApprovalMode.AUTO,
+        sa_column=Column(sa.String(10), nullable=False, server_default="auto"),
+    )
 
 
 class AgentSlackConfig(BaseModel, table=True):
@@ -325,6 +335,7 @@ class AgentCreate(PydanticBaseModel):
     secrets: list[AgentSecretCreate] = Field(default_factory=list)
     # Custom org skills to assign on creation (optional)
     skill_ids: list[UUID] = Field(default_factory=list)
+    approval_mode: CommandApprovalMode = CommandApprovalMode.AUTO
 
     @model_validator(mode="after")
     def validate_platform_credentials(self) -> "AgentCreate":
@@ -380,6 +391,7 @@ class AgentUpdate(PydanticBaseModel):
     # Providers not mentioned in either list are left untouched.
     secrets: list[AgentSecretCreate] | None = None
     removed_secret_providers: list[SecretProvider] | None = None
+    approval_mode: CommandApprovalMode | None = None
 
     @model_validator(mode="after")
     def validate_skill_operations(self) -> "AgentUpdate":
@@ -462,6 +474,7 @@ class AgentRead(PydanticBaseModel):
     teams_config: AgentTeamsConfigRead | None = None
     secrets: list[AgentSecretRead] = Field(default_factory=list)
     skills: list[AgentAssignedSkillRead] = Field(default_factory=list)
+    approval_mode: CommandApprovalMode
     webhook_url: str | None = None
     created_at: datetime
     updated_at: datetime
