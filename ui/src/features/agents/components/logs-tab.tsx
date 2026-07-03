@@ -29,7 +29,7 @@ export function LogsTab({ agent }: LogsTabProps) {
   const { hasMore, isLoading: isLoadingHistory, loadMore, reset } = useAgentLogHistory(agent.id);
 
   useEffect(() => {
-    if (logs?.lines) {
+    if (logs?.lines && logs.source === "live") {
       setLines(logs.lines);
       separatorInsertedRef.current = false;
     }
@@ -146,9 +146,7 @@ export function LogsTab({ agent }: LogsTabProps) {
         style={{ background: "var(--bg-soft)", borderBottom: "1px solid var(--line)" }}
       >
         <span className="text-[0.8125rem] font-medium" style={{ color: "var(--ink-2)" }}>
-          {logs?.source === "snapshot" && logs.sessionEndedAt
-            ? `Session ended ${new Date(logs.sessionEndedAt).toLocaleString()}`
-            : "Live logs"}
+          {isRunning ? "Live logs" : "Logs"}
         </span>
         {isRunning && streamStatus === "streaming" && (
           <span className="flex items-center gap-1.5 text-[0.75rem]" style={{ color: "var(--ink-3)" }}>

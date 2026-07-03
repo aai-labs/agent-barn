@@ -262,7 +262,10 @@ class KubernetesClient:
             namespace, label_selector=f"app={deployment_name}"
         )
         for pod in pods.items:
-            if pod.status.phase == "Running":
+            if (
+                pod.status.phase == "Running"
+                and pod.metadata.deletion_timestamp is None
+            ):
                 return pod.metadata.name
         return None
 
