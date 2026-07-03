@@ -295,7 +295,7 @@ test.describe("Agent Detail Page — Template tab (re-pin)", () => {
     await page.getByRole("button", { name: /Scrum Master/ }).click();
 
     await page.getByPlaceholder(/github_pat_/).fill("github_pat_test_token");
-    await page.getByPlaceholder(/https:\/\/github\.com\/owner\/repo\.git/).fill("https://github.com/owner/repo.git");
+    await page.getByPlaceholder("owner-or-org").fill("acme");
 
     await expect(page.getByRole("button", { name: "Apply template" })).toBeEnabled();
   });

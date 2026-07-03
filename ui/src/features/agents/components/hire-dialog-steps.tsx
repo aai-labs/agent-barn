@@ -18,7 +18,6 @@ import { SkillSourceBadge } from "@/features/skills/components/skill-drawer";
 import {
   INTEGRATION_PROVIDERS,
   getIntegrationProvider,
-  parseGithubRepoUrl,
   type IntegrationDraft,
 } from "../integrations";
 import type { AgentAssignedSkill, AgentTemplateRead } from "../schemas";
@@ -1205,6 +1204,77 @@ export function DetailsStep({
   );
 }
 
+// Free-text repeatable list of repo names — Enter/Add appends a chip, X removes one.
+export function RepoListField({
+  repos,
+  onChange,
+  placeholder,
+}: {
+  repos: string[];
+  onChange: (repos: string[]) => void;
+  placeholder?: string;
+}) {
+  const [draft, setDraft] = useState("");
+
+  function addRepo() {
+    const trimmed = draft.trim();
+    if (trimmed && !repos.includes(trimmed)) {
+      onChange([...repos, trimmed]);
+    }
+    setDraft("");
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      {repos.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {repos.map((repo) => (
+            <span
+              key={repo}
+              className="inline-flex items-center gap-1 text-[0.781rem] px-2.5 py-1 rounded-full"
+              style={{ background: "var(--bg-elev)", border: "1px solid var(--line)", color: "var(--ink-2)" }}
+            >
+              {repo}
+              <button
+                type="button"
+                className="ml-0.5 rounded-full flex items-center"
+                style={{ color: "var(--ink-4)" }}
+                onClick={() => onChange(repos.filter((r) => r !== repo))}
+                aria-label={`Remove ${repo}`}
+              >
+                <XIcon style={{ width: 12, height: 12 }} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      <div className="flex items-stretch gap-2">
+        <input
+          className="af-input flex-1"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              addRepo();
+            }
+          }}
+          placeholder={placeholder}
+          autoComplete="off"
+        />
+        <button
+          type="button"
+          className="af-btn flex items-center gap-1"
+          onClick={addRepo}
+          disabled={!draft.trim()}
+        >
+          <PlusIcon size={14} /> Add
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function SkillsStep({
   selectedSkillIds,
   skillCredentials,
@@ -1281,6 +1351,16 @@ export function SkillsStep({
       skillCredentials.map((c) =>
         c.provider === providerId
           ? { ...c, content: { ...c.content, [key]: value } }
+          : c,
+      ),
+    );
+  }
+
+  function setRepos(providerId: string, key: string, repos: string[]) {
+    onSkillCredentialsChange(
+      skillCredentials.map((c) =>
+        c.provider === providerId
+          ? { ...c, content: { ...c.content, [key]: repos } }
           : c,
       ),
     );
@@ -1412,8 +1492,23 @@ export function SkillsStep({
                   </p>
                 )}
                 {providerSpec.fields.map((field) => {
-                  const value = draft.content[field.key] ?? "";
                   const label = field.required ? field.label : `${field.label} (optional)`;
+                  if (field.type === "repo-list") {
+                    const repos = Array.isArray(draft.content[field.key])
+                      ? (draft.content[field.key] as string[])
+                      : [];
+                    return (
+                      <FormField key={field.key} label={label} hint={field.hint}>
+                        <RepoListField
+                          repos={repos}
+                          onChange={(next) => setRepos(providerId, field.key, next)}
+                          placeholder={field.placeholder}
+                        />
+                      </FormField>
+                    );
+                  }
+                  const rawValue = draft.content[field.key];
+                  const value = typeof rawValue === "string" ? rawValue : "";
                   if (field.type === "secret") {
                     const vkey = `${providerId}:${field.key}`;
                     return (
@@ -1425,32 +1520,6 @@ export function SkillsStep({
                           onToggle={() => setVisible((s) => ({ ...s, [vkey]: !s[vkey] }))}
                           placeholder={field.placeholder}
                         />
-                      </FormField>
-                    );
-                  }
-                  if (field.type === "repo-url") {
-                    const parsed = parseGithubRepoUrl(value);
-                    const invalid = value.length > 0 && !parsed;
-                    return (
-                      <FormField key={field.key} label={label} hint={field.hint}>
-                        <input
-                          className={`af-input${invalid ? " border-red-400" : ""}`}
-                          value={value}
-                          onChange={(e) => setField(providerId, field.key, e.target.value)}
-                          placeholder={field.placeholder}
-                          autoComplete="off"
-                        />
-                        {parsed && (
-                          <p className="text-[0.75rem] mt-1" style={{ color: "var(--ink-3)" }}>
-                            owner: <strong>{parsed.owner}</strong> · repo:{" "}
-                            <strong>{parsed.repo}</strong>
-                          </p>
-                        )}
-                        {invalid && (
-                          <p className="text-[0.75rem] mt-1 text-red-500">
-                            Must be a valid GitHub URL, e.g. https://github.com/owner/repo.git
-                          </p>
-                        )}
                       </FormField>
                     );
                   }
@@ -1502,6 +1571,15 @@ export function IntegrationsStep({
       ),
     );
   }
+  function setRepos(providerId: string, key: string, repos: string[]) {
+    onChange(
+      integrations.map((i) =>
+        i.provider === providerId
+          ? { ...i, content: { ...i.content, [key]: repos } }
+          : i,
+      ),
+    );
+  }
 
   return (
     <div className="flex flex-col gap-5">
@@ -1540,8 +1618,23 @@ export function IntegrationsStep({
             )}
 
             {provider.fields.map((field) => {
-              const value = draft.content[field.key] ?? "";
               const label = field.required ? field.label : `${field.label} (optional)`;
+              if (field.type === "repo-list") {
+                const repos = Array.isArray(draft.content[field.key])
+                  ? (draft.content[field.key] as string[])
+                  : [];
+                return (
+                  <FormField key={field.key} label={label} hint={field.hint}>
+                    <RepoListField
+                      repos={repos}
+                      onChange={(next) => setRepos(draft.provider, field.key, next)}
+                      placeholder={field.placeholder}
+                    />
+                  </FormField>
+                );
+              }
+              const rawValue = draft.content[field.key];
+              const value = typeof rawValue === "string" ? rawValue : "";
               if (field.type === "secret") {
                 const vkey = `${draft.provider}:${field.key}`;
                 return (
@@ -1553,31 +1646,6 @@ export function IntegrationsStep({
                       onToggle={() => setVisible((s) => ({ ...s, [vkey]: !s[vkey] }))}
                       placeholder={field.placeholder}
                     />
-                  </FormField>
-                );
-              }
-              if (field.type === "repo-url") {
-                const parsed = parseGithubRepoUrl(value);
-                const invalid = value.length > 0 && !parsed;
-                return (
-                  <FormField key={field.key} label={label} hint={field.hint}>
-                    <input
-                      className={`af-input${invalid ? " border-red-400" : ""}`}
-                      value={value}
-                      onChange={(e) => setField(draft.provider, field.key, e.target.value)}
-                      placeholder={field.placeholder}
-                      autoComplete="off"
-                    />
-                    {parsed && (
-                      <p className="text-[0.75rem] mt-1" style={{ color: "var(--ink-3)" }}>
-                        owner: <strong>{parsed.owner}</strong> · repo: <strong>{parsed.repo}</strong>
-                      </p>
-                    )}
-                    {invalid && (
-                      <p className="text-[0.75rem] mt-1 text-red-500">
-                        Must be a valid GitHub URL, e.g. https://github.com/owner/repo.git
-                      </p>
-                    )}
                   </FormField>
                 );
               }

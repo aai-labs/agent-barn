@@ -56,24 +56,34 @@ def validate_github(content: GithubContent) -> IntegrationValidationResult:
 def _check_fine_grained_repo_access(
     content: GithubContent, headers: dict[str, str]
 ) -> list[str]:
-    if not content.owner or not content.repo:
+    if not content.owner or not content.repos:
         return []
+    missing: list[str] = []
+    for repo in content.repos:
+        missing.extend(_check_single_repo_access(content.owner, repo, headers))
+    return missing
+
+
+def _check_single_repo_access(
+    owner: str, repo: str, headers: dict[str, str]
+) -> list[str]:
     missing: list[str] = []
 
     # Check repository contents access.
     try:
         resp = httpx.get(
-            f"https://api.github.com/repos/{content.owner}/{content.repo}",
+            f"https://api.github.com/repos/{owner}/{repo}",
             headers=headers,
             timeout=_TIMEOUT,
         )
         if resp.status_code == 403:
             accepted = resp.headers.get("X-Accepted-GitHub-Permissions", "")
             detail = "contents=read" if not accepted else accepted
-            missing.append(f"Repository access — needs: {detail}")
+            missing.append(f"{owner}/{repo}: Repository access — needs: {detail}")
         elif resp.status_code == 404:
             missing.append(
-                "Repository contents read access (or repository does not exist)"
+                f"{owner}/{repo}: Repository contents read access "
+                "(or repository does not exist)"
             )
     except Exception:
         pass
@@ -81,13 +91,14 @@ def _check_fine_grained_repo_access(
     # Check pull request read access.
     try:
         pr_resp = httpx.get(
-            f"https://api.github.com/repos/{content.owner}/{content.repo}/pulls",
+            f"https://api.github.com/repos/{owner}/{repo}/pulls",
             headers=headers,
             timeout=_TIMEOUT,
         )
         if pr_resp.status_code == 403:
             missing.append(
-                "Pull requests: Read + Write — needed to list PRs and post review comments"
+                f"{owner}/{repo}: Pull requests: Read + Write — needed to list PRs "
+                "and post review comments"
             )
     except Exception:
         pass

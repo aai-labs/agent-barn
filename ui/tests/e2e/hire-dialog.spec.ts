@@ -366,7 +366,7 @@ test.describe("Hire Dialog — Skills step", () => {
 
     await page.getByText(mockPlatformSkill.name, { exact: true }).click();
 
-    // GitHub requires token + repo URL; both empty → button disabled
+    // GitHub requires token + owner; both empty → button disabled
     await expect(page.getByRole("button", { name: /hire aria/i })).toBeDisabled();
   });
 
@@ -384,6 +384,68 @@ test.describe("Hire Dialog — Skills step", () => {
 
     await page.getByText(mockPlatformSkill.name, { exact: true }).click();
     await expect(page.getByText("Required credentials", { exact: true })).not.toBeVisible();
+  });
+
+  test("hire button enables with token + owner filled and no repositories added", async ({ page }) => {
+    await navigateToSkillsStep(page);
+
+    await page.getByText(mockPlatformSkill.name, { exact: true }).click();
+    await page.getByPlaceholder(/github_pat_/).fill("ghp_test_token");
+    await page.getByPlaceholder("owner-or-org").fill("acme");
+
+    await expect(page.getByRole("button", { name: /hire aria/i })).toBeEnabled();
+  });
+
+  test("repositories field adds and removes chips without affecting required-field gating", async ({ page }) => {
+    await navigateToSkillsStep(page);
+
+    await page.getByText(mockPlatformSkill.name, { exact: true }).click();
+    await page.getByPlaceholder(/github_pat_/).fill("ghp_test_token");
+    await page.getByPlaceholder("owner-or-org").fill("acme");
+
+    const repoInput = page.getByPlaceholder("repository name");
+    await repoInput.fill("repo-a");
+    await repoInput.press("Enter");
+    await repoInput.fill("repo-b");
+    await page.getByRole("button", { name: "Add" }).click();
+
+    await expect(page.getByText("repo-a", { exact: true })).toBeVisible();
+    await expect(page.getByText("repo-b", { exact: true })).toBeVisible();
+
+    await page.getByRole("button", { name: "Remove repo-a" }).click();
+    await expect(page.getByText("repo-a", { exact: true })).not.toBeVisible();
+    await expect(page.getByText("repo-b", { exact: true })).toBeVisible();
+
+    await expect(page.getByRole("button", { name: /hire aria/i })).toBeEnabled();
+  });
+
+  test("submits multiple repository names in the github secret content", async ({ page }) => {
+    await dataSupportPage.agents.interceptCreateAgentRequest({ body: { ...mockAgent, status: "STOPPED" } });
+
+    await navigateToSkillsStep(page);
+    await page.getByText(mockPlatformSkill.name, { exact: true }).click();
+    await page.getByPlaceholder(/github_pat_/).fill("ghp_test_token");
+    await page.getByPlaceholder("owner-or-org").fill("acme");
+
+    const repoInput = page.getByPlaceholder("repository name");
+    await repoInput.fill("repo-a");
+    await repoInput.press("Enter");
+    await repoInput.fill("repo-b");
+    await repoInput.press("Enter");
+
+    const createPromise = page.waitForRequest(
+      (req) => req.url().includes("/api/v1/agents") && req.method() === "POST",
+    );
+    await page.getByRole("button", { name: "Hire Aria" }).click();
+    const createRequest = await createPromise;
+    const body = createRequest.postDataJSON() as {
+      secrets: Array<{ provider: string; content: Record<string, unknown> }>;
+    };
+
+    const githubSecret = body.secrets.find((s) => s.provider === "github");
+    expect(githubSecret?.content.owner).toBe("acme");
+    expect(githubSecret?.content.org).toBe("acme");
+    expect(githubSecret?.content.repos).toEqual(["repo-a", "repo-b"]);
   });
 
   test("selecting a jira skill reveals jira credential fields", async ({ page }) => {
