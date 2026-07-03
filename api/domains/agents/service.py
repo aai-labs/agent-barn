@@ -356,6 +356,7 @@ class AgentService:
             template_slug=agent.template_slug,
             template_version=agent.template_version,
             model=agent.model,
+            approval_mode=agent.approval_mode,
             slack_config=slack_config_read,
             teams_config=teams_config_read,
             secrets=secrets_read,
@@ -449,6 +450,7 @@ class AgentService:
             agent_type=data.agent_type,
             template_slug=template.template_slug,
             template_version=template.version,
+            approval_mode=data.approval_mode,
         )
 
         if self.config.litellm_base_url and self.config.litellm_secret_name:
@@ -671,6 +673,9 @@ class AgentService:
             self._ensure_model_allowed(updated["model"])
             agent.model = updated["model"]
 
+        if "approval_mode" in updated:
+            agent.approval_mode = updated["approval_mode"]
+
         # Validate skill changes against the effective template's required skills
         if effective_template is None:
             effective_template = (
@@ -878,6 +883,7 @@ class AgentService:
                     self.config.agent_litellm_base_url,
                     dm_policy=str(slack_config.dm_policy),
                     group_policy=str(slack_config.group_policy),
+                    approval_mode=str(agent.approval_mode),
                 )
                 secret = build_secret_hermes_slack(
                     agent_id=agent.id,
@@ -908,6 +914,7 @@ class AgentService:
                     slack_dm_user_ids=slack_config.dm_user_ids,
                     slack_group_policy=str(slack_config.group_policy),
                     slack_dm_policy=str(slack_config.dm_policy),
+                    approval_mode=str(agent.approval_mode),
                 )
                 secret = build_secret_slack(
                     agent_id=agent.id,
@@ -942,6 +949,7 @@ class AgentService:
             overlay = build_openclaw_config_overlay_teams(
                 effective_model,
                 self.config.agent_litellm_base_url,
+                approval_mode=str(agent.approval_mode),
             )
             secret = build_secret_teams(
                 agent_id=agent.id,

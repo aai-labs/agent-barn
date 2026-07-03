@@ -653,3 +653,48 @@ test.describe("Agent Detail Page — Keys tab", () => {
     await expect(agentDetailPage.saveIntegrationsButton()).toBeDisabled();
   });
 });
+
+test.describe("Agent Detail Page — Personality tab (approval mode)", () => {
+  test.describe.configure({ mode: "serial" });
+  let agentDetailPage: AgentDetailPage;
+  let dataSupportPage: DataSupport;
+
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  test.beforeEach(async ({ page }) => {
+    agentDetailPage = new AgentDetailPage(page);
+    dataSupportPage = new DataSupport(page);
+
+    await dataSupportPage.auth.interceptRefreshRequest();
+    await dataSupportPage.users.interceptGetUserContextRequest();
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, status: "STOPPED" },
+    });
+    await dataSupportPage.agents.interceptGetAgentTemplateRequest();
+    await dataSupportPage.agents.interceptGetTemplatesRequest();
+    await dataSupportPage.agents.interceptGetTemplateVersionsRequest();
+    await dataSupportPage.agents.interceptUpdateAgentRequest();
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.configureButton().click();
+  });
+
+  test("shows command approval select defaulting to auto from agent data", async ({ page }) => {
+    await expect(page.getByText("Command approval")).toBeVisible();
+    await expect(page.locator('label:text-is("Command approval") + select')).toHaveValue("auto");
+  });
+
+  test("saving name & model sends approval_mode in the PATCH request", async ({ page }) => {
+    await page.locator('label:text-is("Command approval") + select').selectOption("off");
+
+    const patchPromise = page.waitForRequest(
+      (req) =>
+        req.url().includes(`/api/v1/agents/${MOCK_AGENT_ID}`) &&
+        req.method() === "PATCH",
+    );
+    await page.getByRole("button", { name: /^save$/i }).click();
+    const body = (await patchPromise).postDataJSON() as Record<string, unknown>;
+
+    expect(body.approval_mode).toBe("off");
+  });
+});
