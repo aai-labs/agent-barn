@@ -61,19 +61,21 @@ def test_encrypt_decrypt_round_trip():
     assert decrypt_content(SecretProvider.JIRA, blob, _KEY) == original
 
 
-def test_zoho_mail_infra_defaults_are_filled():
+def test_zoho_mail_content_validates_oauth_fields():
     content = validate_content(
         SecretProvider.ZOHO_MAIL,
         {
-            "username": "u",
             "email": "u@z.com",
-            "from_address": "u@z.com",
-            "app_password": "p",
+            "account_id": "56218000000008002",
+            "client_id": "1000.CLIENTID",
+            "client_secret": "z_secret",
+            "refresh_token": "z_refresh",
         },
     )
     assert isinstance(content, ZohoMailContent)
-    assert content.smtp_host == "smtp.zoho.com"
-    assert content.smtp_port == 465
+    assert content.email == "u@z.com"
+    assert content.account_id == "56218000000008002"
+    assert content.client_id == "1000.CLIENTID"
 
 
 def test_display_names_cover_every_provider():
