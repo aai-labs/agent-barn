@@ -74,10 +74,11 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
   {
     id: "gmail",
     label: "Gmail",
-    scopeNote: "OAuth2 access token with Gmail API scopes (gmail.readonly, gmail.send or gmail.modify as needed)",
+    scopeNote: "OAuth 2.0 client credentials with Gmail API scope (gmail.readonly)",
     fields: [
-      { key: "accessToken", label: "Access token", type: "secret", required: true },
-      { key: "userId", label: "User ID", type: "text", required: true, placeholder: "me or user@example.com" },
+      { key: "clientId", label: "Client ID", type: "text", required: true, placeholder: "…apps.googleusercontent.com", hint: "Google OAuth 2.0 client ID" },
+      { key: "clientSecret", label: "Client secret", type: "secret", required: true, hint: "Google OAuth 2.0 client secret" },
+      { key: "refreshToken", label: "Refresh token", type: "secret", required: true, hint: "OAuth 2.0 refresh token for the Gmail account" },
     ],
   },
   {
@@ -92,12 +93,13 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
   {
     id: "zoho_mail",
     label: "Zoho Mail",
-    scopeNote: "App password from Zoho account security settings (two-factor must be enabled)",
+    scopeNote: "OAuth 2.0 client credentials with ZohoMail.messages.READ scope",
     fields: [
-      { key: "username", label: "Username", type: "text", required: true, placeholder: "you@zoho.com" },
-      { key: "email", label: "Email", type: "text", required: true, placeholder: "you@zoho.com" },
-      { key: "fromAddress", label: "From address", type: "text", required: true, placeholder: "you@zoho.com" },
-      { key: "appPassword", label: "App password", type: "secret", required: true },
+      { key: "email", label: "Email", type: "text", required: true, placeholder: "you@yourdomain.com", hint: "Zoho Mail account email address" },
+      { key: "accountId", label: "Account ID", type: "text", required: true, placeholder: "56218000000008002", hint: "Zoho Mail account ID (from API console)" },
+      { key: "clientId", label: "Client ID", type: "text", required: true, placeholder: "1000.…", hint: "Zoho OAuth 2.0 client ID" },
+      { key: "clientSecret", label: "Client secret", type: "secret", required: true, hint: "Zoho OAuth 2.0 client secret" },
+      { key: "refreshToken", label: "Refresh token", type: "secret", required: true, hint: "OAuth 2.0 refresh token for the Zoho Mail account" },
     ],
   },
   {

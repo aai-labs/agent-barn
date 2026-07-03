@@ -113,10 +113,28 @@ export function AgentSkillsTab({ agent, isRunning }: AgentSkillsTabProps) {
   async function handleSave() {
     updateAgent.reset();
     try {
+      // Providers required by skills that survive this update (kept + newly added).
+      const survivingSkills = [
+        ...agent.skills.filter((s) => !pendingRemoveIds.includes(s.id)),
+        ...skills.filter((s) => pendingAddIds.includes(s.id)),
+      ];
+      const stillNeeded = new Set(survivingSkills.flatMap((s) => s.requiredProviders));
+
+      // Secrets whose provider is no longer required by any remaining skill.
+      const orphanedProviders = [
+        ...new Set(
+          agent.skills
+            .filter((s) => pendingRemoveIds.includes(s.id))
+            .flatMap((s) => s.requiredProviders)
+            .filter((p) => !stillNeeded.has(p)),
+        ),
+      ];
+
       await updateAgent.mutateAsync({
         agentId: agent.id,
         skillIds: pendingAddIds,
         removedSkillIds: pendingRemoveIds,
+        ...(orphanedProviders.length > 0 ? { removedSecretProviders: orphanedProviders } : {}),
         ...(newSecretDrafts.length > 0
           ? {
               secrets: newSecretDrafts.map((d) => ({

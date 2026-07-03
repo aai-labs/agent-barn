@@ -632,4 +632,31 @@ export class AgentDataSupport {
       },
     );
   }
+
+  async interceptValidateIntegrationRequest({
+    agentId = MOCK_AGENT_ID,
+    provider = "github",
+    status = 404,
+    detail = "Agent not found",
+  }: {
+    agentId?: string;
+    provider?: string;
+    status?: number;
+    detail?: string;
+  } = {}) {
+    await this.page.route(
+      `**/api/v1/agents/${agentId}/integrations/${provider}/validate`,
+      async (route) => {
+        if (route.request().method() !== "POST") {
+          await route.fallback();
+          return;
+        }
+        await route.fulfill({
+          status,
+          contentType: "application/json",
+          body: JSON.stringify({ detail }),
+        });
+      },
+    );
+  }
 }
