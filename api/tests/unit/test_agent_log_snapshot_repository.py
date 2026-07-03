@@ -93,33 +93,4 @@ def test_get_latest_log_snapshot_returns_none_when_empty():
                 assert_that(result, none())
 
 
-def test_get_log_snapshots_paginated_by_cursor():
-    with given([*_GIVEN, there_is_an_agent()]) as context:
-        repo: AgentRepository = context.injector.get(AgentRepository)
-        agent_id = context.agent.id
-
-        snapshots = []
-        for day in range(1, 6):
-            ended = dt.datetime(2026, 6, day, tzinfo=dt.timezone.utc)
-            s = _make_snapshot(agent_id, f"day-{day}", session_ended_at=ended)
-            repo.save_log_snapshot(s)
-            snapshots.append(s)
-
-        with when("I fetch the first page of snapshots"):
-            page1 = repo.get_log_snapshots(agent_id, limit=2)
-
-            with then("the two most recent are returned"):
-                assert_that(page1, has_length(2))
-                assert_that(page1[0].log_text, equal_to("day-5"))
-                assert_that(page1[1].log_text, equal_to("day-4"))
-
-        with when("I fetch the next page using cursor"):
-            page2 = repo.get_log_snapshots(agent_id, before_id=page1[1].id, limit=2)
-
-            with then("the next two are returned"):
-                assert_that(page2, has_length(2))
-                assert_that(page2[0].log_text, equal_to("day-3"))
-                assert_that(page2[1].log_text, equal_to("day-2"))
-
-
 _ = (Session, MockLiteLLMModule)

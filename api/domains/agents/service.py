@@ -45,9 +45,9 @@ from api.domains.agents.models import (
     AgentCreate,
     AgentFilter,
     AgentHealthRead,
+    AgentLogHistoryRead,
     AgentLogSnapshot,
     AgentLogsRead,
-    AgentLogSnapshotRead,
     AgentPlatform,
     AgentRead,
     AgentSecret,
@@ -1045,17 +1045,29 @@ class AgentService:
             tail_lines=tail_lines,
         )
 
-    def get_log_snapshots(
+    def get_log_history(
         self,
         agent_id: UUID,
         context: CurrentUserContext,
-        before_id: UUID | None = None,
-        limit: int = 5,
-    ) -> list[AgentLogSnapshotRead]:
+        offset: int = 0,
+        limit: int = 50,
+    ) -> AgentLogHistoryRead:
         org_id = self._org_id(context)
         self._get_active_or_404(agent_id, org_id)
-        snapshots = self.repository.get_log_snapshots(agent_id, before_id, limit)
-        return [AgentLogSnapshotRead.model_validate(s) for s in snapshots]
+        snapshot = self.repository.get_latest_log_snapshot(agent_id)
+        if snapshot is None:
+            return AgentLogHistoryRead(lines=[], has_more=False)
+        all_lines = snapshot.log_text.splitlines()
+        total = len(all_lines)
+        end_idx = total - offset
+        start_idx = max(end_idx - limit, 0)
+        if end_idx <= 0:
+            return AgentLogHistoryRead(lines=[], has_more=False)
+        return AgentLogHistoryRead(
+            lines=all_lines[start_idx:end_idx],
+            has_more=start_idx > 0,
+            session_ended_at=snapshot.session_ended_at,
+        )
 
     def _capture_logs_before_stop(self, agent: "Agent") -> None:
         try:

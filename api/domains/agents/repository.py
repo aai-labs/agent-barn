@@ -223,27 +223,6 @@ class AgentRepository:
             )
             return session.exec(query).first()
 
-    def get_log_snapshots(
-        self,
-        agent_id: UUID,
-        before_id: UUID | None = None,
-        limit: int = 5,
-    ) -> list[AgentLogSnapshot]:
-        with Session(self.delegate.engine) as session:
-            query = select(AgentLogSnapshot).where(
-                col(AgentLogSnapshot.agent_id) == agent_id
-            )
-            if before_id is not None:
-                pivot = session.get(AgentLogSnapshot, before_id)
-                if pivot:
-                    query = query.where(
-                        col(AgentLogSnapshot.session_ended_at) < pivot.session_ended_at
-                    )
-            query = query.order_by(col(AgentLogSnapshot.session_ended_at).desc()).limit(
-                limit
-            )
-            return list(session.exec(query).all())
-
     def save(self, agent: Agent) -> Agent:
         self.delegate.save(agent)
         return agent

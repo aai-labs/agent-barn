@@ -511,13 +511,11 @@ class AgentLogsRead(PydanticBaseModel):
     session_ended_at: datetime | None = None
 
 
-class AgentLogSnapshotRead(PydanticBaseModel):
+class AgentLogHistoryRead(PydanticBaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    id: UUID
-    agent_id: UUID
-    session_started_at: datetime
-    session_ended_at: datetime
-    log_text: str
-    byte_size: int
-    created_at: datetime
+    lines: list[str]
+    has_more: bool
+    session_ended_at: datetime | None = None
+
+

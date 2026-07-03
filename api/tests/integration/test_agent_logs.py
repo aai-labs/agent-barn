@@ -70,21 +70,6 @@ def test_get_agent_logs_returns_404_for_nonexistent_agent():
                 assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
-def test_get_agent_log_snapshots_returns_empty_for_new_agent():
-    with given([*_GIVEN, there_is_an_agent()]) as context:
-        client: TestClient = context.client
-
-        with when("I request log snapshots for a new agent"):
-            response = client.get(
-                f"{_BASE}/{context.agent.id}/logs/snapshots",
-                headers=_auth(context),
-            )
-
-            with then("an empty list is returned"):
-                assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-                assert_that(response.json(), has_length(0))
-
-
 def test_stream_agent_logs_requires_auth():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         client: TestClient = context.client

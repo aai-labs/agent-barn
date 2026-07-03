@@ -156,4 +156,136 @@ def test_capture_logs_swallows_exceptions():
                 pass
 
 
+# --- get_log_history ---
+
+
+def test_get_log_history_returns_last_n_lines_from_snapshot():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        service: AgentService = context.injector.get(AgentService)
+        repo: AgentRepository = context.injector.get(AgentRepository)
+        k8s = _k8s(context)
+        k8s.read_pod_logs.return_value = ""
+
+        now = dt.datetime.now(dt.timezone.utc)
+        repo.save_log_snapshot(
+            AgentLogSnapshot(
+                agent_id=context.agent.id,
+                session_started_at=now,
+                session_ended_at=now,
+                log_text="line1\nline2\nline3\nline4\nline5",
+                byte_size=30,
+            )
+        )
+
+        with when("I request log history with limit=3"):
+            result = service.get_log_history(
+                context.agent.id, context.current_user_context, offset=0, limit=3
+            )
+
+            with then("the last 3 lines are returned in chronological order"):
+                assert_that(result.lines, equal_to(["line3", "line4", "line5"]))
+                assert_that(result.has_more, equal_to(True))
+                assert result.session_ended_at is not None
+
+
+def test_get_log_history_returns_empty_when_no_snapshot():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        service: AgentService = context.injector.get(AgentService)
+        k8s = _k8s(context)
+        k8s.read_pod_logs.return_value = ""
+
+        with when("I request log history with no snapshots"):
+            result = service.get_log_history(
+                context.agent.id, context.current_user_context
+            )
+
+            with then("empty result with has_more=False"):
+                assert_that(result.lines, has_length(0))
+                assert_that(result.has_more, equal_to(False))
+
+
+def test_get_log_history_paginates_with_offset():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        service: AgentService = context.injector.get(AgentService)
+        repo: AgentRepository = context.injector.get(AgentRepository)
+        k8s = _k8s(context)
+        k8s.read_pod_logs.return_value = ""
+
+        now = dt.datetime.now(dt.timezone.utc)
+        repo.save_log_snapshot(
+            AgentLogSnapshot(
+                agent_id=context.agent.id,
+                session_started_at=now,
+                session_ended_at=now,
+                log_text="line1\nline2\nline3\nline4\nline5",
+                byte_size=30,
+            )
+        )
+
+        with when("I request history with offset=3, limit=2"):
+            result = service.get_log_history(
+                context.agent.id, context.current_user_context, offset=3, limit=2
+            )
+
+            with then("lines 1-2 are returned (skipping last 3)"):
+                assert_that(result.lines, equal_to(["line1", "line2"]))
+                assert_that(result.has_more, equal_to(False))
+
+
+def test_get_log_history_has_more_false_when_exhausted():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        service: AgentService = context.injector.get(AgentService)
+        repo: AgentRepository = context.injector.get(AgentRepository)
+        k8s = _k8s(context)
+        k8s.read_pod_logs.return_value = ""
+
+        now = dt.datetime.now(dt.timezone.utc)
+        repo.save_log_snapshot(
+            AgentLogSnapshot(
+                agent_id=context.agent.id,
+                session_started_at=now,
+                session_ended_at=now,
+                log_text="line1\nline2\nline3",
+                byte_size=18,
+            )
+        )
+
+        with when("I request all lines at once (limit >= total)"):
+            result = service.get_log_history(
+                context.agent.id, context.current_user_context, offset=0, limit=50
+            )
+
+            with then("all lines returned with has_more=False"):
+                assert_that(result.lines, equal_to(["line1", "line2", "line3"]))
+                assert_that(result.has_more, equal_to(False))
+
+
+def test_get_log_history_returns_empty_when_offset_exceeds_total():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        service: AgentService = context.injector.get(AgentService)
+        repo: AgentRepository = context.injector.get(AgentRepository)
+        k8s = _k8s(context)
+        k8s.read_pod_logs.return_value = ""
+
+        now = dt.datetime.now(dt.timezone.utc)
+        repo.save_log_snapshot(
+            AgentLogSnapshot(
+                agent_id=context.agent.id,
+                session_started_at=now,
+                session_ended_at=now,
+                log_text="line1\nline2",
+                byte_size=12,
+            )
+        )
+
+        with when("I request history with offset beyond total lines"):
+            result = service.get_log_history(
+                context.agent.id, context.current_user_context, offset=10, limit=5
+            )
+
+            with then("empty result with has_more=False"):
+                assert_that(result.lines, has_length(0))
+                assert_that(result.has_more, equal_to(False))
+
+
 _ = (Session, MockLiteLLMModule)

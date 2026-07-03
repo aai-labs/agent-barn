@@ -30,7 +30,6 @@ export const agentsKey = {
       filters,
     ] as const,
   logs: (id: string) => [..._agentsKeyBase.detail(id), "logs"] as const,
-  logSnapshots: (id: string) => [..._agentsKeyBase.detail(id), "log-snapshots"] as const,
   slackChannels: (id: string) => [..._agentsKeyBase.detail(id), "slack-channels"] as const,
   slackUsers: (id: string) => [..._agentsKeyBase.detail(id), "slack-users"] as const,
   models: () => [..._agentsKeyBase.all, "models"] as const,

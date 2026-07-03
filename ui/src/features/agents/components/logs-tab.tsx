@@ -7,6 +7,7 @@ import { AppErrorState } from "@/components/app-error-state";
 import type { Agent } from "../schemas";
 import { useAgentLogs } from "../hooks/use-agent-logs";
 import { useAgentLogStream } from "../hooks/use-agent-log-stream";
+import { useAgentLogHistory } from "../hooks/use-agent-log-history";
 
 interface LogsTabProps {
   agent: Agent;
@@ -20,20 +21,29 @@ export function LogsTab({ agent }: LogsTabProps) {
   const [lines, setLines] = useState<string[]>([]);
   const [isAtBottom, setIsAtBottom] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
   const prevStatusRef = useRef(agent.status);
+  const prevScrollHeightRef = useRef(0);
+  const separatorInsertedRef = useRef(false);
+
+  const { hasMore, isLoading: isLoadingHistory, loadMore, reset } = useAgentLogHistory(agent.id);
 
   useEffect(() => {
     if (logs?.lines) {
       setLines(logs.lines);
+      separatorInsertedRef.current = false;
     }
   }, [logs]);
 
   useEffect(() => {
     if (prevStatusRef.current !== agent.status) {
       prevStatusRef.current = agent.status;
+      reset();
+      setLines([]);
+      separatorInsertedRef.current = false;
       void refetch();
     }
-  }, [agent.status, refetch]);
+  }, [agent.status, refetch, reset]);
 
   const handleNewLine = useCallback((line: string) => {
     setLines((prev) => {
@@ -50,11 +60,58 @@ export function LogsTab({ agent }: LogsTabProps) {
     onLine: handleNewLine,
   });
 
+  const handleLoadMore = useCallback(async () => {
+    if (!scrollRef.current) return;
+    prevScrollHeightRef.current = scrollRef.current.scrollHeight;
+
+    const result = await loadMore();
+    if (!result) return;
+
+    setLines((prev) => {
+      if (!separatorInsertedRef.current && result.sessionEndedAt) {
+        const ts = new Date(result.sessionEndedAt).toLocaleString();
+        separatorInsertedRef.current = true;
+        return [...result.lines, "", `=== Previous session ended ${ts} ===`, "", ...prev];
+      }
+      return [...result.lines, ...prev];
+    });
+  }, [loadMore]);
+
+  useLayoutEffect(() => {
+    if (prevScrollHeightRef.current > 0 && scrollRef.current) {
+      const delta = scrollRef.current.scrollHeight - prevScrollHeightRef.current;
+      if (delta > 0) {
+        scrollRef.current.scrollTop += delta;
+      }
+      prevScrollHeightRef.current = 0;
+    }
+  }, [lines]);
+
   useLayoutEffect(() => {
     if (isAtBottom && scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [lines.length, isAtBottom]);
+
+  useEffect(() => {
+    const container = scrollRef.current;
+    const sentinel = sentinelRef.current;
+    if (!container || !sentinel) return;
+
+    const showHistory = isRunning && logs?.source === "live" && logs?.hasSnapshots && hasMore && !isLoadingHistory;
+    if (!showHistory) return;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          void handleLoadMore();
+        }
+      },
+      { root: container, threshold: 0 },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [isRunning, logs?.source, logs?.hasSnapshots, hasMore, isLoadingHistory, handleLoadMore]);
 
   function handleScroll(e: React.UIEvent<HTMLDivElement>) {
     const el = e.currentTarget;
@@ -93,40 +150,16 @@ export function LogsTab({ agent }: LogsTabProps) {
             ? `Session ended ${new Date(logs.sessionEndedAt).toLocaleString()}`
             : "Live logs"}
         </span>
-        {isRunning && (
+        {isRunning && streamStatus === "streaming" && (
           <span className="flex items-center gap-1.5 text-[0.75rem]" style={{ color: "var(--ink-3)" }}>
             <span
               className="w-1.5 h-1.5 rounded-full"
-              style={{
-                background:
-                  streamStatus === "streaming"
-                    ? "var(--ok)"
-                    : streamStatus === "connecting"
-                      ? "var(--warn, #f59e0b)"
-                      : "var(--ink-4)",
-              }}
+              style={{ background: "var(--ok)" }}
             />
-            {streamStatus === "streaming"
-              ? "Streaming"
-              : streamStatus === "connecting"
-                ? "Connecting..."
-                : "Disconnected"}
+            Streaming
           </span>
         )}
       </div>
-
-      {isRunning && logs?.hasSnapshots && (
-        <div
-          className="px-4 py-2 text-[0.75rem]"
-          style={{
-            background: "color-mix(in srgb, var(--accent) 8%, transparent)",
-            borderBottom: "1px solid var(--line)",
-            color: "var(--ink-3)",
-          }}
-        >
-          Previous session logs available via snapshots
-        </div>
-      )}
 
       <div
         ref={scrollRef}
@@ -140,6 +173,14 @@ export function LogsTab({ agent }: LogsTabProps) {
           borderTop: "none",
         }}
       >
+        <div ref={sentinelRef} className="h-px" />
+
+        {isLoadingHistory && (
+          <div className="text-center py-2 text-[0.75rem]" style={{ color: "var(--ink-4)" }}>
+            Loading earlier logs...
+          </div>
+        )}
+
         {isLoading && (
           <div className="text-center py-12" style={{ color: "var(--ink-4)" }}>
             Loading logs...
@@ -160,10 +201,10 @@ export function LogsTab({ agent }: LogsTabProps) {
       {!isAtBottom && lines.length > 0 && (
         <button
           onClick={jumpToLatest}
-          className="absolute bottom-4 right-4 px-3 py-1.5 rounded-lg text-[0.75rem] font-medium shadow-md cursor-pointer"
+          className="absolute bottom-4 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-lg text-[0.75rem] font-medium shadow-md cursor-pointer"
           style={{
             background: "var(--accent)",
-            color: "var(--ink-on-accent, #fff)",
+            color: "var(--ink-on-accent, #040404)",
           }}
         >
           Jump to latest

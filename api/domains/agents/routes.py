@@ -9,7 +9,7 @@ from api.domains.agents.models import (
     AgentCreate,
     AgentFilter,
     AgentHealthRead,
-    AgentLogSnapshotRead,
+    AgentLogHistoryRead,
     AgentLogsRead,
     AgentRead,
     AgentUpdate,
@@ -80,20 +80,15 @@ def stream_agent_logs(
     )
 
 
-@agents_router.get(
-    "/{agent_id}/logs/snapshots",
-    response_model=list[AgentLogSnapshotRead],
-)
-def get_agent_log_snapshots(
+@agents_router.get("/{agent_id}/logs/history", response_model=AgentLogHistoryRead)
+def get_agent_log_history(
     agent_id: UUID,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[AgentService, Injected(AgentService)],
-    before_id: Annotated[UUID | None, Query()] = None,
-    limit: Annotated[int, Query(ge=1, le=20)] = 5,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
 ):
-    return service.get_log_snapshots(
-        agent_id, context, before_id=before_id, limit=limit
-    )
+    return service.get_log_history(agent_id, context, offset=offset, limit=limit)
 
 
 @agents_router.get("/{agent_id}/logs", response_model=AgentLogsRead)
