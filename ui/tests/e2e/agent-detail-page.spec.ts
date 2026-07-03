@@ -579,6 +579,7 @@ test.describe("Agent Detail Page — Keys tab", () => {
     await dataSupportPage.agents.interceptGetAgentRequest({
       body: { ...mockAgent, status: "STOPPED", secrets: [mockSecret] },
     });
+    await dataSupportPage.agents.interceptValidateIntegrationRequest();
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();
     await agentDetailPage.keysTab().click();
@@ -606,6 +607,7 @@ test.describe("Agent Detail Page — Keys tab", () => {
     await dataSupportPage.agents.interceptGetAgentRequest({
       body: { ...mockAgent, status: "STOPPED", secrets: [mockSecret] },
     });
+    await dataSupportPage.agents.interceptValidateIntegrationRequest();
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();
     await agentDetailPage.keysTab().click();
@@ -622,6 +624,7 @@ test.describe("Agent Detail Page — Keys tab", () => {
     await dataSupportPage.agents.interceptGetAgentRequest({
       body: { ...mockAgent, status: "STOPPED", secrets: [mockSecret] },
     });
+    await dataSupportPage.agents.interceptValidateIntegrationRequest();
     await dataSupportPage.agents.interceptUpdateAgentRequest({
       status: 409,
       detail: "Secret is used by a skill",
