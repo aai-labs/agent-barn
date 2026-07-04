@@ -44,6 +44,10 @@ api_token_secret = "bitbucket.api_token"
 
 Commands that operate on a repository require `--repo REPO` (bare slug) and `--owner WORKSPACE`. Always pass both explicitly.
 
+**Multiple repositories:** if the configured credential lists more than one repository, additional profiles `bitbucket-work-2`, `bitbucket-work-3`, ... are set up — one per repo, all sharing the same token and workspace. Check the `## Configured Integrations` section of this agent's tool context (TOOLS.md) for the authoritative profile-to-repo mapping; don't guess which numbered profile maps to which repo. Since `--repo` always overrides the profile default, the simplest approach is usually to keep `--profile bitbucket-work` and just pass whichever `--repo` you need explicitly — you rarely need to switch `--profile`.
+
+**No repository configured:** if the credential has zero repositories configured, `profile.repo` is absent entirely. `--repo REPO` then becomes mandatory on every command that needs one — omitting it returns a `config_error`.
+
 ## Response shapes
 
 Successful command output is JSON on stdout.

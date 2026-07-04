@@ -48,7 +48,7 @@ test.describe("Settings — Skills panel", () => {
   });
 
   test("both platform and custom skill rows have only a View button", async ({ page }) => {
-    await expect(page.getByRole("button", { name: "View" })).toHaveCount(2);
+    await expect(page.getByRole("button", { name: "View" })).toHaveCount(4);
     await expect(page.getByRole("button", { name: "Edit" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Delete" })).toHaveCount(0);
   });

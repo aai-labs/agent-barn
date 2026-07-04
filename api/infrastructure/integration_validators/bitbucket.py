@@ -122,10 +122,10 @@ def _validate_scoped_token(content: BitbucketContent) -> IntegrationValidationRe
         return IntegrationValidationResult(
             valid=False, error="Invalid or expired access token"
         )
-    if resp.status_code == 403 and content.repo:
-        # Repository-scoped tokens can't list the workspace — probe the specific
-        # repo instead before concluding the scope is missing.
-        return _validate_repo_scoped_token(content, headers)
+    if resp.status_code == 403 and content.repos:
+        # Repository-scoped tokens can't list the workspace — probe the configured
+        # repos instead before concluding the scope is missing.
+        return _validate_repo_scoped_tokens(content, headers)
     if resp.status_code == 403:
         return IntegrationValidationResult(
             valid=False,
@@ -144,38 +144,52 @@ def _validate_scoped_token(content: BitbucketContent) -> IntegrationValidationRe
     )
 
 
-def _validate_repo_scoped_token(
+def _validate_repo_scoped_tokens(
     content: BitbucketContent, headers: dict[str, str]
 ) -> IntegrationValidationResult:
-    """Probe the specific repo for tokens scoped below workspace level."""
-    try:
-        resp = httpx.get(
-            f"https://api.bitbucket.org/2.0/repositories/{content.workspace}/{content.repo}",
-            headers=headers,
-            timeout=_TIMEOUT,
-        )
-    except Exception as exc:
-        return IntegrationValidationResult(
-            valid=False, error=f"Could not reach Bitbucket: {exc}"
-        )
+    """Probe each configured repo for tokens scoped below workspace level.
 
-    if resp.status_code == 401:
-        return IntegrationValidationResult(
-            valid=False, error="Invalid or expired access token"
-        )
-    if resp.status_code == 403:
+    For this token type a repo probe is the sole proof of any access, so the token
+    is only invalid if *every* configured repo fails; a partial success degrades the
+    failing repos to missing_scopes instead.
+    """
+    successes: list[str] = []
+    failures: list[str] = []
+    for repo in content.repos:
+        try:
+            resp = httpx.get(
+                f"https://api.bitbucket.org/2.0/repositories/{content.workspace}/{repo}",
+                headers=headers,
+                timeout=_TIMEOUT,
+            )
+        except Exception as exc:
+            return IntegrationValidationResult(
+                valid=False, error=f"Could not reach Bitbucket: {exc}"
+            )
+        if resp.status_code == 401:
+            return IntegrationValidationResult(
+                valid=False, error="Invalid or expired access token"
+            )
+        if resp.status_code == 403:
+            failures.append(
+                f"{content.workspace}/{repo}: missing the Repositories (read) scope"
+            )
+            continue
+        if resp.status_code not in (200, 404):
+            failures.append(
+                f"{content.workspace}/{repo}: unexpected status {resp.status_code}"
+            )
+            continue
+        successes.append(repo)
+
+    if not successes:
         return IntegrationValidationResult(
             valid=False,
             error="Access token is missing the Repositories (read) scope",
         )
-    if resp.status_code not in (200, 404):
-        return IntegrationValidationResult(
-            valid=False,
-            error=f"Bitbucket returned unexpected status {resp.status_code}",
-        )
 
-    identity = f"{content.workspace}/{content.repo}"
-    missing = _check_pr_scope(content, headers)
+    identity = f"{content.workspace}/" + ", ".join(successes)
+    missing = failures + _check_pr_scope(content, headers, repos=successes)
     return IntegrationValidationResult(
         valid=True, identity=identity, missing_scopes=missing
     )
@@ -200,19 +214,27 @@ def _check_repo_read_scope(
     return []
 
 
-def _check_pr_scope(content: BitbucketContent, headers: dict[str, str]) -> list[str]:
-    if not content.workspace or not content.repo:
+def _check_pr_scope(
+    content: BitbucketContent,
+    headers: dict[str, str],
+    repos: list[str] | None = None,
+) -> list[str]:
+    target_repos = content.repos if repos is None else repos
+    if not content.workspace or not target_repos:
         return []
-    try:
-        resp = httpx.get(
-            f"https://api.bitbucket.org/2.0/repositories/{content.workspace}/{content.repo}/pullrequests",
-            headers=headers,
-            timeout=_TIMEOUT,
-        )
-        if resp.status_code == 403:
-            return [
-                "Pull requests: Read + Write — needed to read PRs and post review comments"
-            ]
-    except Exception:
-        pass
-    return []
+    missing: list[str] = []
+    for repo in target_repos:
+        try:
+            resp = httpx.get(
+                f"https://api.bitbucket.org/2.0/repositories/{content.workspace}/{repo}/pullrequests",
+                headers=headers,
+                timeout=_TIMEOUT,
+            )
+            if resp.status_code == 403:
+                missing.append(
+                    f"{content.workspace}/{repo}: Pull requests: Read + Write — "
+                    "needed to read PRs and post review comments"
+                )
+        except Exception:
+            pass
+    return missing

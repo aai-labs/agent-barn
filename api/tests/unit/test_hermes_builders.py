@@ -152,6 +152,7 @@ def test_build_secret_hermes_slack_contains_required_keys():
     assert_that(data["SLACK_BOT_TOKEN"], equal_to("xoxb-bot"))
     assert_that(data["SLACK_APP_TOKEN"], equal_to("xapp-app"))
     assert_that(data["API_SERVER_KEY"], equal_to("secret-key-123"))
+    assert_that(data["SLACK_HOME_CHANNEL"], equal_to("C001"))
     assert_that(data["SLACK_CHANNEL_IDS"], equal_to("C001,C002"))
     assert_that(data["SLACK_DM_ALLOWED_USERS"], equal_to("U001,U002"))
     assert_that(data["SLACK_ALLOW_ALL_USERS"], equal_to("true"))
@@ -174,6 +175,7 @@ def test_build_secret_hermes_slack_empty_lists_give_empty_strings():
         channel_ids=[],
         dm_user_ids=[],
     )
+    assert_that(secret.string_data["SLACK_HOME_CHANNEL"], equal_to("C0000000000"))
     assert_that(secret.string_data["SLACK_CHANNEL_IDS"], equal_to(""))
     assert_that(secret.string_data["SLACK_DM_ALLOWED_USERS"], equal_to(""))
 
@@ -364,3 +366,29 @@ def test_start_sh_includes_aai_cli_setup_hook():
 def test_start_sh_includes_skills_json_reconstruction():
     assert_that(HERMES_START_SH, contains_string("skills.json"))
     assert_that(HERMES_START_SH, contains_string("/workspace/skills"))
+
+
+def test_build_hermes_config_approval_mode_auto_maps_to_smart():
+    cfg = build_hermes_config(
+        "litellm/qwen3", "http://litellm:4000", approval_mode="auto"
+    )
+    assert_that(cfg["approvals"]["mode"], equal_to("smart"))
+
+
+def test_build_hermes_config_approval_mode_off():
+    cfg = build_hermes_config(
+        "litellm/qwen3", "http://litellm:4000", approval_mode="off"
+    )
+    assert_that(cfg["approvals"]["mode"], equal_to("off"))
+
+
+def test_build_hermes_config_approval_mode_manual():
+    cfg = build_hermes_config(
+        "litellm/qwen3", "http://litellm:4000", approval_mode="manual"
+    )
+    assert_that(cfg["approvals"]["mode"], equal_to("manual"))
+
+
+def test_build_hermes_config_default_approval_mode_is_smart():
+    cfg = build_hermes_config("litellm/qwen3", "http://litellm:4000")
+    assert_that(cfg["approvals"]["mode"], equal_to("smart"))

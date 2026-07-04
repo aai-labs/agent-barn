@@ -57,6 +57,8 @@ async def lifespan(_: FastAPI):
         default_org = org_service.ensure_default_organization()
         set_default_org_id(default_org.id)
 
+        seed_aai_cli_skills(injector.get(SkillRepository))
+
         template_service = injector.get(TemplateService)
         template_service.seed_predefined_templates(default_org.id)
 
@@ -71,8 +73,6 @@ async def lifespan(_: FastAPI):
                     role=OrganizationRole.OWNER,
                 )
             )
-
-        seed_aai_cli_skills(injector.get(SkillRepository))
     except Exception:
         logger.error("Error during startup bootstrap: %s", traceback.format_exc())
         raise HTTPException(

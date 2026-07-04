@@ -2,6 +2,8 @@ import { Page } from "@playwright/test";
 
 export const MOCK_PLATFORM_SKILL_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 export const MOCK_CUSTOM_SKILL_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+export const MOCK_JIRA_SKILL_ID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+export const MOCK_GMAIL_SKILL_ID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
 
 export const mockPlatformSkill = {
   id: MOCK_PLATFORM_SKILL_ID,
@@ -20,6 +22,28 @@ export const mockCustomSkill = {
   name: "my-tool",
   source: "custom",
   requiredProviders: [],
+  toolsPointer: null,
+  createdAt: "2026-01-01T00:00:00Z",
+  updatedAt: "2026-01-01T00:00:00Z",
+};
+
+export const mockJiraSkill = {
+  id: MOCK_JIRA_SKILL_ID,
+  organizationId: null,
+  name: "jira",
+  source: "aai_cli",
+  requiredProviders: ["jira"],
+  toolsPointer: null,
+  createdAt: "2026-01-01T00:00:00Z",
+  updatedAt: "2026-01-01T00:00:00Z",
+};
+
+export const mockGmailSkill = {
+  id: MOCK_GMAIL_SKILL_ID,
+  organizationId: null,
+  name: "gmail",
+  source: "aai_cli",
+  requiredProviders: ["gmail"],
   toolsPointer: null,
   createdAt: "2026-01-01T00:00:00Z",
   updatedAt: "2026-01-01T00:00:00Z",
@@ -50,7 +74,7 @@ export class SkillDataSupport {
 
       const search = url.searchParams.get("search")?.toLowerCase();
       const source = url.searchParams.get("source");
-      let items = [mockPlatformSkill, mockCustomSkill];
+      let items = [mockPlatformSkill, mockCustomSkill, mockJiraSkill, mockGmailSkill];
       if (search) {
         items = items.filter((s) => s.name.toLowerCase().includes(search));
       }

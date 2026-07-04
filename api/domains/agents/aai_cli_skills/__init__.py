@@ -15,7 +15,9 @@ from api.domains.agents.models import SecretProvider
 from .bitbucket import BITBUCKET_SKILLS
 from .confluence import CONFLUENCE_SKILLS
 from .github import GITHUB_SKILLS
+from .gmail import GMAIL_SKILLS
 from .jira import JIRA_SKILLS
+from .zoho_mail import ZOHO_MAIL_SKILLS
 
 
 # One entry per aai-cli provider skill seeded into the DB on startup.
@@ -44,6 +46,18 @@ AAI_CLI_PROVIDER_SKILLS: list[dict] = [
         "files": BITBUCKET_SKILLS,
         "tools_pointer": "\nFor Bitbucket, use the aai-cli tool. See ./skills/aai-cli/bitbucket_skill.md\n",
     },
+    {
+        "name": "Gmail",
+        "required_providers": [SecretProvider.GMAIL],
+        "files": GMAIL_SKILLS,
+        "tools_pointer": "\nFor Gmail, use the aai-cli tool. See ./skills/aai-cli/gmail_skill.md\n",
+    },
+    {
+        "name": "Zoho Mail",
+        "required_providers": [SecretProvider.ZOHO_MAIL],
+        "files": ZOHO_MAIL_SKILLS,
+        "tools_pointer": "\nFor Zoho Mail, use the aai-cli tool. See ./skills/aai-cli/zoho_mail_skill.md\n",
+    },
 ]
 
 
@@ -56,14 +70,14 @@ def build_zip(files: list[dict]) -> bytes:
     return buf.getvalue()
 
 
-def build_skills_manifest_from_zips(agent_skills: list) -> str:
-    """Extract all assigned skill zips and build the ConfigMap manifest.
+def build_skills_manifest_from_zips(skills: list) -> str:
+    """Extract all mounted skill zips and build the ConfigMap manifest.
 
-    agent_skills: list of (AgentSkill, Skill) tuples from get_agent_skills_with_details.
+    skills: list of Skill objects (each exposing ``zip_content``).
     Returns a sorted JSON string of {path, content} entries for all mounted files.
     """
     entries = []
-    for _agent_skill, skill in agent_skills:
+    for skill in skills:
         buf = io.BytesIO(skill.zip_content)
         with zipfile.ZipFile(buf, "r") as zf:
             for name in zf.namelist():

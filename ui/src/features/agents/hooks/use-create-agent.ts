@@ -27,7 +27,8 @@ export type CreateAgentData = {
   // Skills to assign on creation
   skillIds?: string[];
   // Integration credentials (provider + provider-specific content; name is server-stamped)
-  secrets?: Array<{ provider: string; content: Record<string, string> }>;
+  secrets?: Array<{ provider: string; content: Record<string, string | string[]> }>;
+  approvalMode?: "manual" | "auto" | "off";
 };
 
 export function useCreateAgent() {

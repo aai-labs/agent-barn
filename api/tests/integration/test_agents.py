@@ -45,7 +45,7 @@ from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import (
     there_is_an_organization_with_user_and_access_token,
 )
-from api.tests.steps.template import there_is_a_template
+from api.tests.steps.template import there_is_a_template, there_is_a_template_skill
 
 _BASE = "/api/v1/agents"
 
@@ -208,6 +208,34 @@ def test_create_agent_does_not_create_template_rows():
             assert_that(latest, is_not(none()))
             assert latest is not None
             assert_that(latest.version, equal_to(1))
+
+
+def test_create_agent_default_approval_mode_is_auto():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I create an agent without specifying approval_mode"):
+            response = client.post(_BASE, json=_VALID_CREATE, headers=_auth(context))
+
+        with then("the response has approval_mode set to auto"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(response.json()["approval_mode"], equal_to("auto"))
+
+
+def test_create_agent_with_approval_mode_off():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I create an agent with approval_mode off"):
+            response = client.post(
+                _BASE,
+                json={**_VALID_CREATE, "approval_mode": "off"},
+                headers=_auth(context),
+            )
+
+        with then("the response has approval_mode set to off"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(response.json()["approval_mode"], equal_to("off"))
 
 
 def test_list_agents_returns_active_only():
@@ -394,6 +422,23 @@ def test_patch_agent_no_auth_returns_401():
             assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
 
 
+def test_patch_agent_approval_mode():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        agent_id = str(context.agent.id)
+
+        with when("I update the agent's approval_mode to manual"):
+            response = client.patch(
+                f"{_BASE}/{agent_id}",
+                json={"approval_mode": "manual"},
+                headers=_auth(context),
+            )
+
+        with then("the response reflects the new approval_mode"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["approval_mode"], equal_to("manual"))
+
+
 _JIRA_CONTENT = {
     "site_url": "https://acme.atlassian.net",
     "email": "a@b.com",
@@ -529,6 +574,152 @@ def test_patch_agent_invalid_secret_content_returns_422():
             assert_that(
                 response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY)
             )
+
+
+# --- optional/multi repos for GitHub and Bitbucket secrets (AF-162) ---
+
+_GITHUB_CONTENT_NO_REPOS = {
+    "token": "ghp_token",
+    "owner": "my-org",
+    "org": "my-org",
+}
+
+_BITBUCKET_CONTENT_NO_REPOS = {
+    "workspace": "my-workspace",
+    "email": "a@b.com",
+    "api_token": "bb-tok",
+}
+
+
+def test_patch_agent_adds_github_secret_without_repos():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I patch the agent with a GitHub secret and no repos"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={
+                    "secrets": [
+                        {"provider": "github", "content": _GITHUB_CONTENT_NO_REPOS}
+                    ]
+                },
+                headers=_auth(context),
+            )
+
+        with then("it returns 200 and the agent exposes the github secret"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(_providers(response), equal_to(["github"]))
+
+
+def test_patch_agent_adds_github_secret_with_multiple_repos():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I patch the agent with a GitHub secret listing multiple repos"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={
+                    "secrets": [
+                        {
+                            "provider": "github",
+                            "content": {
+                                **_GITHUB_CONTENT_NO_REPOS,
+                                "repos": ["repo-a", "repo-b"],
+                            },
+                        }
+                    ]
+                },
+                headers=_auth(context),
+            )
+
+        with then("it returns 200 and the agent exposes the github secret"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(_providers(response), equal_to(["github"]))
+
+
+def test_patch_agent_adds_bitbucket_secret_without_repos():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I patch the agent with a Bitbucket secret and no repos"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={
+                    "secrets": [
+                        {
+                            "provider": "bitbucket",
+                            "content": _BITBUCKET_CONTENT_NO_REPOS,
+                        }
+                    ]
+                },
+                headers=_auth(context),
+            )
+
+        with then("it returns 200 and the agent exposes the bitbucket secret"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(_providers(response), equal_to(["bitbucket"]))
+
+
+def test_patch_agent_adds_bitbucket_secret_with_multiple_repos():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I patch the agent with a Bitbucket secret listing multiple repos"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={
+                    "secrets": [
+                        {
+                            "provider": "bitbucket",
+                            "content": {
+                                **_BITBUCKET_CONTENT_NO_REPOS,
+                                "repos": ["repo-a", "repo-b"],
+                            },
+                        }
+                    ]
+                },
+                headers=_auth(context),
+            )
+
+        with then("it returns 200 and the agent exposes the bitbucket secret"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(_providers(response), equal_to(["bitbucket"]))
+
+
+def test_validate_integration_with_no_repos_returns_valid():
+    """A credential with zero configured repos is a legitimate config — the validate
+    endpoint must not report it as invalid."""
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        client.patch(
+            f"{_BASE}/{context.agent.id}",
+            json={
+                "secrets": [{"provider": "github", "content": _GITHUB_CONTENT_NO_REPOS}]
+            },
+            headers=_auth(context),
+        )
+
+        user_resp = httpx.Response(
+            200,
+            json={"login": "alice"},
+            request=httpx.Request("GET", "https://api.github.com/user"),
+        )
+
+        with when("I validate the GitHub integration"):
+            with patch(
+                "api.infrastructure.integration_validators.github.httpx.get",
+                return_value=user_resp,
+            ):
+                response = client.post(
+                    f"{_BASE}/{context.agent.id}/integrations/github/validate",
+                    headers=_auth(context),
+                )
+
+        with then(
+            "it returns a valid status, not invalid, despite no repos configured"
+        ):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["validation_status"], equal_to("valid"))
 
 
 def test_start_agent_sets_status_running():
@@ -2482,3 +2673,288 @@ def test_start_agent_with_skill_pointer_injects_pointer_into_tools_md():
                     'You can use "Pointed Skill" skill in the ./skills folder'
                 ),
             )
+
+
+# --- aai-cli skills auto-attach from configured providers ---
+
+_JIRA_POINTER = "\nFor Jira, use the aai-cli tool. See ./skills/aai-cli/jira_skill.md\n"
+
+
+def test_start_agent_auto_attaches_aai_cli_skill_for_configured_provider():
+    import json as _json
+
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(),
+            there_is_a_skill(
+                name="Jira",
+                required_providers=[SecretProvider.JIRA],
+                global_skill=True,
+                tools_pointer=_JIRA_POINTER,
+            ),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+
+        with when(
+            "a jira secret is configured but the skill is not explicitly assigned"
+        ):
+            client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"secrets": [{"provider": "jira", "content": _JIRA_CONTENT}]},
+                headers=_auth(context),
+            )
+            response = client.post(
+                f"{_BASE}/{context.agent.id}/start", headers=_auth(context)
+            )
+
+        with then("the aai-cli Jira skill is mounted and its pointer injected"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            assert_that(config_map.data, has_key("skills.json"))
+            entries = _json.loads(config_map.data["skills.json"])
+            assert_that(len(entries), equal_to(1))
+            assert_that(entries[0]["path"], equal_to("skill.md"))
+            assert_that(config_map.data["TOOLS.md"], contains_string(_JIRA_POINTER))
+
+
+def test_start_agent_does_not_auto_attach_skill_for_unconfigured_provider():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(),
+            there_is_a_skill(
+                name="GitHub",
+                required_providers=[SecretProvider.GITHUB],
+                global_skill=True,
+                tools_pointer="\nFor GitHub, use the aai-cli tool.\n",
+            ),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+
+        with when("a jira secret is configured but no github secret"):
+            client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"secrets": [{"provider": "jira", "content": _JIRA_CONTENT}]},
+                headers=_auth(context),
+            )
+            response = client.post(
+                f"{_BASE}/{context.agent.id}/start", headers=_auth(context)
+            )
+
+        with then("the GitHub skill is not mounted (its provider is not configured)"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            assert_that(config_map.data, is_not(has_key("skills.json")))
+            assert_that(
+                config_map.data["TOOLS.md"],
+                is_not(contains_string("For GitHub, use the aai-cli tool")),
+            )
+
+
+def test_start_agent_auto_attach_does_not_duplicate_explicitly_assigned_skill():
+    import json as _json
+
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(),
+            there_is_a_skill(
+                name="Jira",
+                required_providers=[SecretProvider.JIRA],
+                global_skill=True,
+                tools_pointer=_JIRA_POINTER,
+            ),
+            skill_is_assigned_to_agent(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+
+        with when("the jira skill is both explicitly assigned and provider-configured"):
+            client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"secrets": [{"provider": "jira", "content": _JIRA_CONTENT}]},
+                headers=_auth(context),
+            )
+            response = client.post(
+                f"{_BASE}/{context.agent.id}/start", headers=_auth(context)
+            )
+
+        with then("the skill is mounted exactly once and the pointer appears once"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            entries = _json.loads(config_map.data["skills.json"])
+            assert_that(len(entries), equal_to(1))
+            assert_that(config_map.data["TOOLS.md"].count(_JIRA_POINTER), equal_to(1))
+
+
+# --- template required skills ---
+
+
+def test_create_agent_with_required_skill_marks_it_required():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Jira"),
+            there_is_a_template_skill(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        skill_id = str(context.skill.id)
+        payload = {**_VALID_CREATE, "skill_ids": [skill_id]}
+
+        with when("I create an agent including the required skill in skill_ids"):
+            response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("it returns 201 and the skill is marked required=true"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            skills = response.json()["skills"]
+            assert_that(len(skills), equal_to(1))
+            assert_that(skills[0]["id"], equal_to(skill_id))
+            assert_that(skills[0]["required"], equal_to(True))
+
+
+def test_create_agent_missing_required_skill_returns_400():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Jira"),
+            there_is_a_template_skill(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("I create an agent without including the required skill"):
+            response = client.post(_BASE, json=_VALID_CREATE, headers=_auth(context))
+
+        with then("it returns 400"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+
+
+def test_update_agent_cannot_remove_required_skill_returns_409():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Jira"),
+            there_is_a_template_skill(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        skill_id = str(context.skill.id)
+
+        with when("I create an agent with the required skill"):
+            agent = client.post(
+                _BASE,
+                json={**_VALID_CREATE, "skill_ids": [skill_id]},
+                headers=_auth(context),
+            ).json()
+
+        with when("I try to remove the required skill via PATCH"):
+            response = client.patch(
+                f"{_BASE}/{agent['id']}",
+                json={"removed_skill_ids": [skill_id]},
+                headers=_auth(context),
+            )
+
+        with then("it returns 409"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+
+
+def test_update_agent_repin_missing_required_skill_returns_400():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Jira"),
+            there_is_a_template(slug="with-skill", name="With Skill"),
+            there_is_a_template_skill(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("I create an agent using a template with no required skills"):
+            agent = client.post(
+                _BASE,
+                json={**_VALID_CREATE, "template_slug": "test-template"},
+                headers=_auth(context),
+            ).json()
+
+        with when("I repin to a template that requires a skill I haven't provided"):
+            response = client.patch(
+                f"{_BASE}/{agent['id']}",
+                json={"template_slug": "with-skill", "template_version": 1},
+                headers=_auth(context),
+            )
+
+        with then("it returns 400"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+
+
+def test_update_agent_repin_with_required_skill_marks_it_required():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Jira"),
+            there_is_a_template(slug="with-skill", name="With Skill"),
+            there_is_a_template_skill(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        skill_id = str(context.skill.id)
+
+        with when("I create an agent using a template with no required skills"):
+            agent = client.post(
+                _BASE,
+                json={**_VALID_CREATE, "template_slug": "test-template"},
+                headers=_auth(context),
+            ).json()
+
+        with when("I repin providing the required skill in skill_ids"):
+            response = client.patch(
+                f"{_BASE}/{agent['id']}",
+                json={
+                    "template_slug": "with-skill",
+                    "template_version": 1,
+                    "skill_ids": [skill_id],
+                },
+                headers=_auth(context),
+            )
+
+        with then("it returns 200 and the skill is marked required=true"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            skills = response.json()["skills"]
+            jira = next(s for s in skills if s["id"] == skill_id)
+            assert_that(jira["required"], equal_to(True))
+
+
+def test_list_agents_marks_required_skills():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Jira"),
+            there_is_a_template_skill(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        skill_id = str(context.skill.id)
+
+        with when("I create an agent with the required skill"):
+            client.post(
+                _BASE,
+                json={**_VALID_CREATE, "skill_ids": [skill_id]},
+                headers=_auth(context),
+            )
+
+        with when("I list agents"):
+            response = client.get(_BASE, headers=_auth(context))
+
+        with then("the skill appears with required=true in the list response"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            agents = response.json()["items"]
+            assert_that(len(agents), equal_to(1))
+            jira = next(s for s in agents[0]["skills"] if s["id"] == skill_id)
+            assert_that(jira["required"], equal_to(True))
