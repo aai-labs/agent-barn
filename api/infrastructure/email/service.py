@@ -54,6 +54,7 @@ class EmailService:
             to_email=email_template.receiver_email,
             subject=email_template.subject,
             html_part=html,
+            from_name=self.config.email_from_name,
         )
 
     def render(self, mjml):

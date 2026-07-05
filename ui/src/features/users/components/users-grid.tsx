@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { KeyRound, Loader2, PlusIcon, Shield, Trash2, UserRound } from "lucide-react";
-import { useDebouncedValue } from "@tanstack/react-pacer";
 
 import { useCurrentUser } from "@/auth/providers/user-context-provider";
 import { AppErrorState } from "@/components/app-error-state";
@@ -34,7 +33,6 @@ function LoadingCard() {
 
 export function UsersGrid() {
   const [search, setSearch] = useState("");
-  const [debouncedSearch] = useDebouncedValue(search, { wait: 300 });
   const [createOpen, setCreateOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<UserRead | null>(null);
   const [resetTarget, setResetTarget] = useState<UserRead | null>(null);
@@ -49,27 +47,26 @@ export function UsersGrid() {
     isFetchingNextPage,
     isLoading,
     refetch,
-  } = useInfiniteUsers({ search: debouncedSearch });
+  } = useInfiniteUsers({ search });
 
   return (
     <div className="max-w-[1200px] mx-auto px-10 pt-9 pb-24">
-      <div className="flex items-start justify-between gap-4 mb-0">
-        <ListPageHeader
-          title="Users"
-          description="Super admin view of all users."
-          count={total}
-          noun="user"
-          search={search}
-          onSearch={setSearch}
-          searchPlaceholder="Search by name or email"
-        />
-        <button
-          className="af-btn af-btn-primary mt-1 flex-shrink-0"
-          onClick={() => setCreateOpen(true)}
-        >
-          <PlusIcon width={15} height={15} /> Create user
-        </button>
-      </div>
+      <ListPageHeader
+        title="Users"
+        description="Super admin view of all users."
+        count={total}
+        noun="user"
+        onSearch={setSearch}
+        searchPlaceholder="Search by name or email"
+        action={
+          <button
+            className="af-btn af-btn-primary flex-shrink-0"
+            onClick={() => setCreateOpen(true)}
+          >
+            <PlusIcon width={15} height={15} /> Create user
+          </button>
+        }
+      />
 
       {isLoading ? (
         <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))" }}>

@@ -18,6 +18,7 @@ test.describe("Hire Dialog", () => {
 
     await dataSupportPage.auth.interceptRefreshRequest();
     await dataSupportPage.users.interceptGetUserContextRequest();
+    await dataSupportPage.users.interceptGetOrganizationsRequest();
     await dataSupportPage.agents.interceptGetAgentsRequest();
     await dataSupportPage.agents.interceptGetTemplatesRequest();
     await dataSupportPage.agents.interceptGetTemplateVersionsRequest();
@@ -273,6 +274,7 @@ test.describe("Hire Dialog — Skills step", () => {
 
     await dataSupportPage.auth.interceptRefreshRequest();
     await dataSupportPage.users.interceptGetUserContextRequest();
+    await dataSupportPage.users.interceptGetOrganizationsRequest();
     await dataSupportPage.agents.interceptGetAgentsRequest();
     await dataSupportPage.agents.interceptGetTemplatesRequest();
     await dataSupportPage.agents.interceptGetTemplateVersionsRequest();

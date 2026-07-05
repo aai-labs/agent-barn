@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import type { Agent, IntegrationValidationResult, AgentAssignedSkill } from "../schemas";
 import { useAgentTemplate } from "../hooks/use-agent-template";
 import { useUpdateAgent } from "../hooks/use-update-agent";
@@ -55,6 +55,8 @@ export const DRAWER_TAB_KEYS: TabKey[] = [
 
 export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigDrawerProps) {
   const router = useRouter();
+  const params = useParams();
+  const orgId = typeof params?.orgId === "string" ? params.orgId : null;
   // Current pinned template — used to show its display name next to the pin.
   const { template } = useAgentTemplate(agent.id, agent.templateVersion);
   const updateAgent = useUpdateAgent();
@@ -296,7 +298,7 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
   async function handleRetire() {
     try {
       await deleteAgent.mutateAsync(agent.id);
-      router.push("/dashboard");
+      router.push(orgId ? `/dashboard/${orgId}` : "/dashboard");
     } catch {
       // error displayed via deleteAgent.error
     }

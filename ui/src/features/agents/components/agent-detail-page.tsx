@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useParams } from "next/navigation";
 import { useQueryState, parseAsStringEnum, parseAsString } from "nuqs";
 import { formatModelName } from "../utils";
 import { useAgent } from "../hooks/use-agent";
@@ -74,11 +75,15 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
 
   const isRunning = agent?.status === "RUNNING";
 
+  const params = useParams();
+  const orgId = typeof params?.orgId === "string" ? params.orgId : null;
+  const homeHref = orgId ? `/dashboard/${orgId}` : "/dashboard";
+
   return (
     <div style={{ background: "var(--bg)" }}>
       <div className="max-w-[73.75rem] mx-auto px-10 pt-7 pb-24">
         <Link
-          href="/dashboard"
+          href={homeHref}
           className="inline-flex items-center gap-1.5 text-[0.8125rem] mb-6 px-2 py-1 -ml-2 rounded-lg hover:bg-[var(--bg-soft)] transition-colors"
           style={{ color: "var(--ink-3)" }}
         >

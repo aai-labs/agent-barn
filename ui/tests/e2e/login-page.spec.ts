@@ -37,7 +37,7 @@ test.describe("Login Page", () => {
       authFixture.validUser.password,
     );
 
-    await page.waitForURL("/dashboard");
+    await page.waitForURL(/\/dashboard\//);
     await expect(
       page.getByRole("heading", { name: /your team/i }),
     ).toBeVisible();
@@ -49,7 +49,7 @@ test.describe("Login Page", () => {
       authFixture.validUser.password,
     );
 
-    await page.waitForURL("/dashboard");
+    await page.waitForURL(/\/dashboard\//);
     await expect(
       page.getByRole("heading", { name: /your team/i }),
     ).toBeVisible();

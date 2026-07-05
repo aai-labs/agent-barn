@@ -1,3 +1,4 @@
+import { TEST_ORG_ID } from "../constants";
 import { expect, test } from "@playwright/test";
 
 import { MOCK_AGENT_ID, mockAgent, mockAssignedSkill, mockSecret, mockToolCall, mockVersionsForSlug } from "../pages/data-support/agent-data-support.po";
@@ -18,6 +19,7 @@ test.describe("Agent Detail Page", () => {
 
     await dataSupportPage.auth.interceptRefreshRequest();
     await dataSupportPage.users.interceptGetUserContextRequest();
+    await dataSupportPage.users.interceptGetOrganizationsRequest();
     await dataSupportPage.agents.interceptGetAgentRequest();
     await dataSupportPage.agents.interceptGetAgentTemplateRequest();
 
@@ -106,6 +108,7 @@ test.describe("Agent Detail Page — Tool calls tab", () => {
 
     await dataSupportPage.auth.interceptRefreshRequest();
     await dataSupportPage.users.interceptGetUserContextRequest();
+    await dataSupportPage.users.interceptGetOrganizationsRequest();
     await dataSupportPage.agents.interceptGetAgentRequest();
     await dataSupportPage.agents.interceptGetAgentTemplateRequest();
     await dataSupportPage.agents.interceptGetToolCallsRequest();
@@ -161,7 +164,7 @@ test.describe("Agent Detail Page — Tool calls tab", () => {
   });
 
   test("direct navigation to ?tab=tool-calls lands on the correct tab", async ({ page }) => {
-    await page.goto(`/dashboard/agents/${MOCK_AGENT_ID}?tab=tool-calls`);
+    await page.goto(`/dashboard/${TEST_ORG_ID}/agents/${MOCK_AGENT_ID}?tab=tool-calls`);
 
     await expect(page.getByRole("columnheader", { name: /tool/i })).toBeVisible();
     await expect(agentDetailPage.toolCallRow("read")).toBeVisible();
@@ -196,6 +199,7 @@ test.describe("Agent Detail Page — Template tab (re-pin)", () => {
 
     await dataSupportPage.auth.interceptRefreshRequest();
     await dataSupportPage.users.interceptGetUserContextRequest();
+    await dataSupportPage.users.interceptGetOrganizationsRequest();
     // Stopped agent so the re-pin controls are enabled.
     await dataSupportPage.agents.interceptGetAgentRequest({
       body: { ...mockAgent, status: "STOPPED" },
@@ -314,6 +318,7 @@ test.describe("Agent Detail Page — Channels tab", () => {
 
     await dataSupportPage.auth.interceptRefreshRequest();
     await dataSupportPage.users.interceptGetUserContextRequest();
+    await dataSupportPage.users.interceptGetOrganizationsRequest();
     await dataSupportPage.agents.interceptGetAgentRequest({
       body: { ...mockAgent, status: "STOPPED" },
     });
@@ -359,6 +364,7 @@ test.describe("Agent Detail Page — Skills tab", () => {
 
     await dataSupportPage.auth.interceptRefreshRequest();
     await dataSupportPage.users.interceptGetUserContextRequest();
+    await dataSupportPage.users.interceptGetOrganizationsRequest();
     await dataSupportPage.agents.interceptGetAgentRequest({
       body: { ...mockAgent, status: "STOPPED" },
     });
@@ -519,6 +525,7 @@ test.describe("Agent Detail Page — Keys tab", () => {
 
     await dataSupportPage.auth.interceptRefreshRequest();
     await dataSupportPage.users.interceptGetUserContextRequest();
+    await dataSupportPage.users.interceptGetOrganizationsRequest();
     await dataSupportPage.agents.interceptGetAgentRequest({
       body: { ...mockAgent, status: "STOPPED" },
     });

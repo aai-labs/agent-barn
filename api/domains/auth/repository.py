@@ -42,11 +42,52 @@ class RefreshTokenRepository:
 class PasswordResetTokenRepository:
     delegate: PostgresRepositoryDelegate
 
-    def get_unused_by_jti(self, jti: str) -> PasswordResetToken | None:
-        return self.delegate.find_one(PasswordResetToken, jti=jti, is_used=False)
+    def get_unused_by_token_hash(
+        self, token_hash: str
+    ) -> PasswordResetToken | None:
+        return self.delegate.find_one(
+            PasswordResetToken, token_hash=token_hash, is_used=False
+        )
+
+    def invalidate_unused_for_user(self, user_id: UUID) -> int:
+        """Mark all of a user's outstanding (unused) tokens as used. Used when a fresh
+        link supersedes older ones, or when an invite is revoked. Returns the count."""
+        tokens = self.delegate.find_all(
+            PasswordResetToken, user_id=user_id, is_used=False
+        )
+        for token in tokens:
+            token.is_used = True
+        if tokens:
+            self.delegate.save_all(tokens)
+        return len(tokens)
+
+    def invalidate_unused_for_user_with_session(
+        self, user_id: UUID, session: Session
+    ) -> int:
+        """Session-scoped variant, so token rotation can share a caller's transaction
+        (invite issued atomically with org/membership writes)."""
+        tokens = list(
+            session.exec(
+                select(PasswordResetToken).where(
+                    PasswordResetToken.user_id == user_id,
+                    PasswordResetToken.is_used == False,  # noqa: E712
+                )
+            )
+        )
+        for token in tokens:
+            token.is_used = True
+            session.add(token)
+        return len(tokens)
 
     def save(self, pwd_reset_token: PasswordResetToken) -> PasswordResetToken:
         self.delegate.save(pwd_reset_token)
+        return pwd_reset_token
+
+    def save_with_session(
+        self, pwd_reset_token: PasswordResetToken, session: Session
+    ) -> PasswordResetToken:
+        session.add(pwd_reset_token)
+        session.flush()
         return pwd_reset_token
 
 

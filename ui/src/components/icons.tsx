@@ -87,6 +87,10 @@ export function ChevLeftIcon(p: IconProps) {
   return <Svg {...p}><path d="m15 18-6-6 6-6"/></Svg>;
 }
 
+export function ChevronDownIcon(p: IconProps) {
+  return <Svg {...p}><path d="m6 9 6 6 6-6"/></Svg>;
+}
+
 export function PauseIcon(p: IconProps) {
   return <Svg {...p}><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></Svg>;
 }

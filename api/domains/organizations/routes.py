@@ -7,6 +7,8 @@ from fastapi_injector import Injected
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import get_current_user
 from api.domains.organizations.models import (
+    OrganizationCreate,
+    OrganizationCreateResult,
     OrganizationFilter,
     OrganizationRead,
     OrganizationUpdate,
@@ -16,6 +18,19 @@ from api.domains.organizations.service import OrganizationService
 from api.infrastructure.shared.models import PaginatedItems
 
 org_router = APIRouter(prefix="/organizations", tags=["organizations"])
+
+
+@org_router.post(
+    "", response_model=OrganizationCreateResult, status_code=status.HTTP_201_CREATED
+)
+def create_organization(
+    data: OrganizationCreate,
+    context: Annotated[
+        CurrentUserContext, Depends(get_current_user(check_superuser=True))
+    ],
+    organization_service: Annotated[OrganizationService, Injected(OrganizationService)],
+):
+    return organization_service.create_organization(data, context)
 
 
 @org_router.get("/{organization_id}", response_model=OrganizationRead)

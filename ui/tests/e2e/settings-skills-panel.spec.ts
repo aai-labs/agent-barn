@@ -1,3 +1,4 @@
+import { TEST_ORG_ID } from "../constants";
 import { expect, test } from "@playwright/test";
 
 import {
@@ -18,9 +19,10 @@ test.describe("Settings — Skills panel", () => {
 
     await dataSupportPage.auth.interceptRefreshRequest();
     await dataSupportPage.users.interceptGetUserContextRequest();
+    await dataSupportPage.users.interceptGetOrganizationsRequest();
     await dataSupportPage.skills.interceptGetSkillsRequest();
 
-    await page.goto("/dashboard/settings");
+    await page.goto(`/dashboard/${TEST_ORG_ID}/settings`);
     await page.getByRole("button", { name: "Skills" }).click();
   });
 
@@ -193,10 +195,11 @@ test.describe("Settings — Skills panel (empty state)", () => {
 
     await dataSupportPage.auth.interceptRefreshRequest();
     await dataSupportPage.users.interceptGetUserContextRequest();
+    await dataSupportPage.users.interceptGetOrganizationsRequest();
     await dataSupportPage.agents.interceptGetTemplatesRequest();
     await dataSupportPage.skills.interceptGetSkillsRequest({ body: [] });
 
-    await page.goto("/dashboard/settings");
+    await page.goto(`/dashboard/${TEST_ORG_ID}/settings`);
     await page.getByRole("button", { name: "Skills" }).click();
 
     await expect(page.getByText("No skills yet")).toBeVisible();
@@ -210,13 +213,14 @@ test.describe("Settings — Skills panel (empty state)", () => {
 
     await dataSupportPage.auth.interceptRefreshRequest();
     await dataSupportPage.users.interceptGetUserContextRequest();
+    await dataSupportPage.users.interceptGetOrganizationsRequest();
     await dataSupportPage.agents.interceptGetTemplatesRequest();
     await dataSupportPage.skills.interceptGetSkillsRequest({
       status: 500,
       detail: "Skills service unavailable",
     });
 
-    await page.goto("/dashboard/settings");
+    await page.goto(`/dashboard/${TEST_ORG_ID}/settings`);
     await page.getByRole("button", { name: "Skills" }).click();
 
     await expect(page.getByText("We couldn't load skills")).toBeVisible();
@@ -232,6 +236,7 @@ test.describe("Settings — Skills panel (pagination)", () => {
     dataSupportPage = new DataSupport(page);
     await dataSupportPage.auth.interceptRefreshRequest();
     await dataSupportPage.users.interceptGetUserContextRequest();
+    await dataSupportPage.users.interceptGetOrganizationsRequest();
   });
 
   test("shows pagination controls when results exceed one page", async ({ page }) => {
@@ -244,7 +249,7 @@ test.describe("Settings — Skills panel (pagination)", () => {
       body: { page: 1, page_size: 15, total: 16, items: manySkills },
     });
 
-    await page.goto("/dashboard/settings");
+    await page.goto(`/dashboard/${TEST_ORG_ID}/settings`);
     await page.getByRole("button", { name: "Skills" }).click();
 
     await expect(page.getByRole("button", { name: "Next", exact: true })).toBeVisible();
@@ -254,7 +259,7 @@ test.describe("Settings — Skills panel (pagination)", () => {
   test("pagination controls are hidden when all results fit on one page", async ({ page }) => {
     await dataSupportPage.skills.interceptGetSkillsRequest();
 
-    await page.goto("/dashboard/settings");
+    await page.goto(`/dashboard/${TEST_ORG_ID}/settings`);
     await page.getByRole("button", { name: "Skills" }).click();
 
     await expect(page.getByRole("button", { name: "Next", exact: true })).not.toBeVisible();
@@ -286,7 +291,7 @@ test.describe("Settings — Skills panel (pagination)", () => {
       });
     });
 
-    await page.goto("/dashboard/settings");
+    await page.goto(`/dashboard/${TEST_ORG_ID}/settings`);
     await page.getByRole("button", { name: "Skills" }).click();
 
     await expect(page.getByText("skill-page1-0")).toBeVisible();
@@ -322,7 +327,7 @@ test.describe("Settings — Skills panel (pagination)", () => {
       });
     });
 
-    await page.goto("/dashboard/settings");
+    await page.goto(`/dashboard/${TEST_ORG_ID}/settings`);
     await page.getByRole("button", { name: "Skills" }).click();
 
     // Advance to page 2.

@@ -87,7 +87,7 @@ export function LoginForm() {
                 <label className="font-medium text-[13.5px]" style={{ color: "var(--ink)" }}>
                   Password
                 </label>
-                <Link href="#" className="text-[12.5px]" style={{ color: "var(--accent-ink)" }}>
+                <Link href="/forgot-password" className="text-[12.5px]" style={{ color: "var(--accent-ink)" }}>
                   Forgot password?
                 </Link>
               </div>

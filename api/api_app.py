@@ -22,6 +22,7 @@ from api.domains.skills.skill_seeder import seed_aai_cli_skills
 from api.domains.templates.routes import templates_router
 from api.domains.templates.service import TemplateService
 from api.domains.tool_calls.routes import tool_calls_router
+from api.domains.users.organization_users.routes import member_router
 from api.domains.users.routes import users_router
 from api.domains.users.service import UserService
 from api.domains.organizations.service import OrganizationService
@@ -110,6 +111,7 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(auth_router)
     subapi.include_router(conversations_router)
     subapi.include_router(org_router)
+    subapi.include_router(member_router)
     subapi.include_router(skills_router)
     subapi.include_router(templates_router)
     subapi.include_router(tool_calls_router)

@@ -1,13 +1,16 @@
-import { SearchIcon } from "@/components/icons";
+import type { ReactNode } from "react";
+
+import { SearchInput } from "@/components/search-input";
 
 interface ListPageHeaderProps {
   title: string;
   description: string;
   count: number;
   noun: string;
-  search: string;
+  /** Receives the debounced search value. */
   onSearch: (value: string) => void;
   searchPlaceholder?: string;
+  action?: ReactNode;
 }
 
 export function ListPageHeader({
@@ -15,9 +18,9 @@ export function ListPageHeader({
   description,
   count,
   noun,
-  search,
   onSearch,
   searchPlaceholder,
+  action,
 }: ListPageHeaderProps) {
   const countLabel = `${count} ${count === 1 ? noun : noun + "s"}`;
 
@@ -32,19 +35,14 @@ export function ListPageHeader({
             {description}
           </p>
         </div>
-        <div className="relative w-full md:w-72">
-          <SearchIcon
-            size={14}
-            className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2"
-            style={{ color: "var(--ink-4)" }}
-          />
-          <input
-            className="af-input pl-8"
-            value={search}
-            onChange={(e) => onSearch(e.target.value)}
+        <div className="flex items-center gap-2.5 w-full md:w-auto">
+          <SearchInput
+            onSearch={onSearch}
             placeholder={searchPlaceholder ?? `Search ${noun}s`}
-            aria-label={`Search ${noun}s`}
+            ariaLabel={`Search ${noun}s`}
+            className="flex-1 md:w-72 md:flex-none"
           />
+          {action}
         </div>
       </div>
       <p className="text-[13px] mb-4" style={{ color: "var(--ink-4)" }}>
