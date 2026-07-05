@@ -1145,13 +1145,9 @@ class AgentService:
                 plaintext_key = decrypt_token(
                     agent.litellm_key_encrypted, self.config.agent_token_encryption_key
                 )
-                try:
-                    self.cost_service.snapshot_agent_cost(agent, org_id, plaintext_key)
-                except Exception:
-                    logger.warning("Could not snapshot cost for agent %s", agent_id)
-                self.litellm.delete_key(plaintext_key)
+                self.litellm.block_key(plaintext_key)
             except Exception:
-                logger.warning("Could not revoke LiteLLM key for agent %s", agent_id)
+                logger.warning("Could not block LiteLLM key for agent %s", agent_id)
 
     def pair_agent(
         self, agent_id: UUID, data: PairRequest, context: CurrentUserContext

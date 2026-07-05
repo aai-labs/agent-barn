@@ -8,48 +8,6 @@ from sqlmodel import Field as SqlField
 from api.infrastructure.postgres.models import BaseModel
 
 
-class AgentCostSnapshot(BaseModel, table=True):
-    """Preserves per-agent cost data so it survives agent deletion."""
-
-    __tablename__: str = "agent_cost_snapshot"
-
-    __table_args__ = (
-        sa.Index("ix_agent_cost_snapshot_organization_id", "organization_id"),
-        sa.Index("ix_agent_cost_snapshot_agent_id", "agent_id"),
-        sa.Index("ix_agent_cost_snapshot_snapshotted_at", "snapshotted_at"),
-    )
-
-    # No FK to agent — the agent may already be deleted when we read this.
-    agent_id: UUID = SqlField(nullable=False)
-    agent_name: str = SqlField(nullable=False, max_length=255)
-
-    organization_id: UUID = SqlField(
-        foreign_key="organization.id", nullable=False, ondelete="CASCADE"
-    )
-
-    model: str = SqlField(nullable=False, max_length=255)
-    total_cost: float = SqlField(nullable=False, default=0.0)
-    total_tokens: int = SqlField(nullable=False, default=0)
-    prompt_tokens: int = SqlField(nullable=False, default=0)
-    completion_tokens: int = SqlField(nullable=False, default=0)
-
-    snapshotted_at: datetime = SqlField(
-        nullable=False,
-        sa_type=sa.DateTime(timezone=True),  # type: ignore
-    )
-
-    # Store per-model breakdown as JSON string
-    models_breakdown_json: str | None = SqlField(nullable=True, default=None)
-
-    def get_models_breakdown(self) -> list[dict]:
-        import json
-
-        if not self.models_breakdown_json:
-            return []
-        try:
-            return json.loads(self.models_breakdown_json)
-        except Exception:
-            return []
 
 
 # ---------------------------------------------------------------------------

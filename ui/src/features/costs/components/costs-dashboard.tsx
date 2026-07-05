@@ -22,6 +22,11 @@ export function CostsDashboard() {
   );
 
   const [expandedAgents, setExpandedAgents] = React.useState<Set<string>>(new Set());
+  const [currentPage, setCurrentPage] = React.useState(1);
+  const PAGE_SIZE = 10;
+
+  const [currentModelPage, setCurrentModelPage] = React.useState(1);
+  const MODEL_PAGE_SIZE = 12;
 
   const toggleAgent = (id: string) => {
     setExpandedAgents((prev) => {
@@ -211,6 +216,8 @@ export function CostsDashboard() {
                 onClick={() => {
                   setAppliedStartDate(draftStartDate);
                   setAppliedEndDate(draftEndDate);
+                  setCurrentPage(1);
+                  setCurrentModelPage(1);
                 }}
                 disabled={!draftStartDate || !draftEndDate}
               >
@@ -224,6 +231,8 @@ export function CostsDashboard() {
                     setDraftEndDate(today);
                     setAppliedStartDate("");
                     setAppliedEndDate(today);
+                    setCurrentPage(1);
+                    setCurrentModelPage(1);
                   }}
                 >
                   Reset
@@ -250,36 +259,69 @@ export function CostsDashboard() {
             </div>
           </div>
 
-          <div className="af-card px-5.5 py-5 flex flex-col gap-4">
-            {sortedByModel.map((entry) => {
-              const pct = maxModelCost > 0 ? (entry.totalCost / maxModelCost) * 100 : 0;
-              return (
-                <div key={entry.model} className="flex items-center gap-4">
-                  <div
-                    className="text-[0.8125rem] font-medium shrink-0"
-                    style={{ width: 160, color: "var(--ink-2)" }}
-                    title={entry.model}
-                  >
-                    {entry.model}
-                  </div>
-                  <div
-                    className="flex-1 h-1.5 rounded-full overflow-hidden"
-                    style={{ background: "var(--bg-sunken)" }}
-                  >
+          <div className="af-card flex flex-col gap-4 overflow-hidden">
+            <div className="px-5.5 pt-5 pb-5 flex flex-col gap-4">
+              {sortedByModel.slice((currentModelPage - 1) * MODEL_PAGE_SIZE, currentModelPage * MODEL_PAGE_SIZE).map((entry) => {
+                const pct = maxModelCost > 0 ? (entry.totalCost / maxModelCost) * 100 : 0;
+                return (
+                  <div key={entry.model} className="flex items-center gap-4">
                     <div
-                      className="h-1.5 rounded-full transition-all duration-500"
-                      style={{ width: `${pct}%`, background: "var(--ink-3)" }}
-                    />
+                      className="text-[0.8125rem] font-medium shrink-0"
+                      style={{ width: 160, color: "var(--ink-2)" }}
+                      title={entry.model}
+                    >
+                      {entry.model}
+                    </div>
+                    <div
+                      className="flex-1 h-1.5 rounded-full overflow-hidden"
+                      style={{ background: "var(--bg-sunken)" }}
+                    >
+                      <div
+                        className="h-1.5 rounded-full transition-all duration-500"
+                        style={{ width: `${pct}%`, background: "var(--ink-3)" }}
+                      />
+                    </div>
+                    <div
+                      className="text-[0.8125rem] font-semibold shrink-0 font-mono w-24 text-right"
+                      style={{ color: "var(--ink)" }}
+                    >
+                      ${entry.totalCost.toFixed(5)}
+                    </div>
                   </div>
-                  <div
-                    className="text-[0.8125rem] font-semibold shrink-0 font-mono w-24 text-right"
-                    style={{ color: "var(--ink)" }}
-                  >
-                    ${entry.totalCost.toFixed(5)}
-                  </div>
+                );
+              })}
+            </div>
+
+            {sortedByModel.length > MODEL_PAGE_SIZE && (
+              <div
+                className="px-5.5 py-4 flex items-center justify-between"
+                style={{ borderTop: "1px solid var(--line)" }}
+              >
+                <div className="text-[0.8125rem]" style={{ color: "var(--ink-3)" }}>
+                  Showing {(currentModelPage - 1) * MODEL_PAGE_SIZE + 1}–{Math.min(currentModelPage * MODEL_PAGE_SIZE, sortedByModel.length)} of {sortedByModel.length} models
                 </div>
-              );
-            })}
+                <div className="flex gap-2">
+                  <button
+                    className="af-btn af-btn-ghost text-[0.8125rem]"
+                    onClick={() => setCurrentModelPage((p) => Math.max(1, p - 1))}
+                    disabled={currentModelPage === 1}
+                  >
+                    Previous
+                  </button>
+                  <button
+                    className="af-btn af-btn-ghost text-[0.8125rem]"
+                    onClick={() =>
+                      setCurrentModelPage((p) =>
+                        Math.min(Math.ceil(sortedByModel.length / MODEL_PAGE_SIZE), p + 1)
+                      )
+                    }
+                    disabled={currentModelPage >= Math.ceil(sortedByModel.length / MODEL_PAGE_SIZE)}
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -313,7 +355,7 @@ export function CostsDashboard() {
                 </tr>
               </thead>
               <tbody>
-                {summary.agents.map((agent) => {
+                {summary.agents.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE).map((agent) => {
                   const effectiveBreakdown = agent.modelsBreakdown?.length > 0
                     ? agent.modelsBreakdown
                     : agent.model
@@ -337,10 +379,10 @@ export function CostsDashboard() {
                   );
 
                   const statusColor: Record<string, string> = {
-                    active:  "#15803d",
+                    active: "#15803d",
                     stopped: "var(--ink-3)",
                     deleted: "#b42318",
-                    error:   "#c2410c",
+                    error: "#c2410c",
                     unknown: "var(--ink-4)",
                   };
                   const sc = statusColor[agent.status] ?? statusColor.unknown;
@@ -431,6 +473,38 @@ export function CostsDashboard() {
                 })}
               </tbody>
             </table>
+          )}
+
+          {/* Pagination controls */}
+          {summary.agents.length > PAGE_SIZE && (
+            <div
+              className="px-6 py-4 flex items-center justify-between"
+              style={{ borderTop: "1px solid var(--line)" }}
+            >
+              <div className="text-[0.8125rem]" style={{ color: "var(--ink-3)" }}>
+                Showing {(currentPage - 1) * PAGE_SIZE + 1}–{Math.min(currentPage * PAGE_SIZE, summary.agents.length)} of {summary.agents.length} agents
+              </div>
+              <div className="flex gap-2">
+                <button
+                  className="af-btn af-btn-ghost text-[0.8125rem]"
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  disabled={currentPage === 1}
+                >
+                  Previous
+                </button>
+                <button
+                  className="af-btn af-btn-ghost text-[0.8125rem]"
+                  onClick={() =>
+                    setCurrentPage((p) =>
+                      Math.min(Math.ceil(summary.agents.length / PAGE_SIZE), p + 1)
+                    )
+                  }
+                  disabled={currentPage >= Math.ceil(summary.agents.length / PAGE_SIZE)}
+                >
+                  Next
+                </button>
+              </div>
+            </div>
           )}
         </div>
       </div>

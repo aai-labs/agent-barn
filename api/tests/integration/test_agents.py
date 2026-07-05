@@ -1008,7 +1008,7 @@ def test_start_agent_injects_per_agent_key():
             )
 
 
-def test_delete_agent_calls_litellm_delete_key():
+def test_delete_agent_calls_litellm_block_key():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         client: TestClient = context.client
         litellm: LiteLLMClient = context.injector.get(LiteLLMClient)
@@ -1018,16 +1018,16 @@ def test_delete_agent_calls_litellm_delete_key():
                 f"{_BASE}/{context.agent.id}", headers=_auth(context)
             )
 
-        with then("LiteLLM delete_key was called once"):
+        with then("LiteLLM block_key was called once"):
             assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
-            litellm.delete_key.assert_called_once_with(FAKE_LITELLM_KEY)
+            litellm.block_key.assert_called_once_with(FAKE_LITELLM_KEY)
 
 
 def test_delete_agent_litellm_failure_still_returns_204():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         client: TestClient = context.client
         litellm: LiteLLMClient = context.injector.get(LiteLLMClient)
-        litellm.delete_key.side_effect = Exception("timeout")
+        litellm.block_key.side_effect = Exception("timeout")
 
         with when("I delete the agent but LiteLLM key revocation fails"):
             response = client.delete(

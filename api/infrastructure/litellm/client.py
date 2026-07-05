@@ -75,7 +75,20 @@ class LiteLLMClient:
             )
             resp.raise_for_status()
         except Exception as exc:
-            logger.warning("Failed to revoke LiteLLM key: %s", exc)
+            logger.warning("Failed to delete LiteLLM key: %s", exc)
+
+    def block_key(self, key: str) -> None:
+        try:
+            master_key = self._master_key()
+            resp = httpx.post(
+                f"{self.config.litellm_base_url}/key/block",
+                json={"key": key},
+                headers=self._headers(master_key),
+                timeout=10,
+            )
+            resp.raise_for_status()
+        except Exception as exc:
+            logger.warning("Failed to block LiteLLM key: %s", exc)
 
     def get_key_info(self, key: str) -> dict:
         """Return the full key info dict from LiteLLM (spend, token totals, etc)."""

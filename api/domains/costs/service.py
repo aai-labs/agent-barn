@@ -1,5 +1,6 @@
 from api.domains.costs.models import AgentModelBreakdown
 import datetime
+import hashlib
 import logging
 from dataclasses import dataclass
 from uuid import UUID
@@ -13,12 +14,10 @@ from api.domains.agents.repository import AgentRepository
 from api.domains.auth.models import CurrentUserContext
 from api.domains.costs.models import (
     AgentCostRead,
-    AgentCostSnapshot,
     CostByModelRead,
     CostTimeSeriesPoint,
     OrgCostSummaryRead,
 )
-from api.domains.costs.repository import CostRepository
 from api.infrastructure.crypto import decrypt_token
 from api.infrastructure.litellm.client import LiteLLMClient
 
@@ -32,7 +31,6 @@ _SPEND_LOOKBACK_DAYS = 365
 @singleton
 @dataclass
 class CostService:
-    repository: CostRepository
     agent_repository: AgentRepository
     litellm: LiteLLMClient
     config: Config
@@ -68,12 +66,15 @@ class CostService:
                 )
             )
 
-        status_map = {"RUNNING": "active", "STOPPED": "stopped", "ERROR": "error"}
-        mapped_status = (
-            status_map.get(agent.status.value, "unknown")
-            if hasattr(agent, "status")
-            else "unknown"
-        )
+        if getattr(agent, "deleted_at", None) is not None:
+            mapped_status = "deleted"
+        else:
+            status_map = {"RUNNING": "active", "STOPPED": "stopped", "ERROR": "error"}
+            mapped_status = (
+                status_map.get(agent.status.value, "unknown")
+                if hasattr(agent, "status")
+                else "unknown"
+            )
         return AgentCostRead(
             agent_id=agent.id,
             agent_name=agent.name,
@@ -103,16 +104,11 @@ class CostService:
         by_model: dict[str, float] = {}
         daily_costs: dict[str, float] = {}
 
-        # --- Live data from active agents ---
-        active_agents = self.agent_repository.find_all_active_for_org(org_id)
-        active_agent_ids: set[UUID] = set()
-
-        import hashlib
-
+        # --- Cost data for all agents: live and deleted ---
+        all_agents = self.agent_repository.find_all_for_org(org_id)
         global_spend = self.litellm.get_global_spend_report(start_str, end_str)
 
-        for agent in active_agents:
-            active_agent_ids.add(agent.id)
+        for agent in all_agents:
             if not agent.litellm_key_encrypted:
                 continue
 
@@ -152,41 +148,7 @@ class CostService:
                 if len(date_str) == 10:
                     daily_costs[date_str] = daily_costs.get(date_str, 0.0) + row_spend
 
-        # --- Historical snapshots for deleted agents ---
-        snapshots = self.repository.find_snapshots_for_org(org_id)
-        seen_deleted: set[UUID] = set()
-        for snap in snapshots:
-            if snap.agent_id in active_agent_ids or snap.agent_id in seen_deleted:
-                continue
-            seen_deleted.add(snap.agent_id)
 
-            # Reconstruct models breakdown from snapshot
-            models_breakdown = [
-                AgentModelBreakdown(
-                    model=m["model"],
-                    total_cost=float(m.get("spend", 0.0)),
-                    prompt_tokens=int(m.get("prompt_tokens", 0)),
-                    completion_tokens=int(m.get("completion_tokens", 0)),
-                )
-                for m in snap.get_models_breakdown()
-            ]
-
-            agent_costs.append(
-                AgentCostRead(
-                    agent_id=snap.agent_id,
-                    agent_name=snap.agent_name,
-                    model=snap.model,
-                    status="deleted",
-                    total_cost=snap.total_cost,
-                    total_tokens=snap.total_tokens,
-                    prompt_tokens=snap.prompt_tokens,
-                    completion_tokens=snap.completion_tokens,
-                    models_breakdown=models_breakdown,
-                )
-            )
-            total_cost += snap.total_cost
-            short_model = snap.model.split("/")[-1] if snap.model else "unknown"
-            by_model[short_model] = by_model.get(short_model, 0.0) + snap.total_cost
 
         time_series = [
             CostTimeSeriesPoint(date=d, cost=c) for d, c in sorted(daily_costs.items())
@@ -206,7 +168,10 @@ class CostService:
         self, agent_id: UUID, context: CurrentUserContext
     ) -> AgentCostRead:
         org_id = self._org_id(context)
+        # Include deleted agents — their spend is still tracked in LiteLLM.
         agent = self.agent_repository.get_active(agent_id, org_id)
+        if not agent:
+            agent = self.agent_repository.get_deleted(agent_id, org_id)
         if not agent:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -234,48 +199,4 @@ class CostService:
             info = {}
         return self._build_agent_cost_read_from_info(agent, info)
 
-    def snapshot_agent_cost(self, agent: Agent, org_id: UUID, key: str) -> None:
-        """Persist a cost snapshot before the agent is deleted."""
-        import hashlib
-        import json
 
-        start_str, end_str = self._date_range(days=365)
-        try:
-            spend = self.litellm.get_key_spend(key)
-            logs = self.litellm.get_spend_logs(key, start_str, end_str)
-            # Also grab the full spend report for model breakdown
-            key_hash = hashlib.sha256(key.encode()).hexdigest()
-            global_spend = self.litellm.get_global_spend_report(start_str, end_str)
-            details = global_spend.get(key_hash, {})
-        except Exception as exc:
-            logger.warning("Failed to snapshot cost for agent %s: %s", agent.id, exc)
-            spend, logs, details = 0.0, [], {}
-
-        prompt_tokens = sum(int(row.get("prompt_tokens") or 0) for row in logs)
-        completion_tokens = sum(int(row.get("completion_tokens") or 0) for row in logs)
-
-        models_breakdown_json = json.dumps(
-            [
-                {
-                    "model": model_name,
-                    "spend": float(m.get("spend", 0.0)),
-                    "prompt_tokens": int(m.get("prompt_tokens", 0)),
-                    "completion_tokens": int(m.get("completion_tokens", 0)),
-                }
-                for model_name, m in details.get("models", {}).items()
-            ]
-        )
-
-        snapshot = AgentCostSnapshot(
-            agent_id=agent.id,
-            agent_name=agent.name,
-            organization_id=org_id,
-            model=agent.model,
-            total_cost=spend,
-            total_tokens=prompt_tokens + completion_tokens,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            snapshotted_at=datetime.datetime.now(datetime.timezone.utc),
-            models_breakdown_json=models_breakdown_json,
-        )
-        self.repository.save_snapshot(snapshot)
