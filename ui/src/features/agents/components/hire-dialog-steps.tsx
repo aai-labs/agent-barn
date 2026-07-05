@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import JSZip from "jszip";
 import { ChevronDownIcon } from "lucide-react";
 import { PlusIcon, SearchIcon, XIcon } from "@/components/icons";
@@ -386,9 +387,9 @@ export function ConfigTokenStep({
 
       <p className="text-[0.75rem]" style={{ color: "var(--ink-4)" }}>
         You can update these tokens later in{" "}
-        <a href="/dashboard/account" className="underline" style={{ color: "var(--ink-3)" }}>
+        <Link href="/dashboard/account" className="underline" style={{ color: "var(--ink-3)" }}>
           Account settings
-        </a>.
+        </Link>.
       </p>
     </div>
   );
