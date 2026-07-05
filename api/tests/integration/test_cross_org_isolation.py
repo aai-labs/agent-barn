@@ -109,6 +109,7 @@ def _there_is_a_skill_in_org(org_id: UUID):
 # Agents — object-level cross-org access must 404
 # --------------------------------------------------------------------------- #
 
+
 def _member_a_with_org_b_agent():
     return [
         *_GIVEN,
@@ -194,6 +195,7 @@ def test_cannot_read_agent_template_from_another_org():
 # --------------------------------------------------------------------------- #
 # Skills — object-level cross-org access must 404
 # --------------------------------------------------------------------------- #
+
 
 def _member_a_with_org_b_skill():
     return [
@@ -294,6 +296,7 @@ def test_cannot_list_template_versions_from_another_org():
 # Members — managing another org must 403 (path-org authz, not header-org)
 # --------------------------------------------------------------------------- #
 
+
 def _owner_a_and_bare_org_b():
     """Owner of org A, scoped to org A, aiming at org B they don't belong to."""
     return [
@@ -359,6 +362,7 @@ def test_cannot_transfer_ownership_of_another_org():
 # --------------------------------------------------------------------------- #
 # Superuser positive controls — targeting an org via the header succeeds
 # --------------------------------------------------------------------------- #
+
 
 def test_superuser_can_read_any_orgs_agent_via_header():
     with given(

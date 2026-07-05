@@ -99,7 +99,9 @@ def test_create_user_with_owner_role_returns_400():
             create_test_client(),
             database_repo_is_ready(),
             database_is_clean(),
-            there_is_a_user(id=super_id, email="super-own@example.com", is_superuser=True),
+            there_is_a_user(
+                id=super_id, email="super-own@example.com", is_superuser=True
+            ),
             there_is_a_default_organization(id=org_id),
             there_is_an_access_token_for_user(user_id=super_id),
         ]
@@ -126,7 +128,9 @@ def test_create_user_with_unknown_org_returns_404():
             create_test_client(),
             database_repo_is_ready(),
             database_is_clean(),
-            there_is_a_user(id=super_id, email="super-noorg@example.com", is_superuser=True),
+            there_is_a_user(
+                id=super_id, email="super-noorg@example.com", is_superuser=True
+            ),
             there_is_an_access_token_for_user(user_id=super_id),
         ]
     ) as context:

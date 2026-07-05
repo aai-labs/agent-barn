@@ -121,9 +121,7 @@ def refresh_access_token(
 def get_current_user_context(
     context: Annotated[
         CurrentUserContext,
-        Depends(
-            get_current_user(verified_required=False, require_organization=False)
-        ),
+        Depends(get_current_user(verified_required=False, require_organization=False)),
     ],
     user_service: UserService = Injected(UserService),
 ):

@@ -285,9 +285,7 @@ def test_admin_cannot_demote_another_admin():
             headers=_auth(context),
         )
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
-        assert_that(
-            _role_of(context, other_admin_id), equal_to(OrganizationRole.ADMIN)
-        )
+        assert_that(_role_of(context, other_admin_id), equal_to(OrganizationRole.ADMIN))
 
 
 def test_owner_can_demote_admin_to_member():

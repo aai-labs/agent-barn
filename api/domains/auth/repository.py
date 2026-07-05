@@ -42,9 +42,7 @@ class RefreshTokenRepository:
 class PasswordResetTokenRepository:
     delegate: PostgresRepositoryDelegate
 
-    def get_unused_by_token_hash(
-        self, token_hash: str
-    ) -> PasswordResetToken | None:
+    def get_unused_by_token_hash(self, token_hash: str) -> PasswordResetToken | None:
         return self.delegate.find_one(
             PasswordResetToken, token_hash=token_hash, is_used=False
         )

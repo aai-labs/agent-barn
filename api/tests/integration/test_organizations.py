@@ -114,9 +114,7 @@ def test_new_organization_is_seeded_with_predefined_templates():
             headers={**_auth(context), "X-Organization-Id": org_id},
         )
         assert_that(templates.status_code, equal_to(status.HTTP_200_OK))
-        assert_that(
-            templates.json()["total"], equal_to(len(PREDEFINED_TEMPLATES))
-        )
+        assert_that(templates.json()["total"], equal_to(len(PREDEFINED_TEMPLATES)))
 
 
 def test_non_superuser_cannot_create_organization():

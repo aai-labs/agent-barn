@@ -86,7 +86,11 @@ def test_set_password_rejects_weak_password():
         with when("the new password is too weak"):
             response = client.post(
                 _SET_PASSWORD,
-                json={"token": context.invite_token, "new_password": "123", "full_name": "X"},
+                json={
+                    "token": context.invite_token,
+                    "new_password": "123",
+                    "full_name": "X",
+                },
             )
 
             with then("it is rejected as a bad request"):
@@ -149,7 +153,11 @@ def test_set_password_with_invalid_token_is_rejected():
         with when("the token is garbage"):
             response = client.post(
                 _SET_PASSWORD,
-                json={"token": "not-a-token", "new_password": "StrongPass123", "full_name": "X"},
+                json={
+                    "token": "not-a-token",
+                    "new_password": "StrongPass123",
+                    "full_name": "X",
+                },
             )
 
             with then("it is rejected"):

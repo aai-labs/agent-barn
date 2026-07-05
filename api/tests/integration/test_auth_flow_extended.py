@@ -150,15 +150,13 @@ def test_signup_service_seeds_predefined_templates():
             "signup-seed@example.com"
         )
         assert_that(user, is_not(none()))
-        memberships = context.injector.get(
-            OrganizationUserRepository
-        ).get_by_user_id(user.id)
+        memberships = context.injector.get(OrganizationUserRepository).get_by_user_id(
+            user.id
+        )
         org_id = memberships[0].organization_id
 
         template_repo = context.injector.get(TemplateRepository)
-        seeded = template_repo.get_latest_template(
-            org_id, PREDEFINED_TEMPLATES[0].slug
-        )
+        seeded = template_repo.get_latest_template(org_id, PREDEFINED_TEMPLATES[0].slug)
         assert_that(seeded, is_not(none()))
 
 
@@ -356,10 +354,14 @@ def test_new_reset_request_invalidates_previous_token():
     ) as context:
         client: TestClient = context.client
 
-        client.post("/api/v1/auth/forgot-password", json={"email": "rotate@example.com"})
+        client.post(
+            "/api/v1/auth/forgot-password", json={"email": "rotate@example.com"}
+        )
         first_token = _extract_token_from_email(email_module.emails[0].html_part)
 
-        client.post("/api/v1/auth/forgot-password", json={"email": "rotate@example.com"})
+        client.post(
+            "/api/v1/auth/forgot-password", json={"email": "rotate@example.com"}
+        )
         second_token = _extract_token_from_email(email_module.emails[1].html_part)
 
         # The superseded first token must no longer work.
