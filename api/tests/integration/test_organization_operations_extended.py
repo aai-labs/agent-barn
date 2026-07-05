@@ -48,7 +48,7 @@ def test_regular_user_lists_only_their_organizations():
 
     with given(
         [
-            prepare_injector(),
+            prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
             prepare_api_server(),
             create_test_client(),
             database_repo_is_ready(),
@@ -83,7 +83,7 @@ def test_superuser_can_update_any_organization():
 
     with given(
         [
-            prepare_injector(),
+            prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
             prepare_api_server(),
             create_test_client(),
             database_repo_is_ready(),
@@ -120,7 +120,7 @@ def test_member_cannot_update_organization():
 
     with given(
         [
-            prepare_injector(),
+            prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
             prepare_api_server(),
             create_test_client(),
             database_repo_is_ready(),
@@ -156,7 +156,7 @@ def test_superuser_gets_404_for_missing_organization():
 
     with given(
         [
-            prepare_injector(),
+            prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
             prepare_api_server(),
             create_test_client(),
             database_repo_is_ready(),
@@ -181,7 +181,7 @@ def test_member_cannot_delete_organization():
 
     with given(
         [
-            prepare_injector(),
+            prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
             prepare_api_server(),
             create_test_client(),
             database_repo_is_ready(),
@@ -215,7 +215,7 @@ def test_superuser_can_delete_any_organization():
     org_id = uuid7()
     with given(
         [
-            prepare_injector(),
+            prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
             prepare_api_server(),
             create_test_client(),
             database_repo_is_ready(),
@@ -248,7 +248,7 @@ def test_owner_cannot_delete_another_organization():
 
     with given(
         [
-            prepare_injector(),
+            prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
             prepare_api_server(),
             create_test_client(),
             database_repo_is_ready(),
@@ -287,7 +287,7 @@ def test_owner_cannot_update_another_organization():
 
     with given(
         [
-            prepare_injector(),
+            prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
             prepare_api_server(),
             create_test_client(),
             database_repo_is_ready(),
@@ -326,7 +326,7 @@ def test_admin_cannot_delete_organization():
 
     with given(
         [
-            prepare_injector(),
+            prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
             prepare_api_server(),
             create_test_client(),
             database_repo_is_ready(),
@@ -363,7 +363,7 @@ def test_owner_can_delete_their_organization():
 
     with given(
         [
-            prepare_injector(),
+            prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
             prepare_api_server(),
             create_test_client(),
             database_repo_is_ready(),
@@ -455,7 +455,7 @@ def test_default_organization_cannot_be_deleted():
 
     with given(
         [
-            prepare_injector(),
+            prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
             prepare_api_server(),
             create_test_client(),
             database_repo_is_ready(),

@@ -266,10 +266,21 @@ test.describe("Set password (accept invite)", () => {
     await page.getByLabel(/full name/i).fill("Jane Doe");
     await page.getByLabel(/^new password$/i).fill("StrongPass123");
     await page.getByLabel(/^confirm password$/i).fill("StrongPass123");
-    await page.getByRole("button", { name: /^set password$/i }).click();
 
-    await expect(page.getByText(/please log in to continue/i)).toBeVisible();
+    // Tie the assertion to the durable signals — the set-password POST completing and
+    // the redirect — rather than the success toast, which is created in the same tick as
+    // router.push("/login") and can be dropped on a slow (CI) renderer mid-navigation.
+    await Promise.all([
+      page.waitForResponse(
+        (r) =>
+          r.url().includes("/api/v1/auth/set-password") &&
+          r.request().method() === "POST",
+      ),
+      page.getByRole("button", { name: /^set password$/i }).click(),
+    ]);
+
     await expect(page).toHaveURL(/\/login/);
+    await expect(page.getByText(/please log in to continue/i)).toBeVisible();
   });
 });
 

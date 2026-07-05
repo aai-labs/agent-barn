@@ -26,13 +26,14 @@ from api.tests.core.modules import (
     prepare_api_server,
     prepare_injector,
 )
+from api.tests.steps.agent import MockK8sModule, MockLiteLLMModule
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
 
 _ORGS = "/api/v1/organizations"
 
 _GIVEN = [
-    prepare_injector(),
+    prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
     prepare_api_server(),
     create_test_client(),
     database_repo_is_ready(),
