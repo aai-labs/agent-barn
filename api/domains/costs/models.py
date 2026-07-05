@@ -1,13 +1,6 @@
-from datetime import datetime
 from uuid import UUID
 
-import sqlalchemy as sa
 from pydantic import BaseModel as PydanticBaseModel, ConfigDict, Field
-from sqlmodel import Field as SqlField
-
-from api.infrastructure.postgres.models import BaseModel
-
-
 
 
 # ---------------------------------------------------------------------------

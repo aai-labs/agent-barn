@@ -148,8 +148,6 @@ class CostService:
                 if len(date_str) == 10:
                     daily_costs[date_str] = daily_costs.get(date_str, 0.0) + row_spend
 
-
-
         time_series = [
             CostTimeSeriesPoint(date=d, cost=c) for d, c in sorted(daily_costs.items())
         ]
@@ -198,5 +196,3 @@ class CostService:
             logger.warning("Failed to fetch key info for agent %s: %s", agent.id, exc)
             info = {}
         return self._build_agent_cost_read_from_info(agent, info)
-
-
