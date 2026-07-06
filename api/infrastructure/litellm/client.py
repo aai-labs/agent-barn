@@ -43,15 +43,19 @@ class LiteLLMClient:
             "Content-Type": "application/json",
         }
 
-    def generate_key(self, agent_id: str, agent_name: str) -> str:
+    def generate_key(self, agent_id: str, agent_name: str, org_id: str) -> str:
+        """Returns a new plaintext LiteLLM key for the agent."""
         master_key = self._master_key()
         url = f"{self.config.litellm_base_url}/key/generate"
         try:
             resp = httpx.post(
                 url,
                 json={
-                    "key_alias": agent_name,
-                    "metadata": {"agent_id": agent_id, "agent_name": agent_name},
+                    "key_alias": f"{agent_name}-{agent_id}",
+                    "metadata": {
+                        "agent_id": agent_id,
+                        "organization_id": org_id,
+                    },
                 },
                 headers=self._headers(master_key),
                 timeout=10,
