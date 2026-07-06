@@ -107,3 +107,38 @@ def test_get_agent_cost_returns_200_and_data():
             data = response.json()
             assert_that(data["total_cost"], equal_to(5.0))
             assert_that(data["agent_id"], equal_to(agent_id))
+
+
+def test_get_costs_summary_requires_auth():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I request costs summary without auth"):
+            response = client.get(f"{_BASE}/summary")
+
+        with then("it returns 401 Unauthorized"):
+            assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
+
+
+def test_get_agent_cost_requires_auth():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        agent_id = str(context.agent.id)
+
+        with when("I request agent cost without auth"):
+            response = client.get(f"{_BASE}/agents/{agent_id}")
+
+        with then("it returns 401 Unauthorized"):
+            assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
+
+
+def test_get_agent_cost_not_found_returns_404():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        fake_id = "11111111-1111-1111-1111-111111111111"
+
+        with when("I request an agent that does not exist"):
+            response = client.get(f"{_BASE}/agents/{fake_id}", headers=_auth(context))
+
+        with then("it returns 404 Not Found"):
+            assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))

@@ -457,9 +457,7 @@ class AgentService:
 
         if self.config.litellm_base_url and self.config.litellm_secret_name:
             try:
-                litellm_key = self.litellm.generate_key(
-                    str(agent.id), agent.name, str(agent.organization_id)
-                )
+                litellm_key = self.litellm.generate_key(str(agent.id), agent.name)
                 agent.litellm_key_encrypted = encrypt_token(
                     litellm_key, self.config.agent_token_encryption_key
                 )

@@ -962,7 +962,7 @@ def test_create_agent_calls_litellm_generate_key():
             agent_id = response.json()["id"]
             # the test uses _VALID_CREATE where name is "Test Agent"
             litellm.generate_key.assert_called_once_with(
-                agent_id, _VALID_CREATE["name"], str(context.organization.id)
+                agent_id, _VALID_CREATE["name"]
             )
 
 
