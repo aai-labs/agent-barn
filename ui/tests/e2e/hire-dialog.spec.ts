@@ -216,6 +216,44 @@ test.describe("Hire Dialog", () => {
     await expect(preview).toHaveValue(/\{\{ agent_display_name \}\}/);
   });
 
+  test("details step shows command approval select defaulting to auto", async ({ page }) => {
+    await page.getByText("General Purpose", { exact: true }).click();
+    await page.getByRole("button", { name: /continue/i }).click(); // template → slack-choice
+    await page.getByText("I already have a Slack app").click();
+    await page.getByRole("button", { name: /continue/i }).click(); // slack-choice → tokens
+    await page.getByPlaceholder(/xapp-/i).fill("xapp-1-test");
+    await page.getByPlaceholder(/xoxb-/i).fill("xoxb-test");
+    await page.getByRole("button", { name: /continue/i }).click(); // tokens → details
+
+    await expect(page.getByText("Command approval")).toBeVisible();
+    await expect(page.locator('label:text-is("Command approval") + select')).toHaveValue("auto");
+  });
+
+  test("hire posts approval_mode from details step selection", async ({ page }) => {
+    await dataSupportPage.agents.interceptCreateAgentRequest({ body: { ...mockAgent, status: "STOPPED" } });
+    await dataSupportPage.agents.interceptSlackChannelsRequest({ agentId: mockAgent.id });
+    await dataSupportPage.agents.interceptSlackUsersRequest({ agentId: mockAgent.id });
+
+    await page.getByText("General Purpose", { exact: true }).click();
+    await page.getByRole("button", { name: /continue/i }).click(); // template → slack-choice
+    await page.getByText("I already have a Slack app").click();
+    await page.getByRole("button", { name: /continue/i }).click(); // slack-choice → tokens
+    await page.getByPlaceholder(/xapp-/i).fill("xapp-1-test");
+    await page.getByPlaceholder(/xoxb-/i).fill("xoxb-test");
+    await page.getByRole("button", { name: /continue/i }).click(); // tokens → details
+    await page.locator('label:text-is("Command approval") + select').selectOption("manual");
+    await page.getByRole("button", { name: /continue/i }).click(); // details → skills
+
+    const createPromise = page.waitForRequest(
+      (req) => req.url().includes("/api/v1/agents") && req.method() === "POST",
+    );
+    await page.getByRole("button", { name: "Hire Aria" }).click();
+    const createRequest = await createPromise;
+    const body = createRequest.postDataJSON() as Record<string, unknown>;
+
+    expect(body.approval_mode).toBe("manual");
+  });
+
   test("hire posts template_slug + selected version, not markdown", async ({ page }) => {
     await dataSupportPage.agents.interceptCreateAgentRequest({ body: { ...mockAgent, status: "STOPPED" } });
     await dataSupportPage.agents.interceptSlackChannelsRequest({ agentId: mockAgent.id });

@@ -25,6 +25,7 @@ export function TopNav({ onHire }: TopNavProps) {
   const orgBase = orgId ? `/dashboard/${orgId}` : "/dashboard";
   const navTabs = [
     { href: orgBase, label: "Home" },
+    { href: "/dashboard/costs", label: "Costs" },
     { href: `${orgBase}/settings`, label: "Settings" },
   ];
 

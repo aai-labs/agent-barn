@@ -14,6 +14,7 @@ export const mockAgent = {
   template_slug: MOCK_TEMPLATE_SLUG,
   template_version: 1,
   model: "litellm/gpt-5-mini",
+  approval_mode: "auto",
   slack_config: {
     channel_ids: [],
     dm_user_ids: [],

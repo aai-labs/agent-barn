@@ -1072,6 +1072,8 @@ export function DetailsStep({
   onSlackGroupPolicyChange,
   slackDmPolicy,
   onSlackDmPolicyChange,
+  approvalMode,
+  onApprovalModeChange,
   onChangeTemplate,
 }: {
   template: AgentTemplateRead;
@@ -1084,6 +1086,8 @@ export function DetailsStep({
   onSlackGroupPolicyChange: (v: string) => void;
   slackDmPolicy: string;
   onSlackDmPolicyChange: (v: string) => void;
+  approvalMode: string;
+  onApprovalModeChange: (v: string) => void;
   onChangeTemplate: () => void;
 }) {
   const [previewFile, setPreviewFile] = useState<TemplateFileKey>("soulMd");
@@ -1118,6 +1122,18 @@ export function DetailsStep({
 
       <FormField label="Model">
         <ModelSelect value={model} onChange={onModelChange} aria-label="Model" />
+      </FormField>
+
+      <FormField label="Command approval">
+        <select
+          className="af-input"
+          value={approvalMode}
+          onChange={(e) => onApprovalModeChange(e.target.value)}
+        >
+          <option value="auto">Auto — approve low-risk commands automatically</option>
+          <option value="manual">Manual — always ask before running commands</option>
+          <option value="off">Off — skip all approval prompts</option>
+        </select>
       </FormField>
 
       {platform === "slack" && (
