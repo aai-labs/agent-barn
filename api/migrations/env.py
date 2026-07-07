@@ -10,6 +10,7 @@ import api.domains.agents.models  # noqa: F401
 import api.domains.skills.models  # noqa: F401
 import api.domains.auth.models  # noqa: F401
 import api.domains.conversations.models  # noqa: F401
+import api.domains.costs.models  # noqa: F401
 import api.domains.organizations.models  # noqa: F401
 import api.domains.templates.models  # noqa: F401
 import api.domains.tool_calls.models  # noqa: F401

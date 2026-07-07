@@ -71,6 +71,7 @@ from api.domains.templates.models import TemplateRead
 from api.domains.templates.renderer import render_template
 from api.domains.templates.repository import TemplateRepository
 from api.domains.conversations.service import ConversationSyncService
+from api.domains.costs.service import CostService
 from api.domains.tool_calls.sync_service import ToolCallSyncService
 from api.infrastructure.crypto import decrypt_token, encrypt_token
 from api.infrastructure.kubernetes.client import KubernetesClient
@@ -174,6 +175,7 @@ class AgentService:
     config: Config
     conversation_sync_service: ConversationSyncService
     sync_service: ToolCallSyncService
+    cost_service: CostService
     skill_repository: SkillRepository
     slack_token_service: SlackConfigTokenService
 
@@ -455,7 +457,9 @@ class AgentService:
 
         if self.config.litellm_base_url and self.config.litellm_secret_name:
             try:
-                litellm_key = self.litellm.generate_key(str(agent.id))
+                litellm_key = self.litellm.generate_key(
+                    str(agent.id), agent.name, str(agent.organization_id)
+                )
                 agent.litellm_key_encrypted = encrypt_token(
                     litellm_key, self.config.agent_token_encryption_key
                 )
@@ -1143,9 +1147,9 @@ class AgentService:
                 plaintext_key = decrypt_token(
                     agent.litellm_key_encrypted, self.config.agent_token_encryption_key
                 )
-                self.litellm.delete_key(plaintext_key)
+                self.litellm.block_key(plaintext_key)
             except Exception:
-                logger.warning("Could not revoke LiteLLM key for agent %s", agent_id)
+                logger.warning("Could not block LiteLLM key for agent %s", agent_id)
 
     def pair_agent(
         self, agent_id: UUID, data: PairRequest, context: CurrentUserContext
