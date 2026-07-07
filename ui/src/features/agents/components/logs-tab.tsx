@@ -35,7 +35,7 @@ export function LogsTab({ agent }: LogsTabProps) {
 
   if (logs !== prevLogs) {
     setPrevLogs(logs);
-    if (logs?.lines && logs.source === "live") {
+    if (logs?.lines && (logs.source === "live" || !isRunning)) {
       setLines(logs.lines);
     }
   }
@@ -64,10 +64,12 @@ export function LogsTab({ agent }: LogsTabProps) {
 
   const handleLoadMore = useCallback(async () => {
     if (!scrollRef.current) return;
+    const wasRunning = isRunningRef.current;
     prevScrollHeightRef.current = scrollRef.current.scrollHeight;
 
     const result = await loadMore();
-    if (!result || !isRunningRef.current) return;
+    if (!result) return;
+    if (wasRunning && !isRunningRef.current) return;
 
     setLines((prev) => {
       const separator = result.sessionEndedAt
@@ -98,7 +100,8 @@ export function LogsTab({ agent }: LogsTabProps) {
     const sentinel = sentinelRef.current;
     if (!container || !sentinel) return;
 
-    const showHistory = isRunning && logs?.source === "live" && logs?.hasSnapshots && hasMore && !isLoadingHistory;
+    const showHistory = logs?.hasSnapshots && hasMore && !isLoadingHistory
+      && (isRunning ? logs?.source === "live" : true);
     if (!showHistory) return;
 
     const observer = new IntersectionObserver(
