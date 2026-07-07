@@ -249,6 +249,30 @@ class AgentRepository:
             )
             return session.exec(query).first()
 
+    def delete_old_snapshots(self, agent_id: UUID, keep: int) -> None:
+        with Session(self.delegate.engine) as session:
+            keep_ids_query = (
+                select(AgentLogSnapshot.id)
+                .where(col(AgentLogSnapshot.agent_id) == agent_id)
+                .order_by(col(AgentLogSnapshot.session_ended_at).desc())
+                .limit(keep)
+            )
+            keep_ids = list(session.exec(keep_ids_query).all())
+            if not keep_ids:
+                return
+            old_query = (
+                select(AgentLogSnapshot)
+                .where(
+                    col(AgentLogSnapshot.agent_id) == agent_id,
+                    col(AgentLogSnapshot.id).notin_(keep_ids),
+                )
+            )
+            old_snapshots = list(session.exec(old_query).all())
+            for snap in old_snapshots:
+                session.delete(snap)
+            if old_snapshots:
+                session.commit()
+
     def save(self, agent: Agent) -> Agent:
         self.delegate.save(agent)
         return agent

@@ -316,4 +316,41 @@ def test_get_log_history_no_more_when_single_snapshot():
                 assert result.next_snapshot_id is None
 
 
+def test_capture_logs_deletes_old_snapshots_keeping_latest_5():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        service: AgentService = context.injector.get(AgentService)
+        repo: AgentRepository = context.injector.get(AgentRepository)
+        k8s = _k8s(context)
+
+        for i in range(6):
+            t = dt.datetime(2025, 1, 1 + i, tzinfo=dt.timezone.utc)
+            repo.save_log_snapshot(
+                AgentLogSnapshot(
+                    agent_id=context.agent.id,
+                    session_started_at=t,
+                    session_ended_at=t,
+                    log_text=f"session-{i}",
+                    byte_size=9,
+                )
+            )
+
+        k8s.read_pod_logs.return_value = "newest-session"
+
+        with when("a 7th snapshot is captured"):
+            service._capture_logs_before_stop(context.agent)
+
+            with then("only 5 snapshots remain"):
+                count = 0
+                snapshot = repo.get_latest_log_snapshot(context.agent.id)
+                while snapshot is not None:
+                    count += 1
+                    snapshot = repo.get_previous_snapshot(
+                        context.agent.id, snapshot.session_ended_at
+                    )
+                assert_that(count, equal_to(5))
+
+                latest = repo.get_latest_log_snapshot(context.agent.id)
+                assert_that(latest.log_text, equal_to("newest-session"))
+
+
 _ = (Session, MockLiteLLMModule)

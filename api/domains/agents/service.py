@@ -1102,6 +1102,7 @@ class AgentService:
                     byte_size=byte_size,
                 )
             )
+            self.repository.delete_old_snapshots(agent.id, keep=5)
             logger.info(
                 "Captured log snapshot for agent %s (%d bytes)", agent.id, byte_size
             )
