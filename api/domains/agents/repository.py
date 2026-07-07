@@ -260,12 +260,9 @@ class AgentRepository:
             keep_ids = list(session.exec(keep_ids_query).all())
             if not keep_ids:
                 return
-            old_query = (
-                select(AgentLogSnapshot)
-                .where(
-                    col(AgentLogSnapshot.agent_id) == agent_id,
-                    col(AgentLogSnapshot.id).notin_(keep_ids),
-                )
+            old_query = select(AgentLogSnapshot).where(
+                col(AgentLogSnapshot.agent_id) == agent_id,
+                col(AgentLogSnapshot.id).notin_(keep_ids),
             )
             old_snapshots = list(session.exec(old_query).all())
             for snap in old_snapshots:
