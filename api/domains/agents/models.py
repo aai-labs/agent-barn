@@ -242,6 +242,10 @@ class AgentSlackConfig(BaseModel, table=True):
         default=SlackDmPolicy.OFF,
         sa_column=Column(sa.String(), nullable=False, server_default="off"),
     )
+    verbose_mode: bool = SqlField(
+        default=True,
+        sa_column=Column(sa.Boolean(), nullable=False, server_default=sa.true()),
+    )
 
 
 class AgentTeamsConfig(BaseModel, table=True):
@@ -326,6 +330,7 @@ class AgentCreate(PydanticBaseModel):
     slack_dm_user_ids: list[str] = Field(default_factory=list)
     slack_group_policy: SlackGroupPolicy = SlackGroupPolicy.ALLOWLIST
     slack_dm_policy: SlackDmPolicy = SlackDmPolicy.OFF
+    slack_verbose_mode: bool = True
     # Teams credentials (required when platform=teams)
     teams_app_id: str | None = Field(default=None, min_length=1)
     teams_app_password: str | None = Field(default=None, min_length=1)
@@ -378,6 +383,7 @@ class AgentUpdate(PydanticBaseModel):
     slack_dm_user_ids: list[str] | None = None
     slack_group_policy: SlackGroupPolicy | None = None
     slack_dm_policy: SlackDmPolicy | None = None
+    slack_verbose_mode: bool | None = None
     # Teams
     teams_app_id: str | None = Field(default=None, min_length=1)
     teams_app_password: str | None = Field(default=None, min_length=1)
@@ -431,6 +437,7 @@ class AgentSlackConfigRead(PydanticBaseModel):
     dm_user_ids: list[str]
     group_policy: SlackGroupPolicy
     dm_policy: SlackDmPolicy
+    verbose_mode: bool
     bot_display_name: str | None = None  # fetched live from Slack, not persisted
 
 

@@ -5,6 +5,7 @@ export const AgentSlackConfigSchema = z.object({
   dmUserIds: z.array(z.string()),
   groupPolicy: z.enum(["open", "allowlist"]),
   dmPolicy: z.enum(["off", "open", "allowlist"]),
+  verboseMode: z.boolean().default(true),
   botDisplayName: z.string().nullable().optional(),
 });
 

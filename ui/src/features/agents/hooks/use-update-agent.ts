@@ -20,6 +20,7 @@ export type UpdateAgentData = {
   slackDmUserIds?: string[];
   slackGroupPolicy?: "open" | "allowlist";
   slackDmPolicy?: "off" | "open" | "allowlist";
+  slackVerboseMode?: boolean;
   teamsAppId?: string;
   teamsAppPassword?: string;
   teamsTenantId?: string;
