@@ -1,7 +1,7 @@
 """add verbose mode to agent slack config
 
 Revision ID: d7e8f9a0b1c2
-Revises: c89367ccd358
+Revises: b1c2d3e4f5a6
 Create Date: 2026-07-07 00:00:00.000000
 
 """
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "d7e8f9a0b1c2"
-down_revision: Union[str, None] = "c89367ccd358"
+down_revision: Union[str, None] = "b1c2d3e4f5a6"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

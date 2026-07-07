@@ -71,6 +71,7 @@ from api.domains.templates.models import TemplateRead
 from api.domains.templates.renderer import render_template
 from api.domains.templates.repository import TemplateRepository
 from api.domains.conversations.service import ConversationSyncService
+from api.domains.costs.service import CostService
 from api.domains.tool_calls.sync_service import ToolCallSyncService
 from api.infrastructure.crypto import decrypt_token, encrypt_token
 from api.infrastructure.kubernetes.client import KubernetesClient
@@ -175,6 +176,7 @@ class AgentService:
     config: Config
     conversation_sync_service: ConversationSyncService
     sync_service: ToolCallSyncService
+    cost_service: CostService
     skill_repository: SkillRepository
     slack_token_service: SlackConfigTokenService
 
@@ -357,6 +359,7 @@ class AgentService:
             template_slug=agent.template_slug,
             template_version=agent.template_version,
             model=agent.model,
+            approval_mode=agent.approval_mode,
             slack_config=slack_config_read,
             teams_config=teams_config_read,
             secrets=secrets_read,
@@ -450,11 +453,14 @@ class AgentService:
             agent_type=data.agent_type,
             template_slug=template.template_slug,
             template_version=template.version,
+            approval_mode=data.approval_mode,
         )
 
         if self.config.litellm_base_url and self.config.litellm_secret_name:
             try:
-                litellm_key = self.litellm.generate_key(str(agent.id))
+                litellm_key = self.litellm.generate_key(
+                    str(agent.id), agent.name, str(agent.organization_id)
+                )
                 agent.litellm_key_encrypted = encrypt_token(
                     litellm_key, self.config.agent_token_encryption_key
                 )
@@ -673,6 +679,9 @@ class AgentService:
             self._ensure_model_allowed(updated["model"])
             agent.model = updated["model"]
 
+        if "approval_mode" in updated:
+            agent.approval_mode = updated["approval_mode"]
+
         # Validate skill changes against the effective template's required skills
         if effective_template is None:
             effective_template = (
@@ -883,6 +892,7 @@ class AgentService:
                     dm_policy=str(slack_config.dm_policy),
                     group_policy=str(slack_config.group_policy),
                     verbose_mode=slack_config.verbose_mode,
+                    approval_mode=str(agent.approval_mode),
                 )
                 secret = build_secret_hermes_slack(
                     agent_id=agent.id,
@@ -913,6 +923,7 @@ class AgentService:
                     slack_dm_user_ids=slack_config.dm_user_ids,
                     slack_group_policy=str(slack_config.group_policy),
                     slack_dm_policy=str(slack_config.dm_policy),
+                    approval_mode=str(agent.approval_mode),
                 )
                 secret = build_secret_slack(
                     agent_id=agent.id,
@@ -947,6 +958,7 @@ class AgentService:
             overlay = build_openclaw_config_overlay_teams(
                 effective_model,
                 self.config.agent_litellm_base_url,
+                approval_mode=str(agent.approval_mode),
             )
             secret = build_secret_teams(
                 agent_id=agent.id,
@@ -1140,9 +1152,9 @@ class AgentService:
                 plaintext_key = decrypt_token(
                     agent.litellm_key_encrypted, self.config.agent_token_encryption_key
                 )
-                self.litellm.delete_key(plaintext_key)
+                self.litellm.block_key(plaintext_key)
             except Exception:
-                logger.warning("Could not revoke LiteLLM key for agent %s", agent_id)
+                logger.warning("Could not block LiteLLM key for agent %s", agent_id)
 
     def pair_agent(
         self, agent_id: UUID, data: PairRequest, context: CurrentUserContext

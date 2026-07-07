@@ -210,6 +210,34 @@ def test_create_agent_does_not_create_template_rows():
             assert_that(latest.version, equal_to(1))
 
 
+def test_create_agent_default_approval_mode_is_auto():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I create an agent without specifying approval_mode"):
+            response = client.post(_BASE, json=_VALID_CREATE, headers=_auth(context))
+
+        with then("the response has approval_mode set to auto"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(response.json()["approval_mode"], equal_to("auto"))
+
+
+def test_create_agent_with_approval_mode_off():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I create an agent with approval_mode off"):
+            response = client.post(
+                _BASE,
+                json={**_VALID_CREATE, "approval_mode": "off"},
+                headers=_auth(context),
+            )
+
+        with then("the response has approval_mode set to off"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(response.json()["approval_mode"], equal_to("off"))
+
+
 def test_list_agents_returns_active_only():
     with given(
         [
@@ -392,6 +420,23 @@ def test_patch_agent_no_auth_returns_401():
 
         with then("it returns 401"):
             assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
+
+
+def test_patch_agent_approval_mode():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        agent_id = str(context.agent.id)
+
+        with when("I update the agent's approval_mode to manual"):
+            response = client.patch(
+                f"{_BASE}/{agent_id}",
+                json={"approval_mode": "manual"},
+                headers=_auth(context),
+            )
+
+        with then("the response reflects the new approval_mode"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["approval_mode"], equal_to("manual"))
 
 
 _JIRA_CONTENT = {
@@ -914,7 +959,11 @@ def test_create_agent_calls_litellm_generate_key():
 
         with then("LiteLLM generate_key was called once"):
             assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
-            litellm.generate_key.assert_called_once()
+            agent_id = response.json()["id"]
+            # the test uses _VALID_CREATE where name is "Test Agent"
+            litellm.generate_key.assert_called_once_with(
+                agent_id, _VALID_CREATE["name"], str(context.organization.id)
+            )
 
 
 def test_create_agent_litellm_failure_returns_503():
@@ -959,7 +1008,7 @@ def test_start_agent_injects_per_agent_key():
             )
 
 
-def test_delete_agent_calls_litellm_delete_key():
+def test_delete_agent_calls_litellm_block_key():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         client: TestClient = context.client
         litellm: LiteLLMClient = context.injector.get(LiteLLMClient)
@@ -969,16 +1018,16 @@ def test_delete_agent_calls_litellm_delete_key():
                 f"{_BASE}/{context.agent.id}", headers=_auth(context)
             )
 
-        with then("LiteLLM delete_key was called once"):
+        with then("LiteLLM block_key was called once"):
             assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
-            litellm.delete_key.assert_called_once_with(FAKE_LITELLM_KEY)
+            litellm.block_key.assert_called_once_with(FAKE_LITELLM_KEY)
 
 
 def test_delete_agent_litellm_failure_still_returns_204():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         client: TestClient = context.client
         litellm: LiteLLMClient = context.injector.get(LiteLLMClient)
-        litellm.delete_key.side_effect = Exception("timeout")
+        litellm.block_key.side_effect = Exception("timeout")
 
         with when("I delete the agent but LiteLLM key revocation fails"):
             response = client.delete(

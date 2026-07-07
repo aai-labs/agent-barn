@@ -124,6 +124,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   const [slackGroupPolicy, setSlackGroupPolicy] = useState<"open" | "allowlist">("allowlist");
   const [slackDmPolicy, setSlackDmPolicy] = useState<"off" | "open" | "allowlist">("off");
   const [slackVerboseMode, setSlackVerboseMode] = useState(true);
+  const [approvalMode, setApprovalMode] = useState<"manual" | "auto" | "off">("auto");
   const [teamsAppId, setTeamsAppId] = useState("");
   const [teamsAppPassword, setTeamsAppPassword] = useState("");
   const [showTeamsAppPassword, setShowTeamsAppPassword] = useState(false);
@@ -273,6 +274,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
           provider: c.provider,
           content: c.provider === "github" ? expandGithubContent(c.content) : c.content,
         })),
+        approvalMode,
         ...(platform === "slack"
           ? { slackBotToken, slackAppToken, slackGroupPolicy, slackDmPolicy, slackVerboseMode }
           : { teamsAppId, teamsAppPassword, teamsTenantId }),
@@ -598,6 +600,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
             slackGroupPolicy={slackGroupPolicy} onSlackGroupPolicyChange={(v) => setSlackGroupPolicy(v as "open" | "allowlist")}
             slackDmPolicy={slackDmPolicy} onSlackDmPolicyChange={(v) => setSlackDmPolicy(v as "off" | "open" | "allowlist")}
             slackVerboseMode={slackVerboseMode} onSlackVerboseModeChange={setSlackVerboseMode}
+            approvalMode={approvalMode} onApprovalModeChange={(v) => setApprovalMode(v as "manual" | "auto" | "off")}
             onChangeTemplate={() => setStep("template")}
           />
         )}

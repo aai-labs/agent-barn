@@ -383,3 +383,29 @@ def test_start_sh_includes_aai_cli_setup_hook():
 def test_start_sh_includes_skills_json_reconstruction():
     assert_that(HERMES_START_SH, contains_string("skills.json"))
     assert_that(HERMES_START_SH, contains_string("/workspace/skills"))
+
+
+def test_build_hermes_config_approval_mode_auto_maps_to_smart():
+    cfg = build_hermes_config(
+        "litellm/qwen3", "http://litellm:4000", approval_mode="auto"
+    )
+    assert_that(cfg["approvals"]["mode"], equal_to("smart"))
+
+
+def test_build_hermes_config_approval_mode_off():
+    cfg = build_hermes_config(
+        "litellm/qwen3", "http://litellm:4000", approval_mode="off"
+    )
+    assert_that(cfg["approvals"]["mode"], equal_to("off"))
+
+
+def test_build_hermes_config_approval_mode_manual():
+    cfg = build_hermes_config(
+        "litellm/qwen3", "http://litellm:4000", approval_mode="manual"
+    )
+    assert_that(cfg["approvals"]["mode"], equal_to("manual"))
+
+
+def test_build_hermes_config_default_approval_mode_is_smart():
+    cfg = build_hermes_config("litellm/qwen3", "http://litellm:4000")
+    assert_that(cfg["approvals"]["mode"], equal_to("smart"))
