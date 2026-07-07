@@ -111,6 +111,7 @@ _SLACK_CONFIG_FIELDS = frozenset(
         "slack_dm_user_ids",
         "slack_group_policy",
         "slack_dm_policy",
+        "slack_verbose_mode",
     }
 )
 
@@ -499,6 +500,7 @@ class AgentService:
                 dm_user_ids=data.slack_dm_user_ids,
                 group_policy=data.slack_group_policy,
                 dm_policy=data.slack_dm_policy,
+                verbose_mode=data.slack_verbose_mode,
             )
             self.repository.save_slack_config(slack_config)
         elif data.platform == AgentPlatform.TEAMS:
@@ -756,6 +758,8 @@ class AgentService:
                     slack_config.group_policy = updated["slack_group_policy"]
                 if "slack_dm_policy" in updated:
                     slack_config.dm_policy = updated["slack_dm_policy"]
+                if "slack_verbose_mode" in updated:
+                    slack_config.verbose_mode = updated["slack_verbose_mode"]
                 self.repository.save_slack_config(slack_config)
                 if "slack_channel_ids" in updated:
                     self._join_public_channels(
@@ -887,6 +891,7 @@ class AgentService:
                     self.config.agent_litellm_base_url,
                     dm_policy=str(slack_config.dm_policy),
                     group_policy=str(slack_config.group_policy),
+                    verbose_mode=slack_config.verbose_mode,
                     approval_mode=str(agent.approval_mode),
                 )
                 secret = build_secret_hermes_slack(

@@ -32,6 +32,7 @@ def build_hermes_config(
     litellm_base_url: str,
     dm_policy: str = "off",
     group_policy: str = "allowlist",
+    verbose_mode: bool = True,
     approval_mode: str = "auto",
 ) -> dict:
     _, sep, model_name = model.partition("/")
@@ -79,6 +80,8 @@ def build_hermes_config(
             "platforms": {
                 "slack": {
                     "tool_progress": "off",
+                    "interim_assistant_messages": verbose_mode,
+                    "busy_ack_detail": False,
                 },
             },
         },
