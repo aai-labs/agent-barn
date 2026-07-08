@@ -1,1 +1,1 @@
-export { api } from "./api-instance";
+export { api, ORGANIZATION_HEADER } from "./api-instance";

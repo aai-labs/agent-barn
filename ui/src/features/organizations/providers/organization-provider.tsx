@@ -16,11 +16,22 @@ import { useCurrentUser } from "@/auth/providers/user-context-provider";
 import { useOrgStore } from "@/features/organizations/stores/org-store";
 import { useOrgStoreHydrated } from "@/features/organizations/stores/use-org-store-hydrated";
 import { useAllOrganizations } from "@/features/organizations/hooks/use-all-organizations";
-import { api } from "@/shared/api";
+import { api, ORGANIZATION_HEADER } from "@/shared/api";
 
 import type { Organization } from "../schemas";
 
-const ORGANIZATION_HEADER = "X-Organization-Id";
+// Org-scoped query base-keys dropped on org switch so the previous org's data can't
+// linger under the new org (these keys aren't org-dimensioned). Deny-list, not an
+// allow-list: user/session queries (current-user-context, etc.) and global lists
+// (organizations, users) must survive — evicting current-user-context would unmount the
+// whole authenticated tree behind UserContextProvider's loading fallback on every switch.
+const ORG_SCOPED_QUERY_KEYS = new Set([
+  "agents",
+  "templates",
+  "tool-calls",
+  "cost",
+  "skills",
+]);
 
 type OrganizationContextValue = {
   organizations: Organization[];
@@ -102,14 +113,21 @@ export function OrganizationProvider({ children }: { children: ReactNode }) {
     }
   }, [activeOrgId, storedOrganizationId, setOrganizationId, user.id]);
 
-  // Refetch org-scoped data when the active org changes (but not on the initial set).
+  // On org switch, DROP org-scoped cache rather than merely invalidating it. Those list
+  // keys aren't org-dimensioned, so invalidate would keep the previous org's data on
+  // screen during the refetch — the new org's URL/header active but the old org's
+  // agents/templates/costs still rendered. Removing forces a fresh load instead. Only
+  // org-scoped keys are touched (see ORG_SCOPED_QUERY_KEYS); user/session and global-list
+  // queries are left intact so the authenticated tree doesn't remount.
   const queryClient = useQueryClient();
-  const invalidatedOrgIdRef = useRef<string | null>(activeOrgId);
+  const switchedOrgIdRef = useRef<string | null>(activeOrgId);
   useEffect(() => {
-    if (invalidatedOrgIdRef.current !== activeOrgId) {
-      invalidatedOrgIdRef.current = activeOrgId;
-      void queryClient.invalidateQueries();
-    }
+    if (switchedOrgIdRef.current === activeOrgId) return;
+    switchedOrgIdRef.current = activeOrgId;
+    queryClient.removeQueries({
+      predicate: (query) =>
+        ORG_SCOPED_QUERY_KEYS.has(query.queryKey[0] as string),
+    });
   }, [activeOrgId, queryClient]);
 
   // A URL org the user can't reach (non-superuser, not a member; or a stale/unknown id)

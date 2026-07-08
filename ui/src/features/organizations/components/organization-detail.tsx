@@ -26,6 +26,7 @@ import {
 import { useDeleteOrganization } from "../hooks/use-organization-actions";
 import { useOrganization } from "../hooks/use-organization";
 import { useOrganizationMembers } from "../hooks/use-organization-members";
+import { useRequireOrgManager } from "../hooks/use-require-org-manager";
 import { MembersSection } from "./members-section";
 
 function orgInitials(name: string) {
@@ -66,6 +67,8 @@ function StatTile({
 }
 
 export function OrganizationDetail({ organizationId }: { organizationId: string }) {
+  // Member management is owner/admin-only; redirect a member here (e.g. via org switch).
+  const canManage = useRequireOrgManager();
   const router = useRouter();
   const { user, userContext } = useCurrentUser();
   const { organization, isLoading } = useOrganization(organizationId);
@@ -94,6 +97,11 @@ export function OrganizationDetail({ organizationId }: { organizationId: string 
       onError: (e) => toast.error(e.message || "Failed to delete organization"),
     });
   };
+
+  // Redirecting (member on an owner/admin page) — render nothing meanwhile.
+  if (!canManage) {
+    return null;
+  }
 
   if (isLoading) {
     return (

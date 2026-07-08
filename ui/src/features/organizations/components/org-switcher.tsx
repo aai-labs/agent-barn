@@ -8,7 +8,8 @@ import { useOrganizationContext } from "@/features/organizations/providers/organ
 import type { Organization } from "../schemas";
 
 // Segments directly under /dashboard/ that are NOT an org id (global admin / personal).
-const GLOBAL_DASHBOARD_SEGMENTS = new Set(["organizations", "account"]);
+// "users" is superuser-only global admin; "costs" is org-scoped and lives under [orgId].
+const GLOBAL_DASHBOARD_SEGMENTS = new Set(["organizations", "account", "users"]);
 
 export function OrgSwitcher() {
   const { organizations, selectedOrganization } = useOrganizationContext();

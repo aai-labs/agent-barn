@@ -8,6 +8,7 @@ import { useLogout } from "@/auth/hooks/use-logout";
 import { PlusIcon, UserIcon, UsersIcon, BuildingIcon, LogOutIcon } from "@/components/icons";
 import { LogoMark } from "@/components/logo-mark";
 import { OrgSwitcher } from "@/features/organizations/components/org-switcher";
+import { useActiveOrgRole } from "@/features/organizations/hooks/use-active-org-role";
 import { useOrganizationContext } from "@/features/organizations/providers/organization-provider";
 
 interface TopNavProps {
@@ -17,26 +18,22 @@ interface TopNavProps {
 export function TopNav({ onHire }: TopNavProps) {
   const pathname = usePathname();
   const router = useRouter();
-  const { user, userContext } = useCurrentUser();
+  const { user } = useCurrentUser();
   const { selectedOrganization } = useOrganizationContext();
   const { logout, isLoggingOut } = useLogout();
 
   const orgId = selectedOrganization?.id;
   const orgBase = orgId ? `/dashboard/${orgId}` : "/dashboard";
+
+  // Owners/admins (and superusers) manage members and see org spend; plain members can't.
+  const { canManage: canManageMembers } = useActiveOrgRole();
+
   const navTabs = [
     { href: orgBase, label: "Home" },
-    { href: "/dashboard/costs", label: "Costs" },
+    // Costs is owner/admin-only (the endpoint is gated too); hide it from members.
+    ...(canManageMembers ? [{ href: `${orgBase}/costs`, label: "Costs" }] : []),
     { href: `${orgBase}/settings`, label: "Settings" },
   ];
-
-  const roleInActiveOrg = userContext.organizationUsers?.find(
-    (m) => m.organizationId === selectedOrganization?.id,
-  )?.role;
-  const canManageMembers =
-    !!selectedOrganization &&
-    (user.isSuperuser ||
-      roleInActiveOrg === "OWNER" ||
-      roleInActiveOrg === "ADMIN");
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
