@@ -1,7 +1,7 @@
 """add approval_mode to agent
 
 Revision ID: b1c2d3e4f5a6
-Revises: 032ff9a474bb
+Revises: c89367ccd358
 Create Date: 2026-07-03
 
 """
