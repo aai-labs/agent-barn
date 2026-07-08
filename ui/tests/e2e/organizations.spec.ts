@@ -215,6 +215,68 @@ test.describe("Org switcher on the detail page", () => {
   });
 });
 
+test.describe("Org switcher — manage page for a member-only org", () => {
+  let data: DataSupport;
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  // Owner of org A, plain member of org B (non-superuser).
+  function ownerOfAMemberOfB() {
+    const [orgA, orgB] = twoOrgs();
+    const userId = "44444444-4444-4444-8444-444444444444";
+    const membership = (organization: unknown, role: string, id: string) => ({
+      id,
+      created_at: "2024-01-01T00:00:00Z",
+      updated_at: "2024-01-01T00:00:00Z",
+      user_id: userId,
+      organization_id: (organization as { id: string }).id,
+      role,
+      organization,
+    });
+    return {
+      id: userId,
+      created_at: "2024-01-01T00:00:00Z",
+      updated_at: "2024-01-01T00:00:00Z",
+      full_name: "Grace Hopper",
+      email: "owner-a@example.com",
+      is_superuser: false,
+      email_verified_at: "2024-01-01T00:00:00Z",
+      organization_users: [
+        membership(orgA, "OWNER", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+        membership(orgB, "MEMBER", "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"),
+      ],
+    };
+  }
+
+  test.beforeEach(async ({ page }) => {
+    data = new DataSupport(page);
+    await data.auth.interceptRefreshRequest();
+    await data.users.interceptGetUserContextRequest({
+      userContext: ownerOfAMemberOfB(),
+    });
+    await data.organizations.interceptGetOrganization();
+    await data.organizations.interceptGetMembers();
+    await data.agents.interceptGetAgentsRequest();
+  });
+
+  test("switching to an org where I'm only a member leaves the manage page for that org's home, not a 403 screen", async ({
+    page,
+  }) => {
+    await page.goto(DETAIL_URL); // org A manage page (I'm the owner)
+    await expect(page.getByRole("heading", { name: /AAI Labs/i })).toBeVisible();
+
+    const switcher = page.locator('button[aria-haspopup="listbox"]');
+    await switcher.click();
+    await page
+      .getByRole("listbox")
+      .getByRole("option", { name: /globex/i })
+      .click();
+
+    // The guard redirects to org B's home instead of /members (which would 403).
+    await expect(page).toHaveURL(new RegExp(`/dashboard/${ORG_B_ID}$`));
+    await expect(page).not.toHaveURL(/\/members/);
+  });
+});
+
 test.describe("Org switcher (superuser)", () => {
   let data: DataSupport;
   test.use({ storageState: { cookies: [], origins: [] } });
