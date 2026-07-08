@@ -26,6 +26,13 @@ agentTokenEncryptionKey: ""
 environment: ""
 webAppUrl: ""
 
+# Transactional email (invites, password reset, verification). Leave blank to disable
+# email delivery — the app logs a warning and no-ops sends. Both credential and SMTP
+# server must be set for delivery to be enabled.
+emailServerCredential: ""
+emailSmtpServer: ""
+emailFromAddress: ""
+
 litellmBaseUrl: "http://litellm:4000"
 agentLitellmBaseUrl: "http://litellm:4000"
 
