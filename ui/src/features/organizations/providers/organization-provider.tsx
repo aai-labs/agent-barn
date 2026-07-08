@@ -122,8 +122,14 @@ export function OrganizationProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const switchedOrgIdRef = useRef<string | null>(activeOrgId);
   useEffect(() => {
-    if (switchedOrgIdRef.current === activeOrgId) return;
+    const previousOrgId = switchedOrgIdRef.current;
+    if (previousOrgId === activeOrgId) return;
     switchedOrgIdRef.current = activeOrgId;
+    // Only a genuine org-to-org switch should drop caches. The initial resolution
+    // (null -> org, e.g. a superuser's org list arriving asynchronously) is not a switch:
+    // evicting there would wipe the just-loaded agents/templates mid-render and flash a
+    // reload. Nothing stale exists before the first org is known, so skip it.
+    if (previousOrgId === null || activeOrgId === null) return;
     queryClient.removeQueries({
       predicate: (query) =>
         ORG_SCOPED_QUERY_KEYS.has(query.queryKey[0] as string),
