@@ -1228,6 +1228,11 @@ class AgentService:
         self.repository.save(agent)
         return self._get_agent_read(agent)
 
+    def count_active_agents(self, organization_id: UUID) -> int:
+        """Number of non-deleted agents in an org. Used by other domains (e.g. org
+        deletion) to decide whether an org can be safely torn down."""
+        return self.repository.count_active_by_org(organization_id)
+
     def delete_agent(self, agent_id: UUID, context: CurrentUserContext) -> None:
         org_id = self._org_id(context)
         agent = self._get_active_or_404(agent_id, org_id)

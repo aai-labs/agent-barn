@@ -1,10 +1,11 @@
+import { TEST_ORG_ID } from "../constants";
 import { Locator, Page } from "@playwright/test";
 
 export class AgentDetailPage {
   constructor(private page: Page) {}
 
   async goto(agentId = "33333333-3333-4333-8333-333333333333") {
-    await this.page.goto(`/dashboard/agents/${agentId}`);
+    await this.page.goto(`/dashboard/${TEST_ORG_ID}/agents/${agentId}`);
   }
 
   agentName(name: string): Locator {

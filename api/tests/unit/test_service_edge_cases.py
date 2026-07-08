@@ -1,4 +1,3 @@
-from types import SimpleNamespace
 from typing import cast
 from unittest.mock import Mock
 from uuid import uuid7
@@ -8,6 +7,7 @@ from hamcrest import assert_that, calling, equal_to, raises
 from pydantic import PostgresDsn
 
 from api.core.config import Config
+from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.repository import RefreshTokenRepository
 from api.domains.organizations.models import OrganizationUpdate
 from api.domains.organizations.repository import OrganizationRepository
@@ -108,11 +108,14 @@ def test_organization_service_update_not_found_raises_404():
     repo = Mock()
     repo.get.return_value = None
     org_service = OrganizationService(
-        organization_repository=repo, user_organization_service=Mock()
+        organization_repository=repo,
+        user_organization_service=Mock(),
+        auth_service=Mock(),
+        agent_service=Mock(),
+        template_service=Mock(),
     )
-    context = SimpleNamespace(
-        user=SimpleNamespace(is_superuser=True), current_user_organization=None
-    )
+    superuser = User(email="root@example.com", hashed_password="x", is_superuser=True)
+    context = CurrentUserContext(user=superuser)
 
     assert_that(
         calling(org_service.update_organization).with_args(

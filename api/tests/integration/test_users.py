@@ -1,7 +1,7 @@
-from uuid import uuid7
+from uuid import UUID, uuid7
 
 from fastapi import status
-from hamcrest import assert_that, equal_to, has_key
+from hamcrest import assert_that, equal_to, has_key, not_none
 from starlette.testclient import TestClient
 
 from api.tests.core.givenpy import given, when, then
@@ -11,8 +11,11 @@ from api.tests.core.modules import (
     prepare_injector,
 )
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
-from api.tests.steps.organization import there_is_a_default_organization
+from api.tests.steps.organization import (
+    there_is_a_default_organization,
+)
 from api.domains.users.organization_users.models import OrganizationRole
+from api.domains.users.organization_users.repository import OrganizationUserRepository
 from api.tests.steps.user import (
     there_is_a_user,
     there_is_an_access_token_for_user,
@@ -49,6 +52,8 @@ def test_super_admin_can_create_user():
                     "email": "newuser@example.com",
                     "password": "StrongPass123",
                     "full_name": "New User",
+                    "organization_id": str(org_id),
+                    "role": "ADMIN",
                 },
                 headers={"Authorization": f"Bearer {context.access_token}"},
             )
@@ -61,6 +66,16 @@ def test_super_admin_can_create_user():
             assert_that(payload["is_superuser"], equal_to(False))
             assert_that(payload, has_key("id"))
 
+        with then("they are a member of the chosen org with the chosen role"):
+            org_user_repo: OrganizationUserRepository = context.injector.get(
+                OrganizationUserRepository
+            )
+            membership = org_user_repo.get_by_user_id_and_organization_id(
+                UUID(payload["id"]), org_id
+            )
+            assert_that(membership, not_none())
+            assert_that(membership.role, equal_to(OrganizationRole.ADMIN))
+
         with then("the new user can login"):
             login_response = client.post(
                 "/api/v1/auth/login",
@@ -72,6 +87,63 @@ def test_super_admin_can_create_user():
             )
             assert_that(login_response.status_code, equal_to(status.HTTP_200_OK))
             assert_that(login_response.json(), has_key("access_token"))
+
+
+def test_create_user_with_owner_role_returns_400():
+    super_id = uuid7()
+    org_id = uuid7()
+    with given(
+        [
+            prepare_injector(),
+            prepare_api_server(),
+            create_test_client(),
+            database_repo_is_ready(),
+            database_is_clean(),
+            there_is_a_user(
+                id=super_id, email="super-own@example.com", is_superuser=True
+            ),
+            there_is_a_default_organization(id=org_id),
+            there_is_an_access_token_for_user(user_id=super_id),
+        ]
+    ) as context:
+        response = context.client.post(
+            "/api/v1/users",
+            json={
+                "email": "wannabe-owner@example.com",
+                "password": "StrongPass123",
+                "organization_id": str(org_id),
+                "role": "OWNER",
+            },
+            headers={"Authorization": f"Bearer {context.access_token}"},
+        )
+        assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+
+
+def test_create_user_with_unknown_org_returns_404():
+    super_id = uuid7()
+    with given(
+        [
+            prepare_injector(),
+            prepare_api_server(),
+            create_test_client(),
+            database_repo_is_ready(),
+            database_is_clean(),
+            there_is_a_user(
+                id=super_id, email="super-noorg@example.com", is_superuser=True
+            ),
+            there_is_an_access_token_for_user(user_id=super_id),
+        ]
+    ) as context:
+        response = context.client.post(
+            "/api/v1/users",
+            json={
+                "email": "orphan@example.com",
+                "password": "StrongPass123",
+                "organization_id": str(uuid7()),
+            },
+            headers={"Authorization": f"Bearer {context.access_token}"},
+        )
+        assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
 def test_create_user_with_duplicate_email_returns_409():
@@ -103,6 +175,7 @@ def test_create_user_with_duplicate_email_returns_409():
                 json={
                     "email": "existing@example.com",
                     "password": "StrongPass123",
+                    "organization_id": str(org_id),
                 },
                 headers={"Authorization": f"Bearer {context.access_token}"},
             )
@@ -139,6 +212,7 @@ def test_create_user_with_weak_password_returns_400():
                 json={
                     "email": "weakpass@example.com",
                     "password": "123",
+                    "organization_id": str(org_id),
                 },
                 headers={"Authorization": f"Bearer {context.access_token}"},
             )
@@ -174,6 +248,7 @@ def test_non_super_admin_cannot_create_user():
                 json={
                     "email": "newuser@example.com",
                     "password": "StrongPass123",
+                    "organization_id": str(org_id),
                 },
                 headers={"Authorization": f"Bearer {context.access_token}"},
             )

@@ -1,13 +1,14 @@
 "use client";
 
 import { useState } from "react";
-import { Building, Loader2, UserRound } from "lucide-react";
-import { useDebouncedValue } from "@tanstack/react-pacer";
+import Link from "next/link";
+import { Building, Loader2, PlusIcon, UserRound } from "lucide-react";
 
 import { AppErrorState } from "@/components/app-error-state";
 import { ListPageHeader } from "@/components/list-page-header";
 
 import { useInfiniteOrganizations } from "../hooks/use-infinite-organizations";
+import { CreateOrganizationDialog } from "./create-organization-dialog";
 
 function LoadingCard() {
   return (
@@ -23,7 +24,7 @@ function LoadingCard() {
 
 export function OrganizationsGrid() {
   const [search, setSearch] = useState("");
-  const [debouncedSearch] = useDebouncedValue(search, { wait: 300 });
+  const [createOpen, setCreateOpen] = useState(false);
   const {
     organizations,
     total,
@@ -33,7 +34,7 @@ export function OrganizationsGrid() {
     isFetchingNextPage,
     isLoading,
     refetch,
-  } = useInfiniteOrganizations({ search: debouncedSearch });
+  } = useInfiniteOrganizations({ search });
 
   return (
     <div className="max-w-[1200px] mx-auto px-10 pt-9 pb-24">
@@ -42,10 +43,19 @@ export function OrganizationsGrid() {
         description="Super admin view of all organizations."
         count={total}
         noun="organization"
-        search={search}
         onSearch={setSearch}
         searchPlaceholder="Search by name, owner, or description"
+        action={
+          <button
+            className="af-btn af-btn-primary flex-shrink-0"
+            onClick={() => setCreateOpen(true)}
+          >
+            <PlusIcon width={15} height={15} /> Create organization
+          </button>
+        }
       />
+
+      <CreateOrganizationDialog open={createOpen} onOpenChange={setCreateOpen} />
 
       {isLoading ? (
         <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))" }}>
@@ -63,7 +73,11 @@ export function OrganizationsGrid() {
       ) : (
         <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))" }}>
           {organizations.map((org) => (
-            <div key={org.id} className="af-card af-card-hover px-5 py-[18px]">
+            <Link
+              key={org.id}
+              href={`/dashboard/${org.id}/members`}
+              className="af-card af-card-hover block px-5 py-[18px]"
+            >
               <div className="flex items-center gap-2 mb-1">
                 <Building width={14} height={14} style={{ color: "var(--ink-4)", flexShrink: 0 }} />
                 <span className="font-semibold text-[14.5px] truncate" style={{ color: "var(--ink)" }}>
@@ -84,9 +98,9 @@ export function OrganizationsGrid() {
                 className="text-[12px] pt-3"
                 style={{ borderTop: "1px solid var(--line)", color: "var(--ink-4)" }}
               >
-                Created: {new Date(org.createdAt).toLocaleString()}
+                Created: {new Date(org.createdAt).toLocaleDateString()}
               </div>
-            </div>
+            </Link>
           ))}
         </div>
       )}

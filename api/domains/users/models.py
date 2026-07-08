@@ -55,6 +55,10 @@ class AdminUserCreate(PydanticBaseModel):
     email: EmailStr
     password: str
     full_name: str | None = None
+    # Superuser-provisioned accounts must land in a chosen org (never a silent default),
+    # so they're usable immediately.
+    organization_id: UUID
+    role: OrganizationRole = OrganizationRole.MEMBER
 
 
 class AdminPasswordReset(PydanticBaseModel):

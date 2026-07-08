@@ -15,6 +15,7 @@ test.describe("Dashboard Page", () => {
 
     await dataSupportPage.auth.interceptRefreshRequest();
     await dataSupportPage.users.interceptGetUserContextRequest();
+    await dataSupportPage.users.interceptGetOrganizationsRequest();
     await dataSupportPage.agents.interceptGetAgentsRequest();
   });
 

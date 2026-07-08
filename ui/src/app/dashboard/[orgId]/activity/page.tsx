@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useAgents } from "@/features/agents/hooks/use-agents";
 import type { ActivityEvent } from "@/features/agents/types";
 import { AgentAvatar } from "@/features/agents/components/agent-avatar";
@@ -60,6 +60,8 @@ function groupEvents(events: (ActivityEvent & { id: string })[]): GroupedEvents 
 
 export default function ActivityPage() {
   const router = useRouter();
+  const params = useParams();
+  const orgId = typeof params?.orgId === "string" ? params.orgId : "";
   const { agents } = useAgents();
   const [events, setEvents] = useState<(ActivityEvent & { id: string })[]>(() =>
     EVENT_SAMPLES.map((e, i) => ({ ...e, id: "init_" + i }))
@@ -128,7 +130,7 @@ export default function ActivityPage() {
                       borderBottom: i < g.events.length - 1 ? "1px solid var(--line)" : undefined,
                       background: isNew ? "var(--bg-soft)" : undefined,
                     }}
-                    onClick={() => realAgent && router.push(`/dashboard/agents/${realAgent.id}`)}
+                    onClick={() => realAgent && router.push(`/dashboard/${orgId}/agents/${realAgent.id}`)}
                     onMouseEnter={(el) => {
                       (el.currentTarget as HTMLElement).style.background = "var(--bg-soft)";
                     }}

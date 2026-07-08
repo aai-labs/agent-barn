@@ -12,6 +12,7 @@ test.describe("Change Password", () => {
 
     await data.auth.interceptRefreshRequest();
     await data.users.interceptGetUserContextRequest();
+    await data.users.interceptGetOrganizationsRequest();
     await data.users.interceptChangePasswordRequest();
   });
 

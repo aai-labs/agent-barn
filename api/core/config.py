@@ -16,6 +16,13 @@ class Config(BaseSettings):
     super_user_full_name: str = "Super User"
     email_server_credential: str | None = None
     email_smtp_server: str | None = None
+    # Optional visible "From" for outgoing mail. The SMTP login always uses the email
+    # in EMAIL_SERVER_CREDENTIAL; set EMAIL_FROM_ADDRESS to send *as* another address
+    # (e.g. no-reply@agentbarn.dev) while still authenticating with that credential.
+    # For good deliverability the sending domain should be authorized by the SMTP
+    # provider and DKIM/SPF/DMARC-configured. Defaults to the credential email.
+    email_from_address: str | None = None
+    email_from_name: str = "Agent Barn"
 
     environment: str = "local"
     web_app_url: str = "http://localhost:3000"

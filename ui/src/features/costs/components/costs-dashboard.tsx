@@ -4,9 +4,12 @@ import React from "react";
 
 import { useCostSummary } from "../hooks/use-cost-summary";
 import { AppErrorState } from "@/components/app-error-state";
+import { useRequireOrgManager } from "@/features/organizations/hooks/use-require-org-manager";
 import { CostsChart } from "./costs-chart";
 
 export function CostsDashboard() {
+  // Costs are owner/admin-only; redirect a member here (e.g. via org switch) to org home.
+  const canManage = useRequireOrgManager();
   const today = new Date().toISOString().split("T")[0];
   const [appliedStartDate, setAppliedStartDate] = React.useState<string>("");
   const [appliedEndDate, setAppliedEndDate] = React.useState<string>(today);
@@ -66,6 +69,11 @@ export function CostsDashboard() {
 
     return padded;
   }, [summary?.timeSeries, appliedStartDate, appliedEndDate, datesValid]);
+
+  // Redirecting (member on an owner/admin page) — render nothing meanwhile.
+  if (!canManage) {
+    return null;
+  }
 
   if (isLoadingSummary) {
     return (

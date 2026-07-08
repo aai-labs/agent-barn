@@ -1,10 +1,12 @@
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from uuid import UUID, uuid7
 
 from fastapi import HTTPException, status
 from injector import inject
 
 from api.core.config import Config
+from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.hashing import check_hash, hash_text
 from api.domains.auth.password_validation import validate_strong_password
 from api.domains.auth.repository import RefreshTokenRepository
@@ -61,25 +63,32 @@ class UserService:
 
     def create_user(self, data: AdminUserCreate) -> User:
         validate_strong_password(data.password)
+        if data.role == OrganizationRole.OWNER:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Use transfer-ownership to assign an owner",
+            )
+        if self.organization_repository.get(data.organization_id) is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Organization not found",
+            )
+
+        # Superuser-provisioned: the admin sets the password directly, so the account is
+        # active (verified) immediately — not a pending invite.
         user = User(
             email=data.email,
             full_name=data.full_name,
             hashed_password=hash_text(data.password),
+            email_verified_at=datetime.now(timezone.utc),
         )
         self.user_repository.save(user)
-
-        default_org = self.organization_repository.find_default()
-        if not default_org:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Default organization not found",
-            )
 
         self.organization_user_repository.save(
             OrganizationUser(
                 user_id=user.id,
-                organization_id=default_org.id,
-                role=OrganizationRole.MEMBER,
+                organization_id=data.organization_id,
+                role=data.role,
             )
         )
         return user
@@ -120,9 +129,16 @@ class UserService:
         return UserRead(**user.model_dump(), organization_users=organization_users)
 
     def get_paginated_users(
-        self, filters: UserFilter, page: int = 1, page_size: int = 15
+        self,
+        filters: UserFilter,
+        context: CurrentUserContext,
+        page: int = 1,
+        page_size: int = 15,
     ) -> PaginatedItems[UserRead]:
         pagination = Pagination(page=page, size=page_size)
+        # Global account admin (superuser-only route): list every account. Org-level
+        # people management lives on the per-org Members page instead.
+        del context  # scoping is intentionally global here
         paginated_users: PaginatedItems[User] = self.user_repository.find_all_paginated(
             pagination=pagination,
             query_filters=filters,

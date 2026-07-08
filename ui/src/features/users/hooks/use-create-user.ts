@@ -16,6 +16,8 @@ export function useCreateUser() {
         email: data.email,
         password: data.password,
         full_name: data.fullName || undefined,
+        organization_id: data.organizationId,
+        role: data.role,
       });
       return response.data;
     },

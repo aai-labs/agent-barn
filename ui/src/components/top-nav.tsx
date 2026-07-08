@@ -7,24 +7,33 @@ import { useCurrentUser } from "@/auth/providers/user-context-provider";
 import { useLogout } from "@/auth/hooks/use-logout";
 import { PlusIcon, UserIcon, UsersIcon, BuildingIcon, LogOutIcon } from "@/components/icons";
 import { LogoMark } from "@/components/logo-mark";
+import { OrgSwitcher } from "@/features/organizations/components/org-switcher";
+import { useActiveOrgRole } from "@/features/organizations/hooks/use-active-org-role";
+import { useOrganizationContext } from "@/features/organizations/providers/organization-provider";
 
 interface TopNavProps {
   onHire: () => void;
-  orgName?: string;
 }
 
-const NAV_TABS = [
-  { href: "/dashboard", label: "Home" },
-  { href: "/dashboard/costs", label: "Costs" },
-  // { href: "/dashboard/activity", label: "Activity" },
-  { href: "/dashboard/settings", label: "Settings" },
-];
-
-export function TopNav({ onHire, orgName }: TopNavProps) {
+export function TopNav({ onHire }: TopNavProps) {
   const pathname = usePathname();
   const router = useRouter();
   const { user } = useCurrentUser();
+  const { selectedOrganization } = useOrganizationContext();
   const { logout, isLoggingOut } = useLogout();
+
+  const orgId = selectedOrganization?.id;
+  const orgBase = orgId ? `/dashboard/${orgId}` : "/dashboard";
+
+  // Owners/admins (and superusers) manage members and see org spend; plain members can't.
+  const { canManage: canManageMembers } = useActiveOrgRole();
+
+  const navTabs = [
+    { href: orgBase, label: "Home" },
+    // Costs is owner/admin-only (the endpoint is gated too); hide it from members.
+    ...(canManageMembers ? [{ href: `${orgBase}/costs`, label: "Costs" }] : []),
+    { href: `${orgBase}/settings`, label: "Settings" },
+  ];
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -46,8 +55,9 @@ export function TopNav({ onHire, orgName }: TopNavProps) {
     .toUpperCase();
 
   const isActive = (href: string) => {
-    if (href === "/dashboard") {
-      return pathname === "/dashboard" || pathname.startsWith("/dashboard/agents");
+    // Home matches the org root and its agent pages; other tabs match their subtree.
+    if (href === orgBase) {
+      return pathname === orgBase || pathname.startsWith(`${orgBase}/agents`);
     }
     return pathname.startsWith(href);
   };
@@ -62,15 +72,10 @@ export function TopNav({ onHire, orgName }: TopNavProps) {
         Agent Barn
       </div>
 
-      {orgName && (
-        <div className="flex items-center gap-1.5 text-[13px]" style={{ color: "var(--ink-3)" }}>
-          <span style={{ color: "var(--ink-5)" }}>/</span>
-          <span>{orgName}</span>
-        </div>
-      )}
+      <OrgSwitcher />
 
       <nav className="flex gap-0.5 flex-1">
-        {NAV_TABS.map(({ href, label }) => (
+        {navTabs.map(({ href, label }) => (
           <Link
             key={href}
             href={href}
@@ -134,6 +139,16 @@ export function TopNav({ onHire, orgName }: TopNavProps) {
                 >
                   <UserIcon /> Account
                 </Link>
+                {canManageMembers && selectedOrganization && (
+                  <Link
+                    href={`${orgBase}/members`}
+                    className="af-hover-bg w-full text-left flex items-center gap-2.5 px-3.5 py-2 text-[13.5px]"
+                    style={{ color: "var(--ink-2)" }}
+                    onClick={() => setMenuOpen(false)}
+                  >
+                    <BuildingIcon /> Manage organization
+                  </Link>
+                )}
               </div>
 
               {user.isSuperuser && (

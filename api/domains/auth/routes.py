@@ -14,6 +14,7 @@ from fastapi_injector import Injected
 from api.core.config import Config
 from api.domains.auth.hashing import check_hash
 from api.domains.auth.models import (
+    AcceptInviteRequest,
     CurrentUserContext,
     ForgotPasswordRequest,
     PasswordResetRequest,
@@ -119,7 +120,8 @@ def refresh_access_token(
 @auth_router.get("/me", response_model=UserRead)
 def get_current_user_context(
     context: Annotated[
-        CurrentUserContext, Depends(get_current_user(verified_required=False))
+        CurrentUserContext,
+        Depends(get_current_user(verified_required=False, require_organization=False)),
     ],
     user_service: UserService = Injected(UserService),
 ):
@@ -176,6 +178,15 @@ def reset_password(
 ):
     auth_service.reset_password(reset_request)
     return {"message": "Password reset successfully."}
+
+
+@auth_router.post("/set-password")
+def set_password(
+    request: AcceptInviteRequest,
+    auth_service: AuthService = Injected(AuthService),
+):
+    auth_service.accept_invite(request)
+    return {"message": "Password set successfully."}
 
 
 @auth_router.post("/logout")

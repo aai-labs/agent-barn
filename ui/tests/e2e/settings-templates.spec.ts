@@ -1,3 +1,4 @@
+import { TEST_ORG_ID } from "../constants";
 import { expect, test } from "@playwright/test";
 
 import {
@@ -20,11 +21,12 @@ test.describe("Settings · Templates", () => {
 
     await dataSupport.auth.interceptRefreshRequest();
     await dataSupport.users.interceptGetUserContextRequest();
+    await dataSupport.users.interceptGetOrganizationsRequest();
     await dataSupport.agents.interceptGetTemplatesRequest();
     await dataSupport.agents.interceptGetTemplateVersionsRequest();
     await dataSupport.skills.interceptGetSkillsRequest();
 
-    await page.goto("/dashboard/settings");
+    await page.goto(`/dashboard/${TEST_ORG_ID}/settings`);
     await page.getByRole("button", { name: "Templates", exact: true }).click();
   });
 

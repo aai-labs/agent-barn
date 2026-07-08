@@ -3,6 +3,7 @@ from uuid import UUID
 
 from injector import inject, singleton
 from sqlalchemy import and_, func
+from sqlalchemy.orm import aliased
 from sqlmodel import Session, col, or_, select
 
 from api.domains.organizations.models import (
@@ -55,6 +56,21 @@ class OrganizationRepository:
             .outerjoin(User, col(User.id) == col(OrganizationUser.user_id))
         )
 
+    @staticmethod
+    def _member_of_organization(user_id: UUID):
+        # Scope "my orgs" by *any* membership, correlated to the outer Organization.
+        # Deliberately separate from the owner-display join above (which is OWNER-only,
+        # just for the email/name columns) so non-owner members aren't filtered out.
+        member = aliased(OrganizationUser)
+        return (
+            select(member.id)
+            .where(
+                col(member.organization_id) == Organization.id,
+                col(member.user_id) == user_id,
+            )
+            .exists()
+        )
+
     def _apply_organization_read_filters(
         self, query, organization_filter: OrganizationFilter
     ):
@@ -97,7 +113,7 @@ class OrganizationRepository:
         with Session(self.delegate.engine) as session:
             query = self._build_organization_read_query()
             if user_id:
-                query = query.where(col(OrganizationUser.user_id) == user_id)
+                query = query.where(self._member_of_organization(user_id))
             query = self._apply_organization_read_filters(query, organization_filter)
             query = query.order_by(col(Organization.updated_at).asc())
 
@@ -114,9 +130,7 @@ class OrganizationRepository:
                 .outerjoin(User, col(User.id) == col(OrganizationUser.user_id))
             )
             if user_id:
-                count_query = count_query.where(
-                    col(OrganizationUser.user_id) == user_id
-                )
+                count_query = count_query.where(self._member_of_organization(user_id))
             count_query = self._apply_organization_read_filters(
                 count_query, organization_filter
             )

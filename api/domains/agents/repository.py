@@ -45,6 +45,16 @@ class AgentRepository:
             )
             return session.exec(query).first()
 
+    def count_active_by_org(self, org_id: UUID) -> int:
+        with Session(self.delegate.engine) as session:
+            count_query = (
+                select(func.count())
+                .select_from(Agent)
+                .where(col(Agent.organization_id) == org_id)
+                .where(col(Agent.deleted_at).is_(None))
+            )
+            return session.scalar(count_query) or 0
+
     def get_deleted(self, agent_id: UUID, org_id: UUID) -> Agent | None:
         with Session(self.delegate.engine) as session:
             query = (

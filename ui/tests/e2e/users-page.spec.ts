@@ -14,6 +14,7 @@ test.describe("Users Page — Create & Delete", () => {
 
     await data.auth.interceptRefreshRequest();
     await data.users.interceptGetUserContextRequest();
+    await data.users.interceptGetOrganizationsRequest();
     await data.users.interceptGetUsersRequest();
     await data.users.interceptCreateUserRequest();
     await data.users.interceptDeleteUserRequest();
@@ -35,6 +36,8 @@ test.describe("Users Page — Create & Delete", () => {
     await page.getByRole("button", { name: /create user/i }).click();
     await page.getByLabel(/email/i).fill("new@example.com");
     await page.getByLabel(/^password$/i).fill("StrongPass123");
+    // Global create-user must target an org (populated from the all-orgs picker).
+    await page.getByLabel(/organization/i).selectOption({ label: "AAI Labs" });
 
     await page.getByRole("button", { name: /^create$/i }).click();
 

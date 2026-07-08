@@ -21,4 +21,4 @@ class Email:
     to_email: str
     subject: str
     html_part: str
-    from_name: str | None = "Export Discovery"
+    from_name: str | None = "Agent Barn"

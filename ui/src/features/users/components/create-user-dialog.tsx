@@ -15,6 +15,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
+import { useAllOrganizations } from "@/features/organizations/hooks/use-all-organizations";
+
 import { useCreateUser } from "../hooks/use-create-user";
 import { CreateUserData, CreateUserSchema } from "../schemas";
 import { generateStrongPassword } from "../utils";
@@ -27,6 +29,7 @@ interface CreateUserDialogProps {
 export function CreateUserDialog({ open, onOpenChange }: CreateUserDialogProps) {
   const [showPassword, setShowPassword] = useState(false);
   const createUser = useCreateUser();
+  const { organizations } = useAllOrganizations({ enabled: open });
 
   const {
     register,
@@ -36,7 +39,13 @@ export function CreateUserDialog({ open, onOpenChange }: CreateUserDialogProps) 
     formState: { errors },
   } = useForm<CreateUserData>({
     resolver: zodResolver(CreateUserSchema),
-    defaultValues: { email: "", password: "", fullName: "" },
+    defaultValues: {
+      email: "",
+      password: "",
+      fullName: "",
+      organizationId: "",
+      role: "MEMBER",
+    },
   });
 
   const onSubmit = (values: CreateUserData) => {
@@ -77,7 +86,9 @@ export function CreateUserDialog({ open, onOpenChange }: CreateUserDialogProps) 
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Create user</DialogTitle>
-          <DialogDescription>Add a new user to the default organization.</DialogDescription>
+          <DialogDescription>
+            Create an account and add it to an organization.
+          </DialogDescription>
         </DialogHeader>
 
         <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4">
@@ -158,6 +169,41 @@ export function CreateUserDialog({ open, onOpenChange }: CreateUserDialogProps) 
               className="af-input"
               {...register("fullName")}
             />
+          </div>
+
+          <div className="flex gap-3">
+            <div className="flex-1 min-w-0">
+              <label htmlFor="organizationId" className="block font-medium text-[13.5px] mb-1.5" style={{ color: "var(--ink)" }}>
+                Organization
+              </label>
+              <select
+                id="organizationId"
+                className="af-select w-full"
+                aria-invalid={!!errors.organizationId}
+                {...register("organizationId")}
+              >
+                <option value="">Select an organization</option>
+                {organizations.map((org) => (
+                  <option key={org.id} value={org.id}>
+                    {org.name}
+                  </option>
+                ))}
+              </select>
+              {errors.organizationId && (
+                <p className="text-[12.5px] mt-1" style={{ color: "var(--err)" }}>
+                  {errors.organizationId.message}
+                </p>
+              )}
+            </div>
+            <div className="w-[130px] flex-shrink-0">
+              <label htmlFor="role" className="block font-medium text-[13.5px] mb-1.5" style={{ color: "var(--ink)" }}>
+                Role
+              </label>
+              <select id="role" className="af-select w-full" {...register("role")}>
+                <option value="MEMBER">Member</option>
+                <option value="ADMIN">Admin</option>
+              </select>
+            </div>
           </div>
 
           <DialogFooter>
