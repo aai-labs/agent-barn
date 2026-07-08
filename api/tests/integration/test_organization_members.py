@@ -7,7 +7,15 @@ invites, and transfer ownership; plain members and cross-org actors are forbidde
 from uuid import uuid7
 
 from fastapi import status
-from hamcrest import assert_that, contains_string, equal_to, has_length, is_, none
+from hamcrest import (
+    assert_that,
+    contains_string,
+    equal_to,
+    has_length,
+    is_,
+    none,
+    not_none,
+)
 
 from api.domains.users.organization_users.models import OrganizationRole
 from api.domains.users.organization_users.repository import OrganizationUserRepository
@@ -339,6 +347,79 @@ def test_owner_removes_member():
                     repo.get_by_user_id_and_organization_id(member_id, ORG),
                     is_(none()),
                 )
+
+
+def test_admin_cannot_remove_another_admin():
+    """Removing an admin is as destructive as demoting one, so it's owner-only too."""
+    admin_id = uuid7()
+    other_admin_id = uuid7()
+    with given(
+        [
+            *_GIVEN,
+            _there_is_an_admin_actor(admin_id),
+            there_is_a_user(
+                id=other_admin_id,
+                email="other-admin-remove@example.com",
+                organization_id=ORG,
+                role=OrganizationRole.ADMIN,
+            ),
+        ]
+    ) as context:
+        response = context.client.delete(
+            f"{_members_url()}/{other_admin_id}", headers=_auth(context)
+        )
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+        repo: OrganizationUserRepository = context.injector.get(
+            OrganizationUserRepository
+        )
+        assert_that(
+            repo.get_by_user_id_and_organization_id(other_admin_id, ORG),
+            is_(not_none()),
+        )
+
+
+def test_admin_can_remove_themselves():
+    """The other-admin gate must not trap an admin in the org: they can still leave."""
+    admin_id = uuid7()
+    with given([*_GIVEN, _there_is_an_admin_actor(admin_id)]) as context:
+        response = context.client.delete(
+            f"{_members_url()}/{admin_id}", headers=_auth(context)
+        )
+        assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+        repo: OrganizationUserRepository = context.injector.get(
+            OrganizationUserRepository
+        )
+        assert_that(
+            repo.get_by_user_id_and_organization_id(admin_id, ORG),
+            is_(none()),
+        )
+
+
+def test_owner_can_remove_admin():
+    admin_id = uuid7()
+    with given(
+        [
+            *_GIVEN,
+            _there_is_an_owner(),
+            there_is_a_user(
+                id=admin_id,
+                email="admin-remove-me@example.com",
+                organization_id=ORG,
+                role=OrganizationRole.ADMIN,
+            ),
+        ]
+    ) as context:
+        response = context.client.delete(
+            f"{_members_url()}/{admin_id}", headers=_auth(context)
+        )
+        assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+        repo: OrganizationUserRepository = context.injector.get(
+            OrganizationUserRepository
+        )
+        assert_that(
+            repo.get_by_user_id_and_organization_id(admin_id, ORG),
+            is_(none()),
+        )
 
 
 def test_removing_pending_member_revokes_their_invite():

@@ -36,10 +36,10 @@ def create_organization(
 @org_router.get("/{organization_id}", response_model=OrganizationRead)
 def get_organization(
     organization_id: UUID,
-    _: Annotated[CurrentUserContext, Depends(get_current_user())],
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
     organization_service: Annotated[OrganizationService, Injected(OrganizationService)],
 ):
-    return organization_service.get_organization(organization_id)
+    return organization_service.get_organization(organization_id, context)
 
 
 @org_router.get("", response_model=PaginatedItems[OrganizationRead])

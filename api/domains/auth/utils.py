@@ -1,4 +1,5 @@
 import uuid
+from collections.abc import Set as AbstractSet
 from typing import Annotated, Callable
 
 import jwt
@@ -60,7 +61,7 @@ def get_authenticated_user(
     user_repository: UserRepository,
     organization_user_repository: OrganizationUserRepository,
     organization_id: uuid.UUID | None = None,
-    organization_roles: list[OrganizationRole] | None = None,
+    organization_roles: AbstractSet[OrganizationRole] | None = None,
     verified_required: bool = False,
 ) -> CurrentUserContext:
     try:
@@ -120,7 +121,7 @@ def get_authenticated_user(
 
 
 def get_current_user(
-    organization_roles: list[OrganizationRole] | None = None,
+    organization_roles: AbstractSet[OrganizationRole] | None = None,
     check_superuser: bool = False,
     verified_required: bool = False,
     require_organization: bool = True,

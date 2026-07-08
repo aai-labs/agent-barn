@@ -20,6 +20,8 @@ from api.domains.organizations.models import (
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.templates.service import TemplateService
 from api.domains.users.organization_users.models import (
+    ORG_MANAGER_ROLES,
+    ORG_OWNER_ONLY_ROLES,
     OrganizationRole,
     OrganizationUser,
 )
@@ -37,7 +39,12 @@ class OrganizationService:
     agent_service: AgentService
     template_service: TemplateService
 
-    def get_organization(self, organization_id: UUID) -> OrganizationRead:
+    def get_organization(
+        self, organization_id: UUID, context: CurrentUserContext
+    ) -> OrganizationRead:
+        # Any member (or a superuser) may view the org; non-members are refused before
+        # the fetch so a 403-vs-404 difference can't confirm an org's existence.
+        self._ensure_can_view_organization(organization_id, context)
         organization = self.organization_repository.get_read(organization_id)
         if not organization:
             raise HTTPException(
@@ -111,13 +118,25 @@ class OrganizationService:
             user_id=user_id,
         )
 
+    def _ensure_can_view_organization(
+        self,
+        organization_id: UUID,
+        context: CurrentUserContext,
+    ) -> None:
+        # Any membership can view the org; authorized against the *target* org (path
+        # param), never the header org. frozenset(OrganizationRole) so a future role is
+        # included automatically rather than silently 403'd out.
+        context.require_org_role(
+            organization_id,
+            frozenset(OrganizationRole),
+            detail="You don't have permission for this organization",
+        )
+
     def _ensure_can_manage_organization(
         self,
         organization_id: UUID,
         context: CurrentUserContext,
-        required_roles: AbstractSet[OrganizationRole] = frozenset(
-            {OrganizationRole.OWNER, OrganizationRole.ADMIN}
-        ),
+        required_roles: AbstractSet[OrganizationRole] = ORG_MANAGER_ROLES,
     ) -> None:
         # Authorized against the *target* org (path param), never the header org —
         # see CurrentUserContext.require_org_role.
@@ -161,7 +180,7 @@ class OrganizationService:
         # Deleting an org cascades its agents/templates/skills and orphans running
         # pods, so it is owner/superuser only — admins can rename but not destroy.
         self._ensure_can_manage_organization(
-            organization_id, context, required_roles=frozenset({OrganizationRole.OWNER})
+            organization_id, context, required_roles=ORG_OWNER_ONLY_ROLES
         )
         organization = self.organization_repository.get(organization_id)
         if not organization:

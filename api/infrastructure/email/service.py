@@ -40,7 +40,10 @@ class EmailService:
 
     def create_email(self, email_template: EmailTemplate) -> Email:
         mjml_template = read_template(email_template.file_name)
-        template = Template(mjml_template)
+        # autoescape so user-supplied values (user_name from owner_name/full_name) can't
+        # inject markup into the email body. URLs are the only other injected values and
+        # HTML-escaping them (& -> &amp;) is correct inside href attributes.
+        template = Template(mjml_template, autoescape=True)
 
         data = {}
         for attribute in email_template.attributes:

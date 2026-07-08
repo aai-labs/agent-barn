@@ -77,6 +77,124 @@ def test_regular_user_lists_only_their_organizations():
         assert_that(response.json()["items"][0]["id"], equal_to(str(org_a)))
 
 
+def test_member_lists_their_organization():
+    """A non-owner MEMBER must still see the org they belong to (not just owners)."""
+    org_a = uuid7()
+    org_b = uuid7()
+    member_a = uuid7()
+
+    with given(
+        [
+            prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
+            prepare_api_server(),
+            create_test_client(),
+            database_repo_is_ready(),
+            database_is_clean(),
+            there_is_a_user(
+                email="owner-memberlist-a@example.com",
+                organization_id=org_a,
+                role=OrganizationRole.OWNER,
+            ),
+            there_is_a_user(
+                id=member_a,
+                email="member-memberlist-a@example.com",
+                organization_id=org_a,
+                role=OrganizationRole.MEMBER,
+            ),
+            there_is_a_user(
+                email="owner-memberlist-b@example.com",
+                organization_id=org_b,
+                role=OrganizationRole.OWNER,
+            ),
+            there_is_an_access_token_for_user(user_id=member_a),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        response = client.get(
+            "/api/v1/organizations",
+            headers={"Authorization": f"Bearer {context.access_token}"},
+        )
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(len(response.json()["items"]), equal_to(1))
+        assert_that(response.json()["items"][0]["id"], equal_to(str(org_a)))
+
+
+def test_member_can_view_their_organization():
+    """A MEMBER may fetch their own org by id."""
+    org_id = uuid7()
+    member_id = uuid7()
+
+    with given(
+        [
+            prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
+            prepare_api_server(),
+            create_test_client(),
+            database_repo_is_ready(),
+            database_is_clean(),
+            there_is_a_user(
+                email="owner-viewself@example.com",
+                organization_id=org_id,
+                role=OrganizationRole.OWNER,
+            ),
+            there_is_a_user(
+                id=member_id,
+                email="member-viewself@example.com",
+                organization_id=org_id,
+                role=OrganizationRole.MEMBER,
+            ),
+            there_is_an_access_token_for_user(user_id=member_id),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        response = client.get(
+            f"/api/v1/organizations/{org_id}",
+            headers={
+                "Authorization": f"Bearer {context.access_token}",
+                "X-Organization-Id": str(org_id),
+            },
+        )
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(response.json()["id"], equal_to(str(org_id)))
+
+
+def test_user_cannot_view_another_organization():
+    """An owner of org A must not be able to fetch org B they don't belong to."""
+    org_a = uuid7()
+    org_b = uuid7()
+    owner_a = uuid7()
+
+    with given(
+        [
+            prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
+            prepare_api_server(),
+            create_test_client(),
+            database_repo_is_ready(),
+            database_is_clean(),
+            there_is_a_user(
+                id=owner_a,
+                email="owner-a-crossview@example.com",
+                organization_id=org_a,
+                role=OrganizationRole.OWNER,
+            ),
+            there_is_a_user(
+                email="owner-b-crossview@example.com",
+                organization_id=org_b,
+                role=OrganizationRole.OWNER,
+            ),
+            there_is_an_access_token_for_user(user_id=owner_a),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        response = client.get(
+            f"/api/v1/organizations/{org_b}",
+            headers={
+                "Authorization": f"Bearer {context.access_token}",
+                "X-Organization-Id": str(org_a),
+            },
+        )
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
 def test_superuser_can_update_any_organization():
     org_id = uuid7()
     super_id = uuid7()

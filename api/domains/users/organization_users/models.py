@@ -17,6 +17,16 @@ class OrganizationRole(str, enum.Enum):
     OWNER = "OWNER"
 
 
+# Authorization role tiers. Single source of truth so the same policy isn't re-spelled per
+# endpoint (and can't drift): managers (owners + admins) run org/member management and see
+# billing; a few destructive/sensitive actions (delete org, transfer ownership, removing or
+# demoting another admin) are owner-only.
+ORG_MANAGER_ROLES: frozenset[OrganizationRole] = frozenset(
+    {OrganizationRole.OWNER, OrganizationRole.ADMIN}
+)
+ORG_OWNER_ONLY_ROLES: frozenset[OrganizationRole] = frozenset({OrganizationRole.OWNER})
+
+
 class OrganizationUser(BaseModel, table=True):
     __tablename__: str = "user_organization"
 

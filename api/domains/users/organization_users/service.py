@@ -12,6 +12,8 @@ from api.domains.users.organization_users.exceptions import (
     UserAlreadyPartOfOrganizationException,
 )
 from api.domains.users.organization_users.models import (
+    ORG_MANAGER_ROLES,
+    ORG_OWNER_ONLY_ROLES,
     AddMemberRequest,
     ChangeMemberRoleRequest,
     OrganizationMemberRead,
@@ -121,7 +123,7 @@ class OrganizationUserService:
     ) -> None:
         context.require_org_role(
             organization_id,
-            {OrganizationRole.OWNER, OrganizationRole.ADMIN},
+            ORG_MANAGER_ROLES,
             detail="You don't have permission to manage this organization's members",
         )
 
@@ -130,7 +132,7 @@ class OrganizationUserService:
     ) -> None:
         context.require_org_role(
             organization_id,
-            {OrganizationRole.OWNER},
+            ORG_OWNER_ONLY_ROLES,
             detail="Only the organization owner can transfer ownership",
         )
 
@@ -249,7 +251,7 @@ class OrganizationUserService:
         # admin can manage members but not other admins (nor mint new ones).
         touches_admin = OrganizationRole.ADMIN in (membership.role, data.role)
         if touches_admin and not context.has_org_role(
-            organization_id, {OrganizationRole.OWNER}
+            organization_id, ORG_OWNER_ONLY_ROLES
         ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -268,6 +270,20 @@ class OrganizationUserService:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Cannot remove the owner; transfer ownership first",
+            )
+        # Removing another admin is at least as destructive as demoting one, so it carries
+        # the same owner-only gate as change_role: a plain admin can manage members but not
+        # other admins. Self-removal (leaving the org) is always allowed — it doesn't touch
+        # anyone else's membership.
+        removing_other_admin = (
+            membership.role == OrganizationRole.ADMIN and user_id != context.user.id
+        )
+        if removing_other_admin and not context.has_org_role(
+            organization_id, ORG_OWNER_ONLY_ROLES
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only an owner can remove an admin",
             )
         self.organization_user_repository.delete(membership)
 
