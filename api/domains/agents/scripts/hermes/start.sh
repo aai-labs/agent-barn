@@ -3,7 +3,7 @@ set -e
 
 python3 /app/config/healthz-server.py &
 
-mkdir -p /opt/data/plugins/slack-deny-dms /opt/data/plugins/slack-channel-allowlist /opt/data/memories /workspace
+mkdir -p /opt/data/plugins/slack-deny-dms /opt/data/plugins/slack-channel-allowlist /opt/data/plugins/telemetry-push /opt/data/memories /workspace
 
 
 if [ ! -f /opt/data/memories/USER.md ]; then
@@ -23,6 +23,9 @@ cp /app/config/slack-deny-dms-init.py /opt/data/plugins/slack-deny-dms/__init__.
 
 cp /app/config/slack-channel-allowlist-plugin.yaml /opt/data/plugins/slack-channel-allowlist/plugin.yaml
 cp /app/config/slack-channel-allowlist-init.py /opt/data/plugins/slack-channel-allowlist/__init__.py
+
+cp /app/config/telemetry-push-plugin.yaml /opt/data/plugins/telemetry-push/plugin.yaml
+cp /app/config/telemetry-push-init.py /opt/data/plugins/telemetry-push/__init__.py
 
 for f in IDENTITY.md AGENTS.md TOOLS.md BOOT.md HEARTBEAT.md; do
     cp /app/config/$f /workspace/$f

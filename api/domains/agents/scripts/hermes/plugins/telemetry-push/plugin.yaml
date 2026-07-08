@@ -1,0 +1,3 @@
+name: telemetry-push
+version: "1.0"
+description: Push messages and tool calls to the ingest API

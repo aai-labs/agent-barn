@@ -59,24 +59,6 @@ class ToolCall(BaseModel, table=True):
     duration_ms: int | None = SqlField(default=None, nullable=True)
 
 
-class ToolCallSyncState(BaseModel, table=True):
-    __tablename__: str = "tool_call_sync_state"
-
-    __table_args__ = (
-        UniqueConstraint("agent_id", "session_file_path", name="uq_tcss_agent_file"),
-    )
-
-    agent_id: UUID = SqlField(
-        foreign_key="agent.id", nullable=False, ondelete="CASCADE"
-    )
-    session_file_path: str = SqlField(nullable=False)
-    last_byte_offset: int = SqlField(nullable=False, default=0)
-    last_synced_at: datetime = SqlField(
-        sa_type=sa.DateTime(timezone=True),  # type: ignore
-        nullable=False,
-    )
-
-
 class ToolCallRead(PydanticBaseModel):
     model_config = ConfigDict(from_attributes=True)
 

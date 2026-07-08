@@ -9,6 +9,7 @@ from .common import _labels, _resource_name
 _SCRIPTS = Path(__file__).parent.parent / "scripts" / "hermes"
 _DENY_DMS = _SCRIPTS / "plugins" / "slack-deny-dms"
 _CHANNEL_ALLOWLIST = _SCRIPTS / "plugins" / "slack-channel-allowlist"
+_TELEMETRY_PUSH = _SCRIPTS / "plugins" / "telemetry-push"
 _NO_HOME_CHANNEL = "C0000000000"
 
 HERMES_BOOTLOADER_FOOTER: str = (_SCRIPTS / "bootloader-footer.md").read_text()
@@ -22,6 +23,8 @@ SLACK_CHANNEL_ALLOWLIST_PLUGIN_YAML: str = (
 SLACK_CHANNEL_ALLOWLIST_PLUGIN_INIT: str = (
     _CHANNEL_ALLOWLIST / "__init__.py"
 ).read_text()
+TELEMETRY_PUSH_PLUGIN_YAML: str = (_TELEMETRY_PUSH / "plugin.yaml").read_text()
+TELEMETRY_PUSH_PLUGIN_INIT: str = (_TELEMETRY_PUSH / "__init__.py").read_text()
 
 
 _HERMES_APPROVAL_MODE = {"manual": "manual", "auto": "smart", "off": "off"}
@@ -46,7 +49,7 @@ def build_hermes_config(
     #   - slack-deny-dms scopes DMs to SLACK_DM_ALLOWED_USERS
     # SLACK_ALLOW_ALL_USERS already authorizes every user at the gateway, so
     # dropping a hook opens that surface up.
-    enabled_plugins: list[str] = []
+    enabled_plugins: list[str] = ["telemetry-push"]
     if group_policy != "open":
         enabled_plugins.append("slack-channel-allowlist")
     if dm_policy != "open":
@@ -133,6 +136,8 @@ def build_hermes_config_map(
         "slack-deny-dms-init.py": SLACK_DENY_DMS_PLUGIN_INIT,
         "slack-channel-allowlist-plugin.yaml": SLACK_CHANNEL_ALLOWLIST_PLUGIN_YAML,
         "slack-channel-allowlist-init.py": SLACK_CHANNEL_ALLOWLIST_PLUGIN_INIT,
+        "telemetry-push-plugin.yaml": TELEMETRY_PUSH_PLUGIN_YAML,
+        "telemetry-push-init.py": TELEMETRY_PUSH_PLUGIN_INIT,
         "healthz-server.py": HERMES_HEALTHZ_PY,
         "start.sh": HERMES_START_SH,
     }

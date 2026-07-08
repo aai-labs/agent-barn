@@ -1,6 +1,5 @@
 """Integration tests for the per-channel Conversations API."""
 
-import json
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
@@ -11,8 +10,7 @@ from starlette.testclient import TestClient
 from api.domains.agents.models import AgentStatus
 from api.domains.conversations.models import AgentChatMessage, MessageDirection
 from api.domains.conversations.repository import ConversationRepository
-from api.domains.conversations.service import ConversationSyncService
-from api.infrastructure.kubernetes.client import KubernetesClient
+from api.domains.conversations.service import ConversationService
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
     create_test_client,
@@ -164,7 +162,7 @@ def test_list_channels_idle_agent_resolves_null_channel_names_from_directory():
 
         with when("I list channels with the directory resolving CBBB"):
             with patch.object(
-                ConversationSyncService,
+                ConversationService,
                 "_platform_maps",
                 return_value=({}, {"CBBB": "ops-alerts"}),
             ):
@@ -180,10 +178,9 @@ def test_list_channels_idle_agent_resolves_null_channel_names_from_directory():
             assert_that(by_id["CAAA"], equal_to("general"))
 
 
-def test_list_channels_running_agent_unions_pod_sessions_with_db():
+def test_list_channels_returns_db_channels():
     with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
         client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
 
         _seed_message(
             context,
@@ -192,16 +189,6 @@ def test_list_channels_running_agent_unions_pod_sessions_with_db():
             content="db-only-channel",
             channel_name="db-known",
         )
-        sessions_json = json.dumps(
-            {
-                "agent:main:slack:channel:cnew": {
-                    "sessionId": "s-new",
-                    "origin": {"nativeChannelId": "CNEW", "threadId": None},
-                }
-            }
-        )
-        k8s.get_pod_name_for_deployment.return_value = "pod-x"
-        k8s.exec_command.return_value = sessions_json
 
         with when("I list channels"):
             response = client.get(
@@ -209,10 +196,10 @@ def test_list_channels_running_agent_unions_pod_sessions_with_db():
                 headers=_auth(context),
             )
 
-        with then("union of pod + DB is returned"):
+        with then("DB channels are returned"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             ids = {c["channel_id"] for c in response.json()}
-            assert_that(ids, equal_to({"CDB1", "CNEW"}))
+            assert_that(ids, equal_to({"CDB1"}))
 
 
 # --- /conversations/channels/{channel_id}/messages ---

@@ -222,6 +222,8 @@ class Agent(BaseModel, table=True):
         nullable=True,
         sa_type=sa.Text,
     )
+
+    ingest_key_encrypted: str | None = SqlField(default=None, nullable=True)
     approval_mode: CommandApprovalMode = SqlField(
         default=CommandApprovalMode.AUTO,
         sa_column=Column(sa.String(10), nullable=False, server_default="auto"),

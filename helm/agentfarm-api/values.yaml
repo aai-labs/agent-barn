@@ -54,7 +54,7 @@ litellmApiKeySecretName: litellm-api-key
 # Pre-existing litellm Secret (used by hook Job to call /key/generate)
 litellmSecretName: litellm
 
-#  kubeconfig Secret for kubectl exec into agent pods
+#  kubeconfig Secret for managing agent k8s resources
 kubeconfigSecretName: agent-farm-user-kubeconfig
 
 imagePullSecrets:
@@ -62,6 +62,7 @@ imagePullSecrets:
 
 service:
   port: 8000
+  ingestPort: 8001
 
 apiExternalUrl: "https://api.agent-farm.k8s.aai-labs.com"
 

@@ -470,44 +470,6 @@ def test_results_ordered_by_occurred_at_desc():
                 assert_that(page.items[1].occurred_at, equal_to(t_old))
 
 
-def test_save_sync_state_insert_and_update():
-    with given([*_GIVEN, there_is_an_agent()]) as context:
-        repository: ToolCallRepository = context.injector.get(ToolCallRepository)
-        agent_id = context.agent.id
-        path = "/home/node/.openclaw/agents/main/sessions/abc.jsonl"
-
-        with when("I save a fresh sync state"):
-            with repository.get_session() as session:
-                repository.save_sync_state(
-                    session,
-                    agent_id=agent_id,
-                    session_file_path=path,
-                    last_byte_offset=100,
-                )
-                session.commit()
-
-            with then("get_sync_state returns it"):
-                state = repository.get_sync_state(agent_id, path)
-                assert_that(state, is_not(none()))
-                assert state is not None
-                assert_that(state.last_byte_offset, equal_to(100))
-
-        with when("I save again with a larger offset"):
-            with repository.get_session() as session:
-                repository.save_sync_state(
-                    session,
-                    agent_id=agent_id,
-                    session_file_path=path,
-                    last_byte_offset=500,
-                )
-                session.commit()
-
-            with then("offset is updated, no duplicate row"):
-                state = repository.get_sync_state(agent_id, path)
-                assert state is not None
-                assert_that(state.last_byte_offset, equal_to(500))
-
-
 def test_find_by_agent_is_scoped_to_agent():
     with given(
         [

@@ -20,5 +20,6 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 COPY ./api /app/api
 
 EXPOSE 8000
+EXPOSE 8001
 
-CMD ["fastapi", "run", "api/main.py", "--port", "8000"]
+CMD ["sh", "api/start.sh"]
