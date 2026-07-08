@@ -4,6 +4,7 @@ import http.client
 import json
 import os
 import tempfile
+from collections.abc import Generator
 from dataclasses import dataclass, field
 
 import yaml
@@ -261,7 +262,10 @@ class KubernetesClient:
             namespace, label_selector=f"app={deployment_name}"
         )
         for pod in pods.items:
-            if pod.status.phase == "Running":
+            if (
+                pod.status.phase == "Running"
+                and pod.metadata.deletion_timestamp is None
+            ):
                 return pod.metadata.name
         return None
 
@@ -306,6 +310,54 @@ class KubernetesClient:
                         return "crashed", cs.state.waiting.reason
                 return "initializing", None
         return None, None
+
+    def read_pod_logs(
+        self,
+        deployment_name: str,
+        namespace: str,
+        tail_lines: int = 100,
+        container: str = "agent",
+    ) -> str | None:
+        pod_name = self.get_pod_name_for_deployment(deployment_name, namespace)
+        if pod_name is None:
+            return None
+        try:
+            return self._core_v1.read_namespaced_pod_log(
+                pod_name,
+                namespace,
+                container=container,
+                tail_lines=tail_lines,
+                timestamps=False,
+            )
+        except ApiException as e:
+            if e.status == 404:
+                return None
+            raise
+
+    def stream_pod_logs(
+        self,
+        deployment_name: str,
+        namespace: str,
+        tail_lines: int = 0,
+        container: str = "agent",
+    ) -> Generator[str, None, None]:
+        pod_name = self.get_pod_name_for_deployment(deployment_name, namespace)
+        if pod_name is None:
+            return
+        resp = self._core_v1.read_namespaced_pod_log(
+            pod_name,
+            namespace,
+            container=container,
+            tail_lines=tail_lines,
+            follow=True,
+            _preload_content=False,
+        )
+        try:
+            for raw_line in resp:
+                yield raw_line.decode("utf-8", errors="replace").rstrip("\n")
+        finally:
+            resp.close()
+            resp.release_conn()
 
     def exec_command(self, pod_name: str, namespace: str, command: list[str]) -> str:
         ws = k8s_stream(

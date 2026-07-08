@@ -1,7 +1,7 @@
 """add agent_type to agent
 
 Revision ID: c1d2e3f4a5b6
-Revises: 23b02ff828ac
+Revises: f3a91c7b2e58
 Create Date: 2026-05-29 00:00:00.000000
 
 """

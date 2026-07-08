@@ -2,6 +2,7 @@ import datetime as dt
 import fnmatch
 import logging
 import secrets
+from collections.abc import Generator
 from dataclasses import dataclass
 from typing import Any, cast
 from uuid import UUID
@@ -17,7 +18,7 @@ from api.domains.agents.aai_cli_artifacts import (
     build_env,
     build_setup_sh,
     build_tool_context_md,
-    provider_to_secret_name_map,
+    provider_secrets_map,
 )
 from api.domains.agents.aai_cli_skills import build_skills_manifest_from_zips
 from api.domains.skills.models import Skill
@@ -43,6 +44,9 @@ from api.domains.agents.models import (
     AgentCreate,
     AgentFilter,
     AgentHealthRead,
+    AgentLogHistoryRead,
+    AgentLogSnapshot,
+    AgentLogsRead,
     AgentPlatform,
     AgentRead,
     AgentSecret,
@@ -99,6 +103,7 @@ _SLACK_CONFIG_FIELDS = frozenset(
         "slack_dm_user_ids",
         "slack_group_policy",
         "slack_dm_policy",
+        "slack_verbose_mode",
     }
 )
 
@@ -110,6 +115,8 @@ _TEAMS_CONFIG_FIELDS = frozenset(
     }
 )
 
+
+_MAX_LOG_SNAPSHOT_BYTES = 1_048_576  # 1 MB
 
 _OPENROUTER_MODEL_PREFIX = "litellm/openrouter/"
 
@@ -343,6 +350,7 @@ class AgentService:
             template_slug=agent.template_slug,
             template_version=agent.template_version,
             model=agent.model,
+            approval_mode=agent.approval_mode,
             slack_config=slack_config_read,
             teams_config=teams_config_read,
             secrets=secrets_read,
@@ -436,11 +444,14 @@ class AgentService:
             agent_type=data.agent_type,
             template_slug=template.template_slug,
             template_version=template.version,
+            approval_mode=data.approval_mode,
         )
 
         if self.config.litellm_base_url and self.config.litellm_secret_name:
             try:
-                litellm_key = self.litellm.generate_key(str(agent.id))
+                litellm_key = self.litellm.generate_key(
+                    str(agent.id), agent.name, str(agent.organization_id)
+                )
                 agent.litellm_key_encrypted = encrypt_token(
                     litellm_key, self.config.agent_token_encryption_key
                 )
@@ -480,6 +491,7 @@ class AgentService:
                 dm_user_ids=data.slack_dm_user_ids,
                 group_policy=data.slack_group_policy,
                 dm_policy=data.slack_dm_policy,
+                verbose_mode=data.slack_verbose_mode,
             )
             self.repository.save_slack_config(slack_config)
         elif data.platform == AgentPlatform.TEAMS:
@@ -658,6 +670,9 @@ class AgentService:
             self._ensure_model_allowed(updated["model"])
             agent.model = updated["model"]
 
+        if "approval_mode" in updated:
+            agent.approval_mode = updated["approval_mode"]
+
         # Validate skill changes against the effective template's required skills
         if effective_template is None:
             effective_template = (
@@ -734,6 +749,8 @@ class AgentService:
                     slack_config.group_policy = updated["slack_group_policy"]
                 if "slack_dm_policy" in updated:
                     slack_config.dm_policy = updated["slack_dm_policy"]
+                if "slack_verbose_mode" in updated:
+                    slack_config.verbose_mode = updated["slack_verbose_mode"]
                 self.repository.save_slack_config(slack_config)
                 if "slack_channel_ids" in updated:
                     self._join_public_channels(
@@ -865,6 +882,8 @@ class AgentService:
                     self.config.agent_litellm_base_url,
                     dm_policy=str(slack_config.dm_policy),
                     group_policy=str(slack_config.group_policy),
+                    verbose_mode=slack_config.verbose_mode,
+                    approval_mode=str(agent.approval_mode),
                 )
                 secret = build_secret_hermes_slack(
                     agent_id=agent.id,
@@ -895,6 +914,7 @@ class AgentService:
                     slack_dm_user_ids=slack_config.dm_user_ids,
                     slack_group_policy=str(slack_config.group_policy),
                     slack_dm_policy=str(slack_config.dm_policy),
+                    approval_mode=str(agent.approval_mode),
                 )
                 secret = build_secret_slack(
                     agent_id=agent.id,
@@ -929,6 +949,7 @@ class AgentService:
             overlay = build_openclaw_config_overlay_teams(
                 effective_model,
                 self.config.agent_litellm_base_url,
+                approval_mode=str(agent.approval_mode),
             )
             secret = build_secret_teams(
                 agent_id=agent.id,
@@ -964,9 +985,7 @@ class AgentService:
             )
             for s in agent_secrets
         }
-        store = {
-            p: c for p, c in decrypted.items() if p.value in provider_to_secret_name_map
-        }
+        store = {p: c for p, c in decrypted.items() if p.value in provider_secrets_map}
         aai_home = "/opt/data" if agent.agent_type == AgentType.HERMES else "/home/node"
         aai_config_toml = (
             build_config_toml(decrypted, home_dir=aai_home) if decrypted else None
@@ -1068,6 +1087,126 @@ class AgentService:
         self.repository.save(agent)
         return self._get_agent_read(agent)
 
+    def get_agent_logs(
+        self,
+        agent_id: UUID,
+        context: CurrentUserContext,
+        tail_lines: int = 100,
+    ) -> AgentLogsRead:
+        org_id = self._org_id(context)
+        agent = self._get_active_or_404(agent_id, org_id)
+
+        latest_snapshot = self.repository.get_latest_log_snapshot(agent_id)
+        has_snapshots = latest_snapshot is not None
+
+        if agent.status == AgentStatus.RUNNING:
+            log_text = self.k8s.read_pod_logs(
+                f"agent-{agent.id}",
+                self.config.k8s_namespace,
+                tail_lines=tail_lines,
+            )
+            lines = log_text.splitlines() if log_text else []
+            return AgentLogsRead(
+                lines=lines, source="live", has_snapshots=has_snapshots
+            )
+
+        if latest_snapshot is None:
+            return AgentLogsRead(lines=[], source="snapshot", has_snapshots=False)
+        all_lines = latest_snapshot.log_text.splitlines()
+        lines = all_lines[-tail_lines:]
+        return AgentLogsRead(
+            lines=lines,
+            source="snapshot",
+            has_snapshots=True,
+            snapshot_id=latest_snapshot.id,
+            session_started_at=latest_snapshot.session_started_at,
+            session_ended_at=latest_snapshot.session_ended_at,
+        )
+
+    def stream_agent_logs(
+        self,
+        agent_id: UUID,
+        context: CurrentUserContext,
+        tail_lines: int = 0,
+    ) -> Generator[str, None, None]:
+        org_id = self._org_id(context)
+        agent = self._get_active_or_404(agent_id, org_id)
+        if agent.status != AgentStatus.RUNNING:
+            return
+        yield from self.k8s.stream_pod_logs(
+            f"agent-{agent.id}",
+            self.config.k8s_namespace,
+            tail_lines=tail_lines,
+        )
+
+    def get_log_history(
+        self,
+        agent_id: UUID,
+        context: CurrentUserContext,
+        snapshot_id: UUID | None = None,
+    ) -> AgentLogHistoryRead:
+        org_id = self._org_id(context)
+        self._get_active_or_404(agent_id, org_id)
+
+        if snapshot_id is not None:
+            snapshot = self.repository.get_snapshot_by_id(agent_id, snapshot_id)
+        else:
+            snapshot = self.repository.get_latest_log_snapshot(agent_id)
+
+        if snapshot is None:
+            return AgentLogHistoryRead(lines=[], has_more=False)
+
+        older = self.repository.get_previous_snapshot(
+            agent_id, snapshot.session_ended_at
+        )
+        return AgentLogHistoryRead(
+            lines=snapshot.log_text.splitlines(),
+            has_more=older is not None,
+            session_ended_at=snapshot.session_ended_at,
+            next_snapshot_id=older.id if older is not None else None,
+        )
+
+    def _capture_logs_before_stop(self, agent: "Agent") -> None:
+        try:
+            log_text = self.k8s.read_pod_logs(
+                f"agent-{agent.id}",
+                self.config.k8s_namespace,
+                tail_lines=50_000,
+            )
+            if not log_text:
+                logger.info(
+                    "No logs to capture for agent %s (empty response)", agent.id
+                )
+                return
+            encoded = log_text.encode("utf-8")
+            if len(encoded) > _MAX_LOG_SNAPSHOT_BYTES:
+                truncated = encoded[-_MAX_LOG_SNAPSHOT_BYTES:]
+                log_text = truncated.decode("utf-8", errors="replace")
+                idx = log_text.find("\n")
+                if idx > 0:
+                    log_text = log_text[idx + 1 :]
+            now = dt.datetime.now(dt.timezone.utc)
+            byte_size = len(log_text.encode("utf-8"))
+            self.repository.save_log_snapshot(
+                AgentLogSnapshot(
+                    agent_id=agent.id,
+                    session_started_at=agent.updated_at,
+                    session_ended_at=now,
+                    log_text=log_text,
+                    byte_size=byte_size,
+                )
+            )
+            self.repository.delete_old_snapshots(agent.id, keep=5)
+            logger.info(
+                "Captured log snapshot for agent %s (%d bytes)", agent.id, byte_size
+            )
+        except Exception:
+            logger.warning(
+                "Failed to capture logs before stop for agent %s",
+                agent.id,
+                exc_info=True,
+            )
+
     def stop_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
         org_id = self._org_id(context)
         agent = self._get_active_or_404(agent_id, org_id)
@@ -1078,6 +1217,7 @@ class AgentService:
                 detail=f"Agent {agent_id} is not running",
             )
 
+        self._capture_logs_before_stop(agent)
         name = f"agent-{agent.id}"
         ns = self.config.k8s_namespace
         self.k8s.delete_deployment(name, ns)
@@ -1108,9 +1248,9 @@ class AgentService:
                 plaintext_key = decrypt_token(
                     agent.litellm_key_encrypted, self.config.agent_token_encryption_key
                 )
-                self.litellm.delete_key(plaintext_key)
+                self.litellm.block_key(plaintext_key)
             except Exception:
-                logger.warning("Could not revoke LiteLLM key for agent %s", agent_id)
+                logger.warning("Could not block LiteLLM key for agent %s", agent_id)
 
     def pair_agent(
         self, agent_id: UUID, data: PairRequest, context: CurrentUserContext

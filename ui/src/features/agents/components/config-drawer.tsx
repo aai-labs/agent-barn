@@ -9,13 +9,12 @@ import { useDeleteAgent } from "../hooks/use-delete-agent";
 import { useValidateIntegration } from "../hooks/use-validate-integration";
 import { XIcon, LockIcon } from "@/components/icons";
 import { FormField, TokenInput } from "./hire-dialog-primitives";
-import { IntegrationsStep, TemplateSourceBadge, VersionSelect } from "./hire-dialog-steps";
+import { IntegrationsStep, RepoListField, TemplateSourceBadge, VersionSelect } from "./hire-dialog-steps";
 import { ModelSelect } from "./model-select";
 import {
   expandGithubContent,
   getIntegrationProvider,
   hasIncompleteIntegration,
-  parseGithubRepoUrl,
   type IntegrationDraft,
 } from "../integrations";
 import { SlackConfigPanel } from "./slack-config-panel";
@@ -64,6 +63,7 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
   const [retireConfirm, setRetireConfirm] = useState(false);
   const [name, setName] = useState(agent.name);
   const [model, setModel] = useState(agent.model);
+  const [approvalMode, setApprovalMode] = useState(agent.approvalMode ?? "auto");
   const [saved, setSaved] = useState(false);
   // Template re-pin browsing state.
   const [templateSearch, setTemplateSearch] = useState("");
@@ -182,9 +182,21 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
     });
   }
 
+  function setRepinRepos(provider: string, key: string, repos: string[]) {
+    setRepinSecretDrafts((prev) => {
+      const existing = prev.find((d) => d.provider === provider);
+      if (existing) {
+        return prev.map((d) =>
+          d.provider === provider ? { ...d, content: { ...d.content, [key]: repos } } : d,
+        );
+      }
+      return [...prev, { provider, content: { [key]: repos } }];
+    });
+  }
+
   async function handleSave() {
     try {
-      await updateAgent.mutateAsync({ agentId: agent.id, name, model });
+      await updateAgent.mutateAsync({ agentId: agent.id, name, model, approvalMode });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch {
@@ -378,6 +390,19 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                     disabled={isRunning}
                   />
                 </div>
+                <div className="flex flex-col gap-1.5">
+                  <label className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>Command approval</label>
+                  <select
+                    className="af-input"
+                    value={approvalMode}
+                    onChange={(e) => setApprovalMode(e.target.value as "manual" | "auto" | "off")}
+                    disabled={isRunning}
+                  >
+                    <option value="auto">Auto — approve low-risk commands automatically</option>
+                    <option value="manual">Manual — always ask before running commands</option>
+                    <option value="off">Off — skip all approval prompts</option>
+                  </select>
+                </div>
                 <div className="flex gap-2 items-center">
                   <button
                     className="af-btn af-btn-sm"
@@ -385,7 +410,7 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                     title={isRunning ? "Stop the agent before saving changes" : undefined}
                     onClick={() => { void handleSave(); }}
                   >
-                    {updateAgent.isPending ? "Saving…" : saved ? "Saved!" : "Save name & model"}
+                    {updateAgent.isPending ? "Saving…" : saved ? "Saved!" : "Save"}
                   </button>
                 </div>
               </div>
@@ -541,8 +566,25 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                           {providerSpec.label}
                         </div>
                         {providerSpec.fields.map((field) => {
-                          const value = draft.content[field.key] ?? "";
                           const label = field.required ? field.label : `${field.label} (optional)`;
+
+                          if (field.type === "repo-list") {
+                            const repos = Array.isArray(draft.content[field.key])
+                              ? (draft.content[field.key] as string[])
+                              : [];
+                            return (
+                              <FormField key={field.key} label={label} hint={field.hint}>
+                                <RepoListField
+                                  repos={repos}
+                                  onChange={(next) => setRepinRepos(providerId, field.key, next)}
+                                  placeholder={field.placeholder}
+                                />
+                              </FormField>
+                            );
+                          }
+
+                          const rawValue = draft.content[field.key];
+                          const value = typeof rawValue === "string" ? rawValue : "";
                           if (field.type === "secret") {
                             const vkey = `${providerId}:${field.key}`;
                             return (
@@ -557,35 +599,6 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                                   placeholder={field.placeholder}
                                   disabled={isRunning}
                                 />
-                              </FormField>
-                            );
-                          }
-                          if (field.type === "repo-url") {
-                            const parsed = parseGithubRepoUrl(value);
-                            const invalid = value.length > 0 && !parsed;
-                            return (
-                              <FormField key={field.key} label={label} hint={field.hint}>
-                                <input
-                                  className={`af-input${invalid ? " border-red-400" : ""}`}
-                                  value={value}
-                                  onChange={(e) =>
-                                    setRepinSecretField(providerId, field.key, e.target.value)
-                                  }
-                                  placeholder={field.placeholder}
-                                  autoComplete="off"
-                                  disabled={isRunning}
-                                />
-                                {parsed && (
-                                  <p className="text-[0.75rem] mt-1" style={{ color: "var(--ink-3)" }}>
-                                    owner: <strong>{parsed.owner}</strong> · repo:{" "}
-                                    <strong>{parsed.repo}</strong>
-                                  </p>
-                                )}
-                                {invalid && (
-                                  <p className="text-[0.75rem] mt-1 text-red-500">
-                                    Must be a valid GitHub URL, e.g. https://github.com/owner/repo.git
-                                  </p>
-                                )}
                               </FormField>
                             );
                           }

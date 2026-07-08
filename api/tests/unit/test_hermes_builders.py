@@ -234,6 +234,23 @@ def test_open_group_and_dm_policy_drops_both_gating_plugins():
     assert_that("slack-channel-allowlist" in enabled, equal_to(False))
 
 
+def test_default_verbose_mode_enables_interim_assistant_messages():
+    cfg = build_hermes_config("litellm/qwen3", "http://x:4000")
+    slack_display = cfg["display"]["platforms"]["slack"]
+    assert_that(slack_display["interim_assistant_messages"], equal_to(True))
+    # Verbosity drives interim messages only; progress spam stays suppressed.
+    assert_that(slack_display["tool_progress"], equal_to("off"))
+    assert_that(slack_display["busy_ack_detail"], equal_to(False))
+
+
+def test_concise_mode_disables_interim_assistant_messages():
+    cfg = build_hermes_config("litellm/qwen3", "http://x:4000", verbose_mode=False)
+    slack_display = cfg["display"]["platforms"]["slack"]
+    assert_that(slack_display["interim_assistant_messages"], equal_to(False))
+    assert_that(slack_display["tool_progress"], equal_to("off"))
+    assert_that(slack_display["busy_ack_detail"], equal_to(False))
+
+
 def test_allowlist_policy_seeds_dm_allowed_users():
     secret = _secret_with(["U001", "U002"], "allowlist")
     assert_that(secret.string_data["SLACK_DM_ALLOWED_USERS"], equal_to("U001,U002"))
@@ -368,3 +385,29 @@ def test_start_sh_includes_aai_cli_setup_hook():
 def test_start_sh_includes_skills_json_reconstruction():
     assert_that(HERMES_START_SH, contains_string("skills.json"))
     assert_that(HERMES_START_SH, contains_string("/workspace/skills"))
+
+
+def test_build_hermes_config_approval_mode_auto_maps_to_smart():
+    cfg = build_hermes_config(
+        "litellm/qwen3", "http://litellm:4000", approval_mode="auto"
+    )
+    assert_that(cfg["approvals"]["mode"], equal_to("smart"))
+
+
+def test_build_hermes_config_approval_mode_off():
+    cfg = build_hermes_config(
+        "litellm/qwen3", "http://litellm:4000", approval_mode="off"
+    )
+    assert_that(cfg["approvals"]["mode"], equal_to("off"))
+
+
+def test_build_hermes_config_approval_mode_manual():
+    cfg = build_hermes_config(
+        "litellm/qwen3", "http://litellm:4000", approval_mode="manual"
+    )
+    assert_that(cfg["approvals"]["mode"], equal_to("manual"))
+
+
+def test_build_hermes_config_default_approval_mode_is_smart():
+    cfg = build_hermes_config("litellm/qwen3", "http://litellm:4000")
+    assert_that(cfg["approvals"]["mode"], equal_to("smart"))

@@ -1,7 +1,7 @@
 """add last_error to agent
 
 Revision ID: 0dfb8ab409db
-Revises: f3a91c7b2e58
+Revises: c1d2e3f4a5b6
 Branch Labels: None
 Depends On: None
 

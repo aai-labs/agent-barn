@@ -14,6 +14,7 @@ export const mockAgent = {
   template_slug: MOCK_TEMPLATE_SLUG,
   template_version: 1,
   model: "litellm/gpt-5-mini",
+  approval_mode: "auto",
   slack_config: {
     channel_ids: [],
     dm_user_ids: [],
@@ -628,6 +629,33 @@ export class AgentDataSupport {
                   items: [mockToolCall],
                 }),
           ),
+        });
+      },
+    );
+  }
+
+  async interceptValidateIntegrationRequest({
+    agentId = MOCK_AGENT_ID,
+    provider = "github",
+    status = 404,
+    detail = "Agent not found",
+  }: {
+    agentId?: string;
+    provider?: string;
+    status?: number;
+    detail?: string;
+  } = {}) {
+    await this.page.route(
+      `**/api/v1/agents/${agentId}/integrations/${provider}/validate`,
+      async (route) => {
+        if (route.request().method() !== "POST") {
+          await route.fallback();
+          return;
+        }
+        await route.fulfill({
+          status,
+          contentType: "application/json",
+          body: JSON.stringify({ detail }),
         });
       },
     );

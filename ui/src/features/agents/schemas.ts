@@ -5,6 +5,7 @@ export const AgentSlackConfigSchema = z.object({
   dmUserIds: z.array(z.string()),
   groupPolicy: z.enum(["open", "allowlist"]),
   dmPolicy: z.enum(["off", "open", "allowlist"]),
+  verboseMode: z.boolean().default(true),
   botDisplayName: z.string().nullable().optional(),
 });
 
@@ -48,6 +49,7 @@ export const AgentSchema = z.object({
   templateSlug: z.string(),
   templateVersion: z.number().int(),
   model: z.string(),
+  approvalMode: z.enum(["manual", "auto", "off"]).default("auto"),
   slackConfig: AgentSlackConfigSchema.nullable().optional(),
   teamsConfig: AgentTeamsConfigSchema.nullable().optional(),
   secrets: z.array(AgentSecretReadSchema).optional(),
@@ -180,6 +182,24 @@ export const ModelOptionSchema = z.object({
   isDefault: z.boolean().optional(),
 });
 
+export const AgentLogsReadSchema = z.object({
+  lines: z.array(z.string()),
+  source: z.enum(["live", "snapshot"]),
+  hasSnapshots: z.boolean().optional().default(false),
+  snapshotId: z.string().uuid().nullable().optional(),
+  sessionStartedAt: z.string().nullable().optional(),
+  sessionEndedAt: z.string().nullable().optional(),
+});
+
+export const AgentLogHistoryReadSchema = z.object({
+  lines: z.array(z.string()),
+  hasMore: z.boolean(),
+  sessionEndedAt: z.string().nullable().optional(),
+  nextSnapshotId: z.string().uuid().nullable().optional(),
+});
+
+
+export type CommandApprovalMode = "manual" | "auto" | "off";
 export type Agent = z.infer<typeof AgentSchema>;
 export type AgentAssignedSkill = z.infer<typeof AgentAssignedSkillSchema>;
 export type AgentSlackConfig = z.infer<typeof AgentSlackConfigSchema>;
@@ -200,3 +220,5 @@ export type PaginatedToolCalls = z.infer<typeof PaginatedToolCallsSchema>;
 export type SlackChannel = z.infer<typeof SlackChannelSchema>;
 export type SlackUser = z.infer<typeof SlackUserSchema>;
 export type ModelOption = z.infer<typeof ModelOptionSchema>;
+export type AgentLogHistoryRead = z.infer<typeof AgentLogHistoryReadSchema>;
+export type AgentLogsRead = z.infer<typeof AgentLogsReadSchema>;

@@ -7,7 +7,7 @@
 // (smtp/imap host+port, folders, …) are NOT inputs here — the backend fills them
 // as schema defaults.
 
-export type IntegrationFieldType = "text" | "secret" | "repo-url";
+export type IntegrationFieldType = "text" | "secret" | "repo-list";
 
 export interface IntegrationField {
   key: string;
@@ -27,7 +27,7 @@ export interface IntegrationProvider {
 
 export interface IntegrationDraft {
   provider: string;
-  content: Record<string, string>;
+  content: Record<string, string | string[]>;
 }
 
 export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
@@ -37,7 +37,8 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
     scopeNote: "Classic PAT: repo, read:user, read:org — Fine-grained PAT: Contents (read), Pull requests (read + write), Metadata (read, mandatory)",
     fields: [
       { key: "token", label: "Personal access token", type: "secret", required: true, placeholder: "github_pat_… or ghp_…" },
-      { key: "repoUrl", label: "Repository URL", type: "repo-url", required: true, placeholder: "https://github.com/owner/repo.git" },
+      { key: "owner", label: "Owner / Org", type: "text", required: true, placeholder: "owner-or-org" },
+      { key: "repos", label: "Repositories", type: "repo-list", required: false, placeholder: "repository name", hint: "Leave empty to allow access to any repository the token can reach — the agent will need to pass a repo name explicitly." },
     ],
   },
   {
@@ -66,7 +67,7 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
     scopeNote: "App password scopes: Account (read), Repositories (read), Pull requests (read + write)",
     fields: [
       { key: "workspace", label: "Workspace", type: "text", required: true, placeholder: "workspace id" },
-      { key: "repo", label: "Repository", type: "text", required: true, placeholder: "repository" },
+      { key: "repos", label: "Repositories", type: "repo-list", required: false, placeholder: "repository name", hint: "Leave empty to allow access to any repository the token can reach — the agent will need to pass a repo name explicitly." },
       { key: "email", label: "Email", type: "text", required: true, placeholder: "you@example.com" },
       { key: "apiToken", label: "API token", type: "secret", required: true },
     ],
@@ -74,10 +75,11 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
   {
     id: "gmail",
     label: "Gmail",
-    scopeNote: "OAuth2 access token with Gmail API scopes (gmail.readonly, gmail.send or gmail.modify as needed)",
+    scopeNote: "OAuth 2.0 client credentials with Gmail API scope (gmail.readonly)",
     fields: [
-      { key: "accessToken", label: "Access token", type: "secret", required: true },
-      { key: "userId", label: "User ID", type: "text", required: true, placeholder: "me or user@example.com" },
+      { key: "clientId", label: "Client ID", type: "text", required: true, placeholder: "…apps.googleusercontent.com", hint: "Google OAuth 2.0 client ID" },
+      { key: "clientSecret", label: "Client secret", type: "secret", required: true, hint: "Google OAuth 2.0 client secret" },
+      { key: "refreshToken", label: "Refresh token", type: "secret", required: true, hint: "OAuth 2.0 refresh token for the Gmail account" },
     ],
   },
   {
@@ -92,12 +94,13 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
   {
     id: "zoho_mail",
     label: "Zoho Mail",
-    scopeNote: "App password from Zoho account security settings (two-factor must be enabled)",
+    scopeNote: "OAuth 2.0 client credentials with ZohoMail.messages.READ scope",
     fields: [
-      { key: "username", label: "Username", type: "text", required: true, placeholder: "you@zoho.com" },
-      { key: "email", label: "Email", type: "text", required: true, placeholder: "you@zoho.com" },
-      { key: "fromAddress", label: "From address", type: "text", required: true, placeholder: "you@zoho.com" },
-      { key: "appPassword", label: "App password", type: "secret", required: true },
+      { key: "email", label: "Email", type: "text", required: true, placeholder: "you@yourdomain.com", hint: "Zoho Mail account email address" },
+      { key: "accountId", label: "Account ID", type: "text", required: true, placeholder: "56218000000008002", hint: "Zoho Mail account ID (from API console)" },
+      { key: "clientId", label: "Client ID", type: "text", required: true, placeholder: "1000.…", hint: "Zoho OAuth 2.0 client ID" },
+      { key: "clientSecret", label: "Client secret", type: "secret", required: true, hint: "Zoho OAuth 2.0 client secret" },
+      { key: "refreshToken", label: "Refresh token", type: "secret", required: true, hint: "OAuth 2.0 refresh token for the Zoho Mail account" },
     ],
   },
   {
@@ -117,18 +120,12 @@ export function getIntegrationProvider(id: string): IntegrationProvider | undefi
   return INTEGRATION_PROVIDERS.find((p) => p.id === id);
 }
 
-export function parseGithubRepoUrl(url: string): { owner: string; repo: string } | null {
-  const m = url.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?$/);
-  return m ? { owner: m[1], repo: m[2] } : null;
-}
-
-export function expandGithubContent(content: Record<string, string>): Record<string, string> {
-  const parsed = parseGithubRepoUrl(content.repoUrl ?? "");
-  if (!parsed) return content;
-  const { owner, repo } = parsed;
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { repoUrl: _repoUrl, ...rest } = content;
-  return { ...rest, owner, repo, org: owner };
+export function expandGithubContent(
+  content: Record<string, string | string[]>,
+): Record<string, string | string[]> {
+  const owner = typeof content.owner === "string" ? content.owner : "";
+  const repos = Array.isArray(content.repos) ? content.repos : [];
+  return { ...content, owner, org: owner, repos };
 }
 
 // True if any added integration is missing a required field — used to gate "Hire".
@@ -138,10 +135,8 @@ export function hasIncompleteIntegration(integrations: IntegrationDraft[]): bool
     if (!provider) return true;
     return provider.fields.some((f) => {
       if (!f.required) return false;
-      const value = (draft.content[f.key] ?? "").trim();
-      if (!value) return true;
-      if (f.type === "repo-url") return parseGithubRepoUrl(value) === null;
-      return false;
+      const value = draft.content[f.key];
+      return typeof value !== "string" || value.trim().length === 0;
     });
   });
 }

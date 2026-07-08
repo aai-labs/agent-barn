@@ -27,11 +27,16 @@ TELEMETRY_PUSH_PLUGIN_YAML: str = (_TELEMETRY_PUSH / "plugin.yaml").read_text()
 TELEMETRY_PUSH_PLUGIN_INIT: str = (_TELEMETRY_PUSH / "__init__.py").read_text()
 
 
+_HERMES_APPROVAL_MODE = {"manual": "manual", "auto": "smart", "off": "off"}
+
+
 def build_hermes_config(
     model: str,
     litellm_base_url: str,
     dm_policy: str = "off",
     group_policy: str = "allowlist",
+    verbose_mode: bool = True,
+    approval_mode: str = "auto",
 ) -> dict:
     _, sep, model_name = model.partition("/")
     if not sep:
@@ -78,6 +83,8 @@ def build_hermes_config(
             "platforms": {
                 "slack": {
                     "tool_progress": "off",
+                    "interim_assistant_messages": verbose_mode,
+                    "busy_ack_detail": False,
                 },
             },
         },
@@ -91,6 +98,9 @@ def build_hermes_config(
         },
         "plugins": {
             "enabled": enabled_plugins,
+        },
+        "approvals": {
+            "mode": _HERMES_APPROVAL_MODE.get(approval_mode, "smart"),
         },
     }
 

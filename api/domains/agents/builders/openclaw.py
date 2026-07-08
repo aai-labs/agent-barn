@@ -17,6 +17,9 @@ TELEMETRY_PUSH_PACKAGE_JSON: str = (_TELEMETRY_PUSH / "package.json").read_text(
 TELEMETRY_PUSH_PLUGIN_JSON: str = (_TELEMETRY_PUSH / "openclaw.plugin.json").read_text()
 
 
+_OPENCLAW_EXEC_MODE = {"manual": "ask", "auto": "auto", "off": "full"}
+
+
 def build_openclaw_config_overlay(
     model: str,
     litellm_base_url: str,
@@ -24,6 +27,7 @@ def build_openclaw_config_overlay(
     slack_dm_user_ids: list[str] | None = None,
     slack_group_policy: str = "open",
     slack_dm_policy: str = "open",
+    approval_mode: str = "auto",
 ) -> dict:
     provider, _, model_name = model.partition("/")
 
@@ -88,7 +92,10 @@ def build_openclaw_config_overlay(
         "bindings": [
             {"type": "route", "agentId": "main", "match": {"channel": "slack"}}
         ],
-        "tools": {"profile": "full"},
+        "tools": {
+            "profile": "full",
+            "exec": {"mode": _OPENCLAW_EXEC_MODE.get(approval_mode, "auto")},
+        },
         "memory": {"backend": "builtin"},
         "plugins": {
             "allow": ["memory-core", "active-memory", "telemetry-push"],
@@ -122,6 +129,7 @@ def build_openclaw_config_overlay(
 def build_openclaw_config_overlay_teams(
     model: str,
     litellm_base_url: str,
+    approval_mode: str = "auto",
 ) -> dict:
     provider, _, model_name = model.partition("/")
 
@@ -154,7 +162,10 @@ def build_openclaw_config_overlay_teams(
         "bindings": [
             {"type": "route", "agentId": "main", "match": {"channel": "msteams"}}
         ],
-        "tools": {"profile": "full"},
+        "tools": {
+            "profile": "full",
+            "exec": {"mode": _OPENCLAW_EXEC_MODE.get(approval_mode, "auto")},
+        },
         "memory": {"backend": "builtin"},
         "plugins": {
             "allow": ["memory-core", "active-memory", "telemetry-push"],

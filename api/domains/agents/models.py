@@ -19,6 +19,12 @@ class AgentStatus(str, enum.Enum):
     ERROR = "ERROR"
 
 
+class CommandApprovalMode(str, enum.Enum):
+    MANUAL = "manual"
+    AUTO = "auto"
+    OFF = "off"
+
+
 class AgentPlatform(str, enum.Enum):
     SLACK = "slack"
     TEAMS = "teams"
@@ -73,10 +79,24 @@ class SecretContent(PydanticBaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class GithubContent(SecretContent):
+class _RepoListCompat(SecretContent):
+    """Upgrades legacy singular `repo` -> `repos: list[str]` on read, so old
+    encrypted blobs (repo: "single-string") decrypt transparently."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_legacy_repo(cls, data):
+        if isinstance(data, dict) and "repo" in data and "repos" not in data:
+            data = dict(data)
+            legacy = data.pop("repo")
+            data["repos"] = [legacy] if legacy else []
+        return data
+
+
+class GithubContent(_RepoListCompat):
     token: str
     owner: str
-    repo: str
+    repos: list[str] = Field(default_factory=list)
     org: str
 
 
@@ -92,16 +112,17 @@ class ConfluenceContent(SecretContent):
     api_token: str
 
 
-class BitbucketContent(SecretContent):
+class BitbucketContent(_RepoListCompat):
     workspace: str
-    repo: str
+    repos: list[str] = Field(default_factory=list)
     email: str
     api_token: str
 
 
 class GmailContent(SecretContent):
-    access_token: str
-    user_id: str
+    client_id: str
+    client_secret: str
+    refresh_token: str
 
 
 class GoogleCalendarContent(SecretContent):
@@ -110,16 +131,11 @@ class GoogleCalendarContent(SecretContent):
 
 
 class ZohoMailContent(SecretContent):
-    username: str
     email: str
-    from_address: str
-    app_password: str
-    smtp_host: str = "smtp.zoho.com"
-    smtp_port: int = 465
-    imap_host: str = "imap.zoho.com"
-    imap_port: int = 993
-    mail_folder: str = "INBOX"
-    sent_folder: str = "Sent"
+    account_id: str
+    client_id: str
+    client_secret: str
+    refresh_token: str
 
 
 class ZohoCalendarContent(SecretContent):
@@ -206,7 +222,12 @@ class Agent(BaseModel, table=True):
         nullable=True,
         sa_type=sa.Text,
     )
+
     ingest_key_encrypted: str | None = SqlField(default=None, nullable=True)
+    approval_mode: CommandApprovalMode = SqlField(
+        default=CommandApprovalMode.AUTO,
+        sa_column=Column(sa.String(10), nullable=False, server_default="auto"),
+    )
 
 
 class AgentSlackConfig(BaseModel, table=True):
@@ -232,6 +253,10 @@ class AgentSlackConfig(BaseModel, table=True):
     dm_policy: SlackDmPolicy = SqlField(
         default=SlackDmPolicy.OFF,
         sa_column=Column(sa.String(), nullable=False, server_default="off"),
+    )
+    verbose_mode: bool = SqlField(
+        default=True,
+        sa_column=Column(sa.Boolean(), nullable=False, server_default=sa.true()),
     )
 
 
@@ -280,6 +305,32 @@ class AgentSkill(BaseModel, table=True):
     )
 
 
+class AgentLogSnapshot(BaseModel, table=True):
+    __tablename__: str = "agent_log_snapshot"
+
+    __table_args__ = (
+        Index(
+            "ix_agent_log_snapshot_agent_ended",
+            "agent_id",
+            sa.text("session_ended_at DESC"),
+        ),
+    )
+
+    agent_id: UUID = SqlField(
+        foreign_key="agent.id", nullable=False, ondelete="CASCADE"
+    )
+    session_started_at: datetime = SqlField(
+        nullable=False,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+    session_ended_at: datetime = SqlField(
+        nullable=False,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+    log_text: str = SqlField(sa_column=Column(sa.Text(), nullable=False))
+    byte_size: int = SqlField(nullable=False)
+
+
 class AgentTemplateSkill(BaseModel, table=True):
     __tablename__: str = "agent_template_skill"
 
@@ -317,6 +368,7 @@ class AgentCreate(PydanticBaseModel):
     slack_dm_user_ids: list[str] = Field(default_factory=list)
     slack_group_policy: SlackGroupPolicy = SlackGroupPolicy.ALLOWLIST
     slack_dm_policy: SlackDmPolicy = SlackDmPolicy.OFF
+    slack_verbose_mode: bool = True
     # Teams credentials (required when platform=teams)
     teams_app_id: str | None = Field(default=None, min_length=1)
     teams_app_password: str | None = Field(default=None, min_length=1)
@@ -330,6 +382,7 @@ class AgentCreate(PydanticBaseModel):
     secrets: list[AgentSecretCreate] = Field(default_factory=list)
     # Custom org skills to assign on creation (optional)
     skill_ids: list[UUID] = Field(default_factory=list)
+    approval_mode: CommandApprovalMode = CommandApprovalMode.AUTO
 
     @model_validator(mode="after")
     def validate_platform_credentials(self) -> "AgentCreate":
@@ -369,6 +422,7 @@ class AgentUpdate(PydanticBaseModel):
     slack_dm_user_ids: list[str] | None = None
     slack_group_policy: SlackGroupPolicy | None = None
     slack_dm_policy: SlackDmPolicy | None = None
+    slack_verbose_mode: bool | None = None
     # Teams
     teams_app_id: str | None = Field(default=None, min_length=1)
     teams_app_password: str | None = Field(default=None, min_length=1)
@@ -385,6 +439,7 @@ class AgentUpdate(PydanticBaseModel):
     # Providers not mentioned in either list are left untouched.
     secrets: list[AgentSecretCreate] | None = None
     removed_secret_providers: list[SecretProvider] | None = None
+    approval_mode: CommandApprovalMode | None = None
 
     @model_validator(mode="after")
     def validate_skill_operations(self) -> "AgentUpdate":
@@ -422,6 +477,7 @@ class AgentSlackConfigRead(PydanticBaseModel):
     dm_user_ids: list[str]
     group_policy: SlackGroupPolicy
     dm_policy: SlackDmPolicy
+    verbose_mode: bool
     bot_display_name: str | None = None  # fetched live from Slack, not persisted
 
 
@@ -467,6 +523,7 @@ class AgentRead(PydanticBaseModel):
     teams_config: AgentTeamsConfigRead | None = None
     secrets: list[AgentSecretRead] = Field(default_factory=list)
     skills: list[AgentAssignedSkillRead] = Field(default_factory=list)
+    approval_mode: CommandApprovalMode
     webhook_url: str | None = None
     created_at: datetime
     updated_at: datetime
@@ -490,3 +547,23 @@ def get_agent_filter(
     status: AgentStatus | None = Query(default=None),
 ) -> AgentFilter:
     return AgentFilter(status=status)
+
+
+class AgentLogsRead(PydanticBaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    lines: list[str]
+    source: str
+    has_snapshots: bool = False
+    snapshot_id: UUID | None = None
+    session_started_at: datetime | None = None
+    session_ended_at: datetime | None = None
+
+
+class AgentLogHistoryRead(PydanticBaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    lines: list[str]
+    has_more: bool
+    session_ended_at: datetime | None = None
+    next_snapshot_id: UUID | None = None
