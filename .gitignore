@@ -126,5 +126,7 @@ miscellaneous/
 CLAUDE.md
 
 kubeconfig.yaml
+k3d-kubeconfig.yaml
+.k3d/
 
 scripts/

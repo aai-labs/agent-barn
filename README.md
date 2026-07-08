@@ -111,6 +111,57 @@ make db-logs
 make db-restart
 ```
 
+## Local Kubernetes (k3d) dev environment
+
+Agents run as Kubernetes resources, so working on that path locally needs a
+cluster. We use [k3d](https://k3d.io) (k3s in Docker): it needs only Docker —
+no host `k3d`, `kubectl`, or `helm` install — and is
+[supported in GitHub Actions](https://github.com/AbsaOSS/k3d-action), so the
+same setup backs CI (see the `test-k8s` job in `.github/workflows/api.yml`).
+
+### 1. Start the cluster
+
+`cluster-up` requires `OPENROUTER_API_KEY` in `.env` (and uses
+`LITELLM_MASTER_KEY` if set, otherwise generates one).
+
+```bash
+make cluster-up      # start LiteLLM + a k3d cluster; write kubeconfigs to .k3d/
+make cluster-down    # delete the cluster and stop LiteLLM
+make cluster-reset   # cluster-down + cluster-up
+```
+
+It writes two kubeconfigs into `.k3d/` (gitignored) — the same cluster, reached
+differently depending on where the client runs:
+
+- `.k3d/kubeconfig-host.yaml` — server on `127.0.0.1`, for host tools
+  (`kubectl`, `helm`, `make dev-api`).
+- `.k3d/kubeconfig-internal.yaml` — server on `host.docker.internal`, for the
+  API running **inside** Docker.
+
+### 2. Point the API at the cluster
+
+Pick the block that matches how you run the API.
+
+**API on the host** (`make dev-api`):
+
+```bash
+export KUBECONFIG=.k3d/kubeconfig-host.yaml
+export K8S_KUBECONFIG_PATH=.k3d/kubeconfig-host.yaml
+make dev-api
+```
+
+**API in Docker** (`make up`): add this one line to `.env` (one-time — the path
+is always the same), then `make up`:
+
+```dotenv
+API_K8S_KUBECONFIG_PATH=/app/.k3d/kubeconfig-internal.yaml
+```
+
+Without this line the containerized API can't reach the cluster, so leave it out
+if you're not using k3d.
+
+Ports: LiteLLM proxy on `127.0.0.1:7070`, k8s API on `127.0.0.1:16443`.
+
 ## Database Migrations
 
 ```bash

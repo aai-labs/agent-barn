@@ -34,6 +34,19 @@ services:
       EMAIL_SMTP_SERVER: ${EMAIL_SMTP_SERVER-}
       ENVIRONMENT: ${ENVIRONMENT:?ENVIRONMENT is required}
       UI_APP_URL: ${UI_APP_URL:?UI_APP_URL is required}
+      # Local k8s (k3d) dev: point this at the in-container kubeconfig to let the
+      # API drive the k3d cluster. Unset by default so plain `make up` is
+      # unchanged; `make cluster-up` prints the exact value to add to .env.
+      K8S_KUBECONFIG_PATH: ${API_K8S_KUBECONFIG_PATH-}
+    extra_hosts:
+      # Reach the host-published k8s API from inside the container. No-op on
+      # Docker Desktop; required on Linux/CI where host.docker.internal is unset.
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # k3d writes kubeconfigs here. Directory mount is safe when absent (Docker
+      # creates an empty, gitignored dir) — avoids the missing-file-becomes-a-dir
+      # bind-mount trap.
+      - ./.k3d:/app/.k3d:ro
     ports:
       - "${API_PORT:?API_PORT is required}:8000"
 
@@ -53,5 +66,56 @@ services:
     ports:
       - "3000:3000"
 
+  # k3d runner — provides the k3d binary without requiring a host install.
+  # Docker socket is mounted so k3d can create k3s containers as host siblings.
+  # The repo root is mounted at /workspace so scripts and helm charts are accessible.
+  k3d-runner:
+    build:
+      context: .
+      dockerfile: docker/k3d/Dockerfile
+    profiles: ["k3d"]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - .:/workspace
+    working_dir: /workspace
+
+  # LiteLLM proxy + its Postgres — only started by `make k3d-up`.
+  # Agents running inside k3d reach LiteLLM via host.docker.internal:7070.
+  litellm-db:
+    image: postgres:16
+    container_name: aai_litellm_db
+    profiles: ["k3d"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: litellm
+      POSTGRES_PASSWORD: litellm
+      POSTGRES_DB: litellm
+    volumes:
+      - aai_litellm_db_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U litellm -d litellm"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  litellm:
+    image: ghcr.io/berriai/litellm:main-v1.83.14-stable.patch.3
+    container_name: aai_litellm
+    profiles: ["k3d"]
+    restart: unless-stopped
+    depends_on:
+      litellm-db:
+        condition: service_healthy
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      DATABASE_URL: postgresql://litellm:litellm@litellm-db:5432/litellm
+    ports:
+      - "127.0.0.1:7070:4000"
+    volumes:
+      - ./docker/litellm/config.yaml:/app/config.yaml:ro
+
 volumes:
   aai_db_postgres_data:
+  aai_litellm_db_data:

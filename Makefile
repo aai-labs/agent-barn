@@ -2,7 +2,8 @@ COMPOSE := docker compose -f compose.yml
 
 .PHONY: \
 	dev-api dev-ui migrate rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api fix-api test check fix \
-	up down restart logs build clean db-up db-down db-logs db-restart
+	up down restart logs build clean db-up db-down db-logs db-restart \
+	cluster-up cluster-down cluster-reset k3d-load-images k3d-load-openclaw k3d-load-hermes
 
 # Non-docker commands
 
@@ -78,3 +79,30 @@ db-logs:
 
 db-restart:
 	$(COMPOSE) restart db
+
+# k3d dev environment — k3s cluster + LiteLLM + litellm-db in Docker.
+# Requires: Docker running. No host k3d or helm install needed.
+# kubeconfigs are written to ./.k3d/ (host + in-container variants).
+# Ports: LiteLLM → 127.0.0.1:7070 | k8s API → 127.0.0.1:16443
+
+cluster-up:
+	@bash docker/k3d/k3d-up.sh
+
+cluster-down:
+	$(COMPOSE) --profile k3d run --rm k3d-runner k3d cluster delete agentfarm-dev
+	$(COMPOSE) --profile k3d stop litellm litellm-db
+
+cluster-reset: cluster-down cluster-up
+
+# Build both agent base images locally and import them into the k3d cluster.
+# Requires GH_TOKEN in env (GitHub PAT with repo read access).
+# OPENCLAW_IMAGE and HERMES_IMAGE are read from the environment (your .env).
+
+k3d-load-images:
+	@bash docker/k3d/k3d-load-images.sh
+
+k3d-load-openclaw:
+	@TARGET=openclaw bash docker/k3d/k3d-load-images.sh
+
+k3d-load-hermes:
+	@TARGET=hermes bash docker/k3d/k3d-load-images.sh
