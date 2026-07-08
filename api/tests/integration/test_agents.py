@@ -1,6 +1,5 @@
 import json
-import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import httpx
 from fastapi import status
@@ -14,11 +13,9 @@ from hamcrest import (
 )
 from starlette.testclient import TestClient
 
-from api.domains.agents import service as agent_service
 from api.domains.agents.models import AgentStatus
 from api.domains.agents.repository import AgentRepository
 from api.domains.templates.repository import TemplateRepository
-from api.domains.conversations.service import ConversationSyncService
 from api.infrastructure.kubernetes.client import KubernetesClient
 from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
 from api.tests.core.givenpy import given, then, when
@@ -818,46 +815,6 @@ def test_stop_agent_no_auth_returns_401():
             assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
 
 
-def test_stop_agent_succeeds_when_presync_raises():
-    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
-        client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
-        conv = context.injector.get(ConversationSyncService)
-
-        with when("the pre-stop conversation sync raises but I stop the agent"):
-            conv.sync_all_channels = MagicMock(side_effect=RuntimeError("slack 429"))
-            response = client.post(
-                f"{_BASE}/{context.agent.id}/stop", headers=_auth(context)
-            )
-
-        with then("stop still tears down and marks the agent STOPPED"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            assert_that(response.json()["status"], equal_to(AgentStatus.STOPPED.value))
-            k8s.delete_deployment.assert_called_once()
-
-
-def test_stop_agent_is_bounded_when_presync_hangs(monkeypatch):
-    monkeypatch.setattr(agent_service, "_STOP_SYNC_TIMEOUT_SECONDS", 0.3)
-    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
-        client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
-        conv = context.injector.get(ConversationSyncService)
-        conv.sync_all_channels = MagicMock(side_effect=lambda agent_id: time.sleep(0.5))
-
-        with when("a pre-stop sync hangs far past the budget"):
-            started = time.monotonic()
-            response = client.post(
-                f"{_BASE}/{context.agent.id}/stop", headers=_auth(context)
-            )
-            elapsed = time.monotonic() - started
-
-        with then("stop is bounded by the budget and still tears down + STOPPED"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            assert_that(response.json()["status"], equal_to(AgentStatus.STOPPED.value))
-            k8s.delete_deployment.assert_called_once()
-            assert elapsed < 2.0, f"stop took {elapsed:.2f}s, expected < 2s"
-
-
 def test_delete_agent_soft_deletes():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         client: TestClient = context.client
@@ -1510,6 +1467,7 @@ def test_create_agent_with_slack_settings():
             "slack_dm_user_ids": ["U001"],
             "slack_group_policy": "allowlist",
             "slack_dm_policy": "allowlist",
+            "slack_verbose_mode": False,
         }
 
         with when("I create an agent with Slack settings"):
@@ -1522,6 +1480,7 @@ def test_create_agent_with_slack_settings():
             assert_that(body["slack_config"]["dm_user_ids"], equal_to(["U001"]))
             assert_that(body["slack_config"]["group_policy"], equal_to("allowlist"))
             assert_that(body["slack_config"]["dm_policy"], equal_to("allowlist"))
+            assert_that(body["slack_config"]["verbose_mode"], equal_to(False))
 
 
 def test_create_agent_defaults_to_allowlist_groups_dms_off():
@@ -1538,6 +1497,7 @@ def test_create_agent_defaults_to_allowlist_groups_dms_off():
             assert_that(body["slack_config"]["dm_policy"], equal_to("off"))
             assert_that(body["slack_config"]["channel_ids"], equal_to([]))
             assert_that(body["slack_config"]["dm_user_ids"], equal_to([]))
+            assert_that(body["slack_config"]["verbose_mode"], equal_to(True))
 
 
 def test_patch_agent_updates_slack_settings():
@@ -1552,6 +1512,7 @@ def test_patch_agent_updates_slack_settings():
                     "slack_dm_user_ids": ["U888"],
                     "slack_group_policy": "open",
                     "slack_dm_policy": "allowlist",
+                    "slack_verbose_mode": False,
                 },
                 headers=_auth(context),
             )
@@ -1563,6 +1524,7 @@ def test_patch_agent_updates_slack_settings():
             assert_that(body["slack_config"]["dm_user_ids"], equal_to(["U888"]))
             assert_that(body["slack_config"]["group_policy"], equal_to("open"))
             assert_that(body["slack_config"]["dm_policy"], equal_to("allowlist"))
+            assert_that(body["slack_config"]["verbose_mode"], equal_to(False))
 
 
 def test_start_agent_overlay_uses_slack_settings():
@@ -2111,6 +2073,10 @@ def test_start_hermes_agent_configmap_has_hermes_config():
             cfg = _yaml.safe_load(config_map.data["hermes-config.yaml"])
             assert_that(cfg["model"]["base_url"], equal_to("http://litellm:4000"))
             assert_that(cfg["slack"]["unauthorized_dm_behavior"], equal_to("ignore"))
+            assert_that(
+                cfg["display"]["platforms"]["slack"]["interim_assistant_messages"],
+                equal_to(True),
+            )
             assert_that("slack-deny-dms" in cfg["plugins"]["enabled"], equal_to(True))
             assert_that(
                 "slack-channel-allowlist" in cfg["plugins"]["enabled"], equal_to(True)
@@ -2131,6 +2097,35 @@ def test_start_hermes_agent_configmap_has_hermes_config():
 
         with then("BOOTSTRAP.md is absent from the ConfigMap"):
             assert_that(config_map.data, is_not(has_key("BOOTSTRAP.md")))
+
+
+def test_start_hermes_agent_configmap_concise_mode():
+    import yaml as _yaml
+
+    with given(
+        [*_GIVEN_WITH_HERMES_IMAGE, there_is_an_agent(agent_type=AgentType.HERMES)]
+    ) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+
+        client.patch(
+            f"{_BASE}/{context.agent.id}",
+            json={"slack_verbose_mode": False},
+            headers=_auth(context),
+        )
+
+        with when("I start the Hermes agent in concise mode"):
+            response = client.post(
+                f"{_BASE}/{context.agent.id}/start", headers=_auth(context)
+            )
+
+        with then("hermes-config.yaml disables interim assistant messages"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            cfg = _yaml.safe_load(config_map.data["hermes-config.yaml"])
+            slack_display = cfg["display"]["platforms"]["slack"]
+            assert_that(slack_display["interim_assistant_messages"], equal_to(False))
+            assert_that(slack_display["busy_ack_detail"], equal_to(False))
 
 
 def test_start_hermes_agent_secret_has_channel_and_dm_lists():

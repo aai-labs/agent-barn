@@ -1,10 +1,11 @@
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import status
 from hamcrest import assert_that, equal_to, has_length
 
-from api.domains.tool_calls.sync_service import ToolCallSyncService
-from api.infrastructure.kubernetes.client import KubernetesClient
+from api.domains.tool_calls.models import ToolCallStatus
+from api.domains.tool_calls.repository import ToolCallRepository
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
     create_test_client,
@@ -45,27 +46,37 @@ _GIVEN = [
     use_org_for_auth(),
 ]
 
-_SIMPLE_JSONL = (
-    '{"type":"message","id":"a1","message":{"role":"assistant","content":[{"type":"toolCall",'
-    '"id":"call_abc123","name":"read","arguments":{"path":"/tmp/test.txt"}}],"timestamp":1748000000000}}\n'
-    '{"type":"message","id":"r1","message":{"role":"toolResult","toolCallId":"call_abc123",'
-    '"toolName":"read","content":[{"type":"text","text":"hello"}],"isError":false,"timestamp":1748000001000}}\n'
-)
-
-_SESSION_FILE = "/home/node/.openclaw/agents/main/sessions/session-abc.jsonl"
-
 
 def _auth(context) -> dict:
     return {"Authorization": f"Bearer {context.access_token}"}
 
 
-def _seed(context, *exec_side_effects) -> None:
-    """Set up k8s mock and synchronously run a full sync for the test agent."""
-    k8s: KubernetesClient = context.injector.get(KubernetesClient)
-    k8s.get_pod_name_for_deployment.return_value = "agent-pod"
-    k8s.exec_command.side_effect = list(exec_side_effects)
-    sync_service: ToolCallSyncService = context.injector.get(ToolCallSyncService)
-    sync_service.sync_agent(context.agent.id, context.organization.id, force=True)
+def _seed_tool_call(
+    context, external_id, tool_name, arguments, status_val, result=None
+):
+    repo: ToolCallRepository = context.injector.get(ToolCallRepository)
+    now = datetime.now(timezone.utc)
+    with repo.get_session() as session:
+        repo.upsert_pending(
+            session=session,
+            organization_id=context.organization.id,
+            agent_id=context.agent.id,
+            session_id="session-abc",
+            external_id=external_id,
+            tool_name=tool_name,
+            arguments=arguments,
+            occurred_at=now,
+        )
+        if status_val != ToolCallStatus.PENDING:
+            repo.complete(
+                session=session,
+                agent_id=context.agent.id,
+                external_id=external_id,
+                result=result,
+                is_error=(status_val == ToolCallStatus.ERROR),
+                completed_at=now,
+            )
+        session.commit()
 
 
 def test_list_tool_calls_no_auth_returns_401():
@@ -90,12 +101,9 @@ def test_list_tool_calls_unknown_agent_returns_404():
             assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
-def test_list_tool_calls_pod_not_found_returns_200_empty():
+def test_list_tool_calls_empty_returns_200():
     with given([*_GIVEN, there_is_an_agent()]) as context:
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
-        k8s.get_pod_name_for_deployment.return_value = None
-
-        with when("I request tool calls but no pod is running"):
+        with when("I request tool calls with no data seeded"):
             response = context.client.get(
                 f"{_BASE}/{context.agent.id}/tool-calls", headers=_auth(context)
             )
@@ -107,32 +115,23 @@ def test_list_tool_calls_pod_not_found_returns_200_empty():
             assert_that(body["items"], has_length(0))
 
 
-def test_list_tool_calls_exec_failure_returns_200_empty():
+def test_list_tool_calls_returns_seeded_results():
     with given([*_GIVEN, there_is_an_agent()]) as context:
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
-        k8s.get_pod_name_for_deployment.return_value = "agent-pod"
-        k8s.exec_command.side_effect = RuntimeError("exec failed")
-
-        with when("I request tool calls but exec fails"):
-            response = context.client.get(
-                f"{_BASE}/{context.agent.id}/tool-calls", headers=_auth(context)
-            )
-
-        with then("it still returns 200 with empty results"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            assert_that(response.json()["total"], equal_to(0))
-
-
-def test_list_tool_calls_syncs_from_pod_and_returns_results():
-    with given([*_GIVEN, there_is_an_agent()]) as context:
-        _seed(context, _SESSION_FILE + "\n", _SIMPLE_JSONL)
+        _seed_tool_call(
+            context,
+            "call_abc123",
+            "read",
+            {"path": "/tmp/test.txt"},
+            ToolCallStatus.SUCCESS,
+            result="hello",
+        )
 
         with when("I request tool calls"):
             response = context.client.get(
                 f"{_BASE}/{context.agent.id}/tool-calls", headers=_auth(context)
             )
 
-        with then("it returns 200 with the synced tool call"):
+        with then("it returns 200 with the seeded tool call"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             body = response.json()
             assert_that(body["total"], equal_to(1))
@@ -142,16 +141,17 @@ def test_list_tool_calls_syncs_from_pod_and_returns_results():
             assert_that(item["arguments"], equal_to({"path": "/tmp/test.txt"}))
 
 
-def test_list_tool_calls_pending_when_no_result():
-    jsonl_no_result = (
-        '{"type":"message","id":"a1","message":{"role":"assistant","content":[{"type":"toolCall",'
-        '"id":"call_pending1","name":"bash","arguments":{"command":"sleep 10"}}],"timestamp":1748000000000}}\n'
-    )
-
+def test_list_tool_calls_pending_status():
     with given([*_GIVEN, there_is_an_agent()]) as context:
-        _seed(context, _SESSION_FILE + "\n", jsonl_no_result)
+        _seed_tool_call(
+            context,
+            "call_pending1",
+            "bash",
+            {"command": "sleep 10"},
+            ToolCallStatus.PENDING,
+        )
 
-        with when("I request tool calls before the result has arrived"):
+        with when("I request tool calls"):
             response = context.client.get(
                 f"{_BASE}/{context.agent.id}/tool-calls", headers=_auth(context)
             )
@@ -164,15 +164,9 @@ def test_list_tool_calls_pending_when_no_result():
 
 
 def test_list_tool_calls_filter_by_tool_name():
-    read_jsonl = (
-        '{"type":"message","id":"a1","message":{"role":"assistant","content":[{"type":"toolCall",'
-        '"id":"call_r1","name":"read","arguments":{}}],"timestamp":1748000000000}}\n'
-        '{"type":"message","id":"a2","message":{"role":"assistant","content":[{"type":"toolCall",'
-        '"id":"call_b1","name":"bash","arguments":{}}],"timestamp":1748000001000}}\n'
-    )
-
     with given([*_GIVEN, there_is_an_agent()]) as context:
-        _seed(context, _SESSION_FILE + "\n", read_jsonl)
+        _seed_tool_call(context, "call_r1", "read", {}, ToolCallStatus.PENDING)
+        _seed_tool_call(context, "call_b1", "bash", {}, ToolCallStatus.PENDING)
 
         with when("I filter tool calls by tool_name=read"):
             response = context.client.get(
@@ -189,7 +183,14 @@ def test_list_tool_calls_filter_by_tool_name():
 
 def test_list_tool_calls_filter_by_status():
     with given([*_GIVEN, there_is_an_agent()]) as context:
-        _seed(context, _SESSION_FILE + "\n", _SIMPLE_JSONL)
+        _seed_tool_call(
+            context,
+            "call_abc123",
+            "read",
+            {"path": "/tmp/test.txt"},
+            ToolCallStatus.SUCCESS,
+            result="hello",
+        )
 
         with when("I filter by status=PENDING"):
             response = context.client.get(
@@ -203,15 +204,9 @@ def test_list_tool_calls_filter_by_status():
 
 
 def test_list_tool_calls_pagination():
-    two_calls_jsonl = (
-        '{"type":"message","id":"a1","message":{"role":"assistant","content":[{"type":"toolCall",'
-        '"id":"call_1","name":"read","arguments":{}}],"timestamp":1748000000000}}\n'
-        '{"type":"message","id":"a2","message":{"role":"assistant","content":[{"type":"toolCall",'
-        '"id":"call_2","name":"write","arguments":{}}],"timestamp":1748000001000}}\n'
-    )
-
     with given([*_GIVEN, there_is_an_agent()]) as context:
-        _seed(context, _SESSION_FILE + "\n", two_calls_jsonl)
+        _seed_tool_call(context, "call_1", "read", {}, ToolCallStatus.PENDING)
+        _seed_tool_call(context, "call_2", "write", {}, ToolCallStatus.PENDING)
 
         with when("I request page 1 with size 1"):
             response = context.client.get(
@@ -224,45 +219,3 @@ def test_list_tool_calls_pagination():
             body = response.json()
             assert_that(body["total"], equal_to(2))
             assert_that(body["items"], has_length(1))
-
-
-def test_list_tool_calls_second_sync_reads_only_new_bytes():
-    first_call_jsonl = (
-        '{"type":"message","id":"a1","message":{"role":"assistant","content":[{"type":"toolCall",'
-        '"id":"call_first","name":"read","arguments":{}}],"timestamp":1748000000000}}\n'
-    )
-    second_call_jsonl = (
-        '{"type":"message","id":"a2","message":{"role":"assistant","content":[{"type":"toolCall",'
-        '"id":"call_second","name":"write","arguments":{}}],"timestamp":1748000001000}}\n'
-    )
-
-    with given([*_GIVEN, there_is_an_agent()]) as context:
-        _seed(context, _SESSION_FILE + "\n", first_call_jsonl)
-        _seed(context, _SESSION_FILE + "\n", second_call_jsonl)
-
-        with when("I request tool calls after two syncs"):
-            response = context.client.get(
-                f"{_BASE}/{context.agent.id}/tool-calls", headers=_auth(context)
-            )
-
-        with then("both calls are returned (old + new)"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            assert_that(response.json()["total"], equal_to(2))
-
-
-def test_list_tool_calls_agent_from_other_org_returns_404():
-    with given(
-        [
-            *_GIVEN,
-            there_is_an_agent(),
-        ]
-    ) as context:
-        other_org_agent_id = uuid.uuid4()
-
-        with when("I request tool calls for an agent in another org"):
-            response = context.client.get(
-                f"{_BASE}/{other_org_agent_id}/tool-calls", headers=_auth(context)
-            )
-
-        with then("it returns 404"):
-            assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))

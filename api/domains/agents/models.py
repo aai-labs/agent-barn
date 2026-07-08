@@ -222,6 +222,8 @@ class Agent(BaseModel, table=True):
         nullable=True,
         sa_type=sa.Text,
     )
+
+    ingest_key_encrypted: str | None = SqlField(default=None, nullable=True)
     approval_mode: CommandApprovalMode = SqlField(
         default=CommandApprovalMode.AUTO,
         sa_column=Column(sa.String(10), nullable=False, server_default="auto"),
@@ -251,6 +253,10 @@ class AgentSlackConfig(BaseModel, table=True):
     dm_policy: SlackDmPolicy = SqlField(
         default=SlackDmPolicy.OFF,
         sa_column=Column(sa.String(), nullable=False, server_default="off"),
+    )
+    verbose_mode: bool = SqlField(
+        default=True,
+        sa_column=Column(sa.Boolean(), nullable=False, server_default=sa.true()),
     )
 
 
@@ -299,6 +305,32 @@ class AgentSkill(BaseModel, table=True):
     )
 
 
+class AgentLogSnapshot(BaseModel, table=True):
+    __tablename__: str = "agent_log_snapshot"
+
+    __table_args__ = (
+        Index(
+            "ix_agent_log_snapshot_agent_ended",
+            "agent_id",
+            sa.text("session_ended_at DESC"),
+        ),
+    )
+
+    agent_id: UUID = SqlField(
+        foreign_key="agent.id", nullable=False, ondelete="CASCADE"
+    )
+    session_started_at: datetime = SqlField(
+        nullable=False,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+    session_ended_at: datetime = SqlField(
+        nullable=False,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+    log_text: str = SqlField(sa_column=Column(sa.Text(), nullable=False))
+    byte_size: int = SqlField(nullable=False)
+
+
 class AgentTemplateSkill(BaseModel, table=True):
     __tablename__: str = "agent_template_skill"
 
@@ -336,6 +368,7 @@ class AgentCreate(PydanticBaseModel):
     slack_dm_user_ids: list[str] = Field(default_factory=list)
     slack_group_policy: SlackGroupPolicy = SlackGroupPolicy.ALLOWLIST
     slack_dm_policy: SlackDmPolicy = SlackDmPolicy.OFF
+    slack_verbose_mode: bool = True
     # Teams credentials (required when platform=teams)
     teams_app_id: str | None = Field(default=None, min_length=1)
     teams_app_password: str | None = Field(default=None, min_length=1)
@@ -389,6 +422,7 @@ class AgentUpdate(PydanticBaseModel):
     slack_dm_user_ids: list[str] | None = None
     slack_group_policy: SlackGroupPolicy | None = None
     slack_dm_policy: SlackDmPolicy | None = None
+    slack_verbose_mode: bool | None = None
     # Teams
     teams_app_id: str | None = Field(default=None, min_length=1)
     teams_app_password: str | None = Field(default=None, min_length=1)
@@ -443,6 +477,7 @@ class AgentSlackConfigRead(PydanticBaseModel):
     dm_user_ids: list[str]
     group_policy: SlackGroupPolicy
     dm_policy: SlackDmPolicy
+    verbose_mode: bool
     bot_display_name: str | None = None  # fetched live from Slack, not persisted
 
 
@@ -512,3 +547,23 @@ def get_agent_filter(
     status: AgentStatus | None = Query(default=None),
 ) -> AgentFilter:
     return AgentFilter(status=status)
+
+
+class AgentLogsRead(PydanticBaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    lines: list[str]
+    source: str
+    has_snapshots: bool = False
+    snapshot_id: UUID | None = None
+    session_started_at: datetime | None = None
+    session_ended_at: datetime | None = None
+
+
+class AgentLogHistoryRead(PydanticBaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    lines: list[str]
+    has_more: bool
+    session_ended_at: datetime | None = None
+    next_snapshot_id: UUID | None = None

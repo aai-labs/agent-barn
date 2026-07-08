@@ -1064,6 +1064,7 @@ export function TeamsCredentialsStep({
 export function DetailsStep({
   template,
   platform,
+  agentType,
   name,
   onNameChange,
   model,
@@ -1072,12 +1073,15 @@ export function DetailsStep({
   onSlackGroupPolicyChange,
   slackDmPolicy,
   onSlackDmPolicyChange,
+  slackVerboseMode,
+  onSlackVerboseModeChange,
   approvalMode,
   onApprovalModeChange,
   onChangeTemplate,
 }: {
   template: AgentTemplateRead;
   platform: "slack" | "teams";
+  agentType: "openclaw" | "hermes";
   name: string;
   onNameChange: (v: string) => void;
   model: string;
@@ -1086,6 +1090,8 @@ export function DetailsStep({
   onSlackGroupPolicyChange: (v: string) => void;
   slackDmPolicy: string;
   onSlackDmPolicyChange: (v: string) => void;
+  slackVerboseMode: boolean;
+  onSlackVerboseModeChange: (v: boolean) => void;
   approvalMode: string;
   onApprovalModeChange: (v: string) => void;
   onChangeTemplate: () => void;
@@ -1160,6 +1166,22 @@ export function DetailsStep({
               <option value="open">Open — anyone can DM</option>
             </select>
           </FormField>
+
+          {agentType === "hermes" && (
+            <FormField
+              label="Verbosity"
+              hint="When verbose, the agent announces what it's about to do at each step."
+            >
+              <select
+                className="af-input"
+                value={slackVerboseMode ? "verbose" : "concise"}
+                onChange={(e) => onSlackVerboseModeChange(e.target.value === "verbose")}
+              >
+                <option value="verbose">Verbose — announces each step</option>
+                <option value="concise">Concise — final answers only</option>
+              </select>
+            </FormField>
+          )}
         </>
       )}
 

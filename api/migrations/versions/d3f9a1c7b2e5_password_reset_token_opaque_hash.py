@@ -5,7 +5,7 @@ stored. Existing (JWT-based) rows are stale after this migration and are cleared
 half-migrated tokens linger — affected users simply request a fresh link.
 
 Revision ID: d3f9a1c7b2e5
-Revises: b1c2d3e4f5a6
+Revises: ab2b4bb88c6f
 """
 
 from typing import Union
@@ -13,7 +13,7 @@ from typing import Union
 from alembic import op
 
 revision: str = "d3f9a1c7b2e5"
-down_revision: Union[str, None] = "b1c2d3e4f5a6"
+down_revision: Union[str, None] = "ab2b4bb88c6f"
 branch_labels: Union[str, None] = None
 depends_on: Union[str, None] = None
 

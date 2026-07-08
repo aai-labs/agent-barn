@@ -16,6 +16,7 @@ import { AgentMetaBadges } from "./agent-meta-badges";
 import { StatusLine } from "./status-line";
 import { ConversationsTab } from "./conversations-tab";
 import { ToolCallsTab } from "./tool-calls-tab";
+import { LogsTab } from "./logs-tab";
 import { WorkTab } from "./work-tab";
 import { AboutTab } from "./about-tab";
 import { ConfigDrawer, DRAWER_TAB_KEYS } from "./config-drawer";
@@ -24,8 +25,8 @@ interface AgentDetailPageProps {
   agentId: string;
 }
 
-type Tab = "conversations" | "tool-calls" | "work" | "about";
-const VALID_TABS: Tab[] = ["conversations", "tool-calls", "work", "about"];
+type Tab = "conversations" | "tool-calls" | "logs" | "work" | "about";
+const VALID_TABS: Tab[] = ["conversations", "tool-calls", "logs", "work", "about"];
 
 function HeaderSkeleton() {
   return (
@@ -69,6 +70,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   const tabs: [Tab, string][] = [
     ["conversations", "Conversations"],
     ["tool-calls", "Tool calls"],
+    ["logs", "Logs"],
     ["work", "Work"],
     ["about", "About"],
   ];
@@ -182,6 +184,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
 
             {tab === "conversations" && <ConversationsTab agent={agent} />}
             {tab === "tool-calls" && <ToolCallsTab agent={agent} />}
+            {tab === "logs" && <LogsTab agent={agent} />}
             {tab === "work" && <WorkTab agent={agent} />}
             {tab === "about" && <AboutTab agent={agent} onConfigure={() => { void setConfigTab("personality"); }} />}
           </>

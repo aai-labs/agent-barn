@@ -229,7 +229,26 @@ def test_open_group_and_dm_policy_drops_both_gating_plugins():
     cfg = build_hermes_config(
         "litellm/qwen3", "http://x:4000", dm_policy="open", group_policy="open"
     )
-    assert_that(cfg["plugins"]["enabled"], equal_to([]))
+    enabled = cfg["plugins"]["enabled"]
+    assert_that("slack-deny-dms" in enabled, equal_to(False))
+    assert_that("slack-channel-allowlist" in enabled, equal_to(False))
+
+
+def test_default_verbose_mode_enables_interim_assistant_messages():
+    cfg = build_hermes_config("litellm/qwen3", "http://x:4000")
+    slack_display = cfg["display"]["platforms"]["slack"]
+    assert_that(slack_display["interim_assistant_messages"], equal_to(True))
+    # Verbosity drives interim messages only; progress spam stays suppressed.
+    assert_that(slack_display["tool_progress"], equal_to("off"))
+    assert_that(slack_display["busy_ack_detail"], equal_to(False))
+
+
+def test_concise_mode_disables_interim_assistant_messages():
+    cfg = build_hermes_config("litellm/qwen3", "http://x:4000", verbose_mode=False)
+    slack_display = cfg["display"]["platforms"]["slack"]
+    assert_that(slack_display["interim_assistant_messages"], equal_to(False))
+    assert_that(slack_display["tool_progress"], equal_to("off"))
+    assert_that(slack_display["busy_ack_detail"], equal_to(False))
 
 
 def test_allowlist_policy_seeds_dm_allowed_users():
