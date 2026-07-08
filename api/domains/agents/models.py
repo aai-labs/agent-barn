@@ -303,6 +303,32 @@ class AgentSkill(BaseModel, table=True):
     )
 
 
+class AgentLogSnapshot(BaseModel, table=True):
+    __tablename__: str = "agent_log_snapshot"
+
+    __table_args__ = (
+        Index(
+            "ix_agent_log_snapshot_agent_ended",
+            "agent_id",
+            sa.text("session_ended_at DESC"),
+        ),
+    )
+
+    agent_id: UUID = SqlField(
+        foreign_key="agent.id", nullable=False, ondelete="CASCADE"
+    )
+    session_started_at: datetime = SqlField(
+        nullable=False,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+    session_ended_at: datetime = SqlField(
+        nullable=False,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+    log_text: str = SqlField(sa_column=Column(sa.Text(), nullable=False))
+    byte_size: int = SqlField(nullable=False)
+
+
 class AgentTemplateSkill(BaseModel, table=True):
     __tablename__: str = "agent_template_skill"
 
@@ -519,3 +545,23 @@ def get_agent_filter(
     status: AgentStatus | None = Query(default=None),
 ) -> AgentFilter:
     return AgentFilter(status=status)
+
+
+class AgentLogsRead(PydanticBaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    lines: list[str]
+    source: str
+    has_snapshots: bool = False
+    snapshot_id: UUID | None = None
+    session_started_at: datetime | None = None
+    session_ended_at: datetime | None = None
+
+
+class AgentLogHistoryRead(PydanticBaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    lines: list[str]
+    has_more: bool
+    session_ended_at: datetime | None = None
+    next_snapshot_id: UUID | None = None
