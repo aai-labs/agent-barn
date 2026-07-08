@@ -5,6 +5,7 @@ export const AgentSlackConfigSchema = z.object({
   dmUserIds: z.array(z.string()),
   groupPolicy: z.enum(["open", "allowlist"]),
   dmPolicy: z.enum(["off", "open", "allowlist"]),
+  verboseMode: z.boolean().default(true),
   botDisplayName: z.string().nullable().optional(),
 });
 
@@ -33,6 +34,7 @@ export const AgentAssignedSkillSchema = z.object({
   source: z.string(),
   requiredProviders: z.array(z.string()),
   toolsPointer: z.string().nullable(),
+  required: z.boolean().default(false),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -47,6 +49,7 @@ export const AgentSchema = z.object({
   templateSlug: z.string(),
   templateVersion: z.number().int(),
   model: z.string(),
+  approvalMode: z.enum(["manual", "auto", "off"]).default("auto"),
   slackConfig: AgentSlackConfigSchema.nullable().optional(),
   teamsConfig: AgentTeamsConfigSchema.nullable().optional(),
   secrets: z.array(AgentSecretReadSchema).optional(),
@@ -72,6 +75,7 @@ export const AgentTemplateReadSchema = z.object({
   bootMd: z.string(),
   bootstrapMd: z.string(),
   heartbeatMd: z.string(),
+  requiredSkills: z.array(AgentAssignedSkillSchema).default([]),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -195,6 +199,7 @@ export const AgentLogHistoryReadSchema = z.object({
 });
 
 
+export type CommandApprovalMode = "manual" | "auto" | "off";
 export type Agent = z.infer<typeof AgentSchema>;
 export type AgentAssignedSkill = z.infer<typeof AgentAssignedSkillSchema>;
 export type AgentSlackConfig = z.infer<typeof AgentSlackConfigSchema>;

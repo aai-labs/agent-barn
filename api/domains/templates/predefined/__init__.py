@@ -8,6 +8,7 @@ from api.domains.templates.defaults import (
 )
 from api.domains.templates.predefined import (
     code_reviewer,
+    email_reminder,
     general_purpose,
     scrum_master,
 )
@@ -26,6 +27,7 @@ class PredefinedTemplate:
     boot_md: str
     bootstrap_md: str
     heartbeat_md: str
+    required_skill_names: tuple[str, ...] = ()
 
 
 PREDEFINED_TEMPLATES: tuple[PredefinedTemplate, ...] = (
@@ -54,6 +56,7 @@ PREDEFINED_TEMPLATES: tuple[PredefinedTemplate, ...] = (
         boot_md=scrum_master.BOOT_MD,
         bootstrap_md=DEFAULT_BOOTSTRAP_MD,
         heartbeat_md=scrum_master.HEARTBEAT_MD,
+        required_skill_names=("Jira", "Confluence"),
     ),
     PredefinedTemplate(
         slug="code-reviewer",
@@ -67,5 +70,19 @@ PREDEFINED_TEMPLATES: tuple[PredefinedTemplate, ...] = (
         boot_md=code_reviewer.BOOT_MD,
         bootstrap_md=DEFAULT_BOOTSTRAP_MD,
         heartbeat_md=code_reviewer.HEARTBEAT_MD,
+        required_skill_names=("GitHub",),
+    ),
+    PredefinedTemplate(
+        slug="email-reminder",
+        name="Email Reminder",
+        description="Monitors a mailbox, flags action-required emails, and posts P1/P2 priority pings to Slack.",
+        soul_md=email_reminder.SOUL_MD,
+        identity_md=email_reminder.IDENTITY_MD,
+        user_md=email_reminder.USER_MD,
+        tools_md=email_reminder.TOOLS_MD,
+        agents_md=email_reminder.AGENTS_MD,
+        boot_md=email_reminder.BOOT_MD,
+        bootstrap_md=DEFAULT_BOOTSTRAP_MD,
+        heartbeat_md=email_reminder.HEARTBEAT_MD,
     ),
 )

@@ -1,9 +1,9 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { mockAgent } from "../pages/data-support/agent-data-support.po";
+import { mockAgent, mockVersionsForSlug } from "../pages/data-support/agent-data-support.po";
 import { DataSupport } from "../pages/data-support/data-support.po";
 import { DashboardPage } from "../pages/dashboard-page.po";
-import { mockPlatformSkill, mockCustomSkill } from "../pages/data-support/skill-data-support.po";
+import { mockPlatformSkill, mockCustomSkill, mockJiraSkill, mockGmailSkill, MOCK_PLATFORM_SKILL_ID } from "../pages/data-support/skill-data-support.po";
 
 test.describe("Hire Dialog", () => {
   test.describe.configure({ mode: "serial" });
@@ -215,6 +215,44 @@ test.describe("Hire Dialog", () => {
     await expect(preview).toHaveValue(/\{\{ agent_display_name \}\}/);
   });
 
+  test("details step shows command approval select defaulting to auto", async ({ page }) => {
+    await page.getByText("General Purpose", { exact: true }).click();
+    await page.getByRole("button", { name: /continue/i }).click(); // template → slack-choice
+    await page.getByText("I already have a Slack app").click();
+    await page.getByRole("button", { name: /continue/i }).click(); // slack-choice → tokens
+    await page.getByPlaceholder(/xapp-/i).fill("xapp-1-test");
+    await page.getByPlaceholder(/xoxb-/i).fill("xoxb-test");
+    await page.getByRole("button", { name: /continue/i }).click(); // tokens → details
+
+    await expect(page.getByText("Command approval")).toBeVisible();
+    await expect(page.locator('label:text-is("Command approval") + select')).toHaveValue("auto");
+  });
+
+  test("hire posts approval_mode from details step selection", async ({ page }) => {
+    await dataSupportPage.agents.interceptCreateAgentRequest({ body: { ...mockAgent, status: "STOPPED" } });
+    await dataSupportPage.agents.interceptSlackChannelsRequest({ agentId: mockAgent.id });
+    await dataSupportPage.agents.interceptSlackUsersRequest({ agentId: mockAgent.id });
+
+    await page.getByText("General Purpose", { exact: true }).click();
+    await page.getByRole("button", { name: /continue/i }).click(); // template → slack-choice
+    await page.getByText("I already have a Slack app").click();
+    await page.getByRole("button", { name: /continue/i }).click(); // slack-choice → tokens
+    await page.getByPlaceholder(/xapp-/i).fill("xapp-1-test");
+    await page.getByPlaceholder(/xoxb-/i).fill("xoxb-test");
+    await page.getByRole("button", { name: /continue/i }).click(); // tokens → details
+    await page.locator('label:text-is("Command approval") + select').selectOption("manual");
+    await page.getByRole("button", { name: /continue/i }).click(); // details → skills
+
+    const createPromise = page.waitForRequest(
+      (req) => req.url().includes("/api/v1/agents") && req.method() === "POST",
+    );
+    await page.getByRole("button", { name: "Hire Aria" }).click();
+    const createRequest = await createPromise;
+    const body = createRequest.postDataJSON() as Record<string, unknown>;
+
+    expect(body.approval_mode).toBe("manual");
+  });
+
   test("hire posts template_slug + selected version, not markdown", async ({ page }) => {
     await dataSupportPage.agents.interceptCreateAgentRequest({ body: { ...mockAgent, status: "STOPPED" } });
     await dataSupportPage.agents.interceptSlackChannelsRequest({ agentId: mockAgent.id });
@@ -328,7 +366,7 @@ test.describe("Hire Dialog — Skills step", () => {
 
     await page.getByText(mockPlatformSkill.name, { exact: true }).click();
 
-    // GitHub requires token + repo URL; both empty → button disabled
+    // GitHub requires token + owner; both empty → button disabled
     await expect(page.getByRole("button", { name: /hire aria/i })).toBeDisabled();
   });
 
@@ -346,5 +384,194 @@ test.describe("Hire Dialog — Skills step", () => {
 
     await page.getByText(mockPlatformSkill.name, { exact: true }).click();
     await expect(page.getByText("Required credentials", { exact: true })).not.toBeVisible();
+  });
+
+  test("hire button enables with token + owner filled and no repositories added", async ({ page }) => {
+    await navigateToSkillsStep(page);
+
+    await page.getByText(mockPlatformSkill.name, { exact: true }).click();
+    await page.getByPlaceholder(/github_pat_/).fill("ghp_test_token");
+    await page.getByPlaceholder("owner-or-org").fill("acme");
+
+    await expect(page.getByRole("button", { name: /hire aria/i })).toBeEnabled();
+  });
+
+  test("repositories field adds and removes chips without affecting required-field gating", async ({ page }) => {
+    await navigateToSkillsStep(page);
+
+    await page.getByText(mockPlatformSkill.name, { exact: true }).click();
+    await page.getByPlaceholder(/github_pat_/).fill("ghp_test_token");
+    await page.getByPlaceholder("owner-or-org").fill("acme");
+
+    const repoInput = page.getByPlaceholder("repository name");
+    await repoInput.fill("repo-a");
+    await repoInput.press("Enter");
+    await repoInput.fill("repo-b");
+    await page.getByRole("button", { name: "Add" }).click();
+
+    await expect(page.getByText("repo-a", { exact: true })).toBeVisible();
+    await expect(page.getByText("repo-b", { exact: true })).toBeVisible();
+
+    await page.getByRole("button", { name: "Remove repo-a" }).click();
+    await expect(page.getByText("repo-a", { exact: true })).not.toBeVisible();
+    await expect(page.getByText("repo-b", { exact: true })).toBeVisible();
+
+    await expect(page.getByRole("button", { name: /hire aria/i })).toBeEnabled();
+  });
+
+  test("submits multiple repository names in the github secret content", async ({ page }) => {
+    await dataSupportPage.agents.interceptCreateAgentRequest({ body: { ...mockAgent, status: "STOPPED" } });
+
+    await navigateToSkillsStep(page);
+    await page.getByText(mockPlatformSkill.name, { exact: true }).click();
+    await page.getByPlaceholder(/github_pat_/).fill("ghp_test_token");
+    await page.getByPlaceholder("owner-or-org").fill("acme");
+
+    const repoInput = page.getByPlaceholder("repository name");
+    await repoInput.fill("repo-a");
+    await repoInput.press("Enter");
+    await repoInput.fill("repo-b");
+    await repoInput.press("Enter");
+
+    const createPromise = page.waitForRequest(
+      (req) => req.url().includes("/api/v1/agents") && req.method() === "POST",
+    );
+    await page.getByRole("button", { name: "Hire Aria" }).click();
+    const createRequest = await createPromise;
+    const body = createRequest.postDataJSON() as {
+      secrets: Array<{ provider: string; content: Record<string, unknown> }>;
+    };
+
+    const githubSecret = body.secrets.find((s) => s.provider === "github");
+    expect(githubSecret?.content.owner).toBe("acme");
+    expect(githubSecret?.content.org).toBe("acme");
+    expect(githubSecret?.content.repos).toEqual(["repo-a", "repo-b"]);
+  });
+
+  test("selecting a jira skill reveals jira credential fields", async ({ page }) => {
+    await navigateToSkillsStep(page);
+
+    await page.getByText(mockJiraSkill.name, { exact: true }).click();
+
+    await expect(page.getByText("Required credentials", { exact: true })).toBeVisible();
+    await expect(page.getByPlaceholder(/atlassian\.net/)).toBeVisible();
+    await expect(page.getByPlaceholder("you@example.com")).toBeVisible();
+  });
+
+  test("hire button is disabled when jira credentials are incomplete", async ({ page }) => {
+    await navigateToSkillsStep(page);
+
+    await page.getByText(mockJiraSkill.name, { exact: true }).click();
+
+    await expect(page.getByRole("button", { name: /hire aria/i })).toBeDisabled();
+  });
+
+  test("selecting a gmail skill reveals gmail credential fields", async ({ page }) => {
+    await navigateToSkillsStep(page);
+
+    await page.getByText(mockGmailSkill.name, { exact: true }).click();
+
+    await expect(page.getByText("Required credentials", { exact: true })).toBeVisible();
+    await expect(page.getByPlaceholder(/apps\.googleusercontent\.com/)).toBeVisible();
+  });
+
+  test("hire button is disabled when gmail credentials are incomplete", async ({ page }) => {
+    await navigateToSkillsStep(page);
+
+    await page.getByText(mockGmailSkill.name, { exact: true }).click();
+
+    await expect(page.getByRole("button", { name: /hire aria/i })).toBeDisabled();
+  });
+
+  test("required skill card is shown as locked-selected with 'Required by template' label", async ({ page }) => {
+    await dataSupportPage.agents.interceptGetTemplateVersionsRequest({
+      body: mockVersionsForSlug("general-purpose").map((v) => ({
+        ...v,
+        required_skills: [{
+          id: MOCK_PLATFORM_SKILL_ID,
+          name: "github",
+          source: "aai_cli",
+          required_providers: ["github"],
+          tools_pointer: null,
+          required: true,
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+        }],
+      })),
+    });
+
+    await navigateToSkillsStep(page);
+
+    await expect(page.getByText(mockPlatformSkill.name, { exact: true })).toBeVisible();
+    await expect(page.getByText("Required by template")).toBeVisible();
+  });
+
+  test("clicking a required skill card does not deselect it", async ({ page }) => {
+    await dataSupportPage.agents.interceptGetTemplateVersionsRequest({
+      body: mockVersionsForSlug("general-purpose").map((v) => ({
+        ...v,
+        required_skills: [{
+          id: MOCK_PLATFORM_SKILL_ID,
+          name: "github",
+          source: "aai_cli",
+          required_providers: ["github"],
+          tools_pointer: null,
+          required: true,
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+        }],
+      })),
+    });
+
+    await navigateToSkillsStep(page);
+
+    await page.getByText(mockPlatformSkill.name, { exact: true }).click();
+
+    await expect(page.getByText("Required by template")).toBeVisible();
+  });
+
+  test("credential form appears for required skill provider without selecting the skill", async ({ page }) => {
+    await dataSupportPage.agents.interceptGetTemplateVersionsRequest({
+      body: mockVersionsForSlug("general-purpose").map((v) => ({
+        ...v,
+        required_skills: [{
+          id: MOCK_PLATFORM_SKILL_ID,
+          name: "github",
+          source: "aai_cli",
+          required_providers: ["github"],
+          tools_pointer: null,
+          required: true,
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+        }],
+      })),
+    });
+
+    await navigateToSkillsStep(page);
+
+    await expect(page.getByText("Required credentials", { exact: true })).toBeVisible();
+    await expect(page.getByPlaceholder(/github_pat_/)).toBeVisible();
+  });
+
+  test("hire button is disabled when required skill credentials are incomplete", async ({ page }) => {
+    await dataSupportPage.agents.interceptGetTemplateVersionsRequest({
+      body: mockVersionsForSlug("general-purpose").map((v) => ({
+        ...v,
+        required_skills: [{
+          id: MOCK_PLATFORM_SKILL_ID,
+          name: "github",
+          source: "aai_cli",
+          required_providers: ["github"],
+          tools_pointer: null,
+          required: true,
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+        }],
+      })),
+    });
+
+    await navigateToSkillsStep(page);
+
+    await expect(page.getByRole("button", { name: /hire aria/i })).toBeDisabled();
   });
 });

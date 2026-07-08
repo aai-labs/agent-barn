@@ -44,6 +44,10 @@ repo = "my-repo"
 
 Most commands accept `--owner OWNER --repo REPO` overrides. When omitted they fall back to `profile.owner` / `profile.repo`. `repos list` falls back to `profile.org` (org repos) or the authenticated user's repos when `org` is unset.
 
+**Multiple repositories:** if the configured credential lists more than one repository, additional profiles `github-work-2`, `github-work-3`, ... are set up — one per repo, all sharing the same token and owner. Check the `## Configured Integrations` section of this agent's tool context (TOOLS.md) for the authoritative profile-to-repo mapping; don't guess which numbered profile maps to which repo. Since `--repo` always overrides the profile default, the simplest approach is usually to keep `--profile github-work` and just pass whichever `--repo` you need explicitly — you rarely need to switch `--profile`.
+
+**No repository configured:** if the credential has zero repositories configured, `profile.repo` is absent entirely. `--repo REPO` then becomes mandatory on every command that needs one — omitting it returns a `config_error`.
+
 ## Response shapes
 
 Successful command output is JSON on stdout.

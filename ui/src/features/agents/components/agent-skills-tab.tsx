@@ -5,6 +5,7 @@ import { useDebouncedValue } from "@tanstack/react-pacer";
 
 import { AppErrorState } from "@/components/app-error-state";
 import { SearchIcon } from "@/components/icons";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useSkills } from "@/features/skills/hooks/use-skills";
 import { SKILL_PROVIDER_LABELS } from "@/features/skills/utils";
 import { SkillSourceBadge } from "@/features/skills/components/skill-drawer";
@@ -14,10 +15,10 @@ import {
   expandGithubContent,
   getIntegrationProvider,
   hasIncompleteIntegration,
-  parseGithubRepoUrl,
   type IntegrationDraft,
 } from "../integrations";
 import { FormField, TokenInput } from "./hire-dialog-primitives";
+import { RepoListField } from "./hire-dialog-steps";
 import { useUpdateAgent } from "../hooks/use-update-agent";
 import type { Agent, AgentAssignedSkill } from "../schemas";
 
@@ -109,13 +110,41 @@ export function AgentSkillsTab({ agent, isRunning }: AgentSkillsTabProps) {
     );
   }
 
+  function setRepos(provider: string, key: string, repos: string[]) {
+    setNewSecretDrafts((prev) =>
+      prev.map((d) =>
+        d.provider === provider
+          ? { ...d, content: { ...d.content, [key]: repos } }
+          : d,
+      ),
+    );
+  }
+
   async function handleSave() {
     updateAgent.reset();
     try {
+      // Providers required by skills that survive this update (kept + newly added).
+      const survivingSkills = [
+        ...agent.skills.filter((s) => !pendingRemoveIds.includes(s.id)),
+        ...skills.filter((s) => pendingAddIds.includes(s.id)),
+      ];
+      const stillNeeded = new Set(survivingSkills.flatMap((s) => s.requiredProviders));
+
+      // Secrets whose provider is no longer required by any remaining skill.
+      const orphanedProviders = [
+        ...new Set(
+          agent.skills
+            .filter((s) => pendingRemoveIds.includes(s.id))
+            .flatMap((s) => s.requiredProviders)
+            .filter((p) => !stillNeeded.has(p)),
+        ),
+      ];
+
       await updateAgent.mutateAsync({
         agentId: agent.id,
         skillIds: pendingAddIds,
         removedSkillIds: pendingRemoveIds,
+        ...(orphanedProviders.length > 0 ? { removedSecretProviders: orphanedProviders } : {}),
         ...(newSecretDrafts.length > 0
           ? {
               secrets: newSecretDrafts.map((d) => ({
@@ -281,10 +310,27 @@ export function AgentSkillsTab({ agent, isRunning }: AgentSkillsTabProps) {
                   {providerSpec.label}
                 </div>
                 {providerSpec.fields.map((field) => {
-                  const value = draft.content[field.key] ?? "";
                   const label = field.required
                     ? field.label
                     : `${field.label} (optional)`;
+
+                  if (field.type === "repo-list") {
+                    const repos = Array.isArray(draft.content[field.key])
+                      ? (draft.content[field.key] as string[])
+                      : [];
+                    return (
+                      <FormField key={field.key} label={label} hint={field.hint}>
+                        <RepoListField
+                          repos={repos}
+                          onChange={(next) => setRepos(providerId, field.key, next)}
+                          placeholder={field.placeholder}
+                        />
+                      </FormField>
+                    );
+                  }
+
+                  const rawValue = draft.content[field.key];
+                  const value = typeof rawValue === "string" ? rawValue : "";
 
                   if (field.type === "secret") {
                     const vkey = `${providerId}:${field.key}`;
@@ -299,39 +345,6 @@ export function AgentSkillsTab({ agent, isRunning }: AgentSkillsTabProps) {
                           }
                           placeholder={field.placeholder}
                         />
-                      </FormField>
-                    );
-                  }
-
-                  if (field.type === "repo-url") {
-                    const parsed = parseGithubRepoUrl(value);
-                    const invalid = value.length > 0 && !parsed;
-                    return (
-                      <FormField key={field.key} label={label} hint={field.hint}>
-                        <input
-                          className={`af-input${invalid ? " border-red-400" : ""}`}
-                          value={value}
-                          onChange={(e) =>
-                            setField(providerId, field.key, e.target.value)
-                          }
-                          placeholder={field.placeholder}
-                          autoComplete="off"
-                        />
-                        {parsed && (
-                          <p
-                            className="text-[0.75rem] mt-1"
-                            style={{ color: "var(--ink-3)" }}
-                          >
-                            owner: <strong>{parsed.owner}</strong> · repo:{" "}
-                            <strong>{parsed.repo}</strong>
-                          </p>
-                        )}
-                        {invalid && (
-                          <p className="text-[0.75rem] mt-1 text-red-500">
-                            Must be a valid GitHub URL, e.g.
-                            https://github.com/owner/repo.git
-                          </p>
-                        )}
                       </FormField>
                     );
                   }
@@ -451,14 +464,37 @@ function AssignedSkillRow({
           {skill.name}
         </span>
         <SkillSourceBadge source={skill.source} />
+        {skill.required && (
+          <span
+            className="text-[0.6875rem] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full"
+            style={{ color: "var(--ink-3)", background: "var(--line)" }}
+          >
+            Required
+          </span>
+        )}
       </div>
-      <button
-        className="af-btn af-btn-sm af-btn-ghost"
-        disabled={isRunning}
-        onClick={onRemove}
-      >
-        Remove
-      </button>
+      {skill.required ? (
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span>
+                <button className="af-btn af-btn-sm af-btn-ghost" disabled>
+                  Remove
+                </button>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>Required by template</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      ) : (
+        <button
+          className="af-btn af-btn-sm af-btn-ghost"
+          disabled={isRunning}
+          onClick={onRemove}
+        >
+          Remove
+        </button>
+      )}
     </div>
   );
 }

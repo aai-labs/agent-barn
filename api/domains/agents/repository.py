@@ -45,6 +45,16 @@ class AgentRepository:
             )
             return session.exec(query).first()
 
+    def get_deleted(self, agent_id: UUID, org_id: UUID) -> Agent | None:
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(Agent)
+                .where(col(Agent.id) == agent_id)
+                .where(col(Agent.organization_id) == org_id)
+                .where(col(Agent.deleted_at).is_not(None))
+            )
+            return session.exec(query).first()
+
     def find_all_active(
         self,
         org_id: UUID,
@@ -81,6 +91,26 @@ class AgentRepository:
 
             agents = list(session.exec(query).all())
             return agents, total
+
+    def find_all_active_for_org(self, org_id: UUID) -> list[Agent]:
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(Agent)
+                .where(col(Agent.organization_id) == org_id)
+                .where(col(Agent.deleted_at).is_(None))
+                .order_by(col(Agent.created_at).asc())
+            )
+            return list(session.exec(query).all())
+
+    def find_all_for_org(self, org_id: UUID) -> list[Agent]:
+        """Return all agents for an org — both live and deleted."""
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(Agent)
+                .where(col(Agent.organization_id) == org_id)
+                .order_by(col(Agent.created_at).asc())
+            )
+            return list(session.exec(query).all())
 
     # --- Slack config ---
 
