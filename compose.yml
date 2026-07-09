@@ -32,6 +32,9 @@ services:
       SUPER_USER_CREDENTIALS: ${SUPER_USER_CREDENTIALS:?SUPER_USER_CREDENTIALS is required}
       EMAIL_SERVER_CREDENTIAL: ${EMAIL_SERVER_CREDENTIAL-}
       EMAIL_SMTP_SERVER: ${EMAIL_SMTP_SERVER-}
+      # Gmail "Authenticate with Google" OAuth client (optional; empty disables the flow).
+      GOOGLE_CLOUD_CLIENT_ID: ${GOOGLE_CLOUD_CLIENT_ID-}
+      GOOGLE_CLOUD_CLIENT_SECRET: ${GOOGLE_CLOUD_CLIENT_SECRET-}
       ENVIRONMENT: ${ENVIRONMENT:?ENVIRONMENT is required}
       UI_APP_URL: ${UI_APP_URL:?UI_APP_URL is required}
     ports:

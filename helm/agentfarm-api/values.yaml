@@ -33,6 +33,12 @@ emailServerCredential: ""
 emailSmtpServer: ""
 emailFromAddress: ""
 
+# Shared Google OAuth 2.0 "Web application" client for the Gmail "Authenticate with
+# Google" flow. Leave blank to disable the flow. Registered redirect URI must be
+# "<webAppUrl>/api/v1/integrations/google/callback".
+googleCloudClientId: ""
+googleCloudClientSecret: ""
+
 litellmBaseUrl: "http://litellm:4000"
 agentLitellmBaseUrl: "http://litellm:4000"
 

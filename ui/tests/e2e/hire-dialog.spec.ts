@@ -468,13 +468,13 @@ test.describe("Hire Dialog — Skills step", () => {
     await expect(page.getByRole("button", { name: /hire aria/i })).toBeDisabled();
   });
 
-  test("selecting a gmail skill reveals gmail credential fields", async ({ page }) => {
+  test("selecting a gmail skill reveals the Google OAuth button", async ({ page }) => {
     await navigateToSkillsStep(page);
 
     await page.getByText(mockGmailSkill.name, { exact: true }).click();
 
     await expect(page.getByText("Required credentials", { exact: true })).toBeVisible();
-    await expect(page.getByPlaceholder(/apps\.googleusercontent\.com/)).toBeVisible();
+    await expect(page.getByRole("button", { name: "Authenticate with Google" })).toBeVisible();
   });
 
   test("hire button is disabled when gmail credentials are incomplete", async ({ page }) => {

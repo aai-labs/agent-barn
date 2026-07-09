@@ -9,6 +9,7 @@ from api.domains.agents.models import (
     AgentCreate,
     BitbucketContent,
     GithubContent,
+    GmailContent,
     JiraContent,
     SecretProvider,
     ZohoMailContent,
@@ -187,3 +188,34 @@ def test_decrypt_content_upgrades_legacy_bitbucket_blob():
     content = decrypt_content(SecretProvider.BITBUCKET, legacy_blob, _KEY)
     assert isinstance(content, BitbucketContent)
     assert content.repos == ["legacy-repo"]
+
+
+# --- Gmail OAuth: refresh-token-only secrets (AF-153) ---
+
+
+def test_gmail_content_accepts_refresh_token_only():
+    """OAuth-created Gmail secrets carry only the refresh token; client id/secret come
+    from config at agent-start time and default to empty here."""
+    content = validate_content(SecretProvider.GMAIL, {"refresh_token": "rt-123"})
+    assert isinstance(content, GmailContent)
+    assert content.refresh_token == "rt-123"
+    assert content.client_id == ""
+    assert content.client_secret == ""
+
+
+def test_gmail_content_requires_refresh_token():
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.GMAIL, {"client_id": "cid"})
+
+
+def test_decrypt_content_reads_legacy_gmail_blob():
+    """Legacy Gmail secrets from the old three-field form still decrypt with all fields."""
+    legacy_blob = encrypt_token(
+        json.dumps({"client_id": "cid", "client_secret": "cs", "refresh_token": "rt"}),
+        _KEY,
+    )
+    content = decrypt_content(SecretProvider.GMAIL, legacy_blob, _KEY)
+    assert isinstance(content, GmailContent)
+    assert content.client_id == "cid"
+    assert content.client_secret == "cs"
+    assert content.refresh_token == "rt"

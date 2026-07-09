@@ -23,6 +23,10 @@ export interface IntegrationProvider {
   label: string;
   scopeNote?: string;
   fields: IntegrationField[];
+  // When set, the provider is configured via an OAuth flow (an "Authenticate with
+  // <provider>" button) instead of manual field entry. "google_oauth" captures a Gmail
+  // refresh token via the popup flow and writes it to content.refreshToken.
+  authMethod?: "google_oauth";
 }
 
 export interface IntegrationDraft {
@@ -75,12 +79,9 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
   {
     id: "gmail",
     label: "Gmail",
-    scopeNote: "OAuth 2.0 client credentials with Gmail API scope (gmail.readonly)",
-    fields: [
-      { key: "clientId", label: "Client ID", type: "text", required: true, placeholder: "…apps.googleusercontent.com", hint: "Google OAuth 2.0 client ID" },
-      { key: "clientSecret", label: "Client secret", type: "secret", required: true, hint: "Google OAuth 2.0 client secret" },
-      { key: "refreshToken", label: "Refresh token", type: "secret", required: true, hint: "OAuth 2.0 refresh token for the Gmail account" },
-    ],
+    authMethod: "google_oauth",
+    scopeNote: "Read-only Gmail access via Google sign-in (gmail.readonly). No manual keys needed.",
+    fields: [],
   },
   {
     id: "google_calendar",
@@ -128,11 +129,19 @@ export function expandGithubContent(
   return { ...content, owner, org: owner, repos };
 }
 
+// True if the OAuth-based provider hasn't captured its refresh token yet.
+export function isOAuthConnected(draft: IntegrationDraft): boolean {
+  const token = draft.content.refreshToken;
+  return typeof token === "string" && token.trim().length > 0;
+}
+
 // True if any added integration is missing a required field — used to gate "Hire".
 export function hasIncompleteIntegration(integrations: IntegrationDraft[]): boolean {
   return integrations.some((draft) => {
     const provider = getIntegrationProvider(draft.provider);
     if (!provider) return true;
+    // OAuth providers have no manual fields; they're complete once connected.
+    if (provider.authMethod === "google_oauth") return !isOAuthConnected(draft);
     return provider.fields.some((f) => {
       if (!f.required) return false;
       const value = draft.content[f.key];
