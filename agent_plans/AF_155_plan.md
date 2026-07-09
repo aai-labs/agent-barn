@@ -49,19 +49,50 @@ Multiple open issues describe **exactly this behavior** on versions around 2026.
 - "Fixes completed assistant messages appearing **twice** in Slack and other streamed chats after a multi-message reply"
 - Delivery and reconnect fixes span Telegram, WhatsApp, Matrix, Google Chat, Slack, and other channels
 
-## Fix: Upgrade Openclaw from 2026.5.7 → 2026.6.11
+## Fix: Upgrade Openclaw from 2026.5.7 → 2026.6.11 + Config Compatibility
 
-### Files to modify
+### Part 1: Image upgrade (DONE)
 
-1. **`openclaw-base/Dockerfile`**
+1. **`openclaw-base/Dockerfile`** ✅
    - Line 34: `npm install -g openclaw@2026.5.7` → `npm install -g openclaw@2026.6.11`
    - Line 63: `@openclaw/msteams@2026.5.7` → `@openclaw/msteams@2026.5.27` (latest available on npm)
 
-2. **`openclaw-base/VERSION`**
+2. **`openclaw-base/VERSION`** ✅
    - `0.3.0` → `0.4.0`
 
-3. **`.env.deploy.spec`**
+3. **`.env.deploy.spec`** ✅
    - Line 26: `OPENCLAW_IMAGE_TAG=0.3.0` → `OPENCLAW_IMAGE_TAG=0.4.0`
+
+### Part 2: Config overlay compatibility fix (gateway auth)
+
+**Problem:** Openclaw 2026.6.x introduced mandatory gateway API authentication as part of "safer admin defaults." The gateway's internal HTTP/WS server on port 18789 now requires a device identity or auth token for all connections. Without it:
+
+- The gateway auto-generates an ephemeral runtime token on startup
+- Our `healthz-server.js` runs `openclaw health --json` which connects to this internal API — and gets rejected with `device identity required` (WebSocket close code 1008)
+- Repeated `[ws] closed before connect` errors flood the logs
+- The health endpoint reports the agent as unhealthy
+
+**Evidence from logs:**
+```
+[gateway] auth token was missing. Generated a runtime token for this startup...
+[ws] closed before connect ... code=1008 reason=device identity required
+[ws] closed before connect ... code=1008 reason=connect failed
+```
+
+**Fix:** Add `gateway.auth.mode: "none"` to the config overlay. Per [Openclaw docs](https://docs.openclaw.ai/gateway/configuration-reference), `"none"` is the explicit no-auth mode for trusted local/loopback setups. This is safe because:
+- The gateway only listens on loopback (`127.0.0.1`) inside the pod
+- The pod is not exposed externally (only Slack Socket Mode outbound + healthz on port 8081)
+- This restores the pre-2026.6.x behavior
+
+**Files to modify:**
+
+4. **`api/domains/agents/builders/openclaw.py`**
+   - `build_openclaw_config_overlay`: Add `"gateway": {"auth": {"mode": "none"}}` to the returned dict
+   - `build_openclaw_config_overlay_teams`: Same addition
+
+5. **`api/tests/integration/test_agents.py`** — Update assertions if they check the full overlay structure
+
+6. **`api/tests/unit/test_openclaw_builders.py`** — Update assertions if they check the full overlay structure
 
 ### What NOT to change
 
@@ -69,12 +100,19 @@ Multiple open issues describe **exactly this behavior** on versions around 2026.
 - **Telemetry plugin** — Already works correctly (uses `agent_end`, not the broken `message_sent`)
 - **`tools.exec.mode`** — Intentionally removed (approval mode not tested with Openclaw yet, disabled for initial setup)
 - **DM config** — Already works fine
+- **`healthz-server.js`** — No changes needed; `openclaw health --json` will work once gateway auth is disabled
+
+### Deprecation warning (non-blocking)
+
+The logs show: `[plugins] active-memory: config.modelFallbackPolicy is deprecated`. This is a harmless warning — the field still exists in the overlay but is ignored at runtime. Can be cleaned up in a follow-up if desired.
 
 ## Verification
 
 1. Rebuild the `openclaw-base` Docker image with the updated Dockerfile
-2. Deploy an Openclaw agent, message it in a **public channel**, confirm the response arrives
-3. Verify DM functionality still works
-4. Verify the response appears in the UI conversations view (telemetry still works)
-5. Verify Teams agents still function (msteams plugin version bump)
-6. Run the existing smoke test: `openclaw-base/smoke-test.sh` during image build
+2. Stop and start an Openclaw agent — confirm no `device identity required` errors in logs
+3. Confirm `[gateway] ready` and healthz endpoint returns `{"status": "ok"}`
+4. Message the agent in a **public channel**, confirm the response arrives
+5. Verify DM functionality still works
+6. Verify the response appears in the UI conversations view (telemetry still works)
+7. Verify Teams agents still function (msteams plugin version bump)
+8. Run the existing smoke test: `openclaw-base/smoke-test.sh` during image build
