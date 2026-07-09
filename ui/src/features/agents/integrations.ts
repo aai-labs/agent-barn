@@ -83,15 +83,17 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
     scopeNote: "Read-only Gmail access via Google sign-in (gmail.readonly). No manual keys needed.",
     fields: [],
   },
-  {
-    id: "google_calendar",
-    label: "Google Calendar",
-    scopeNote: "OAuth2 access token with calendar.readonly or calendar scope",
-    fields: [
-      { key: "accessToken", label: "Access token", type: "secret", required: true },
-      { key: "calendarId", label: "Calendar ID", type: "text", required: true, placeholder: "primary or calendar@group.calendar.google.com" },
-    ],
-  },
+  // google_calendar disabled: not currently offered as an integration. Re-enable by
+  // uncommenting once it's wired up (e.g. behind the Google OAuth flow like gmail).
+  // {
+  //   id: "google_calendar",
+  //   label: "Google Calendar",
+  //   scopeNote: "OAuth2 access token with calendar.readonly or calendar scope",
+  //   fields: [
+  //     { key: "accessToken", label: "Access token", type: "secret", required: true },
+  //     { key: "calendarId", label: "Calendar ID", type: "text", required: true, placeholder: "primary or calendar@group.calendar.google.com" },
+  //   ],
+  // },
   {
     id: "zoho_mail",
     label: "Zoho Mail",
@@ -104,17 +106,19 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
       { key: "refreshToken", label: "Refresh token", type: "secret", required: true, hint: "OAuth 2.0 refresh token for the Zoho Mail account" },
     ],
   },
-  {
-    id: "zoho_calendar",
-    label: "Zoho Calendar",
-    scopeNote: "App password from Zoho account security settings (two-factor must be enabled)",
-    fields: [
-      { key: "username", label: "Username", type: "text", required: true, placeholder: "you@zoho.com" },
-      { key: "email", label: "Email", type: "text", required: true, placeholder: "you@zoho.com" },
-      { key: "appPassword", label: "App password", type: "secret", required: true },
-      { key: "caldavUrl", label: "CalDAV URL", type: "text", required: true, placeholder: "https://calendar.zoho.com/caldav/..." },
-    ],
-  },
+  // zoho_calendar disabled: not currently offered as an integration. Re-enable by
+  // uncommenting if needed again.
+  // {
+  //   id: "zoho_calendar",
+  //   label: "Zoho Calendar",
+  //   scopeNote: "App password from Zoho account security settings (two-factor must be enabled)",
+  //   fields: [
+  //     { key: "username", label: "Username", type: "text", required: true, placeholder: "you@zoho.com" },
+  //     { key: "email", label: "Email", type: "text", required: true, placeholder: "you@zoho.com" },
+  //     { key: "appPassword", label: "App password", type: "secret", required: true },
+  //     { key: "caldavUrl", label: "CalDAV URL", type: "text", required: true, placeholder: "https://calendar.zoho.com/caldav/..." },
+  //   ],
+  // },
 ];
 
 export function getIntegrationProvider(id: string): IntegrationProvider | undefined {
