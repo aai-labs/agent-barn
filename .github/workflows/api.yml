@@ -52,6 +52,9 @@ jobs:
         uses: AbsaOSS/k3d-action@v2
         with:
           cluster-name: agentfarm-ci
+          # Pin k3d explicitly: the action's default (v5.4.6) is old enough that
+          # its install now 404s. Bump this as needed.
+          k3d-version: v5.7.4
           args: --wait
       - name: Seed namespace
         # The integration test assumes the target namespace already exists but
