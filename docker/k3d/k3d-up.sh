@@ -46,15 +46,12 @@ step()   { printf '\n\033[1m▶ %s\033[0m\n' "$*"; }
 step "Checking dependencies"
 command -v docker >/dev/null 2>&1 || red "docker not found"
 [[ -n "${OPENROUTER_API_KEY:-}" ]] || red "OPENROUTER_API_KEY is not set — add it to .env"
+# LiteLLM persists issued keys in its Postgres and (with no separate salt key)
+# encrypts them with the master key, so the key must stay stable across runs.
+# Require it rather than generating a throwaway that changes every run and
+# breaks agents created under a previous key.
+[[ -n "${LITELLM_MASTER_KEY:-}" ]] || red "LITELLM_MASTER_KEY is not set — add a stable value to .env, e.g. LITELLM_MASTER_KEY=sk-\$(openssl rand -hex 16)"
 green "  docker present"
-
-# Generate LITELLM_MASTER_KEY if not provided.
-if [[ -z "${LITELLM_MASTER_KEY:-}" ]]; then
-  LITELLM_MASTER_KEY="sk-$(openssl rand -hex 16)"
-  export LITELLM_MASTER_KEY
-  yellow "  Generated LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}"
-  yellow "  Add to your .env to keep it stable across restarts."
-fi
 
 # ── litellm-db + litellm (compose) ───────────────────────────────────────────
 

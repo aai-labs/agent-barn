@@ -121,8 +121,13 @@ same setup backs CI (see the `test-k8s` job in `.github/workflows/api.yml`).
 
 ### 1. Start the cluster
 
-`cluster-up` requires `OPENROUTER_API_KEY` in `.env` (and uses
-`LITELLM_MASTER_KEY` if set, otherwise generates one).
+`cluster-up` requires two values in `.env`:
+
+- `OPENROUTER_API_KEY` — passed to LiteLLM.
+- `LITELLM_MASTER_KEY` — a **stable** admin key for LiteLLM (e.g.
+  `LITELLM_MASTER_KEY=sk-$(openssl rand -hex 16)`). Set it once and leave it:
+  LiteLLM encrypts the virtual keys it stores in Postgres with this value, so
+  changing it between runs breaks agents created under the old key.
 
 ```bash
 make cluster-up      # start LiteLLM + a k3d cluster; write kubeconfigs to .k3d/
