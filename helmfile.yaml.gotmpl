@@ -86,6 +86,12 @@ releases:
         value: {{ env "ENVIRONMENT" | required "ENVIRONMENT is required" | quote }}
       - name: webAppUrl
         value: {{ env "WEB_APP_URL" | required "WEB_APP_URL is required" | quote }}
+      - name: emailServerCredential
+        value: {{ env "EMAIL_SERVER_CREDENTIAL" | default "" | quote }}
+      - name: emailSmtpServer
+        value: {{ env "EMAIL_SMTP_SERVER" | default "" | quote }}
+      - name: emailFromAddress
+        value: {{ env "EMAIL_FROM_ADDRESS" | default "" | quote }}
       - name: apiExternalUrl
         value: {{ printf "https://%s" (env "API_HOST" | required "API_HOST is required" | splitList "," | first | trim) | quote }}
       - name: kubeconfigB64

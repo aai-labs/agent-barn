@@ -173,6 +173,9 @@ jobs:
           AGENT_TOKEN_ENCRYPTION_KEY: ${{ secrets.AGENT_TOKEN_ENCRYPTION_KEY }}
           ENVIRONMENT: production
           WEB_APP_URL: ${{ vars.WEB_APP_URL }}
+          EMAIL_SERVER_CREDENTIAL: ${{ secrets.EMAIL_SERVER_CREDENTIAL }}
+          EMAIL_SMTP_SERVER: ${{ vars.EMAIL_SMTP_SERVER }}
+          EMAIL_FROM_ADDRESS: ${{ vars.EMAIL_FROM_ADDRESS }}
           API_HOST: ${{ vars.API_HOST }}
           UI_HOST: ${{ vars.UI_HOST }}
           KUBECONFIG_B64: ${{ secrets.KUBECONFIG_B64 }}
