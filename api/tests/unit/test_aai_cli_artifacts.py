@@ -1,7 +1,9 @@
 from api.domains.agents.aai_cli_artifacts import (
     CONFIG_PATH,
+    PROFILE_SLUGS,
     build_config_toml,
     build_env,
+    build_integrations_policy_md,
     build_setup_sh,
     build_tool_context_md,
     env_var_for,
@@ -307,3 +309,85 @@ def test_tool_context_md_lists_multiple_providers():
     assert "github-work" in md
     assert "jira-work" in md
     assert "confluence-work" in md
+
+
+# --- build_integrations_policy_md ---------------------------------------------
+
+
+def test_integrations_policy_md_empty_when_no_secrets():
+    assert build_integrations_policy_md({}) == ""
+
+
+def test_integrations_policy_md_includes_no_fallback_policy():
+    md = build_integrations_policy_md({SecretProvider.JIRA: _JIRA})
+    # aai-cli is the only path; always pass --profile; no browser/curl/HTTP fallback;
+    # don't invent URLs/tokens; pointer to the on-demand skill docs.
+    assert "aai-cli" in md
+    assert "--profile" in md
+    assert "curl" in md
+    assert "./skills/aai-cli/" in md
+
+
+def test_integrations_policy_md_includes_nested_command_grammar():
+    # Agents burn turns guessing subcommands (they try `... get AF-147` at the top
+    # level); the block must show the 3-level grammar, a worked example, and steer
+    # them to read the skill file rather than look it up by name.
+    md = build_integrations_policy_md({SecretProvider.JIRA: _JIRA})
+    assert "aai-cli --profile <slug> <service> <resource> <verb>" in md
+    assert "aai-cli --profile jira-work jira issues get AF-147" in md
+    assert "./skills/aai-cli/<service>_skill.md" in md
+
+
+def test_integrations_policy_md_emits_profile_line_per_provider():
+    md = build_integrations_policy_md({SecretProvider.JIRA: _JIRA})
+    assert "--profile jira-work" in md
+
+
+def test_integrations_policy_md_github_multi_repo_lists_all_profiles():
+    github = validate_content(
+        SecretProvider.GITHUB,
+        {
+            "token": "ghp_tok",
+            "owner": "aai-labs",
+            "repos": ["agent-farm", "ocbw"],
+            "org": "aai-labs",
+        },
+    )
+    md = build_integrations_policy_md({SecretProvider.GITHUB: github})
+    assert "--profile github-work" in md
+    assert "--profile github-work-2" in md
+
+
+def test_integrations_policy_md_covers_non_store_providers():
+    md = build_integrations_policy_md(
+        {
+            SecretProvider.GMAIL: _GMAIL,
+            SecretProvider.ZOHO_MAIL: _ZOHO_MAIL,
+        }
+    )
+    assert "--profile gmail-work" in md
+    assert "--profile zoho-mail-rest" in md
+
+
+def test_profile_slugs_are_single_source_of_truth_for_jira():
+    # The config.toml profile header and the agents_md --profile line must both derive
+    # from PROFILE_SLUGS, so they can never drift apart.
+    slug = PROFILE_SLUGS[SecretProvider.JIRA]
+    assert f"[profiles.{slug}]" in build_config_toml({SecretProvider.JIRA: _JIRA})
+    assert f"--profile {slug}" in build_integrations_policy_md(
+        {SecretProvider.JIRA: _JIRA}
+    )
+
+
+def test_integrations_policy_md_never_leaks_tokens():
+    md = build_integrations_policy_md(
+        {
+            SecretProvider.GITHUB: _GITHUB,
+            SecretProvider.JIRA: _JIRA,
+            SecretProvider.GMAIL: _GMAIL,
+        }
+    )
+    assert "ghp_tok" not in md
+    assert "jira_tok" not in md
+    assert "g_client_secret" not in md
+    assert "g_refresh_tok" not in md
