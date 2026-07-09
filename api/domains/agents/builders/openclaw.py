@@ -92,10 +92,7 @@ def build_openclaw_config_overlay(
         "bindings": [
             {"type": "route", "agentId": "main", "match": {"channel": "slack"}}
         ],
-        "tools": {
-            "profile": "full",
-            "exec": {"mode": _OPENCLAW_EXEC_MODE.get(approval_mode, "auto")},
-        },
+        "tools": {"profile": "full"},
         "memory": {"backend": "builtin"},
         "plugins": {
             "allow": ["memory-core", "active-memory", "telemetry-push"],
@@ -162,10 +159,7 @@ def build_openclaw_config_overlay_teams(
         "bindings": [
             {"type": "route", "agentId": "main", "match": {"channel": "msteams"}}
         ],
-        "tools": {
-            "profile": "full",
-            "exec": {"mode": _OPENCLAW_EXEC_MODE.get(approval_mode, "auto")},
-        },
+        "tools": {"profile": "full"},
         "memory": {"backend": "builtin"},
         "plugins": {
             "allow": ["memory-core", "active-memory", "telemetry-push"],
