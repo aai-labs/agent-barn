@@ -79,7 +79,7 @@ services:
       - .:/workspace
     working_dir: /workspace
 
-  # LiteLLM proxy + its Postgres — only started by `make k3d-up`.
+  # LiteLLM proxy + its Postgres — only started by `make cluster-up`.
   # Agents running inside k3d reach LiteLLM via host.docker.internal:7070.
   litellm-db:
     image: postgres:16

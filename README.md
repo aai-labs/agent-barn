@@ -114,10 +114,12 @@ make db-restart
 ## Local Kubernetes (k3d) dev environment
 
 Agents run as Kubernetes resources, so working on that path locally needs a
-cluster. We use [k3d](https://k3d.io) (k3s in Docker): it needs only Docker —
-no host `k3d`, `kubectl`, or `helm` install — and is
-[supported in GitHub Actions](https://github.com/AbsaOSS/k3d-action), so the
-same setup backs CI (see the `test-k8s` job in `.github/workflows/api.yml`).
+cluster. We use [k3d](https://k3d.io) (k3s in Docker): the cluster runs from a
+helper container, so no host `k3d` or `helm` install is needed — only Docker and
+`kubectl` (`cluster-up` uses host `kubectl` to seed the namespace/secret and, on
+a native Linux docker engine, to add a CoreDNS host alias). It's
+[supported in GitHub Actions](https://github.com/AbsaOSS/k3d-action), so the same
+setup backs CI (see the `test-k8s` job in `.github/workflows/api.yml`).
 
 ### 1. Start the cluster
 

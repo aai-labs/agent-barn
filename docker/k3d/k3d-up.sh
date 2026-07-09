@@ -7,7 +7,7 @@
 #
 # Required in .env (auto-sourced):
 #   OPENROUTER_API_KEY   — passed to litellm
-#   LITELLM_MASTER_KEY   — litellm auth key (generated + printed if absent)
+#   LITELLM_MASTER_KEY   — litellm admin key; must be a stable value (required)
 #
 # Ports on localhost:
 #   7070  — LiteLLM proxy
