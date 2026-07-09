@@ -1,7 +1,6 @@
 "use client";
 
 import { createContext, type ReactNode, useContext, useEffect } from "react";
-import { useRouter } from "next/navigation";
 import type { QueryObserverResult } from "@tanstack/react-query";
 
 import { AuthLoadingFallback } from "@/auth/components/auth-loading-fallback";
@@ -23,8 +22,7 @@ const CurrentUserContextState = createContext<UserContextType | undefined>(
 );
 
 export function UserContextProvider({ children }: { children: ReactNode }) {
-  const router = useRouter();
-  const clearToken = useAuthStore((state) => state.clearToken);
+  const expireSession = useAuthStore((state) => state.expireSession);
   const { data, isPending, isError, error, refetch } = useCurrentUserContext();
   const userContext = data?.data ?? null;
 
@@ -33,17 +31,12 @@ export function UserContextProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (shouldRedirectToLogin) {
-      clearToken();
-      router.replace("/login");
+      expireSession();
     }
-  }, [clearToken, router, shouldRedirectToLogin]);
+  }, [expireSession, shouldRedirectToLogin]);
 
-  if (isPending) {
+  if (isPending || shouldRedirectToLogin) {
     return <AuthLoadingFallback message="Loading your account..." />;
-  }
-
-  if (shouldRedirectToLogin) {
-    return <AuthLoadingFallback message="Redirecting to login..." />;
   }
 
   if (isError || !userContext) {
