@@ -123,6 +123,42 @@ else
   yellow "      --from-literal=LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}"
 fi
 
+# ── host alias for in-cluster pods (native Linux) ─────────────────────────────
+# Agent pods reach the host (LiteLLM on :7070, etc.) via host.docker.internal.
+# On Docker Desktop that name already resolves inside pods through Docker's
+# embedded DNS. A native Linux docker engine injects nothing, so map it to the
+# cluster network's gateway (the host) via the k3s coredns-custom mechanism.
+
+step "Ensuring pods can reach the host (host.docker.internal)"
+docker_os="$(docker info -f '{{.OperatingSystem}}' 2>/dev/null || true)"
+if [[ "${docker_os}" == *"Docker Desktop"* ]]; then
+  green "  Docker Desktop resolves host.docker.internal in-cluster — nothing to do"
+elif ! command -v kubectl >/dev/null 2>&1; then
+  yellow "  kubectl not found — on native Linux, agents can't resolve"
+  yellow "  host.docker.internal until a CoreDNS entry is added for it."
+else
+  host_ip="$(docker network inspect "k3d-${CLUSTER}" \
+    -f '{{range .IPAM.Config}}{{if .Gateway}}{{.Gateway}} {{end}}{{end}}' 2>/dev/null \
+    | awk '{print $1}' || true)"
+  [[ -n "${host_ip}" ]] || red "could not determine the host IP for network 'k3d-${CLUSTER}'"
+  export KUBECONFIG="${KUBECONFIG_HOST}"
+  kubectl -n kube-system apply -f - >/dev/null <<COREDNS
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coredns-custom
+data:
+  host-docker-internal.server: |
+    host.docker.internal:53 {
+      hosts {
+        ${host_ip} host.docker.internal
+      }
+    }
+COREDNS
+  kubectl -n kube-system rollout restart deployment coredns >/dev/null 2>&1 || true
+  green "  host.docker.internal → ${host_ip} (CoreDNS entry added for Linux)"
+fi
+
 # ── summary ───────────────────────────────────────────────────────────────────
 
 printf '\n'

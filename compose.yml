@@ -112,7 +112,11 @@ services:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       DATABASE_URL: postgresql://litellm:litellm@litellm-db:5432/litellm
     ports:
-      - "127.0.0.1:7070:4000"
+      # Bind all interfaces (not just loopback) so agent pods inside k3d can
+      # reach LiteLLM through the host on Linux, where host.docker.internal maps
+      # to the bridge gateway IP rather than 127.0.0.1. Safe for local dev on a
+      # personal machine: the proxy is gated by LITELLM_MASTER_KEY.
+      - "7070:4000"
     volumes:
       - ./docker/litellm/config.yaml:/app/config.yaml:ro
 
