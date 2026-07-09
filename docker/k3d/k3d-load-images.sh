@@ -3,7 +3,8 @@
 # into the running agentfarm-dev k3d cluster.
 #
 # Required env vars:
-#   GH_TOKEN          — GitHub PAT with repo read access (for agent-cli-tools)
+#   GH_TOKEN          — GitHub PAT with read access to aai-labs/agent-cli-tools
+#                       (https://github.com/aai-labs/agent-cli-tools)
 #   OPENCLAW_IMAGE    — fully-qualified image name+tag (from .env)
 #   HERMES_IMAGE      — fully-qualified image name+tag (from .env)
 #
@@ -46,7 +47,7 @@ command -v docker >/dev/null 2>&1 || red "docker not found"
 # Verify the cluster is running (via the k3d-runner container)
 ${COMPOSE} run --rm k3d-runner k3d cluster list 2>/dev/null \
   | awk 'NR>1{print $1}' | grep -qx "${CLUSTER}" \
-  || red "k3d cluster '${CLUSTER}' is not running — run 'make k3d-up' first"
+  || red "k3d cluster '${CLUSTER}' is not running — run 'make cluster-up' first"
 
 green "  checks passed"
 

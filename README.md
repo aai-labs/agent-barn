@@ -162,6 +162,59 @@ if you're not using k3d.
 
 Ports: LiteLLM proxy on `127.0.0.1:7070`, k8s API on `127.0.0.1:16443`.
 
+Agent pods inside k3d reach LiteLLM at `http://host.docker.internal:7070` — set
+`AGENT_LITELLM_BASE_URL` to that in `.env`. On Docker Desktop that name resolves
+inside pods automatically; on a native Linux docker engine `cluster-up` adds a
+CoreDNS entry (via the `coredns-custom` config map) mapping it to the cluster
+network gateway, so it resolves there too — no manual setup on either platform.
+
+### 3. Load the agent base images (only needed to run agents)
+
+`cluster-up` brings up the cluster but does **not** build or import the
+OpenClaw/Hermes base images. Do that separately when you actually want to launch
+agents (the cluster must already be running):
+
+```bash
+make k3d-load-images                   # build + import both
+TARGET=openclaw make k3d-load-images   # just OpenClaw
+TARGET=hermes   make k3d-load-images   # just Hermes
+```
+
+This builds each base image from source, tags it with the corresponding env var,
+and imports it into the k3d cluster. Agent pods run with
+`imagePullPolicy=IfNotPresent`, so they use the imported image and never hit a
+registry. It needs, in `.env`:
+
+- `GH_TOKEN` — a GitHub PAT with **read access to
+  [`aai-labs/agent-cli-tools`](https://github.com/aai-labs/agent-cli-tools)**;
+  the base-image build clones that repo.
+- `OPENCLAW_IMAGE`, `HERMES_IMAGE` — the fully-qualified image name+tag the agent
+  pods request.
+
+**Keep the image tags in sync with the `VERSION` files.** The tag in
+`OPENCLAW_IMAGE` must match `openclaw-base/VERSION`, and `HERMES_IMAGE` must match
+`hermes-base/VERSION` (e.g. if `openclaw-base/VERSION` is `0.3.0`, then
+`OPENCLAW_IMAGE` must end in `:0.3.0`). CI publishes each base image under exactly
+its `VERSION` tag, and the API launches pods using these env-var refs — so if a
+tag doesn't match its `VERSION`, you'll build, import, or pull an image that isn't
+the version the code expects.
+
+### Windows
+
+The k3d flow needs **`bash` and `make`** — the `make cluster-*` and
+`make k3d-load-images` targets shell out to `bash docker/k3d/*.sh`, so installing
+GNU Make alone (without a Unix shell) isn't enough. Two supported ways:
+
+- **WSL2 (recommended)** — Docker Desktop already uses the WSL2 backend, so
+  `make cluster-up` and the whole bash flow work unchanged, and that's the path
+  CI exercises. Docker Desktop publishes the container ports to `localhost`
+  inside both Windows and your WSL2 distro, so no manual port forwarding is
+  needed.
+- **`bash` on `PATH`** — e.g. Git Bash or MSYS2 installed alongside `make`; run
+  the `make` targets from that shell.
+
+Requires Docker Desktop in Linux-container mode (the default).
+
 ## Database Migrations
 
 ```bash
