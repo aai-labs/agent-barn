@@ -92,6 +92,10 @@ releases:
         value: {{ env "EMAIL_SMTP_SERVER" | default "" | quote }}
       - name: emailFromAddress
         value: {{ env "EMAIL_FROM_ADDRESS" | default "" | quote }}
+      - name: googleCloudClientId
+        value: {{ env "GOOGLE_CLOUD_CLIENT_ID" | default "" | quote }}
+      - name: googleCloudClientSecret
+        value: {{ env "GOOGLE_CLOUD_CLIENT_SECRET" | default "" | quote }}
       - name: apiExternalUrl
         value: {{ printf "https://%s" (env "API_HOST" | required "API_HOST is required" | splitList "," | first | trim) | quote }}
       - name: kubeconfigB64
