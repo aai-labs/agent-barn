@@ -1518,7 +1518,11 @@ export function SkillsStep({
                 {providerSpec.authMethod === "google_oauth" && (
                   <GoogleAuthButton
                     connected={isOAuthConnected(draft)}
-                    onConnected={(token) => setField(providerId, "refreshToken", token)}
+                    onConnected={({ refreshToken, clientId, clientSecret }) => {
+                      setField(providerId, "refreshToken", refreshToken);
+                      setField(providerId, "clientId", clientId);
+                      setField(providerId, "clientSecret", clientSecret);
+                    }}
                   />
                 )}
                 {providerSpec.fields.map((field) => {
@@ -1650,7 +1654,11 @@ export function IntegrationsStep({
             {provider.authMethod === "google_oauth" && (
               <GoogleAuthButton
                 connected={isOAuthConnected(draft)}
-                onConnected={(token) => setField(draft.provider, "refreshToken", token)}
+                onConnected={({ refreshToken, clientId, clientSecret }) => {
+                  setField(draft.provider, "refreshToken", refreshToken);
+                  setField(draft.provider, "clientId", clientId);
+                  setField(draft.provider, "clientSecret", clientSecret);
+                }}
               />
             )}
 

@@ -571,7 +571,11 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                         {providerSpec.authMethod === "google_oauth" && (
                           <GoogleAuthButton
                             connected={isOAuthConnected(draft)}
-                            onConnected={(token) => setRepinSecretField(providerId, "refreshToken", token)}
+                            onConnected={({ refreshToken, clientId, clientSecret }) => {
+                              setRepinSecretField(providerId, "refreshToken", refreshToken);
+                              setRepinSecretField(providerId, "clientId", clientId);
+                              setRepinSecretField(providerId, "clientSecret", clientSecret);
+                            }}
                             disabled={isRunning}
                           />
                         )}

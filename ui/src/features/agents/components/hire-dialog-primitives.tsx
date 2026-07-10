@@ -2,7 +2,7 @@
 
 import React, { useState } from "react";
 import { EyeIcon, EyeOffIcon } from "@/components/icons";
-import { useGoogleOAuth } from "../hooks/use-google-oauth";
+import { useGoogleOAuth, type GoogleOAuthResult } from "../hooks/use-google-oauth";
 
 export function DialogShell({
   children,
@@ -142,17 +142,37 @@ export function GoogleAuthButton({
   disabled,
 }: {
   connected: boolean;
-  onConnected: (refreshToken: string) => void;
+  onConnected: (result: GoogleOAuthResult) => void;
   disabled?: boolean;
 }) {
   const { connectGoogle, isConnecting } = useGoogleOAuth();
   const [error, setError] = useState<string | null>(null);
+  const [showCustom, setShowCustom] = useState(false);
+  const [clientId, setClientId] = useState("");
+  const [clientSecret, setClientSecret] = useState("");
+  const [showSecret, setShowSecret] = useState(false);
+
+  const redirectUri =
+    typeof window !== "undefined"
+      ? `${window.location.origin}/api/v1/integrations/google/callback`
+      : "";
 
   async function handleClick() {
     setError(null);
+    const id = clientId.trim();
+    const secret = clientSecret.trim();
+    // A custom client needs both halves; refuse a lopsided pair rather than silently
+    // falling back to the shared client.
+    if ((id || secret) && (!id || !secret)) {
+      setError(
+        "Enter both a client ID and secret, or leave both blank to use the shared app client.",
+      );
+      return;
+    }
+    const creds = id && secret ? { clientId: id, clientSecret: secret } : undefined;
     try {
-      const refreshToken = await connectGoogle();
-      onConnected(refreshToken);
+      const result = await connectGoogle(creds);
+      onConnected(result);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Authentication failed.");
     }
@@ -182,6 +202,55 @@ export function GoogleAuthButton({
         <span className="text-[0.75rem]" style={{ color: "var(--danger, #c53030)" }}>
           {error}
         </span>
+      )}
+
+      <button
+        type="button"
+        className="text-[0.75rem] self-start"
+        style={{ color: "var(--ink-4)" }}
+        onClick={() => setShowCustom((v) => !v)}
+        disabled={disabled || isConnecting}
+      >
+        {showCustom ? "▾" : "▸"} Use your own Google client (optional)
+      </button>
+      {showCustom && (
+        <div className="flex flex-col gap-2.5 pl-3" style={{ borderLeft: "2px solid var(--line)" }}>
+          <p className="text-[0.75rem] leading-[1.5]" style={{ color: "var(--ink-4)" }}>
+            In the{" "}
+            <a
+              href="https://console.cloud.google.com/apis/credentials"
+              target="_blank"
+              rel="noreferrer"
+              className="underline"
+            >
+              Google Cloud Console
+            </a>{" "}
+            create an OAuth 2.0 Client ID of type <strong>Web application</strong>, enable the
+            Gmail API, request the <code>gmail.readonly</code> scope, and add{" "}
+            <code className="break-all">{redirectUri}</code> as an authorized redirect URI. Then
+            paste the client ID and secret below — leave both blank to use the shared app client.
+          </p>
+          <FormField label="Client ID">
+            <input
+              className="af-input font-mono text-[0.8125rem]"
+              value={clientId}
+              onChange={(e) => setClientId(e.target.value)}
+              placeholder="1234567890-abc….apps.googleusercontent.com"
+              autoComplete="off"
+              disabled={disabled || isConnecting}
+            />
+          </FormField>
+          <FormField label="Client secret">
+            <TokenInput
+              value={clientSecret}
+              onChange={setClientSecret}
+              visible={showSecret}
+              onToggle={() => setShowSecret((v) => !v)}
+              placeholder="GOCSPX-…"
+              disabled={disabled || isConnecting}
+            />
+          </FormField>
+        </div>
       )}
     </div>
   );

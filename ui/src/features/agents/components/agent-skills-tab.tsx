@@ -313,7 +313,11 @@ export function AgentSkillsTab({ agent, isRunning }: AgentSkillsTabProps) {
                 {providerSpec.authMethod === "google_oauth" && (
                   <GoogleAuthButton
                     connected={isOAuthConnected(draft)}
-                    onConnected={(token) => setField(providerId, "refreshToken", token)}
+                    onConnected={({ refreshToken, clientId, clientSecret }) => {
+                      setField(providerId, "refreshToken", refreshToken);
+                      setField(providerId, "clientId", clientId);
+                      setField(providerId, "clientSecret", clientSecret);
+                    }}
                   />
                 )}
                 {providerSpec.fields.map((field) => {

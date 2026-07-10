@@ -4,13 +4,23 @@ Replaces the old hand-pasted client_id/client_secret/refresh_token fields with a
 single "Authenticate with Google" button. The frontend opens a popup, fetches the
 authorize URL from ``/authorize-url`` (authenticated), and points the popup at Google.
 Google redirects the popup to ``/callback`` (proxied through the UI origin so it is
-same-origin with the opener); the callback exchanges the code for a refresh token using
-the app-owned client credentials from config, then serves a tiny HTML page that
-``postMessage``s the refresh token back to the opener and closes.
+same-origin with the opener); the callback validates the signed ``state`` and
+``postMessage``s the raw authorization ``code`` back to the opener. The opener then
+calls ``/token`` (authenticated) to exchange the code for a refresh token and closes
+the popup.
 
-Only the refresh token is persisted (as a ``gmail`` AgentSecret via the normal agent
-create/update path); the client id/secret stay in config and are injected into the
-agent's aai-cli profile at start time.
+By default the exchange uses the app-owned client credentials from config. A user may
+instead bring their own Google client: the frontend passes ``client_id`` to
+``/authorize-url`` (the client id is public and rides in the authorize URL) and both
+``client_id``/``client_secret`` to ``/token``. The secret therefore only ever travels
+in an authenticated request body — never through Google's authorize endpoint, the
+redirect URL, browser history, or our access logs.
+
+The refresh token is persisted as a ``gmail`` AgentSecret via the normal agent
+create/update path. For the app-owned client, the client id/secret stay in config and
+are injected into the agent's aai-cli profile at start time; for a user's own client,
+the frontend also persists that client id/secret alongside the refresh token (a refresh
+token is bound to the client that issued it).
 """
 
 import json
@@ -25,6 +35,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import HTMLResponse
 from fastapi_injector import Injected
 from jwt.exceptions import InvalidTokenError
+from pydantic import BaseModel
 
 from api.core.config import Config
 from api.domains.auth.models import CurrentUserContext
@@ -77,14 +88,15 @@ def _state_is_valid(state: str, config: Config) -> bool:
 def _post_message_html(
     config: Config,
     *,
-    refresh_token: str | None = None,
+    code: str | None = None,
     error: str | None = None,
 ) -> HTMLResponse:
     """HTML that posts the result back to the opener window and closes the popup.
 
-    ``targetOrigin`` is the app's own origin (``web_app_url``) — the popup is served on
-    that same origin (Next.js proxies ``/api/*`` to the backend), so the opener's origin
-    check matches.
+    Carries the raw authorization ``code`` (not a refresh token) — the opener exchanges
+    it via ``/token``. ``targetOrigin`` is the app's own origin (``web_app_url``): the
+    popup is served on that same origin (Next.js proxies ``/api/*`` to the backend), so
+    the opener's origin check matches.
     """
     if error is not None:
         message: dict = {"type": MESSAGE_TYPE, "provider": PROVIDER, "error": error}
@@ -93,7 +105,7 @@ def _post_message_html(
         message = {
             "type": MESSAGE_TYPE,
             "provider": PROVIDER,
-            "refreshToken": refresh_token,
+            "code": code,
         }
         blurb = "Authentication complete. You can close this window."
 
@@ -131,16 +143,30 @@ def _post_message_html(
 @integrations_router.get("/google/authorize-url")
 def google_authorize_url(
     _context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    # Plain default (not Query(...)) so a direct call resolves to None rather than the
+    # Query sentinel; FastAPI still parses it as an optional query parameter.
+    client_id: str | None = None,
     config: Config = Injected(Config),
 ):
-    """Return the Google OAuth authorize URL for the popup to navigate to."""
-    if not config.google_cloud_client_id or not config.google_cloud_client_secret:
+    """Return the Google OAuth authorize URL for the popup to navigate to.
+
+    ``client_id`` (optional) selects a user-supplied Google client; when omitted the
+    app-owned client from config is used. Only the client id is needed here — it is
+    public and travels in the authorize URL — while the matching secret is supplied
+    later, to ``/token``.
+    """
+    resolved_client_id = client_id or config.google_cloud_client_id
+    # For the app-owned client, also require its secret to be configured so we fail
+    # before opening consent. A custom client carries its own secret to /token.
+    if not resolved_client_id or (
+        not client_id and not config.google_cloud_client_secret
+    ):
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Google OAuth is not configured on this server.",
         )
     params = {
-        "client_id": config.google_cloud_client_id,
+        "client_id": resolved_client_id,
         "redirect_uri": _redirect_uri(config),
         "response_type": "code",
         "scope": GMAIL_SCOPE,
@@ -159,7 +185,11 @@ def google_callback(
     state: str | None = Query(default=None),
     error: str | None = Query(default=None),
 ):
-    """Exchange the authorization code for a refresh token and hand it to the opener."""
+    """Validate the signed state and hand the raw authorization code to the opener.
+
+    The code→token exchange happens in ``/token`` (authenticated), so the client secret
+    never has to transit this unauthenticated redirect.
+    """
     if error:
         return _post_message_html(
             config, error=f"Google authorization was denied or failed ({error})."
@@ -172,25 +202,60 @@ def google_callback(
         return _post_message_html(
             config, error="Missing authorization code from Google."
         )
+    return _post_message_html(config, code=code)
+
+
+class GoogleTokenExchangeRequest(BaseModel):
+    code: str
+    # Optional user-supplied client. When omitted, the app-owned client from config is
+    # used. Must be the same client the authorize URL was built with (Google binds the
+    # code to its issuing client).
+    client_id: str | None = None
+    client_secret: str | None = None
+
+
+@integrations_router.post("/google/token")
+def google_token_exchange(
+    body: GoogleTokenExchangeRequest,
+    _context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    config: Config = Injected(Config),
+):
+    """Exchange the authorization code for a refresh token.
+
+    Uses the caller-supplied client id/secret when present (a user's own Google client),
+    otherwise the app-owned client from config. The secret is read from the request body
+    — it never appears in a URL, the authorize request, or our logs.
+    """
+    client_id = body.client_id or config.google_cloud_client_id
+    client_secret = body.client_secret or config.google_cloud_client_secret
+    if not client_id or not client_secret:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Google OAuth is not configured on this server.",
+        )
 
     try:
         resp = httpx.post(
             GOOGLE_TOKEN_ENDPOINT,
             data={
-                "client_id": config.google_cloud_client_id,
-                "client_secret": config.google_cloud_client_secret,
-                "code": code,
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "code": body.code,
                 "redirect_uri": _redirect_uri(config),
                 "grant_type": "authorization_code",
             },
             timeout=_TOKEN_EXCHANGE_TIMEOUT_SECONDS,
         )
     except httpx.HTTPError as exc:
-        return _post_message_html(config, error=f"Could not reach Google: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Could not reach Google: {exc}",
+        )
 
     if resp.status_code != 200:
-        return _post_message_html(
-            config, error="Google rejected the token exchange. Please try again."
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Google rejected the token exchange. Please try again.",
         )
 
     refresh_token = resp.json().get("refresh_token")
@@ -198,12 +263,12 @@ def google_callback(
         # Google only returns a refresh token on first consent; prompt=consent should force
         # it, but if the app's access was previously granted without offline access the user
         # may need to revoke it first.
-        return _post_message_html(
-            config,
-            error=(
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
                 "Google did not return a refresh token. Remove this app's access at "
                 "myaccount.google.com/permissions, then reconnect."
             ),
         )
 
-    return _post_message_html(config, refresh_token=refresh_token)
+    return {"refresh_token": refresh_token}
