@@ -37,3 +37,15 @@ def test_build_openclaw_config_overlay_teams_approval_mode_off():
         "litellm/gpt-4o", "http://litellm:4000", approval_mode="off"
     )
     assert_that(overlay["tools"]["exec"]["mode"], equal_to("full"))
+
+
+def test_build_openclaw_config_overlay_gateway_auth_is_none():
+    overlay = build_openclaw_config_overlay("litellm/gpt-4o", "http://litellm:4000")
+    assert_that(overlay["gateway"]["auth"]["mode"], equal_to("none"))
+
+
+def test_build_openclaw_config_overlay_teams_gateway_auth_is_none():
+    overlay = build_openclaw_config_overlay_teams(
+        "litellm/gpt-4o", "http://litellm:4000"
+    )
+    assert_that(overlay["gateway"]["auth"]["mode"], equal_to("none"))

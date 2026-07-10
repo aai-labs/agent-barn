@@ -65,7 +65,10 @@ def build_openclaw_config_overlay(
             "defaults": {
                 "model": {
                     "primary": model,
-                }
+                },
+                "memorySearch": {
+                    "provider": "none",
+                },
             }
         },
         "channels": {
@@ -92,7 +95,10 @@ def build_openclaw_config_overlay(
         "bindings": [
             {"type": "route", "agentId": "main", "match": {"channel": "slack"}}
         ],
-        "tools": {"profile": "full"},
+        "tools": {
+            "profile": "full",
+            "exec": {"mode": _OPENCLAW_EXEC_MODE.get(approval_mode, "auto")},
+        },
         "memory": {"backend": "builtin"},
         "plugins": {
             "allow": ["memory-core", "active-memory", "telemetry-push"],
@@ -120,6 +126,7 @@ def build_openclaw_config_overlay(
                 },
             },
         },
+        "gateway": {"auth": {"mode": "none"}},
     }
 
 
@@ -143,7 +150,10 @@ def build_openclaw_config_overlay_teams(
             "defaults": {
                 "model": {
                     "primary": model,
-                }
+                },
+                "memorySearch": {
+                    "provider": "none",
+                },
             }
         },
         "channels": {
@@ -159,7 +169,10 @@ def build_openclaw_config_overlay_teams(
         "bindings": [
             {"type": "route", "agentId": "main", "match": {"channel": "msteams"}}
         ],
-        "tools": {"profile": "full"},
+        "tools": {
+            "profile": "full",
+            "exec": {"mode": _OPENCLAW_EXEC_MODE.get(approval_mode, "auto")},
+        },
         "memory": {"backend": "builtin"},
         "plugins": {
             "allow": ["memory-core", "active-memory", "telemetry-push"],
@@ -187,6 +200,7 @@ def build_openclaw_config_overlay_teams(
                 },
             },
         },
+        "gateway": {"auth": {"mode": "none"}},
     }
 
 
