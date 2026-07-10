@@ -989,6 +989,18 @@ class AgentService:
             for s in agent_secrets
         }
         self._backfill_gmail_client_credentials(decrypted)
+        gmail = decrypted.get(SecretProvider.GMAIL)
+        if isinstance(gmail, GmailContent) and (
+            not gmail.client_id or not gmail.client_secret
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Gmail credential is missing a client id/secret and Google OAuth is "
+                    "not configured on this server. Reconnect via Authenticate with "
+                    "Google, or configure google_cloud_client_id/secret."
+                ),
+            )
         store = {p: c for p, c in decrypted.items() if p.value in provider_secrets_map}
         aai_home = "/opt/data" if agent.agent_type == AgentType.HERMES else "/home/node"
         aai_config_toml = (

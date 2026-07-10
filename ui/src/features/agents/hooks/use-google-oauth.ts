@@ -67,6 +67,9 @@ export function useGoogleOAuth() {
       function onMessage(event: MessageEvent) {
         // The callback is same-origin (served through the /api proxy); reject anything else.
         if (event.origin !== window.location.origin) return;
+        // Pin to this call's own popup so a concurrent flow (e.g. a second popup opened
+        // before this one settles) can't resolve this promise with its token/error.
+        if (event.source !== popup) return;
         const data = event.data as OAuthMessage;
         if (!data || data.type !== MESSAGE_TYPE) return;
         try {

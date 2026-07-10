@@ -97,6 +97,18 @@ def _post_message_html(
         }
         blurb = "Authentication complete. You can close this window."
 
+    # json.dumps does not escape "/", so a payload containing a literal "</script>" (e.g.
+    # from the unauthenticated `error` query param) would otherwise close the script block
+    # early and inject arbitrary markup/script into the page. Escape "<", ">", "&" as unicode
+    # escapes so the JSON stays inert HTML text while still parsing as the same JS value.
+    def _script_safe(value: object) -> str:
+        return (
+            json.dumps(value)
+            .replace("<", "\\u003c")
+            .replace(">", "\\u003e")
+            .replace("&", "\\u0026")
+        )
+
     html = f"""<!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><title>Google authentication</title></head>
@@ -104,9 +116,9 @@ def _post_message_html(
 <p>{blurb}</p>
 <script>
   (function () {{
-    var msg = {json.dumps(message)};
+    var msg = {_script_safe(message)};
     if (window.opener) {{
-      window.opener.postMessage(msg, {json.dumps(config.web_app_url)});
+      window.opener.postMessage(msg, {_script_safe(config.web_app_url)});
     }}
     window.close();
   }})();
@@ -122,7 +134,7 @@ def google_authorize_url(
     config: Config = Injected(Config),
 ):
     """Return the Google OAuth authorize URL for the popup to navigate to."""
-    if not config.google_cloud_client_id:
+    if not config.google_cloud_client_id or not config.google_cloud_client_secret:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Google OAuth is not configured on this server.",
