@@ -54,6 +54,13 @@ def test_build_openclaw_config_overlay_teams_gateway_auth_is_none():
     assert_that(overlay["gateway"]["auth"]["mode"], equal_to("none"))
 
 
+def test_build_openclaw_config_overlay_has_exec_approvals():
+    overlay = build_openclaw_config_overlay("litellm/gpt-4o", "http://litellm:4000")
+    exec_approvals = overlay["channels"]["slack"]["execApprovals"]
+    assert_that(exec_approvals["enabled"], equal_to(True))
+    assert_that(exec_approvals["target"], equal_to("channel"))
+
+
 def test_build_deployment_has_pvc_owner_init_container():
     dep = build_deployment(
         agent_id=UUID("00000000-0000-0000-0000-000000000001"),

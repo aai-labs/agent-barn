@@ -89,6 +89,10 @@ def build_openclaw_config_overlay(
                     "mode": "partial",
                     "nativeTransport": True,
                 },
+                "execApprovals": {
+                    "enabled": True,
+                    "target": "channel",
+                },
                 "channels": channels_config,
             }
         },
