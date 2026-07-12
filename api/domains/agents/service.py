@@ -16,6 +16,7 @@ from api.infrastructure.openrouter.client import OpenRouterClient
 from api.domains.agents.aai_cli_artifacts import (
     build_config_toml,
     build_env,
+    build_integrations_policy_md,
     build_setup_sh,
     build_tool_context_md,
     provider_secrets_map,
@@ -1036,6 +1037,9 @@ class AgentService:
             + self._build_skill_pointers(mounted_skills)
             + build_tool_context_md(decrypted)
         )
+        # AGENTS.md is auto-loaded into the startup prompt by both runtimes, so the
+        # --profile mapping + no-fallback policy is appended here (not just to TOOLS.md).
+        agents_md = rendered.agents_md + build_integrations_policy_md(decrypted)
 
         if agent.agent_type == AgentType.HERMES:
             assert hermes_cfg is not None
@@ -1047,7 +1051,7 @@ class AgentService:
                 identity_md=rendered.identity_md,
                 user_md=rendered.user_md,
                 tools_md=tools_md,
-                agents_md=rendered.agents_md,
+                agents_md=agents_md,
                 boot_md=rendered.boot_md,
                 heartbeat_md=rendered.heartbeat_md,
                 hermes_config=hermes_cfg,
@@ -1064,7 +1068,7 @@ class AgentService:
                 identity_md=rendered.identity_md,
                 user_md=rendered.user_md,
                 tools_md=tools_md,
-                agents_md=rendered.agents_md,
+                agents_md=agents_md,
                 boot_md=rendered.boot_md,
                 bootstrap_md=rendered.bootstrap_md,
                 heartbeat_md=rendered.heartbeat_md,
