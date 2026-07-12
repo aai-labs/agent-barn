@@ -17,9 +17,6 @@ TELEMETRY_PUSH_PACKAGE_JSON: str = (_TELEMETRY_PUSH / "package.json").read_text(
 TELEMETRY_PUSH_PLUGIN_JSON: str = (_TELEMETRY_PUSH / "openclaw.plugin.json").read_text()
 
 
-_OPENCLAW_EXEC_MODE = {"manual": "ask", "auto": "auto", "off": "full"}
-
-
 def build_openclaw_config_overlay(
     model: str,
     litellm_base_url: str,
@@ -89,10 +86,6 @@ def build_openclaw_config_overlay(
                     "mode": "partial",
                     "nativeTransport": True,
                 },
-                "execApprovals": {
-                    "enabled": True,
-                    "target": "channel",
-                },
                 "channels": channels_config,
             }
         },
@@ -101,7 +94,7 @@ def build_openclaw_config_overlay(
         ],
         "tools": {
             "profile": "full",
-            "exec": {"mode": _OPENCLAW_EXEC_MODE.get(approval_mode, "auto")},
+            "exec": {"mode": "full"},
         },
         "memory": {"backend": "builtin"},
         "plugins": {
@@ -175,7 +168,7 @@ def build_openclaw_config_overlay_teams(
         ],
         "tools": {
             "profile": "full",
-            "exec": {"mode": _OPENCLAW_EXEC_MODE.get(approval_mode, "auto")},
+            "exec": {"mode": "full"},
         },
         "memory": {"backend": "builtin"},
         "plugins": {
