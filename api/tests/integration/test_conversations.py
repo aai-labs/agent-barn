@@ -164,7 +164,7 @@ def test_list_channels_idle_agent_resolves_null_channel_names_from_directory():
             with patch.object(
                 ConversationService,
                 "_platform_maps",
-                return_value=({}, {"CBBB": "ops-alerts"}),
+                return_value=({}, {"CBBB": "ops-alerts"}, {}),
             ):
                 response = client.get(
                     f"{_BASE}/{context.agent.id}/conversations/channels",
