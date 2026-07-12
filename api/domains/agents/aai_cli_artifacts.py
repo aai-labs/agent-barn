@@ -281,19 +281,28 @@ _INTEGRATION_LABELS: dict[SecretProvider, str] = {
 }
 
 
-def _profile_slugs(provider: SecretProvider, content: SecretContent) -> list[str]:
-    """The --profile slug(s) an agent uses to reach a configured provider.
+def _repo_scoped_profile_line(
+    label: str, base: str, scope: str, scope_kind: str, repos: list[str]
+) -> str:
+    """Render the agents_md line for a repo-scoped provider (GitHub/Bitbucket).
 
-    GitHub/Bitbucket emit one slug per configured repo (``github-work``,
-    ``github-work-2``, ...); everything else has a single fixed slug. All slugs come
-    from PROFILE_SLUGS, the same source the config.toml builders use.
+    With repos configured, each --profile slug is mapped to the ``scope/repo`` it
+    targets (``github-work`` -> ``aai-labs/agent-farm``) so an agent with several repos
+    knows which profile is which. With none configured, the profile carries no ``repo``,
+    so aai-cli requires ``--repo`` at call time — the line says so, and names the
+    ``scope`` (owner/workspace). ``scope`` comes from the configured secret, so this
+    reflects whatever org/workspace the operator set up — nothing is hardcoded.
     """
-    base = PROFILE_SLUGS[provider]
-    if isinstance(content, GithubContent):
-        return [name for name, _ in _profile_repo_pairs(base, content.repos)]
-    if isinstance(content, BitbucketContent):
-        return [name for name, _ in _profile_repo_pairs(base, content.repos)]
-    return [base]
+    if repos:
+        segments = ", ".join(
+            f"`--profile {name}` → {scope}/{repo}"
+            for name, repo in _profile_repo_pairs(base, repos)
+        )
+        return f"- **{label}**: {segments}"
+    return (
+        f"- **{label}**: `--profile {base}` ({scope_kind} `{scope}` already set on the "
+        "profile; no repo configured — pass `--repo <repo>`)"
+    )
 
 
 def build_integrations_policy_md(
@@ -304,8 +313,10 @@ def build_integrations_policy_md(
     Both Hermes and OpenClaw auto-load AGENTS.md into the startup system prompt, so
     this is where the ``--profile`` mapping belongs. Kept short: a no-fallback policy
     line, the nested command grammar with one worked example (agents otherwise burn
-    turns guessing subcommands), one line per configured provider, and a read-the-file
-    pointer to the on-demand skill docs. Full command syntax stays in the per-service
+    turns guessing subcommands), one line per configured provider (GitHub/Bitbucket map
+    each --profile slug to the repo it targets, or say to pass ``--repo`` when the
+    profile has none), and a read-the-file pointer to the on-demand skill docs. Full command
+    syntax stays in the per-service
     ``./skills/aai-cli/<service>_skill.md`` files and TOOLS.md. Returns "" when no
     integrations are configured.
     """
@@ -326,10 +337,21 @@ def build_integrations_policy_md(
         content = decrypted.get(provider)
         if content is None:
             continue
-        slugs = ", ".join(
-            f"`--profile {slug}`" for slug in _profile_slugs(provider, content)
-        )
-        lines.append(f"- **{_INTEGRATION_LABELS[provider]}**: {slugs}")
+        base = PROFILE_SLUGS[provider]
+        if isinstance(content, GithubContent):
+            lines.append(
+                _repo_scoped_profile_line(
+                    "GitHub", base, content.owner, "owner", content.repos
+                )
+            )
+        elif isinstance(content, BitbucketContent):
+            lines.append(
+                _repo_scoped_profile_line(
+                    "Bitbucket", base, content.workspace, "workspace", content.repos
+                )
+            )
+        else:
+            lines.append(f"- **{_INTEGRATION_LABELS[provider]}**: `--profile {base}`")
     return "\n".join(lines) + "\n"
 
 
