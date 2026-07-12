@@ -3,7 +3,7 @@ helmDefaults:
 
 releases:
   - name: postgres-app
-    namespace: agent-farm
+    namespace: {{ env "NAMESPACE" | default "agent-farm" }}
     chart: ./helm/postgres
     labels:
       name: postgres-app
@@ -22,7 +22,7 @@ releases:
         value: {{ env "POSTGRES_APP_DB" | required "POSTGRES_APP_DB is required" | quote }}
 
   - name: postgres-litellm
-    namespace: agent-farm
+    namespace: {{ env "NAMESPACE" | default "agent-farm" }}
     chart: ./helm/postgres
     labels:
       name: postgres-litellm
@@ -41,7 +41,7 @@ releases:
         value: {{ env "POSTGRES_LITELLM_DB" | required "POSTGRES_LITELLM_DB is required" | quote }}
 
   - name: litellm
-    namespace: agent-farm
+    namespace: {{ env "NAMESPACE" | default "agent-farm" }}
     chart: ./helm/litellm
     labels:
       name: litellm
@@ -53,11 +53,11 @@ releases:
       - name: databaseUrl
         value: {{ printf "postgresql://%s:%s@postgres-litellm:5432/%s" (env "POSTGRES_LITELLM_USER") (env "POSTGRES_LITELLM_PASSWORD") (env "POSTGRES_LITELLM_DB") | quote }}
     needs:
-      - agent-farm/postgres-app
-      - agent-farm/postgres-litellm
+      - {{ env "NAMESPACE" | default "agent-farm" }}/postgres-app
+      - {{ env "NAMESPACE" | default "agent-farm" }}/postgres-litellm
 
   - name: agentfarm-api
-    namespace: agent-farm
+    namespace: {{ env "NAMESPACE" | default "agent-farm" }}
     chart: ./helm/agentfarm-api
     labels:
       name: agentfarm-api
@@ -66,6 +66,8 @@ releases:
         value: {{ env "REGISTRY_PREFIX" | default "registry.k8s.aai-labs.com" | quote }}
       - name: image.repository
         value: {{ env "API_IMAGE_REPOSITORY" | default "agentfarm-api" | quote }}
+      - name: image.tag
+        value: {{ env "API_IMAGE_TAG" | default "" | quote }}
       - name: openclawImage.repository
         value: {{ env "OPENCLAW_IMAGE_REPOSITORY" | default "agentfarm-openclaw-base" | quote }}
       - name: openclawImage.tag
@@ -115,11 +117,11 @@ releases:
       - name: ingress.hosts
         value: {{ env "API_HOST" | required "API_HOST is required" | quote }}
     needs:
-      - agent-farm/postgres-app
-      - agent-farm/litellm
+      - {{ env "NAMESPACE" | default "agent-farm" }}/postgres-app
+      - {{ env "NAMESPACE" | default "agent-farm" }}/litellm
 
   - name: agentfarm-ui
-    namespace: agent-farm
+    namespace: {{ env "NAMESPACE" | default "agent-farm" }}
     chart: ./helm/agentfarm-ui
     labels:
       name: agentfarm-ui
@@ -128,7 +130,9 @@ releases:
         value: {{ env "REGISTRY_PREFIX" | default "registry.k8s.aai-labs.com" | quote }}
       - name: image.repository
         value: {{ env "UI_IMAGE_REPOSITORY" | default "agentfarm-ui" | quote }}
+      - name: image.tag
+        value: {{ env "UI_IMAGE_TAG" | default "" | quote }}
       - name: ingress.hosts
         value: {{ env "UI_HOST" | required "UI_HOST is required" | quote }}
     needs:
-      - agent-farm/agentfarm-api
+      - {{ env "NAMESPACE" | default "agent-farm" }}/agentfarm-api
