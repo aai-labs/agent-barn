@@ -11,11 +11,13 @@ from api.domains.agents.models import (
     BitbucketContent,
     ConfluenceContent,
     GithubContent,
+    GmailContent,
     JiraContent,
 )
 from api.infrastructure.integration_validators.bitbucket import validate_bitbucket
 from api.infrastructure.integration_validators.confluence import validate_confluence
 from api.infrastructure.integration_validators.github import validate_github
+from api.infrastructure.integration_validators.gmail import validate_gmail
 from api.infrastructure.integration_validators.jira import validate_jira
 from api.infrastructure.integration_validators.result import IntegrationValidationResult
 
@@ -43,6 +45,11 @@ _CONFLUENCE = ConfluenceContent(
 )
 _BB = BitbucketContent(
     workspace="acme", repos=["backend"], email="alice@acme.com", api_token="bb-tok"
+)
+_GMAIL = GmailContent(
+    client_id="client-id.apps.googleusercontent.com",
+    client_secret="client-secret",
+    refresh_token="rt-123",
 )
 
 # ── IntegrationValidationResult ───────────────────────────────────────────────
@@ -663,3 +670,111 @@ def test_confluence_identity_falls_back_to_content_email_when_absent():
 
     assert result.valid is True
     assert _CONFLUENCE.email in (result.identity or "")
+
+
+# ── Gmail ─────────────────────────────────────────────────────────────────────
+
+_GMAIL_TOKEN_MOD = "api.infrastructure.integration_validators.gmail.httpx.post"
+_GMAIL_PROFILE_MOD = "api.infrastructure.integration_validators.gmail.httpx.get"
+
+_GMAIL_TOKEN_OK = {
+    "access_token": "at-123",
+    "scope": "https://www.googleapis.com/auth/gmail.readonly",
+    "token_type": "Bearer",
+    "expires_in": 3599,
+}
+
+
+def test_gmail_valid_refresh_token_returns_identity():
+    token_resp = _resp(_GMAIL_TOKEN_OK)
+    profile_resp = _resp({"emailAddress": "alice@gmail.com"})
+
+    with (
+        patch(_GMAIL_TOKEN_MOD, return_value=token_resp),
+        patch(_GMAIL_PROFILE_MOD, return_value=profile_resp),
+    ):
+        result = validate_gmail(_GMAIL)
+
+    assert result.valid is True
+    assert result.identity == "alice@gmail.com"
+    assert result.missing_scopes == []
+    assert result.error is None
+
+
+def test_gmail_missing_client_credentials_returns_error():
+    """Should never reach Google — client id/secret weren't backfilled from config."""
+    no_client = GmailContent(refresh_token="rt-123")
+    with patch(_GMAIL_TOKEN_MOD) as mock_post:
+        result = validate_gmail(no_client)
+
+    assert result.valid is False
+    assert result.error is not None
+    assert "configured" in result.error.lower()
+    mock_post.assert_not_called()
+
+
+def test_gmail_invalid_grant_reports_reconnect_hint():
+    """Google's canonical error for a revoked/expired refresh token is invalid_grant."""
+    with patch(
+        _GMAIL_TOKEN_MOD, return_value=_resp({"error": "invalid_grant"}, status=400)
+    ):
+        result = validate_gmail(_GMAIL)
+
+    assert result.valid is False
+    assert result.error is not None
+    assert "reconnect" in result.error.lower()
+
+
+def test_gmail_unexpected_status_returns_error():
+    with patch(_GMAIL_TOKEN_MOD, return_value=_resp({}, status=500)):
+        result = validate_gmail(_GMAIL)
+
+    assert result.valid is False
+    assert "500" in (result.error or "")
+
+
+def test_gmail_network_error_returns_error():
+    with patch(_GMAIL_TOKEN_MOD, side_effect=_connect_error()):
+        result = validate_gmail(_GMAIL)
+
+    assert result.valid is False
+    assert result.error is not None
+    assert "google" in result.error.lower()
+
+
+def test_gmail_missing_access_token_in_response():
+    with patch(_GMAIL_TOKEN_MOD, return_value=_resp({"scope": "gmail.readonly"})):
+        result = validate_gmail(_GMAIL)
+
+    assert result.valid is False
+    assert result.error is not None
+
+
+def test_gmail_missing_readonly_scope_warns():
+    token_resp = _resp(
+        {**_GMAIL_TOKEN_OK, "scope": "https://www.googleapis.com/auth/gmail.send"}
+    )
+    profile_resp = _resp({"emailAddress": "alice@gmail.com"})
+
+    with (
+        patch(_GMAIL_TOKEN_MOD, return_value=token_resp),
+        patch(_GMAIL_PROFILE_MOD, return_value=profile_resp),
+    ):
+        result = validate_gmail(_GMAIL)
+
+    assert result.valid is True
+    assert any("gmail.readonly" in s for s in result.missing_scopes)
+
+
+def test_gmail_profile_fetch_failure_still_valid_without_identity():
+    """Token exchange proves the refresh token works even if the profile probe fails."""
+    token_resp = _resp(_GMAIL_TOKEN_OK)
+
+    with (
+        patch(_GMAIL_TOKEN_MOD, return_value=token_resp),
+        patch(_GMAIL_PROFILE_MOD, side_effect=_connect_error()),
+    ):
+        result = validate_gmail(_GMAIL)
+
+    assert result.valid is True
+    assert result.identity is None

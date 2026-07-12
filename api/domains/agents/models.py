@@ -120,8 +120,12 @@ class BitbucketContent(_RepoListCompat):
 
 
 class GmailContent(SecretContent):
-    client_id: str
-    client_secret: str
+    # client_id/client_secret are optional: secrets created via the "Authenticate
+    # with Google" OAuth flow carry only the refresh token, and the app-owned client
+    # id/secret are injected from config at agent-start time (see AgentService.start_agent).
+    # Legacy secrets from the old three-field form still carry all three and validate as-is.
+    client_id: str = ""
+    client_secret: str = ""
     refresh_token: str
 
 

@@ -61,6 +61,7 @@ from api.domains.agents.models import (
     AgentTeamsConfigRead,
     AgentType,
     AgentUpdate,
+    GmailContent,
     PairRequest,
     SecretProvider,
     decrypt_content,
@@ -81,6 +82,7 @@ from api.infrastructure.integration_validators import (
     validate_bitbucket,
     validate_confluence,
     validate_github,
+    validate_gmail,
     validate_jira,
 )
 from api.infrastructure.slack.client import (
@@ -126,6 +128,7 @@ _VALIDATORS: dict[SecretProvider, Any] = {
     SecretProvider.JIRA: validate_jira,
     SecretProvider.CONFLUENCE: validate_confluence,
     SecretProvider.BITBUCKET: validate_bitbucket,
+    SecretProvider.GMAIL: validate_gmail,
 }
 
 
@@ -986,6 +989,19 @@ class AgentService:
             )
             for s in agent_secrets
         }
+        self._backfill_gmail_client_credentials(decrypted)
+        gmail = decrypted.get(SecretProvider.GMAIL)
+        if isinstance(gmail, GmailContent) and (
+            not gmail.client_id or not gmail.client_secret
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Gmail credential is missing a client id/secret and Google OAuth is "
+                    "not configured on this server. Reconnect via Authenticate with "
+                    "Google, or configure google_cloud_client_id/secret."
+                ),
+            )
         store = {p: c for p, c in decrypted.items() if p.value in provider_secrets_map}
         aai_home = "/opt/data" if agent.agent_type == AgentType.HERMES else "/home/node"
         aai_config_toml = (
@@ -1410,6 +1426,20 @@ class AgentService:
                 detail="Could not load Slack users right now. Please try again.",
             ) from exc
 
+    def _backfill_gmail_client_credentials(
+        self, decrypted: dict[SecretProvider, Any]
+    ) -> None:
+        """Gmail secrets created via the OAuth flow store only the refresh token; inject
+        the app-owned client id/secret from config. Backfill only when empty so legacy
+        secrets (which carry their own client the refresh token was issued under) keep
+        working."""
+        gmail = decrypted.get(SecretProvider.GMAIL)
+        if isinstance(gmail, GmailContent):
+            if not gmail.client_id:
+                gmail.client_id = self.config.google_cloud_client_id
+            if not gmail.client_secret:
+                gmail.client_secret = self.config.google_cloud_client_secret
+
     def validate_integration(
         self, agent_id: UUID, provider: SecretProvider, context: CurrentUserContext
     ) -> dict:
@@ -1431,6 +1461,7 @@ class AgentService:
         content = decrypt_content(
             provider, secret.content, self.config.agent_token_encryption_key
         )
+        self._backfill_gmail_client_credentials({provider: content})
         result = validator(content)  # type: ignore[arg-type]
         if result.valid and result.missing_scopes:
             validation_status = "warning"

@@ -19,11 +19,12 @@ import { SkillSourceBadge } from "@/features/skills/components/skill-drawer";
 import {
   INTEGRATION_PROVIDERS,
   getIntegrationProvider,
+  isOAuthConnected,
   type IntegrationDraft,
 } from "../integrations";
 import type { AgentAssignedSkill, AgentTemplateRead } from "../schemas";
 import { useTemplates } from "../hooks/use-templates";
-import { ChoiceCard, FormField, NextStep, TokenInput } from "./hire-dialog-primitives";
+import { ChoiceCard, FormField, GoogleAuthButton, NextStep, TokenInput } from "./hire-dialog-primitives";
 import { ModelSelect } from "./model-select";
 import { Pagination } from "./pagination";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -1514,6 +1515,16 @@ export function SkillsStep({
                     {providerSpec.scopeNote}
                   </p>
                 )}
+                {providerSpec.authMethod === "google_oauth" && (
+                  <GoogleAuthButton
+                    connected={isOAuthConnected(draft)}
+                    onConnected={({ refreshToken, clientId, clientSecret }) => {
+                      setField(providerId, "refreshToken", refreshToken);
+                      setField(providerId, "clientId", clientId);
+                      setField(providerId, "clientSecret", clientSecret);
+                    }}
+                  />
+                )}
                 {providerSpec.fields.map((field) => {
                   const label = field.required ? field.label : `${field.label} (optional)`;
                   if (field.type === "repo-list") {
@@ -1638,6 +1649,17 @@ export function IntegrationsStep({
               <p className="text-[0.75rem] leading-[1.4]" style={{ color: "var(--ink-3)" }}>
                 {provider.scopeNote}
               </p>
+            )}
+
+            {provider.authMethod === "google_oauth" && (
+              <GoogleAuthButton
+                connected={isOAuthConnected(draft)}
+                onConnected={({ refreshToken, clientId, clientSecret }) => {
+                  setField(draft.provider, "refreshToken", refreshToken);
+                  setField(draft.provider, "clientId", clientId);
+                  setField(draft.provider, "clientSecret", clientSecret);
+                }}
+              />
             )}
 
             {provider.fields.map((field) => {
