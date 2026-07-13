@@ -1,5 +1,8 @@
 helmDefaults:
-  createNamespace: true
+  # Default true (prod bootstraps the namespace via helm). Set CREATE_NAMESPACE=false
+  # when the namespace is pre-created and the deploy identity is namespace-scoped
+  # (can't create cluster-scoped namespaces), e.g. staging's agent-farm-staging-user.
+  createNamespace: {{ env "CREATE_NAMESPACE" | default "true" }}
 
 releases:
   - name: postgres-app
@@ -68,6 +71,8 @@ releases:
         value: {{ env "API_IMAGE_REPOSITORY" | default "agentfarm-api" | quote }}
       - name: image.tag
         value: {{ env "API_IMAGE_TAG" | default "" | quote }}
+      - name: litellmKeyServiceAccountName
+        value: {{ env "LITELLM_KEY_SERVICE_ACCOUNT" | default "agent-farm-user" | quote }}
       - name: openclawImage.repository
         value: {{ env "OPENCLAW_IMAGE_REPOSITORY" | default "agentfarm-openclaw-base" | quote }}
       - name: openclawImage.tag

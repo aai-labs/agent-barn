@@ -67,6 +67,12 @@ litellmApiKeySecretName: litellm-api-key
 # Pre-existing litellm Secret (used by hook Job to call /key/generate)
 litellmSecretName: litellm
 
+# ServiceAccount the litellm-key hook Job runs as (needs create/update on secrets).
+# Defaults to the out-of-band `agent-farm-user` (see k8s/agent-farm-user.yaml). Set
+# to the deploy identity's own SA when that SA already has secret perms and you can't
+# provision the agent-farm-user Role/RoleBinding (e.g. a namespace-scoped kubeconfig).
+litellmKeyServiceAccountName: agent-farm-user
+
 #  kubeconfig Secret for managing agent k8s resources
 kubeconfigSecretName: agent-farm-user-kubeconfig
 

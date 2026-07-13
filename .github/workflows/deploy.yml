@@ -27,6 +27,12 @@ jobs:
                 echo "ENVIRONMENT=staging"
                 echo "IMAGE_SUFFIX=-staging"
                 echo "PUSH_LATEST=false"
+                # Namespace is pre-created and the deploy SA is namespace-scoped
+                # (can't create cluster-scoped namespaces).
+                echo "CREATE_NAMESPACE=false"
+                # litellm-key hook runs as the deploy SA (already has secret perms)
+                # instead of the out-of-band agent-farm-user.
+                echo "LITELLM_KEY_SERVICE_ACCOUNT=agent-farm-staging-user"
                 echo "API_HOST=${{ vars.STAGING_API_HOST }}"
                 echo "UI_HOST=${{ vars.STAGING_UI_HOST }}"
                 echo "WEB_APP_URL=${{ vars.STAGING_WEB_APP_URL }}"
@@ -38,6 +44,8 @@ jobs:
                 echo "ENVIRONMENT=production"
                 echo "IMAGE_SUFFIX="
                 echo "PUSH_LATEST=true"
+                echo "CREATE_NAMESPACE=true"
+                echo "LITELLM_KEY_SERVICE_ACCOUNT=agent-farm-user"
                 echo "API_HOST=${{ vars.API_HOST }}"
                 echo "UI_HOST=${{ vars.UI_HOST }}"
                 echo "WEB_APP_URL=${{ vars.WEB_APP_URL }}"
@@ -200,6 +208,10 @@ jobs:
           KUBECONFIG: /home/runner/.kube/config
           # Target namespace, resolved from the branch (agent-farm / agent-farm-staging).
           NAMESPACE: ${{ env.NAMESPACE }}
+          # false on staging (namespace pre-exists, SA is namespace-scoped).
+          CREATE_NAMESPACE: ${{ env.CREATE_NAMESPACE }}
+          # SA the litellm-key hook runs as (staging: the namespace-scoped deploy SA).
+          LITELLM_KEY_SERVICE_ACCOUNT: ${{ env.LITELLM_KEY_SERVICE_ACCOUNT }}
           API_IMAGE_TAG: ${{ env.API_IMAGE_TAG }}
           UI_IMAGE_TAG: ${{ env.UI_IMAGE_TAG }}
           OPENCLAW_IMAGE_TAG: ${{ env.OPENCLAW_IMAGE_TAG }}
