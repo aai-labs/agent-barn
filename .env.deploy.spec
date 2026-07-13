@@ -6,6 +6,12 @@
 # For k3s: copy /etc/rancher/k3s/k3s.yaml somewhere readable and point here.
 KUBECONFIG=$HOME/.kube/config
 
+# Target namespace. Defaults to agent-farm. helmfile reads this, so every release
+# (plus its secrets/services/ingresses) lands here. For a separate STAGING stack,
+# set NAMESPACE=agent-farm-staging, use the -staging image tags below, and point
+# deploy.sh's `kubectl apply` line at k8s/agent-farm-user.staging.yaml.
+NAMESPACE=agent-farm
+
 # ── Container registry ───────────────────────────────────────────────────────
 REGISTRY_PREFIX=registry.k8s.aai-labs.com
 REGISTRY_SERVER=registry.k8s.aai-labs.com
@@ -21,6 +27,8 @@ HERMES_IMAGE_REPOSITORY=agentfarm-hermes-base
 OPENCLAW_IMAGE_REPOSITORY=agentfarm-openclaw-base
 
 # ── Image tags (pin to specific versions for a real deploy) ──────────────────
+# For a staging deploy, suffix each with -staging (e.g. 0.13.0-staging); staging
+# builds its own images so it never clobbers prod's tags.
 API_IMAGE_TAG=0.13.0
 UI_IMAGE_TAG=0.13.0
 OPENCLAW_IMAGE_TAG=0.3.0
