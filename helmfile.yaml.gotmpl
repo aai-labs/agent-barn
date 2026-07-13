@@ -1,8 +1,10 @@
 helmDefaults:
-  # Default true (prod bootstraps the namespace via helm). Set CREATE_NAMESPACE=false
-  # when the namespace is pre-created and the deploy identity is namespace-scoped
-  # (can't create cluster-scoped namespaces), e.g. staging's agent-farm-staging-user.
-  createNamespace: {{ env "CREATE_NAMESPACE" | default "true" }}
+  # Every environment pre-creates its namespace out-of-band (staging ahead of
+  # time; prod via deploy.sh's `kubectl apply -f k8s/agent-farm-user.yaml`), and
+  # the deploy identities are namespace-scoped and can't create cluster-scoped
+  # namespaces. So helm must never attempt to create it — the target namespace
+  # always already exists.
+  createNamespace: false
 
 releases:
   - name: postgres-app
