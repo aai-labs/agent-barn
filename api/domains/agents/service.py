@@ -29,13 +29,17 @@ from api.domains.agents.builders import (
     build_deployment,
     build_hermes_config,
     build_hermes_config_map,
+    build_hermes_config_telegram,
     build_hermes_deployment,
     build_openclaw_config_overlay,
     build_openclaw_config_overlay_teams,
+    build_openclaw_config_overlay_telegram,
     build_pvc,
     build_secret_hermes_slack,
+    build_secret_hermes_telegram,
     build_secret_slack,
     build_secret_teams,
+    build_secret_telegram,
     build_service,
 )
 from api.domains.agents.models import (
@@ -1077,6 +1081,79 @@ class AgentService:
                 self.config.openclaw_image,
                 self.config.agent_image_pull_secret,
             )
+        elif agent.platform == AgentPlatform.TELEGRAM:
+            telegram_config = self.repository.get_telegram_config(agent.id)
+            if not telegram_config:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Telegram config missing for agent {agent_id}",
+                )
+            bot_token = decrypt_token(
+                telegram_config.bot_token_encrypted,
+                self.config.agent_token_encryption_key,
+            )
+            ok, reason, _ = validate_telegram_bot_token(bot_token)
+            if not ok:
+                agent.last_error = reason
+                agent.status = AgentStatus.ERROR
+                self.repository.save(agent)
+                return self._get_agent_read(agent)
+
+            service = build_service(agent.id, org_id, ns)
+
+            if agent.agent_type == AgentType.HERMES:
+                api_server_key = secrets.token_urlsafe(32)
+                hermes_cfg = build_hermes_config_telegram(
+                    effective_model,
+                    self.config.agent_litellm_base_url,
+                    dm_policy=str(telegram_config.dm_policy),
+                    group_policy=str(telegram_config.group_policy),
+                    allowed_user_ids=telegram_config.allowed_user_ids,
+                    allowed_chat_ids=telegram_config.allowed_chat_ids,
+                    approval_mode=str(agent.approval_mode),
+                )
+                secret = build_secret_hermes_telegram(
+                    agent_id=agent.id,
+                    org_id=org_id,
+                    namespace=ns,
+                    agent_name=agent.name,
+                    telegram_bot_token=bot_token,
+                    litellm_api_key=litellm_key,
+                    litellm_base_url=self.config.agent_litellm_base_url,
+                    api_server_key=api_server_key,
+                )
+                deployment = build_hermes_deployment(
+                    agent.id,
+                    org_id,
+                    ns,
+                    self.config.hermes_image,
+                    self.config.agent_image_pull_secret,
+                )
+            else:
+                overlay = build_openclaw_config_overlay_telegram(
+                    effective_model,
+                    self.config.agent_litellm_base_url,
+                    dm_policy=str(telegram_config.dm_policy),
+                    group_policy=str(telegram_config.group_policy),
+                    allowed_user_ids=telegram_config.allowed_user_ids,
+                    allowed_chat_ids=telegram_config.allowed_chat_ids,
+                    approval_mode=str(agent.approval_mode),
+                )
+                secret = build_secret_telegram(
+                    agent_id=agent.id,
+                    org_id=org_id,
+                    namespace=ns,
+                    telegram_bot_token=bot_token,
+                    litellm_api_key=litellm_key,
+                    litellm_base_url=self.config.agent_litellm_base_url,
+                )
+                deployment = build_deployment(
+                    agent.id,
+                    org_id,
+                    ns,
+                    self.config.openclaw_image,
+                    self.config.agent_image_pull_secret,
+                )
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -1162,6 +1239,7 @@ class AgentService:
                 aai_cli_config_toml=aai_config_toml,
                 aai_cli_setup_sh=aai_setup_sh,
                 skills_json=skills_json,
+                platform=str(agent.platform),
             )
         else:
             config_map = build_config_map(
