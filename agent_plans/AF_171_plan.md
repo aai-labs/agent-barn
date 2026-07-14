@@ -288,3 +288,137 @@ At the end:
    - Config drawer → "Chats" tab shows policies and ID lists
    - Update policies → save → restart → verify new config applied
    - Assign integrations (GitHub, etc.) → verify aai-cli works
+
+---
+---
+
+# Bug Fixes from Live Testing (Post-Implementation)
+
+## Context
+
+Sub-tasks 0–7 implemented. Live testing with both Hermes and OpenClaw runtimes revealed 7 bugs that need fixing before the feature can ship.
+
+---
+
+## Bug 1: Telegram agents don't auto-start after hiring
+
+**Root cause**: The Telegram post-hire screen in `hire-dialog.tsx` calls `onHired()` directly without calling `startAgent.mutateAsync()` first. The Slack post-hire screen calls `startAgent` in both exit paths (Save and Skip).
+
+**Fix** in `ui/src/features/agents/components/hire-dialog.tsx`:
+- In the Telegram post-hire `if (platform === "telegram")` block, change the "Done" button's `onClick` to call `startAgent.mutateAsync(createdAgent.id)` then `onHired()`, same pattern as the Slack "Skip for now" button.
+
+---
+
+## Bug 2: Conversation tab shows numeric user ID instead of username (Hermes)
+
+**Root cause** — two-part failure chain:
+1. The telemetry-push plugin (`api/domains/agents/scripts/hermes/plugins/telemetry-push/__init__.py`) sends `sender_name: None` and `channel_name: None` for all messages (lines 154-155).
+2. The conversation service's `_platform_maps()` in `api/domains/conversations/service.py` only has a Slack resolution path. For Telegram agents, it falls through to the Slack code, which returns empty maps because there's no Slack config. The UI falls back to displaying the raw `channel_id` (numeric Telegram user ID like `7455545661`).
+
+**Fix** — Add Telegram API resolution in `_platform_maps()`:
+
+1. **New function** in `api/infrastructure/telegram/client.py`:
+   - `get_chat_info(bot_token: str, chat_id: str) -> dict` — calls Telegram's `getChat` API (`https://api.telegram.org/bot{token}/getChat?chat_id={chat_id}`). Returns `{"first_name": ..., "username": ..., "title": ...}` or empty dict on failure.
+
+2. **Refactor** `_platform_maps()` in `api/domains/conversations/service.py`:
+   - Change signature to accept the unresolved ID lists so Telegram resolution only calls `getChat` for IDs that need resolving (can't enumerate all Telegram users like Slack).
+   - Add `if agent.platform == AgentPlatform.TELEGRAM:` branch that decrypts the bot token and calls `get_chat_info()` for each unresolved user/chat ID.
+   - Build `dm_map: {user_id: first_name or username}` from the results.
+
+3. **Tests**: Unit test for `get_chat_info()` (mock httpx). Integration test for Telegram name resolution in conversations.
+
+---
+
+## Bug 3: DM and group policies not shown during Telegram hiring
+
+**Root cause**: `DetailsStep` in `hire-dialog-steps.tsx` only renders policy dropdowns when `platform === "slack"` (lines 1234-1275). No `platform === "telegram"` block exists. The state variables `telegramGroupPolicy` and `telegramDmPolicy` exist in `hire-dialog.tsx` but are never surfaced in the UI during hiring.
+
+**Fix**:
+1. `ui/src/features/agents/components/hire-dialog-steps.tsx`:
+   - Add `telegramGroupPolicy`, `onTelegramGroupPolicyChange`, `telegramDmPolicy`, `onTelegramDmPolicyChange` props to `DetailsStep`.
+   - Add a `{platform === "telegram" && (...)}` block rendering group policy (allowlist/open) and DM policy (off/allowlist/open) dropdowns.
+
+2. `ui/src/features/agents/components/hire-dialog.tsx`:
+   - Pass the Telegram policy state and setters to `DetailsStep`.
+
+---
+
+## Bug 4: Some conversations missing from UI
+
+**Root cause (confirmed for OpenClaw)**: The OpenClaw parser's `_SESSION_PREFIXES` in `api/domains/conversations/parser.py` does **not** include `"agent:main:telegram:dm:"`. Telegram DM sessions are dropped.
+
+**Fix** in `api/domains/conversations/parser.py`:
+- Add `"agent:main:telegram:dm:"` to `_SESSION_PREFIXES`.
+
+**Test**: Add a test case for `agent:main:telegram:dm:` prefix in the existing OpenClaw parser tests.
+
+---
+
+## Bug 5: Hermes sends "set home channel" prompt
+
+**Root cause**: The Slack builder sets `SLACK_HOME_CHANNEL=C0000000000` (dummy value) in the K8s Secret to suppress this generic Hermes prompt. The Telegram builder (`build_secret_hermes_telegram`) does not set this env var. Hermes checks it regardless of platform.
+
+**Fix** in `api/domains/agents/builders/hermes.py`:
+- In `build_secret_hermes_telegram()` (lines 281-310), add `"SLACK_HOME_CHANNEL": _NO_HOME_CHANNEL` to `string_data`.
+
+**Test**: Extend test in `test_hermes_builders.py` to verify the Telegram secret contains `SLACK_HOME_CHANNEL`.
+
+---
+
+## Bug 6: Teams option still appears in wizard (should be removed)
+
+**Root cause**: The `PlatformChoiceStep` conditionally shows Teams for OpenClaw agents. User wants Teams completely removed from the wizard — Telegram replaces it. Only Slack + Telegram for both runtimes.
+
+**Fix** in `ui/src/features/agents/components/hire-dialog-steps.tsx`:
+- Remove the `{agentType === "openclaw" && (...)}` conditional around the Teams `ChoiceCard` in `PlatformChoiceStep`. Only show Slack and Telegram.
+- Remove the `agentType` prop from `PlatformChoiceStep` since it's no longer needed.
+
+**Fix** in `ui/src/features/agents/components/hire-dialog.tsx`:
+- Remove `agentType` from the `PlatformChoiceStep` usage.
+- Remove the `platform === "teams"` branch from `getSteps()`.
+- Remove all wizard-only Teams code: Teams state variables (`teamsAppId`, `teamsAppPassword`, `teamsTenantId`, `teamsTokenError`, `showTeamsAppPassword`), `handleContinueFromTeamsCredentials()`, Teams post-hire screen, Teams step rendering (`teams-credentials`, `teams-bot-builder`), Teams footer buttons.
+- Note: Keep `TeamsCredentialsStep`, `TeamsBotBuilderStep`, `generateTeamsManifest`, `downloadTeamsAppPackage` exports in `hire-dialog-steps.tsx` — these are still used by the config drawer for existing Teams agents.
+
+---
+
+## Bug 7: OpenClaw Telegram bot shows "Disconnected" in UI
+
+**Root cause** — two issues:
+
+### 7a: Healthz `everConnected` false positive
+In `api/domains/agents/scripts/openclaw/healthz-server.js` (line 108), when a channel has `lastError != null` but `lastConnectedAt` is not a number (never connected), `everConnected` is set to `true` via `everConnected || hasError`. This causes healthz to return `{ status: "error" }` (HTTP 500) instead of `{ status: "starting" }` (HTTP 503). The UI shows "Disconnected" for `status: "error"`.
+
+**Fix**: Line 108 — change `everConnected: everConnected || hasError` to `everConnected: everConnected`. The `hasError` flag should not promote to "ever connected".
+
+### 7b: `allowed_chat_ids` silently dropped in OpenClaw overlay
+In `api/domains/agents/builders/openclaw.py`, `build_openclaw_config_overlay_telegram()` accepts `allowed_chat_ids` parameter (line 210) but never includes it in the overlay's `channels.telegram` section. Group allowlist is never enforced.
+
+**Fix**:
+1. `api/domains/agents/builders/openclaw.py`: Add `"allowedChats": list(allowed_chat_ids or [])` to `channels.telegram` when `group_policy == "allowlist"`.
+2. `api/domains/agents/scripts/openclaw/init-openclaw.js`: Add `['channels', 'telegram', 'allowedChats']` to `REPLACE_PATHS`.
+
+**Tests**: Add test for `allowed_chat_ids` in overlay. Update healthz test if any.
+
+---
+
+## Implementation Order
+
+1. **Bug 5** (home channel) — one-line fix in `hermes.py` + test
+2. **Bug 4** (missing conversations) — one-line fix in `parser.py` + test
+3. **Bug 7** (OpenClaw disconnect + allowed_chat_ids) — fix healthz logic, fix overlay builder, fix init script + tests
+4. **Bug 2** (username resolution) — add `get_chat_info()`, refactor `_platform_maps()` + tests
+5. **Bug 1** (auto-start) — UI fix in `hire-dialog.tsx`
+6. **Bug 3** (policies in wizard) — UI fix in `hire-dialog-steps.tsx` + `hire-dialog.tsx`
+7. **Bug 6** (remove Teams from wizard) — UI cleanup in both dialog files
+
+---
+
+## Verification
+
+After all fixes:
+1. `make check-api` — lint + type check pass
+2. `make test-api` — all tests pass
+3. `make check-ui` — TypeScript compiles clean
+4. Manual test: Hire Hermes Telegram agent → auto-starts → no home channel prompt → conversations show usernames → policies configurable during hiring
+5. Manual test: Hire OpenClaw Telegram agent → auto-starts → UI shows "Working" not "Disconnected" → group allowlist enforced
+6. Manual test: Wizard shows only Slack + Telegram (no Teams) for both runtimes

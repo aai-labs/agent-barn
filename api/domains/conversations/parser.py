@@ -37,6 +37,11 @@ _INBOUND_TEAMS_RE = re.compile(
     r"Teams message in (.+?) from (\S+): (.+)",
     re.DOTALL,
 )
+_INBOUND_TELEGRAM_RE = re.compile(
+    r"\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC)\] "
+    r"Telegram message in (.+?) from (\S+): (.+)",
+    re.DOTALL,
+)
 _MENTION_RE = re.compile(r"<@(U\w+)>")
 _TS_FMT = "%Y-%m-%d %H:%M:%S UTC"
 
@@ -44,6 +49,8 @@ _SESSION_PREFIXES = (
     "agent:main:slack:channel:",
     "agent:main:msteams:channel:",
     "agent:main:msteams:group:",
+    "agent:main:telegram:channel:",
+    "agent:main:telegram:group:",
 )
 
 
@@ -204,7 +211,7 @@ def _parse_jsonl(
         ):
             content_raw = line.get("content", "")
             first_line = content_raw.split("\n")[0]
-            m = _INBOUND_RE.search(first_line) or _INBOUND_TEAMS_RE.search(first_line)
+            m = _INBOUND_RE.search(first_line) or _INBOUND_TEAMS_RE.search(first_line) or _INBOUND_TELEGRAM_RE.search(first_line)
             if not m:
                 continue
             ts_str, _raw_channel, sender_id, text = (

@@ -4,6 +4,10 @@ import json
 from uuid import UUID
 
 from api.domains.conversations.models import ConversationType, MessageDirection
+from api.domains.conversations.hermes_parser import (
+    hermes_channel_sessions,
+    hermes_distinct_conversations,
+)
 from api.domains.conversations.parser import parse_sessions
 
 _AGENT_ID = UUID("00000000-0000-0000-0000-000000000001")
@@ -72,6 +76,63 @@ _THREAD_JSONL = json.dumps(
         "type": "custom_message",
         "customType": "openclaw.runtime-context",
         "content": "[2025-05-01 12:10:00 UTC] Slack message in #general from U99999: Thread reply",
+    }
+)
+
+# --- Hermes Telegram fixtures ---
+
+_HERMES_TELEGRAM_DM_KEY = "agent:main:telegram:dm:123456"
+_HERMES_TELEGRAM_GROUP_KEY = "agent:main:telegram:group:789012"
+
+_HERMES_TELEGRAM_SESSIONS_JSON = json.dumps(
+    {
+        _HERMES_TELEGRAM_DM_KEY: {
+            "session_id": "tg-dm-uuid",
+            "chat_type": "dm",
+            "origin": {"chat_id": "123456"},
+        },
+        _HERMES_TELEGRAM_GROUP_KEY: {
+            "session_id": "tg-group-uuid",
+            "chat_type": "group",
+            "origin": {"chat_id": "789012"},
+        },
+    }
+)
+
+# --- OpenClaw Telegram fixtures ---
+
+_TELEGRAM_CHANNEL_SESSION_KEY = "agent:main:telegram:channel:tg_chat_123"
+
+_TELEGRAM_INBOUND_LINE = json.dumps(
+    {
+        "id": "tg-msg-001",
+        "type": "custom_message",
+        "customType": "openclaw.runtime-context",
+        "content": "[2025-05-01 14:00:00 UTC] Telegram message in MyGroup from user42: Hello from Telegram!",
+    }
+)
+
+_TELEGRAM_OUTBOUND_LINE = json.dumps(
+    {
+        "id": "tg-msg-002",
+        "type": "message",
+        "timestamp": "2025-05-01T14:00:05Z",
+        "message": {
+            "role": "assistant",
+            "model": "delivery-mirror",
+            "content": [{"type": "text", "text": "Hi from the bot on Telegram!"}],
+        },
+    }
+)
+
+_TELEGRAM_SESSIONS_JSON = json.dumps(
+    {
+        _TELEGRAM_CHANNEL_SESSION_KEY: {
+            "sessionId": "tgtg-uuid",
+            "chatType": "channel",
+            "groupId": "tg_chat_123",
+            "origin": {"nativeChannelId": "TG_CHAT_123", "threadId": None},
+        },
     }
 )
 
@@ -683,3 +744,47 @@ def test_handles_both_slack_and_teams_sessions():
     contents = {m.content for m in messages}
     assert "Hello agent!" in contents
     assert "Hello from Teams!" in contents
+
+
+# --- Hermes parser: Telegram session prefix tests ---
+
+
+def test_hermes_distinct_conversations_telegram_dm():
+    convos = hermes_distinct_conversations(_HERMES_TELEGRAM_SESSIONS_JSON)
+    dm_convos = [(cid, ct, name) for cid, ct, name in convos if ct == ConversationType.DM]
+    assert len(dm_convos) == 1
+    assert dm_convos[0][0] == "123456"
+
+
+def test_hermes_distinct_conversations_telegram_group():
+    convos = hermes_distinct_conversations(_HERMES_TELEGRAM_SESSIONS_JSON)
+    group_convos = [
+        (cid, ct, name) for cid, ct, name in convos if ct == ConversationType.CHANNEL
+    ]
+    assert len(group_convos) == 1
+    assert group_convos[0][0] == "789012"
+
+
+def test_hermes_channel_sessions_telegram():
+    sessions = hermes_channel_sessions(_HERMES_TELEGRAM_SESSIONS_JSON, "789012")
+    assert len(sessions) == 1
+    assert sessions[0][0] == _HERMES_TELEGRAM_GROUP_KEY
+    assert sessions[0][1] == "tg-group-uuid"
+
+
+# --- OpenClaw parser: Telegram session prefix tests ---
+
+
+def test_openclaw_parser_telegram_session_prefix():
+    messages = parse_sessions(
+        _AGENT_ID,
+        _TELEGRAM_SESSIONS_JSON,
+        _make_get_jsonl(
+            {"tgtg-uuid": "\n".join([_TELEGRAM_INBOUND_LINE, _TELEGRAM_OUTBOUND_LINE])}
+        ),
+    )
+
+    outbound = [m for m in messages if m.direction == MessageDirection.OUTBOUND]
+    assert len(outbound) == 1
+    assert outbound[0].content == "Hi from the bot on Telegram!"
+    assert outbound[0].channel_id == "TG_CHAT_123"

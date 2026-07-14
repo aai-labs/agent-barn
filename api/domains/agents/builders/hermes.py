@@ -212,7 +212,9 @@ def build_hermes_config_map(
     if platform == "slack":
         data["slack-deny-dms-plugin.yaml"] = SLACK_DENY_DMS_PLUGIN_YAML
         data["slack-deny-dms-init.py"] = SLACK_DENY_DMS_PLUGIN_INIT
-        data["slack-channel-allowlist-plugin.yaml"] = SLACK_CHANNEL_ALLOWLIST_PLUGIN_YAML
+        data["slack-channel-allowlist-plugin.yaml"] = (
+            SLACK_CHANNEL_ALLOWLIST_PLUGIN_YAML
+        )
         data["slack-channel-allowlist-init.py"] = SLACK_CHANNEL_ALLOWLIST_PLUGIN_INIT
     if aai_cli_config_toml is not None:
         data["aai-cli-config.toml"] = aai_cli_config_toml

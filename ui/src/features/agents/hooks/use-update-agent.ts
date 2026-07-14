@@ -21,6 +21,11 @@ export type UpdateAgentData = {
   slackGroupPolicy?: "open" | "allowlist";
   slackDmPolicy?: "off" | "open" | "allowlist";
   slackVerboseMode?: boolean;
+  telegramBotToken?: string;
+  telegramGroupPolicy?: "open" | "allowlist";
+  telegramDmPolicy?: "off" | "open" | "allowlist";
+  telegramAllowedUserIds?: string[];
+  telegramAllowedChatIds?: string[];
   teamsAppId?: string;
   teamsAppPassword?: string;
   teamsTenantId?: string;
