@@ -23,7 +23,7 @@ OPENCLAW_IMAGE_REPOSITORY=agentfarm-openclaw-base
 # ── Image tags (pin to specific versions for a real deploy) ──────────────────
 API_IMAGE_TAG=0.13.0
 UI_IMAGE_TAG=0.13.0
-OPENCLAW_IMAGE_TAG=0.3.0
+OPENCLAW_IMAGE_TAG=0.4.0
 HERMES_IMAGE_TAG=0.1.0
 
 # ── Postgres (app DB) ────────────────────────────────────────────────────────
