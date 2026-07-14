@@ -676,7 +676,7 @@ test.describe("Agent Detail Page — Personality tab (approval mode)", () => {
     await dataSupportPage.users.interceptGetUserContextRequest();
     await dataSupportPage.users.interceptGetOrganizationsRequest();
     await dataSupportPage.agents.interceptGetAgentRequest({
-      body: { ...mockAgent, status: "STOPPED" },
+      body: { ...mockAgent, status: "STOPPED", agent_type: "hermes" },
     });
     await dataSupportPage.agents.interceptGetAgentTemplateRequest();
     await dataSupportPage.agents.interceptGetTemplatesRequest();
