@@ -36,12 +36,8 @@ def upgrade() -> None:
         sa.Column("agent_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("bot_token_encrypted", sa.Text(), nullable=False),
         sa.Column("bot_username", sa.String(length=255), nullable=False),
-        sa.Column(
-            "allowed_user_ids", sa.JSON(), nullable=False, server_default="[]"
-        ),
-        sa.Column(
-            "allowed_chat_ids", sa.JSON(), nullable=False, server_default="[]"
-        ),
+        sa.Column("allowed_user_ids", sa.JSON(), nullable=False, server_default="[]"),
+        sa.Column("allowed_chat_ids", sa.JSON(), nullable=False, server_default="[]"),
         sa.Column(
             "group_policy", sa.String(), nullable=False, server_default="allowlist"
         ),

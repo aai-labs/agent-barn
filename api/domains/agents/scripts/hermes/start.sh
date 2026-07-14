@@ -3,7 +3,7 @@ set -e
 
 python3 /app/config/healthz-server.py &
 
-mkdir -p /opt/data/plugins/slack-deny-dms /opt/data/plugins/slack-channel-allowlist /opt/data/plugins/telemetry-push /opt/data/memories /workspace
+mkdir -p /opt/data/plugins/telemetry-push /opt/data/memories /workspace
 
 
 if [ ! -f /opt/data/memories/USER.md ]; then
@@ -18,11 +18,17 @@ cp /app/config/hermes-config.yaml /opt/data/config.yaml
 # values (e.g. old home channel) to survive pod restarts.
 rm -f /opt/data/.env
 
-cp /app/config/slack-deny-dms-plugin.yaml /opt/data/plugins/slack-deny-dms/plugin.yaml
-cp /app/config/slack-deny-dms-init.py /opt/data/plugins/slack-deny-dms/__init__.py
+if [ -f /app/config/slack-deny-dms-plugin.yaml ]; then
+    mkdir -p /opt/data/plugins/slack-deny-dms
+    cp /app/config/slack-deny-dms-plugin.yaml /opt/data/plugins/slack-deny-dms/plugin.yaml
+    cp /app/config/slack-deny-dms-init.py /opt/data/plugins/slack-deny-dms/__init__.py
+fi
 
-cp /app/config/slack-channel-allowlist-plugin.yaml /opt/data/plugins/slack-channel-allowlist/plugin.yaml
-cp /app/config/slack-channel-allowlist-init.py /opt/data/plugins/slack-channel-allowlist/__init__.py
+if [ -f /app/config/slack-channel-allowlist-plugin.yaml ]; then
+    mkdir -p /opt/data/plugins/slack-channel-allowlist
+    cp /app/config/slack-channel-allowlist-plugin.yaml /opt/data/plugins/slack-channel-allowlist/plugin.yaml
+    cp /app/config/slack-channel-allowlist-init.py /opt/data/plugins/slack-channel-allowlist/__init__.py
+fi
 
 cp /app/config/telemetry-push-plugin.yaml /opt/data/plugins/telemetry-push/plugin.yaml
 cp /app/config/telemetry-push-init.py /opt/data/plugins/telemetry-push/__init__.py

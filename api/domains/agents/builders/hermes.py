@@ -105,6 +105,77 @@ def build_hermes_config(
     }
 
 
+def build_hermes_config_telegram(
+    model: str,
+    litellm_base_url: str,
+    dm_policy: str = "off",
+    group_policy: str = "allowlist",
+    allowed_user_ids: list[str] | None = None,
+    allowed_chat_ids: list[str] | None = None,
+    approval_mode: str = "auto",
+) -> dict:
+    _, sep, model_name = model.partition("/")
+    if not sep:
+        model_name = model
+
+    if dm_policy == "open":
+        allow_from: list[str] = ["*"]
+    elif dm_policy == "allowlist":
+        allow_from = list(allowed_user_ids or [])
+    else:
+        allow_from = []
+
+    config: dict = {
+        "toolsets": ["all"],
+        "model": {
+            "provider": "openrouter",
+            "default": model_name,
+            "model": model_name,
+            "base_url": litellm_base_url,
+            "api_mode": "chat_completions",
+        },
+        "terminal": {
+            "backend": "local",
+            "cwd": "/workspace",
+            "timeout": 120,
+        },
+        "memory": {
+            "memory_enabled": True,
+            "user_profile_enabled": True,
+        },
+        "compression": {
+            "enabled": False,
+        },
+        "agent": {
+            "max_turns": 50,
+        },
+        "display": {
+            "tool_progress": "all",
+            "platforms": {
+                "telegram": {
+                    "tool_progress": "off",
+                },
+            },
+        },
+        "group_sessions_per_user": False,
+        "allow_from": allow_from,
+        "plugins": {
+            "enabled": ["telemetry-push"],
+        },
+        "approvals": {
+            "mode": _HERMES_APPROVAL_MODE.get(approval_mode, "smart"),
+        },
+    }
+
+    if group_policy == "open":
+        config["guest_mode"] = True
+    else:
+        config["guest_mode"] = False
+        config["group_allowed_chats"] = list(allowed_chat_ids or [])
+
+    return config
+
+
 def build_hermes_config_map(
     agent_id: UUID,
     org_id: UUID,
@@ -120,6 +191,7 @@ def build_hermes_config_map(
     aai_cli_config_toml: str | None = None,
     aai_cli_setup_sh: str | None = None,
     skills_json: str | None = None,
+    platform: str = "slack",
 ) -> client.V1ConfigMap:
     data: dict[str, str] = {
         "SOUL.md": soul_md + HERMES_BOOTLOADER_FOOTER,
@@ -132,15 +204,16 @@ def build_hermes_config_map(
         "hermes-config.yaml": yaml.dump(
             hermes_config, default_flow_style=False, sort_keys=False
         ),
-        "slack-deny-dms-plugin.yaml": SLACK_DENY_DMS_PLUGIN_YAML,
-        "slack-deny-dms-init.py": SLACK_DENY_DMS_PLUGIN_INIT,
-        "slack-channel-allowlist-plugin.yaml": SLACK_CHANNEL_ALLOWLIST_PLUGIN_YAML,
-        "slack-channel-allowlist-init.py": SLACK_CHANNEL_ALLOWLIST_PLUGIN_INIT,
         "telemetry-push-plugin.yaml": TELEMETRY_PUSH_PLUGIN_YAML,
         "telemetry-push-init.py": TELEMETRY_PUSH_PLUGIN_INIT,
         "healthz-server.py": HERMES_HEALTHZ_PY,
         "start.sh": HERMES_START_SH,
     }
+    if platform == "slack":
+        data["slack-deny-dms-plugin.yaml"] = SLACK_DENY_DMS_PLUGIN_YAML
+        data["slack-deny-dms-init.py"] = SLACK_DENY_DMS_PLUGIN_INIT
+        data["slack-channel-allowlist-plugin.yaml"] = SLACK_CHANNEL_ALLOWLIST_PLUGIN_YAML
+        data["slack-channel-allowlist-init.py"] = SLACK_CHANNEL_ALLOWLIST_PLUGIN_INIT
     if aai_cli_config_toml is not None:
         data["aai-cli-config.toml"] = aai_cli_config_toml
     if aai_cli_setup_sh is not None:
@@ -198,6 +271,39 @@ def build_secret_hermes_slack(
             "SLACK_HOME_CHANNEL": channel_ids[0] if channel_ids else _NO_HOME_CHANNEL,
             "SLACK_CHANNEL_IDS": ",".join(channel_ids),
             "SLACK_DM_ALLOWED_USERS": ",".join(allowed_dm_users),
+            "AGENT_PLATFORM": "slack",
+        },
+    )
+
+
+def build_secret_hermes_telegram(
+    agent_id: UUID,
+    org_id: UUID,
+    namespace: str,
+    agent_name: str,
+    telegram_bot_token: str,
+    litellm_api_key: str,
+    litellm_base_url: str,
+    api_server_key: str,
+) -> client.V1Secret:
+    return client.V1Secret(
+        metadata=client.V1ObjectMeta(
+            name=_resource_name(agent_id),
+            namespace=namespace,
+            labels=_labels(agent_id, org_id),
+        ),
+        string_data={
+            "TELEGRAM_BOT_TOKEN": telegram_bot_token,
+            "OPENAI_API_KEY": litellm_api_key,
+            "OPENAI_BASE_URL": litellm_base_url,
+            "OPENROUTER_BASE_URL": litellm_base_url,
+            "API_SERVER_ENABLED": "true",
+            "API_SERVER_HOST": "0.0.0.0",
+            "API_SERVER_PORT": "8642",
+            "API_SERVER_KEY": api_server_key,
+            "API_SERVER_MODEL_NAME": agent_name,
+            "GATEWAY_ALLOW_ALL_USERS": "true",
+            "AGENT_PLATFORM": "telegram",
         },
     )
 

@@ -14,6 +14,7 @@ from api.domains.agents.models import (
     AgentSkill,
     AgentSlackConfig,
     AgentTeamsConfig,
+    AgentTelegramConfig,
     SecretProvider,
 )
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
@@ -167,6 +168,30 @@ class AgentRepository:
         with Session(self.delegate.engine) as session:
             query = select(AgentTeamsConfig).where(
                 col(AgentTeamsConfig.agent_id).in_(agent_ids)
+            )
+            return {c.agent_id: c for c in session.exec(query).all()}
+
+    # --- Telegram config ---
+
+    def get_telegram_config(self, agent_id: UUID) -> AgentTelegramConfig | None:
+        with Session(self.delegate.engine) as session:
+            query = select(AgentTelegramConfig).where(
+                col(AgentTelegramConfig.agent_id) == agent_id
+            )
+            return session.exec(query).first()
+
+    def save_telegram_config(self, config: AgentTelegramConfig) -> AgentTelegramConfig:
+        self.delegate.save(config)
+        return config
+
+    def get_telegram_configs_for_agents(
+        self, agent_ids: list[UUID]
+    ) -> dict[UUID, AgentTelegramConfig]:
+        if not agent_ids:
+            return {}
+        with Session(self.delegate.engine) as session:
+            query = select(AgentTelegramConfig).where(
+                col(AgentTelegramConfig.agent_id).in_(agent_ids)
             )
             return {c.agent_id: c for c in session.exec(query).all()}
 

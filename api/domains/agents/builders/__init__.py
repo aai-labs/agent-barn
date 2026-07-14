@@ -11,8 +11,10 @@ from .hermes import (
     TELEMETRY_PUSH_PLUGIN_YAML,
     build_hermes_config,
     build_hermes_config_map,
+    build_hermes_config_telegram,
     build_hermes_deployment,
     build_secret_hermes_slack,
+    build_secret_hermes_telegram,
 )
 from .openclaw import (
     HEALTHZ_SERVER_JS,
@@ -25,8 +27,10 @@ from .openclaw import (
     build_deployment,
     build_openclaw_config_overlay,
     build_openclaw_config_overlay_teams,
+    build_openclaw_config_overlay_telegram,
     build_secret_slack,
     build_secret_teams,
+    build_secret_telegram,
 )
 
 __all__ = [
@@ -42,9 +46,11 @@ __all__ = [
     "TELEMETRY_PUSH_PLUGIN_JSON",
     "build_openclaw_config_overlay",
     "build_openclaw_config_overlay_teams",
+    "build_openclaw_config_overlay_telegram",
     "build_config_map",
     "build_secret_slack",
     "build_secret_teams",
+    "build_secret_telegram",
     "build_deployment",
     # hermes
     "HERMES_BOOTLOADER_FOOTER",
@@ -58,6 +64,8 @@ __all__ = [
     "TELEMETRY_PUSH_PLUGIN_INIT",
     "build_hermes_config",
     "build_hermes_config_map",
+    "build_hermes_config_telegram",
     "build_secret_hermes_slack",
+    "build_secret_hermes_telegram",
     "build_hermes_deployment",
 ]

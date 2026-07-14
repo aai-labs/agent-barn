@@ -453,9 +453,7 @@ class AgentCreate(PydanticBaseModel):
                 )
         elif self.platform == AgentPlatform.TELEGRAM:
             if not self.telegram_bot_token:
-                raise ValueError(
-                    "telegram_bot_token is required for Telegram agents"
-                )
+                raise ValueError("telegram_bot_token is required for Telegram agents")
         return self
 
     @model_validator(mode="after")

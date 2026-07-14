@@ -18,6 +18,7 @@ const REPLACE_PATHS = [
   ['channels', 'slack', 'channels'],
   ['channels', 'slack', 'allowFrom'],
   ['channels', 'msteams', 'allowFrom'],
+  ['channels', 'telegram', 'allowFrom'],
 ];
 
 function getPath(obj, parts) {
@@ -144,6 +145,7 @@ console.log('[init-openclaw] Config merged successfully');
 for (const [channel, allowFile, defaultAllowFile] of [
   ['slack', 'slack-allowFrom.json', 'slack-default-allowFrom.json'],
   ['msteams', 'msteams-allowFrom.json', 'msteams-default-allowFrom.json'],
+  ['telegram', 'telegram-allowFrom.json', 'telegram-default-allowFrom.json'],
 ]) {
   const af = getPath(overlay, ['channels', channel, 'allowFrom']);
   if (af !== undefined) {
