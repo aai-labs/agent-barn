@@ -8,13 +8,14 @@ import { useUpdateAgent } from "../hooks/use-update-agent";
 import { useDeleteAgent } from "../hooks/use-delete-agent";
 import { useValidateIntegration } from "../hooks/use-validate-integration";
 import { XIcon, LockIcon } from "@/components/icons";
-import { FormField, TokenInput } from "./hire-dialog-primitives";
+import { FormField, GoogleAuthButton, TokenInput } from "./hire-dialog-primitives";
 import { IntegrationsStep, RepoListField, TemplateSourceBadge, VersionSelect } from "./hire-dialog-steps";
 import { ModelSelect } from "./model-select";
 import {
   expandGithubContent,
   getIntegrationProvider,
   hasIncompleteIntegration,
+  isOAuthConnected,
   type IntegrationDraft,
 } from "../integrations";
 import { SlackConfigPanel } from "./slack-config-panel";
@@ -567,6 +568,17 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                         <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
                           {providerSpec.label}
                         </div>
+                        {providerSpec.authMethod === "google_oauth" && (
+                          <GoogleAuthButton
+                            connected={isOAuthConnected(draft)}
+                            onConnected={({ refreshToken, clientId, clientSecret }) => {
+                              setRepinSecretField(providerId, "refreshToken", refreshToken);
+                              setRepinSecretField(providerId, "clientId", clientId);
+                              setRepinSecretField(providerId, "clientSecret", clientSecret);
+                            }}
+                            disabled={isRunning}
+                          />
+                        )}
                         {providerSpec.fields.map((field) => {
                           if (field.dependsOn && draft.content[field.dependsOn.key] !== field.dependsOn.value) {
                             return null;

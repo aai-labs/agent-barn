@@ -63,6 +63,13 @@ class Config(BaseSettings):
     # Empty allows the full catalogue.
     agent_model_allowlist: str = ""
 
+    # Shared Google OAuth 2.0 "Web application" client used by the "Authenticate
+    # with Google" flow when a user connects the Gmail skill. The refresh token is
+    # minted per-agent; these app-owned credentials are never shown to users and are
+    # injected into the agent's aai-cli gmail-work profile at start time.
+    google_cloud_client_id: str = ""
+    google_cloud_client_secret: str = ""
+
     @property
     def is_email_delivery_enabled(self) -> bool:
         return bool(
