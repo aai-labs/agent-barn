@@ -102,14 +102,19 @@ class GithubContent(_RepoListCompat):
 
 class JiraContent(SecretContent):
     site_url: str
-    email: str
+    email: str = ""
     api_token: str
+    # Populated at save time for service accounts (no email).
+    # Used to build the bearer-token Atlassian API Gateway URL for aai-cli.
+    cloud_id: str = ""
 
 
 class ConfluenceContent(SecretContent):
     site_url: str
-    email: str
+    email: str = ""
     api_token: str
+    # Populated at save time for service accounts (no email).
+    cloud_id: str = ""
 
 
 class BitbucketContent(_RepoListCompat):

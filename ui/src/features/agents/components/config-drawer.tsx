@@ -568,6 +568,9 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                           {providerSpec.label}
                         </div>
                         {providerSpec.fields.map((field) => {
+                          if (field.dependsOn && draft.content[field.dependsOn.key] !== field.dependsOn.value) {
+                            return null;
+                          }
                           const label = field.required ? field.label : `${field.label} (optional)`;
 
                           if (field.type === "repo-list") {
@@ -604,6 +607,29 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                               </FormField>
                             );
                           }
+                          if (field.type === "radio") {
+                            return (
+                              <FormField key={field.key} label={label} hint={field.hint}>
+                                <div className="flex flex-col gap-2 mt-1">
+                                  {field.options?.map((opt) => (
+                                    <label key={opt.value} className="flex items-center gap-2 cursor-pointer">
+                                      <input
+                                        type="radio"
+                                        name={`repin-${providerId}-${field.key}`}
+                                        value={opt.value}
+                                        checked={value === opt.value}
+                                        onChange={(e) => setRepinSecretField(providerId, field.key, e.target.value)}
+                                        disabled={isRunning}
+                                        className="accent-[var(--blue-9)]"
+                                      />
+                                      <span className="text-[13px]" style={{ color: "var(--ink-1)" }}>{opt.label}</span>
+                                    </label>
+                                  ))}
+                                </div>
+                              </FormField>
+                            );
+                          }
+
                           return (
                             <FormField key={field.key} label={label} hint={field.hint}>
                               <input

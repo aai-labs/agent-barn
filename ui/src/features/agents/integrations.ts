@@ -7,12 +7,14 @@
 // (smtp/imap host+port, folders, …) are NOT inputs here — the backend fills them
 // as schema defaults.
 
-export type IntegrationFieldType = "text" | "secret" | "repo-list";
+export type IntegrationFieldType = "text" | "secret" | "repo-list" | "radio";
 
 export interface IntegrationField {
   key: string;
   label: string;
   type: IntegrationFieldType;
+  options?: { label: string; value: string }[];
+  dependsOn?: { key: string; value: string };
   required: boolean;
   placeholder?: string;
   hint?: string;
@@ -47,8 +49,8 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
     scopeNote: "API token inherits your Atlassian account's project permissions — account needs Browse Projects and Add Comments on the target project",
     fields: [
       { key: "siteUrl", label: "Site URL", type: "text", required: true, placeholder: "https://your-domain.atlassian.net" },
-      { key: "email", label: "Email", type: "text", required: true, placeholder: "you@example.com" },
-      { key: "apiToken", label: "API token", type: "secret", required: true, hint: "Use a classic (unscoped) API token. Scoped tokens won't work — they only authenticate via Atlassian's api.atlassian.com gateway, not your site URL." },
+      { key: "email", label: "Email", type: "text", required: false, placeholder: "you@example.com", hint: "Leave blank if using a scoped service account token (OAuth Bearer)." },
+      { key: "apiToken", label: "API token", type: "secret", required: true },
     ],
   },
   {
@@ -57,8 +59,8 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
     scopeNote: "API token inherits your Atlassian account's space permissions — account needs Space View and Add Page Comments on the target space",
     fields: [
       { key: "siteUrl", label: "Site URL", type: "text", required: true, placeholder: "https://your-domain.atlassian.net" },
-      { key: "email", label: "Email", type: "text", required: true, placeholder: "you@example.com" },
-      { key: "apiToken", label: "API token", type: "secret", required: true, hint: "Use a classic (unscoped) API token. Scoped tokens won't work — they only authenticate via Atlassian's api.atlassian.com gateway, not your site URL." },
+      { key: "email", label: "Email", type: "text", required: false, placeholder: "you@example.com", hint: "Leave blank if using a scoped service account token (OAuth Bearer)." },
+      { key: "apiToken", label: "API token", type: "secret", required: true },
     ],
   },
   {

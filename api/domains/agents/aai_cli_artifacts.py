@@ -98,6 +98,30 @@ def _github_block(c: GithubContent) -> str:
 
 
 def _jira_block(c: JiraContent) -> str:
+    if not c.email:
+        # Service account: use Bearer token via Atlassian API Gateway.
+        # cloud_id is required to build the gateway URL.
+        if not c.cloud_id:
+            # Fallback: cloud_id wasn't stored yet (old credential). Use dummy
+            # basic_api_token so aai-cli at least starts without crashing; Jira
+            # calls will fail until the user re-saves the integration to refresh
+            # the cloud_id.
+            email_to_use = "service-account@agent-farm.local"
+            return (
+                "[profiles.jira-work]\n"
+                'auth_type = "basic_api_token"\n'
+                f"site_url = {_q(c.site_url)}\n"
+                f"email = {_q(email_to_use)}\n"
+                'api_token_secret = "jira.api_token"\n'
+            )
+        gateway_url = f"https://api.atlassian.com/ex/jira/{c.cloud_id}"
+        return (
+            "[profiles.jira-work]\n"
+            'auth_type = "bearer_token"\n'
+            f"site_url = {_q(gateway_url)}\n"
+            'token_secret = "jira.api_token"\n'
+        )
+    # Regular user account: Basic Auth directly to the site.
     return (
         "[profiles.jira-work]\n"
         'auth_type = "basic_api_token"\n'
@@ -108,6 +132,23 @@ def _jira_block(c: JiraContent) -> str:
 
 
 def _confluence_block(c: ConfluenceContent) -> str:
+    if not c.email:
+        if not c.cloud_id:
+            email_to_use = "service-account@agent-farm.local"
+            return (
+                "[profiles.confluence-work]\n"
+                'auth_type = "basic_api_token"\n'
+                f"site_url = {_q(c.site_url)}\n"
+                f"email = {_q(email_to_use)}\n"
+                'api_token_secret = "confluence.api_token"\n'
+            )
+        gateway_url = f"https://api.atlassian.com/ex/confluence/{c.cloud_id}"
+        return (
+            "[profiles.confluence-work]\n"
+            'auth_type = "bearer_token"\n'
+            f"site_url = {_q(gateway_url)}\n"
+            'token_secret = "confluence.api_token"\n'
+        )
     return (
         "[profiles.confluence-work]\n"
         'auth_type = "basic_api_token"\n'
@@ -281,7 +322,6 @@ def build_setup_sh(
     present = set(store_providers)
     lines = [
         "#!/bin/sh",
-        "set -e",
         f"export HOME={home_dir}",
         f"mkdir -p {secrets_dir}",
         f"cp /app/config/aai-cli-config.toml {config_path}",
