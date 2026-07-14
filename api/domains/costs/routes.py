@@ -4,6 +4,8 @@ from uuid import UUID
 from fastapi import APIRouter, Depends
 from fastapi_injector import Injected
 
+from api.domains.audit_logs.models import AuditAction, TargetType
+from api.domains.audit_logs.service import AuditLogService
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import get_current_user
 from api.domains.costs.models import AgentCostRead, OrgCostSummaryRead
@@ -27,12 +29,15 @@ def get_cost_summary(
         Depends(get_current_user(organization_roles=ORG_MANAGER_ROLES)),
     ],
     service: Annotated[CostService, Injected(CostService)],
+    audit_log_service: Annotated[AuditLogService, Injected(AuditLogService)],
     start_date: str | None = None,
     end_date: str | None = None,
 ):
-    return service.get_org_cost_summary(
+    result = service.get_org_cost_summary(
         context, start_date=start_date, end_date=end_date
     )
+    audit_log_service.record(action=AuditAction.COST_VIEW, context=context)
+    return result
 
 
 @costs_router.get("/agents/{agent_id}", response_model=AgentCostRead)
@@ -43,5 +48,13 @@ def get_agent_cost(
         Depends(get_current_user(organization_roles=ORG_MANAGER_ROLES)),
     ],
     service: Annotated[CostService, Injected(CostService)],
+    audit_log_service: Annotated[AuditLogService, Injected(AuditLogService)],
 ):
-    return service.get_agent_cost(agent_id, context)
+    result = service.get_agent_cost(agent_id, context)
+    audit_log_service.record(
+        action=AuditAction.COST_VIEW,
+        context=context,
+        target_type=TargetType.AGENT,
+        target_id=agent_id,
+    )
+    return result

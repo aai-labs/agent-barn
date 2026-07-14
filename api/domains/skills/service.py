@@ -6,6 +6,8 @@ from uuid import UUID
 from fastapi import HTTPException, status
 from injector import inject, singleton
 
+from api.domains.audit_logs.models import AuditAction, TargetType
+from api.domains.audit_logs.service import AuditLogService, diff_changed_fields
 from api.domains.auth.models import CurrentUserContext
 from api.domains.skills.models import (
     Skill,
@@ -30,6 +32,11 @@ _MAX_ENTRIES = 1000
 @dataclass
 class SkillService:
     repository: SkillRepository
+    audit_log_service: AuditLogService
+
+    # The zip payload is binary/large; record only that it changed. name/providers keep
+    # their values.
+    _SKILL_UPDATE_VALUE_ALLOWLIST = {"name", "required_providers"}
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
@@ -131,6 +138,13 @@ class SkillService:
             tools_pointer=f'You can use "{data.name}" skill in the ./skills folder',
         )
         self.repository.save(skill)
+        self.audit_log_service.record(
+            action=AuditAction.SKILL_CREATE,
+            context=context,
+            target_type=TargetType.SKILL,
+            target_id=skill.id,
+            target_label=skill.name,
+        )
         return SkillRead.model_validate(skill)
 
     def update_skill(
@@ -144,6 +158,9 @@ class SkillService:
                 detail="Cannot modify built-in skills",
             )
         updated = data.model_dump(exclude_unset=True)
+        changed_fields = diff_changed_fields(
+            skill, updated, self._SKILL_UPDATE_VALUE_ALLOWLIST
+        )
         if "zip_content" in updated and updated["zip_content"] is not None:
             self._validate_zip(updated["zip_content"])
             skill.zip_content = updated["zip_content"]
@@ -155,6 +172,14 @@ class SkillService:
         if "required_providers" in updated:
             skill.required_providers = updated["required_providers"]
         self.repository.save(skill)
+        self.audit_log_service.record(
+            action=AuditAction.SKILL_UPDATE,
+            context=context,
+            target_type=TargetType.SKILL,
+            target_id=skill.id,
+            target_label=skill.name,
+            changed_fields=changed_fields,
+        )
         return SkillRead.model_validate(skill)
 
     def delete_skill(self, skill_id: UUID, context: CurrentUserContext) -> None:
@@ -181,6 +206,13 @@ class SkillService:
             )
         self.repository.delete_stale_template_skill_refs(skill_id, org_id)
         self.repository.delete(skill)
+        self.audit_log_service.record(
+            action=AuditAction.SKILL_DELETE,
+            context=context,
+            target_type=TargetType.SKILL,
+            target_id=skill.id,
+            target_label=skill.name,
+        )
 
     def get_skill(self, skill_id: UUID, context: CurrentUserContext) -> SkillRead:
         org_id = self._org_id(context)

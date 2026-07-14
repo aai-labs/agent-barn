@@ -5,6 +5,8 @@ from fastapi_injector import Injected
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic import Field
 
+from api.domains.audit_logs.models import AuditAction, TargetType
+from api.domains.audit_logs.service import AuditLogService
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.token_service import SlackConfigTokenService
 from api.domains.auth.utils import get_current_user
@@ -35,6 +37,7 @@ def create_slack_app_route(
     body: CreateSlackAppRequest,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     token_service: SlackConfigTokenService = Injected(SlackConfigTokenService),
+    audit_log_service: AuditLogService = Injected(AuditLogService),
 ) -> CreateSlackAppResponse:
     access_token = token_service.get_usable_access_token(context.user.id)
     manifest = build_slack_app_manifest(
@@ -43,6 +46,14 @@ def create_slack_app_route(
         background_color=body.background_color,
     )
     app_id = create_slack_app(access_token, manifest)
+    # Provisions an external Slack app via the user's config token → NULL org.
+    audit_log_service.record(
+        action=AuditAction.INTEGRATION_SLACK_APP_CREATE,
+        context=context,
+        organization_id=None,
+        target_type=TargetType.INTEGRATION,
+        target_label=f"{body.name} ({app_id})",
+    )
     return CreateSlackAppResponse(
         app_id=app_id,
         bot_token_url=f"https://api.slack.com/apps/{app_id}/install-on-team",

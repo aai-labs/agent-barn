@@ -14,6 +14,7 @@ from api.core.utils import create_injector
 from api.domains.agents.routes import agents_router
 from api.domains.agents.slack_routes import slack_router
 from api.domains.agents.webhook_routes import webhook_router
+from api.domains.audit_logs.routes import audit_logs_router
 from api.domains.auth.routes import auth_router
 from api.domains.conversations.routes import conversations_router
 from api.domains.costs.routes import costs_router
@@ -121,6 +122,7 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(tool_calls_router)
     subapi.include_router(users_router)
     subapi.include_router(slack_router)
+    subapi.include_router(audit_logs_router)
 
     attach_injector(app_v1, injector)
     attach_injector(subapi, injector)

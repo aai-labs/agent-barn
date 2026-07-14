@@ -1,4 +1,5 @@
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import (
     APIRouter,
@@ -11,7 +12,11 @@ from fastapi import (
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi_injector import Injected
 
+import jwt
+
 from api.core.config import Config
+from api.domains.audit_logs.models import AuditAction, TargetType
+from api.domains.audit_logs.service import AuditLogService
 from api.domains.auth.hashing import check_hash
 from api.domains.auth.models import (
     AcceptInviteRequest,
@@ -24,7 +29,7 @@ from api.domains.auth.models import (
     Token,
     TokenData,
 )
-from api.domains.auth.service import AuthService
+from api.domains.auth.service import JWT_ENCODING_ALGORITHM, AuthService
 from api.domains.auth.token_service import SlackConfigTokenService
 from api.domains.auth.utils import get_current_user
 from api.domains.users.models import UserPasswordChange, UserRead, UserUpdate
@@ -54,6 +59,7 @@ def login_for_access_token(
     user_service: UserService = Injected(UserService),
     auth_service: AuthService = Injected(AuthService),
     config: Config = Injected(Config),
+    audit_log_service: AuditLogService = Injected(AuditLogService),
 ):
     credential_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -61,16 +67,37 @@ def login_for_access_token(
         headers={"WWW-Authenticate": "Bearer"},
     )
 
+    def _record_failed_login(user_id=None):
+        # Failed logins are the highest-value security signal here — capture the
+        # attempted email even when no user matches. Global action → NULL org.
+        audit_log_service.record(
+            action=AuditAction.AUTH_LOGIN_FAILED,
+            actor_user_id=user_id,
+            actor_email=form_data.username,
+            organization_id=None,
+        )
+
     try:
         user = user_service.get_user_by_email(form_data.username)
     except HTTPException:
+        _record_failed_login()
         raise credential_exception
     if not user or not check_hash(form_data.password, user.hashed_password):
+        _record_failed_login(user.id if user else None)
         raise credential_exception
 
     token_data = TokenData(user_id=str(user.id), stamp=user.security_stamp)
     token_pair = auth_service.create_token_pair(token_data)
     _set_refresh_token_cookie(response, token_pair.refresh_token, config)
+    audit_log_service.record(
+        action=AuditAction.AUTH_LOGIN,
+        actor_user_id=user.id,
+        actor_email=user.email,
+        organization_id=None,
+        target_type=TargetType.USER,
+        target_id=user.id,
+        target_label=user.email,
+    )
     return token_pair
 
 
@@ -133,8 +160,18 @@ def update_current_user_profile(
     user_update: UserUpdate,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     user_service: UserService = Injected(UserService),
+    audit_log_service: AuditLogService = Injected(AuditLogService),
 ):
-    return user_service.update_current_user(context.user.id, user_update)
+    result = user_service.update_current_user(context.user.id, user_update)
+    audit_log_service.record(
+        action=AuditAction.AUTH_PROFILE_UPDATE,
+        context=context,
+        organization_id=None,
+        target_type=TargetType.USER,
+        target_id=context.user.id,
+        target_label=context.user.email,
+    )
+    return result
 
 
 @auth_router.post("/me/change-password", response_model=Token)
@@ -145,12 +182,21 @@ def change_current_user_password(
     user_service: UserService = Injected(UserService),
     auth_service: AuthService = Injected(AuthService),
     config: Config = Injected(Config),
+    audit_log_service: AuditLogService = Injected(AuditLogService),
 ):
     user_service.change_password(context.user.id, password_data)
     user = user_service.get_user(context.user.id)
     token_data = TokenData(user_id=str(user.id), stamp=user.security_stamp)
     token_pair = auth_service.create_token_pair(token_data)
     _set_refresh_token_cookie(response, token_pair.refresh_token, config)
+    audit_log_service.record(
+        action=AuditAction.AUTH_PASSWORD_CHANGE,
+        context=context,
+        organization_id=None,
+        target_type=TargetType.USER,
+        target_id=context.user.id,
+        target_label=context.user.email,
+    )
     return token_pair
 
 
@@ -190,7 +236,12 @@ def set_password(
 
 
 @auth_router.post("/logout")
-def logout(response: Response, config: Config = Injected(Config)):
+def logout(
+    request: Request,
+    response: Response,
+    config: Config = Injected(Config),
+    audit_log_service: AuditLogService = Injected(AuditLogService),
+):
     is_local_like = config.environment in {"local", "test"}
     response.delete_cookie(
         key=REFRESH_TOKEN_COOKIE_KEY,
@@ -198,7 +249,33 @@ def logout(response: Response, config: Config = Injected(Config)):
         secure=not is_local_like,
         samesite="lax" if is_local_like else "none",
     )
+    # This route has no auth dependency (logout must work even with a stale token), so
+    # identify the actor best-effort from the bearer token and skip silently if absent.
+    _record_logout(request, config, audit_log_service)
     return {"message": "Successfully logged out"}
+
+
+def _record_logout(
+    request: Request, config: Config, audit_log_service: AuditLogService
+) -> None:
+    header = request.headers.get("Authorization", "")
+    if not header.lower().startswith("bearer "):
+        return
+    token = header[7:]
+    try:
+        payload = jwt.decode(
+            token, config.secret_signing_key, algorithms=[JWT_ENCODING_ALGORITHM]
+        )
+        user_id = payload.get("user_id")
+    except jwt.InvalidTokenError:
+        return
+    if not user_id:
+        return
+    audit_log_service.record(
+        action=AuditAction.AUTH_LOGOUT,
+        actor_user_id=UUID(user_id),
+        organization_id=None,
+    )
 
 
 @auth_router.get("/me/slack-config-token", response_model=SlackConfigTokenRead)
@@ -214,15 +291,35 @@ def save_slack_config_token(
     body: SlackConfigTokenSave,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: SlackConfigTokenService = Injected(SlackConfigTokenService),
+    audit_log_service: AuditLogService = Injected(AuditLogService),
 ) -> SlackConfigTokenRead:
-    return service.save_config_token(
+    result = service.save_config_token(
         context.user.id, body.access_token, body.refresh_token
     )
+    # Token values are never recorded — only that the credential was set.
+    audit_log_service.record(
+        action=AuditAction.AUTH_SLACK_CONFIG_TOKEN_SAVE,
+        context=context,
+        organization_id=None,
+        target_type=TargetType.USER,
+        target_id=context.user.id,
+        target_label=context.user.email,
+    )
+    return result
 
 
 @auth_router.delete("/me/slack-config-token", status_code=status.HTTP_204_NO_CONTENT)
 def delete_slack_config_token(
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: SlackConfigTokenService = Injected(SlackConfigTokenService),
+    audit_log_service: AuditLogService = Injected(AuditLogService),
 ) -> None:
     service.delete_config_token(context.user.id)
+    audit_log_service.record(
+        action=AuditAction.AUTH_SLACK_CONFIG_TOKEN_DELETE,
+        context=context,
+        organization_id=None,
+        target_type=TargetType.USER,
+        target_id=context.user.id,
+        target_label=context.user.email,
+    )

@@ -4,6 +4,8 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Response, status
 from fastapi_injector import Injected
 
+from api.domains.audit_logs.models import AuditAction, TargetType
+from api.domains.audit_logs.service import AuditLogService
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import get_current_user
 from api.domains.users.models import (
@@ -41,8 +43,18 @@ def create_user(
         CurrentUserContext, Depends(get_current_user(check_superuser=True))
     ],
     user_service: UserService = Injected(UserService),
+    audit_log_service: AuditLogService = Injected(AuditLogService),
 ):
     user = user_service.create_user(data)
+    # Superuser admin action over a global (org-less) user record → NULL org.
+    audit_log_service.record(
+        action=AuditAction.USER_CREATE,
+        context=context,
+        organization_id=None,
+        target_type=TargetType.USER,
+        target_id=user.id,
+        target_label=user.email,
+    )
     return user_service.to_user_read(user)
 
 
@@ -50,10 +62,22 @@ def create_user(
 def reset_user_password(
     user_id: UUID,
     data: AdminPasswordReset,
-    _: Annotated[CurrentUserContext, Depends(get_current_user(check_superuser=True))],
+    context: Annotated[
+        CurrentUserContext, Depends(get_current_user(check_superuser=True))
+    ],
     user_service: UserService = Injected(UserService),
+    audit_log_service: AuditLogService = Injected(AuditLogService),
 ):
     user_service.reset_user_password(user_id, data.new_password)
+    target = user_service.get_user(user_id)
+    audit_log_service.record(
+        action=AuditAction.USER_PASSWORD_RESET,
+        context=context,
+        organization_id=None,
+        target_type=TargetType.USER,
+        target_id=user_id,
+        target_label=target.email if target else None,
+    )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -64,6 +88,18 @@ def delete_user(
         CurrentUserContext, Depends(get_current_user(check_superuser=True))
     ],
     user_service: UserService = Injected(UserService),
+    audit_log_service: AuditLogService = Injected(AuditLogService),
 ):
+    # Capture the email before deletion so the audit row stays readable.
+    target = user_service.get_user(user_id)
+    target_email = target.email if target else None
     user_service.delete_user(user_id, context.user.id)
+    audit_log_service.record(
+        action=AuditAction.USER_DELETE,
+        context=context,
+        organization_id=None,
+        target_type=TargetType.USER,
+        target_id=user_id,
+        target_label=target_email,
+    )
     return Response(status_code=status.HTTP_204_NO_CONTENT)

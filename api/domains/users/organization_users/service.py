@@ -5,6 +5,8 @@ from fastapi import HTTPException, status
 from injector import inject, singleton
 from sqlmodel import Session
 
+from api.domains.audit_logs.models import AuditAction, TargetType
+from api.domains.audit_logs.service import AuditLogService
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.service import AuthService
 from api.domains.organizations.repository import OrganizationRepository
@@ -34,6 +36,7 @@ class OrganizationUserService:
     organization_repository: OrganizationRepository
     auth_service: AuthService
     user_repository: UserRepository
+    audit_log_service: AuditLogService
 
     def find_by_user_id_and_organization_id(
         self, user_id: UUID, organization_id: UUID
@@ -226,7 +229,17 @@ class OrganizationUserService:
             session.commit()
 
         self.auth_service.send_prepared_invite(prepared)
-        return self._to_member_read(membership), prepared.invite_link
+        member_read = self._to_member_read(membership)
+        self.audit_log_service.record(
+            action=AuditAction.MEMBER_ADD,
+            context=context,
+            organization_id=organization_id,
+            target_type=TargetType.MEMBER,
+            target_id=member_read.user_id,
+            target_label=member_read.email,
+            changed_fields={"role": {"old": None, "new": data.role.value}},
+        )
+        return member_read, prepared.invite_link
 
     def change_role(
         self,
@@ -257,9 +270,20 @@ class OrganizationUserService:
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Only an owner can promote or demote admins",
             )
+        old_role = membership.role
         membership.role = data.role
         self.organization_user_repository.save(membership)
-        return self._to_member_read(membership)
+        member_read = self._to_member_read(membership)
+        self.audit_log_service.record(
+            action=AuditAction.MEMBER_ROLE_CHANGE,
+            context=context,
+            organization_id=organization_id,
+            target_type=TargetType.MEMBER,
+            target_id=member_read.user_id,
+            target_label=member_read.email,
+            changed_fields={"role": {"old": old_role.value, "new": data.role.value}},
+        )
+        return member_read
 
     def remove_member(
         self, context: CurrentUserContext, organization_id: UUID, user_id: UUID
@@ -285,7 +309,18 @@ class OrganizationUserService:
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Only an owner can remove an admin",
             )
+        removed_email = self._to_member_read(membership).email
+        removed_role = membership.role
         self.organization_user_repository.delete(membership)
+        self.audit_log_service.record(
+            action=AuditAction.MEMBER_REMOVE,
+            context=context,
+            organization_id=organization_id,
+            target_type=TargetType.MEMBER,
+            target_id=user_id,
+            target_label=removed_email,
+            changed_fields={"role": {"old": removed_role.value, "new": None}},
+        )
 
         # Rescinding a still-pending member's access must also kill their invite link,
         # which otherwise stays valid (it's tied to the user, not the membership).
@@ -314,6 +349,15 @@ class OrganizationUserService:
             current_owner_id=current_owner.id,
             new_owner_id=data.user_id,
         )
+        new_owner_label = self._to_member_read(new_owner_membership).email
+        self.audit_log_service.record(
+            action=AuditAction.MEMBER_OWNERSHIP_TRANSFER,
+            context=context,
+            organization_id=organization_id,
+            target_type=TargetType.MEMBER,
+            target_id=data.user_id,
+            target_label=new_owner_label,
+        )
 
     def resend_invite(
         self, context: CurrentUserContext, organization_id: UUID, user_id: UUID
@@ -338,4 +382,12 @@ class OrganizationUserService:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to generate invite link",
             )
+        self.audit_log_service.record(
+            action=AuditAction.MEMBER_INVITE_RESEND,
+            context=context,
+            organization_id=organization_id,
+            target_type=TargetType.MEMBER,
+            target_id=user_id,
+            target_label=user.email,
+        )
         return invite_link

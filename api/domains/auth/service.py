@@ -10,6 +10,8 @@ from injector import inject, singleton
 from sqlmodel import Session
 
 from api.core.config import Config
+from api.domains.audit_logs.models import AuditAction, TargetType
+from api.domains.audit_logs.service import AuditLogService
 from api.domains.auth.hashing import hash_text
 from api.domains.auth.models import (
     AcceptInviteRequest,
@@ -67,6 +69,7 @@ class AuthService:
     organization_user_repository: OrganizationUserRepository
     email_service: EmailService
     template_service: TemplateService
+    audit_log_service: AuditLogService
 
     @staticmethod
     def _default_organization_name(full_name: str | None) -> str:
@@ -260,13 +263,33 @@ class AuthService:
         return user
 
     def reset_password(self, reset_request: PasswordResetRequest):
-        self._apply_new_password(reset_request, mark_email_verified=False)
+        user = self._apply_new_password(reset_request, mark_email_verified=False)
+        # Token-based, no authenticated context — identify the actor from the resolved
+        # user. Global (org-less) action → NULL org. Never records field values.
+        self.audit_log_service.record(
+            action=AuditAction.AUTH_PASSWORD_RESET,
+            actor_user_id=user.id,
+            actor_email=user.email,
+            organization_id=None,
+            target_type=TargetType.USER,
+            target_id=user.id,
+            target_label=user.email,
+        )
 
     def accept_invite(self, request: AcceptInviteRequest):
         """Complete enrollment: the invitee sets their password + name and their email is
         verified, in one step."""
-        self._apply_new_password(
+        user = self._apply_new_password(
             request, mark_email_verified=True, full_name=request.full_name
+        )
+        self.audit_log_service.record(
+            action=AuditAction.AUTH_SET_PASSWORD,
+            actor_user_id=user.id,
+            actor_email=user.email,
+            organization_id=None,
+            target_type=TargetType.USER,
+            target_id=user.id,
+            target_label=user.email,
         )
 
     def prepare_invite(
@@ -348,4 +371,13 @@ class AuthService:
             receiver_email=user.email,
             password_reset_link=f"{self.config.web_app_url}/reset-password?token={token}",
             receiver_name=user.full_name,
+        )
+        self.audit_log_service.record(
+            action=AuditAction.AUTH_PASSWORD_RESET_REQUEST,
+            actor_user_id=user.id,
+            actor_email=user.email,
+            organization_id=None,
+            target_type=TargetType.USER,
+            target_id=user.id,
+            target_label=user.email,
         )

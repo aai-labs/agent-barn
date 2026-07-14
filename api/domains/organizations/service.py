@@ -7,6 +7,8 @@ from injector import inject, singleton
 from sqlmodel import Session
 
 from api.domains.agents.service import AgentService
+from api.domains.audit_logs.models import AuditAction, TargetType
+from api.domains.audit_logs.service import AuditLogService, diff_changed_fields
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.service import AuthService
 from api.domains.organizations.models import (
@@ -38,6 +40,7 @@ class OrganizationService:
     auth_service: AuthService
     agent_service: AgentService
     template_service: TemplateService
+    audit_log_service: AuditLogService
 
     def get_organization(
         self, organization_id: UUID, context: CurrentUserContext
@@ -92,6 +95,14 @@ class OrganizationService:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to load organization",
             )
+        self.audit_log_service.record(
+            action=AuditAction.ORG_CREATE,
+            context=actor,
+            organization_id=organization.id,
+            target_type=TargetType.ORGANIZATION,
+            target_id=organization.id,
+            target_label=organization.name,
+        )
         return OrganizationCreateResult(
             organization=organization_read, invite_link=prepared.invite_link
         )
@@ -160,7 +171,11 @@ class OrganizationService:
                 detail=f"Organization {organization_id} not found",
             )
 
-        for key, value in organization_data.model_dump(exclude_unset=True).items():
+        update_payload = organization_data.model_dump(exclude_unset=True)
+        changed_fields = diff_changed_fields(
+            organization, update_payload, {"name", "description"}
+        )
+        for key, value in update_payload.items():
             setattr(organization, key, value)
         organization = self.organization_repository.save(organization)
 
@@ -170,6 +185,15 @@ class OrganizationService:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to load organization",
             )
+        self.audit_log_service.record(
+            action=AuditAction.ORG_UPDATE,
+            context=context,
+            organization_id=organization.id,
+            target_type=TargetType.ORGANIZATION,
+            target_id=organization.id,
+            target_label=organization.name,
+            changed_fields=changed_fields,
+        )
         return organization_read
 
     def delete_organization(
@@ -205,3 +229,11 @@ class OrganizationService:
                 ),
             )
         self.organization_repository.delete(organization.id)
+        self.audit_log_service.record(
+            action=AuditAction.ORG_DELETE,
+            context=context,
+            organization_id=organization.id,
+            target_type=TargetType.ORGANIZATION,
+            target_id=organization.id,
+            target_label=organization.name,
+        )

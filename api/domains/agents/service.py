@@ -70,6 +70,8 @@ from api.domains.agents.models import (
 )
 from api.domains.agents.error_messages import friendly_k8s_error, friendly_pod_reason
 from api.domains.agents.repository import AgentRepository
+from api.domains.audit_logs.models import AuditAction, TargetType
+from api.domains.audit_logs.service import AuditLogService, diff_changed_fields
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.token_service import SlackConfigTokenService
 from api.domains.templates.models import TemplateRead
@@ -174,6 +176,20 @@ class AgentService:
     config: Config
     skill_repository: SkillRepository
     slack_token_service: SlackConfigTokenService
+    audit_log_service: AuditLogService
+
+    # Fields whose new values are safe to record verbatim in an agent.update audit entry.
+    # Default-deny: anything not listed (tokens, secrets, ...) is redacted to name-only.
+    _AGENT_UPDATE_VALUE_ALLOWLIST = {
+        "name",
+        "model",
+        "approval_mode",
+        "template_slug",
+        "template_version",
+        "skill_ids",
+        "removed_skill_ids",
+        "slack_channels",
+    }
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
@@ -541,6 +557,14 @@ class AgentService:
                 [AgentSkill(agent_id=agent.id, skill_id=s.id) for s in skills_to_assign]
             )
 
+        self.audit_log_service.record(
+            action=AuditAction.AGENT_CREATE,
+            context=context,
+            target_type=TargetType.AGENT,
+            target_id=agent.id,
+            target_label=agent.name,
+        )
+
         if data.platform == AgentPlatform.TEAMS:
             return self.start_agent(agent.id, context)
         return self._build_agent_read(
@@ -629,6 +653,12 @@ class AgentService:
             )
 
         updated = data.model_dump(exclude_unset=True)
+
+        # Snapshot the change set before any in-place mutation of ``agent``.
+        # Non-allowlisted fields (tokens, secrets) are recorded name-only.
+        changed_fields = diff_changed_fields(
+            agent, updated, self._AGENT_UPDATE_VALUE_ALLOWLIST
+        )
 
         if agent.platform == AgentPlatform.TEAMS and (
             _SLACK_CONFIG_FIELDS & updated.keys()
@@ -822,6 +852,14 @@ class AgentService:
             self.repository.add_skill(agent.id, skill_id)
 
         self.repository.save(agent)
+        self.audit_log_service.record(
+            action=AuditAction.AGENT_UPDATE,
+            context=context,
+            target_type=TargetType.AGENT,
+            target_id=agent.id,
+            target_label=agent.name,
+            changed_fields=changed_fields,
+        )
         return self._get_agent_read(agent)
 
     def start_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
@@ -1105,6 +1143,13 @@ class AgentService:
             ingest_key, self.config.agent_token_encryption_key
         )
         self.repository.save(agent)
+        self.audit_log_service.record(
+            action=AuditAction.AGENT_START,
+            context=context,
+            target_type=TargetType.AGENT,
+            target_id=agent.id,
+            target_label=agent.name,
+        )
         return self._get_agent_read(agent)
 
     def get_agent_logs(
@@ -1246,6 +1291,13 @@ class AgentService:
 
         agent.status = AgentStatus.STOPPED
         self.repository.save(agent)
+        self.audit_log_service.record(
+            action=AuditAction.AGENT_STOP,
+            context=context,
+            target_type=TargetType.AGENT,
+            target_id=agent.id,
+            target_label=agent.name,
+        )
         return self._get_agent_read(agent)
 
     def count_active_agents(self, organization_id: UUID) -> int:
@@ -1276,6 +1328,14 @@ class AgentService:
                 self.litellm.block_key(plaintext_key)
             except Exception:
                 logger.warning("Could not block LiteLLM key for agent %s", agent_id)
+
+        self.audit_log_service.record(
+            action=AuditAction.AGENT_DELETE,
+            context=context,
+            target_type=TargetType.AGENT,
+            target_id=agent.id,
+            target_label=agent.name,
+        )
 
     def pair_agent(
         self, agent_id: UUID, data: PairRequest, context: CurrentUserContext
@@ -1323,6 +1383,13 @@ class AgentService:
                 detail=f"Failed to execute pairing command in agent {agent_id}",
             ) from exc
 
+        self.audit_log_service.record(
+            action=AuditAction.AGENT_PAIR,
+            context=context,
+            target_type=TargetType.AGENT,
+            target_id=agent.id,
+            target_label=agent.name,
+        )
         return output
 
     def _check_slack_tokens(
@@ -1469,6 +1536,13 @@ class AgentService:
             validation_status = "valid"
         else:
             validation_status = "invalid"
+        self.audit_log_service.record(
+            action=AuditAction.AGENT_INTEGRATION_VALIDATE,
+            context=context,
+            target_type=TargetType.AGENT,
+            target_id=agent_id,
+            target_label=provider.value,
+        )
         return {
             "validation_status": validation_status,
             "validation_identity": result.identity,

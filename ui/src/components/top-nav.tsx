@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useCurrentUser } from "@/auth/providers/user-context-provider";
 import { useLogout } from "@/auth/hooks/use-logout";
-import { PlusIcon, UserIcon, UsersIcon, BuildingIcon, LogOutIcon } from "@/components/icons";
+import { PlusIcon, UserIcon, UsersIcon, BuildingIcon, LogOutIcon, ShieldIcon } from "@/components/icons";
 import { LogoMark } from "@/components/logo-mark";
 import { OrgSwitcher } from "@/features/organizations/components/org-switcher";
 import { useActiveOrgRole } from "@/features/organizations/hooks/use-active-org-role";
@@ -30,8 +30,14 @@ export function TopNav({ onHire }: TopNavProps) {
 
   const navTabs = [
     { href: orgBase, label: "Home" },
-    // Costs is owner/admin-only (the endpoint is gated too); hide it from members.
-    ...(canManageMembers ? [{ href: `${orgBase}/costs`, label: "Costs" }] : []),
+    // Costs and the audit log are owner/admin-only (the endpoints are gated too); hide
+    // them from members.
+    ...(canManageMembers
+      ? [
+          { href: `${orgBase}/costs`, label: "Costs" },
+          { href: `${orgBase}/audit-log`, label: "Audit log" },
+        ]
+      : []),
     { href: `${orgBase}/settings`, label: "Settings" },
   ];
   const [menuOpen, setMenuOpen] = useState(false);
@@ -171,6 +177,14 @@ export function TopNav({ onHire }: TopNavProps) {
                     onClick={() => setMenuOpen(false)}
                   >
                     <BuildingIcon /> Organizations
+                  </Link>
+                  <Link
+                    href="/dashboard/audit-logs"
+                    className="af-hover-bg w-full text-left flex items-center gap-2.5 px-3.5 py-2 text-[13.5px]"
+                    style={{ color: "var(--ink-2)" }}
+                    onClick={() => setMenuOpen(false)}
+                  >
+                    <ShieldIcon /> Audit logs
                   </Link>
                 </div>
               )}

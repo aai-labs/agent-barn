@@ -1,16 +1,19 @@
 import json
 from types import SimpleNamespace
 from typing import cast
+from unittest.mock import MagicMock
 
 import jwt
 import pytest
 from fastapi import HTTPException
 
+from api.domains.audit_logs.service import AuditLogService
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.service import JWT_ENCODING_ALGORITHM
 from api.domains.integrations.google_oauth import routes as oauth
 
 _NO_CONTEXT = cast(CurrentUserContext, None)
+_NOOP_AUDIT = cast(AuditLogService, MagicMock())
 
 
 def _config(**overrides):
@@ -165,7 +168,10 @@ def test_token_exchange_success_uses_config_client(monkeypatch):
 
     monkeypatch.setattr(oauth.httpx, "post", fake_post)
     result = oauth.google_token_exchange(
-        body=_token_request(), _context=_NO_CONTEXT, config=cfg
+        body=_token_request(),
+        context=_NO_CONTEXT,
+        config=cfg,
+        audit_log_service=_NOOP_AUDIT,
     )
     assert result == {"refresh_token": "rt-123"}
 
@@ -183,8 +189,9 @@ def test_token_exchange_prefers_custom_client(monkeypatch):
     monkeypatch.setattr(oauth.httpx, "post", fake_post)
     result = oauth.google_token_exchange(
         body=_token_request(client_id="custom-id", client_secret="custom-secret"),
-        _context=_NO_CONTEXT,
+        context=_NO_CONTEXT,
         config=cfg,
+        audit_log_service=_NOOP_AUDIT,
     )
     assert result == {"refresh_token": "rt-x"}
 
@@ -198,8 +205,9 @@ def test_token_exchange_requires_configured_client(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         oauth.google_token_exchange(
             body=_token_request(),
-            _context=_NO_CONTEXT,
+            context=_NO_CONTEXT,
             config=_config(google_cloud_client_id="", google_cloud_client_secret=""),
+            audit_log_service=_NOOP_AUDIT,
         )
     assert exc.value.status_code == 503
 
@@ -214,7 +222,10 @@ def test_token_exchange_errors_when_no_refresh_token(monkeypatch):
     )
     with pytest.raises(HTTPException) as exc:
         oauth.google_token_exchange(
-            body=_token_request(), _context=_NO_CONTEXT, config=_config()
+            body=_token_request(),
+            context=_NO_CONTEXT,
+            config=_config(),
+            audit_log_service=_NOOP_AUDIT,
         )
     assert exc.value.status_code == 400
 
@@ -227,6 +238,9 @@ def test_token_exchange_errors_on_non_200(monkeypatch):
     )
     with pytest.raises(HTTPException) as exc:
         oauth.google_token_exchange(
-            body=_token_request(), _context=_NO_CONTEXT, config=_config()
+            body=_token_request(),
+            context=_NO_CONTEXT,
+            config=_config(),
+            audit_log_service=_NOOP_AUDIT,
         )
     assert exc.value.status_code == 400

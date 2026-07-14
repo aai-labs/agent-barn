@@ -18,6 +18,8 @@ from api.domains.agents.models import (
     get_agent_filter,
 )
 from api.domains.agents.service import AgentService
+from api.domains.audit_logs.models import AuditAction, TargetType
+from api.domains.audit_logs.service import AuditLogService
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import get_current_user
 from api.domains.templates.models import TemplateRead
@@ -85,9 +87,17 @@ def get_agent_log_history(
     agent_id: UUID,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[AgentService, Injected(AgentService)],
+    audit_log_service: Annotated[AuditLogService, Injected(AuditLogService)],
     snapshot_id: Annotated[UUID | None, Query()] = None,
 ):
-    return service.get_log_history(agent_id, context, snapshot_id=snapshot_id)
+    result = service.get_log_history(agent_id, context, snapshot_id=snapshot_id)
+    audit_log_service.record(
+        action=AuditAction.AGENT_LOGS_VIEW,
+        context=context,
+        target_type=TargetType.AGENT,
+        target_id=agent_id,
+    )
+    return result
 
 
 @agents_router.get("/{agent_id}/logs", response_model=AgentLogsRead)
@@ -95,9 +105,17 @@ def get_agent_logs(
     agent_id: UUID,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[AgentService, Injected(AgentService)],
+    audit_log_service: Annotated[AuditLogService, Injected(AuditLogService)],
     tail_lines: Annotated[int, Query(ge=1, le=10000)] = 100,
 ):
-    return service.get_agent_logs(agent_id, context, tail_lines=tail_lines)
+    result = service.get_agent_logs(agent_id, context, tail_lines=tail_lines)
+    audit_log_service.record(
+        action=AuditAction.AGENT_LOGS_VIEW,
+        context=context,
+        target_type=TargetType.AGENT,
+        target_id=agent_id,
+    )
+    return result
 
 
 @agents_router.get("/{agent_id}", response_model=AgentRead)
@@ -105,8 +123,17 @@ def get_agent(
     agent_id: UUID,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[AgentService, Injected(AgentService)],
+    audit_log_service: Annotated[AuditLogService, Injected(AuditLogService)],
 ):
-    return service.get_agent(agent_id, context)
+    result = service.get_agent(agent_id, context)
+    audit_log_service.record(
+        action=AuditAction.AGENT_VIEW,
+        context=context,
+        target_type=TargetType.AGENT,
+        target_id=agent_id,
+        target_label=result.name,
+    )
+    return result
 
 
 @agents_router.get("/{agent_id}/template/{version}", response_model=TemplateRead)

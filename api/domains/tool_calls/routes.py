@@ -5,6 +5,8 @@ from fastapi import APIRouter, Depends, Query
 from fastapi_injector import Injected
 
 from api.domains.agents.service import AgentService
+from api.domains.audit_logs.models import AuditAction, TargetType
+from api.domains.audit_logs.service import AuditLogService
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import get_current_user
 from api.domains.tool_calls.models import (
@@ -26,12 +28,20 @@ def list_tool_calls(
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     agent_service: Annotated[AgentService, Injected(AgentService)],
     tool_call_service: Annotated[ToolCallService, Injected(ToolCallService)],
+    audit_log_service: Annotated[AuditLogService, Injected(AuditLogService)],
     tool_call_filter: Annotated[ToolCallFilter, Depends(get_tool_call_filter)],
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1)] = 50,
 ):
     org_id = context.require_current_user_organization().organization_id
     agent_service.get_agent(agent_id, context)  # raises 404 if not found or wrong org
-    return tool_call_service.list_tool_calls(
+    result = tool_call_service.list_tool_calls(
         agent_id, org_id, tool_call_filter, Pagination(page=page, size=page_size)
     )
+    audit_log_service.record(
+        action=AuditAction.AGENT_TOOL_CALLS_VIEW,
+        context=context,
+        target_type=TargetType.AGENT,
+        target_id=agent_id,
+    )
+    return result

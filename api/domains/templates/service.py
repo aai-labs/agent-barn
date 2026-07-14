@@ -5,6 +5,8 @@ from uuid import UUID
 from fastapi import HTTPException, status
 from injector import inject, singleton
 
+from api.domains.audit_logs.models import AuditAction, TargetType
+from api.domains.audit_logs.service import AuditLogService, diff_changed_fields
 from api.domains.auth.models import CurrentUserContext
 from api.domains.skills.models import SkillRead
 from api.domains.skills.repository import SkillRepository
@@ -45,6 +47,11 @@ logger = logging.getLogger(__name__)
 class TemplateService:
     repository: TemplateRepository
     skill_repository: SkillRepository
+    audit_log_service: AuditLogService
+
+    # Template content bodies (soul_md, ...) are large; record only that they changed,
+    # not the full text. Short, safe fields keep their values.
+    _TEMPLATE_UPDATE_VALUE_ALLOWLIST = {"template_name", "description"}
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
@@ -173,6 +180,13 @@ class TemplateService:
         self.repository.save_template(template)
         if data.required_skill_ids:
             self.repository.save_template_skills(template.id, data.required_skill_ids)
+        self.audit_log_service.record(
+            action=AuditAction.TEMPLATE_CREATE,
+            context=context,
+            target_type=TargetType.TEMPLATE,
+            target_id=template.id,
+            target_label=template.template_slug,
+        )
         return self._with_required_skills(TemplateRead.model_validate(template))
 
     def update_template(
@@ -181,6 +195,9 @@ class TemplateService:
         org_id = self._org_id(context)
         old = self._get_latest_or_404(org_id, slug)
         updated = data.model_dump(exclude_unset=True)
+        changed_fields = diff_changed_fields(
+            old, updated, self._TEMPLATE_UPDATE_VALUE_ALLOWLIST
+        )
         # Every update publishes a new immutable version of the lineage; the
         # slug never changes and agent pins are left untouched.
         new_template = AgentTemplate(
@@ -207,6 +224,14 @@ class TemplateService:
             resolved_ids = data.required_skill_ids
         self.repository.save_template(new_template)
         self.repository.save_template_skills(new_template.id, resolved_ids)
+        self.audit_log_service.record(
+            action=AuditAction.TEMPLATE_UPDATE,
+            context=context,
+            target_type=TargetType.TEMPLATE,
+            target_id=new_template.id,
+            target_label=new_template.template_slug,
+            changed_fields=changed_fields,
+        )
         return self._with_required_skills(TemplateRead.model_validate(new_template))
 
     def seed_predefined_templates(self, org_id: UUID) -> None:
