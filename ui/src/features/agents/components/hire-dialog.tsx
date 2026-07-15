@@ -15,6 +15,7 @@ import {
   DetailsStep, SkillsStep,
 } from "./hire-dialog-steps";
 import { SlackConfigPanel } from "./slack-config-panel";
+import { TelegramConfigPanel } from "./telegram-config-panel";
 import {
   hasIncompleteIntegration,
   expandGithubContent,
@@ -308,41 +309,42 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
           >
             <div>
               <div className="text-xs uppercase tracking-[0.08em] font-semibold mb-1" style={{ color: "var(--ink-3)" }}>
-                {name} · Telegram
+                {name} · configure Telegram
               </div>
               <h2 className="text-xl font-semibold tracking-tight m-0" style={{ color: "var(--ink)" }}>
-                {name} is ready!
+                Set up Telegram access
               </h2>
             </div>
-            <button
-              className="af-btn af-btn-ghost af-btn-icon"
-              onClick={() => {
-                void startAgent.mutateAsync(createdAgent.id).then(() => {
-                  onHired({ name, role: roleLabel });
-                });
-              }}
-            >
+            <button className="af-btn af-btn-ghost af-btn-icon" onClick={() => onHired({ name, role: roleLabel })}>
               <XIcon />
             </button>
           </header>
           <div className="flex-1 overflow-y-auto p-6">
             <p className="text-[0.8125rem] mb-5 leading-[1.5]" style={{ color: "var(--ink-3)" }}>
-              {name} is hired and connected to Telegram. The agent will start automatically — message your bot to begin.
+              {name} is hired! Configure which group chats and users they can access, or skip to do this later from their settings.
             </p>
+            <TelegramConfigPanel
+              agent={createdAgent}
+              onSaved={() => {
+                void startAgent.mutateAsync(createdAgent.id).then(() => {
+                  onHired({ name, role: roleLabel });
+                });
+              }}
+            />
           </div>
           <footer
             className="px-6 py-4 flex items-center justify-end flex-shrink-0"
             style={{ borderTop: "1px solid var(--line)" }}
           >
             <button
-              className="af-btn af-btn-primary"
+              className="af-btn af-btn-ghost"
               onClick={() => {
                 void startAgent.mutateAsync(createdAgent.id).then(() => {
                   onHired({ name, role: roleLabel });
                 });
               }}
             >
-              Done
+              Skip for now
             </button>
           </footer>
         </DialogShell>

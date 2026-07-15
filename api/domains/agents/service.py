@@ -1108,8 +1108,6 @@ class AgentService:
                     self.config.agent_litellm_base_url,
                     dm_policy=str(telegram_config.dm_policy),
                     group_policy=str(telegram_config.group_policy),
-                    allowed_user_ids=telegram_config.allowed_user_ids,
-                    allowed_chat_ids=telegram_config.allowed_chat_ids,
                     approval_mode=str(agent.approval_mode),
                 )
                 secret = build_secret_hermes_telegram(
@@ -1121,6 +1119,9 @@ class AgentService:
                     litellm_api_key=litellm_key,
                     litellm_base_url=self.config.agent_litellm_base_url,
                     api_server_key=api_server_key,
+                    dm_policy=str(telegram_config.dm_policy),
+                    allowed_user_ids=telegram_config.allowed_user_ids,
+                    allowed_chat_ids=telegram_config.allowed_chat_ids,
                 )
                 deployment = build_hermes_deployment(
                     agent.id,

@@ -9,6 +9,8 @@ from .common import _labels, _resource_name
 _SCRIPTS = Path(__file__).parent.parent / "scripts" / "hermes"
 _DENY_DMS = _SCRIPTS / "plugins" / "slack-deny-dms"
 _CHANNEL_ALLOWLIST = _SCRIPTS / "plugins" / "slack-channel-allowlist"
+_TG_DENY_DMS = _SCRIPTS / "plugins" / "telegram-deny-dms"
+_TG_CHANNEL_ALLOWLIST = _SCRIPTS / "plugins" / "telegram-channel-allowlist"
 _TELEMETRY_PUSH = _SCRIPTS / "plugins" / "telemetry-push"
 _NO_SLACK_HOME_CHANNEL = "C0000000000"
 _NO_TELEGRAM_HOME_CHANNEL = "0000000000"
@@ -24,6 +26,14 @@ SLACK_CHANNEL_ALLOWLIST_PLUGIN_YAML: str = (
 ).read_text()
 SLACK_CHANNEL_ALLOWLIST_PLUGIN_INIT: str = (
     _CHANNEL_ALLOWLIST / "__init__.py"
+).read_text()
+TELEGRAM_DENY_DMS_PLUGIN_YAML: str = (_TG_DENY_DMS / "plugin.yaml").read_text()
+TELEGRAM_DENY_DMS_PLUGIN_INIT: str = (_TG_DENY_DMS / "__init__.py").read_text()
+TELEGRAM_CHANNEL_ALLOWLIST_PLUGIN_YAML: str = (
+    _TG_CHANNEL_ALLOWLIST / "plugin.yaml"
+).read_text()
+TELEGRAM_CHANNEL_ALLOWLIST_PLUGIN_INIT: str = (
+    _TG_CHANNEL_ALLOWLIST / "__init__.py"
 ).read_text()
 TELEMETRY_PUSH_PLUGIN_YAML: str = (_TELEMETRY_PUSH / "plugin.yaml").read_text()
 TELEMETRY_PUSH_PLUGIN_INIT: str = (_TELEMETRY_PUSH / "__init__.py").read_text()
@@ -112,22 +122,19 @@ def build_hermes_config_telegram(
     litellm_base_url: str,
     dm_policy: str = "off",
     group_policy: str = "allowlist",
-    allowed_user_ids: list[str] | None = None,
-    allowed_chat_ids: list[str] | None = None,
     approval_mode: str = "auto",
 ) -> dict:
     _, sep, model_name = model.partition("/")
     if not sep:
         model_name = model
 
-    if dm_policy == "open":
-        allow_from: list[str] = ["*"]
-    elif dm_policy == "allowlist":
-        allow_from = list(allowed_user_ids or [])
-    else:
-        allow_from = []
+    enabled_plugins: list[str] = ["telemetry-push"]
+    if group_policy != "open":
+        enabled_plugins.append("telegram-channel-allowlist")
+    if dm_policy != "open":
+        enabled_plugins.append("telegram-deny-dms")
 
-    config: dict = {
+    return {
         "toolsets": ["all"],
         "model": {
             "provider": "openrouter",
@@ -160,22 +167,13 @@ def build_hermes_config_telegram(
             },
         },
         "group_sessions_per_user": False,
-        "allow_from": allow_from,
         "plugins": {
-            "enabled": ["telemetry-push"],
+            "enabled": enabled_plugins,
         },
         "approvals": {
             "mode": _HERMES_APPROVAL_MODE.get(approval_mode, "smart"),
         },
     }
-
-    if group_policy == "open":
-        config["guest_mode"] = True
-    else:
-        config["guest_mode"] = False
-        config["group_allowed_chats"] = list(allowed_chat_ids or [])
-
-    return config
 
 
 def build_hermes_config_map(
@@ -218,6 +216,15 @@ def build_hermes_config_map(
             SLACK_CHANNEL_ALLOWLIST_PLUGIN_YAML
         )
         data["slack-channel-allowlist-init.py"] = SLACK_CHANNEL_ALLOWLIST_PLUGIN_INIT
+    elif platform == "telegram":
+        data["telegram-deny-dms-plugin.yaml"] = TELEGRAM_DENY_DMS_PLUGIN_YAML
+        data["telegram-deny-dms-init.py"] = TELEGRAM_DENY_DMS_PLUGIN_INIT
+        data["telegram-channel-allowlist-plugin.yaml"] = (
+            TELEGRAM_CHANNEL_ALLOWLIST_PLUGIN_YAML
+        )
+        data["telegram-channel-allowlist-init.py"] = (
+            TELEGRAM_CHANNEL_ALLOWLIST_PLUGIN_INIT
+        )
     if aai_cli_config_toml is not None:
         data["aai-cli-config.toml"] = aai_cli_config_toml
     if aai_cli_setup_sh is not None:
@@ -289,7 +296,11 @@ def build_secret_hermes_telegram(
     litellm_api_key: str,
     litellm_base_url: str,
     api_server_key: str,
+    dm_policy: str = "off",
+    allowed_user_ids: list[str] | None = None,
+    allowed_chat_ids: list[str] | None = None,
 ) -> client.V1Secret:
+    allowed_dm_users = allowed_user_ids if dm_policy == "allowlist" else []
     return client.V1Secret(
         metadata=client.V1ObjectMeta(
             name=_resource_name(agent_id),
@@ -309,6 +320,8 @@ def build_secret_hermes_telegram(
             "GATEWAY_ALLOW_ALL_USERS": "true",
             "TELEGRAM_HOME_CHANNEL": _NO_TELEGRAM_HOME_CHANNEL,
             "TELEGRAM_HOME_CHANNEL_NAME": _NO_TELEGRAM_HOME_CHANNEL_NAME,
+            "TELEGRAM_CHANNEL_IDS": ",".join(allowed_chat_ids or []),
+            "TELEGRAM_DM_ALLOWED_USERS": ",".join(allowed_dm_users or []),
             "AGENT_PLATFORM": "telegram",
         },
     )

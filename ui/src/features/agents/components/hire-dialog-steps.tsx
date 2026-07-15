@@ -792,6 +792,10 @@ export function TelegramTokenStep({
         <NextStep n={3} label="Copy the token">
           BotFather will send a message containing your bot token. Paste it above.
         </NextStep>
+        <NextStep n={4} label="Enable group messaging (optional)">
+          To receive all messages in groups (not just @mentions), disable Group Privacy:
+          open <b>@BotFather</b> → <b>/mybots</b> → select your bot → <b>Bot Settings</b> → <b>Group Privacy</b> → <b>Turn off</b>.
+        </NextStep>
       </div>
     </form>
   );
