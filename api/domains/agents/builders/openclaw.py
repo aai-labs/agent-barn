@@ -247,7 +247,7 @@ def build_openclaw_config_overlay_telegram(
                 "groupPolicy": group_policy,
                 "dmPolicy": openclaw_dm_policy,
                 "allowFrom": allow_from,
-                **({"allowedChats": list(allowed_chat_ids or [])} if group_policy == "allowlist" else {}),
+                **({"groups": {cid: {} for cid in (allowed_chat_ids or [])}} if group_policy == "allowlist" else {}),
             }
         },
         "bindings": [

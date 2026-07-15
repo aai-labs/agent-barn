@@ -19,7 +19,7 @@ const REPLACE_PATHS = [
   ['channels', 'slack', 'allowFrom'],
   ['channels', 'msteams', 'allowFrom'],
   ['channels', 'telegram', 'allowFrom'],
-  ['channels', 'telegram', 'allowedChats'],
+  ['channels', 'telegram', 'groups'],
 ];
 
 function getPath(obj, parts) {
