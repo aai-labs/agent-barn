@@ -12,8 +12,7 @@ import { DialogShell } from "./hire-dialog-primitives";
 import {
   WizardStep, TemplateStep, AgentTypeStep, PlatformChoiceStep, SlackChoiceStep,
   ConfigTokenStep, BotBuilderStep, SlackTokensStep, TelegramTokenStep,
-  TeamsBotBuilderStep, TeamsCredentialsStep, DetailsStep, SkillsStep,
-  downloadTeamsAppPackage, generateTeamsManifest,
+  DetailsStep, SkillsStep,
 } from "./hire-dialog-steps";
 import { SlackConfigPanel } from "./slack-config-panel";
 import {
@@ -42,15 +41,12 @@ const PROVISION_STEPS = [
 
 function getSteps(
   agentType: "openclaw" | "hermes",
-  platform: "slack" | "teams" | "telegram",
+  platform: "slack" | "telegram",
   setupNewBot: boolean,
   configTokenReady: boolean,
 ): WizardStep[] {
   if (platform === "telegram") {
     return ["template", "agent-type", "platform-choice", "telegram-token", "details", "skills"];
-  }
-  if (platform === "teams") {
-    return ["template", "agent-type", "platform-choice", "teams-credentials", "teams-bot-builder", "details", "skills"];
   }
   if (agentType === "hermes") {
     if (!setupNewBot) {
@@ -73,7 +69,7 @@ function getSteps(
 function stepOrdinal(
   step: WizardStep,
   agentType: "openclaw" | "hermes",
-  platform: "slack" | "teams" | "telegram",
+  platform: "slack" | "telegram",
   setupNewBot: boolean,
   configTokenReady: boolean,
 ): string {
@@ -90,8 +86,6 @@ function stepTitle(step: WizardStep): string {
     case "config-token": return "Set up Slack app creation";
     case "bot-builder": return "Build your Slack bot";
     case "slack-tokens": return "Connect Slack";
-    case "teams-bot-builder": return "Build your Teams bot";
-    case "teams-credentials": return "Connect to Azure";
     case "telegram-token": return "Connect your Telegram bot";
     case "details": return "A few details and we'll get them set up.";
     case "skills": return "Assign skills";
@@ -110,7 +104,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
   const [name, setName] = useState<string>(DEFAULT_AGENT_NAME);
   const [model, setModel] = useState<string>("");
-  const [platform, setPlatform] = useState<"slack" | "teams" | "telegram">("slack");
+  const [platform, setPlatform] = useState<"slack" | "telegram">("slack");
   const [setupNewBot, setSetupNewBot] = useState(true);
   const [botName, setBotName] = useState<string>(DEFAULT_AGENT_NAME);
   const [botDescription, setBotDescription] = useState<string>(DEFAULT_BOT_DESCRIPTION);
@@ -125,16 +119,11 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   const [slackDmPolicy, setSlackDmPolicy] = useState<"off" | "open" | "allowlist">("off");
   const [slackVerboseMode, setSlackVerboseMode] = useState(true);
   const [approvalMode, setApprovalMode] = useState<"manual" | "auto" | "off">("auto");
-  const [teamsAppId, setTeamsAppId] = useState("");
-  const [teamsAppPassword, setTeamsAppPassword] = useState("");
-  const [showTeamsAppPassword, setShowTeamsAppPassword] = useState(false);
-  const [teamsTenantId, setTeamsTenantId] = useState("");
-  const [teamsTokenError, setTeamsTokenError] = useState<string | null>(null);
   const [telegramBotToken, setTelegramBotToken] = useState("");
   const [showTelegramToken, setShowTelegramToken] = useState(false);
   const [telegramTokenError, setTelegramTokenError] = useState<string | null>(null);
-  const [telegramGroupPolicy, setTelegramGroupPolicy] = useState<"open" | "allowlist">("allowlist");
-  const [telegramDmPolicy, setTelegramDmPolicy] = useState<"off" | "open" | "allowlist">("off");
+  const [telegramGroupPolicy, setTelegramGroupPolicy] = useState<"open" | "allowlist">("open");
+  const [telegramDmPolicy, setTelegramDmPolicy] = useState<"off" | "open" | "allowlist">("open");
   const [configTokenInput, setConfigTokenInput] = useState("");
   const [configRefreshInput, setConfigRefreshInput] = useState("");
   const [showConfigToken, setShowConfigToken] = useState(false);
@@ -175,10 +164,6 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
     setSelectedVersion(null); // reset to the new lineage's latest
   }
 
-  function handleTeamsBotNameChange(value: string) {
-    setBotName(value);
-    setName(value);
-  }
 
   function handleBack() {
     const steps = getSteps(agentType, platform, setupNewBot, configTokenReady);
@@ -188,7 +173,6 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
 
   function handleAgentTypeChange(v: "openclaw" | "hermes") {
     setAgentType(v);
-    if (v === "hermes" && platform === "teams") setPlatform("slack");
   }
 
   function handleContinueFromTokens() {
@@ -247,14 +231,6 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
     }
   }
 
-  function handleContinueFromTeamsCredentials() {
-    if (!teamsAppId.trim() || !teamsAppPassword.trim() || !teamsTenantId.trim()) {
-      setTeamsTokenError("App ID, App Password, and Tenant ID are all required.");
-      return;
-    }
-    setStep("teams-bot-builder");
-  }
-
   function handleContinueFromTelegramToken() {
     if (!telegramBotToken.trim()) {
       setTelegramTokenError("Bot token is required.");
@@ -292,11 +268,9 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
           content: c.provider === "github" ? expandGithubContent(c.content) : c.content,
         })),
         approvalMode,
-        ...(platform === "slack"
-          ? { slackBotToken, slackAppToken, slackGroupPolicy, slackDmPolicy, slackVerboseMode }
-          : platform === "telegram"
+        ...(platform === "telegram"
           ? { telegramBotToken, telegramGroupPolicy, telegramDmPolicy }
-          : { teamsAppId, teamsAppPassword, teamsTenantId }),
+          : { slackBotToken, slackAppToken, slackGroupPolicy, slackDmPolicy, slackVerboseMode }),
       });
       setCreatedAgent(agent);
       apiDoneRef.current = true;
@@ -325,80 +299,6 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   }, [provisioning]);
 
   if (!provisioning && createdAgent) {
-    if (platform === "teams") {
-      const teamsManifest = generateTeamsManifest(teamsAppId, botName, botDescription, botColor);
-
-      return (
-        <DialogShell shadeClick={undefined}>
-          <header
-            className="px-6 pt-6 pb-4 flex items-start justify-between"
-            style={{ borderBottom: "1px solid var(--line)" }}
-          >
-            <div>
-              <div className="text-xs uppercase tracking-[0.08em] font-semibold mb-1" style={{ color: "var(--ink-3)" }}>
-                {name} · configure Teams
-              </div>
-              <h2 className="text-xl font-semibold tracking-tight m-0" style={{ color: "var(--ink)" }}>
-                Set up the messaging endpoint
-              </h2>
-            </div>
-            <button className="af-btn af-btn-ghost af-btn-icon" onClick={() => onHired({ name, role: roleLabel })}>
-              <XIcon />
-            </button>
-          </header>
-          <div className="flex-1 overflow-y-auto p-6">
-            <p className="text-[0.8125rem] mb-5 leading-[1.5]" style={{ color: "var(--ink-3)" }}>
-              {name} is hired! Set the URL below as the <b>Messaging Endpoint</b> in your Azure Bot registration → Configuration.
-            </p>
-            {createdAgent.webhookUrl && (
-              <div
-                className="flex items-center gap-2 p-4 rounded-xl font-mono text-sm"
-                style={{ background: "var(--bg-soft)", border: "1px solid var(--line)" }}
-              >
-                <span className="flex-1 break-all" style={{ color: "var(--ink-2)" }}>
-                  {createdAgent.webhookUrl}
-                </span>
-                <button
-                  className="af-btn af-btn-sm flex-shrink-0"
-                  onClick={() => void navigator.clipboard.writeText(createdAgent.webhookUrl!)}
-                >
-                  Copy
-                </button>
-              </div>
-            )}
-            <div
-              className="mt-5 rounded-xl p-4"
-              style={{ background: "var(--bg-soft)", border: "1px solid var(--line)" }}
-            >
-              <div className="font-semibold text-[0.844rem] mb-1" style={{ color: "var(--ink)" }}>
-                Teams app package
-              </div>
-              <p className="text-[0.8125rem] mb-3 leading-[1.5]" style={{ color: "var(--ink-3)" }}>
-                Download the ready-to-upload package if you still need to add this bot to Teams.
-              </p>
-              <button
-                className="af-btn af-btn-sm"
-                onClick={() => { void downloadTeamsAppPackage(teamsManifest, botName); }}
-              >
-                Download Teams app package
-              </button>
-            </div>
-          </div>
-          <footer
-            className="px-6 py-4 flex items-center justify-end flex-shrink-0"
-            style={{ borderTop: "1px solid var(--line)" }}
-          >
-            <button
-              className="af-btn af-btn-primary"
-              onClick={() => onHired({ name, role: roleLabel })}
-            >
-              Done
-            </button>
-          </footer>
-        </DialogShell>
-      );
-    }
-
     if (platform === "telegram") {
       return (
         <DialogShell shadeClick={undefined}>
@@ -414,13 +314,20 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
                 {name} is ready!
               </h2>
             </div>
-            <button className="af-btn af-btn-ghost af-btn-icon" onClick={() => onHired({ name, role: roleLabel })}>
+            <button
+              className="af-btn af-btn-ghost af-btn-icon"
+              onClick={() => {
+                void startAgent.mutateAsync(createdAgent.id).then(() => {
+                  onHired({ name, role: roleLabel });
+                });
+              }}
+            >
               <XIcon />
             </button>
           </header>
           <div className="flex-1 overflow-y-auto p-6">
             <p className="text-[0.8125rem] mb-5 leading-[1.5]" style={{ color: "var(--ink-3)" }}>
-              {name} is hired and connected to Telegram. Start the agent from the dashboard, then message your bot to begin.
+              {name} is hired and connected to Telegram. The agent will start automatically — message your bot to begin.
             </p>
           </div>
           <footer
@@ -429,7 +336,11 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
           >
             <button
               className="af-btn af-btn-primary"
-              onClick={() => onHired({ name, role: roleLabel })}
+              onClick={() => {
+                void startAgent.mutateAsync(createdAgent.id).then(() => {
+                  onHired({ name, role: roleLabel });
+                });
+              }}
             >
               Done
             </button>
@@ -497,7 +408,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
             Hiring {name}…
           </h2>
           <p className="text-sm mb-8" style={{ color: "var(--ink-3)" }}>
-            A few moments — provisioning, installing skills, connecting to {platform === "teams" ? "Teams" : platform === "telegram" ? "Telegram" : "Slack"}.
+            A few moments — provisioning, installing skills, connecting to {platform === "telegram" ? "Telegram" : "Slack"}.
           </p>
           <div className="w-full max-w-sm mb-8">
             <div className="w-full h-1.5 rounded-full overflow-hidden" style={{ background: "var(--bg-soft)" }}>
@@ -583,7 +494,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
           />
         )}
         {step === "agent-type" && <AgentTypeStep agentType={agentType} onChange={handleAgentTypeChange} />}
-        {step === "platform-choice" && <PlatformChoiceStep platform={platform} agentType={agentType} onChange={setPlatform} />}
+        {step === "platform-choice" && <PlatformChoiceStep platform={platform} onChange={setPlatform} />}
         {step === "slack-choice" && <SlackChoiceStep setupNewBot={setupNewBot} onChange={setSetupNewBot} />}
         {step === "config-token" && (
           <ConfigTokenStep
@@ -636,27 +547,6 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
             error={telegramTokenError}
           />
         )}
-        {step === "teams-bot-builder" && (
-          <TeamsBotBuilderStep
-            teamsAppId={teamsAppId} onTeamsAppIdChange={setTeamsAppId}
-            botName={botName} onBotNameChange={handleTeamsBotNameChange}
-            botDescription={botDescription} onBotDescriptionChange={setBotDescription}
-            botColor={botColor} onBotColorChange={setBotColor}
-          />
-        )}
-        {step === "teams-credentials" && (
-          <TeamsCredentialsStep
-            teamsAppId={teamsAppId}
-            onAppIdChange={(v) => { setTeamsAppId(v); setTeamsTokenError(null); }}
-            teamsAppPassword={teamsAppPassword}
-            onAppPasswordChange={(v) => { setTeamsAppPassword(v); setTeamsTokenError(null); }}
-            showAppPassword={showTeamsAppPassword}
-            onToggleAppPassword={() => setShowTeamsAppPassword((v) => !v)}
-            teamsTenantId={teamsTenantId}
-            onTenantIdChange={(v) => { setTeamsTenantId(v); setTeamsTokenError(null); }}
-            error={teamsTokenError}
-          />
-        )}
         {step === "details" && versionTemplate && (
           <DetailsStep
             template={versionTemplate}
@@ -667,6 +557,8 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
             slackGroupPolicy={slackGroupPolicy} onSlackGroupPolicyChange={(v) => setSlackGroupPolicy(v as "open" | "allowlist")}
             slackDmPolicy={slackDmPolicy} onSlackDmPolicyChange={(v) => setSlackDmPolicy(v as "off" | "open" | "allowlist")}
             slackVerboseMode={slackVerboseMode} onSlackVerboseModeChange={setSlackVerboseMode}
+            telegramGroupPolicy={telegramGroupPolicy} onTelegramGroupPolicyChange={(v) => setTelegramGroupPolicy(v as "open" | "allowlist")}
+            telegramDmPolicy={telegramDmPolicy} onTelegramDmPolicyChange={(v) => setTelegramDmPolicy(v as "off" | "open" | "allowlist")}
             approvalMode={approvalMode} onApprovalModeChange={(v) => setApprovalMode(v as "manual" | "auto" | "off")}
             onChangeTemplate={() => setStep("template")}
           />
@@ -713,9 +605,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
           <button
             className="af-btn af-btn-primary af-btn-lg"
             onClick={() => setStep(
-              platform === "telegram" ? "telegram-token"
-                : platform === "teams" ? "teams-credentials"
-                : "slack-choice"
+              platform === "telegram" ? "telegram-token" : "slack-choice"
             )}
           >
             Continue
@@ -757,16 +647,6 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
         )}
         {step === "slack-tokens" && (
           <button className="af-btn af-btn-primary af-btn-lg" onClick={handleContinueFromTokens}>
-            Continue
-          </button>
-        )}
-        {step === "teams-bot-builder" && (
-          <button className="af-btn af-btn-primary af-btn-lg" onClick={() => setStep("details")}>
-            Continue
-          </button>
-        )}
-        {step === "teams-credentials" && (
-          <button className="af-btn af-btn-primary af-btn-lg" onClick={handleContinueFromTeamsCredentials}>
             Continue
           </button>
         )}

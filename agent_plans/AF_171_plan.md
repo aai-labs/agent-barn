@@ -325,7 +325,9 @@ Sub-tasks 0–7 implemented. Live testing with both Hermes and OpenClaw runtimes
    - Add `if agent.platform == AgentPlatform.TELEGRAM:` branch that decrypts the bot token and calls `get_chat_info()` for each unresolved user/chat ID.
    - Build `dm_map: {user_id: first_name or username}` from the results.
 
-3. **Tests**: Unit test for `get_chat_info()` (mock httpx). Integration test for Telegram name resolution in conversations.
+3. **Also fix** `_platform_maps()` in `api/domains/ingest/service.py` (lines 114-141) — same issue. For Telegram agents, it falls through to the Slack path and returns empty maps. Add a Telegram branch here too so names are resolved at ingest time (when available), not just at display time.
+
+4. **Tests**: Unit test for `get_chat_info()` (mock httpx). Integration test for Telegram name resolution in conversations.
 
 ---
 
@@ -345,12 +347,27 @@ Sub-tasks 0–7 implemented. Live testing with both Hermes and OpenClaw runtimes
 
 ## Bug 4: Some conversations missing from UI
 
-**Root cause (confirmed for OpenClaw)**: The OpenClaw parser's `_SESSION_PREFIXES` in `api/domains/conversations/parser.py` does **not** include `"agent:main:telegram:dm:"`. Telegram DM sessions are dropped.
+**Two confirmed causes:**
+
+### 4a: OpenClaw parser missing Telegram DM prefix
+The OpenClaw parser's `_SESSION_PREFIXES` in `api/domains/conversations/parser.py` does **not** include `"agent:main:telegram:dm:"`. Telegram DM sessions are dropped by the parser.
 
 **Fix** in `api/domains/conversations/parser.py`:
 - Add `"agent:main:telegram:dm:"` to `_SESSION_PREFIXES`.
 
 **Test**: Add a test case for `agent:main:telegram:dm:` prefix in the existing OpenClaw parser tests.
+
+### 4b: Hermes telemetry-push plugin race condition on `_last_channel`
+The plugin uses a global `_last_channel` dict (line 22) shared across all concurrent sessions. `_on_pre_gateway_dispatch` writes the inbound message's `channel_id`/`chat_type` to it (lines 139-142), and `_on_post_llm_call` reads it back to tag the outbound response (lines 168-171). If two conversations overlap, the outbound message gets the wrong `channel_id`/`session_key`, causing it to appear under the wrong conversation or create a phantom conversation entry.
+
+**Fix** in `api/domains/agents/scripts/hermes/plugins/telemetry-push/__init__.py`:
+- Replace the global `_last_channel` dict with a per-session dict keyed by `task_id` or `session_id`. The `_on_pre_gateway_dispatch` already has access to `chat_id` and `chat_type` from the event source; store them keyed by session. The `_on_post_llm_call` receives `session_id` as a kwarg — use it to look up the correct channel context.
+- Structure: `_session_channels: dict[str, dict] = {}` with `_session_channels_lock`.
+- In `_on_pre_gateway_dispatch`: store under `_session_channels[session_key] = {"channel_id": chat_id, "chat_type": chat_type, "thread_id": thread_id}`.
+- In `_on_post_llm_call`: look up `_session_channels.get(session_key_from_session_id, {})`. Fall back to `_last_channel` for backward compatibility if session_id is not available.
+- Clean up entries in `_on_session_end`.
+
+Note: This is a pre-existing bug affecting all platforms, but more noticeable on Telegram where the user has fewer concurrent sessions. Also, the "missing" may partly be Bug 2 (numeric IDs making conversations hard to identify) and Bug 5 (home channel prompt creating noise).
 
 ---
 
@@ -398,6 +415,12 @@ In `api/domains/agents/builders/openclaw.py`, `build_openclaw_config_overlay_tel
 2. `api/domains/agents/scripts/openclaw/init-openclaw.js`: Add `['channels', 'telegram', 'allowedChats']` to `REPLACE_PATHS`.
 
 **Tests**: Add test for `allowed_chat_ids` in overlay. Update healthz test if any.
+
+---
+
+## Minor: Conversations empty state text
+
+In `ui/src/features/agents/components/conversations-tab.tsx` line 63, the empty state says "Messages will appear here once the agent starts receiving Slack messages." — hardcoded to Slack. Should be platform-aware (pass `agent.platform` and adjust text).
 
 ---
 

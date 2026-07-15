@@ -10,7 +10,9 @@ _SCRIPTS = Path(__file__).parent.parent / "scripts" / "hermes"
 _DENY_DMS = _SCRIPTS / "plugins" / "slack-deny-dms"
 _CHANNEL_ALLOWLIST = _SCRIPTS / "plugins" / "slack-channel-allowlist"
 _TELEMETRY_PUSH = _SCRIPTS / "plugins" / "telemetry-push"
-_NO_HOME_CHANNEL = "C0000000000"
+_NO_SLACK_HOME_CHANNEL = "C0000000000"
+_NO_TELEGRAM_HOME_CHANNEL = "0000000000"
+_NO_TELEGRAM_HOME_CHANNEL_NAME = "No Telegram Home Channel"
 
 HERMES_BOOTLOADER_FOOTER: str = (_SCRIPTS / "bootloader-footer.md").read_text()
 HERMES_HEALTHZ_PY: str = (_SCRIPTS / "healthz-server.py").read_text()
@@ -270,7 +272,7 @@ def build_secret_hermes_slack(
             "API_SERVER_MODEL_NAME": agent_name,
             "GATEWAY_ALLOW_ALL_USERS": "true",
             "SLACK_ALLOW_ALL_USERS": "true",
-            "SLACK_HOME_CHANNEL": channel_ids[0] if channel_ids else _NO_HOME_CHANNEL,
+            "SLACK_HOME_CHANNEL": channel_ids[0] if channel_ids else _NO_SLACK_HOME_CHANNEL,
             "SLACK_CHANNEL_IDS": ",".join(channel_ids),
             "SLACK_DM_ALLOWED_USERS": ",".join(allowed_dm_users),
             "AGENT_PLATFORM": "slack",
@@ -305,6 +307,8 @@ def build_secret_hermes_telegram(
             "API_SERVER_KEY": api_server_key,
             "API_SERVER_MODEL_NAME": agent_name,
             "GATEWAY_ALLOW_ALL_USERS": "true",
+            "TELEGRAM_HOME_CHANNEL": _NO_TELEGRAM_HOME_CHANNEL,
+            "TELEGRAM_HOME_CHANNEL_NAME": _NO_TELEGRAM_HOME_CHANNEL_NAME,
             "AGENT_PLATFORM": "telegram",
         },
     )

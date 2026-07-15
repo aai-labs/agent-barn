@@ -51,6 +51,7 @@ _SESSION_PREFIXES = (
     "agent:main:msteams:group:",
     "agent:main:telegram:channel:",
     "agent:main:telegram:group:",
+    "agent:main:telegram:dm:",
 )
 
 

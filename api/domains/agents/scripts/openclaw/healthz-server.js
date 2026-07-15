@@ -105,7 +105,7 @@ function refresh() {
         if (channel?.healthState !== 'healthy') {
           const everConnected = typeof channel?.lastConnectedAt === 'number';
           const hasError = channel?.lastError != null;
-          cache = { ok: false, everConnected: everConnected || hasError, reason: channel?.lastError || 'channel ' + ch + ' not connected' };
+          cache = { ok: false, everConnected, reason: channel?.lastError || 'channel ' + ch + ' not connected' };
           return;
         }
       }

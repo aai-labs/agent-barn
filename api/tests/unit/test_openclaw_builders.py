@@ -146,6 +146,33 @@ def test_build_openclaw_config_overlay_telegram_group_policy_allowlist():
     assert_that(overlay["channels"]["telegram"]["groupPolicy"], equal_to("allowlist"))
 
 
+def test_build_openclaw_config_overlay_telegram_allowed_chat_ids():
+    overlay = build_openclaw_config_overlay_telegram(
+        "litellm/gpt-4o",
+        "http://litellm:4000",
+        group_policy="allowlist",
+        allowed_chat_ids=["-100123", "-100456"],
+    )
+    assert_that(
+        overlay["channels"]["telegram"]["allowedChats"],
+        equal_to(["-100123", "-100456"]),
+    )
+
+
+def test_build_openclaw_config_overlay_telegram_allowed_chat_ids_empty_when_none():
+    overlay = build_openclaw_config_overlay_telegram(
+        "litellm/gpt-4o", "http://litellm:4000", group_policy="allowlist"
+    )
+    assert_that(overlay["channels"]["telegram"]["allowedChats"], equal_to([]))
+
+
+def test_build_openclaw_config_overlay_telegram_no_allowed_chats_when_open():
+    overlay = build_openclaw_config_overlay_telegram(
+        "litellm/gpt-4o", "http://litellm:4000", group_policy="open"
+    )
+    assert_that("allowedChats" in overlay["channels"]["telegram"], equal_to(False))
+
+
 # --- Telegram secret --------------------------------------------------------
 
 
@@ -208,3 +235,7 @@ def test_init_openclaw_js_has_telegram_replace_paths():
 
 def test_init_openclaw_js_has_telegram_credential_sync():
     assert_that("telegram-allowFrom.json" in INIT_OPENCLAW_JS, equal_to(True))
+
+
+def test_init_openclaw_js_has_telegram_allowed_chats_replace_path():
+    assert_that("'allowedChats'" in INIT_OPENCLAW_JS, equal_to(True))

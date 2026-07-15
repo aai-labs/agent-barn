@@ -512,9 +512,11 @@ def test_build_secret_hermes_telegram_contains_required_keys():
     assert_that(data["API_SERVER_KEY"], equal_to("secret-key-123"))
     assert_that(data["AGENT_PLATFORM"], equal_to("telegram"))
     assert_that(data["API_SERVER_ENABLED"], equal_to("true"))
+    assert_that(data["TELEGRAM_HOME_CHANNEL"], equal_to("0000000000"))
+    assert_that(data["TELEGRAM_HOME_CHANNEL_NAME"], equal_to("No Telegram Home Channel"))
 
 
-def test_build_secret_hermes_telegram_no_slack_keys():
+def test_build_secret_hermes_telegram_no_slack_bot_keys():
     secret = build_secret_hermes_telegram(
         _AGENT_ID,
         _ORG_ID,

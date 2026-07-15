@@ -799,12 +799,10 @@ export function TelegramTokenStep({
 
 export function PlatformChoiceStep({
   platform,
-  agentType,
   onChange,
 }: {
-  platform: "slack" | "teams" | "telegram";
-  agentType: "openclaw" | "hermes";
-  onChange: (v: "slack" | "teams" | "telegram") => void;
+  platform: "slack" | "telegram";
+  onChange: (v: "slack" | "telegram") => void;
 }) {
   return (
     <div className="flex flex-col gap-3">
@@ -820,14 +818,6 @@ export function PlatformChoiceStep({
         title="Telegram"
         description="Connect with a bot token from @BotFather. One token, one step."
       />
-      {agentType === "openclaw" && (
-        <ChoiceCard
-          selected={platform === "teams"}
-          onClick={() => onChange("teams")}
-          title="Microsoft Teams"
-          description="Connect via Azure Bot Framework with a webhook endpoint."
-        />
-      )}
     </div>
   );
 }
@@ -851,7 +841,7 @@ export function AgentTypeStep({
         selected={agentType === "openclaw"}
         onClick={() => onChange("openclaw")}
         title="OpenClaw"
-        description="Slack, Telegram, and Microsoft Teams. Full platform support."
+        description="Slack and Telegram. Full platform support with multi-channel routing."
       />
     </div>
   );
@@ -1162,12 +1152,16 @@ export function DetailsStep({
   onSlackDmPolicyChange,
   slackVerboseMode,
   onSlackVerboseModeChange,
+  telegramGroupPolicy,
+  onTelegramGroupPolicyChange,
+  telegramDmPolicy,
+  onTelegramDmPolicyChange,
   approvalMode,
   onApprovalModeChange,
   onChangeTemplate,
 }: {
   template: AgentTemplateRead;
-  platform: "slack" | "teams" | "telegram";
+  platform: "slack" | "telegram";
   agentType: "openclaw" | "hermes";
   name: string;
   onNameChange: (v: string) => void;
@@ -1179,6 +1173,10 @@ export function DetailsStep({
   onSlackDmPolicyChange: (v: string) => void;
   slackVerboseMode: boolean;
   onSlackVerboseModeChange: (v: boolean) => void;
+  telegramGroupPolicy: string;
+  onTelegramGroupPolicyChange: (v: string) => void;
+  telegramDmPolicy: string;
+  onTelegramDmPolicyChange: (v: string) => void;
   approvalMode: string;
   onApprovalModeChange: (v: string) => void;
   onChangeTemplate: () => void;
@@ -1271,6 +1269,33 @@ export function DetailsStep({
               </select>
             </FormField>
           )}
+        </>
+      )}
+
+      {platform === "telegram" && (
+        <>
+          <FormField label="Group access" hint="You can add specific groups after hiring">
+            <select
+              className="af-input"
+              value={telegramGroupPolicy}
+              onChange={(e) => onTelegramGroupPolicyChange(e.target.value)}
+            >
+              <option value="open">Open — respond in any group</option>
+              <option value="allowlist">Allowlist — only allowed groups</option>
+            </select>
+          </FormField>
+
+          <FormField label="Direct messages">
+            <select
+              className="af-input"
+              value={telegramDmPolicy}
+              onChange={(e) => onTelegramDmPolicyChange(e.target.value)}
+            >
+              <option value="open">Open — anyone can DM</option>
+              <option value="allowlist">Allowlist — only allowed users</option>
+              <option value="off">Off — ignore direct messages</option>
+            </select>
+          </FormField>
         </>
       )}
 

@@ -80,3 +80,26 @@ def validate_bot_token(bot_token: str) -> tuple[bool, str, dict]:
 
     description = data.get("description", "unknown error")
     return False, f"Telegram bot token is invalid: {description}", {}
+
+
+def get_chat_display_name(bot_token: str, chat_id: str) -> str | None:
+    """Resolve a Telegram chat/user ID to a human-readable name.
+
+    Returns a display name or None if the lookup fails.
+    """
+    url = f"{_BASE}/bot{bot_token}/getChat?chat_id={chat_id}"
+    try:
+        data = _request_json(url)
+    except Exception:
+        return None
+    if not data.get("ok"):
+        return None
+    result = data.get("result", {})
+    chat_type = result.get("type", "")
+    if chat_type in ("group", "supergroup", "channel"):
+        return result.get("title")
+    return (
+        result.get("first_name")
+        or result.get("username")
+        or result.get("last_name")
+    )

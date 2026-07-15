@@ -102,6 +102,40 @@ _HERMES_TELEGRAM_SESSIONS_JSON = json.dumps(
 # --- OpenClaw Telegram fixtures ---
 
 _TELEGRAM_CHANNEL_SESSION_KEY = "agent:main:telegram:channel:tg_chat_123"
+_TELEGRAM_DM_SESSION_KEY = "agent:main:telegram:dm:user42"
+
+_TELEGRAM_DM_INBOUND_LINE = json.dumps(
+    {
+        "id": "tg-dm-001",
+        "type": "custom_message",
+        "customType": "openclaw.runtime-context",
+        "content": "[2025-05-01 15:00:00 UTC] Telegram message in DM from user42: Hello via DM!",
+    }
+)
+
+_TELEGRAM_DM_OUTBOUND_LINE = json.dumps(
+    {
+        "id": "tg-dm-002",
+        "type": "message",
+        "timestamp": "2025-05-01T15:00:05Z",
+        "message": {
+            "role": "assistant",
+            "model": "delivery-mirror",
+            "content": [{"type": "text", "text": "DM reply from bot!"}],
+        },
+    }
+)
+
+_TELEGRAM_DM_SESSIONS_JSON = json.dumps(
+    {
+        _TELEGRAM_DM_SESSION_KEY: {
+            "sessionId": "tg-dm-uuid",
+            "chatType": "dm",
+            "groupId": "user42",
+            "origin": {"nativeChannelId": "USER42", "threadId": None},
+        },
+    }
+)
 
 _TELEGRAM_INBOUND_LINE = json.dumps(
     {
@@ -788,3 +822,23 @@ def test_openclaw_parser_telegram_session_prefix():
     assert len(outbound) == 1
     assert outbound[0].content == "Hi from the bot on Telegram!"
     assert outbound[0].channel_id == "TG_CHAT_123"
+
+
+def test_openclaw_parser_telegram_dm_session_prefix():
+    messages = parse_sessions(
+        _AGENT_ID,
+        _TELEGRAM_DM_SESSIONS_JSON,
+        _make_get_jsonl(
+            {"tg-dm-uuid": "\n".join([_TELEGRAM_DM_INBOUND_LINE, _TELEGRAM_DM_OUTBOUND_LINE])}
+        ),
+    )
+
+    assert len(messages) == 2
+    inbound = [m for m in messages if m.direction == MessageDirection.INBOUND]
+    assert len(inbound) == 1
+    assert inbound[0].content == "Hello via DM!"
+    assert inbound[0].sender_id == "user42"
+    outbound = [m for m in messages if m.direction == MessageDirection.OUTBOUND]
+    assert len(outbound) == 1
+    assert outbound[0].content == "DM reply from bot!"
+    assert outbound[0].channel_id == "USER42"
