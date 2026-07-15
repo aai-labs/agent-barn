@@ -39,8 +39,6 @@ class AuditAction(StrEnum):
     AGENT_START = "agent.start"
     AGENT_STOP = "agent.stop"
     AGENT_DELETE = "agent.delete"
-    AGENT_PAIR = "agent.pair"
-    AGENT_INTEGRATION_VALIDATE = "agent.integration_validate"
     # Agent reads
     AGENT_VIEW = "agent.view"
     AGENT_LOGS_VIEW = "agent.logs_view"
@@ -81,7 +79,6 @@ class AuditAction(StrEnum):
     AUTH_PASSWORD_RESET_REQUEST = "auth.password_reset_request"
     AUTH_PASSWORD_RESET = "auth.password_reset"
     AUTH_SET_PASSWORD = "auth.set_password"
-    AUTH_PROFILE_UPDATE = "auth.profile_update"
     AUTH_SLACK_CONFIG_TOKEN_SAVE = "auth.slack_config_token_save"
     AUTH_SLACK_CONFIG_TOKEN_DELETE = "auth.slack_config_token_delete"
 

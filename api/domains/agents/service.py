@@ -1383,13 +1383,6 @@ class AgentService:
                 detail=f"Failed to execute pairing command in agent {agent_id}",
             ) from exc
 
-        self.audit_log_service.record(
-            action=AuditAction.AGENT_PAIR,
-            context=context,
-            target_type=TargetType.AGENT,
-            target_id=agent.id,
-            target_label=agent.name,
-        )
         return output
 
     def _check_slack_tokens(
@@ -1536,13 +1529,6 @@ class AgentService:
             validation_status = "valid"
         else:
             validation_status = "invalid"
-        self.audit_log_service.record(
-            action=AuditAction.AGENT_INTEGRATION_VALIDATE,
-            context=context,
-            target_type=TargetType.AGENT,
-            target_id=agent_id,
-            target_label=provider.value,
-        )
         return {
             "validation_status": validation_status,
             "validation_identity": result.identity,

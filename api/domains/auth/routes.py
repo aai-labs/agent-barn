@@ -160,18 +160,8 @@ def update_current_user_profile(
     user_update: UserUpdate,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     user_service: UserService = Injected(UserService),
-    audit_log_service: AuditLogService = Injected(AuditLogService),
 ):
-    result = user_service.update_current_user(context.user.id, user_update)
-    audit_log_service.record(
-        action=AuditAction.AUTH_PROFILE_UPDATE,
-        context=context,
-        organization_id=None,
-        target_type=TargetType.USER,
-        target_id=context.user.id,
-        target_label=context.user.email,
-    )
-    return result
+    return user_service.update_current_user(context.user.id, user_update)
 
 
 @auth_router.post("/me/change-password", response_model=Token)

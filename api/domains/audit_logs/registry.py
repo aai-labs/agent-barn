@@ -21,8 +21,6 @@ AUDITED_ROUTES: dict[str, AuditAction | tuple[AuditAction, ...]] = {
     "delete_agent": AuditAction.AGENT_DELETE,
     "start_agent": AuditAction.AGENT_START,
     "stop_agent": AuditAction.AGENT_STOP,
-    "pair_agent": AuditAction.AGENT_PAIR,
-    "validate_integration": AuditAction.AGENT_INTEGRATION_VALIDATE,
     "get_agent": AuditAction.AGENT_VIEW,
     "get_agent_logs": AuditAction.AGENT_LOGS_VIEW,
     "get_agent_log_history": AuditAction.AGENT_LOGS_VIEW,
@@ -31,7 +29,6 @@ AUDITED_ROUTES: dict[str, AuditAction | tuple[AuditAction, ...]] = {
     # auth
     "login_for_access_token": (AuditAction.AUTH_LOGIN, AuditAction.AUTH_LOGIN_FAILED),
     "logout": AuditAction.AUTH_LOGOUT,
-    "update_current_user_profile": AuditAction.AUTH_PROFILE_UPDATE,
     "change_current_user_password": AuditAction.AUTH_PASSWORD_CHANGE,
     "forgot_password": AuditAction.AUTH_PASSWORD_RESET_REQUEST,
     "reset_password": AuditAction.AUTH_PASSWORD_RESET,
@@ -83,6 +80,11 @@ AUDIT_EXEMPT_ROUTES: dict[str, str] = {
     "refresh_access_token": "token refresh, not a distinct user action",
     "get_current_user_context": "reads own identity (/me); every page load",
     "signup": "disabled stub endpoint",
+    # live endpoints with no frontend path — nothing reaches them from the app
+    "pair_agent": "no frontend path (use-pair-agent hook is unused)",
+    "update_current_user_profile": "no frontend path (account page has no name edit)",
+    # read-only credential check, auto-fired on viewing the secrets tab (no user action)
+    "validate_integration": "read-only re-check; auto-fires per secret on secrets-tab view",
     # pure list / lookup endpoints (the corresponding detail/mutation is audited)
     "list_agents": "list endpoint; browsing, not a discrete action",
     "list_models": "static allowlist lookup for a dropdown",
