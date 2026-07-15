@@ -716,7 +716,7 @@ class AgentService:
             if fields & updated.keys():
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=f"Cannot set {label} fields on a {agent.platform.value.title()} agent",
+                    detail=f"Cannot set {label} fields on a {agent.platform.title()} agent",
                 )
 
         # Re-pin the agent to a different template (slug, version). The model
