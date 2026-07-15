@@ -40,8 +40,6 @@ export type WizardStep =
   | "bot-builder"
   | "slack-tokens"
   | "telegram-token"
-  | "teams-bot-builder"
-  | "teams-credentials"
   | "details"
   | "skills";
 

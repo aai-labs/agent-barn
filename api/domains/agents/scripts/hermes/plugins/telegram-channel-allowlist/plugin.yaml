@@ -1,0 +1,3 @@
+name: telegram-channel-allowlist
+version: "1.0"
+description: Restrict responses to Telegram groups listed in TELEGRAM_CHANNEL_IDS; open to all if unset
