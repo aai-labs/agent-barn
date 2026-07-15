@@ -30,13 +30,10 @@ export function TopNav({ onHire }: TopNavProps) {
 
   const navTabs = [
     { href: orgBase, label: "Home" },
-    // Costs and the audit log are owner/admin-only (the endpoints are gated too); hide
-    // them from members.
+    // Costs is owner/admin-only (the endpoint is gated too); hide it from members. The
+    // org-level audit log lives on the org management page (/members), not a nav tab.
     ...(canManageMembers
-      ? [
-          { href: `${orgBase}/costs`, label: "Costs" },
-          { href: `${orgBase}/audit-log`, label: "Audit log" },
-        ]
+      ? [{ href: `${orgBase}/costs`, label: "Costs" }]
       : []),
     { href: `${orgBase}/settings`, label: "Settings" },
   ];

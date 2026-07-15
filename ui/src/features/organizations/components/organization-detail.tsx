@@ -7,6 +7,7 @@ import {
   CalendarDays,
   ChevronLeft,
   Loader2,
+  ScrollText,
   Trash2,
   UserRound,
   Users,
@@ -173,18 +174,27 @@ export function OrganizationDetail({ organizationId }: { organizationId: string 
           </p>
         </div>
 
-        {canDelete && (
-          <button
-            className="af-btn flex-shrink-0"
-            style={{ color: "var(--err)", borderColor: "var(--line)" }}
-            onClick={() => {
-              setConfirmName("");
-              setDeleteOpen(true);
-            }}
+        <div className="flex flex-shrink-0 items-center gap-2">
+          <Link
+            href={`/dashboard/${organizationId}/audit-log`}
+            className="af-btn"
+            style={{ borderColor: "var(--line)" }}
           >
-            <Trash2 width={15} height={15} /> Delete organization
-          </button>
-        )}
+            <ScrollText width={15} height={15} /> Audit log
+          </Link>
+          {canDelete && (
+            <button
+              className="af-btn"
+              style={{ color: "var(--err)", borderColor: "var(--line)" }}
+              onClick={() => {
+                setConfirmName("");
+                setDeleteOpen(true);
+              }}
+            >
+              <Trash2 width={15} height={15} /> Delete organization
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Stat row */}
