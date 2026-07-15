@@ -188,6 +188,7 @@ def _parse_jsonl(
     jsonl_text: str,
     user_map: dict[str, str] | None = None,
     channel_map: dict[str, str] | None = None,
+    conversation_type: ConversationType = ConversationType.CHANNEL,
 ) -> list[AgentChatMessage]:
     messages: list[AgentChatMessage] = []
 
@@ -212,7 +213,11 @@ def _parse_jsonl(
         ):
             content_raw = line.get("content", "")
             first_line = content_raw.split("\n")[0]
-            m = _INBOUND_RE.search(first_line) or _INBOUND_TEAMS_RE.search(first_line) or _INBOUND_TELEGRAM_RE.search(first_line)
+            m = (
+                _INBOUND_RE.search(first_line)
+                or _INBOUND_TEAMS_RE.search(first_line)
+                or _INBOUND_TELEGRAM_RE.search(first_line)
+            )
             if not m:
                 continue
             ts_str, _raw_channel, sender_id, text = (
@@ -236,7 +241,7 @@ def _parse_jsonl(
                     channel_id=channel_id,
                     thread_id=thread_id,
                     direction=MessageDirection.INBOUND,
-                    conversation_type=ConversationType.CHANNEL,
+                    conversation_type=conversation_type,
                     sender_id=sender_id,
                     sender_name=resolved_sender,
                     channel_name=resolved_channel,
@@ -275,7 +280,7 @@ def _parse_jsonl(
                     channel_id=channel_id,
                     thread_id=thread_id,
                     direction=MessageDirection.OUTBOUND,
-                    conversation_type=ConversationType.CHANNEL,
+                    conversation_type=conversation_type,
                     sender_id=None,
                     sender_name=None,
                     content=_resolve_mentions(text, user_map or {}),
@@ -472,6 +477,10 @@ def parse_sessions(
             logger.warning("Failed to read JSONL for session %s: %s", session_uuid, e)
             continue
 
+        ctype = (
+            ConversationType.DM if ":dm:" in session_key else ConversationType.CHANNEL
+        )
+
         messages = _parse_jsonl(
             agent_id,
             session_key,
@@ -480,6 +489,7 @@ def parse_sessions(
             jsonl_text,
             user_map,
             channel_map,
+            conversation_type=ctype,
         )
         all_messages.extend(messages)
         _accumulate_thread_links(jsonl_text, thread_id, root_of, link)
@@ -490,9 +500,9 @@ def parse_sessions(
     dm_session_data = sessions.get("agent:main:main")
     if dm_session_data:
         origin = dm_session_data.get("origin") or {}
-        if (
-            dm_session_data.get("chatType") == "direct"
-            and origin.get("provider") == "slack"
+        if dm_session_data.get("chatType") == "direct" and origin.get("provider") in (
+            "slack",
+            "telegram",
         ):
             dm_conversation_id = (origin.get("nativeChannelId") or "").upper() or None
             session_uuid = dm_session_data.get("sessionId")

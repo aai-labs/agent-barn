@@ -98,8 +98,4 @@ def get_chat_display_name(bot_token: str, chat_id: str) -> str | None:
     chat_type = result.get("type", "")
     if chat_type in ("group", "supergroup", "channel"):
         return result.get("title")
-    return (
-        result.get("first_name")
-        or result.get("username")
-        or result.get("last_name")
-    )
+    return result.get("first_name") or result.get("username") or result.get("last_name")

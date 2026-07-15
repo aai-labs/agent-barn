@@ -785,7 +785,9 @@ def test_handles_both_slack_and_teams_sessions():
 
 def test_hermes_distinct_conversations_telegram_dm():
     convos = hermes_distinct_conversations(_HERMES_TELEGRAM_SESSIONS_JSON)
-    dm_convos = [(cid, ct, name) for cid, ct, name in convos if ct == ConversationType.DM]
+    dm_convos = [
+        (cid, ct, name) for cid, ct, name in convos if ct == ConversationType.DM
+    ]
     assert len(dm_convos) == 1
     assert dm_convos[0][0] == "123456"
 
@@ -829,7 +831,11 @@ def test_openclaw_parser_telegram_dm_session_prefix():
         _AGENT_ID,
         _TELEGRAM_DM_SESSIONS_JSON,
         _make_get_jsonl(
-            {"tg-dm-uuid": "\n".join([_TELEGRAM_DM_INBOUND_LINE, _TELEGRAM_DM_OUTBOUND_LINE])}
+            {
+                "tg-dm-uuid": "\n".join(
+                    [_TELEGRAM_DM_INBOUND_LINE, _TELEGRAM_DM_OUTBOUND_LINE]
+                )
+            }
         ),
     )
 

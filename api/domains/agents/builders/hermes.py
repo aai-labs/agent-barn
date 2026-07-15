@@ -279,7 +279,9 @@ def build_secret_hermes_slack(
             "API_SERVER_MODEL_NAME": agent_name,
             "GATEWAY_ALLOW_ALL_USERS": "true",
             "SLACK_ALLOW_ALL_USERS": "true",
-            "SLACK_HOME_CHANNEL": channel_ids[0] if channel_ids else _NO_SLACK_HOME_CHANNEL,
+            "SLACK_HOME_CHANNEL": channel_ids[0]
+            if channel_ids
+            else _NO_SLACK_HOME_CHANNEL,
             "SLACK_CHANNEL_IDS": ",".join(channel_ids),
             "SLACK_DM_ALLOWED_USERS": ",".join(allowed_dm_users),
             "AGENT_PLATFORM": "slack",

@@ -103,8 +103,10 @@ function refresh() {
       for (const ch of order) {
         const channel = d.channels[ch];
         if (channel?.healthState !== 'healthy') {
+          if (AGENT_PLATFORM === 'telegram' && !channel?.lastError) {
+            continue;
+          }
           const everConnected = typeof channel?.lastConnectedAt === 'number';
-          const hasError = channel?.lastError != null;
           cache = { ok: false, everConnected, reason: channel?.lastError || 'channel ' + ch + ' not connected' };
           return;
         }

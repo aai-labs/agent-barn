@@ -168,7 +168,10 @@ class IngestService:
         )
         resolved: dict[str, str] = {}
         for chat_id in unresolved_ids:
-            name = get_chat_display_name(bot_token, chat_id)
+            raw_id = chat_id
+            if raw_id.upper().startswith("TELEGRAM:"):
+                raw_id = raw_id[len("TELEGRAM:") :]
+            name = get_chat_display_name(bot_token, raw_id)
             if name:
                 resolved[chat_id] = name
         return resolved, resolved
