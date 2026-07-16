@@ -320,8 +320,12 @@ def build_secret_hermes_telegram(
             "API_SERVER_KEY": api_server_key,
             "API_SERVER_MODEL_NAME": agent_name,
             "GATEWAY_ALLOW_ALL_USERS": "true",
-            "TELEGRAM_HOME_CHANNEL": _NO_TELEGRAM_HOME_CHANNEL,
-            "TELEGRAM_HOME_CHANNEL_NAME": _NO_TELEGRAM_HOME_CHANNEL_NAME,
+            "TELEGRAM_HOME_CHANNEL": allowed_chat_ids[0]
+            if allowed_chat_ids
+            else _NO_TELEGRAM_HOME_CHANNEL,
+            "TELEGRAM_HOME_CHANNEL_NAME": allowed_chat_ids[0]
+            if allowed_chat_ids
+            else _NO_TELEGRAM_HOME_CHANNEL_NAME,
             "TELEGRAM_CHANNEL_IDS": ",".join(allowed_chat_ids or []),
             "TELEGRAM_DM_ALLOWED_USERS": ",".join(allowed_dm_users or []),
             "AGENT_PLATFORM": "telegram",

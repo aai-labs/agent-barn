@@ -546,6 +546,8 @@ def test_build_secret_hermes_telegram_allowlist_seeds_dm_users():
     data = secret.string_data
     assert_that(data["TELEGRAM_DM_ALLOWED_USERS"], equal_to("111,222"))
     assert_that(data["TELEGRAM_CHANNEL_IDS"], equal_to("-100999"))
+    assert_that(data["TELEGRAM_HOME_CHANNEL"], equal_to("-100999"))
+    assert_that(data["TELEGRAM_HOME_CHANNEL_NAME"], equal_to("-100999"))
 
 
 def test_build_secret_hermes_telegram_off_policy_clears_dm_users():

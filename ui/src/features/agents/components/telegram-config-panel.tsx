@@ -18,6 +18,9 @@ export function TelegramConfigPanel({ agent, onSaved }: TelegramConfigPanelProps
   const [allowedChatIds, setAllowedChatIds] = useState((tc?.allowedChatIds ?? []).join(", "));
   const [allowedUserIds, setAllowedUserIds] = useState((tc?.allowedUserIds ?? []).join(", "));
   const [saved, setSaved] = useState(false);
+  const parsedChatIds = allowedChatIds.split(",").map((s) => s.trim()).filter(Boolean);
+  const shouldShowHermesHomeChannelMessage =
+    agent.agentType === "hermes" && parsedChatIds.length === 0;
 
   async function handleSave() {
     try {
@@ -57,6 +60,12 @@ export function TelegramConfigPanel({ agent, onSaved }: TelegramConfigPanelProps
             <option value="allowlist">Allowlist — only allowed group chats</option>
           </select>
         </div>
+
+        {shouldShowHermesHomeChannelMessage && (
+          <p className="text-[0.781rem]" style={{ color: "var(--err)" }}>
+            Set up a home channel for Hermes if you want scheduled or proactive Telegram delivery.
+          </p>
+        )}
 
         {groupPolicy === "allowlist" && (
           <div className="flex flex-col gap-1.5">
