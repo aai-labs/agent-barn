@@ -1,11 +1,13 @@
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from uuid import UUID
+import fnmatch
 
 from fastapi import HTTPException, status
 from injector import inject, singleton
 from sqlmodel import Session
 
+from api.core.config import get_config
 from api.domains.agents.service import AgentService
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.service import AuthService
@@ -53,16 +55,41 @@ class OrganizationService:
             )
         return organization
 
+    def _validate_allowed_models(self, allowed_models: list[str]) -> None:
+        if not allowed_models:
+            return
+        try:
+            catalog = self.agent_service.openrouter.list_models()
+        except Exception:
+            # If the OpenRouter catalog is unavailable (e.g. no API key locally),
+            # skip validation so admins can still configure the allowlist.
+            return
+        if not catalog:
+            return
+        for pattern in allowed_models:
+            # Strip any litellm gateway prefix so patterns match the bare OpenRouter slug.
+            bare = pattern.strip().lower().removeprefix("litellm/openrouter/")
+            catalog_ids_lower = [m["id"].lower() for m in catalog]
+            if not any(fnmatch.fnmatch(cid, bare) for cid in catalog_ids_lower):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Model pattern '{pattern}' does not match any known models in the catalog.",
+                )
+
     def create_organization(
         self, data: OrganizationCreate, actor: CurrentUserContext
     ) -> OrganizationCreateResult:
         actor.require_superuser(detail="Only a superuser can create organizations")
 
+        config = get_config()
+        allowed_models = data.allowed_models if data.allowed_models is not None else [config.agent_default_model]
+        self._validate_allowed_models(allowed_models)
+
         # Org, owner-invite (user + token) and the OWNER membership all commit together,
         # so a failed step can't leave an org with no owner. The invite email is sent
         # only after commit.
         organization = Organization(
-            name=data.name, description=data.description, is_default=False
+            name=data.name, description=data.description, is_default=False, allowed_models=allowed_models
         )
         with Session(
             self.organization_repository.delegate.engine, expire_on_commit=False
@@ -153,18 +180,30 @@ class OrganizationService:
         context: CurrentUserContext,
     ) -> OrganizationRead:
         self._ensure_can_manage_organization(organization_id, context)
-        organization = self.organization_repository.get(organization_id)
-        if not organization:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Organization {organization_id} not found",
-            )
 
-        for key, value in organization_data.model_dump(exclude_unset=True).items():
-            setattr(organization, key, value)
-        organization = self.organization_repository.save(organization)
+        dump = organization_data.model_dump(exclude_unset=True)
 
-        organization_read = self.organization_repository.get_read(organization.id)
+        # Fetch, mutate, and commit inside a single live session
+        # so SQLAlchemy properly tracks list mutations and flushes the UPDATE.
+        with Session(self.organization_repository.delegate.engine, expire_on_commit=False) as session:
+            from sqlmodel import select
+            organization = session.exec(select(Organization).where(Organization.id == organization_id)).first()
+            if not organization:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Organization {organization_id} not found",
+                )
+
+            for key, value in dump.items():
+                setattr(organization, key, value)
+            
+            from sqlalchemy.orm.attributes import flag_modified
+            if "allowed_models" in dump:
+                flag_modified(organization, "allowed_models")
+
+            session.commit()
+
+        organization_read = self.organization_repository.get_read(organization_id)
         if not organization_read:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

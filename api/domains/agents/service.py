@@ -22,6 +22,7 @@ from api.domains.agents.aai_cli_artifacts import (
     provider_secrets_map,
 )
 from api.domains.agents.aai_cli_skills import build_skills_manifest_from_zips
+from api.domains.organizations.repository import OrganizationRepository
 from api.domains.skills.models import Skill
 from api.domains.skills.repository import SkillRepository
 from api.domains.agents.builders import (
@@ -132,17 +133,15 @@ _VALIDATORS: dict[SecretProvider, Any] = {
 }
 
 
-def _allowlist_patterns(allowlist: str) -> list[str]:
-    return [p.strip().lower() for p in allowlist.split(",") if p.strip()]
-
-
-def filter_models_by_allowlist(catalog: list[dict], allowlist: str) -> list[dict]:
-    """Keeps catalogue entries whose id matches any comma-separated glob pattern.
-    An empty allowlist passes everything through. Matching is case-insensitive.
+def filter_models_by_allowlist(catalog: list[dict], allowlist: list[str]) -> list[dict]:
+    """Keeps catalogue entries whose id matches any glob pattern in the allowlist.
+    An empty allowlist blocks everything. Matching is case-insensitive.
     """
-    patterns = _allowlist_patterns(allowlist)
+    if not allowlist:
+        return []
+    patterns = [p.strip().lower() for p in allowlist if p.strip()]
     if not patterns:
-        return catalog
+        return []
     return [
         model
         for model in catalog
@@ -150,14 +149,16 @@ def filter_models_by_allowlist(catalog: list[dict], allowlist: str) -> list[dict
     ]
 
 
-def is_model_allowed(model: str, allowlist: str) -> bool:
+def is_model_allowed(model: str, allowlist: list[str]) -> bool:
     """Whether a stored model string (litellm/openrouter/<slug>) is permitted by
-    the allowlist globs. An empty allowlist permits everything. The litellm/
+    the allowlist globs. An empty allowlist blocks everything. The litellm/
     gateway prefix is stripped so patterns match the OpenRouter slug.
     """
-    patterns = _allowlist_patterns(allowlist)
+    if not allowlist:
+        return False
+    patterns = [p.strip().lower() for p in allowlist if p.strip()]
     if not patterns:
-        return True
+        return False
     slug = model.removeprefix(_OPENROUTER_MODEL_PREFIX).lower()
     return any(fnmatch.fnmatch(slug, pattern) for pattern in patterns)
 
@@ -174,20 +175,25 @@ class AgentService:
     config: Config
     skill_repository: SkillRepository
     slack_token_service: SlackConfigTokenService
+    organization_repository: "OrganizationRepository"
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
 
-    def _ensure_model_allowed(self, model: str | None) -> None:
+    def _ensure_model_allowed(self, model: str | None, org_id: UUID) -> None:
         """Rejects models outside the allowlist. litellm is cluster-internal, so
         create/update are the only paths that can set an agent's model; enforcing
         here is sufficient. An empty/None model defers to the configured default.
         """
-        if model and not is_model_allowed(model, self.config.agent_model_allowlist):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Model '{model}' is not in the allowed model list",
-            )
+        if model:
+            organization = self.organization_repository.get(org_id)
+            if not organization:
+                raise HTTPException(status_code=404, detail="Organization not found")
+            if not is_model_allowed(model, organization.allowed_models):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Model '{model}' is not in the allowed model list",
+                )
 
     @staticmethod
     def _build_skill_pointers(skills: list[Skill]) -> str:
@@ -409,7 +415,7 @@ class AgentService:
 
     def create_agent(self, data: AgentCreate, context: CurrentUserContext) -> AgentRead:
         org_id = self._org_id(context)
-        self._ensure_model_allowed(data.model)
+        self._ensure_model_allowed(data.model, org_id)
 
         if data.platform == AgentPlatform.SLACK:
             assert data.slack_bot_token is not None
@@ -671,7 +677,7 @@ class AgentService:
                 self._try_rename_slack_app(agent, updated["name"], context)
 
         if "model" in updated:
-            self._ensure_model_allowed(updated["model"])
+            self._ensure_model_allowed(updated["model"], org_id)
             agent.model = updated["model"]
 
         if "approval_mode" in updated:
@@ -1350,14 +1356,27 @@ class AgentService:
             except Exception as e:
                 logger.warning("Unexpected error joining channel %s: %s", channel_id, e)
 
-    def list_models(self, context: CurrentUserContext) -> list[dict]:
+    def list_models(self, context: CurrentUserContext, catalog: bool = False) -> list[dict]:
         """Returns the allowlisted OpenRouter models as picker options. The
         configured default (AGENT_DEFAULT_MODEL) is guaranteed present, flagged
         is_default, and listed first so the frontend and backend agree on it.
         """
-        self._org_id(context)
-        catalog = self.openrouter.list_models()
-        allowed = filter_models_by_allowlist(catalog, self.config.agent_model_allowlist)
+        org_id = self._org_id(context)
+        raw_catalog = self.openrouter.list_models()
+        
+        if catalog:
+            from api.domains.users.organization_users.models import ORG_MANAGER_ROLES
+            context.require_org_role(
+                org_id,
+                ORG_MANAGER_ROLES,
+                detail="You don't have permission to view the full model catalog.",
+            )
+            allowed = raw_catalog
+        else:
+            organization = self.organization_repository.get(org_id)
+            if not organization:
+                raise HTTPException(status_code=404, detail="Organization not found")
+            allowed = filter_models_by_allowlist(raw_catalog, organization.allowed_models)
         options = [
             {
                 "value": f"litellm/openrouter/{model['id']}",

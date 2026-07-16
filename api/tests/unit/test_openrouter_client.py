@@ -85,18 +85,17 @@ _CATALOG = [
 ]
 
 
-def test_allowlist_empty_passes_everything():
-    assert filter_models_by_allowlist(_CATALOG, "") == _CATALOG
-    assert filter_models_by_allowlist(_CATALOG, "  ") == _CATALOG
+def test_allowlist_empty_blocks_everything():
+    assert filter_models_by_allowlist(_CATALOG, []) == []
 
 
 def test_allowlist_glob_vendor_prefix():
-    result = filter_models_by_allowlist(_CATALOG, "openai/*")
+    result = filter_models_by_allowlist(_CATALOG, ["openai/*"])
     assert [m["id"] for m in result] == ["openai/gpt-5-mini", "openai/gpt-5"]
 
 
 def test_allowlist_multiple_patterns_and_exact():
-    result = filter_models_by_allowlist(_CATALOG, "qwen/qwen3.6-plus, anthropic/*")
+    result = filter_models_by_allowlist(_CATALOG, ["qwen/qwen3.6-plus", "anthropic/*"])
     assert [m["id"] for m in result] == [
         "qwen/qwen3.6-plus",
         "anthropic/claude-opus",
@@ -104,28 +103,35 @@ def test_allowlist_multiple_patterns_and_exact():
 
 
 def test_allowlist_is_case_insensitive():
-    result = filter_models_by_allowlist(_CATALOG, "OPENAI/GPT-5*")
+    result = filter_models_by_allowlist(_CATALOG, ["OPENAI/GPT-5*"])
     assert [m["id"] for m in result] == ["openai/gpt-5-mini", "openai/gpt-5"]
 
 
 def test_is_model_allowed_strips_gateway_prefix_and_matches_glob():
-    assert is_model_allowed("litellm/openrouter/openai/gpt-5-mini", "openai/*")
-    assert not is_model_allowed("litellm/openrouter/anthropic/claude", "openai/*")
+    assert is_model_allowed("litellm/openrouter/openai/gpt-5-mini", ["openai/*"])
+    assert not is_model_allowed("litellm/openrouter/anthropic/claude", ["openai/*"])
 
 
-def test_is_model_allowed_empty_allowlist_permits_anything():
-    assert is_model_allowed("litellm/openrouter/anything/at-all", "")
+def test_is_model_allowed_empty_allowlist_blocks_everything():
+    assert not is_model_allowed("litellm/openrouter/anything/at-all", [])
 
 
 def test_is_model_allowed_handles_unprefixed_value():
-    assert is_model_allowed("openai/gpt-5-mini", "openai/*")
-    assert not is_model_allowed("openai/gpt-5-mini", "qwen/*")
+    assert is_model_allowed("openai/gpt-5-mini", ["openai/*"])
+    assert not is_model_allowed("openai/gpt-5-mini", ["qwen/*"])
 
 
-def _service(openrouter, allowlist="", default_model=""):
+def _service(openrouter, allowlist=None, default_model=""):
+    if allowlist is None:
+        allowlist = ["qwen/*", "openai/*", "anthropic/*"] # pass everything in tests unless blocked
     config = MagicMock()
-    config.agent_model_allowlist = allowlist
     config.agent_default_model = default_model
+    
+    org_repo = MagicMock()
+    org = MagicMock()
+    org.allowed_models = allowlist
+    org_repo.get.return_value = org
+
     return AgentService(
         repository=MagicMock(),
         template_repository=MagicMock(),
@@ -135,6 +141,7 @@ def _service(openrouter, allowlist="", default_model=""):
         openrouter=openrouter,
         config=config,
         slack_token_service=MagicMock(),
+        organization_repository=org_repo,
     )
 
 
@@ -148,7 +155,8 @@ def test_service_maps_catalog_to_litellm_openrouter_picker_options():
             "pricing": {"prompt": "0.1"},
         }
     ]
-    service = _service(openrouter)
+    service = _service(openrouter, allowlist=["qwen/*"])
+    service._org_id = MagicMock()
 
     options = service.list_models(MagicMock())
 
@@ -169,7 +177,8 @@ def test_service_flags_and_surfaces_configured_default_first():
         {"id": "qwen/qwen3.6-plus", "name": "Qwen"},
         {"id": "openai/gpt-5-mini", "name": "GPT-5 mini"},
     ]
-    service = _service(openrouter, default_model="litellm/openrouter/openai/gpt-5-mini")
+    service = _service(openrouter, allowlist=["qwen/*", "openai/*"], default_model="litellm/openrouter/openai/gpt-5-mini")
+    service._org_id = MagicMock()
 
     options = service.list_models(MagicMock())
 
@@ -183,9 +192,10 @@ def test_service_injects_default_when_absent_from_catalog():
     openrouter.list_models.return_value = [{"id": "qwen/qwen3.6-plus", "name": "Qwen"}]
     service = _service(
         openrouter,
-        allowlist="qwen/*",
+        allowlist=["qwen/*"],
         default_model="litellm/openrouter/openai/gpt-5-mini",
     )
+    service._org_id = MagicMock()
 
     options = service.list_models(MagicMock())
 

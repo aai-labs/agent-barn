@@ -53,6 +53,7 @@ def there_is_an_organization(
             name=name,
             description=description,
             is_default=is_default,
+            allowed_models=["*"],
         )
         organization_repository.save(organization)
 

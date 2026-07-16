@@ -54,8 +54,9 @@ def list_agents(
 def list_models(
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[AgentService, Injected(AgentService)],
+    catalog: Annotated[bool, Query()] = False,
 ):
-    return service.list_models(context)
+    return service.list_models(context, catalog=catalog)
 
 
 @agents_router.get("/{agent_id}/logs/stream")
