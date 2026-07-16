@@ -350,6 +350,18 @@ def test_build_hermes_deployment_has_no_empty_dir_workspace_volume():
     assert_that("workspace" in volume_names, equal_to(False))
 
 
+def test_build_hermes_deployment_anchors_cwd_env_to_workspace():
+    # The hermes process starts in its install dir (/opt/hermes) and the user's
+    # HOME is /opt/data, so without these env vars the agent's shell is anchored
+    # in the wrong place and relative writes miss the persistent /workspace.
+    # ocbw sets both alongside terminal.cwd (openclaw_bootstrap/hermes.py) —
+    # mirror that.
+    dep = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:latest")
+    env = {e.name: e.value for e in dep.spec.template.spec.containers[0].env or []}
+    assert_that(env.get("TERMINAL_CWD"), equal_to("/workspace"))
+    assert_that(env.get("MESSAGING_CWD"), equal_to("/workspace"))
+
+
 def test_start_sh_prunes_stale_skills_before_seeding():
     # /workspace persists now, so a skill file from a removed integration would
     # linger without an explicit prune before re-seeding.
