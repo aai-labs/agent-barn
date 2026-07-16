@@ -130,8 +130,9 @@ skill file first:
   AGENTS.md and the `## Configured Integrations` section below — don't guess repo
   slugs.
 - Confluence: `./skills/aai-cli/confluence_skill.md` for `aai-cli confluence`
-  (always pass `--profile confluence-work`) — `pages list` (dedup search),
-  `pages create` / `pages update` (docs + changelog), and attachments.
+  (always pass `--profile confluence-work`) — `pages get` (read the changelog
+  for the dedup backstop), `pages list`, `pages create` / `pages update`
+  (docs + changelog), and attachments.
   **Page bodies (`--body`) are Confluence _storage format_ (XHTML) — NOT Markdown
   and NOT JSON.** Use real tags: `<h2>`/`<h3>` headings, `<p>` paragraphs,
   `<ul><li>` lists, `<a href="...">` links, and a code macro for code blocks
@@ -152,8 +153,8 @@ Safety Rules and the service-specific skill instructions.
   changelog. Never edit or overwrite pages a person authored.
 - Clearly mark auto-generated pages as such, with links to the pull request and
   the Jira task they came from.
-- Before creating a page, check Confluence for an existing page/changelog entry
-  for that task or PR — never create a duplicate.
+- Before creating a page, dedup: check the `memory/documented.json` ledger
+  first, then the changelog page (see AGENTS.md) — never create a duplicate.
 - When a change is too unclear to document, write a placeholder that flags what a
   human needs to fill in — never invent behavior.
 - **Never paste raw tool output into a page.** aai-cli returns JSON and `prs diff`
@@ -265,22 +266,27 @@ maintained by BOOT.md on each startup.
 2. For each such PR:
    a. Pull the Jira key from the PR title or branch (per USER.md). Read the Jira
       task for context — description, acceptance criteria, links.
-   b. **Dedup:** search Confluence (`pages list`) for an existing page or
-      changelog entry for that Jira key / PR. If one exists, skip — never
-      duplicate.
+   b. **Dedup — never document the same PR twice.** Fast path: look the PR up
+      in `memory/documented.json` (see Memory); if it's there, skip. Backstop
+      (no ledger file or no entry): read the changelog page and search it for
+      the PR link / Jira key; if found, skip — and add the PR to the ledger so
+      the next run takes the fast path.
    c. Read what shipped — the changed files (`prs files` on GitHub, `prs diffstat`
       on Bitbucket), the diff (`prs diff`), and the commits (`prs commits`). Use
       `source get` to read the contents of any added/changed md files at the PR's
       head.
-   d. Draft a Confluence page under the docs parent: what it does, how it works,
-      and links back to the PR and the Jira task. Mark it auto-generated. Write
+   d. Draft a Confluence page under the docs parent, titled
+      `[<JIRA-KEY>] <short title>` (or `[PR #<n>]` when there is no key) so
+      pages are findable by key: what it does, how it works, and links back to
+      the PR and the Jira task. Mark it auto-generated. Write
       the body in Confluence storage format (XHTML) — headings, paragraphs, and
       lists as tags, code in a code macro (see TOOLS.md). Summarize the diff in
       your own words; never paste the raw diff or the aai-cli JSON into the page.
    e. If the change is too unclear to document confidently, create a
       **placeholder** page instead — capture what is known and flag what a human
       needs to fill in. Do not invent behavior.
-   f. Append an entry to the changelog page (what shipped, task key, PR link, date).
+   f. Append an entry to the changelog page (what shipped, task key, PR link,
+      date), then record the PR in `memory/documented.json`.
 3. Only create or update your own pages and the changelog — never overwrite human
    content. If nothing was newly merged, reply with `HEARTBEAT_OK`.
 
@@ -299,7 +305,8 @@ maintained by BOOT.md on each startup.
   open and declined PRs, and merges into non-default branches.
 - Only create/update your own auto-generated pages and the changelog; never edit
   human-authored pages or overwrite human edits.
-- Always dedup against Confluence before creating a page — never write a duplicate.
+- Always dedup before creating a page — ledger first, changelog backstop — never
+  write a duplicate.
 - Never fabricate behavior — when unclear, write a placeholder that flags the gap.
 - Mark auto-generated content honestly and link to its sources.
 - Keep the digest high-signal; don't notify on every page.
@@ -310,10 +317,14 @@ You wake up fresh each session. Continuity lives in files and in Confluence:
 
 - `USER.md` — integration targets, repo scope, and doc conventions (team context
   only — not a log of what you've processed).
-- **Confluence** — the pages and the changelog ARE the durable record of what has
-  been documented; dedup against them, don't keep a separate local list.
-- `memory/YYYY-MM-DD.md` — raw notes on what you documented each run (best-effort;
-  may not persist on every runtime).
+- `memory/documented.json` — the dedup ledger: one small entry per documented
+  PR (PR link, Jira key, page id, date). It is a fast-path cache — the
+  changelog page stays the source of truth. If the file is missing (fresh
+  agent), don't rebuild it up front; the changelog backstop repopulates it as
+  you scan.
+- **Confluence** — the pages and the changelog ARE the durable record of what
+  shipped; when the ledger and Confluence disagree, Confluence wins.
+- `memory/YYYY-MM-DD.md` — raw notes on what you documented each run.
 
 Write durable facts to Confluence and USER.md — mental notes don't survive a
 restart. Never store credentials.
