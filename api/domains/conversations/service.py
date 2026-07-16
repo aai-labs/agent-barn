@@ -75,29 +75,40 @@ class ConversationService:
         agent_id: UUID,
         merged: dict[str, tuple[str | None, ConversationType]],
     ) -> None:
-        unresolved = [
+        unresolved_channels = [
             cid
             for cid, (name, ctype) in merged.items()
             if ctype == ConversationType.CHANNEL and (name is None or name == cid)
         ]
-        if not unresolved:
+        unresolved_dms = [
+            cid
+            for cid, (name, ctype) in merged.items()
+            if ctype == ConversationType.DM and (name is None or name == cid)
+        ]
+        if not unresolved_channels and not unresolved_dms:
             return
-        _, slack_channel_map = self._platform_maps(agent_id)
-        for cid in unresolved:
-            resolved = slack_channel_map.get(cid)
+        user_map, channel_map, dm_map = self._platform_maps(agent_id)
+        for cid in unresolved_channels:
+            resolved = channel_map.get(cid)
+            if resolved:
+                merged[cid] = (resolved, merged[cid][1])
+        for cid in unresolved_dms:
+            resolved = dm_map.get(cid)
             if resolved:
                 merged[cid] = (resolved, merged[cid][1])
 
-    def _platform_maps(self, agent_id: UUID) -> tuple[dict[str, str], dict[str, str]]:
+    def _platform_maps(
+        self, agent_id: UUID
+    ) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
         agent = self.agent_repository.get_by_id(agent_id)
         if not (agent and self.config.agent_token_encryption_key):
-            return {}, {}
+            return {}, {}, {}
         if agent.platform == AgentPlatform.TEAMS:
-            return {}, {}
+            return {}, {}, {}
         try:
             slack_config = self.agent_repository.get_slack_config(agent_id)
             if not slack_config:
-                return {}, {}
+                return {}, {}, {}
             bot_token = decrypt_token(
                 slack_config.bot_token_encrypted,
                 self.config.agent_token_encryption_key,
@@ -112,10 +123,17 @@ class ConversationService:
             channel_map = {
                 c["id"]: c["name"] for c in channels if c["id"] and c["name"]
             }
-            return user_map, channel_map
+            try:
+                dm_channels = slack.list_dm_channels()
+                dm_map: dict[str, str] = {
+                    dm["id"]: user_map.get(dm["user"], dm["user"]) for dm in dm_channels
+                }
+            except Exception:
+                dm_map = {}
+            return user_map, channel_map, dm_map
         except Exception as e:
             logger.warning("Failed to fetch Slack maps for agent %s: %s", agent_id, e)
-            return {}, {}
+            return {}, {}, {}
 
     def list_threads(
         self,

@@ -31,7 +31,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     python3 -m playwright install chromium --with-deps && \
     chmod -R o+rX /opt/playwright
 
-RUN npm install -g openclaw@2026.5.7
+RUN npm install -g openclaw@2026.6.11
 
 ARG CLOUD_CLIS=false
 ENV CLOUD_CLIS=${CLOUD_CLIS}
@@ -60,7 +60,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     fi
 
 RUN mkdir -p /opt/openclaw-preinstalled/npm && \
-    npm install --prefix /opt/openclaw-preinstalled/npm @openclaw/msteams@2026.5.7 && \
+    npm install --prefix /opt/openclaw-preinstalled/npm @openclaw/msteams@2026.5.27 && \
     chown -R node:node /opt/openclaw-preinstalled
 
 USER node
