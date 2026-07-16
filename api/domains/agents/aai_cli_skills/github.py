@@ -378,10 +378,15 @@ GitHub exposes three distinct PR comment resources. This skill keeps them as sep
 ## prs list
 
 List pull requests for a repository. Returns the raw GitHub provider page.
+By default GitHub returns only **open** PRs — pass `--state` to change that.
 
 ```
-aai-cli github prs list [--owner OWNER] [--repo REPO] [--limit N] --profile github-work
+aai-cli github prs list [--owner OWNER] [--repo REPO] [--limit N] [--state STATE] --profile github-work
 ```
+
+`--state` accepts `open` (default), `closed`, or `all`. GitHub has no "merged"
+state: to find **merged** PRs, use `--state closed` and keep those whose
+`merged_at` is not null.
 
 ---
 

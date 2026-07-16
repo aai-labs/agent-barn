@@ -352,9 +352,10 @@ Most commands accept `--repo REPO`. Newer commands also accept `--owner WORKSPAC
 ## prs list
 
 List pull requests for a repository. Returns the raw Bitbucket provider page.
+By default Bitbucket returns only **OPEN** PRs — pass `--state` to change that.
 
 ```
-aai-cli bitbucket prs list [--repo REPO] [--owner WORKSPACE] [--limit N] --profile bitbucket-work
+aai-cli bitbucket prs list [--repo REPO] [--owner WORKSPACE] [--limit N] [--state STATE] --profile bitbucket-work
 ```
 
 | Flag | Required | Description |
@@ -362,11 +363,12 @@ aai-cli bitbucket prs list [--repo REPO] [--owner WORKSPACE] [--limit N] --profi
 | `--repo` | **yes** | Bare repository slug (e.g. `my-repo`) |
 | `--owner` | **yes** | Bitbucket workspace |
 | `--limit` | no | Provider page length. Default: `50` |
+| `--state` | no | PR state: `OPEN` (default), `MERGED`, `DECLINED`, or `SUPERSEDED` |
 
-**Example**
+**Example — merged PRs**
 
 ```
-aai-cli bitbucket prs list --repo my-repo --limit 5 --profile bitbucket-work
+aai-cli bitbucket prs list --repo my-repo --state MERGED --limit 5 --profile bitbucket-work
 ```
 
 ---
