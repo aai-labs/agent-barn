@@ -257,9 +257,16 @@ def build_hermes_deployment(
                                     name="data",
                                     mount_path="/opt/data",
                                 ),
+                                # /workspace is the agent's cwd; back it with the
+                                # per-agent PVC so agent-written files survive
+                                # restarts (AF-215) — like ocbw's persistent
+                                # ./agents/<name>/workspace and OpenClaw's
+                                # PVC-nested workspace. subPath keeps it a
+                                # sibling of the /opt/data content on one PVC.
                                 client.V1VolumeMount(
-                                    name="workspace",
+                                    name="data",
                                     mount_path="/workspace",
+                                    sub_path="workspace",
                                 ),
                             ],
                         )
@@ -274,10 +281,6 @@ def build_hermes_deployment(
                             persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(
                                 claim_name=name
                             ),
-                        ),
-                        client.V1Volume(
-                            name="workspace",
-                            empty_dir=client.V1EmptyDirVolumeSource(),
                         ),
                     ],
                 ),
