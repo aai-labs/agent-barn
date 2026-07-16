@@ -9,6 +9,10 @@ more / the action set can grow" survives future development.
 The map is keyed on the route handler's function ``__name__``. It is documentation, not
 wiring: the actual ``record()`` calls live in the services/routes. Keeping them listed
 here (rather than introspected) is intentional — it's a human-maintained checklist.
+
+Placement: mutations record in services (post-commit); reads record in the route —
+unless the service method already holds the agent (for the target label) and isn't
+reused internally, in which case the read records in the service too.
 """
 
 from api.domains.audit_logs.models import AuditAction
@@ -41,8 +45,6 @@ AUDITED_ROUTES: dict[str, AuditAction | tuple[AuditAction, ...]] = {
     # costs
     "get_cost_summary": AuditAction.COST_VIEW,
     "get_agent_cost": AuditAction.COST_VIEW,
-    # integrations
-    "google_token_exchange": AuditAction.INTEGRATION_GOOGLE_CONNECT,
     # organizations
     "create_organization": AuditAction.ORG_CREATE,
     "update_organization": AuditAction.ORG_UPDATE,
@@ -107,6 +109,10 @@ AUDIT_EXEMPT_ROUTES: dict[str, str] = {
     # OAuth handshake steps with no durable user-authenticated state
     "google_authorize_url": "OAuth handshake step; no durable state",
     "google_callback": "OAuth redirect target; no user token on the request",
+    "google_token_exchange": (
+        "credential mint with no expressible object (the receiving agent doesn't exist"
+        " yet); the attach is audited via agent.create/update"
+    ),
     # agent-key-authenticated inbound webhooks — AF-5's domain, no user actor
     "teams_webhook": "inbound agent webhook; no user actor (AF-5 domain)",
 }

@@ -83,7 +83,6 @@ class AuditAction(StrEnum):
     AUTH_SLACK_CONFIG_TOKEN_DELETE = "auth.slack_config_token_delete"
 
     # Integrations
-    INTEGRATION_GOOGLE_CONNECT = "integration.google_connect"
     INTEGRATION_SLACK_APP_CREATE = "integration.slack_app_create"
 
     # Cost

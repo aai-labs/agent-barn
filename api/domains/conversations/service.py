@@ -8,6 +8,9 @@ from injector import inject, singleton
 from api.core.config import Config
 from api.domains.agents.models import AgentPlatform
 from api.domains.agents.repository import AgentRepository
+from api.domains.audit_logs.models import AuditAction, TargetType
+from api.domains.audit_logs.service import AuditLogService
+from api.domains.auth.models import CurrentUserContext
 from api.domains.conversations.models import (
     AgentChatMessage,
     ConversationChannelRead,
@@ -32,9 +35,10 @@ class ConversationService:
     repository: ConversationRepository
     agent_repository: AgentRepository
     config: Config
+    audit_log_service: AuditLogService
 
     def list_channels(
-        self, agent_id: UUID, org_id: UUID
+        self, agent_id: UUID, org_id: UUID, context: CurrentUserContext
     ) -> list[ConversationChannelRead]:
         agent = self.agent_repository.get_active(agent_id, org_id)
         if not agent:
@@ -42,6 +46,15 @@ class ConversationService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Agent {agent_id} not found",
             )
+        # Recorded here (not in the route) because the agent — and hence its name for
+        # the target label — is already in hand. Suppressed read; record() never raises.
+        self.audit_log_service.record(
+            action=AuditAction.AGENT_CONVERSATIONS_VIEW,
+            context=context,
+            target_type=TargetType.AGENT,
+            target_id=agent.id,
+            target_label=agent.name,
+        )
 
         db_channels = self.repository.distinct_channels(agent_id)
         merged: dict[str, tuple[str | None, ConversationType]] = {
@@ -112,6 +125,7 @@ class ConversationService:
         filter: ConversationsFilter,
         cursor: ConversationsCursor,
         page_size: int,
+        context: CurrentUserContext,
     ) -> ConversationThreadsPage:
         agent = self.agent_repository.get_active(agent_id, org_id)
         if not agent:
@@ -119,6 +133,13 @@ class ConversationService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Agent {agent_id} not found",
             )
+        self.audit_log_service.record(
+            action=AuditAction.AGENT_CONVERSATIONS_VIEW,
+            context=context,
+            target_type=TargetType.AGENT,
+            target_id=agent.id,
+            target_label=agent.name,
+        )
 
         messages = self.repository.find_all_channel_messages(
             agent_id=agent_id,

@@ -68,13 +68,16 @@ def login_for_access_token(
     )
 
     def _record_failed_login(user_id=None):
-        # Failed logins are the highest-value security signal here — capture the
-        # attempted email even when no user matches. Global action → NULL org.
+        # Failed logins are the highest-value security signal here. The actor is
+        # deliberately anonymous — an unauthenticated caller has no attributable
+        # subject; the attempted *account* is the object (target_id only when the email
+        # matched a real user). Global action → NULL org.
         audit_log_service.record(
             action=AuditAction.AUTH_LOGIN_FAILED,
-            actor_user_id=user_id,
-            actor_email=form_data.username,
             organization_id=None,
+            target_type=TargetType.USER,
+            target_id=user_id,
+            target_label=form_data.username,
         )
 
     try:
@@ -230,6 +233,7 @@ def logout(
     request: Request,
     response: Response,
     config: Config = Injected(Config),
+    user_service: UserService = Injected(UserService),
     audit_log_service: AuditLogService = Injected(AuditLogService),
 ):
     is_local_like = config.environment in {"local", "test"}
@@ -241,12 +245,15 @@ def logout(
     )
     # This route has no auth dependency (logout must work even with a stale token), so
     # identify the actor best-effort from the bearer token and skip silently if absent.
-    _record_logout(request, config, audit_log_service)
+    _record_logout(request, config, user_service, audit_log_service)
     return {"message": "Successfully logged out"}
 
 
 def _record_logout(
-    request: Request, config: Config, audit_log_service: AuditLogService
+    request: Request,
+    config: Config,
+    user_service: UserService,
+    audit_log_service: AuditLogService,
 ) -> None:
     header = request.headers.get("Authorization", "")
     if not header.lower().startswith("bearer "):
@@ -261,10 +268,20 @@ def _record_logout(
         return
     if not user_id:
         return
+    # Best-effort email snapshot so the subject is human-readable; a deleted user
+    # still gets an id-only row.
+    try:
+        email = user_service.get_user(UUID(user_id)).email
+    except HTTPException:
+        email = None
     audit_log_service.record(
         action=AuditAction.AUTH_LOGOUT,
         actor_user_id=UUID(user_id),
+        actor_email=email,
         organization_id=None,
+        target_type=TargetType.USER,
+        target_id=UUID(user_id),
+        target_label=email,
     )
 
 

@@ -34,7 +34,7 @@ def list_tool_calls(
     page_size: Annotated[int, Query(ge=1)] = 50,
 ):
     org_id = context.require_current_user_organization().organization_id
-    agent_service.get_agent(agent_id, context)  # raises 404 if not found or wrong org
+    agent = agent_service.get_agent(agent_id, context)  # 404 if not found or wrong org
     result = tool_call_service.list_tool_calls(
         agent_id, org_id, tool_call_filter, Pagination(page=page, size=page_size)
     )
@@ -43,5 +43,6 @@ def list_tool_calls(
         context=context,
         target_type=TargetType.AGENT,
         target_id=agent_id,
+        target_label=agent.name,
     )
     return result

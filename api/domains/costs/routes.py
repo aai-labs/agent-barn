@@ -10,6 +10,7 @@ from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import get_current_user
 from api.domains.costs.models import AgentCostRead, OrgCostSummaryRead
 from api.domains.costs.service import CostService
+from api.domains.organizations.service import OrganizationService
 from api.domains.users.organization_users.models import ORG_MANAGER_ROLES
 
 costs_router = APIRouter(prefix="/costs", tags=["costs"])
@@ -29,6 +30,7 @@ def get_cost_summary(
         Depends(get_current_user(organization_roles=ORG_MANAGER_ROLES)),
     ],
     service: Annotated[CostService, Injected(CostService)],
+    organization_service: Annotated[OrganizationService, Injected(OrganizationService)],
     audit_log_service: Annotated[AuditLogService, Injected(AuditLogService)],
     start_date: str | None = None,
     end_date: str | None = None,
@@ -36,7 +38,16 @@ def get_cost_summary(
     result = service.get_org_cost_summary(
         context, start_date=start_date, end_date=end_date
     )
-    audit_log_service.record(action=AuditAction.COST_VIEW, context=context)
+    # The object of an org-wide spend view is the organization itself.
+    org_id = context.require_current_user_organization().organization_id
+    organization = organization_service.get_organization(org_id, context)
+    audit_log_service.record(
+        action=AuditAction.COST_VIEW,
+        context=context,
+        target_type=TargetType.ORGANIZATION,
+        target_id=org_id,
+        target_label=organization.name,
+    )
     return result
 
 
@@ -56,5 +67,6 @@ def get_agent_cost(
         context=context,
         target_type=TargetType.AGENT,
         target_id=agent_id,
+        target_label=result.agent_name,
     )
     return result

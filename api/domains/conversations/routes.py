@@ -5,8 +5,6 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query
 from fastapi_injector import Injected
 
-from api.domains.audit_logs.models import AuditAction, TargetType
-from api.domains.audit_logs.service import AuditLogService
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.routes import get_current_user
 from api.domains.conversations.models import (
@@ -44,17 +42,10 @@ def list_channels(
     agent_id: UUID,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[ConversationService, Injected(ConversationService)],
-    audit_log_service: Annotated[AuditLogService, Injected(AuditLogService)],
 ) -> list[ConversationChannelRead]:
     org_id = context.require_current_user_organization().organization_id
-    result = service.list_channels(agent_id, org_id)
-    audit_log_service.record(
-        action=AuditAction.AGENT_CONVERSATIONS_VIEW,
-        context=context,
-        target_type=TargetType.AGENT,
-        target_id=agent_id,
-    )
-    return result
+    # agent.conversations_view is recorded inside the service, where the agent is in hand.
+    return service.list_channels(agent_id, org_id, context)
 
 
 @conversations_router.get(
@@ -66,25 +57,18 @@ def list_channel_messages(
     channel_id: str,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[ConversationService, Injected(ConversationService)],
-    audit_log_service: Annotated[AuditLogService, Injected(AuditLogService)],
     filter: Annotated[ConversationsFilter, Depends(get_conversations_filter)],
     cursor: Annotated[ConversationsCursor, Depends(get_conversations_cursor)],
     page_size: int = Query(default=6, ge=1, le=100),
 ) -> ConversationThreadsPage:
     org_id = context.require_current_user_organization().organization_id
-    result = service.list_threads(
+    # agent.conversations_view is recorded inside the service, where the agent is in hand.
+    return service.list_threads(
         agent_id=agent_id,
         org_id=org_id,
         channel_id=channel_id,
         filter=filter,
         cursor=cursor,
         page_size=page_size,
-    )
-    audit_log_service.record(
-        action=AuditAction.AGENT_CONVERSATIONS_VIEW,
         context=context,
-        target_type=TargetType.AGENT,
-        target_id=agent_id,
-        target_label=channel_id,
     )
-    return result

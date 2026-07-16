@@ -207,9 +207,15 @@ def test_failed_login_is_recorded_and_visible_to_superuser():
                 context, token, ORG_A, scope="all", action="auth.login_failed"
             ).json()["items"]
             assert_that(len(rows), greater_than_or_equal_to(1))
-            attempted = [r["actor_email"] for r in rows]
+            # The subject is anonymous (nobody authenticated); the attempted account
+            # is the object — with target_id set since the email matched a real user.
+            attempted = [r["target_label"] for r in rows]
             assert_that(attempted, has_item("owner-a@example.com"))
-            assert_that(rows[0]["organization_id"], is_(None))
+            row = next(r for r in rows if r["target_label"] == "owner-a@example.com")
+            assert_that(row["actor_email"], is_(None))
+            assert_that(row["actor_user_id"], is_(None))
+            assert_that(row["target_id"], equal_to(str(OWNER_A)))
+            assert_that(row["organization_id"], is_(None))
 
 
 def test_auth_events_hidden_from_org_scoped_view():
@@ -267,6 +273,95 @@ def test_agent_view_is_recorded_and_deduped():
             assert_that(len(rows), equal_to(1))
             assert_that(rows[0]["target_id"], equal_to(str(agent_id)))
             assert_that(rows[0]["target_label"], equal_to("Viewable Agent"))
+
+
+def test_read_events_carry_visible_objects():
+    """Every read's target is a user-visible entity: agent reads carry the agent's
+    name as the label, and the org-wide cost summary targets the organization."""
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_user(
+                id=OWNER_A,
+                email="owner-a@example.com",
+                organization_id=ORG_A,
+                role=OrganizationRole.OWNER,
+            ),
+            there_is_an_agent(organization_id=ORG_A, name="Object Agent"),
+        ]
+    ) as context:
+        token = _token_for(context, OWNER_A)
+        agent_id = context.agent.id
+        headers = _headers(token, ORG_A)
+
+        with when("the owner views tool calls, conversations, logs, and org costs"):
+            for path in (
+                f"/api/v1/agents/{agent_id}/tool-calls",
+                f"/api/v1/agents/{agent_id}/conversations/channels",
+                f"/api/v1/agents/{agent_id}/logs",
+                "/api/v1/costs/summary",
+            ):
+                resp = context.client.get(path, headers=headers)
+                assert_that(resp.status_code, equal_to(status.HTTP_200_OK))
+
+        with then("the agent reads label their target with the agent's name"):
+            for action in (
+                "agent.tool_calls_view",
+                "agent.conversations_view",
+                "agent.logs_view",
+            ):
+                rows = _list(context, token, ORG_A, action=action).json()["items"]
+                assert_that(len(rows), equal_to(1))
+                assert_that(rows[0]["target_type"], equal_to("agent"))
+                assert_that(rows[0]["target_id"], equal_to(str(agent_id)))
+                assert_that(rows[0]["target_label"], equal_to("Object Agent"))
+
+        with then("the org cost summary targets the organization by name"):
+            rows = _list(context, token, ORG_A, action="cost.view").json()["items"]
+            assert_that(len(rows), equal_to(1))
+            assert_that(rows[0]["target_type"], equal_to("organization"))
+            assert_that(rows[0]["target_id"], equal_to(str(ORG_A)))
+            assert_that(rows[0]["target_label"], equal_to(f"test-org-{ORG_A}"))
+
+
+def test_logout_records_readable_reflexive_row():
+    """auth.logout snapshots the actor's email (not just the token's UUID) and points
+    its target at the user themselves, like the other reflexive auth events."""
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_user(
+                id=SUPERUSER,
+                email="root@example.com",
+                is_superuser=True,
+                organization_id=None,
+            ),
+            there_is_a_user(
+                id=OWNER_A,
+                email="owner-a@example.com",
+                organization_id=ORG_A,
+                role=OrganizationRole.OWNER,
+            ),
+        ]
+    ) as context:
+        with when("the owner logs out with a valid bearer token"):
+            token = _token_for(context, OWNER_A)
+            resp = context.client.post("/api/v1/auth/logout", headers=_headers(token))
+            assert_that(resp.status_code, equal_to(status.HTTP_200_OK))
+
+        with then("the logout row is readable and reflexive"):
+            su_token = _token_for(context, SUPERUSER)
+            rows = _list(
+                context, su_token, ORG_A, scope="all", action="auth.logout"
+            ).json()["items"]
+            assert_that(len(rows), equal_to(1))
+            row = rows[0]
+            assert_that(row["actor_user_id"], equal_to(str(OWNER_A)))
+            assert_that(row["actor_email"], equal_to("owner-a@example.com"))
+            assert_that(row["target_type"], equal_to("user"))
+            assert_that(row["target_id"], equal_to(str(OWNER_A)))
+            assert_that(row["target_label"], equal_to("owner-a@example.com"))
+            assert_that(row["organization_id"], is_(None))
 
 
 # --------------------------------------------------------------------------- #

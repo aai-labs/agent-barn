@@ -86,7 +86,6 @@ const ACTION_LABELS: Record<string, string> = {
   "auth.set_password": "Password set",
   "auth.slack_config_token_save": "Slack config token saved",
   "auth.slack_config_token_delete": "Slack config token deleted",
-  "integration.google_connect": "Google connected",
   "integration.slack_app_create": "Slack app created",
   "cost.view": "Viewed costs",
   "audit_log.view": "Viewed audit log",

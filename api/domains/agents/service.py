@@ -1160,6 +1160,15 @@ class AgentService:
     ) -> AgentLogsRead:
         org_id = self._org_id(context)
         agent = self._get_active_or_404(agent_id, org_id)
+        # Recorded here (not in the route) because the agent — and hence its name for
+        # the target label — is already in hand. Suppressed read; record() never raises.
+        self.audit_log_service.record(
+            action=AuditAction.AGENT_LOGS_VIEW,
+            context=context,
+            target_type=TargetType.AGENT,
+            target_id=agent.id,
+            target_label=agent.name,
+        )
 
         latest_snapshot = self.repository.get_latest_log_snapshot(agent_id)
         has_snapshots = latest_snapshot is not None
@@ -1211,7 +1220,14 @@ class AgentService:
         snapshot_id: UUID | None = None,
     ) -> AgentLogHistoryRead:
         org_id = self._org_id(context)
-        self._get_active_or_404(agent_id, org_id)
+        agent = self._get_active_or_404(agent_id, org_id)
+        self.audit_log_service.record(
+            action=AuditAction.AGENT_LOGS_VIEW,
+            context=context,
+            target_type=TargetType.AGENT,
+            target_id=agent.id,
+            target_label=agent.name,
+        )
 
         if snapshot_id is not None:
             snapshot = self.repository.get_snapshot_by_id(agent_id, snapshot_id)

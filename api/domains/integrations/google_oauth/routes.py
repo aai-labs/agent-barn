@@ -38,8 +38,6 @@ from jwt.exceptions import InvalidTokenError
 from pydantic import BaseModel
 
 from api.core.config import Config
-from api.domains.audit_logs.models import AuditAction, TargetType
-from api.domains.audit_logs.service import AuditLogService
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.service import JWT_ENCODING_ALGORITHM
 from api.domains.auth.utils import get_current_user
@@ -219,9 +217,8 @@ class GoogleTokenExchangeRequest(BaseModel):
 @integrations_router.post("/google/token")
 def google_token_exchange(
     body: GoogleTokenExchangeRequest,
-    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    _context: Annotated[CurrentUserContext, Depends(get_current_user())],
     config: Config = Injected(Config),
-    audit_log_service: AuditLogService = Injected(AuditLogService),
 ):
     """Exchange the authorization code for a refresh token.
 
@@ -274,10 +271,4 @@ def google_token_exchange(
             ),
         )
 
-    audit_log_service.record(
-        action=AuditAction.INTEGRATION_GOOGLE_CONNECT,
-        context=context,
-        target_type=TargetType.INTEGRATION,
-        target_label="google",
-    )
     return {"refresh_token": refresh_token}

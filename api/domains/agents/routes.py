@@ -87,17 +87,10 @@ def get_agent_log_history(
     agent_id: UUID,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[AgentService, Injected(AgentService)],
-    audit_log_service: Annotated[AuditLogService, Injected(AuditLogService)],
     snapshot_id: Annotated[UUID | None, Query()] = None,
 ):
-    result = service.get_log_history(agent_id, context, snapshot_id=snapshot_id)
-    audit_log_service.record(
-        action=AuditAction.AGENT_LOGS_VIEW,
-        context=context,
-        target_type=TargetType.AGENT,
-        target_id=agent_id,
-    )
-    return result
+    # agent.logs_view is recorded inside the service, where the agent is in hand.
+    return service.get_log_history(agent_id, context, snapshot_id=snapshot_id)
 
 
 @agents_router.get("/{agent_id}/logs", response_model=AgentLogsRead)
@@ -105,17 +98,10 @@ def get_agent_logs(
     agent_id: UUID,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[AgentService, Injected(AgentService)],
-    audit_log_service: Annotated[AuditLogService, Injected(AuditLogService)],
     tail_lines: Annotated[int, Query(ge=1, le=10000)] = 100,
 ):
-    result = service.get_agent_logs(agent_id, context, tail_lines=tail_lines)
-    audit_log_service.record(
-        action=AuditAction.AGENT_LOGS_VIEW,
-        context=context,
-        target_type=TargetType.AGENT,
-        target_id=agent_id,
-    )
-    return result
+    # agent.logs_view is recorded inside the service, where the agent is in hand.
+    return service.get_agent_logs(agent_id, context, tail_lines=tail_lines)
 
 
 @agents_router.get("/{agent_id}", response_model=AgentRead)
