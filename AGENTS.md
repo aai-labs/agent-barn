@@ -1,7 +1,7 @@
 # Agent work loop
 
 1. **Context** — Read the task-specific guidance below, inspect neighboring code, and clarify material ambiguity before large edits.
-2. **Plan** — Keep the approach scoped to the requested behavior; identify contracts, migrations, tests, and release impact before implementation.
+2. **Plan** — Keep the approach scoped to the requested behavior; identify contracts, migrations, tests, and release impact before implementation. For work spanning multiple tickets or PRs, follow `docs/guidelines/epics.md`.
 3. **Implement** — Follow established domain and feature boundaries; avoid unrelated refactors.
 4. **Verify** — Run the checks in `docs/guidelines/testing.md` for every touched area and fix failures introduced by the change.
 5. **Document** — Update agent-facing docs when domain language, invariants, boundaries, state models, or change-impact surfaces change.
@@ -16,6 +16,7 @@
 | API routes, services, repositories, models, authorization, or migrations | `docs/guidelines/code.md`       |
 | Next.js routes, React components, queries, providers, or API schemas     | `docs/guidelines/webapp.md`     |
 | Tests, coverage, lint, type checking, or verification                    | `docs/guidelines/testing.md`    |
+| Multi-ticket or multi-PR epic coordination                               | `docs/guidelines/epics.md`      |
 | Local setup, migrations, deployment, Helm, or release versions           | `docs/guidelines/operations.md` |
 
 Follow pointers in `docs/INDEX.md` before changing agent lifecycle, tenancy, templates/skills, activity ingest, integrations, costs, UI providers, or runtime/deployment behavior.
@@ -37,6 +38,8 @@ Review agents MUST treat the routed documentation as review input, not optional 
 3. Check both implementation correctness and documentation synchronization. A changed invariant, boundary, state model, or operational contract requires the authoritative document to change in the same diff.
 4. Cite the relevant documentation path and rule for each documentation-based finding.
 5. Treat documented behavior as the current contract, not an immutable one. When a change intentionally revises that contract, verify that code, tests, and docs move together instead of demanding the old behavior.
+
+For a PR belonging to an active multi-PR epic, reviewers MUST also verify that `docs/features/<epic-slug>/CHANGELOG.md` records the delivered slice and resulting current state.
 
 ## Coding core
 
