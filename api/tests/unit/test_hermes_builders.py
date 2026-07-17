@@ -411,3 +411,85 @@ def test_build_hermes_config_approval_mode_manual():
 def test_build_hermes_config_default_approval_mode_is_smart():
     cfg = build_hermes_config("litellm/qwen3", "http://litellm:4000")
     assert_that(cfg["approvals"]["mode"], equal_to("smart"))
+
+
+# --- Firecrawl (AF-152) ---
+
+
+def test_build_hermes_config_firecrawl_enabled():
+    cfg = build_hermes_config(
+        "litellm/qwen3",
+        "http://litellm:4000",
+        firecrawl_base_url="http://firecrawl:3002",
+        firecrawl_api_key="fc-key",
+    )
+    assert_that(cfg["web"], equal_to({"backend": "firecrawl"}))
+    assert_that(cfg["browser"], equal_to({"cloud_provider": "firecrawl"}))
+
+
+def test_build_hermes_config_firecrawl_disabled_when_no_url():
+    cfg = build_hermes_config(
+        "litellm/qwen3",
+        "http://litellm:4000",
+        firecrawl_api_key="fc-key",
+    )
+    assert_that(cfg, is_not(has_key("web")))
+    assert_that(cfg, is_not(has_key("browser")))
+
+
+def test_build_hermes_config_firecrawl_disabled_when_no_key():
+    cfg = build_hermes_config(
+        "litellm/qwen3",
+        "http://litellm:4000",
+        firecrawl_base_url="http://firecrawl:3002",
+    )
+    assert_that(cfg, is_not(has_key("web")))
+    assert_that(cfg, is_not(has_key("browser")))
+
+
+def test_build_hermes_config_firecrawl_disabled_by_default():
+    cfg = build_hermes_config("litellm/qwen3", "http://litellm:4000")
+    assert_that(cfg, is_not(has_key("web")))
+    assert_that(cfg, is_not(has_key("browser")))
+
+
+def test_build_secret_hermes_slack_firecrawl_env_vars():
+    secret = build_secret_hermes_slack(
+        _AGENT_ID,
+        _ORG_ID,
+        _NS,
+        agent_name="myagent",
+        slack_bot_token="xoxb-bot",
+        slack_app_token="xapp-app",
+        litellm_api_key="sk-key",
+        litellm_base_url="http://litellm:4000",
+        api_server_key="k",
+        channel_ids=["C001"],
+        dm_user_ids=[],
+        firecrawl_api_key="fc-secret",
+        firecrawl_base_url="http://firecrawl:3002",
+    )
+    data = secret.string_data
+    assert_that(data["FIRECRAWL_API_KEY"], equal_to("fc-secret"))
+    assert_that(data["FIRECRAWL_API_URL"], equal_to("http://firecrawl:3002"))
+    assert_that(data["FIRECRAWL_BROWSER_TTL"], equal_to("600"))
+
+
+def test_build_secret_hermes_slack_no_firecrawl_by_default():
+    secret = build_secret_hermes_slack(
+        _AGENT_ID,
+        _ORG_ID,
+        _NS,
+        agent_name="myagent",
+        slack_bot_token="xoxb-bot",
+        slack_app_token="xapp-app",
+        litellm_api_key="sk-key",
+        litellm_base_url="http://litellm:4000",
+        api_server_key="k",
+        channel_ids=[],
+        dm_user_ids=[],
+    )
+    data = secret.string_data
+    assert_that(data, is_not(has_key("FIRECRAWL_API_KEY")))
+    assert_that(data, is_not(has_key("FIRECRAWL_API_URL")))
+    assert_that(data, is_not(has_key("FIRECRAWL_BROWSER_TTL")))

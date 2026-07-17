@@ -335,7 +335,7 @@ def build_integrations_policy_md(
     ]
     for provider in SecretProvider:  # fixed enum order for deterministic output
         content = decrypted.get(provider)
-        if content is None:
+        if content is None or provider not in PROFILE_SLUGS:
             continue
         base = PROFILE_SLUGS[provider]
         if isinstance(content, GithubContent):
@@ -368,7 +368,7 @@ def build_config_toml(
     blocks = [_header(secrets_dir)]
     for provider in SecretProvider:
         content = decrypted.get(provider)
-        if content is not None:
+        if content is not None and provider in _PROFILE_BUILDERS:
             blocks.append(_PROFILE_BUILDERS[provider](content))
     return "\n".join(blocks)
 

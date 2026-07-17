@@ -25,6 +25,8 @@ def build_openclaw_config_overlay(
     slack_group_policy: str = "open",
     slack_dm_policy: str = "open",
     approval_mode: str = "auto",
+    firecrawl_base_url: str = "",
+    firecrawl_api_key: str = "",
 ) -> dict:
     provider, _, model_name = model.partition("/")
 
@@ -49,7 +51,7 @@ def build_openclaw_config_overlay(
         for channel_id in channel_ids
     }
 
-    return {
+    overlay = {
         "models": {
             "providers": {
                 provider: {
@@ -125,16 +127,41 @@ def build_openclaw_config_overlay(
         },
         "gateway": {"auth": {"mode": "none"}},
     }
+    if firecrawl_base_url and firecrawl_api_key:
+        overlay["plugins"]["allow"].append("firecrawl")
+        overlay["plugins"]["entries"]["firecrawl"] = {
+            "enabled": True,
+            "config": {
+                "webSearch": {
+                    "apiKey": "${FIRECRAWL_API_KEY}",
+                    "baseUrl": firecrawl_base_url,
+                },
+                "webFetch": {
+                    "apiKey": "${FIRECRAWL_API_KEY}",
+                    "baseUrl": firecrawl_base_url,
+                    "onlyMainContent": True,
+                    "maxAgeMs": 172800000,
+                    "timeoutSeconds": 60,
+                },
+            },
+        }
+        overlay["tools"]["web"] = {
+            "fetch": {"provider": "firecrawl"},
+            "search": {"enabled": True, "provider": "firecrawl"},
+        }
+    return overlay
 
 
 def build_openclaw_config_overlay_teams(
     model: str,
     litellm_base_url: str,
     approval_mode: str = "auto",
+    firecrawl_base_url: str = "",
+    firecrawl_api_key: str = "",
 ) -> dict:
     provider, _, model_name = model.partition("/")
 
-    return {
+    overlay = {
         "models": {
             "providers": {
                 provider: {
@@ -199,6 +226,29 @@ def build_openclaw_config_overlay_teams(
         },
         "gateway": {"auth": {"mode": "none"}},
     }
+    if firecrawl_base_url and firecrawl_api_key:
+        overlay["plugins"]["allow"].append("firecrawl")
+        overlay["plugins"]["entries"]["firecrawl"] = {
+            "enabled": True,
+            "config": {
+                "webSearch": {
+                    "apiKey": "${FIRECRAWL_API_KEY}",
+                    "baseUrl": firecrawl_base_url,
+                },
+                "webFetch": {
+                    "apiKey": "${FIRECRAWL_API_KEY}",
+                    "baseUrl": firecrawl_base_url,
+                    "onlyMainContent": True,
+                    "maxAgeMs": 172800000,
+                    "timeoutSeconds": 60,
+                },
+            },
+        }
+        overlay["tools"]["web"] = {
+            "fetch": {"provider": "firecrawl"},
+            "search": {"enabled": True, "provider": "firecrawl"},
+        }
+    return overlay
 
 
 def build_config_map(
@@ -260,19 +310,23 @@ def build_secret_slack(
     slack_app_token: str,
     litellm_api_key: str,
     litellm_base_url: str,
+    firecrawl_api_key: str = "",
 ) -> client.V1Secret:
+    string_data = {
+        "SLACK_BOT_TOKEN": slack_bot_token,
+        "SLACK_APP_TOKEN": slack_app_token,
+        "LITELLM_API_KEY": litellm_api_key,
+        "LITELLM_BASE_URL": litellm_base_url,
+    }
+    if firecrawl_api_key:
+        string_data["FIRECRAWL_API_KEY"] = firecrawl_api_key
     return client.V1Secret(
         metadata=client.V1ObjectMeta(
             name=_resource_name(agent_id),
             namespace=namespace,
             labels=_labels(agent_id, org_id),
         ),
-        string_data={
-            "SLACK_BOT_TOKEN": slack_bot_token,
-            "SLACK_APP_TOKEN": slack_app_token,
-            "LITELLM_API_KEY": litellm_api_key,
-            "LITELLM_BASE_URL": litellm_base_url,
-        },
+        string_data=string_data,
     )
 
 
@@ -285,20 +339,24 @@ def build_secret_teams(
     msteams_tenant_id: str,
     litellm_api_key: str,
     litellm_base_url: str,
+    firecrawl_api_key: str = "",
 ) -> client.V1Secret:
+    string_data = {
+        "MSTEAMS_APP_ID": msteams_app_id,
+        "MSTEAMS_APP_PASSWORD": msteams_app_password,
+        "MSTEAMS_TENANT_ID": msteams_tenant_id,
+        "LITELLM_API_KEY": litellm_api_key,
+        "LITELLM_BASE_URL": litellm_base_url,
+    }
+    if firecrawl_api_key:
+        string_data["FIRECRAWL_API_KEY"] = firecrawl_api_key
     return client.V1Secret(
         metadata=client.V1ObjectMeta(
             name=_resource_name(agent_id),
             namespace=namespace,
             labels=_labels(agent_id, org_id),
         ),
-        string_data={
-            "MSTEAMS_APP_ID": msteams_app_id,
-            "MSTEAMS_APP_PASSWORD": msteams_app_password,
-            "MSTEAMS_TENANT_ID": msteams_tenant_id,
-            "LITELLM_API_KEY": litellm_api_key,
-            "LITELLM_BASE_URL": litellm_base_url,
-        },
+        string_data=string_data,
     )
 
 

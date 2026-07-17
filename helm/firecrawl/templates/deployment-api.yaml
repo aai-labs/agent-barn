@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "firecrawl.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "firecrawl.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      annotations:
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+      labels:
+        {{- include "firecrawl.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: api
+    spec:
+      containers:
+        - name: firecrawl
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 3002
+          envFrom:
+            - secretRef:
+                name: {{ .Values.secretName }}
+          env:
+            - name: PORT
+              value: "3002"
+            - name: HOST
+              value: "0.0.0.0"
+            - name: NUM_WORKERS_PER_QUEUE
+              value: "8"
+            - name: REDIS_URL
+              value: "redis://{{ .Release.Name }}-redis:6379"
+            - name: REDIS_RATE_LIMIT_URL
+              value: "redis://{{ .Release.Name }}-redis:6379"
+            - name: PLAYWRIGHT_MICROSERVICE_URL
+              value: "http://{{ .Release.Name }}-playwright:3000"
+            - name: USE_DB_AUTHENTICATION
+              value: "true"
+            - name: RABBITMQ_URL
+              value: "amqp://{{ .Release.Name }}-rabbitmq:5672"
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 3002
+            initialDelaySeconds: 15
+            periodSeconds: 5
+            failureThreshold: 12
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 3002
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          resources:
+            {{- toYaml .Values.resources.api | nindent 12 }}

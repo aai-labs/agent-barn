@@ -37,6 +37,8 @@ def build_hermes_config(
     group_policy: str = "allowlist",
     verbose_mode: bool = True,
     approval_mode: str = "auto",
+    firecrawl_base_url: str = "",
+    firecrawl_api_key: str = "",
 ) -> dict:
     _, sep, model_name = model.partition("/")
     if not sep:
@@ -54,7 +56,7 @@ def build_hermes_config(
         enabled_plugins.append("slack-channel-allowlist")
     if dm_policy != "open":
         enabled_plugins.append("slack-deny-dms")
-    return {
+    config = {
         "toolsets": ["all"],
         "model": {
             "provider": "openrouter",
@@ -103,6 +105,10 @@ def build_hermes_config(
             "mode": _HERMES_APPROVAL_MODE.get(approval_mode, "smart"),
         },
     }
+    if firecrawl_base_url and firecrawl_api_key:
+        config["web"] = {"backend": "firecrawl"}
+        config["browser"] = {"cloud_provider": "firecrawl"}
+    return config
 
 
 def build_hermes_config_map(
@@ -170,35 +176,42 @@ def build_secret_hermes_slack(
     channel_ids: list[str],
     dm_user_ids: list[str],
     dm_policy: str = "off",
+    firecrawl_api_key: str = "",
+    firecrawl_base_url: str = "",
 ) -> client.V1Secret:
     # Only an explicit allowlist seeds SLACK_DM_ALLOWED_USERS. "off" denies every
     # DM (empty allowlist behind the deny plugin); "open" drops the deny plugin,
     # so the value is unused there. This keeps a stale user list from leaking DM
     # access when the policy is switched away from allowlist.
     allowed_dm_users = dm_user_ids if dm_policy == "allowlist" else []
+    string_data = {
+        "SLACK_BOT_TOKEN": slack_bot_token,
+        "SLACK_APP_TOKEN": slack_app_token,
+        "OPENAI_API_KEY": litellm_api_key,
+        "OPENAI_BASE_URL": litellm_base_url,
+        "OPENROUTER_BASE_URL": litellm_base_url,
+        "API_SERVER_ENABLED": "true",
+        "API_SERVER_HOST": "0.0.0.0",
+        "API_SERVER_PORT": "8642",
+        "API_SERVER_KEY": api_server_key,
+        "API_SERVER_MODEL_NAME": agent_name,
+        "GATEWAY_ALLOW_ALL_USERS": "true",
+        "SLACK_ALLOW_ALL_USERS": "true",
+        "SLACK_HOME_CHANNEL": channel_ids[0] if channel_ids else _NO_HOME_CHANNEL,
+        "SLACK_CHANNEL_IDS": ",".join(channel_ids),
+        "SLACK_DM_ALLOWED_USERS": ",".join(allowed_dm_users),
+    }
+    if firecrawl_api_key and firecrawl_base_url:
+        string_data["FIRECRAWL_API_KEY"] = firecrawl_api_key
+        string_data["FIRECRAWL_API_URL"] = firecrawl_base_url
+        string_data["FIRECRAWL_BROWSER_TTL"] = "600"
     return client.V1Secret(
         metadata=client.V1ObjectMeta(
             name=_resource_name(agent_id),
             namespace=namespace,
             labels=_labels(agent_id, org_id),
         ),
-        string_data={
-            "SLACK_BOT_TOKEN": slack_bot_token,
-            "SLACK_APP_TOKEN": slack_app_token,
-            "OPENAI_API_KEY": litellm_api_key,
-            "OPENAI_BASE_URL": litellm_base_url,
-            "OPENROUTER_BASE_URL": litellm_base_url,
-            "API_SERVER_ENABLED": "true",
-            "API_SERVER_HOST": "0.0.0.0",
-            "API_SERVER_PORT": "8642",
-            "API_SERVER_KEY": api_server_key,
-            "API_SERVER_MODEL_NAME": agent_name,
-            "GATEWAY_ALLOW_ALL_USERS": "true",
-            "SLACK_ALLOW_ALL_USERS": "true",
-            "SLACK_HOME_CHANNEL": channel_ids[0] if channel_ids else _NO_HOME_CHANNEL,
-            "SLACK_CHANNEL_IDS": ",".join(channel_ids),
-            "SLACK_DM_ALLOWED_USERS": ",".join(allowed_dm_users),
-        },
+        string_data=string_data,
     )
 
 

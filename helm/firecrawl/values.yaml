@@ -1,0 +1,66 @@
+image:
+  repository: ghcr.io/firecrawl/firecrawl
+  tag: latest
+  pullPolicy: IfNotPresent
+
+playwrightImage:
+  repository: ghcr.io/firecrawl/playwright-service
+  tag: latest
+  pullPolicy: IfNotPresent
+
+redisImage:
+  repository: redis
+  tag: alpine
+  pullPolicy: IfNotPresent
+
+rabbitmqImage:
+  repository: rabbitmq
+  tag: 3-management
+  pullPolicy: IfNotPresent
+
+secretName: firecrawl
+
+# Firecrawl API key — shared by all agents as the platform-level key.
+firecrawlApiKey: ""
+
+# Random key for the BullMQ dashboard auth.
+bullAuthKey: ""
+
+# Postgres connection string for Firecrawl's own database.
+databaseUrl: ""
+
+service:
+  apiPort: 3002
+  playwrightPort: 3000
+  redisPort: 6379
+  rabbitmqPort: 5672
+
+resources:
+  api:
+    requests:
+      memory: 512Mi
+      cpu: 200m
+    limits:
+      memory: 1Gi
+      cpu: 1000m
+  playwright:
+    requests:
+      memory: 512Mi
+      cpu: 200m
+    limits:
+      memory: 2Gi
+      cpu: 1000m
+  redis:
+    requests:
+      memory: 64Mi
+      cpu: 50m
+    limits:
+      memory: 256Mi
+      cpu: 250m
+  rabbitmq:
+    requests:
+      memory: 128Mi
+      cpu: 100m
+    limits:
+      memory: 512Mi
+      cpu: 500m
