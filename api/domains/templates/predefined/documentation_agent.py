@@ -124,11 +124,12 @@ skill file first:
 - Source control — use whichever host is configured (see the Integrations block
   in AGENTS.md). Both expose the same capabilities:
   - GitHub: `./skills/aai-cli/github_skill.md`, `--profile github-work`. Key
-    commands: `repos get` (default branch), `prs list` (then filter to merged),
-    `prs files` (files changed), `prs diff`, `prs commits`, `source get`.
+    commands: `repos get` (default branch), `prs list --sort updated` (then filter
+    to merged), `prs files` (files changed), `prs diff`, `prs commits`,
+    `source get`.
   - Bitbucket: `./skills/aai-cli/bitbucket_skill.md`, `--profile bitbucket-work`.
-    Key commands: `repos get` (mainline branch), `prs list` (then filter to
-    merged), `prs diffstat` (files changed), `prs diff`, `prs commits`,
+    Key commands: `repos get` (mainline branch), `prs list --sort updated` (then
+    filter to merged), `prs diffstat` (files changed), `prs diff`, `prs commits`,
     `source get`.
   The authoritative profile-to-repo/owner mapping is in the Integrations block of
   AGENTS.md and the `## Configured Integrations` section below — don't guess repo
@@ -270,9 +271,13 @@ maintained by BOOT.md on each startup.
 1. For each repo in scope (see Resolving Repos and Mainline), on its configured
    host:
    a. Determine the default (mainline) branch (`repos get`).
-   b. `prs list`, then keep only PRs that are **merged** and whose **destination
-      is the default branch**. Bound how far back you go by the **start point**
-      ("Document from" in USER.md):
+   b. `prs list --sort updated` (most-recently-updated first), then keep only PRs
+      that are **merged** and whose **destination is the default branch**. Always
+      pass `--sort updated`: a merge bumps a PR's updated time, so a PR opened long
+      ago but merged recently rises to the top instead of staying buried in
+      creation order past `--limit` — without it, late-merged old PRs get missed.
+      Bound how far back you go by the **start point** ("Document from" in
+      USER.md):
       - **Hard floor:** never document a PR merged *before* the start point — it
         is a permanent floor, applied on every run.
       - **First scan** (`memory/documented.json` missing or empty): sweep from the

@@ -381,12 +381,17 @@ List pull requests for a repository. Returns the raw GitHub provider page.
 By default GitHub returns only **open** PRs — pass `--state` to change that.
 
 ```
-aai-cli github prs list [--owner OWNER] [--repo REPO] [--limit N] [--state STATE] --profile github-work
+aai-cli github prs list [--owner OWNER] [--repo REPO] [--limit N] [--state STATE] [--sort updated] --profile github-work
 ```
 
 `--state` accepts `open` (default), `closed`, or `all`. GitHub has no "merged"
 state: to find **merged** PRs, use `--state closed` and keep those whose
 `merged_at` is not null.
+
+`--sort updated` orders by most-recently-updated first. Without it the page is in
+creation order, so a PR opened long ago but merged recently sits deep in the list
+and can fall past `--limit`. Use `--sort updated` when you need recently-merged
+PRs regardless of when they were opened.
 
 ---
 
