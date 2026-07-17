@@ -68,6 +68,10 @@ Integration credentials and base URLs are in TOOLS.md — do not duplicate them 
 - **Confluence space key** (where docs live):
 - **Confluence parent page** (docs root / changelog location):
 - **Slack channel for the weekly digest:**
+- **Document from** (the earliest merge to ever document — a PR number/URL or a
+  date; a permanent floor): defaults to the setup date when the operator says
+  "from now". Resolve "from now" to a concrete date before writing it here so the
+  floor is unambiguous.
 
 ### Repo Scope
 
@@ -218,8 +222,14 @@ already infer):
 > 2. **Which Slack channel** should get the weekly digest? *(required)*
 > 3. **Jira project key(s)** that count as ours — e.g. `AF` *(helps me link PRs to tasks)*
 > 4. **How do PRs reference a task?** e.g. the Jira key in the PR title or branch
+> 5. **Where should I start from?** By default I only document PRs merged from now
+>    on — give me a **PR number or a date** if you'd rather I backfill from there.
+>    *(default: from now)*
 
 Wait for a response; ask again for anything missing. Write the answers to USER.md.
+If the operator doesn't give a start point, default to "from now" — resolve it to
+today's date, write that to **Document from**, and state it back in Step 5 so the
+default is never silent.
 
 ### Step 4: Create cron jobs
 
@@ -231,9 +241,10 @@ already exist):
 
 ### Step 5: Confirm
 
-> Setup complete. Each day I'll document PRs merged to your default branch(es)
-> into Confluence, keep a changelog, and post a weekly summary of what shipped to
-> your channel.
+> Setup complete. I'll start from **{start point}** (from now on, unless you gave
+> me a PR/date to backfill from). Each day I'll document PRs merged to your default
+> branch(es) into Confluence, keep a changelog, and post a weekly summary of what
+> shipped to your channel.
 
 ## Resolving Repos and Mainline
 
@@ -259,10 +270,17 @@ maintained by BOOT.md on each startup.
 1. For each repo in scope (see Resolving Repos and Mainline), on its configured
    host:
    a. Determine the default (mainline) branch (`repos get`).
-   b. `prs list`, then keep only PRs that are **merged**, whose **destination is
-      the default branch**, and that **merged within the lookback window**
-      (default the last ~2 days, so a missed daily run still gets caught — the
-      Confluence dedup below makes the overlap free).
+   b. `prs list`, then keep only PRs that are **merged** and whose **destination
+      is the default branch**. Bound how far back you go by the **start point**
+      ("Document from" in USER.md):
+      - **Hard floor:** never document a PR merged *before* the start point — it
+        is a permanent floor, applied on every run.
+      - **First scan** (`memory/documented.json` missing or empty): sweep from the
+        start point up to now — the one-time backfill. If the start point is the
+        setup date ("from now"), there is effectively nothing older to backfill.
+      - **Steady state:** use the usual lookback window (~2 days) so a missed daily
+        run still gets caught; the Confluence dedup below makes the overlap free,
+        and the floor keeps old PRs permanently out of scope.
 2. For each such PR:
    a. Pull the Jira key from the PR title or branch (per USER.md). Read the Jira
       task for context — description, acceptance criteria, links.
@@ -303,6 +321,8 @@ maintained by BOOT.md on each startup.
 
 - Only document PRs that are **merged to the default (mainline) branch**; ignore
   open and declined PRs, and merges into non-default branches.
+- Never document a PR merged **before the start point** ("Document from" in
+  USER.md) — it is a permanent floor set at setup.
 - Only create/update your own auto-generated pages and the changelog; never edit
   human-authored pages or overwrite human edits.
 - Always dedup before creating a page — ledger first, changelog backstop — never
@@ -315,8 +335,8 @@ maintained by BOOT.md on each startup.
 
 You wake up fresh each session. Continuity lives in files and in Confluence:
 
-- `USER.md` — integration targets, repo scope, and doc conventions (team context
-  only — not a log of what you've processed).
+- `USER.md` — integration targets, repo scope, the start point ("Document from"),
+  and doc conventions (team context only — not a log of what you've processed).
 - `memory/documented.json` — the dedup ledger: one small entry per documented
   PR (PR link, Jira key, page id, date). It is a fast-path cache — the
   changelog page stays the source of truth. If the file is missing (fresh
