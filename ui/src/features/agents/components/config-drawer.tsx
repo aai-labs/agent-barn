@@ -393,19 +393,21 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                     disabled={isRunning}
                   />
                 </div>
-                <div className="flex flex-col gap-1.5">
-                  <label className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>Command approval</label>
-                  <select
-                    className="af-input"
-                    value={approvalMode}
-                    onChange={(e) => setApprovalMode(e.target.value as "manual" | "auto" | "off")}
-                    disabled={isRunning}
-                  >
-                    <option value="auto">Auto — approve low-risk commands automatically</option>
-                    <option value="manual">Manual — always ask before running commands</option>
-                    <option value="off">Off — skip all approval prompts</option>
-                  </select>
-                </div>
+                {agent.agentType === "hermes" && (
+                  <div className="flex flex-col gap-1.5">
+                    <label className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>Command approval</label>
+                    <select
+                      className="af-input"
+                      value={approvalMode}
+                      onChange={(e) => setApprovalMode(e.target.value as "manual" | "auto" | "off")}
+                      disabled={isRunning}
+                    >
+                      <option value="auto">Auto — approve low-risk commands automatically</option>
+                      <option value="manual">Manual — always ask before running commands</option>
+                      <option value="off">Off — skip all approval prompts</option>
+                    </select>
+                  </div>
+                )}
                 <div className="flex gap-2 items-center">
                   <button
                     className="af-btn af-btn-sm"

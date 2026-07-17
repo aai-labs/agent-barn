@@ -186,6 +186,25 @@ class SlackClient:
                 )
         return result
 
+    def _fetch_dm_channels(self) -> list[dict]:
+        """Paginates conversations.list(types=im). Returns [{id, user}] for each DM channel."""
+        result: list[dict] = []
+        for channels in self._iter_pages(
+            "conversations.list",
+            {"limit": _PAGE_SIZE, "types": "im"},
+            "channels",
+        ):
+            for ch in channels:
+                cid = ch.get("id", "")
+                user = ch.get("user", "")
+                if cid and user:
+                    result.append({"id": cid, "user": user})
+        return result
+
+    def list_dm_channels(self) -> list[dict]:
+        """Returns all DM channels (cached). Each entry has {id, user}."""
+        return cached(self._token_key("dm_channels"), self._fetch_dm_channels)
+
     def _fetch_all_users(self) -> list[dict]:
         """Paginates users.list to the end. Returns the full membership.
 

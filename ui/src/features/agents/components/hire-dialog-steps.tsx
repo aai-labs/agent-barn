@@ -1131,17 +1131,19 @@ export function DetailsStep({
         <ModelSelect value={model} onChange={onModelChange} aria-label="Model" />
       </FormField>
 
-      <FormField label="Command approval">
-        <select
-          className="af-input"
-          value={approvalMode}
-          onChange={(e) => onApprovalModeChange(e.target.value)}
-        >
-          <option value="auto">Auto — approve low-risk commands automatically</option>
-          <option value="manual">Manual — always ask before running commands</option>
-          <option value="off">Off — skip all approval prompts</option>
-        </select>
-      </FormField>
+      {agentType === "hermes" && (
+        <FormField label="Command approval">
+          <select
+            className="af-input"
+            value={approvalMode}
+            onChange={(e) => onApprovalModeChange(e.target.value)}
+          >
+            <option value="auto">Auto — approve low-risk commands automatically</option>
+            <option value="manual">Manual — always ask before running commands</option>
+            <option value="off">Off — skip all approval prompts</option>
+          </select>
+        </FormField>
+      )}
 
       {platform === "slack" && (
         <>
