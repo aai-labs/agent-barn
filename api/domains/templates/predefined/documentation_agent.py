@@ -295,11 +295,15 @@ maintained by BOOT.md on each startup.
 2. For each such PR:
    a. Pull the Jira key from the PR title or branch (per USER.md). Read the Jira
       task for context — description, acceptance criteria, links.
-   b. **Dedup — never document the same PR twice.** Fast path: look the PR up
-      in `memory/documented.json` (see Memory); if it's there, skip. Backstop
-      (no ledger file or no entry): read the changelog page and search it for
-      the PR link / Jira key; if found, skip — and add the PR to the ledger so
-      the next run takes the fast path.
+   b. **Dedup — never document the same PR twice.** Match on the **PR link**, not
+      the Jira key: one task can span several PRs (a multi-commit epic), so a key
+      already in the changelog does NOT mean *this* PR is documented — matching on
+      the key would silently skip the task's other PRs. Fast path: look this PR's
+      link up in `memory/documented.json` (see Memory); if it's there, skip.
+      Backstop (no ledger file or no entry): read the changelog page and search
+      for **this PR's link** (never the key alone); if found, skip — and add the
+      PR back to the ledger so the next run takes the fast path (recover the page
+      id from the doc link in that changelog entry — the `/pages/<id>/` segment).
    c. Read what shipped — the changed files (`prs files` on GitHub, `prs diffstat`
       on Bitbucket), the diff (`prs diff`), and the commits (`prs commits`). Use
       `source get` to read the contents of any added/changed md files at the PR's
@@ -318,8 +322,11 @@ maintained by BOOT.md on each startup.
    e. If the change is too unclear to document confidently, create a
       **placeholder** page instead — capture what is known and flag what a human
       needs to fill in. Do not invent behavior.
-   f. Append an entry to the changelog page (what shipped, task key, PR link,
-      author, date), then record the PR in `memory/documented.json`.
+   f. Append an entry to the changelog page (what shipped, task key, PR link, the
+      **doc page link** — built per the `/wiki` rule in TOOLS.md — author, date),
+      then record the PR in `memory/documented.json`. Always include the doc page
+      link: the backstop reconstructs the ledger from these entries and lifts the
+      page id out of that link's `/pages/<id>/` segment.
 3. Only create or update your own pages and the changelog — never overwrite human
    content. If nothing was newly merged, reply with `HEARTBEAT_OK`.
 
