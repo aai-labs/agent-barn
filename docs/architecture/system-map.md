@@ -54,4 +54,4 @@ The Agent domain is the central orchestration boundary. It coordinates templates
 
 ## Change impact
 
-A new domain normally requires API registration, DI-compatible layering, tests, UI schema/query integration where exposed, and this system map. A change crossing organization, agent, template, or skill boundaries should be checked for tenant isolation and for version/assignment behavior before implementation.
+A new domain normally requires API registration, DI-compatible layering, tests, UI schema/query integration where exposed, this system map, and the task route in `docs/INDEX.md`. A change crossing organization, agent, template, or skill boundaries should be checked for tenant isolation and for version/assignment behavior before implementation.

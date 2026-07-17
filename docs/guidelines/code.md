@@ -9,7 +9,7 @@
 - Keep database models and API DTOs as distinct types.
 - Keep changes scoped; broad refactors require an explicit request.
 
-For current domain relationships and API runtime behavior, follow the relevant files under `docs/architecture/` and `docs/features/` rather than restating architecture here.
+For current domain relationships and API runtime behavior, follow `docs/INDEX.md` rather than restating architecture here.
 
 ## Rule language
 
@@ -66,7 +66,7 @@ Prefer `204` over ad hoc success objects such as `{"status": "ok"}`.
 - Database schema changes MUST include an Alembic migration.
 - Treat PostgreSQL constraints, enum behavior, and migration order as part of the contract.
 
-Before changing tenant ownership, authorization, or cross-domain relationships, read the relevant files under `docs/features/` and `docs/architecture/`.
+Before changing tenant ownership, authorization, or cross-domain relationships, follow the relevant route in `docs/INDEX.md`.
 
 ## API feature workflow
 
