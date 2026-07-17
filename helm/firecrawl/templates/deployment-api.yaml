@@ -5,6 +5,7 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "firecrawl.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
 spec:
   replicas: 1
   selector:
@@ -23,40 +24,44 @@ spec:
         - name: firecrawl
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["node"]
+          args: ["dist/src/harness.js", "--start-docker"]
           ports:
             - name: http
-              containerPort: 3002
+              containerPort: {{ .Values.service.apiPort }}
           envFrom:
             - secretRef:
                 name: {{ .Values.secretName }}
           env:
             - name: PORT
-              value: "3002"
+              value: "{{ .Values.service.apiPort }}"
             - name: HOST
               value: "0.0.0.0"
             - name: NUM_WORKERS_PER_QUEUE
               value: "8"
             - name: REDIS_URL
-              value: "redis://{{ .Release.Name }}-redis:6379"
+              value: "redis://{{ .Release.Name }}-redis:{{ .Values.service.redisPort }}"
             - name: REDIS_RATE_LIMIT_URL
-              value: "redis://{{ .Release.Name }}-redis:6379"
+              value: "redis://{{ .Release.Name }}-redis:{{ .Values.service.redisPort }}"
             - name: PLAYWRIGHT_MICROSERVICE_URL
-              value: "http://{{ .Release.Name }}-playwright:3000"
+              value: "http://{{ .Release.Name }}-playwright:{{ .Values.service.playwrightPort }}/scrape"
             - name: USE_DB_AUTHENTICATION
               value: "true"
-            - name: RABBITMQ_URL
-              value: "amqp://{{ .Release.Name }}-rabbitmq:5672"
+            - name: NUQ_RABBITMQ_URL
+              value: "amqp://{{ .Release.Name }}-rabbitmq:{{ .Values.service.rabbitmqPort }}"
+            - name: POSTGRES_HOST
+              value: "{{ .Values.postgres.host }}"
+            - name: POSTGRES_PORT
+              value: "{{ .Values.postgres.port }}"
           readinessProbe:
-            httpGet:
-              path: /
-              port: 3002
+            tcpSocket:
+              port: {{ .Values.service.apiPort }}
             initialDelaySeconds: 15
             periodSeconds: 5
             failureThreshold: 12
           livenessProbe:
-            httpGet:
-              path: /
-              port: 3002
+            tcpSocket:
+              port: {{ .Values.service.apiPort }}
             initialDelaySeconds: 30
             periodSeconds: 15
           resources:

@@ -20,14 +20,20 @@ rabbitmqImage:
 
 secretName: firecrawl
 
-# Firecrawl API key — shared by all agents as the platform-level key.
-firecrawlApiKey: ""
+# Server-side API key that Firecrawl validates against (USE_DB_AUTHENTICATION=true).
+# Agents use this same value client-side as FIRECRAWL_API_KEY.
+testApiKey: ""
 
 # Random key for the BullMQ dashboard auth.
 bullAuthKey: ""
 
-# Postgres connection string for Firecrawl's own database.
-databaseUrl: ""
+# Postgres connection — individual vars (Firecrawl does not use DATABASE_URL).
+postgres:
+  user: ""
+  password: ""
+  db: ""
+  host: "postgres-firecrawl"
+  port: "5432"
 
 service:
   apiPort: 3002

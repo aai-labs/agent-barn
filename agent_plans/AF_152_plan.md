@@ -14,13 +14,13 @@ Agent-farm's predecessor (OCBW) had Firecrawl integration for both OpenClaw (plu
 
 ## Implementation Plan
 
-### Step 1: API Models — Add `SecretProvider.FIRECRAWL`
+### Step 1: API Models — Add `SecretProvider.FIRECRAWL` ✅
 
-No DB migration needed — `provider` is stored as `sa.String()`, not `sa.Enum()`.
+DB migration added — `ck_agent_secret_provider` check constraint needed updating.
 
 **File: `api/domains/agents/models.py`**
 - Add `FIRECRAWL = "firecrawl"` to `SecretProvider` enum (after ZOHO_CALENDAR)
-- Add `FirecrawlContent(SecretContent)` model with single field: `api_key: str`
+- Add `FirecrawlContent(SecretContent)` model with fields: `api_key: str`, `base_url: str = ""`
 - Add entry to `PROVIDER_DISPLAY_NAMES`: `SecretProvider.FIRECRAWL: "Firecrawl credential"`
 - Add entry to `PROVIDER_CONTENT_MODELS`: `SecretProvider.FIRECRAWL: FirecrawlContent`
 
@@ -28,7 +28,7 @@ No DB migration needed — `provider` is stored as `sa.String()`, not `sa.Enum()
 
 ---
 
-### Step 2: API Config — Add Firecrawl settings
+### Step 2: API Config — Add Firecrawl settings ✅
 
 **File: `api/core/config.py`**
 - Add `agent_firecrawl_base_url: str = ""` (populated from `AGENT_FIRECRAWL_BASE_URL` env var)
@@ -113,26 +113,26 @@ Same pattern for `build_openclaw_config_overlay_teams()`.
 
 ---
 
-### Step 5: Agent Service — Wire Firecrawl into `start_agent()`
+### Step 5: Agent Service — Wire Firecrawl into `start_agent()` ✅
 
 **File: `api/domains/agents/service.py`**
 
-In `start_agent()`, after decrypting agent secrets (line ~984):
+In `start_agent()`, after decrypting agent secrets (line ~1017):
 1. Check if agent has a `SecretProvider.FIRECRAWL` secret → use that `api_key`
 2. Otherwise fall back to `self.config.agent_firecrawl_api_key` (platform-level)
-3. Get `firecrawl_base_url` from `self.config.agent_firecrawl_base_url`
-4. Pass both to builder functions:
-   - `build_hermes_config(... firecrawl_base_url=..., firecrawl_api_key=...)`
-   - `build_secret_hermes_slack(... firecrawl_api_key=..., firecrawl_base_url=...)`
-   - `build_openclaw_config_overlay(... firecrawl_base_url=..., firecrawl_api_key=...)`
-   - `build_secret_slack(... firecrawl_api_key=...)`
-   - Same for Teams variants
+3. For `base_url`: if per-agent secret has a non-empty `base_url`, use it; otherwise fall back to `self.config.agent_firecrawl_base_url`
+4. Mutate already-built config/overlay/secret objects with resolved key + URL
 
-Firecrawl is active only when both `firecrawl_base_url` and `firecrawl_api_key` are non-empty. If the platform-level key is unset and the agent has no per-agent key, firecrawl is simply not configured (no error — graceful skip).
+**Key + URL override logic:**
+- Per-agent secret can override **both** the API key and the base URL
+- This lets users point to Firecrawl Cloud (`https://api.firecrawl.dev`) with their own key
+- If only `api_key` is set in the per-agent secret (no `base_url`), the agent still uses the platform's self-hosted URL — but this will fail auth since the self-hosted server only knows the platform `TEST_API_KEY`
+- If neither platform nor per-agent key is set → firecrawl not configured (graceful skip)
 
 **Tests first:** Integration tests verifying:
-- Agent with per-agent FIRECRAWL secret → agent pod gets that key
-- Agent without FIRECRAWL secret → agent pod gets platform-level key
+- Agent with per-agent FIRECRAWL secret (key only) → agent pod gets that key + platform URL
+- Agent with per-agent FIRECRAWL secret (key + base_url) → agent pod gets both overrides
+- Agent without FIRECRAWL secret → agent pod gets platform-level key + URL
 - Neither set → firecrawl not configured (no FIRECRAWL_* env vars)
 
 ---
@@ -241,18 +241,45 @@ Add to `INTEGRATION_PROVIDERS` array:
 {
   id: "firecrawl",
   label: "Firecrawl",
-  scopeNote: "Optional — agents use the platform Firecrawl by default. Provide your own API key to override.",
+  scopeNote: "Optional — agents use the platform Firecrawl by default. Provide your own API key and URL to use Firecrawl Cloud or another instance.",
   fields: [
-    { key: "apiKey", label: "API key", type: "secret", required: true, placeholder: "fc-..." },
+    { key: "apiKey", label: "API key", type: "secret", required: true, placeholder: "fc-…" },
+    { key: "baseUrl", label: "Base URL", type: "text", required: false, placeholder: "https://api.firecrawl.dev", hint: "Leave empty to use the platform's self-hosted Firecrawl." },
   ],
 },
 ```
 
 ---
 
+### Step 10a: Backfill — Add `base_url` to `FirecrawlContent` and service wiring
+
+Since Steps 1 and 5 were implemented before the key+URL override decision, this step backfills the changes:
+
+**File: `api/domains/agents/models.py`**
+- Add `base_url: str = ""` to `FirecrawlContent` (optional field, empty default)
+
+**File: `api/domains/agents/service.py`** (line ~1017–1053)
+- After resolving `fc_api_key`, also resolve `fc_base_url`:
+  ```python
+  fc_base_url = (
+      fc_content.base_url
+      if isinstance(fc_content, FirecrawlContent) and fc_content.base_url
+      else self.config.agent_firecrawl_base_url
+  )
+  ```
+
+**File: `api/tests/unit/test_agent_secrets.py`**
+- Update existing `FirecrawlContent` tests to cover `base_url` field (present, absent, empty)
+
+**File: `api/tests/integration/test_agents.py`**
+- Add test for per-agent key + base_url override
+
+---
+
 ## Design Decisions
 
 - **Always on**: All agents get Firecrawl automatically via the platform-level API key (mirrors OCBW's `capabilities.defaults: ["firecrawl"]`). Users can optionally override with their own key per agent via the integrations UI.
+- **Key + URL override**: Per-agent Firecrawl secret includes an optional `base_url` alongside `api_key`. When set, the agent uses the user's Firecrawl instance (e.g. Firecrawl Cloud at `https://api.firecrawl.dev`). When empty, the agent uses the platform self-hosted instance. Key-only override still works if additional keys are registered in the self-hosted Firecrawl DB.
 - **Reuse postgres chart**: Firecrawl's Postgres runs as a separate `postgres-firecrawl` helmfile release reusing `helm/postgres`, matching the `postgres-litellm` precedent.
 - **Full implementation**: All 10 steps in one pass — backend, Helm, and UI.
 
