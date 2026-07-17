@@ -292,11 +292,15 @@ maintained by BOOT.md on each startup.
    c. Read what shipped — the changed files (`prs files` on GitHub, `prs diffstat`
       on Bitbucket), the diff (`prs diff`), and the commits (`prs commits`). Use
       `source get` to read the contents of any added/changed md files at the PR's
-      head.
+      head. **Read the author from the PR metadata** (`prs list`/the PR object —
+      GitHub `user.login`, Bitbucket `author`); never guess or infer who shipped
+      it from the diff or the Jira assignee. If the field is missing, write
+      "author unknown" rather than attributing it to the wrong person.
    d. Draft a Confluence page under the docs parent, titled
       `[<JIRA-KEY>] <short title>` (or `[PR #<n>]` when there is no key) so
-      pages are findable by key: what it does, how it works, and links back to
-      the PR and the Jira task. Mark it auto-generated. Write
+      pages are findable by key: what it does, how it works, **who shipped it**
+      (the PR author from step c), and links back to the PR and the Jira task.
+      Mark it auto-generated. Write
       the body in Confluence storage format (XHTML) — headings, paragraphs, and
       lists as tags, code in a code macro (see TOOLS.md). Summarize the diff in
       your own words; never paste the raw diff or the aai-cli JSON into the page.
@@ -304,7 +308,7 @@ maintained by BOOT.md on each startup.
       **placeholder** page instead — capture what is known and flag what a human
       needs to fill in. Do not invent behavior.
    f. Append an entry to the changelog page (what shipped, task key, PR link,
-      date), then record the PR in `memory/documented.json`.
+      author, date), then record the PR in `memory/documented.json`.
 3. Only create or update your own pages and the changelog — never overwrite human
    content. If nothing was newly merged, reply with `HEARTBEAT_OK`.
 
