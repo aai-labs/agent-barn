@@ -55,15 +55,15 @@ Stop snapshots logs before removing active runtime resources and marking the age
 
 | Concern                                    | Authoritative source                                                                                         |
 | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
-| Persistence, enums, request/read contracts | `api/domains/agents/models.py`                                                                               |
-| Lifecycle and cross-domain orchestration   | `api/domains/agents/service.py`                                                                              |
-| Tenant-scoped persistence                  | `api/domains/agents/repository.py`                                                                           |
-| HTTP routes                                | `api/domains/agents/routes.py`, `api/domains/agents/slack_routes.py`, `api/domains/agents/webhook_routes.py` |
-| Runtime resources                          | `api/domains/agents/builders/`                                                                               |
-| Integration and skill artifacts            | `api/domains/agents/aai_cli_artifacts.py`, `aai_cli_skills/`                                                 |
-| UI contracts and hooks                     | `ui/src/features/agents/schemas.ts`, `ui/src/features/agents/hooks/`                                         |
-| UI components                              | `ui/src/features/agents/components/`                                                                         |
-| Integration coverage                       | `api/tests/integration/test_agents.py`, `api/tests/integration/test_agent_logs.py`                           |
+| Persistence, enums, request/read contracts | `../../api/domains/agents/models.py`                                                                               |
+| Lifecycle and cross-domain orchestration   | `../../api/domains/agents/service.py`                                                                              |
+| Tenant-scoped persistence                  | `../../api/domains/agents/repository.py`                                                                           |
+| HTTP routes                                | `../../api/domains/agents/routes.py`, `../../api/domains/agents/slack_routes.py`, `../../api/domains/agents/webhook_routes.py` |
+| Runtime resources                          | `../../api/domains/agents/builders/`                                                                               |
+| Integration and skill artifacts            | `../../api/domains/agents/aai_cli_artifacts.py`, `../../api/domains/agents/aai_cli_skills/`                                                 |
+| UI contracts and hooks                     | `../../ui/src/features/agents/schemas.ts`, `../../ui/src/features/agents/hooks/`                                         |
+| UI components                              | `../../ui/src/features/agents/components/`                                                                         |
+| Integration coverage                       | `../../api/tests/integration/test_agents.py`, `../../api/tests/integration/test_agent_logs.py`                           |
 
 ## Change impact
 

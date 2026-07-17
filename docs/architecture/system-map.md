@@ -10,12 +10,12 @@ Agent Farm is a monorepo with four operational areas:
 
 | Area           | Responsibility                                                                                         | Authoritative sources                                                        |
 | -------------- | ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
-| API            | Product and ingest HTTP contracts, authorization, business orchestration, persistence, runtime control | `api/api_app.py`, `api/ingest_app.py`, `api/domains/`, `api/infrastructure/` |
-| UI             | Authenticated organization-scoped product interface                                                    | `ui/src/app/`, `ui/src/features/`, `ui/src/shared/`                          |
-| Agent runtimes | Execute rendered agent configuration and report activity                                               | `api/domains/agents/builders/`, `hermes-base/`, `openclaw-base/`             |
-| Deployment     | Build and deploy databases, LiteLLM, API, UI, and runtime images                                       | `helm/`, `helmfile.yaml.gotmpl`, `.github/workflows/`                        |
+| API            | Product and ingest HTTP contracts, authorization, business orchestration, persistence, runtime control | `../../api/api_app.py`, `../../api/ingest_app.py`, `../../api/domains/`, `../../api/infrastructure/` |
+| UI             | Authenticated organization-scoped product interface                                                    | `../../ui/src/app/`, `../../ui/src/features/`, `../../ui/src/shared/`                          |
+| Agent runtimes | Execute rendered agent configuration and report activity                                               | `../../api/domains/agents/builders/`, `../../hermes-base/`, `../../openclaw-base/`             |
+| Deployment     | Build and deploy databases, LiteLLM, API, UI, and runtime images                                       | `../../helm/`, `../../helmfile.yaml.gotmpl`, `../../.github/workflows/`                        |
 
-Product routes are registered in `api/api_app.py` beneath `/api/v1`. Runtime telemetry is a separate FastAPI application registered in `api/ingest_app.py` beneath `/ingest/v1` and served on a separate process/port by `api/start.sh`. The UI normally reaches product routes through `ui/src/shared/api`.
+Product routes are registered in `../../api/api_app.py` beneath `/api/v1`. Runtime telemetry is a separate FastAPI application registered in `../../api/ingest_app.py` beneath `/ingest/v1` and served on a separate process/port by `../../api/start.sh`. The UI normally reaches product routes through `../../ui/src/shared/api`.
 
 ## Domain relationships
 
@@ -50,8 +50,8 @@ The Agent domain is the central orchestration boundary. It coordinates templates
 - Agent runtime configuration is assembled from the agent's pinned template version, explicit skill assignments, eligible integration skills, and encrypted credentials at start time.
 - Runtime and platform are separate concepts: Hermes/OpenClaw are runtimes; Slack/Teams are platforms.
 - Schema changes are represented by Alembic migrations and exercised against PostgreSQL in API integration tests.
-- API and UI deployment versions are independent; `AGENTS.md` owns the release-version rules.
+- API and UI deployment versions are independent; `../../AGENTS.md` owns the release-version rules.
 
 ## Change impact
 
-A new domain normally requires API registration, DI-compatible layering, tests, UI schema/query integration where exposed, this system map, and the task route in `docs/INDEX.md`. A change crossing organization, agent, template, or skill boundaries should be checked for tenant isolation and for version/assignment behavior before implementation.
+A new domain normally requires API registration, DI-compatible layering, tests, UI schema/query integration where exposed, this system map, and the task route in `../INDEX.md`. A change crossing organization, agent, template, or skill boundaries should be checked for tenant isolation and for version/assignment behavior before implementation.

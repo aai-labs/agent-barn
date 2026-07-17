@@ -26,13 +26,13 @@ Agents own LiteLLM key creation, encryption, deletion blocking, and lifecycle st
 
 | Concern                       | Authoritative source                  |
 | ----------------------------- | ------------------------------------- |
-| Cost response contracts       | `api/domains/costs/models.py`         |
-| Attribution and aggregation   | `api/domains/costs/service.py`        |
-| HTTP routes                   | `api/domains/costs/routes.py`         |
-| LiteLLM client                | `api/infrastructure/litellm/`         |
-| Agent key lifecycle           | `api/domains/agents/service.py`       |
-| UI schemas, hooks, and charts | `ui/src/features/costs/`              |
-| Tests                         | `api/tests/integration/test_costs.py` |
+| Cost response contracts       | `../../api/domains/costs/models.py`         |
+| Attribution and aggregation   | `../../api/domains/costs/service.py`        |
+| HTTP routes                   | `../../api/domains/costs/routes.py`         |
+| LiteLLM client                | `../../api/infrastructure/litellm/`         |
+| Agent key lifecycle           | `../../api/domains/agents/service.py`       |
+| UI schemas, hooks, and charts | `../../ui/src/features/costs/`              |
+| Tests                         | `../../api/tests/integration/test_costs.py` |
 
 ## Change impact
 

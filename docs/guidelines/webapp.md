@@ -2,14 +2,14 @@
 
 ## Project-defining frontend rules
 
-- Feature logic lives under `ui/src/features/<feature>/`.
-- Normal application API calls use `ui/src/shared/api`.
+- Feature logic lives under `../../ui/src/features/<feature>/`.
+- Normal application API calls use `../../ui/src/shared/api`.
 - Important API responses are validated with feature-local Zod schemas.
 - Query keys use centralized helpers rather than scattered literal arrays.
 - Server Components are the App Router default; add `"use client"` only for client-owned behavior.
 - Select loading and error boundaries according to who owns the asynchronous work.
 
-Read `docs/architecture/ui.md` before changing authentication, organization scoping, provider composition, query-cache isolation, or SSE behavior.
+Read `../architecture/ui.md` before changing authentication, organization scoping, provider composition, query-cache isolation, or SSE behavior.
 
 ## Feature structure
 
@@ -26,7 +26,7 @@ ui/src/features/<feature>/
   utils.ts
 ```
 
-Optional additions include `providers/`, `stores/`, `constants.ts`, and a small barrel export. Route composition remains under `ui/src/app/`.
+Optional additions include `providers/`, `stores/`, `constants.ts`, and a small barrel export. Route composition remains under `../../ui/src/app/`.
 
 ## Schemas and API boundaries
 
@@ -39,12 +39,12 @@ Optional additions include `providers/`, `stores/`, `constants.ts`, and a small 
 
 ## Queries and mutations
 
-- Define keys through `ui/src/shared/query-keys.ts` patterns and feature-local helpers.
+- Define keys through `../../ui/src/shared/query-keys.ts` patterns and feature-local helpers.
 - Add `enabled` guards when required IDs or context may be absent.
 - Prefer `useInfiniteQuery` for progressive load-more behavior.
 - Mutations MUST invalidate affected list and detail families.
 - Hooks SHOULD return domain-oriented fields such as `agent`, `isLoadingAgent`, and `error` rather than leaking raw query objects unnecessarily.
-- Determine whether new queries are organization-scoped. Include organization identity in the key or update the organization-switch isolation behavior described in `docs/architecture/ui.md`.
+- Determine whether new queries are organization-scoped. Include organization identity in the key or update the organization-switch isolation behavior described in `../architecture/ui.md`.
 
 ## Loading and errors
 
@@ -78,11 +78,11 @@ Optional additions include `providers/`, `stores/`, `constants.ts`, and a small 
 2. Add or update centralized query keys.
 3. Add query and mutation hooks through the shared API client.
 4. Build feature components.
-5. Compose them from `ui/src/app/` routes.
-6. Add or update Playwright coverage following `docs/guidelines/testing.md`.
-7. Run the UI checks listed in `docs/guidelines/testing.md`.
-8. Apply UI versioning rules from `docs/guidelines/operations.md` when release preparation is requested.
+5. Compose them from `../../ui/src/app/` routes.
+6. Add or update Playwright coverage following `testing.md`.
+7. Run the UI checks listed in `testing.md`.
+8. Apply UI versioning rules from `operations.md` when release preparation is requested.
 
 ## Maintaining conventions
 
-When a repeatable frontend convention changes, update this file once rather than copying the rule into feature docs. Feature docs under `docs/features/` own product invariants and boundaries, not generic React or query guidance.
+When a repeatable frontend convention changes, update this file once rather than copying the rule into feature docs. Feature docs under `../features/` own product invariants and boundaries, not generic React or query guidance.

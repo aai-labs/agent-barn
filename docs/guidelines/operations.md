@@ -34,15 +34,15 @@ make rollback
 make makemigrations
 ```
 
-Schema changes require a migration under `api/migrations/versions/`. Review generated migrations before applying them. Production deployment runs Alembic through the API chart migration hook described in `docs/architecture/runtime-and-deployment.md`.
+Schema changes require a migration under `../../api/migrations/versions/`. Review generated migrations before applying them. Production deployment runs Alembic through the API chart migration hook described in `../architecture/runtime-and-deployment.md`.
 
 ## Checks and tests
 
-Testing and verification commands live in `docs/guidelines/testing.md`. Run the smallest complete set for the touched area before widening to full suites.
+Testing and verification commands live in `testing.md`. Run the smallest complete set for the touched area before widening to full suites.
 
 ## Deployment shape
 
-The deployable services have independent Helm charts. `helmfile.yaml.gotmpl` controls release ordering, and `.github/workflows/deploy.yml` builds images and applies Helmfile. Read `docs/architecture/runtime-and-deployment.md` before changing runtime images, agent Kubernetes resources, chart wiring, migrations, or deployment order.
+The deployable services have independent Helm charts. `../../helmfile.yaml.gotmpl` controls release ordering, and `../../.github/workflows/deploy.yml` builds images and applies Helmfile. Read `../architecture/runtime-and-deployment.md` before changing runtime images, agent Kubernetes resources, chart wiring, migrations, or deployment order.
 
 ## Versioning and releases
 
@@ -57,7 +57,7 @@ Rules:
 - Never reuse an `appVersion` for different image content.
 - Bump versions late, ideally immediately before the PR, to reduce merge conflicts.
 - The git commit or PR is the product release identifier; there is no shared API/UI release number.
-- `deploy.yml` reads API and UI image tags from `helm/agentfarm-api/Chart.yaml` and `helm/agentfarm-ui/Chart.yaml`.
+- `../../.github/workflows/deploy.yml` reads API and UI image tags from `../../helm/agentfarm-api/Chart.yaml` and `../../helm/agentfarm-ui/Chart.yaml`.
 - LiteLLM and PostgreSQL charts run upstream images and have no `appVersion`; bump only chart `version` when their chart templates change.
 
 Documentation-only changes do not change a service image and do not require an `appVersion` bump.

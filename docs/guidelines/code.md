@@ -9,7 +9,7 @@
 - Keep database models and API DTOs as distinct types.
 - Keep changes scoped; broad refactors require an explicit request.
 
-For current domain relationships and API runtime behavior, follow `docs/INDEX.md` rather than restating architecture here.
+For current domain relationships and API runtime behavior, follow `../INDEX.md` rather than restating architecture here.
 
 ## Rule language
 
@@ -19,7 +19,7 @@ For current domain relationships and API runtime behavior, follow `docs/INDEX.md
 
 ## API domain structure
 
-New domains live under `api/domains/<domain>/` with this baseline:
+New domains live under `../../api/domains/<domain>/` with this baseline:
 
 ```text
 models.py       # database models and request/response/filter DTOs
@@ -28,7 +28,7 @@ service.py      # business rules and orchestration
 routes.py       # HTTP handlers and dependency wiring
 ```
 
-Add extra files only for a real responsibility such as exceptions, parsers, builders, or provider-specific behavior. Register product routers in `api/api_app.py`; Ingest routes use the separate composition described in `docs/architecture/api.md`.
+Add extra files only for a real responsibility such as exceptions, parsers, builders, or provider-specific behavior. Register product routers in `../../api/api_app.py`; Ingest routes use the separate composition described in `../architecture/api.md`.
 
 Public service and repository methods MUST have explicit type hints. New abstractions SHOULD match the neighboring domain before introducing a new pattern.
 
@@ -66,7 +66,7 @@ Prefer `204` over ad hoc success objects such as `{"status": "ok"}`.
 - Database schema changes MUST include an Alembic migration.
 - Treat PostgreSQL constraints, enum behavior, and migration order as part of the contract.
 
-Before changing tenant ownership, authorization, or cross-domain relationships, follow the relevant route in `docs/INDEX.md`.
+Before changing tenant ownership, authorization, or cross-domain relationships, follow the relevant route in `../INDEX.md`.
 
 ## API feature workflow
 
@@ -76,16 +76,16 @@ Before changing tenant ownership, authorization, or cross-domain relationships, 
 4. Add or update thin routes.
 5. Register a new router when needed.
 6. Add a migration for schema changes.
-7. Add tests following `docs/guidelines/testing.md`.
-8. Run the API checks and tests listed in `docs/guidelines/testing.md`.
-9. Apply service versioning rules from `docs/guidelines/operations.md` when release preparation is requested.
+7. Add tests following `testing.md`.
+8. Run the API checks and tests listed in `testing.md`.
+9. Apply service versioning rules from `operations.md` when release preparation is requested.
 
 ## Code style
 
 - Follow Ruff formatting and lint rules.
 - Prefer focused, domain-oriented functions and explicit types.
 - Keep control flow direct; extract a module only when it creates a useful boundary.
-- Use canonical domain terms from `CONTEXT.md`.
+- Use canonical domain terms from `../../CONTEXT.md`.
 - Comments should explain a non-obvious constraint, not narrate the implementation.
 
 ## Review priorities
@@ -107,5 +107,5 @@ Review in this order:
 - Lint, formatting, and type checks pass for touched areas.
 - Schema changes include a migration.
 - Agent-facing docs are updated when invariants, boundaries, or state models change.
-- Release versions are updated only when requested and according to `docs/guidelines/operations.md`.
+- Release versions are updated only when requested and according to `operations.md`.
 - The diff contains no unrelated refactor or style churn.

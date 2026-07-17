@@ -47,16 +47,16 @@ Explicit assignments are persisted after organization access and provider requir
 
 | Concern                             | Authoritative source                                                                                                      |
 | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| Template model and DTOs             | `api/domains/templates/models.py`                                                                                         |
-| Template versioning and seeding     | `api/domains/templates/service.py`, `predefined/`                                                                         |
-| Template persistence                | `api/domains/templates/repository.py`                                                                                     |
-| Skill model and DTOs                | `api/domains/skills/models.py`                                                                                            |
-| Skill archive and CRUD rules        | `api/domains/skills/service.py`                                                                                           |
-| Built-in skill seeding              | `api/domains/skills/skill_seeder.py`, `api/domains/agents/aai_cli_skills/`                                                |
-| Assignment enforcement and mounting | `api/domains/agents/service.py`                                                                                           |
-| UI template surface                 | `ui/src/features/agents/components/templates-panel.tsx`, template hooks                                                   |
-| UI skill surface                    | `ui/src/features/skills/`                                                                                                 |
-| Tests                               | `api/tests/integration/test_templates.py`, `api/tests/integration/test_skills.py`, `api/tests/integration/test_agents.py` |
+| Template model and DTOs             | `../../api/domains/templates/models.py`                                                                                         |
+| Template versioning and seeding     | `../../api/domains/templates/service.py`, `../../api/domains/templates/predefined/`                                                                         |
+| Template persistence                | `../../api/domains/templates/repository.py`                                                                                     |
+| Skill model and DTOs                | `../../api/domains/skills/models.py`                                                                                            |
+| Skill archive and CRUD rules        | `../../api/domains/skills/service.py`                                                                                           |
+| Built-in skill seeding              | `../../api/domains/skills/skill_seeder.py`, `../../api/domains/agents/aai_cli_skills/`                                                |
+| Assignment enforcement and mounting | `../../api/domains/agents/service.py`                                                                                           |
+| UI template surface                 | `../../ui/src/features/agents/components/templates-panel.tsx`, template hooks                                                   |
+| UI skill surface                    | `../../ui/src/features/skills/`                                                                                                 |
+| Tests                               | `../../api/tests/integration/test_templates.py`, `../../api/tests/integration/test_skills.py`, `../../api/tests/integration/test_agents.py` |
 
 ## Change impact
 

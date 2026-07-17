@@ -6,7 +6,7 @@ Read before changing API composition, dependency injection, route/service/reposi
 
 ## Composition and layering
 
-The API has two composition roots. `api/api_app.py` mounts product routes at `/api/v1`, attaches the Injector, configures CORS, and defines the database-backed health check. `api/ingest_app.py` mounts runtime telemetry at `/ingest/v1`. `api/start.sh` serves the ingest app on port 8001 alongside the product API on port 8000.
+The API has two composition roots. `../../api/api_app.py` mounts product routes at `/api/v1`, attaches the Injector, configures CORS, and defines the database-backed health check. `../../api/ingest_app.py` mounts runtime telemetry at `/ingest/v1`. `../../api/start.sh` serves the ingest app on port 8001 alongside the product API on port 8000.
 
 The default dependency direction is:
 
@@ -26,13 +26,13 @@ Nearby domains are the implementation template. Costs and Ingest intentionally d
 
 Authentication builds `CurrentUserContext`; organization-scoped services derive the active organization from it. `X-Organization-Id` selects the active organization, with the configured default organization as fallback. Normal users require membership. Tenant resolution synthesizes owner-level organization context for superusers, and authorization helpers explicitly preserve the superuser bypass.
 
-Tenant-sensitive reads generally return 404 when a resource is absent or belongs to another organization. Organization administration uses 403 when the target organization exists but the actor lacks the required role. The integration contract is exercised in `api/tests/integration/test_cross_org_isolation.py` and `api/tests/integration/test_tenant_resolution.py`.
+Tenant-sensitive reads generally return 404 when a resource is absent or belongs to another organization. Organization administration uses 403 when the target organization exists but the actor lacks the required role. The integration contract is exercised in `../../api/tests/integration/test_cross_org_isolation.py` and `../../api/tests/integration/test_tenant_resolution.py`.
 
 ## Persistence and transactions
 
-Most repositories reuse `api/infrastructure/postgres/repository.py`. Delegate operations open and commit a session per operation. A service workflow spanning several repository calls is therefore not automatically atomic; workflows requiring all-or-nothing behavior need an explicit repository transaction boundary.
+Most repositories reuse `../../api/infrastructure/postgres/repository.py`. Delegate operations open and commit a session per operation. A service workflow spanning several repository calls is therefore not automatically atomic; workflows requiring all-or-nothing behavior need an explicit repository transaction boundary.
 
-Database records generally inherit UUID and timestamp fields from `api/infrastructure/postgres/models.py`. Schema evolution belongs in `api/migrations/versions/`; integration setup applies Alembic heads to a PostgreSQL test container.
+Database records generally inherit UUID and timestamp fields from `../../api/infrastructure/postgres/models.py`. Schema evolution belongs in `../../api/migrations/versions/`; integration setup applies Alembic heads to a PostgreSQL test container.
 
 ## Startup data
 
@@ -49,15 +49,15 @@ The application lifespan ensures the default superuser and organization, records
 
 | Concern | Source |
 |---|---|
-| Product API composition and router registry | `api/api_app.py` |
-| Ingest API composition and process entry | `api/ingest_app.py`, `api/ingest_main.py`, `api/start.sh` |
-| Injector configuration | `api/core/utils.py`, `api/infrastructure/app.py` |
-| Auth and tenant resolution | `api/domains/auth/utils.py`, `api/domains/auth/models.py` |
-| Shared persistence delegate | `api/infrastructure/postgres/repository.py` |
-| Base database model | `api/infrastructure/postgres/models.py` |
-| Migrations | `api/migrations/versions/` |
-| Test app and database setup | `api/tests/conftest.py`, `api/tests/core/` |
+| Product API composition and router registry | `../../api/api_app.py` |
+| Ingest API composition and process entry | `../../api/ingest_app.py`, `../../api/ingest_main.py`, `../../api/start.sh` |
+| Injector configuration | `../../api/core/utils.py`, `../../api/infrastructure/app.py` |
+| Auth and tenant resolution | `../../api/domains/auth/utils.py`, `../../api/domains/auth/models.py` |
+| Shared persistence delegate | `../../api/infrastructure/postgres/repository.py` |
+| Base database model | `../../api/infrastructure/postgres/models.py` |
+| Migrations | `../../api/migrations/versions/` |
+| Test app and database setup | `../../api/tests/conftest.py`, `../../api/tests/core/` |
 
 ## Change impact
 
-When adding or moving a product router, update `api/api_app.py`; ingest routes are registered through `api/ingest_app.py`. When a schema changes, update the database model, API DTO where required, migration, integration tests, and corresponding UI Zod schema. When a workflow spans repositories, verify whether partial persistence is acceptable before relying on the default session-per-operation behavior.
+When adding or moving a product router, update `../../api/api_app.py`; ingest routes are registered through `../../api/ingest_app.py`. When a schema changes, update the database model, API DTO where required, migration, integration tests, and corresponding UI Zod schema. When a workflow spans repositories, verify whether partial persistence is acceptable before relying on the default session-per-operation behavior.

@@ -10,7 +10,7 @@ Integrations make external services available to an Agent. Agent Secrets hold en
 
 ## Supported providers
 
-Provider credential contracts are defined by `SecretProvider` and its content models in `api/domains/agents/models.py`. Current providers cover GitHub, Jira, Confluence, Bitbucket, Gmail, Google Calendar, Zoho Mail, and Zoho Calendar.
+Provider credential contracts are defined by `SecretProvider` and its content models in `../../api/domains/agents/models.py`. Current providers cover GitHub, Jira, Confluence, Bitbucket, Gmail, Google Calendar, Zoho Mail, and Zoho Calendar.
 
 ## Invariants
 
@@ -38,16 +38,16 @@ At start, Agent Service decrypts provider payloads, backfills configured Google 
 
 ## Source map
 
-| Concern                                            | Authoritative source                                                                                                              |
-| -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| Provider enum, content schemas, encryption helpers | `api/domains/agents/models.py`                                                                                                    |
-| Agent Secret persistence and lifecycle             | `api/domains/agents/service.py`, `api/domains/agents/repository.py`                                                               |
-| aai-cli runtime materialization                    | `api/domains/agents/aai_cli_artifacts.py`, `api/domains/agents/aai_cli_skills/`                                                   |
-| Built-in skill definitions                         | `api/domains/agents/aai_cli_skills/`                                                                                              |
-| Slack configuration token lifecycle                | `api/domains/auth/token_service.py`, `auth/routes.py`                                                                             |
-| Gmail OAuth                                        | `api/domains/integrations/google_oauth/routes.py`                                                                                 |
-| UI credential forms                                | `ui/src/features/agents/`, `ui/src/features/account/`                                                                             |
-| Tests                                              | `api/tests/integration/test_agents.py`, `api/tests/integration/test_slack_config_token.py`, `api/tests/unit/test_google_oauth.py` |
+| Concern                                            | Authoritative source                                                                                                                                |
+| -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Provider enum, content schemas, encryption helpers | `../../api/domains/agents/models.py`                                                                                                                |
+| Agent Secret persistence and lifecycle             | `../../api/domains/agents/service.py`, `../../api/domains/agents/repository.py`                                                                     |
+| aai-cli runtime materialization                    | `../../api/domains/agents/aai_cli_artifacts.py`, `../../api/domains/agents/aai_cli_skills/`                                                         |
+| Built-in skill definitions                         | `../../api/domains/agents/aai_cli_skills/`                                                                                                          |
+| Slack configuration token lifecycle                | `../../api/domains/auth/token_service.py`, `../../api/domains/auth/routes.py`                                                                       |
+| Gmail OAuth                                        | `../../api/domains/integrations/google_oauth/routes.py`                                                                                             |
+| UI credential forms                                | `../../ui/src/features/agents/`, `../../ui/src/features/account/`                                                                                   |
+| Tests                                              | `../../api/tests/integration/test_agents.py`, `../../api/tests/integration/test_slack_config_token.py`, `../../api/tests/unit/test_google_oauth.py` |
 
 ## Change impact
 

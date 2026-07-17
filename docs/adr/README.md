@@ -1,6 +1,6 @@
 # Architectural Decision Records
 
-ADRs preserve why consequential architectural choices were made. Current behavior belongs in `docs/features/` and `docs/architecture/`; implementation plans and backlog items belong elsewhere.
+ADRs preserve why consequential architectural choices were made. Current behavior belongs in `../features/` and `../architecture/`; implementation plans and backlog items belong elsewhere.
 
 ## Filename convention
 

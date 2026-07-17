@@ -23,7 +23,7 @@ make check-ui        # TypeScript type check
 make test-ui         # Playwright
 ```
 
-From `ui/` when debugging Playwright:
+From `../../ui/` when debugging Playwright:
 
 ```bash
 pnpm test:watch
@@ -42,22 +42,22 @@ API behavior changes MUST cover:
 - Not-found and conflict behavior.
 - Migration behavior when the database schema changes.
 
-Integration tests use the real FastAPI app, migrated PostgreSQL, and additive Injector overrides. Follow the existing Given/When/Then style in `api/tests/integration/`:
+Integration tests use the real FastAPI app, migrated PostgreSQL, and additive Injector overrides. Follow the existing Given/When/Then style in `../../api/tests/integration/`:
 
 - `given(...)` assembles reusable setup steps.
 - `when(...)` names the action.
 - `then(...)` contains assertions.
 - PyHamcrest is the established assertion style in existing suites.
 
-Keep domain setup helpers under the existing test support structure rather than embedding large setup blocks in each test. Unit tests under `api/tests/unit/` are appropriate for services, repositories, parsers, builders, and infrastructure adapters when HTTP composition is not the contract under test.
+Keep domain setup helpers under the existing test support structure rather than embedding large setup blocks in each test. Unit tests under `../../api/tests/unit/` are appropriate for services, repositories, parsers, builders, and infrastructure adapters when HTTP composition is not the contract under test.
 
 Representative sources:
 
-- Tenant isolation: `api/tests/integration/test_cross_org_isolation.py`
-- Agent lifecycle: `api/tests/integration/test_agents.py`
-- Templates and skills: `api/tests/integration/test_templates.py`, `api/tests/integration/test_skills.py`
-- Ingest/activity: `api/tests/integration/test_ingest.py`, `test_conversations.py`, `test_tool_calls.py`
-- Test application setup: `api/tests/conftest.py`, `api/tests/core/`
+- Tenant isolation: `../../api/tests/integration/test_cross_org_isolation.py`
+- Agent lifecycle: `../../api/tests/integration/test_agents.py`
+- Templates and skills: `../../api/tests/integration/test_templates.py`, `../../api/tests/integration/test_skills.py`
+- Ingest/activity: `../../api/tests/integration/test_ingest.py`, `../../api/tests/integration/test_conversations.py`, `../../api/tests/integration/test_tool_calls.py`
+- Test application setup: `../../api/tests/conftest.py`, `../../api/tests/core/`
 
 ## UI and browser tests
 
@@ -65,10 +65,10 @@ Changed UI behavior SHOULD include Playwright coverage when regression risk is n
 
 Use this ownership split:
 
-- Specs and assertions: `ui/tests/e2e/`
-- Selectors and user interactions: `ui/tests/pages/`
-- Request interception and reusable mocks: `ui/tests/pages/data-support/`
-- Static response data: `ui/tests/fixtures/`
+- Specs and assertions: `../../ui/tests/e2e/`
+- Selectors and user interactions: `../../ui/tests/pages/`
+- Request interception and reusable mocks: `../../ui/tests/pages/data-support/`
+- Static response data: `../../ui/tests/fixtures/`
 
 Page objects expose user-level actions and stable locators; specs describe behavior and outcomes. Keep mock setup out of specs when a shared domain support helper can own it.
 

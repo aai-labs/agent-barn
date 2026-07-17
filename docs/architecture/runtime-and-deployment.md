@@ -35,9 +35,9 @@ Agent runtimes report messages and tool-call state to the separate Ingest API us
 
 ## Service deployment
 
-`helmfile.yaml.gotmpl` orders PostgreSQL releases, LiteLLM, API, and UI. API deployment mounts Kubernetes access so the service can manage agent resources. An API Helm hook runs Alembic before installation or upgrade, and health probes use `/api/v1/health`.
+`../../helmfile.yaml.gotmpl` orders PostgreSQL releases, LiteLLM, API, and UI. API deployment mounts Kubernetes access so the service can manage agent resources. An API Helm hook runs Alembic before installation or upgrade, and health probes use `/api/v1/health`.
 
-The deploy workflow reads API and UI image tags from each chart's `appVersion`, builds versioned images, and applies Helmfile. `AGENTS.md` is authoritative for independent API/UI `appVersion` and chart `version` rules.
+The deploy workflow reads API and UI image tags from each chart's `appVersion`, builds versioned images, and applies Helmfile. `../../AGENTS.md` is authoritative for independent API/UI `appVersion` and chart `version` rules.
 
 ## Kubernetes client constraint
 
@@ -47,16 +47,16 @@ Kubernetes `stream()` and `portforward()` temporarily monkey-patch `ApiClient.re
 
 | Concern                         | Source                                                                          |
 | ------------------------------- | ------------------------------------------------------------------------------- |
-| Runtime orchestration           | `api/domains/agents/service.py`                                                 |
-| Ingest process and routing      | `api/ingest_app.py`, `api/ingest_main.py`, `api/start.sh`                       |
-| Shared Kubernetes builders      | `api/domains/agents/builders/common.py`                                         |
-| Hermes builders                 | `api/domains/agents/builders/hermes.py`, `hermes-base/`                         |
-| OpenClaw builders               | `api/domains/agents/builders/openclaw.py`, `openclaw-base/`                     |
-| Skill and integration artifacts | `api/domains/agents/aai_cli_artifacts.py`, `api/domains/agents/aai_cli_skills/` |
-| Kubernetes client               | `api/infrastructure/kubernetes/`                                                |
-| Charts and release ordering     | `helm/`, `helmfile.yaml.gotmpl`                                                 |
-| Deployment workflow             | `.github/workflows/deploy.yml`                                                  |
+| Runtime orchestration           | `../../api/domains/agents/service.py`                                                 |
+| Ingest process and routing      | `../../api/ingest_app.py`, `../../api/ingest_main.py`, `../../api/start.sh`                       |
+| Shared Kubernetes builders      | `../../api/domains/agents/builders/common.py`                                         |
+| Hermes builders                 | `../../api/domains/agents/builders/hermes.py`, `../../hermes-base/`                         |
+| OpenClaw builders               | `../../api/domains/agents/builders/openclaw.py`, `../../openclaw-base/`                     |
+| Skill and integration artifacts | `../../api/domains/agents/aai_cli_artifacts.py`, `../../api/domains/agents/aai_cli_skills/` |
+| Kubernetes client               | `../../api/infrastructure/kubernetes/`                                                |
+| Charts and release ordering     | `../../helm/`, `../../helmfile.yaml.gotmpl`                                                 |
+| Deployment workflow             | `../../.github/workflows/deploy.yml`                                                  |
 
 ## Change impact
 
-Runtime changes must be checked against both platforms, builders, images/base configuration, agent lifecycle tests, telemetry, and persisted configuration contracts. Service-code changes require the affected chart `appVersion` bump; chart template/value changes require the chart `version` bump according to `AGENTS.md`.
+Runtime changes must be checked against both platforms, builders, images/base configuration, agent lifecycle tests, telemetry, and persisted configuration contracts. Service-code changes require the affected chart `appVersion` bump; chart template/value changes require the chart `version` bump according to `../../AGENTS.md`.
