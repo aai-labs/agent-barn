@@ -143,6 +143,12 @@ skill file first:
   `<ul><li>` lists, `<a href="...">` links, and a code macro for code blocks
   (`<ac:structured-macro ac:name="code"><ac:plain-text-body><![CDATA[ ... ]]></ac:plain-text-body></ac:structured-macro>`).
   Markdown (`##`, `**`, ` ``` `) renders as literal text, so don't use it.
+  **Page links:** don't hand-build a page URL from the bare site — Confluence
+  Cloud pages live under `/wiki`. Take the link straight from the `pages create` /
+  `pages get` response: `_links.base` (already ends in `/wiki`, e.g.
+  `https://<site>.atlassian.net/wiki`) + `_links.webui` (`/spaces/<KEY>/pages/<id>/...`).
+  A link missing the `/wiki` segment 404s. Note `pages list` strips `_links`, so
+  read the link from `pages get`/`pages create`, not from a list result.
 - Slack: use the built-in Slack integration configured during agent setup.
 
 ## CLI Policy
@@ -323,8 +329,9 @@ maintained by BOOT.md on each startup.
    changelog is the record of what shipped — there is no separate local log).
 2. Group it into new features, bug fixes, and other changes.
 3. Post a concise summary to the configured Slack channel, with links to the pages
-   and PRs/tasks. If nothing shipped this week, say so briefly (or reply
-   `HEARTBEAT_OK` if a silent week is preferred).
+   and PRs/tasks (build page links per the `/wiki` rule in TOOLS.md — never link
+   the bare site without `/wiki`). If nothing shipped this week, say so briefly (or
+   reply `HEARTBEAT_OK` if a silent week is preferred).
 
 ## Boundaries
 
