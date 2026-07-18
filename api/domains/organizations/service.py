@@ -18,6 +18,7 @@ from api.domains.organizations.models import (
     OrganizationUpdate,
 )
 from api.domains.organizations.repository import OrganizationRepository
+from api.domains.rbac.catalog import OWNER_ROLE_ID
 from api.domains.templates.service import TemplateService
 from api.domains.users.organization_users.models import (
     ORG_MANAGER_ROLES,
@@ -75,7 +76,7 @@ class OrganizationService:
                 OrganizationUser(
                     user_id=prepared.user.id,
                     organization_id=organization.id,
-                    role=OrganizationRole.OWNER,
+                    role_id=OWNER_ROLE_ID,
                 ),
                 session,
             )

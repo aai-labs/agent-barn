@@ -184,6 +184,11 @@ class Agent(BaseModel, table=True):
     __table_args__ = (
         Index("ix_agent_organization_deleted", "organization_id", "deleted_at"),
         sa.Index("ix_agent_status", "status"),
+        sa.UniqueConstraint(
+            "id",
+            "organization_id",
+            name="uq_agent_id_organization",
+        ),
         sa.ForeignKeyConstraint(
             ["organization_id", "template_slug", "template_version"],
             [
@@ -198,6 +203,13 @@ class Agent(BaseModel, table=True):
 
     organization_id: UUID = SqlField(
         foreign_key="organization.id", nullable=False, ondelete="CASCADE"
+    )
+    created_by_user_id: UUID | None = SqlField(
+        default=None,
+        foreign_key="user.id",
+        nullable=True,
+        ondelete="SET NULL",
+        index=True,
     )
     name: str = SqlField(nullable=False, max_length=255)
     litellm_key_encrypted: str = SqlField(nullable=False, default="")
@@ -232,6 +244,39 @@ class Agent(BaseModel, table=True):
         default=CommandApprovalMode.AUTO,
         sa_column=Column(sa.String(10), nullable=False, server_default="auto"),
     )
+
+
+class AgentAccess(BaseModel, table=True):
+    __tablename__: str = "agent_access"
+    __table_args__ = (
+        sa.UniqueConstraint(
+            "membership_id",
+            "agent_id",
+            name="uq_agent_access_membership_agent",
+        ),
+        sa.ForeignKeyConstraint(
+            ["membership_id", "organization_id"],
+            ["user_organization.id", "user_organization.organization_id"],
+            name="fk_agent_access_membership_organization",
+            ondelete="CASCADE",
+        ),
+        sa.ForeignKeyConstraint(
+            ["agent_id", "organization_id"],
+            ["agent.id", "agent.organization_id"],
+            name="fk_agent_access_agent_organization",
+            ondelete="CASCADE",
+        ),
+        sa.Index("ix_agent_access_membership", "membership_id"),
+        sa.Index("ix_agent_access_agent", "agent_id"),
+    )
+
+    organization_id: UUID = SqlField(
+        foreign_key="organization.id",
+        nullable=False,
+        ondelete="CASCADE",
+    )
+    membership_id: UUID = SqlField(nullable=False)
+    agent_id: UUID = SqlField(nullable=False)
 
 
 class AgentSlackConfig(BaseModel, table=True):

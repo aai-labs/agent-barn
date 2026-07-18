@@ -31,10 +31,8 @@ from api.domains.organizations.repository import OrganizationRepository
 from api.domains.templates.service import TemplateService
 from api.domains.users.exceptions import EmailTakenHTTPException
 from api.domains.users.models import User
-from api.domains.users.organization_users.models import (
-    OrganizationRole,
-    OrganizationUser,
-)
+from api.domains.rbac.catalog import OWNER_ROLE_ID
+from api.domains.users.organization_users.models import OrganizationUser
 from api.domains.users.organization_users.repository import OrganizationUserRepository
 from api.domains.users.repository import UserRepository
 from api.infrastructure.email.service import EmailService
@@ -146,7 +144,7 @@ class AuthService:
                 OrganizationUser(
                     user_id=user.id,
                     organization_id=organization.id,
-                    role=OrganizationRole.OWNER,
+                    role_id=OWNER_ROLE_ID,
                 ),
                 session,
             )

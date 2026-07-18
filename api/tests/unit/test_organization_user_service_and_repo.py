@@ -6,6 +6,7 @@ from hamcrest import assert_that, calling, equal_to, raises
 from sqlalchemy.exc import IntegrityError
 
 from api.domains.organizations.models import Organization
+from api.domains.rbac.catalog import system_role_id
 from api.domains.users.organization_users.exceptions import (
     OneOwnerPerOrganizationException,
     UserAlreadyPartOfOrganizationException,
@@ -16,6 +17,36 @@ from api.domains.users.organization_users.models import (
 )
 from api.domains.users.organization_users.repository import OrganizationUserRepository
 from api.domains.users.organization_users.service import OrganizationUserService
+
+
+def test_organization_user_accepts_legacy_role_constructor():
+    membership = OrganizationUser(
+        user_id=uuid7(),
+        organization_id=uuid7(),
+        role=OrganizationRole.OWNER,
+    )
+
+    assert_that(
+        (membership.role, membership.role_id),
+        equal_to(
+            (
+                OrganizationRole.OWNER,
+                system_role_id(OrganizationRole.OWNER.value),
+            )
+        ),
+    )
+
+
+def test_organization_user_rejects_role_and_role_id_together():
+    assert_that(
+        calling(OrganizationUser).with_args(
+            user_id=uuid7(),
+            organization_id=uuid7(),
+            role=OrganizationRole.OWNER,
+            role_id=system_role_id(OrganizationRole.OWNER.value),
+        ),
+        raises(ValueError),
+    )
 
 
 def test_organization_user_service_raises_404_when_membership_missing():
@@ -50,7 +81,9 @@ def test_organization_user_service_maps_conflict_to_409():
         user_repository=Mock(),
     )
     org_user = OrganizationUser(
-        user_id=uuid7(), organization_id=uuid7(), role=OrganizationRole.MEMBER
+        user_id=uuid7(),
+        organization_id=uuid7(),
+        role_id=system_role_id(OrganizationRole.MEMBER.value),
     )
 
     try:
@@ -67,7 +100,9 @@ def test_organization_user_repository_maps_duplicate_member_constraint():
     )
     repository = OrganizationUserRepository(delegate=delegate)
     org_user = OrganizationUser(
-        user_id=uuid7(), organization_id=uuid7(), role=OrganizationRole.MEMBER
+        user_id=uuid7(),
+        organization_id=uuid7(),
+        role_id=system_role_id(OrganizationRole.MEMBER.value),
     )
 
     assert_that(
@@ -83,7 +118,9 @@ def test_organization_user_repository_maps_one_owner_constraint():
     )
     repository = OrganizationUserRepository(delegate=delegate)
     org_user = OrganizationUser(
-        user_id=uuid7(), organization_id=uuid7(), role=OrganizationRole.OWNER
+        user_id=uuid7(),
+        organization_id=uuid7(),
+        role_id=system_role_id(OrganizationRole.OWNER.value),
     )
 
     assert_that(

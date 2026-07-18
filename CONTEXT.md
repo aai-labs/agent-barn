@@ -13,8 +13,28 @@ The relationship between a user and an organization, carrying exactly one organi
 _Avoid_: organization user, user organization
 
 **Organization Role**:
-A membership's authority level: owner, admin, or member. An organization can have at most one owner; normal creation and transfer flows establish one.
-_Avoid_: user role, global role
+A membership's organization-scoped authority. The predefined roles are owner, admin, and member; an organization can have at most one owner.
+_Avoid_: user role, global role, superuser
+
+**Permission**:
+A named capability granted through an Organization Role and evaluated for a specific organization, action, and when applicable resource.
+_Avoid_: role check, global permission
+
+**Permission Scope**:
+The resource boundary of a role's Permission grant: organization covers all matching resources in that Organization, while assigned covers only Agent aggregates linked through Agent Access.
+_Avoid_: global scope, tenant bypass
+
+**Agent Access**:
+The relationship that makes an Agent assigned to a Membership. A member sees and may exercise assigned-agent permissions only for Agents they created or were explicitly granted access to.
+_Avoid_: agent ownership, organization membership
+
+**Agent Creator**:
+The user who originally created an Agent, retained as provenance rather than ownership or current access.
+_Avoid_: agent owner, agent manager
+
+**Security Audit Event**:
+An organization-scoped record of a security-sensitive authorization or credential change. Ordinary resource reads are not Security Audit Events.
+_Avoid_: activity event, request log
 
 **Agent**:
 An organization-owned AI worker configured from a pinned template version and executed by one runtime on one chat platform.
@@ -64,7 +84,9 @@ _Avoid_: webhook
 
 - An **Organization** has many **Memberships**, **Agents**, **Templates**, and custom **Skills**.
 - A **Membership** links one user to one **Organization** with one **Organization Role**.
-- An **Agent** belongs to one **Organization**, pins one **Template Version**, uses one **Runtime**, and connects to one **Platform**.
+- An **Organization Role** grants **Permissions** with a **Permission Scope** within its Organization.
+- An **Agent** belongs to one **Organization**, has one original **Agent Creator**, pins one **Template Version**, uses one **Runtime**, and connects to one **Platform**.
+- A **Membership** may have **Agent Access** to many Agents; creating an Agent establishes access without making the creator its owner.
 - A **Template Version** may require multiple **Skills**.
 - An **Agent** may have multiple **Skills** and **Agent Secrets**.
 - An Agent runtime sends **Conversation Messages** and **Tool Calls** through **Ingest**.

@@ -65,6 +65,10 @@ Stop snapshots logs before removing active runtime resources and marking the age
 | UI components                              | `../../ui/src/features/agents/components/`                                                                         |
 | Integration coverage                       | `../../api/tests/integration/test_agents.py`, `../../api/tests/integration/test_agent_logs.py`                           |
 
+## Related decisions
+
+- [`2026-07-18-assigned-agent-access-boundary.md`](../adr/2026-07-18-assigned-agent-access-boundary.md)
+
 ## Change impact
 
 Lifecycle or runtime changes affect agent API contracts, both runtime builders, Kubernetes cleanup, logs/health, UI schemas and controls, and agent integration tests. Template/skill changes also require checking creation, repinning, update validation, and template/skill integration tests. Platform changes require checking Slack and Teams credential handling separately.

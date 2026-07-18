@@ -5,15 +5,13 @@ from injector import inject, singleton
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
+from api.domains.rbac.catalog import ADMIN_ROLE_ID, OWNER_ROLE_ID
 from api.domains.users.models import User
 from api.domains.users.organization_users.exceptions import (
     OneOwnerPerOrganizationException,
     UserAlreadyPartOfOrganizationException,
 )
-from api.domains.users.organization_users.models import (
-    OrganizationRole,
-    OrganizationUser,
-)
+from api.domains.users.organization_users.models import OrganizationUser
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
 
@@ -105,10 +103,10 @@ class OrganizationUserRepository:
             if current is None or new is None:
                 raise ValueError("Owner or target membership not found for transfer")
 
-            current.role = OrganizationRole.ADMIN
+            current.role_id = ADMIN_ROLE_ID
             session.add(current)
             session.flush()
-            new.role = OrganizationRole.OWNER
+            new.role_id = OWNER_ROLE_ID
             session.add(new)
             session.flush()
             session.commit()

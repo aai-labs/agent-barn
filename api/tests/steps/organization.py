@@ -3,6 +3,7 @@ from uuid import UUID, uuid7
 from api.domains.auth.utils import set_default_org_id
 from api.domains.organizations.models import Organization
 from api.domains.organizations.repository import OrganizationRepository
+from api.domains.rbac.catalog import system_role_id
 from api.domains.users.organization_users.models import (
     OrganizationRole,
     OrganizationUser,
@@ -63,7 +64,7 @@ def there_is_an_organization(
             org_user = OrganizationUser(
                 user_id=org_owner_id,
                 organization_id=organization.id,
-                role=OrganizationRole.OWNER,
+                role_id=system_role_id(OrganizationRole.OWNER.value),
             )
             organization_user_repository.save(org_user)
 
@@ -83,7 +84,9 @@ def there_is_an_organization_user(
             OrganizationUserRepository
         )
         user_organization = OrganizationUser(
-            user_id=user_id, organization_id=organization_id, role=role
+            user_id=user_id,
+            organization_id=organization_id,
+            role_id=system_role_id(role.value),
         )
         organization_user_repository.save(user_organization)
         context.organization_user = user_organization
