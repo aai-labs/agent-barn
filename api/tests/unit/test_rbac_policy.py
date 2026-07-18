@@ -2,8 +2,7 @@ from datetime import datetime, timezone
 from unittest.mock import Mock
 from uuid import UUID, uuid7
 
-from fastapi import status
-from hamcrest import assert_that, equal_to, none
+from hamcrest import assert_that, calling, equal_to, has_properties, none, raises
 
 from api.domains.auth.exceptions import ForbiddenException
 from api.domains.auth.models import CurrentUserContext
@@ -133,17 +132,21 @@ def test_resolve_denies_missing_permission_by_default():
         none(),
     )
 
-    try:
-        policy.require(
+    assert_that(
+        calling(policy.require).with_args(
             context,
             membership.organization_id,
             PermissionKey.MEMBERSHIP_READ,
             detail="Missing membership read",
-        )
-        raise AssertionError("Expected ForbiddenException")
-    except ForbiddenException as exc:
-        assert_that(exc.status_code, equal_to(status.HTTP_403_FORBIDDEN))
-        assert_that(exc.detail, equal_to("Missing membership read"))
+        ),
+        raises(
+            ForbiddenException,
+            matching=has_properties(
+                status_code=403,
+                detail="Missing membership read",
+            ),
+        ),
+    )
 
 
 def test_resolve_superuser_uses_transient_explicit_org_context_without_membership():
@@ -191,11 +194,15 @@ def test_resolve_requires_active_organization_context_even_for_superuser():
     policy = PermissionPolicy(repository=Mock())
     context = CurrentUserContext(user=_user(is_superuser=True))
 
-    try:
-        policy.resolve(context, uuid7(), PermissionKey.ORGANIZATION_READ)
-        raise AssertionError("Expected ForbiddenException")
-    except ForbiddenException as exc:
-        assert_that(exc.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+    assert_that(
+        calling(policy.resolve).with_args(
+            context, uuid7(), PermissionKey.ORGANIZATION_READ
+        ),
+        raises(
+            ForbiddenException,
+            matching=has_properties(status_code=403),
+        ),
+    )
 
 
 def test_resolve_observes_membership_role_changes_without_caching():
