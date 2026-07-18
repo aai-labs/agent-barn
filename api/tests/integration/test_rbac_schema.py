@@ -20,6 +20,7 @@ from api.domains.rbac.catalog import (
     PERMISSIONS,
     SYSTEM_ROLE_GRANTS,
     PermissionKey,
+    PermissionScope,
 )
 from api.domains.rbac.repository import RbacRepository
 from api.domains.rbac.seeder import RbacSeedConflictError, RbacSeeder
@@ -65,10 +66,14 @@ def _alembic_config() -> Config:
     return Config(ALEMBIC_INI)
 
 
-def _seeder_for(url: URL) -> RbacSeeder:
+def _repository_for(url: URL) -> RbacRepository:
     config = AppConfig.model_construct(db_connection_url=url.render_as_string(False))
     delegate = PostgresRepositoryDelegate(config)
-    return RbacSeeder(repository=RbacRepository(delegate=delegate))
+    return RbacRepository(delegate=delegate)
+
+
+def _seeder_for(url: URL) -> RbacSeeder:
+    return RbacSeeder(repository=_repository_for(url))
 
 
 @pytest.fixture
@@ -282,6 +287,48 @@ def test_fresh_upgrade_seeds_exact_system_catalogue(fresh_database):
                 "legacy_enum_count": 0,
             }
         ),
+    )
+
+
+def test_repository_resolves_exact_persisted_permission_scope(fresh_database):
+    repository = _repository_for(fresh_database.url)
+
+    assert_that(
+        repository.get_permission_scope(MEMBER_ROLE_ID, PermissionKey.AGENT_READ),
+        equal_to(PermissionScope.ASSIGNED),
+    )
+    assert_that(
+        repository.get_permission_scope(ADMIN_ROLE_ID, PermissionKey.AGENT_READ),
+        equal_to(PermissionScope.ORGANIZATION),
+    )
+    assert_that(
+        repository.get_permission_scope(MEMBER_ROLE_ID, PermissionKey.AUDIT_READ),
+        none(),
+    )
+
+
+def test_repository_observes_permission_scope_changes_without_caching(fresh_database):
+    repository = _repository_for(fresh_database.url)
+    permission_id = PERMISSION_ID_BY_KEY[PermissionKey.AGENT_READ]
+
+    assert_that(
+        repository.get_permission_scope(MEMBER_ROLE_ID, PermissionKey.AGENT_READ),
+        equal_to(PermissionScope.ASSIGNED),
+    )
+
+    with fresh_database.engine.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE role_permissions "
+                "SET scope = 'ORGANIZATION'::permissionscope "
+                "WHERE role_id = :role_id AND permission_id = :permission_id"
+            ),
+            {"role_id": MEMBER_ROLE_ID, "permission_id": permission_id},
+        )
+
+    assert_that(
+        repository.get_permission_scope(MEMBER_ROLE_ID, PermissionKey.AGENT_READ),
+        equal_to(PermissionScope.ORGANIZATION),
     )
 
 

@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from uuid import UUID
 
 from injector import inject, singleton
 from sqlmodel import Session, col, select
@@ -8,6 +9,8 @@ from api.domains.rbac.catalog import (
     PERMISSIONS,
     SYSTEM_ROLE_GRANTS,
     SYSTEM_ROLES,
+    PermissionKey,
+    PermissionScope,
 )
 from api.domains.rbac.models import Permission, Role, RolePermission
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
@@ -22,6 +25,24 @@ class RbacSeedConflictError(RuntimeError):
 @dataclass
 class RbacRepository:
     delegate: PostgresRepositoryDelegate
+
+    def get_permission_scope(
+        self, role_id: UUID, permission: PermissionKey
+    ) -> PermissionScope | None:
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(RolePermission)
+                .join(
+                    Permission,
+                    col(Permission.id) == col(RolePermission.permission_id),
+                )
+                .where(
+                    col(RolePermission.role_id) == role_id,
+                    col(Permission.key) == permission.value,
+                )
+            )
+            grant = session.exec(query).first()
+            return grant.scope if grant is not None else None
 
     def ensure_system_catalogue(self) -> None:
         with Session(self.delegate.engine) as session:
