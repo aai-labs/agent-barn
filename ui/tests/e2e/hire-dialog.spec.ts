@@ -58,37 +58,40 @@ test.describe("Hire Dialog", () => {
     await expect(page.getByText(/step 1 of/i)).toBeVisible();
   });
 
-  test("should go from template directly to slack setup (runtime/platform pickers skipped)", async ({ page }) => {
+  test("should advance to agent-type step after template", async ({ page }) => {
     await page.getByText("General Purpose", { exact: true }).click();
-    await page.getByRole("button", { name: /continue/i }).click(); // template → slack-choice
+    await page.getByRole("button", { name: /continue/i }).click(); // template → agent-type
 
-    await expect(page.getByText("Set up your Slack app")).toBeVisible();
+    await expect(page.getByText("Choose your agent runtime")).toBeVisible();
     await expect(page.getByText(/step 2 of/i)).toBeVisible();
   });
 
   test("should skip bot builder when choosing existing app", async ({ page }) => {
     await page.getByText("General Purpose", { exact: true }).click();
-    await page.getByRole("button", { name: /continue/i }).click(); // template → slack-choice
+    await page.getByRole("button", { name: /continue/i }).click(); // template → agent-type
+    await page.getByRole("button", { name: /continue/i }).click(); // agent-type → slack-choice
     await page.getByText("I already have a Slack app").click();
     await page.getByRole("button", { name: /continue/i }).click();
 
     await expect(page.getByText("Connect Slack")).toBeVisible();
-    await expect(page.getByText(/step 3 of 5/i)).toBeVisible();
+    await expect(page.getByText(/step 4 of 6/i)).toBeVisible();
   });
 
   test("should go through bot builder when choosing new bot", async ({ page }) => {
     await page.getByText("General Purpose", { exact: true }).click();
-    await page.getByRole("button", { name: /continue/i }).click(); // template → slack-choice
+    await page.getByRole("button", { name: /continue/i }).click(); // template → agent-type
+    await page.getByRole("button", { name: /continue/i }).click(); // agent-type → slack-choice
     await page.getByText("Set up a new Slack bot").click();
     await page.getByRole("button", { name: /continue/i }).click();
 
     await expect(page.getByText("Build your Slack bot")).toBeVisible();
-    await expect(page.getByText(/step 3 of 6/i)).toBeVisible();
+    await expect(page.getByText(/step 4 of 7/i)).toBeVisible();
   });
 
   test("should show bot builder fields when choosing new bot", async ({ page }) => {
     await page.getByText("General Purpose", { exact: true }).click();
-    await page.getByRole("button", { name: /continue/i }).click();
+    await page.getByRole("button", { name: /continue/i }).click(); // template → agent-type
+    await page.getByRole("button", { name: /continue/i }).click(); // agent-type → slack-choice
     await page.getByText("Set up a new Slack bot").click();
     await page.getByRole("button", { name: /continue/i }).click();
 
@@ -98,7 +101,8 @@ test.describe("Hire Dialog", () => {
 
   test("should advance to details step (path: skip bot builder)", async ({ page }) => {
     await page.getByText("General Purpose", { exact: true }).click();
-    await page.getByRole("button", { name: /continue/i }).click(); // template → slack-choice
+    await page.getByRole("button", { name: /continue/i }).click(); // template → agent-type
+    await page.getByRole("button", { name: /continue/i }).click(); // agent-type → slack-choice
     await page.getByText("I already have a Slack app").click();
     await page.getByRole("button", { name: /continue/i }).click();
     await page.getByPlaceholder(/xapp-/i).fill("xapp-1-test");
@@ -106,12 +110,13 @@ test.describe("Hire Dialog", () => {
     await page.getByRole("button", { name: /continue/i }).click();
 
     await expect(page.getByText("A few details and we'll get them set up.")).toBeVisible();
-    await expect(page.getByText(/step 4 of 5/i)).toBeVisible();
+    await expect(page.getByText(/step 5 of 6/i)).toBeVisible();
   });
 
   test("should show model dropdown with qwen as default and gpt-5-mini as option", async ({ page }) => {
     await page.getByText("General Purpose", { exact: true }).click();
-    await page.getByRole("button", { name: /continue/i }).click();
+    await page.getByRole("button", { name: /continue/i }).click(); // template → agent-type
+    await page.getByRole("button", { name: /continue/i }).click(); // agent-type → slack-choice
     await page.getByText("I already have a Slack app").click();
     await page.getByRole("button", { name: /continue/i }).click();
     await page.getByPlaceholder(/xapp-/i).fill("xapp-1-test");
@@ -131,7 +136,8 @@ test.describe("Hire Dialog", () => {
 
   test("should populate agent name from slack bot name", async ({ page }) => {
     await page.getByText("General Purpose", { exact: true }).click();
-    await page.getByRole("button", { name: /continue/i }).click();
+    await page.getByRole("button", { name: /continue/i }).click(); // template → agent-type
+    await page.getByRole("button", { name: /continue/i }).click(); // agent-type → slack-choice
     await page.getByText("Set up a new Slack bot").click();
     await page.getByRole("button", { name: /continue/i }).click();
 
@@ -153,7 +159,8 @@ test.describe("Hire Dialog", () => {
     await dataSupportPage.agents.interceptSlackUsersRequest({ agentId: mockAgent.id });
 
     await page.getByText("General Purpose", { exact: true }).click();
-    await page.getByRole("button", { name: /continue/i }).click(); // template → slack-choice
+    await page.getByRole("button", { name: /continue/i }).click(); // template → agent-type
+    await page.getByRole("button", { name: /continue/i }).click(); // agent-type → slack-choice
     await page.getByText("I already have a Slack app").click();
     await page.getByRole("button", { name: /continue/i }).click(); // slack-choice → tokens
     await page.getByPlaceholder(/xapp-/i).fill("xapp-1-test");
@@ -174,7 +181,7 @@ test.describe("Hire Dialog", () => {
   test("should navigate back through steps", async ({ page }) => {
     await page.getByText("General Purpose", { exact: true }).click();
     await page.getByRole("button", { name: /continue/i }).click();
-    await expect(page.getByText("Set up your Slack app")).toBeVisible();
+    await expect(page.getByText("Choose your agent runtime")).toBeVisible();
 
     await page.getByRole("button", { name: /back/i }).click();
     await expect(page.getByText("What kind of teammate do you need?")).toBeVisible();
@@ -202,7 +209,8 @@ test.describe("Hire Dialog", () => {
   test("details step shows a read-only template preview with raw placeholders", async ({ page }) => {
     // Pick the scrum-master template (its soul contains a raw {{ placeholder }}).
     await page.getByText("Scrum Master", { exact: true }).click();
-    await page.getByRole("button", { name: /continue/i }).click(); // template → slack-choice
+    await page.getByRole("button", { name: /continue/i }).click(); // template → agent-type
+    await page.getByRole("button", { name: /continue/i }).click(); // agent-type → slack-choice
     await page.getByText("I already have a Slack app").click();
     await page.getByRole("button", { name: /continue/i }).click(); // slack-choice → tokens
     await page.getByPlaceholder(/xapp-/i).fill("xapp-1-test");
@@ -218,7 +226,8 @@ test.describe("Hire Dialog", () => {
 
   test("details step shows command approval select defaulting to auto", async ({ page }) => {
     await page.getByText("General Purpose", { exact: true }).click();
-    await page.getByRole("button", { name: /continue/i }).click(); // template → slack-choice
+    await page.getByRole("button", { name: /continue/i }).click(); // template → agent-type
+    await page.getByRole("button", { name: /continue/i }).click(); // agent-type → slack-choice
     await page.getByText("I already have a Slack app").click();
     await page.getByRole("button", { name: /continue/i }).click(); // slack-choice → tokens
     await page.getByPlaceholder(/xapp-/i).fill("xapp-1-test");
@@ -235,7 +244,8 @@ test.describe("Hire Dialog", () => {
     await dataSupportPage.agents.interceptSlackUsersRequest({ agentId: mockAgent.id });
 
     await page.getByText("General Purpose", { exact: true }).click();
-    await page.getByRole("button", { name: /continue/i }).click(); // template → slack-choice
+    await page.getByRole("button", { name: /continue/i }).click(); // template → agent-type
+    await page.getByRole("button", { name: /continue/i }).click(); // agent-type → slack-choice
     await page.getByText("I already have a Slack app").click();
     await page.getByRole("button", { name: /continue/i }).click(); // slack-choice → tokens
     await page.getByPlaceholder(/xapp-/i).fill("xapp-1-test");
@@ -263,7 +273,8 @@ test.describe("Hire Dialog", () => {
     await page.getByText("General Purpose", { exact: true }).click();
     await page.getByLabel("Version").click();
     await page.getByRole("menuitemradio", { name: "v1" }).click();
-    await page.getByRole("button", { name: /continue/i }).click(); // template → slack-choice
+    await page.getByRole("button", { name: /continue/i }).click(); // template → agent-type
+    await page.getByRole("button", { name: /continue/i }).click(); // agent-type → slack-choice
     await page.getByText("I already have a Slack app").click();
     await page.getByRole("button", { name: /continue/i }).click(); // slack-choice → tokens
     await page.getByPlaceholder(/xapp-/i).fill("xapp-1-test");
@@ -297,7 +308,8 @@ test.describe("Hire Dialog — Skills step", () => {
 
   async function navigateToSkillsStep(page: Page) {
     await page.getByText("General Purpose", { exact: true }).click();
-    await page.getByRole("button", { name: /continue/i }).click(); // template → slack-choice
+    await page.getByRole("button", { name: /continue/i }).click(); // template → agent-type
+    await page.getByRole("button", { name: /continue/i }).click(); // agent-type → slack-choice
     await page.getByText("I already have a Slack app").click();
     await page.getByRole("button", { name: /continue/i }).click(); // slack-choice → tokens
     await page.getByPlaceholder(/xapp-/i).fill("xapp-1-test");
@@ -326,7 +338,7 @@ test.describe("Hire Dialog — Skills step", () => {
     await navigateToSkillsStep(page);
 
     await expect(page.getByText("Assign skills")).toBeVisible();
-    await expect(page.getByText(/step 5 of 5/i)).toBeVisible();
+    await expect(page.getByText(/step 6 of 6/i)).toBeVisible();
   });
 
   test("shows skills as cards with source badges and search input", async ({ page }) => {
@@ -468,13 +480,13 @@ test.describe("Hire Dialog — Skills step", () => {
     await expect(page.getByRole("button", { name: /hire aria/i })).toBeDisabled();
   });
 
-  test("selecting a gmail skill reveals gmail credential fields", async ({ page }) => {
+  test("selecting a gmail skill reveals the Google OAuth button", async ({ page }) => {
     await navigateToSkillsStep(page);
 
     await page.getByText(mockGmailSkill.name, { exact: true }).click();
 
     await expect(page.getByText("Required credentials", { exact: true })).toBeVisible();
-    await expect(page.getByPlaceholder(/apps\.googleusercontent\.com/)).toBeVisible();
+    await expect(page.getByRole("button", { name: "Authenticate with Google" })).toBeVisible();
   });
 
   test("hire button is disabled when gmail credentials are incomplete", async ({ page }) => {

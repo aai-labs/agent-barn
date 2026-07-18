@@ -8,13 +8,14 @@ import { useUpdateAgent } from "../hooks/use-update-agent";
 import { useDeleteAgent } from "../hooks/use-delete-agent";
 import { useValidateIntegration } from "../hooks/use-validate-integration";
 import { XIcon, LockIcon } from "@/components/icons";
-import { FormField, TokenInput } from "./hire-dialog-primitives";
+import { FormField, GoogleAuthButton, TokenInput } from "./hire-dialog-primitives";
 import { IntegrationsStep, RepoListField, TemplateSourceBadge, VersionSelect } from "./hire-dialog-steps";
 import { ModelSelect } from "./model-select";
 import {
   expandGithubContent,
   getIntegrationProvider,
   hasIncompleteIntegration,
+  isOAuthConnected,
   type IntegrationDraft,
 } from "../integrations";
 import { SlackConfigPanel } from "./slack-config-panel";
@@ -392,19 +393,21 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                     disabled={isRunning}
                   />
                 </div>
-                <div className="flex flex-col gap-1.5">
-                  <label className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>Command approval</label>
-                  <select
-                    className="af-input"
-                    value={approvalMode}
-                    onChange={(e) => setApprovalMode(e.target.value as "manual" | "auto" | "off")}
-                    disabled={isRunning}
-                  >
-                    <option value="auto">Auto — approve low-risk commands automatically</option>
-                    <option value="manual">Manual — always ask before running commands</option>
-                    <option value="off">Off — skip all approval prompts</option>
-                  </select>
-                </div>
+                {agent.agentType === "hermes" && (
+                  <div className="flex flex-col gap-1.5">
+                    <label className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>Command approval</label>
+                    <select
+                      className="af-input"
+                      value={approvalMode}
+                      onChange={(e) => setApprovalMode(e.target.value as "manual" | "auto" | "off")}
+                      disabled={isRunning}
+                    >
+                      <option value="auto">Auto — approve low-risk commands automatically</option>
+                      <option value="manual">Manual — always ask before running commands</option>
+                      <option value="off">Off — skip all approval prompts</option>
+                    </select>
+                  </div>
+                )}
                 <div className="flex gap-2 items-center">
                   <button
                     className="af-btn af-btn-sm"
@@ -567,6 +570,17 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                         <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
                           {providerSpec.label}
                         </div>
+                        {providerSpec.authMethod === "google_oauth" && (
+                          <GoogleAuthButton
+                            connected={isOAuthConnected(draft)}
+                            onConnected={({ refreshToken, clientId, clientSecret }) => {
+                              setRepinSecretField(providerId, "refreshToken", refreshToken);
+                              setRepinSecretField(providerId, "clientId", clientId);
+                              setRepinSecretField(providerId, "clientSecret", clientSecret);
+                            }}
+                            disabled={isRunning}
+                          />
+                        )}
                         {providerSpec.fields.map((field) => {
                           const label = field.required ? field.label : `${field.label} (optional)`;
 

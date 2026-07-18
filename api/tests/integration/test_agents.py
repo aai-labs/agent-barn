@@ -2788,6 +2788,73 @@ def test_start_agent_auto_attach_does_not_duplicate_explicitly_assigned_skill():
             assert_that(config_map.data["TOOLS.md"].count(_JIRA_POINTER), equal_to(1))
 
 
+def test_start_agent_injects_profile_mapping_into_agents_md_openclaw():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+
+        with when("a jira secret is configured and the OpenClaw agent starts"):
+            client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"secrets": [{"provider": "jira", "content": _JIRA_CONTENT}]},
+                headers=_auth(context),
+            )
+            response = client.post(
+                f"{_BASE}/{context.agent.id}/start", headers=_auth(context)
+            )
+
+        with then("AGENTS.md carries the --profile mapping and no-fallback policy"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            agents_md = config_map.data["AGENTS.md"]
+            assert_that(agents_md, contains_string("--profile jira-work"))
+            assert_that(agents_md, contains_string("./skills/aai-cli/"))
+
+
+def test_start_agent_injects_profile_mapping_into_agents_md_hermes():
+    with given(
+        [*_GIVEN_WITH_HERMES_IMAGE, there_is_an_agent(agent_type=AgentType.HERMES)]
+    ) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+
+        with when("a jira secret is configured and the Hermes agent starts"):
+            client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"secrets": [{"provider": "jira", "content": _JIRA_CONTENT}]},
+                headers=_auth(context),
+            )
+            response = client.post(
+                f"{_BASE}/{context.agent.id}/start", headers=_auth(context)
+            )
+
+        with then("AGENTS.md carries the --profile mapping and no-fallback policy"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            agents_md = config_map.data["AGENTS.md"]
+            assert_that(agents_md, contains_string("--profile jira-work"))
+            assert_that(agents_md, contains_string("./skills/aai-cli/"))
+
+
+def test_start_agent_no_integrations_leaves_agents_md_unmodified():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+
+        with when("the agent starts with no configured secrets"):
+            response = client.post(
+                f"{_BASE}/{context.agent.id}/start", headers=_auth(context)
+            )
+
+        with then("AGENTS.md has no integrations block appended"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            assert_that(
+                config_map.data["AGENTS.md"],
+                is_not(contains_string("--profile")),
+            )
+
+
 # --- template required skills ---
 
 

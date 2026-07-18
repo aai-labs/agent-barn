@@ -38,6 +38,21 @@ provider_secrets_map: dict[str, list[tuple[str, str]]] = {
     ],
 }
 
+# Canonical aai-cli --profile slug per provider — the single source of truth shared by the
+# config.toml profile builders (which emit `[profiles.<slug>]`) and the markdown that tells
+# the agent which --profile to pass. GitHub/Bitbucket use this as the base slug; each extra
+# configured repo appends -2, -3, ... via _profile_repo_pairs.
+PROFILE_SLUGS: dict[SecretProvider, str] = {
+    SecretProvider.GITHUB: "github-work",
+    SecretProvider.JIRA: "jira-work",
+    SecretProvider.CONFLUENCE: "confluence-work",
+    SecretProvider.BITBUCKET: "bitbucket-work",
+    SecretProvider.GMAIL: "gmail-work",
+    SecretProvider.GOOGLE_CALENDAR: "google-calendar-work",
+    SecretProvider.ZOHO_MAIL: "zoho-mail-rest",
+    SecretProvider.ZOHO_CALENDAR: "zoho-calendar-work",
+}
+
 # Default config dir for OpenClaw (node user). Callers can pass a different home_dir for other
 # runtimes (e.g. Hermes runs as root → home_dir="/root").
 SECRETS_DIR = "/home/node/.config/aai-cli"
@@ -82,7 +97,9 @@ def _profile_repo_pairs(
 
 def _github_block(c: GithubContent) -> str:
     blocks = []
-    for name, repo in _profile_repo_pairs("github-work", c.repos):
+    for name, repo in _profile_repo_pairs(
+        PROFILE_SLUGS[SecretProvider.GITHUB], c.repos
+    ):
         lines = [
             f"[profiles.{name}]\n",
             'provider = "github"\n',
@@ -99,7 +116,7 @@ def _github_block(c: GithubContent) -> str:
 
 def _jira_block(c: JiraContent) -> str:
     return (
-        "[profiles.jira-work]\n"
+        f"[profiles.{PROFILE_SLUGS[SecretProvider.JIRA]}]\n"
         'auth_type = "basic_api_token"\n'
         f"site_url = {_q(c.site_url)}\n"
         f"email = {_q(c.email)}\n"
@@ -109,7 +126,7 @@ def _jira_block(c: JiraContent) -> str:
 
 def _confluence_block(c: ConfluenceContent) -> str:
     return (
-        "[profiles.confluence-work]\n"
+        f"[profiles.{PROFILE_SLUGS[SecretProvider.CONFLUENCE]}]\n"
         'auth_type = "basic_api_token"\n'
         f"site_url = {_q(c.site_url)}\n"
         f"email = {_q(c.email)}\n"
@@ -119,7 +136,9 @@ def _confluence_block(c: ConfluenceContent) -> str:
 
 def _bitbucket_block(c: BitbucketContent) -> str:
     blocks = []
-    for name, repo in _profile_repo_pairs("bitbucket-work", c.repos):
+    for name, repo in _profile_repo_pairs(
+        PROFILE_SLUGS[SecretProvider.BITBUCKET], c.repos
+    ):
         lines = [
             f"[profiles.{name}]\n",
             'auth_type = "basic_api_token"\n',
@@ -135,7 +154,7 @@ def _bitbucket_block(c: BitbucketContent) -> str:
 
 def _gmail_block(c: GmailContent) -> str:
     return (
-        "[profiles.gmail-work]\n"
+        f"[profiles.{PROFILE_SLUGS[SecretProvider.GMAIL]}]\n"
         'provider = "google"\n'
         'auth_type = "bearer_token"\n'
         f"client_id = {_q(c.client_id)}\n"
@@ -147,7 +166,7 @@ def _gmail_block(c: GmailContent) -> str:
 
 def _google_calendar_block(c: GoogleCalendarContent) -> str:
     return (
-        "[profiles.google-calendar-work]\n"
+        f"[profiles.{PROFILE_SLUGS[SecretProvider.GOOGLE_CALENDAR]}]\n"
         'provider = "google"\n'
         'auth_type = "bearer_token"\n'
         'token_env = "GOOGLE_CALENDAR_ACCESS_TOKEN"\n'
@@ -157,7 +176,7 @@ def _google_calendar_block(c: GoogleCalendarContent) -> str:
 
 def _zoho_mail_block(c: ZohoMailContent) -> str:
     return (
-        "[profiles.zoho-mail-rest]\n"
+        f"[profiles.{PROFILE_SLUGS[SecretProvider.ZOHO_MAIL]}]\n"
         'provider = "zoho"\n'
         'auth_type = "zoho_oauth"\n'
         f"email = {_q(c.email)}\n"
@@ -170,7 +189,7 @@ def _zoho_mail_block(c: ZohoMailContent) -> str:
 
 def _zoho_calendar_block(c: ZohoCalendarContent) -> str:
     return (
-        "[profiles.zoho-calendar-work]\n"
+        f"[profiles.{PROFILE_SLUGS[SecretProvider.ZOHO_CALENDAR]}]\n"
         'provider = "zoho"\n'
         'transport = "caldav"\n'
         'auth_type = "app_password"\n'
@@ -213,39 +232,126 @@ def build_tool_context_md(decrypted: Mapping[SecretProvider, SecretContent]) -> 
         if content is None:
             continue
         if isinstance(content, GithubContent):
+            base = PROFILE_SLUGS[SecretProvider.GITHUB]
             if content.repos:
                 pairs = "; ".join(
                     f"`{name}`: {content.owner}/{repo}"
-                    for name, repo in _profile_repo_pairs("github-work", content.repos)
+                    for name, repo in _profile_repo_pairs(base, content.repos)
                 )
                 lines.append(f"- **GitHub**: {pairs}")
             else:
                 lines.append(
-                    f"- **GitHub** (`github-work`): owner/org `{content.owner}` — "
+                    f"- **GitHub** (`{base}`): owner/org `{content.owner}` — "
                     "no repository configured; pass --repo explicitly"
                 )
         elif isinstance(content, JiraContent):
-            lines.append(
-                f"- **Jira** (`jira-work`): {content.site_url} ({content.email})"
-            )
+            slug = PROFILE_SLUGS[SecretProvider.JIRA]
+            lines.append(f"- **Jira** (`{slug}`): {content.site_url} ({content.email})")
         elif isinstance(content, ConfluenceContent):
+            slug = PROFILE_SLUGS[SecretProvider.CONFLUENCE]
             lines.append(
-                f"- **Confluence** (`confluence-work`): {content.site_url} ({content.email})"
+                f"- **Confluence** (`{slug}`): {content.site_url} ({content.email})"
             )
         elif isinstance(content, BitbucketContent):
+            base = PROFILE_SLUGS[SecretProvider.BITBUCKET]
             if content.repos:
                 pairs = "; ".join(
                     f"`{name}`: {content.workspace}/{repo}"
-                    for name, repo in _profile_repo_pairs(
-                        "bitbucket-work", content.repos
-                    )
+                    for name, repo in _profile_repo_pairs(base, content.repos)
                 )
                 lines.append(f"- **Bitbucket**: {pairs} ({content.email})")
             else:
                 lines.append(
-                    f"- **Bitbucket** (`bitbucket-work`): workspace `{content.workspace}` "
+                    f"- **Bitbucket** (`{base}`): workspace `{content.workspace}` "
                     f"({content.email}) — no repository configured; pass --repo explicitly"
                 )
+    return "\n".join(lines) + "\n"
+
+
+# Display label per provider for the agents_md integrations block.
+_INTEGRATION_LABELS: dict[SecretProvider, str] = {
+    SecretProvider.GITHUB: "GitHub",
+    SecretProvider.JIRA: "Jira",
+    SecretProvider.CONFLUENCE: "Confluence",
+    SecretProvider.BITBUCKET: "Bitbucket",
+    SecretProvider.GMAIL: "Gmail",
+    SecretProvider.GOOGLE_CALENDAR: "Google Calendar",
+    SecretProvider.ZOHO_MAIL: "Zoho Mail",
+    SecretProvider.ZOHO_CALENDAR: "Zoho Calendar",
+}
+
+
+def _repo_scoped_profile_line(
+    label: str, base: str, scope: str, scope_kind: str, repos: list[str]
+) -> str:
+    """Render the agents_md line for a repo-scoped provider (GitHub/Bitbucket).
+
+    With repos configured, each --profile slug is mapped to the ``scope/repo`` it
+    targets (``github-work`` -> ``aai-labs/agent-farm``) so an agent with several repos
+    knows which profile is which. With none configured, the profile carries no ``repo``,
+    so aai-cli requires ``--repo`` at call time — the line says so, and names the
+    ``scope`` (owner/workspace). ``scope`` comes from the configured secret, so this
+    reflects whatever org/workspace the operator set up — nothing is hardcoded.
+    """
+    if repos:
+        segments = ", ".join(
+            f"`--profile {name}` → {scope}/{repo}"
+            for name, repo in _profile_repo_pairs(base, repos)
+        )
+        return f"- **{label}**: {segments}"
+    return (
+        f"- **{label}**: `--profile {base}` ({scope_kind} `{scope}` already set on the "
+        "profile; no repo configured — pass `--repo <repo>`)"
+    )
+
+
+def build_integrations_policy_md(
+    decrypted: Mapping[SecretProvider, SecretContent],
+) -> str:
+    """Render the concise integrations + policy block injected into agents_md.
+
+    Both Hermes and OpenClaw auto-load AGENTS.md into the startup system prompt, so
+    this is where the ``--profile`` mapping belongs. Kept short: a no-fallback policy
+    line, the nested command grammar with one worked example (agents otherwise burn
+    turns guessing subcommands), one line per configured provider (GitHub/Bitbucket map
+    each --profile slug to the repo it targets, or say to pass ``--repo`` when the
+    profile has none), and a read-the-file pointer to the on-demand skill docs. Full command
+    syntax stays in the per-service
+    ``./skills/aai-cli/<service>_skill.md`` files and TOOLS.md. Returns "" when no
+    integrations are configured.
+    """
+    if not decrypted:
+        return ""
+
+    lines: list[str] = [
+        "\n## Integrations (aai-cli)\n",
+        "These integrations are pre-configured. **aai-cli is the only way to reach "
+        "them** — always pass `--profile <slug>`. Never fall back to a browser, "
+        "`curl`, or raw HTTP, and never invent URLs or tokens.\n",
+        "Commands nest as `aai-cli --profile <slug> <service> <resource> <verb>` "
+        "(e.g. `aai-cli --profile jira-work jira issues get AF-147`). Don't guess "
+        "subcommands — **Read** the matching `./skills/aai-cli/<service>_skill.md` "
+        "file first (they are plain files, not lookup-by-name skills).\n",
+    ]
+    for provider in SecretProvider:  # fixed enum order for deterministic output
+        content = decrypted.get(provider)
+        if content is None:
+            continue
+        base = PROFILE_SLUGS[provider]
+        if isinstance(content, GithubContent):
+            lines.append(
+                _repo_scoped_profile_line(
+                    "GitHub", base, content.owner, "owner", content.repos
+                )
+            )
+        elif isinstance(content, BitbucketContent):
+            lines.append(
+                _repo_scoped_profile_line(
+                    "Bitbucket", base, content.workspace, "workspace", content.repos
+                )
+            )
+        else:
+            lines.append(f"- **{_INTEGRATION_LABELS[provider]}**: `--profile {base}`")
     return "\n".join(lines) + "\n"
 
 

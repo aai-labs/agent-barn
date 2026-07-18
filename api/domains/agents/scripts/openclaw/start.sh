@@ -9,6 +9,8 @@ cp /app/config/telemetry-push-index.js "$PLUGIN_DIR/index.js"
 cp /app/config/telemetry-push-package.json "$PLUGIN_DIR/package.json"
 cp /app/config/telemetry-push-plugin.json "$PLUGIN_DIR/openclaw.plugin.json"
 
+openclaw plugins install @openclaw/slack 2>&1 || echo "[start] slack plugin install failed"
+
 if [ -f /app/config/aai-cli-setup.sh ]; then
   sh /app/config/aai-cli-setup.sh || echo "[aai-cli] setup failed; continuing"
 fi

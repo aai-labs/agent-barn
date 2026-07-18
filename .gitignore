@@ -130,3 +130,5 @@ k3d-kubeconfig.yaml
 .k3d/
 
 scripts/
+
+.dex/

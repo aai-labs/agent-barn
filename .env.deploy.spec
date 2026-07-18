@@ -23,7 +23,7 @@ OPENCLAW_IMAGE_REPOSITORY=agentfarm-openclaw-base
 # ── Image tags (pin to specific versions for a real deploy) ──────────────────
 API_IMAGE_TAG=0.13.0
 UI_IMAGE_TAG=0.13.0
-OPENCLAW_IMAGE_TAG=0.3.0
+OPENCLAW_IMAGE_TAG=0.4.0
 HERMES_IMAGE_TAG=0.1.0
 
 # ── Postgres (app DB) ────────────────────────────────────────────────────────
@@ -59,6 +59,13 @@ ENVIRONMENT=local
 API_HOST=api.agentfarm.local
 UI_HOST=agentfarm.local
 WEB_APP_URL=http://agentfarm.local
+
+# ── Gmail OAuth (AF-153) ─────────────────────────────────────────────────────
+# Shared Google OAuth 2.0 "Web application" client for the Gmail "Authenticate
+# with Google" flow. Leave blank to disable. Register
+# "<WEB_APP_URL>/api/v1/integrations/google/callback" as an authorized redirect URI.
+GOOGLE_CLOUD_CLIENT_ID=
+GOOGLE_CLOUD_CLIENT_SECRET=
 
 # ── Ingress TLS ──────────────────────────────────────────────────────────────
 # cert-manager ClusterIssuer that signs the api/ui ingress certs. cert-manager

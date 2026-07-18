@@ -15,9 +15,10 @@ import {
   expandGithubContent,
   getIntegrationProvider,
   hasIncompleteIntegration,
+  isOAuthConnected,
   type IntegrationDraft,
 } from "../integrations";
-import { FormField, TokenInput } from "./hire-dialog-primitives";
+import { FormField, GoogleAuthButton, TokenInput } from "./hire-dialog-primitives";
 import { RepoListField } from "./hire-dialog-steps";
 import { useUpdateAgent } from "../hooks/use-update-agent";
 import type { Agent, AgentAssignedSkill } from "../schemas";
@@ -309,6 +310,16 @@ export function AgentSkillsTab({ agent, isRunning }: AgentSkillsTabProps) {
                 <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
                   {providerSpec.label}
                 </div>
+                {providerSpec.authMethod === "google_oauth" && (
+                  <GoogleAuthButton
+                    connected={isOAuthConnected(draft)}
+                    onConnected={({ refreshToken, clientId, clientSecret }) => {
+                      setField(providerId, "refreshToken", refreshToken);
+                      setField(providerId, "clientId", clientId);
+                      setField(providerId, "clientSecret", clientSecret);
+                    }}
+                  />
+                )}
                 {providerSpec.fields.map((field) => {
                   const label = field.required
                     ? field.label
