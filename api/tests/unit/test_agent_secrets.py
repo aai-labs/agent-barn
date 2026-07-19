@@ -216,6 +216,17 @@ def test_firecrawl_content_validates_api_key():
     content = validate_content(SecretProvider.FIRECRAWL, {"api_key": "fc-abc123"})
     assert isinstance(content, FirecrawlContent)
     assert content.api_key == "fc-abc123"
+    assert content.base_url == ""
+
+
+def test_firecrawl_content_validates_api_key_with_base_url():
+    content = validate_content(
+        SecretProvider.FIRECRAWL,
+        {"api_key": "fc-abc123", "base_url": "https://api.firecrawl.dev"},
+    )
+    assert isinstance(content, FirecrawlContent)
+    assert content.api_key == "fc-abc123"
+    assert content.base_url == "https://api.firecrawl.dev"
 
 
 def test_firecrawl_content_rejects_missing_api_key():
@@ -235,6 +246,17 @@ def test_firecrawl_encrypt_decrypt_round_trip():
     blob = encrypt_content(original, _KEY)
     assert "fc-secret" not in blob
     assert decrypt_content(SecretProvider.FIRECRAWL, blob, _KEY) == original
+
+
+def test_firecrawl_encrypt_decrypt_round_trip_with_base_url():
+    original = validate_content(
+        SecretProvider.FIRECRAWL,
+        {"api_key": "fc-secret", "base_url": "https://api.firecrawl.dev"},
+    )
+    blob = encrypt_content(original, _KEY)
+    decrypted = decrypt_content(SecretProvider.FIRECRAWL, blob, _KEY)
+    assert decrypted == original
+    assert decrypted.base_url == "https://api.firecrawl.dev"
 
 
 def test_decrypt_content_reads_legacy_gmail_blob():

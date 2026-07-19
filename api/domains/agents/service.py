@@ -1020,7 +1020,11 @@ class AgentService:
             if isinstance(fc_content, FirecrawlContent)
             else self.config.agent_firecrawl_api_key
         )
-        fc_base_url = self.config.agent_firecrawl_base_url
+        fc_base_url = (
+            fc_content.base_url
+            if isinstance(fc_content, FirecrawlContent) and fc_content.base_url
+            else self.config.agent_firecrawl_base_url
+        )
         if fc_api_key and fc_base_url:
             if hermes_cfg is not None:
                 hermes_cfg["web"] = {"backend": "firecrawl"}

@@ -153,6 +153,7 @@ class ZohoCalendarContent(SecretContent):
 
 class FirecrawlContent(SecretContent):
     api_key: str
+    base_url: str = ""
 
 
 PROVIDER_CONTENT_MODELS: dict[SecretProvider, type[SecretContent]] = {

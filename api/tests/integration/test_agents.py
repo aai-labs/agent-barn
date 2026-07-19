@@ -3155,3 +3155,43 @@ def test_start_agent_per_agent_firecrawl_overrides_platform():
             )
 
 
+def test_start_agent_per_agent_firecrawl_overrides_base_url():
+    with given([*_GIVEN_WITH_FIRECRAWL, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+
+        with when("I add a per-agent firecrawl secret with base_url and start"):
+            client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={
+                    "secrets": [
+                        {
+                            "provider": "firecrawl",
+                            "content": {
+                                "api_key": "fc-cloud-key",
+                                "base_url": "https://api.firecrawl.dev",
+                            },
+                        }
+                    ]
+                },
+                headers=_auth(context),
+            )
+            response = client.post(
+                f"{_BASE}/{context.agent.id}/start", headers=_auth(context)
+            )
+
+        with then("both the key and base URL are overridden"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            secret = k8s.create_secret.call_args.args[1]
+            assert_that(
+                secret.string_data["FIRECRAWL_API_KEY"], equal_to("fc-cloud-key")
+            )
+            config_map = k8s.create_config_map.call_args.args[1]
+            overlay = json.loads(config_map.data["openclaw-config-overlay.json"])
+            fc_cfg = overlay["plugins"]["entries"]["firecrawl"]["config"]
+            assert_that(
+                fc_cfg["webSearch"]["baseUrl"],
+                equal_to("https://api.firecrawl.dev"),
+            )
+
+
