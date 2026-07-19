@@ -43,8 +43,7 @@ def list_channels(
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[ConversationService, Injected(ConversationService)],
 ) -> list[ConversationChannelRead]:
-    org_id = context.require_current_user_organization().organization_id
-    return service.list_channels(agent_id, org_id)
+    return service.list_channels(agent_id, context)
 
 
 @conversations_router.get(
@@ -60,10 +59,9 @@ def list_channel_messages(
     cursor: Annotated[ConversationsCursor, Depends(get_conversations_cursor)],
     page_size: int = Query(default=6, ge=1, le=100),
 ) -> ConversationThreadsPage:
-    org_id = context.require_current_user_organization().organization_id
     return service.list_threads(
         agent_id=agent_id,
-        org_id=org_id,
+        context=context,
         channel_id=channel_id,
         filter=filter,
         cursor=cursor,

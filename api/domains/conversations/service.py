@@ -2,12 +2,13 @@ import logging
 from dataclasses import dataclass
 from uuid import UUID
 
-from fastapi import HTTPException, status
 from injector import inject, singleton
 
 from api.core.config import Config
-from api.domains.agents.models import AgentPlatform
+from api.domains.agents.authorization import AgentAuthorization
+from api.domains.agents.models import Agent, AgentPlatform
 from api.domains.agents.repository import AgentRepository
+from api.domains.auth.models import CurrentUserContext
 from api.domains.conversations.models import (
     AgentChatMessage,
     ConversationChannelRead,
@@ -19,6 +20,7 @@ from api.domains.conversations.models import (
     ConversationsFilter,
 )
 from api.domains.conversations.repository import ConversationRepository
+from api.domains.rbac.catalog import PermissionKey
 from api.infrastructure.crypto import decrypt_token
 from api.infrastructure.slack.client import SlackClient
 
@@ -31,24 +33,22 @@ logger = logging.getLogger(__name__)
 class ConversationService:
     repository: ConversationRepository
     agent_repository: AgentRepository
+    agent_authorization: AgentAuthorization
     config: Config
 
     def list_channels(
-        self, agent_id: UUID, org_id: UUID
+        self, agent_id: UUID, context: CurrentUserContext
     ) -> list[ConversationChannelRead]:
-        agent = self.agent_repository.get_active(agent_id, org_id)
-        if not agent:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Agent {agent_id} not found",
-            )
-
-        db_channels = self.repository.distinct_channels(agent_id)
+        agent = self.agent_authorization.require_visible(context, agent_id)
+        activity_scope = self.agent_authorization.require_action_for_visible(
+            context, agent, PermissionKey.ACTIVITY_READ
+        )
+        db_channels = self.repository.distinct_channels(agent_id, activity_scope)
         merged: dict[str, tuple[str | None, ConversationType]] = {
             cid: (name, ctype) for cid, name, ctype in db_channels
         }
 
-        self._resolve_channel_names(agent_id, merged)
+        self._resolve_channel_names(agent, merged)
 
         return [
             ConversationChannelRead(
@@ -59,7 +59,7 @@ class ConversationService:
 
     def _resolve_channel_names(
         self,
-        agent_id: UUID,
+        agent: Agent,
         merged: dict[str, tuple[str | None, ConversationType]],
     ) -> None:
         unresolved_channels = [
@@ -74,7 +74,7 @@ class ConversationService:
         ]
         if not unresolved_channels and not unresolved_dms:
             return
-        user_map, channel_map, dm_map = self._platform_maps(agent_id)
+        user_map, channel_map, dm_map = self._platform_maps(agent)
         for cid in unresolved_channels:
             resolved = channel_map.get(cid)
             if resolved:
@@ -85,15 +85,14 @@ class ConversationService:
                 merged[cid] = (resolved, merged[cid][1])
 
     def _platform_maps(
-        self, agent_id: UUID
+        self, agent: Agent
     ) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
-        agent = self.agent_repository.get_by_id(agent_id)
-        if not (agent and self.config.agent_token_encryption_key):
+        if not self.config.agent_token_encryption_key:
             return {}, {}, {}
         if agent.platform == AgentPlatform.TEAMS:
             return {}, {}, {}
         try:
-            slack_config = self.agent_repository.get_slack_config(agent_id)
+            slack_config = self.agent_repository.get_slack_config(agent.id)
             if not slack_config:
                 return {}, {}, {}
             bot_token = decrypt_token(
@@ -119,29 +118,27 @@ class ConversationService:
                 dm_map = {}
             return user_map, channel_map, dm_map
         except Exception as e:
-            logger.warning("Failed to fetch Slack maps for agent %s: %s", agent_id, e)
+            logger.warning("Failed to fetch Slack maps for agent %s: %s", agent.id, e)
             return {}, {}, {}
 
     def list_threads(
         self,
         agent_id: UUID,
-        org_id: UUID,
+        context: CurrentUserContext,
         channel_id: str,
         filter: ConversationsFilter,
         cursor: ConversationsCursor,
         page_size: int,
     ) -> ConversationThreadsPage:
-        agent = self.agent_repository.get_active(agent_id, org_id)
-        if not agent:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Agent {agent_id} not found",
-            )
-
+        agent = self.agent_authorization.require_visible(context, agent_id)
+        activity_scope = self.agent_authorization.require_action_for_visible(
+            context, agent, PermissionKey.ACTIVITY_READ
+        )
         messages = self.repository.find_all_channel_messages(
             agent_id=agent_id,
             channel_id=channel_id.upper(),
             filter=filter,
+            authorization_scope=activity_scope,
         )
         threads, has_more, next_cursor = _group_into_threads(
             messages, cursor, page_size

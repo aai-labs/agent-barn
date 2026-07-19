@@ -8,6 +8,9 @@ from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import Session, col, select
 
+from api.domains.agents.models import Agent
+from api.domains.agents.repository import agent_scope_predicates
+from api.domains.rbac.policy import AuthorizationScope
 from api.domains.tool_calls.models import (
     ToolCall,
     ToolCallFilter,
@@ -29,16 +32,33 @@ class ToolCallRepository:
         agent_id: UUID,
         tool_call_filter: ToolCallFilter,
         pagination: Pagination,
+        authorization_scope: AuthorizationScope,
     ) -> PaginatedItems[ToolCallRead]:
         with Session(self.delegate.engine) as session:
-            base = select(ToolCall).where(col(ToolCall.agent_id) == agent_id)
+            visibility = agent_scope_predicates(authorization_scope)
+            base = (
+                select(ToolCall)
+                .join(Agent, col(Agent.id) == col(ToolCall.agent_id))
+                .where(
+                    col(ToolCall.agent_id) == agent_id,
+                    col(ToolCall.organization_id)
+                    == authorization_scope.organization_id,
+                    *visibility,
+                )
+            )
             base = self._apply_filter(base, tool_call_filter)
             base = base.order_by(col(ToolCall.occurred_at).desc())
 
             count_query = (
                 select(func.count())
                 .select_from(ToolCall)
-                .where(col(ToolCall.agent_id) == agent_id)
+                .join(Agent, col(Agent.id) == col(ToolCall.agent_id))
+                .where(
+                    col(ToolCall.agent_id) == agent_id,
+                    col(ToolCall.organization_id)
+                    == authorization_scope.organization_id,
+                    *visibility,
+                )
             )
             count_query = self._apply_filter(count_query, tool_call_filter)
             total = session.scalar(count_query) or 0

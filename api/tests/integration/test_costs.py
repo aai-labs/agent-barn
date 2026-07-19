@@ -79,14 +79,14 @@ def test_member_cannot_view_costs_summary():
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
-def test_member_cannot_view_agent_cost():
+def test_unassigned_member_cannot_view_agent_cost():
     member_id = uuid7()
     with given([*_GIVEN, _there_is_a_member_actor(member_id)]) as context:
         agent_id = str(context.agent.id)
         response = context.client.get(
             f"{_BASE}/agents/{agent_id}", headers=_auth(context)
         )
-        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+        assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
 def test_superuser_can_view_costs_summary():

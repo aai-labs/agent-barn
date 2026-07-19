@@ -938,10 +938,18 @@ def test_create_agent_litellm_failure_returns_503():
             )
             repository: AgentRepository = context.injector.get(AgentRepository)
             from api.domains.agents.models import AgentFilter
+            from api.domains.rbac.catalog import PermissionScope
+            from api.domains.rbac.policy import AuthorizationScope
             from api.infrastructure.shared.models import Pagination
 
             _, total = repository.find_all_active(
-                context.organization.id, AgentFilter(), Pagination(page=1, size=10)
+                AuthorizationScope(
+                    organization_id=context.organization.id,
+                    scope=PermissionScope.ORGANIZATION,
+                    membership_id=None,
+                ),
+                AgentFilter(),
+                Pagination(page=1, size=10),
             )
             assert_that(total, equal_to(0))
 

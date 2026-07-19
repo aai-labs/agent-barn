@@ -9,6 +9,7 @@ from fastapi import HTTPException, status
 from injector import inject, singleton
 
 from api.core.config import Config
+from api.domains.agents.authorization import AgentAuthorization
 from api.domains.agents.models import Agent
 from api.domains.agents.repository import AgentRepository
 from api.domains.auth.models import CurrentUserContext
@@ -18,6 +19,8 @@ from api.domains.costs.models import (
     CostTimeSeriesPoint,
     OrgCostSummaryRead,
 )
+from api.domains.rbac.catalog import PermissionKey, PermissionScope
+from api.domains.rbac.policy import PermissionPolicy
 from api.infrastructure.crypto import decrypt_token
 from api.infrastructure.litellm.client import LiteLLMClient
 
@@ -32,6 +35,8 @@ _SPEND_LOOKBACK_DAYS = 365
 @dataclass
 class CostService:
     agent_repository: AgentRepository
+    agent_authorization: AgentAuthorization
+    permission_policy: PermissionPolicy
     litellm: LiteLLMClient
     config: Config
 
@@ -166,15 +171,32 @@ class CostService:
         self, agent_id: UUID, context: CurrentUserContext
     ) -> AgentCostRead:
         org_id = self._org_id(context)
-        # Include deleted agents — their spend is still tracked in LiteLLM.
-        agent = self.agent_repository.get_active(agent_id, org_id)
-        if not agent:
-            agent = self.agent_repository.get_deleted(agent_id, org_id)
-        if not agent:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Agent {agent_id} not found",
+        try:
+            agent = self.agent_authorization.require_action(
+                context, agent_id, PermissionKey.COST_READ
             )
+        except HTTPException as exc:
+            if exc.status_code != status.HTTP_404_NOT_FOUND:
+                raise
+            # Organization-scoped managers retain historical spend access after an
+            # Agent is soft-deleted. Assigned grants never reveal deleted Agents.
+            scopes = self.permission_policy.resolve_many(
+                context,
+                org_id,
+                (PermissionKey.AGENT_READ, PermissionKey.COST_READ),
+            )
+            read_scope = scopes.get(PermissionKey.AGENT_READ)
+            cost_scope = scopes.get(PermissionKey.COST_READ)
+            if (
+                read_scope is None
+                or cost_scope is None
+                or read_scope.scope != PermissionScope.ORGANIZATION
+                or cost_scope.scope != PermissionScope.ORGANIZATION
+            ):
+                raise
+            agent = self.agent_repository.get_deleted_in_scope(agent_id, cost_scope)
+            if agent is None:
+                raise
 
         if not agent.litellm_key_encrypted:
             return AgentCostRead(

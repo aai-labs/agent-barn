@@ -5,12 +5,15 @@ from injector import inject, singleton
 from sqlalchemy.dialects.postgresql import insert
 from sqlmodel import Session, and_, col, or_, select
 
+from api.domains.agents.models import Agent
+from api.domains.agents.repository import agent_scope_predicates
 from api.domains.conversations.models import (
     AgentChatMessage,
-    ConversationType,
     ConversationsCursor,
     ConversationsFilter,
+    ConversationType,
 )
+from api.domains.rbac.policy import AuthorizationScope
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
 
@@ -59,7 +62,7 @@ class ConversationRepository:
             session.commit()
 
     def distinct_channels(
-        self, agent_id: UUID
+        self, agent_id: UUID, authorization_scope: AuthorizationScope
     ) -> list[tuple[str, str | None, ConversationType]]:
         """Returns DISTINCT (channel_id, channel_name, conversation_type) per agent.
 
@@ -72,7 +75,11 @@ class ConversationRepository:
                     AgentChatMessage.channel_name,
                     AgentChatMessage.conversation_type,
                 )
-                .where(col(AgentChatMessage.agent_id) == agent_id)
+                .join(Agent, col(Agent.id) == col(AgentChatMessage.agent_id))
+                .where(
+                    col(AgentChatMessage.agent_id) == agent_id,
+                    *agent_scope_predicates(authorization_scope),
+                )
                 .order_by(
                     col(AgentChatMessage.channel_id),
                     col(AgentChatMessage.channel_name).desc().nulls_last(),
@@ -89,6 +96,7 @@ class ConversationRepository:
         filter: ConversationsFilter,
         cursor: ConversationsCursor,
         page_size: int,
+        authorization_scope: AuthorizationScope,
     ) -> tuple[list[AgentChatMessage], ConversationsCursor | None]:
         """Fetch a page of messages for a channel.
 
@@ -123,7 +131,8 @@ class ConversationRepository:
 
             query = (
                 select(AgentChatMessage)
-                .where(*filters)
+                .join(Agent, col(Agent.id) == col(AgentChatMessage.agent_id))
+                .where(*filters, *agent_scope_predicates(authorization_scope))
                 .order_by(
                     col(AgentChatMessage.occurred_at).desc(),
                     col(AgentChatMessage.id).desc(),
@@ -153,6 +162,7 @@ class ConversationRepository:
         agent_id: UUID,
         channel_id: str,
         filter: ConversationsFilter,
+        authorization_scope: AuthorizationScope,
     ) -> list[AgentChatMessage]:
         """Return all messages for a channel in the filter range, ordered occurred_at ASC."""
         with Session(self.delegate.engine) as session:
@@ -166,7 +176,8 @@ class ConversationRepository:
                 filters.append(col(AgentChatMessage.occurred_at) < filter.to_date)
             query = (
                 select(AgentChatMessage)
-                .where(*filters)
+                .join(Agent, col(Agent.id) == col(AgentChatMessage.agent_id))
+                .where(*filters, *agent_scope_predicates(authorization_scope))
                 .order_by(
                     col(AgentChatMessage.occurred_at).asc(),
                     col(AgentChatMessage.id).asc(),

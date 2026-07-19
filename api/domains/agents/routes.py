@@ -65,8 +65,10 @@ def stream_agent_logs(
     service: Annotated[AgentService, Injected(AgentService)],
     tail_lines: Annotated[int, Query(ge=0, le=1000)] = 0,
 ):
+    lines = service.stream_agent_logs(agent_id, context, tail_lines=tail_lines)
+
     def event_generator():
-        for line in service.stream_agent_logs(agent_id, context, tail_lines=tail_lines):
+        for line in lines:
             yield f"data: {line}\n\n"
 
     return StreamingResponse(

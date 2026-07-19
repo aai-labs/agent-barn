@@ -38,10 +38,7 @@ def get_cost_summary(
 @costs_router.get("/agents/{agent_id}", response_model=AgentCostRead)
 def get_agent_cost(
     agent_id: UUID,
-    context: Annotated[
-        CurrentUserContext,
-        Depends(get_current_user(organization_roles=ORG_MANAGER_ROLES)),
-    ],
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[CostService, Injected(CostService)],
 ):
     return service.get_agent_cost(agent_id, context)

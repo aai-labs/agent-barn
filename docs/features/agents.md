@@ -10,7 +10,10 @@ An Agent is the central operational aggregate. It connects organization tenancy,
 
 ## Invariants
 
-- Every agent belongs to one organization and pins an exact `(template_slug, template_version)` in that organization.
+- Every agent belongs to one organization and pins an exact `(template_slug, template_version)` in that organization. The organization owns the Agent; creator identity is immutable provenance rather than ownership.
+- Human Agent creation atomically records creator provenance and Agent Access for the creator. A membership-less superuser has organization-wide authority and does not receive an access row.
+- Owner/Admin/superuser permissions see all Agents in the active organization. Member reads and actions require Agent Access; unassigned and cross-organization Agents are concealed with 404.
+- Agent read DTOs expose current effective Agent-related Permission keys for UI rendering. Mutations independently reauthorize and validate current state.
 - Runtime and platform are separate. Hermes supports Slack only; OpenClaw supports Slack and Teams.
 - Persisted lifecycle states are `STOPPED`, `RUNNING`, and `ERROR`.
 - Slack agents require bot and app tokens. Teams agents require app ID, app password, and tenant ID.
@@ -37,7 +40,7 @@ Starting an already running agent and stopping an agent that is not running are 
 
 ### Create
 
-Creation resolves the requested template version or the latest version, validates required skills and provider credentials, persists encrypted platform/integration configuration, assigns skills, and creates a per-agent LiteLLM key when configured. Teams creation continues into start; Slack creation remains stopped.
+Creation requires `agent.create`, resolves the requested template version or the latest version, validates required skills and provider credentials, and atomically persists the Agent with creator access before platform configuration. It then persists encrypted platform/integration configuration, assigns skills, and creates a per-agent LiteLLM key when configured. Teams creation continues into start; Slack creation remains stopped.
 
 ### Update
 
@@ -57,13 +60,14 @@ Stop snapshots logs before removing active runtime resources and marking the age
 | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
 | Persistence, enums, request/read contracts | `../../api/domains/agents/models.py`                                                                               |
 | Lifecycle and cross-domain orchestration   | `../../api/domains/agents/service.py`                                                                              |
-| Tenant-scoped persistence                  | `../../api/domains/agents/repository.py`                                                                           |
+| Tenant/access-scoped persistence           | `../../api/domains/agents/repository.py`                                                                           |
+| Agent visibility and effective actions     | `../../api/domains/agents/authorization.py`                                                                        |
 | HTTP routes                                | `../../api/domains/agents/routes.py`, `../../api/domains/agents/slack_routes.py`, `../../api/domains/agents/webhook_routes.py` |
 | Runtime resources                          | `../../api/domains/agents/builders/`                                                                               |
 | Integration and skill artifacts            | `../../api/domains/agents/aai_cli_artifacts.py`, `../../api/domains/agents/aai_cli_skills/`                                                 |
 | UI contracts and hooks                     | `../../ui/src/features/agents/schemas.ts`, `../../ui/src/features/agents/hooks/`                                         |
 | UI components                              | `../../ui/src/features/agents/components/`                                                                         |
-| Integration coverage                       | `../../api/tests/integration/test_agents.py`, `../../api/tests/integration/test_agent_logs.py`                           |
+| Integration coverage                       | `../../api/tests/integration/test_agents.py`, `../../api/tests/integration/test_agent_rbac.py`, `../../api/tests/integration/test_agent_logs.py` |
 
 ## Related decisions
 

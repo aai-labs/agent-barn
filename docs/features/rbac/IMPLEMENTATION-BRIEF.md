@@ -15,7 +15,7 @@ Read this together with:
 - [`../identity-and-organizations.md`](../identity-and-organizations.md) and [`../agents.md`](../agents.md) for current behavior.
 - [`../../guidelines/code.md`](../../guidelines/code.md), [`../../guidelines/webapp.md`](../../guidelines/webapp.md), [`../../guidelines/testing.md`](../../guidelines/testing.md), and [`../../guidelines/epics.md`](../../guidelines/epics.md) before implementation.
 
-Implementation is in transition. Membership now references database-backed seeded Roles; scoped Role-Permission grants, nullable Agent creator provenance, and same-Organization Agent Access are persisted and legacy data is backfilled. Authorization still primarily checks compatibility role values, Agent creation does not yet establish creator access, and Agent queries remain organization-wide. Follow `CHANGELOG.md` rather than treating the full accepted design as delivered behavior.
+Implementation is in transition. Membership references database-backed seeded Roles; scoped Role-Permission grants, Agent creator provenance, and same-Organization Agent Access are persisted and legacy data is backfilled. Agent creation now establishes creator access atomically, and Agent lifecycle, activity, logs, integration validation, and per-Agent cost paths enforce permission and assigned visibility. Organization-wide shared-resource services still contain compatibility role checks, and Agent Access grant/revoke APIs and UI are not yet delivered. Follow `CHANGELOG.md` rather than treating the full accepted design as complete.
 
 ## Authorization model
 
@@ -94,7 +94,7 @@ Repositories own tenant/resource query composition. Services own permission-sens
 
 ## API and UI contract
 
-Agent read/list DTOs expose server-computed effective actions for the current actor and resource. The exact wire representation may be finalized during API design, but it must be typed and validated by the UI.
+Agent read/list DTOs expose server-computed effective actions as canonical Agent-related `PermissionKey` values for the current actor and resource. This deliberately reuses the Permission catalogue rather than maintaining a second action vocabulary; the UI must validate the typed subset it consumes.
 
 The UI uses effective actions to render edit, delete, start, stop, configuration, secret, and access-management controls. It must not reconstruct authorization from role names. Hidden or disabled controls are usability only: every mutation re-resolves authorization and Agent state on the server.
 

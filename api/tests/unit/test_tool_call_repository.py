@@ -4,6 +4,8 @@ from uuid import UUID
 from hamcrest import assert_that, equal_to, has_length, is_, is_not, none
 from sqlmodel import Session
 
+from api.domains.rbac.catalog import PermissionScope
+from api.domains.rbac.policy import AuthorizationScope
 from api.domains.tool_calls.models import (
     ToolCall,
     ToolCallFilter,
@@ -39,6 +41,25 @@ _GIVEN = [
 
 def _now() -> datetime.datetime:
     return datetime.datetime.now(datetime.timezone.utc)
+
+
+def _find_by_agent(
+    repository: ToolCallRepository,
+    context,
+    agent_id: UUID,
+    tool_call_filter: ToolCallFilter,
+    pagination: Pagination,
+):
+    return repository.find_by_agent(
+        agent_id,
+        tool_call_filter,
+        pagination,
+        AuthorizationScope(
+            organization_id=context.organization.id,
+            scope=PermissionScope.ORGANIZATION,
+            membership_id=None,
+        ),
+    )
 
 
 def _seed_pending(
@@ -93,7 +114,9 @@ def test_find_by_agent_returns_empty_when_no_rows():
         repository: ToolCallRepository = context.injector.get(ToolCallRepository)
 
         with when("I list tool calls for an agent with none recorded"):
-            result = repository.find_by_agent(
+            result = _find_by_agent(
+                repository,
+                context,
                 context.agent.id,
                 ToolCallFilter(),
                 Pagination(page=1, size=20),
@@ -118,7 +141,9 @@ def test_upsert_pending_inserts_row():
             )
 
             with then("it appears in find_by_agent with PENDING status"):
-                page = repository.find_by_agent(
+                page = _find_by_agent(
+                    repository,
+                    context,
                     context.agent.id,
                     ToolCallFilter(),
                     Pagination(page=1, size=20),
@@ -152,7 +177,9 @@ def test_upsert_pending_is_idempotent_on_external_id_conflict():
             )
 
             with then("only one row exists"):
-                page = repository.find_by_agent(
+                page = _find_by_agent(
+                    repository,
+                    context,
                     context.agent.id,
                     ToolCallFilter(),
                     Pagination(page=1, size=20),
@@ -188,7 +215,9 @@ def test_complete_transitions_pending_to_success():
 
             with then("status is SUCCESS, result is set, duration computed"):
                 assert_that(ok, equal_to(True))
-                page = repository.find_by_agent(
+                page = _find_by_agent(
+                    repository,
+                    context,
                     context.agent.id,
                     ToolCallFilter(),
                     Pagination(page=1, size=20),
@@ -223,7 +252,9 @@ def test_complete_transitions_pending_to_error():
 
             with then("status is ERROR"):
                 assert_that(ok, equal_to(True))
-                page = repository.find_by_agent(
+                page = _find_by_agent(
+                    repository,
+                    context,
                     context.agent.id,
                     ToolCallFilter(),
                     Pagination(page=1, size=20),
@@ -244,7 +275,9 @@ def test_complete_returns_false_when_no_match():
 
             with then("False is returned and no row is created"):
                 assert_that(ok, equal_to(False))
-                page = repository.find_by_agent(
+                page = _find_by_agent(
+                    repository,
+                    context,
                     context.agent.id,
                     ToolCallFilter(),
                     Pagination(page=1, size=20),
@@ -281,7 +314,9 @@ def test_filter_by_tool_name_uses_ilike():
         )
 
         with when("I filter by partial tool name"):
-            page = repository.find_by_agent(
+            page = _find_by_agent(
+                repository,
+                context,
                 agent_id,
                 ToolCallFilter(tool_name="re"),
                 Pagination(page=1, size=20),
@@ -311,7 +346,9 @@ def test_filter_by_status():
         _complete(repository, agent_id=agent_id, external_id="c3", is_error=True)
 
         with when("I filter by status=SUCCESS"):
-            page = repository.find_by_agent(
+            page = _find_by_agent(
+                repository,
+                context,
                 agent_id,
                 ToolCallFilter(status=ToolCallStatus.SUCCESS),
                 Pagination(page=1, size=20),
@@ -320,7 +357,9 @@ def test_filter_by_status():
             assert_that(page.items[0].status, equal_to(ToolCallStatus.SUCCESS))
 
         with when("I filter by status=ERROR"):
-            page = repository.find_by_agent(
+            page = _find_by_agent(
+                repository,
+                context,
                 agent_id,
                 ToolCallFilter(status=ToolCallStatus.ERROR),
                 Pagination(page=1, size=20),
@@ -329,7 +368,9 @@ def test_filter_by_status():
             assert_that(page.items[0].status, equal_to(ToolCallStatus.ERROR))
 
         with when("I filter by status=PENDING"):
-            page = repository.find_by_agent(
+            page = _find_by_agent(
+                repository,
+                context,
                 agent_id,
                 ToolCallFilter(status=ToolCallStatus.PENDING),
                 Pagination(page=1, size=20),
@@ -371,7 +412,9 @@ def test_filter_by_date_range():
         )
 
         with when("I filter by from_date=t2"):
-            page = repository.find_by_agent(
+            page = _find_by_agent(
+                repository,
+                context,
                 agent_id,
                 ToolCallFilter(from_date=t2),
                 Pagination(page=1, size=20),
@@ -379,7 +422,9 @@ def test_filter_by_date_range():
             assert_that(page.items, has_length(2))
 
         with when("I filter by to_date=t3 (exclusive)"):
-            page = repository.find_by_agent(
+            page = _find_by_agent(
+                repository,
+                context,
                 agent_id,
                 ToolCallFilter(to_date=t3),
                 Pagination(page=1, size=20),
@@ -387,7 +432,9 @@ def test_filter_by_date_range():
             assert_that(page.items, has_length(2))
 
         with when("I filter by both from and to (t2 inclusive, t3 exclusive)"):
-            page = repository.find_by_agent(
+            page = _find_by_agent(
+                repository,
+                context,
                 agent_id,
                 ToolCallFilter(from_date=t2, to_date=t3),
                 Pagination(page=1, size=20),
@@ -414,7 +461,9 @@ def test_pagination_returns_correct_page_and_total():
             )
 
         with when("I request page 1, size 2"):
-            page = repository.find_by_agent(
+            page = _find_by_agent(
+                repository,
+                context,
                 agent_id,
                 ToolCallFilter(),
                 Pagination(page=1, size=2),
@@ -425,7 +474,9 @@ def test_pagination_returns_correct_page_and_total():
             assert_that(page.page_size, equal_to(2))
 
         with when("I request page 3, size 2"):
-            page = repository.find_by_agent(
+            page = _find_by_agent(
+                repository,
+                context,
                 agent_id,
                 ToolCallFilter(),
                 Pagination(page=3, size=2),
@@ -459,7 +510,9 @@ def test_results_ordered_by_occurred_at_desc():
         )
 
         with when("I list tool calls"):
-            page = repository.find_by_agent(
+            page = _find_by_agent(
+                repository,
+                context,
                 agent_id,
                 ToolCallFilter(),
                 Pagination(page=1, size=20),
@@ -493,13 +546,21 @@ def test_find_by_agent_is_scoped_to_agent():
         )
 
         with when("I list for agent A"):
-            page_a = repository.find_by_agent(
-                agent_a_id, ToolCallFilter(), Pagination(page=1, size=20)
+            page_a = _find_by_agent(
+                repository,
+                context,
+                agent_a_id,
+                ToolCallFilter(),
+                Pagination(page=1, size=20),
             )
 
         with when("I list for agent B"):
-            page_b = repository.find_by_agent(
-                agent_b_id, ToolCallFilter(), Pagination(page=1, size=20)
+            page_b = _find_by_agent(
+                repository,
+                context,
+                agent_b_id,
+                ToolCallFilter(),
+                Pagination(page=1, size=20),
             )
 
             with then("each agent sees only its own tool calls"):

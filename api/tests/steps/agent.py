@@ -8,6 +8,7 @@ from injector import Module, provider, singleton
 
 from api.domains.agents.models import (
     Agent,
+    AgentAccess,
     AgentPlatform,
     AgentSlackConfig,
     AgentStatus,
@@ -69,6 +70,8 @@ def there_is_an_agent(
     agent_type: AgentType = AgentType.OPENCLAW,
     soul_md: str = "# Soul\n\nTest soul.",
     tools_md: str = DEFAULT_TOOLS_MD,
+    created_by_user_id: UUID | None = None,
+    creator_membership_id: UUID | None = None,
 ):
     def step(context):
         org_id = organization_id or context.organization.id
@@ -96,6 +99,7 @@ def there_is_an_agent(
 
         agent = Agent(
             organization_id=org_id,
+            created_by_user_id=created_by_user_id,
             name=name,
             litellm_key_encrypted=encrypt_token(FAKE_LITELLM_KEY, TEST_ENCRYPTION_KEY),
             model=model,
@@ -109,7 +113,10 @@ def there_is_an_agent(
         if deleted:
             agent.deleted_at = datetime.datetime.now(datetime.timezone.utc)
 
-        repository.save(agent)
+        if creator_membership_id is None:
+            repository.save(agent)
+        else:
+            repository.create_with_creator_access(agent, creator_membership_id)
 
         if platform == AgentPlatform.SLACK:
             slack_config = AgentSlackConfig(
@@ -134,6 +141,25 @@ def there_is_an_agent(
             repository.save_teams_config(teams_config)
 
         context.agent = agent
+
+    return step
+
+
+def there_is_agent_access(
+    membership_id: UUID | None = None,
+    agent_id: UUID | None = None,
+):
+    def step(context):
+        repository: AgentRepository = context.injector.get(AgentRepository)
+        membership = membership_id or context.organization_user.id
+        target_agent = agent_id or context.agent.id
+        repository.delegate.save(
+            AgentAccess(
+                organization_id=context.organization.id,
+                membership_id=membership,
+                agent_id=target_agent,
+            )
+        )
 
     return step
 

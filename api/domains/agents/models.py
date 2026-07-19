@@ -9,6 +9,7 @@ from pydantic import BaseModel as PydanticBaseModel
 from pydantic import ConfigDict, Field, model_validator
 from sqlmodel import Column, Enum, Field as SqlField, Index
 
+from api.domains.rbac.catalog import PermissionKey
 from api.infrastructure.crypto import decrypt_token, encrypt_token
 from api.infrastructure.postgres.models import BaseModel
 
@@ -574,6 +575,7 @@ class AgentRead(PydanticBaseModel):
     skills: list[AgentAssignedSkillRead] = Field(default_factory=list)
     approval_mode: CommandApprovalMode
     webhook_url: str | None = None
+    allowed_actions: list[PermissionKey] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 

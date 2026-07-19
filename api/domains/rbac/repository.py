@@ -1,4 +1,6 @@
+from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import cast
 from uuid import UUID
 
 from injector import inject, singleton
@@ -29,20 +31,31 @@ class RbacRepository:
     def get_permission_scope(
         self, role_id: UUID, permission: PermissionKey
     ) -> PermissionScope | None:
+        return self.get_permission_scopes(role_id, (permission,)).get(permission)
+
+    def get_permission_scopes(
+        self, role_id: UUID, permissions: Iterable[PermissionKey]
+    ) -> dict[PermissionKey, PermissionScope]:
+        requested = tuple(dict.fromkeys(permissions))
+        if not requested:
+            return {}
+        by_value = {permission.value: permission for permission in requested}
         with Session(self.delegate.engine) as session:
             query = (
-                select(RolePermission)
+                select(Permission.key, RolePermission.scope)
                 .join(
-                    Permission,
+                    RolePermission,
                     col(Permission.id) == col(RolePermission.permission_id),
                 )
                 .where(
                     col(RolePermission.role_id) == role_id,
-                    col(Permission.key) == permission.value,
+                    col(Permission.key).in_(list(by_value)),
                 )
             )
-            grant = session.exec(query).first()
-            return grant.scope if grant is not None else None
+            return {
+                by_value[key]: cast(PermissionScope, scope)
+                for key, scope in session.exec(query).all()
+            }
 
     def ensure_system_catalogue(self) -> None:
         with Session(self.delegate.engine) as session:

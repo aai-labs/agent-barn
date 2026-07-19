@@ -57,6 +57,11 @@ def _system_catalogue_repository() -> Mock:
     repository.get_permission_scope.side_effect = lambda role_id, permission: (
         SYSTEM_ROLE_GRANTS.get(role_id, {}).get(permission)
     )
+    repository.get_permission_scopes.side_effect = lambda role_id, permissions: {
+        permission: scope
+        for permission in permissions
+        if (scope := SYSTEM_ROLE_GRANTS.get(role_id, {}).get(permission)) is not None
+    }
     return repository
 
 
@@ -115,6 +120,39 @@ def test_resolve_returns_seeded_owner_admin_and_member_scopes():
                 scope=PermissionScope.ASSIGNED,
                 membership_id=member_membership.id,
             )
+        ),
+    )
+
+
+def test_resolve_many_returns_current_scopes_without_missing_permissions():
+    context, membership = _context(MEMBER_ROLE_ID)
+    policy = PermissionPolicy(repository=_system_catalogue_repository())
+
+    result = policy.resolve_many(
+        context,
+        membership.organization_id,
+        (
+            PermissionKey.AGENT_READ,
+            PermissionKey.AGENT_CREATE,
+            PermissionKey.MEMBERSHIP_READ,
+        ),
+    )
+
+    assert_that(
+        result,
+        equal_to(
+            {
+                PermissionKey.AGENT_READ: AuthorizationScope(
+                    organization_id=membership.organization_id,
+                    scope=PermissionScope.ASSIGNED,
+                    membership_id=membership.id,
+                ),
+                PermissionKey.AGENT_CREATE: AuthorizationScope(
+                    organization_id=membership.organization_id,
+                    scope=PermissionScope.ORGANIZATION,
+                    membership_id=None,
+                ),
+            }
         ),
     )
 

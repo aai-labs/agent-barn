@@ -2,7 +2,7 @@ import datetime as dt
 import fnmatch
 import logging
 import secrets
-from collections.abc import Generator
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any, cast
 from uuid import UUID
@@ -11,8 +11,6 @@ from fastapi import HTTPException, status
 from injector import inject, singleton
 
 from api.core.config import Config
-from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
-from api.infrastructure.openrouter.client import OpenRouterClient
 from api.domains.agents.aai_cli_artifacts import (
     build_config_toml,
     build_env,
@@ -22,8 +20,7 @@ from api.domains.agents.aai_cli_artifacts import (
     provider_secrets_map,
 )
 from api.domains.agents.aai_cli_skills import build_skills_manifest_from_zips
-from api.domains.skills.models import Skill
-from api.domains.skills.repository import SkillRepository
+from api.domains.agents.authorization import AgentAuthorization
 from api.domains.agents.builders import (
     build_config_map,
     build_deployment,
@@ -38,6 +35,7 @@ from api.domains.agents.builders import (
     build_secret_teams,
     build_service,
 )
+from api.domains.agents.error_messages import friendly_k8s_error, friendly_pod_reason
 from api.domains.agents.models import (
     PROVIDER_DISPLAY_NAMES,
     Agent,
@@ -68,16 +66,16 @@ from api.domains.agents.models import (
     encrypt_content,
     validate_content,
 )
-from api.domains.agents.error_messages import friendly_k8s_error, friendly_pod_reason
 from api.domains.agents.repository import AgentRepository
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.token_service import SlackConfigTokenService
+from api.domains.rbac.catalog import PermissionKey
+from api.domains.skills.models import Skill
+from api.domains.skills.repository import SkillRepository
 from api.domains.templates.models import TemplateRead
 from api.domains.templates.renderer import render_template
 from api.domains.templates.repository import TemplateRepository
 from api.infrastructure.crypto import decrypt_token, encrypt_token
-from api.infrastructure.kubernetes.client import KubernetesClient
-from api.infrastructure.shared.models import PaginatedItems, Pagination
 from api.infrastructure.integration_validators import (
     validate_bitbucket,
     validate_confluence,
@@ -85,6 +83,10 @@ from api.infrastructure.integration_validators import (
     validate_gmail,
     validate_jira,
 )
+from api.infrastructure.kubernetes.client import KubernetesClient
+from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
+from api.infrastructure.openrouter.client import OpenRouterClient
+from api.infrastructure.shared.models import PaginatedItems, Pagination
 from api.infrastructure.slack.client import (
     SlackClient,
     SlackFetchError,
@@ -115,6 +117,17 @@ _TEAMS_CONFIG_FIELDS = frozenset(
         "teams_app_id",
         "teams_app_password",
         "teams_tenant_id",
+    }
+)
+
+_CREDENTIAL_FIELDS = frozenset(
+    {
+        "slack_bot_token",
+        "slack_app_token",
+        "teams_app_id",
+        "teams_app_password",
+        "secrets",
+        "removed_secret_providers",
     }
 )
 
@@ -167,6 +180,7 @@ def is_model_allowed(model: str, allowlist: str) -> bool:
 @dataclass
 class AgentService:
     repository: AgentRepository
+    authorization: AgentAuthorization
     template_repository: TemplateRepository
     k8s: KubernetesClient
     litellm: LiteLLMClient
@@ -243,8 +257,7 @@ class AgentService:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=(
-                        f"Skill '{skill.name}' requires providers not covered "
-                        f"by submitted secrets: {names}"
+                        f"Skill '{skill.name}' requires providers not covered by submitted secrets: {names}"
                     ),
                 )
             skills.append(skill)
@@ -296,19 +309,9 @@ class AgentService:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=(
-                        f"Skill '{skill.name}' requires providers that would no longer "
-                        f"be available: {names}"
+                        f"Skill '{skill.name}' requires providers that would no longer be available: {names}"
                     ),
                 )
-
-    def _get_active_or_404(self, agent_id: UUID, org_id: UUID) -> Agent:
-        agent = self.repository.get_active(agent_id, org_id)
-        if not agent:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Agent {agent_id} not found",
-            )
-        return agent
 
     def _build_agent_read(
         self,
@@ -318,6 +321,7 @@ class AgentService:
         secrets: list[AgentSecret] | None = None,
         skills: list[Skill] | None = None,
         required_skill_ids: set[UUID] | None = None,
+        allowed_actions: list[PermissionKey] | None = None,
     ) -> AgentRead:
         slack_config_read = (
             AgentSlackConfigRead.model_validate(slack_config) if slack_config else None
@@ -360,11 +364,12 @@ class AgentService:
             secrets=secrets_read,
             skills=skills_read,
             webhook_url=webhook_url,
+            allowed_actions=allowed_actions or [],
             created_at=agent.created_at,
             updated_at=agent.updated_at,
         )
 
-    def _get_agent_read(self, agent: Agent) -> AgentRead:
+    def _get_agent_read(self, agent: Agent, context: CurrentUserContext) -> AgentRead:
         slack_config = None
         teams_config = None
         if agent.platform == AgentPlatform.SLACK:
@@ -383,8 +388,15 @@ class AgentService:
             if template
             else set()
         )
+        allowed_actions = self.authorization.allowed_actions(context, [agent])[agent.id]
         return self._build_agent_read(
-            agent, slack_config, teams_config, secrets, skills, required_ids
+            agent,
+            slack_config,
+            teams_config,
+            secrets,
+            skills,
+            required_ids,
+            allowed_actions,
         )
 
     def _get_bot_display_name(
@@ -409,6 +421,7 @@ class AgentService:
 
     def create_agent(self, data: AgentCreate, context: CurrentUserContext) -> AgentRead:
         org_id = self._org_id(context)
+        self.authorization.require_collection_scope(context, PermissionKey.AGENT_CREATE)
         self._ensure_model_allowed(data.model)
 
         if data.platform == AgentPlatform.SLACK:
@@ -442,6 +455,7 @@ class AgentService:
 
         agent = Agent(
             organization_id=org_id,
+            created_by_user_id=context.user.id,
             name=data.name,
             model=data.model or "",
             platform=data.platform,
@@ -475,7 +489,14 @@ class AgentService:
                     detail="Required template skills must be included in skill_ids",
                 )
 
-        self.repository.save(agent)
+        persisted_membership = context.user_organization_map.get(org_id)
+        creator_membership_id = (
+            persisted_membership.id
+            if persisted_membership is not None
+            and persisted_membership.user_id == context.user.id
+            else None
+        )
+        self.repository.create_with_creator_access(agent, creator_membership_id)
 
         slack_config = None
         teams_config = None
@@ -543,20 +564,26 @@ class AgentService:
 
         if data.platform == AgentPlatform.TEAMS:
             return self.start_agent(agent.id, context)
+        allowed_actions = self.authorization.allowed_actions(context, [agent])[agent.id]
         return self._build_agent_read(
-            agent, slack_config, teams_config, secrets, skills_to_assign, required_ids
+            agent,
+            slack_config,
+            teams_config,
+            secrets,
+            skills_to_assign,
+            required_ids,
+            allowed_actions,
         )
 
     def get_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
-        org_id = self._org_id(context)
-        agent = self._get_active_or_404(agent_id, org_id)
-        return self._get_agent_read(agent)
+        agent = self.authorization.require_visible(context, agent_id)
+        return self._get_agent_read(agent, context)
 
     def get_agent_template(
         self, agent_id: UUID, version: int, context: CurrentUserContext
     ) -> TemplateRead:
         org_id = self._org_id(context)
-        agent = self._get_active_or_404(agent_id, org_id)
+        agent = self.authorization.require_visible(context, agent_id)
         template = self.template_repository.get_template_by_slug_and_version(
             org_id, agent.template_slug, version
         )
@@ -574,9 +601,13 @@ class AgentService:
         context: CurrentUserContext,
     ) -> PaginatedItems[AgentRead]:
         org_id = self._org_id(context)
-        agents, total = self.repository.find_all_active(
-            org_id, agent_filter, pagination
+        read_scope = self.authorization.require_collection_scope(
+            context, PermissionKey.AGENT_READ
         )
+        agents, total = self.repository.find_all_active(
+            read_scope, agent_filter, pagination
+        )
+        allowed_actions = self.authorization.allowed_actions(context, agents)
 
         agent_ids = [a.id for a in agents]
         slack_configs = self.repository.get_slack_configs_for_agents(agent_ids)
@@ -605,6 +636,7 @@ class AgentService:
                 secrets_by_agent.get(agent.id, []),
                 skills_by_agent.get(agent.id, []),
                 _required_ids(agent),
+                allowed_actions.get(agent.id, []),
             )
             for agent in agents
         ]
@@ -620,15 +652,20 @@ class AgentService:
         self, agent_id: UUID, data: AgentUpdate, context: CurrentUserContext
     ) -> AgentRead:
         org_id = self._org_id(context)
-        agent = self._get_active_or_404(agent_id, org_id)
+        agent = self.authorization.require_action(
+            context, agent_id, PermissionKey.AGENT_UPDATE
+        )
+        updated = data.model_dump(exclude_unset=True)
+        if _CREDENTIAL_FIELDS & updated.keys():
+            self.authorization.require_action_for_visible(
+                context, agent, PermissionKey.AGENT_SECRET_MANAGE
+            )
 
         if agent.status == AgentStatus.RUNNING:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Agent {agent_id} must be stopped before updating",
             )
-
-        updated = data.model_dump(exclude_unset=True)
 
         if agent.platform == AgentPlatform.TEAMS and (
             _SLACK_CONFIG_FIELDS & updated.keys()
@@ -658,8 +695,7 @@ class AgentService:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=(
-                        f"Template {updated['template_slug']} "
-                        f"v{updated['template_version']} not found"
+                        f"Template {updated['template_slug']} v{updated['template_version']} not found"
                     ),
                 )
             agent.template_slug = effective_template.template_slug
@@ -822,11 +858,13 @@ class AgentService:
             self.repository.add_skill(agent.id, skill_id)
 
         self.repository.save(agent)
-        return self._get_agent_read(agent)
+        return self._get_agent_read(agent, context)
 
     def start_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
         org_id = self._org_id(context)
-        agent = self._get_active_or_404(agent_id, org_id)
+        agent = self.authorization.require_action(
+            context, agent_id, PermissionKey.AGENT_START
+        )
 
         if agent.status == AgentStatus.RUNNING:
             raise HTTPException(
@@ -873,7 +911,7 @@ class AgentService:
                 agent.last_error = reason
                 agent.status = AgentStatus.ERROR
                 self.repository.save(agent)
-                return self._get_agent_read(agent)
+                return self._get_agent_read(agent, context)
 
             if slack_config.channel_ids:
                 self._join_public_channels(bot_token, slack_config.channel_ids)
@@ -1105,7 +1143,7 @@ class AgentService:
             ingest_key, self.config.agent_token_encryption_key
         )
         self.repository.save(agent)
-        return self._get_agent_read(agent)
+        return self._get_agent_read(agent, context)
 
     def get_agent_logs(
         self,
@@ -1113,8 +1151,9 @@ class AgentService:
         context: CurrentUserContext,
         tail_lines: int = 100,
     ) -> AgentLogsRead:
-        org_id = self._org_id(context)
-        agent = self._get_active_or_404(agent_id, org_id)
+        agent = self.authorization.require_action(
+            context, agent_id, PermissionKey.ACTIVITY_READ
+        )
 
         latest_snapshot = self.repository.get_latest_log_snapshot(agent_id)
         has_snapshots = latest_snapshot is not None
@@ -1148,12 +1187,13 @@ class AgentService:
         agent_id: UUID,
         context: CurrentUserContext,
         tail_lines: int = 0,
-    ) -> Generator[str, None, None]:
-        org_id = self._org_id(context)
-        agent = self._get_active_or_404(agent_id, org_id)
+    ) -> Iterator[str]:
+        agent = self.authorization.require_action(
+            context, agent_id, PermissionKey.ACTIVITY_READ
+        )
         if agent.status != AgentStatus.RUNNING:
-            return
-        yield from self.k8s.stream_pod_logs(
+            return iter(())
+        return self.k8s.stream_pod_logs(
             f"agent-{agent.id}",
             self.config.k8s_namespace,
             tail_lines=tail_lines,
@@ -1165,8 +1205,9 @@ class AgentService:
         context: CurrentUserContext,
         snapshot_id: UUID | None = None,
     ) -> AgentLogHistoryRead:
-        org_id = self._org_id(context)
-        self._get_active_or_404(agent_id, org_id)
+        self.authorization.require_action(
+            context, agent_id, PermissionKey.ACTIVITY_READ
+        )
 
         if snapshot_id is not None:
             snapshot = self.repository.get_snapshot_by_id(agent_id, snapshot_id)
@@ -1228,8 +1269,9 @@ class AgentService:
             )
 
     def stop_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
-        org_id = self._org_id(context)
-        agent = self._get_active_or_404(agent_id, org_id)
+        agent = self.authorization.require_action(
+            context, agent_id, PermissionKey.AGENT_STOP
+        )
 
         if agent.status != AgentStatus.RUNNING:
             raise HTTPException(
@@ -1246,7 +1288,7 @@ class AgentService:
 
         agent.status = AgentStatus.STOPPED
         self.repository.save(agent)
-        return self._get_agent_read(agent)
+        return self._get_agent_read(agent, context)
 
     def count_active_agents(self, organization_id: UUID) -> int:
         """Number of non-deleted agents in an org. Used by other domains (e.g. org
@@ -1254,8 +1296,9 @@ class AgentService:
         return self.repository.count_active_by_org(organization_id)
 
     def delete_agent(self, agent_id: UUID, context: CurrentUserContext) -> None:
-        org_id = self._org_id(context)
-        agent = self._get_active_or_404(agent_id, org_id)
+        agent = self.authorization.require_action(
+            context, agent_id, PermissionKey.AGENT_DELETE
+        )
         ns = self.config.k8s_namespace
         name = f"agent-{agent.id}"
 
@@ -1280,8 +1323,9 @@ class AgentService:
     def pair_agent(
         self, agent_id: UUID, data: PairRequest, context: CurrentUserContext
     ) -> str:
-        org_id = self._org_id(context)
-        agent = self._get_active_or_404(agent_id, org_id)
+        agent = self.authorization.require_action(
+            context, agent_id, PermissionKey.AGENT_UPDATE
+        )
 
         if agent.agent_type == AgentType.HERMES:
             raise HTTPException(
@@ -1355,7 +1399,7 @@ class AgentService:
         configured default (AGENT_DEFAULT_MODEL) is guaranteed present, flagged
         is_default, and listed first so the frontend and backend agree on it.
         """
-        self._org_id(context)
+        self.authorization.require_collection_scope(context, PermissionKey.AGENT_CREATE)
         catalog = self.openrouter.list_models()
         allowed = filter_models_by_allowlist(catalog, self.config.agent_model_allowlist)
         options = [
@@ -1389,8 +1433,9 @@ class AgentService:
     def list_slack_channels(
         self, agent_id: UUID, context: CurrentUserContext, search: str | None = None
     ) -> list[dict]:
-        org_id = self._org_id(context)
-        agent = self._get_active_or_404(agent_id, org_id)
+        agent = self.authorization.require_action(
+            context, agent_id, PermissionKey.AGENT_UPDATE
+        )
         if agent.platform != AgentPlatform.SLACK:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -1410,8 +1455,9 @@ class AgentService:
     def list_slack_users(
         self, agent_id: UUID, context: CurrentUserContext, search: str | None = None
     ) -> list[dict]:
-        org_id = self._org_id(context)
-        agent = self._get_active_or_404(agent_id, org_id)
+        agent = self.authorization.require_action(
+            context, agent_id, PermissionKey.AGENT_UPDATE
+        )
         if agent.platform != AgentPlatform.SLACK:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -1444,8 +1490,9 @@ class AgentService:
         self, agent_id: UUID, provider: SecretProvider, context: CurrentUserContext
     ) -> dict:
         """Validate an existing secret on demand. Never persists — returns result directly."""
-        org_id = self._org_id(context)
-        self._get_active_or_404(agent_id, org_id)
+        self.authorization.require_action(
+            context, agent_id, PermissionKey.AGENT_SECRET_MANAGE
+        )
         secret = self.repository.get_secret(agent_id, provider)
         if secret is None:
             raise HTTPException(
@@ -1533,8 +1580,9 @@ class AgentService:
     def get_agent_health(
         self, agent_id: UUID, context: CurrentUserContext
     ) -> AgentHealthRead:
-        org_id = self._org_id(context)
-        agent = self._get_active_or_404(agent_id, org_id)
+        agent = self.authorization.require_action(
+            context, agent_id, PermissionKey.ACTIVITY_READ
+        )
 
         if agent.status == AgentStatus.ERROR:
             return AgentHealthRead(status="error", reason=agent.last_error)
