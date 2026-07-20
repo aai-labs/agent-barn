@@ -321,17 +321,54 @@ def test_build_hermes_deployment_mounts_opt_data_and_workspace():
     assert_that("/workspace" in mounts, equal_to(True))
 
 
-def test_build_hermes_deployment_has_empty_dir_workspace():
-    from kubernetes.client import V1EmptyDirVolumeSource
-
+def test_build_hermes_deployment_workspace_is_pvc_backed():
+    # /workspace must persist across restarts (AF-215): it is a subPath of the
+    # per-agent PVC, not an ephemeral emptyDir — mirroring ocbw's persistent
+    # ./agents/<name>/workspace bind-mount and OpenClaw's PVC-nested workspace.
     dep = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:latest")
-    workspace_vols = [
-        v for v in dep.spec.template.spec.volumes if v.name == "workspace"
-    ]
-    assert_that(len(workspace_vols), equal_to(1))
-    assert_that(
-        isinstance(workspace_vols[0].empty_dir, V1EmptyDirVolumeSource), equal_to(True)
-    )
+    mounts = {
+        m.mount_path: m for m in dep.spec.template.spec.containers[0].volume_mounts
+    }
+    workspace = mounts["/workspace"]
+    assert_that(workspace.name, equal_to("data"))
+    assert_that(workspace.sub_path, equal_to("workspace"))
+
+
+def test_build_hermes_deployment_opt_data_stays_on_pvc_root():
+    dep = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:latest")
+    mounts = {
+        m.mount_path: m for m in dep.spec.template.spec.containers[0].volume_mounts
+    }
+    data = mounts["/opt/data"]
+    assert_that(data.name, equal_to("data"))
+    assert_that(data.sub_path, equal_to(None))
+
+
+def test_build_hermes_deployment_has_no_empty_dir_workspace_volume():
+    dep = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:latest")
+    volume_names = {v.name for v in dep.spec.template.spec.volumes}
+    assert_that("workspace" in volume_names, equal_to(False))
+
+
+def test_build_hermes_deployment_anchors_cwd_env_to_workspace():
+    # The hermes process starts in its install dir (/opt/hermes) and the user's
+    # HOME is /opt/data, so without these env vars the agent's shell is anchored
+    # in the wrong place and relative writes miss the persistent /workspace.
+    # ocbw sets both alongside terminal.cwd (openclaw_bootstrap/hermes.py) —
+    # mirror that.
+    dep = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:latest")
+    env = {e.name: e.value for e in dep.spec.template.spec.containers[0].env or []}
+    assert_that(env.get("TERMINAL_CWD"), equal_to("/workspace"))
+    assert_that(env.get("MESSAGING_CWD"), equal_to("/workspace"))
+
+
+def test_start_sh_prunes_stale_skills_before_seeding():
+    # /workspace persists now, so a skill file from a removed integration would
+    # linger without an explicit prune before re-seeding.
+    assert_that(HERMES_START_SH, contains_string("rm -rf /workspace/skills"))
+    prune_at = HERMES_START_SH.index("rm -rf /workspace/skills")
+    seed_at = HERMES_START_SH.index("skills.json")
+    assert_that(prune_at < seed_at, equal_to(True))
 
 
 def test_build_hermes_config_map_includes_aai_cli_kwargs_when_provided():
