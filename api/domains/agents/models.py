@@ -1,4 +1,5 @@
 import enum
+import hashlib
 import json
 from datetime import datetime
 from uuid import UUID
@@ -234,14 +235,28 @@ class Agent(BaseModel, table=True):
     )
 
 
+def compute_bot_token_hash(bot_token: str) -> str:
+    return hashlib.sha256(bot_token.encode("utf-8")).hexdigest()
+
+
 class AgentSlackConfig(BaseModel, table=True):
     __tablename__: str = "agent_slack_config"
+
+    __table_args__ = (
+        sa.Index(
+            "ix_agent_slack_config_bot_token_hash",
+            "bot_token_hash",
+            unique=True,
+            postgresql_where=sa.text("bot_token_hash IS NOT NULL"),
+        ),
+    )
 
     agent_id: UUID = SqlField(
         foreign_key="agent.id", nullable=False, unique=True, ondelete="CASCADE"
     )
     bot_token_encrypted: str = SqlField(nullable=False)
     app_token_encrypted: str = SqlField(nullable=False)
+    bot_token_hash: str | None = SqlField(default=None, nullable=True)
     channel_ids: list[str] = SqlField(
         default_factory=list,
         sa_column=Column(sa.JSON(), nullable=False, server_default="[]"),

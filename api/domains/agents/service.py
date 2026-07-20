@@ -65,10 +65,12 @@ from api.domains.agents.models import (
     PairRequest,
     SecretProvider,
     decrypt_content,
+    compute_bot_token_hash,
     encrypt_content,
     validate_content,
 )
 from api.domains.agents.error_messages import friendly_k8s_error, friendly_pod_reason
+from api.domains.agents.exceptions import BotTokenConflictHTTPException
 from api.domains.agents.repository import AgentRepository
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.token_service import SlackConfigTokenService
@@ -421,6 +423,7 @@ class AgentService:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST, detail=reason
                 )
+            self._ensure_bot_token_unique(data.slack_bot_token)
 
         # Pin to the requested version, or the lineage's latest if unspecified.
         if data.template_version is not None:
@@ -491,6 +494,7 @@ class AgentService:
                     cast(str, data.slack_app_token),
                     self.config.agent_token_encryption_key,
                 ),
+                bot_token_hash=compute_bot_token_hash(cast(str, data.slack_bot_token)),
                 channel_ids=data.slack_channel_ids,
                 dm_user_ids=data.slack_dm_user_ids,
                 group_policy=data.slack_group_policy,
@@ -732,12 +736,20 @@ class AgentService:
                     status_code=status.HTTP_400_BAD_REQUEST, detail=reason
                 )
 
+            if "slack_bot_token" in updated:
+                self._ensure_bot_token_unique(
+                    updated["slack_bot_token"], exclude_agent_id=agent.id
+                )
+
             slack_config = self.repository.get_slack_config(agent.id)
             if slack_config:
                 if "slack_bot_token" in updated:
                     slack_config.bot_token_encrypted = encrypt_token(
                         updated["slack_bot_token"],
                         self.config.agent_token_encryption_key,
+                    )
+                    slack_config.bot_token_hash = compute_bot_token_hash(
+                        updated["slack_bot_token"]
                     )
                     _bot_name_cache.pop(str(agent.id), None)
                 if "slack_app_token" in updated:
@@ -1265,6 +1277,11 @@ class AgentService:
         self.k8s.delete_secret(name, ns)
         self.k8s.delete_config_map(name, ns)
 
+        slack_config = self.repository.get_slack_config(agent.id)
+        if slack_config:
+            slack_config.bot_token_hash = None
+            self.repository.save_slack_config(slack_config)
+
         agent.deleted_at = dt.datetime.now(dt.timezone.utc)
         self.repository.save(agent)
 
@@ -1341,6 +1358,16 @@ class AgentService:
             if not ok:
                 return ok, reason
         return True, ""
+
+    def _ensure_bot_token_unique(
+        self, bot_token: str, exclude_agent_id: UUID | None = None
+    ) -> None:
+        token_hash = compute_bot_token_hash(bot_token)
+        conflicting = self.repository.find_active_agent_by_bot_token_hash(
+            token_hash, exclude_agent_id=exclude_agent_id
+        )
+        if conflicting:
+            raise BotTokenConflictHTTPException(conflicting.name)
 
     def _join_public_channels(self, bot_token: str, channel_ids: list[str]) -> None:
         client = SlackClient(bot_token)

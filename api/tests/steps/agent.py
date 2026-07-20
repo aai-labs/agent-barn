@@ -1,4 +1,5 @@
 import datetime
+import uuid as uuid_mod
 from typing import Any
 from unittest.mock import MagicMock
 from uuid import UUID
@@ -13,6 +14,7 @@ from api.domains.agents.models import (
     AgentStatus,
     AgentTeamsConfig,
     AgentType,
+    compute_bot_token_hash,
 )
 from api.domains.agents.repository import AgentRepository
 from api.domains.auth.utils import set_default_org_id
@@ -69,6 +71,7 @@ def there_is_an_agent(
     agent_type: AgentType = AgentType.OPENCLAW,
     soul_md: str = "# Soul\n\nTest soul.",
     tools_md: str = DEFAULT_TOOLS_MD,
+    bot_token: str | None = None,
 ):
     def step(context):
         org_id = organization_id or context.organization.id
@@ -112,14 +115,16 @@ def there_is_an_agent(
         repository.save(agent)
 
         if platform == AgentPlatform.SLACK:
+            effective_bot_token = bot_token or f"xoxb-test-{uuid_mod.uuid4()}"
             slack_config = AgentSlackConfig(
                 agent_id=agent.id,
                 bot_token_encrypted=encrypt_token(
-                    TEST_SLACK_BOT_TOKEN, TEST_ENCRYPTION_KEY
+                    effective_bot_token, TEST_ENCRYPTION_KEY
                 ),
                 app_token_encrypted=encrypt_token(
                     TEST_SLACK_APP_TOKEN, TEST_ENCRYPTION_KEY
                 ),
+                bot_token_hash=None if deleted else compute_bot_token_hash(effective_bot_token),
             )
             repository.save_slack_config(slack_config)
         elif platform == AgentPlatform.TEAMS:
