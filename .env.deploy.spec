@@ -83,8 +83,9 @@ STORAGE_CLASS=local-path
 # API key used by the Firecrawl server (TEST_API_KEY) and agents (FIRECRAWL_API_KEY).
 # Same value serves both sides. Generate with: openssl rand -hex 24
 FIRECRAWL_API_KEY=
-# Random key protecting the BullMQ admin dashboard.
-FIRECRAWL_BULL_AUTH_KEY=
+# Optional: random key protecting the BullMQ admin dashboard. Defaults to '@'.
+# Not needed for production since Firecrawl is on ClusterIP (internal only).
+# FIRECRAWL_BULL_AUTH_KEY=
 
 # ── Postgres (Firecrawl DB) ──────────────────────────────────────────────────
 POSTGRES_FIRECRAWL_USER=firecrawl

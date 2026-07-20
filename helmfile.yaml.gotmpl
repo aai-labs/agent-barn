@@ -84,7 +84,7 @@ releases:
       - name: testApiKey
         value: {{ env "FIRECRAWL_API_KEY" | required "FIRECRAWL_API_KEY is required" | quote }}
       - name: bullAuthKey
-        value: {{ env "FIRECRAWL_BULL_AUTH_KEY" | required "FIRECRAWL_BULL_AUTH_KEY is required" | quote }}
+        value: {{ env "FIRECRAWL_BULL_AUTH_KEY" | default "" | quote }}
       - name: postgres.user
         value: {{ env "POSTGRES_FIRECRAWL_USER" | required "POSTGRES_FIRECRAWL_USER is required" | quote }}
       - name: postgres.password
