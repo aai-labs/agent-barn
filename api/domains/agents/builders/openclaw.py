@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 from kubernetes import client
@@ -130,7 +130,7 @@ def build_openclaw_config_overlay(
     }
     if firecrawl_base_url and firecrawl_api_key:
         overlay["plugins"]["allow"].append("firecrawl")
-        entries: dict[str, Any] = overlay["plugins"]["entries"]
+        entries = cast(dict[str, Any], overlay["plugins"]["entries"])
         entries["firecrawl"] = {
             "enabled": True,
             "config": {
@@ -147,7 +147,7 @@ def build_openclaw_config_overlay(
                 },
             },
         }
-        tools: dict[str, Any] = overlay["tools"]
+        tools = cast(dict[str, Any], overlay["tools"])
         tools["web"] = {
             "fetch": {"provider": "firecrawl"},
             "search": {"enabled": True, "provider": "firecrawl"},
@@ -231,7 +231,7 @@ def build_openclaw_config_overlay_teams(
     }
     if firecrawl_base_url and firecrawl_api_key:
         overlay["plugins"]["allow"].append("firecrawl")
-        entries: dict[str, Any] = overlay["plugins"]["entries"]
+        entries = cast(dict[str, Any], overlay["plugins"]["entries"])
         entries["firecrawl"] = {
             "enabled": True,
             "config": {
@@ -248,7 +248,7 @@ def build_openclaw_config_overlay_teams(
                 },
             },
         }
-        tools: dict[str, Any] = overlay["tools"]
+        tools = cast(dict[str, Any], overlay["tools"])
         tools["web"] = {
             "fetch": {"provider": "firecrawl"},
             "search": {"enabled": True, "provider": "firecrawl"},
