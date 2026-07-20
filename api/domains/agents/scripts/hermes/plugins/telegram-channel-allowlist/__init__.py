@@ -1,6 +1,6 @@
 """Restrict responses to Telegram groups listed in TELEGRAM_CHANNEL_IDS.
 
-If TELEGRAM_CHANNEL_IDS is empty, the agent responds in all groups.
+If TELEGRAM_CHANNEL_IDS is empty, the agent ignores all group messages.
 DMs are not affected — those are handled by telegram-deny-dms.
 """
 
@@ -20,8 +20,6 @@ def _platform_name(platform) -> str:
 
 def filter_channel(event, **kwargs):
     allowed = _allowed_channels()
-    if not allowed:
-        return None
 
     source = getattr(event, "source", None)
     if source is None:
@@ -35,7 +33,7 @@ def filter_channel(event, **kwargs):
         return None
 
     channel_id = str(getattr(source, "chat_id", "") or "")
-    if channel_id not in allowed:
+    if not allowed or channel_id not in allowed:
         return {"action": "skip", "reason": "channel-not-allowlisted"}
 
     return None

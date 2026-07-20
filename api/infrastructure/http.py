@@ -72,11 +72,7 @@ def resilient_request(
             )
             time.sleep(wait)
             continue
-        if (
-            retry_server_errors
-            and resp.status_code >= 500
-            and attempt < max_retries
-        ):
+        if retry_server_errors and resp.status_code >= 500 and attempt < max_retries:
             logger.warning(
                 "%s server error %d; retrying in %ss (attempt %d/%d)",
                 label,
