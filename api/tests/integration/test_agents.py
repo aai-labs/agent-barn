@@ -3150,9 +3150,7 @@ def test_start_agent_per_agent_firecrawl_overrides_platform():
         with then("the per-agent key is used instead of the platform key"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             secret = k8s.create_secret.call_args.args[1]
-            assert_that(
-                secret.string_data["FIRECRAWL_API_KEY"], equal_to("fc-my-key")
-            )
+            assert_that(secret.string_data["FIRECRAWL_API_KEY"], equal_to("fc-my-key"))
 
 
 def test_start_agent_per_agent_firecrawl_overrides_base_url():
@@ -3193,5 +3191,3 @@ def test_start_agent_per_agent_firecrawl_overrides_base_url():
                 fc_cfg["webSearch"]["baseUrl"],
                 equal_to("https://api.firecrawl.dev"),
             )
-
-

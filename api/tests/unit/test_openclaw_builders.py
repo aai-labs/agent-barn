@@ -116,7 +116,9 @@ def test_build_openclaw_config_overlay_teams_firecrawl():
 
 def test_build_secret_slack_firecrawl_key():
     secret = build_secret_slack(
-        _AGENT_ID, _ORG_ID, _NS,
+        _AGENT_ID,
+        _ORG_ID,
+        _NS,
         slack_bot_token="xoxb-x",
         slack_app_token="xapp-x",
         litellm_api_key="sk-key",
@@ -128,7 +130,9 @@ def test_build_secret_slack_firecrawl_key():
 
 def test_build_secret_slack_no_firecrawl_by_default():
     secret = build_secret_slack(
-        _AGENT_ID, _ORG_ID, _NS,
+        _AGENT_ID,
+        _ORG_ID,
+        _NS,
         slack_bot_token="xoxb-x",
         slack_app_token="xapp-x",
         litellm_api_key="sk-key",
@@ -139,7 +143,9 @@ def test_build_secret_slack_no_firecrawl_by_default():
 
 def test_build_secret_teams_firecrawl_key():
     secret = build_secret_teams(
-        _AGENT_ID, _ORG_ID, _NS,
+        _AGENT_ID,
+        _ORG_ID,
+        _NS,
         msteams_app_id="app-id",
         msteams_app_password="app-pw",
         msteams_tenant_id="tenant-id",
@@ -152,7 +158,9 @@ def test_build_secret_teams_firecrawl_key():
 
 def test_build_secret_teams_no_firecrawl_by_default():
     secret = build_secret_teams(
-        _AGENT_ID, _ORG_ID, _NS,
+        _AGENT_ID,
+        _ORG_ID,
+        _NS,
         msteams_app_id="app-id",
         msteams_app_password="app-pw",
         msteams_tenant_id="tenant-id",

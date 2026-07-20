@@ -236,9 +236,7 @@ def test_firecrawl_content_rejects_missing_api_key():
 
 def test_firecrawl_content_rejects_extra_fields():
     with pytest.raises(ValidationError):
-        validate_content(
-            SecretProvider.FIRECRAWL, {"api_key": "fc-x", "extra": "nope"}
-        )
+        validate_content(SecretProvider.FIRECRAWL, {"api_key": "fc-x", "extra": "nope"})
 
 
 def test_firecrawl_encrypt_decrypt_round_trip():
