@@ -2,13 +2,13 @@ import logging
 import threading
 import time
 from collections.abc import Callable
-from typing import TypeVar
+from typing import Any, TypeVar
 
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
-_cache: dict[str, tuple[float, object]] = {}
+_cache: dict[str, tuple[float, Any]] = {}
 _cache_lock = threading.Lock()
 _key_locks: dict[str, threading.Lock] = {}
 
@@ -40,13 +40,13 @@ def cached(key: str, fetch: Callable[[], T], *, ttl: float) -> T:
     with _cache_lock:
         entry = _cache.get(key)
         if entry and now - entry[0] < ttl:
-            return entry[1]  # type: ignore[return-value]
+            return entry[1]
     with _key_lock(key):
         now = time.monotonic()
         with _cache_lock:
             entry = _cache.get(key)
             if entry and now - entry[0] < ttl:
-                return entry[1]  # type: ignore[return-value]
+                return entry[1]
         try:
             data = fetch()
         except Exception as exc:
@@ -56,7 +56,7 @@ def cached(key: str, fetch: Callable[[], T], *, ttl: float) -> T:
                 logger.warning(
                     "Cache refresh failed for %s (%s); serving stale entry", key, exc
                 )
-                return stale[1]  # type: ignore[return-value]
+                return stale[1]
             raise
         with _cache_lock:
             _cache[key] = (time.monotonic(), data)
