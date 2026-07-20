@@ -20,6 +20,10 @@ spec:
         {{- include "firecrawl.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: api
     spec:
+      initContainers:
+        - name: wait-rabbitmq
+          image: busybox
+          command: ['sh', '-c', 'until nc -z {{ .Release.Name }}-rabbitmq {{ .Values.service.rabbitmqPort }}; do echo "waiting for rabbitmq..."; sleep 2; done']
       containers:
         - name: firecrawl
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
@@ -46,7 +50,7 @@ spec:
             - name: PLAYWRIGHT_MICROSERVICE_URL
               value: "http://{{ .Release.Name }}-playwright:{{ .Values.service.playwrightPort }}/scrape"
             - name: USE_DB_AUTHENTICATION
-              value: "true"
+              value: "false"
             - name: NUQ_RABBITMQ_URL
               value: "amqp://{{ .Release.Name }}-rabbitmq:{{ .Values.service.rabbitmqPort }}"
             - name: POSTGRES_HOST

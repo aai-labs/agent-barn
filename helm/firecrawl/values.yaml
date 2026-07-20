@@ -20,7 +20,7 @@ rabbitmqImage:
 
 secretName: firecrawl
 
-# Server-side API key that Firecrawl validates against (USE_DB_AUTHENTICATION=true).
+# Server-side API key that Firecrawl validates against (USE_DB_AUTHENTICATION=false).
 # Agents use this same value client-side as FIRECRAWL_API_KEY.
 testApiKey: ""
 
