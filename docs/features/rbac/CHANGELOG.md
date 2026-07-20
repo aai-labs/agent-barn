@@ -6,12 +6,18 @@ Related context: [implementation brief](IMPLEMENTATION-BRIEF.md), [role decision
 
 ## Current state
 
-- Delivered: accepted RBAC language and decisions; deterministic Permission/system Role catalogue; scoped grants; Membership role foreign keys; legacy backfill; request-time permission resolution; atomic creator assignment; assigned Agent lifecycle/list/detail enforcement; canonical effective Permission actions; scoped conversation, tool-call, log, integration-validation, and per-Agent cost reads; and Agent Access list/grant/revoke APIs.
-- In transition: APIs still expose Owner/Admin/Member compatibility values, organization-wide shared-resource services still use compatibility role gates, and RBAC-aware UI controls are not yet active.
-- Next: apply the permission matrix to organization-wide resources, then update the UI.
+- Delivered: accepted RBAC language and decisions; deterministic Permission/system Role catalogue; scoped grants; Membership role foreign keys; legacy backfill; request-time permission resolution; assigned Agent aggregate enforcement and effective actions; Agent Access management APIs; named Organization and Membership Permission gates; read/manage separation for Templates and Skills; and organization-scoped cost-summary authorization.
+- In transition: APIs still expose Owner/Admin/Member compatibility values and RBAC-aware UI controls are not yet active. Protected Owner recovery actions intentionally remain role-based.
+- Next: update the UI to consume effective actions and Agent Access management contracts.
 - Blockers: none. Durable Domain Events and Security Audit Records are deferred to [AF-218](https://aai-labs.atlassian.net/browse/AF-218) and do not block AF-150.
 
 ## Changes
+
+### 2026-07-20 — AF-150 — pending PR — organization-wide Permission enforcement
+
+- Delivered: `ORGANIZATION`-scoped Permission checks for Organization read/update, Membership list/invite/role-update/remove, Template read/manage, Skill read/manage, and organization cost summaries; protected Owner governance rules remain explicit role invariants and superuser governance actions require matching explicit Organization context.
+- Changed: Members retain shared Template/Skill read and Agent-use access without shared-definition mutation; cost summaries now require `cost.read` at `ORGANIZATION` scope rather than a route-level Owner/Admin role gate; authorization tests can temporarily alter persisted grants without leaking catalogue mutations between tests.
+- Follow-up: consume effective actions and access-management contracts in the RBAC-aware UI; adopt durable events later under AF-218.
 
 ### 2026-07-20 — AF-150 — pending PR — Agent Access management API
 

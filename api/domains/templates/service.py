@@ -6,6 +6,8 @@ from fastapi import HTTPException, status
 from injector import inject, singleton
 
 from api.domains.auth.models import CurrentUserContext
+from api.domains.rbac.catalog import PermissionKey
+from api.domains.rbac.policy import PermissionPolicy
 from api.domains.skills.models import SkillRead
 from api.domains.skills.repository import SkillRepository
 from api.domains.templates.defaults import (
@@ -45,6 +47,7 @@ logger = logging.getLogger(__name__)
 class TemplateService:
     repository: TemplateRepository
     skill_repository: SkillRepository
+    permission_policy: PermissionPolicy
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
@@ -82,6 +85,9 @@ class TemplateService:
         context: CurrentUserContext,
     ) -> PaginatedItems[TemplateRead]:
         org_id = self._org_id(context)
+        self.permission_policy.require_organization(
+            context, org_id, PermissionKey.TEMPLATE_READ
+        )
         templates, total = self.repository.find_latest_templates(
             org_id, template_filter, pagination
         )
@@ -108,7 +114,11 @@ class TemplateService:
 
     def get_template(self, slug: str, context: CurrentUserContext) -> TemplateRead:
         org_id = self._org_id(context)
-        read = TemplateRead.model_validate(self._get_latest_or_404(org_id, slug))
+        template = self._get_latest_or_404(org_id, slug)
+        self.permission_policy.require_organization(
+            context, org_id, PermissionKey.TEMPLATE_READ
+        )
+        read = TemplateRead.model_validate(template)
         return self._with_required_skills(read)
 
     def list_template_versions(
@@ -121,6 +131,9 @@ class TemplateService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Template {slug} not found",
             )
+        self.permission_policy.require_organization(
+            context, org_id, PermissionKey.TEMPLATE_READ
+        )
         template_ids = [v.id for v in versions]
         skills_by_template = self.repository.get_required_skills_for_templates(
             template_ids
@@ -141,6 +154,9 @@ class TemplateService:
         self, data: TemplateCreate, context: CurrentUserContext
     ) -> TemplateRead:
         org_id = self._org_id(context)
+        self.permission_policy.require_organization(
+            context, org_id, PermissionKey.TEMPLATE_MANAGE
+        )
         slug = slugify(data.template_name)
         if not slug:
             raise HTTPException(
@@ -180,6 +196,9 @@ class TemplateService:
     ) -> TemplateRead:
         org_id = self._org_id(context)
         old = self._get_latest_or_404(org_id, slug)
+        self.permission_policy.require_organization(
+            context, org_id, PermissionKey.TEMPLATE_MANAGE
+        )
         updated = data.model_dump(exclude_unset=True)
         # Every update publishes a new immutable version of the lineage; the
         # slug never changes and agent pins are left untouched.

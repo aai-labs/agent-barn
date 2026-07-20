@@ -24,13 +24,8 @@ class OrganizationRole(str, enum.Enum):
     OWNER = "OWNER"
 
 
-# Authorization role tiers. Single source of truth so the same policy isn't re-spelled per
-# endpoint (and can't drift): managers (owners + admins) run org/member management and see
-# billing; a few destructive/sensitive actions (delete org, transfer ownership, removing or
-# demoting another admin) are owner-only.
-ORG_MANAGER_ROLES: frozenset[OrganizationRole] = frozenset(
-    {OrganizationRole.OWNER, OrganizationRole.ADMIN}
-)
+# Recovery/governance invariants intentionally remain role-based even though ordinary
+# capabilities resolve through database-backed Permissions.
 ORG_OWNER_ONLY_ROLES: frozenset[OrganizationRole] = frozenset({OrganizationRole.OWNER})
 
 

@@ -1,0 +1,69 @@
+import pytest
+from hamcrest import assert_that, equal_to, none
+
+from api.domains.rbac.catalog import ADMIN_ROLE_ID, PermissionKey, PermissionScope
+from api.domains.rbac.repository import RbacRepository
+from api.tests.core.givenpy import given
+from api.tests.core.modules import (
+    create_test_client,
+    prepare_api_server,
+    prepare_injector,
+)
+from api.tests.steps.database import database_is_clean, database_repo_is_ready
+from api.tests.steps.rbac import role_lacks_permission
+
+_GIVEN = [
+    prepare_injector(),
+    prepare_api_server(),
+    create_test_client(),
+    database_repo_is_ready(),
+    database_is_clean(),
+]
+
+
+def test_temporary_missing_permission_is_restored_after_normal_exit():
+    repository: RbacRepository
+
+    with given(
+        [
+            *_GIVEN,
+            role_lacks_permission(ADMIN_ROLE_ID, PermissionKey.TEMPLATE_MANAGE),
+        ]
+    ) as context:
+        repository = context.injector.get(RbacRepository)
+        assert_that(
+            repository.get_permission_scope(
+                ADMIN_ROLE_ID, PermissionKey.TEMPLATE_MANAGE
+            ),
+            none(),
+        )
+
+    assert_that(
+        repository.get_permission_scope(ADMIN_ROLE_ID, PermissionKey.TEMPLATE_MANAGE),
+        equal_to(PermissionScope.ORGANIZATION),
+    )
+
+
+def test_temporary_missing_permission_is_restored_after_exception():
+    repository: RbacRepository
+
+    with pytest.raises(RuntimeError):
+        with given(
+            [
+                *_GIVEN,
+                role_lacks_permission(ADMIN_ROLE_ID, PermissionKey.SKILL_MANAGE),
+            ]
+        ) as context:
+            repository = context.injector.get(RbacRepository)
+            assert_that(
+                repository.get_permission_scope(
+                    ADMIN_ROLE_ID, PermissionKey.SKILL_MANAGE
+                ),
+                none(),
+            )
+            raise RuntimeError("exercise cleanup")
+
+    assert_that(
+        repository.get_permission_scope(ADMIN_ROLE_ID, PermissionKey.SKILL_MANAGE),
+        equal_to(PermissionScope.ORGANIZATION),
+    )

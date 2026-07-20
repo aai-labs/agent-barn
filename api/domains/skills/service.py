@@ -7,6 +7,8 @@ from fastapi import HTTPException, status
 from injector import inject, singleton
 
 from api.domains.auth.models import CurrentUserContext
+from api.domains.rbac.catalog import PermissionKey
+from api.domains.rbac.policy import PermissionPolicy
 from api.domains.skills.models import (
     Skill,
     SkillCreate,
@@ -30,6 +32,7 @@ _MAX_ENTRIES = 1000
 @dataclass
 class SkillService:
     repository: SkillRepository
+    permission_policy: PermissionPolicy
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
@@ -121,6 +124,9 @@ class SkillService:
 
     def create_skill(self, data: SkillCreate, context: CurrentUserContext) -> SkillRead:
         org_id = self._org_id(context)
+        self.permission_policy.require_organization(
+            context, org_id, PermissionKey.SKILL_MANAGE
+        )
         self._validate_zip(data.zip_content)
         skill = Skill(
             organization_id=org_id,
@@ -138,6 +144,9 @@ class SkillService:
     ) -> SkillRead:
         org_id = self._org_id(context)
         skill = self._get_or_404(skill_id, org_id)
+        self.permission_policy.require_organization(
+            context, org_id, PermissionKey.SKILL_MANAGE
+        )
         if skill.source == SkillSource.AAI_CLI:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -160,6 +169,9 @@ class SkillService:
     def delete_skill(self, skill_id: UUID, context: CurrentUserContext) -> None:
         org_id = self._org_id(context)
         skill = self._get_or_404(skill_id, org_id)
+        self.permission_policy.require_organization(
+            context, org_id, PermissionKey.SKILL_MANAGE
+        )
         if skill.source == SkillSource.AAI_CLI:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -185,6 +197,9 @@ class SkillService:
     def get_skill(self, skill_id: UUID, context: CurrentUserContext) -> SkillRead:
         org_id = self._org_id(context)
         skill = self._get_or_404(skill_id, org_id)
+        self.permission_policy.require_organization(
+            context, org_id, PermissionKey.SKILL_READ
+        )
         return SkillRead.model_validate(skill)
 
     def list_skills(
@@ -194,6 +209,9 @@ class SkillService:
         context: CurrentUserContext,
     ) -> PaginatedItems[SkillRead]:
         org_id = self._org_id(context)
+        self.permission_policy.require_organization(
+            context, org_id, PermissionKey.SKILL_READ
+        )
         skills, total = self.repository.find_all_for_org(
             org_id, skill_filter, pagination
         )

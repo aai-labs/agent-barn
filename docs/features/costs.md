@@ -16,7 +16,7 @@ Costs provides organization and per-agent spend views by querying LiteLLM and jo
 - Per-agent detail requires `cost.read` within the Agent's authorization scope. Assigned Members can read active assigned-Agent cost, while organization-scoped callers may also read deleted-Agent history.
 - Per-agent detail for an agent without a LiteLLM key returns zero-valued data with status `stopped`; the summary omits that agent.
 - For agents with a key, cost-facing status is mapped to `active`, `stopped`, `error`, or `deleted`; it is not the persisted AgentStatus enum.
-- Organization cost summaries require organization manager authority (owner/admin, with superuser bypass). Members cannot use per-Agent detail to infer unassigned or deleted Agents.
+- Organization cost summaries require `cost.read` at `ORGANIZATION` scope; seeded Owner/Admin roles and explicit superuser organization context receive it. A Member's `ASSIGNED` grant cannot authorize the summary, and per-Agent detail cannot reveal unassigned or deleted Agents.
 
 ## Boundaries
 

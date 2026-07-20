@@ -12,7 +12,7 @@ Authentication establishes a user and membership context; Organization is the te
 
 - Organization roles are database-backed. The immutable seeded roles are `OWNER`, `ADMIN`, and `MEMBER`; current APIs continue to expose those stable names.
 - A user has at most one membership per organization, and the database permits at most one owner membership per organization. Normal creation and transfer flows establish an owner, but global user deletion can leave an organization without one.
-- Owner and admin are organization managers. Organization deletion, ownership transfer, and sensitive admin changes require owner or superuser authority.
+- Ordinary organization and Membership capabilities require current database-backed Permission grants at `ORGANIZATION` scope. Organization deletion, ownership transfer, and sensitive Admin changes remain protected Owner/superuser governance invariants.
 - `X-Organization-Id` selects the active organization; an absent header falls back to the process default organization.
 - Normal users require membership in the selected organization. Superusers can target organizations without persisted membership through explicit context behavior.
 - Cross-organization resource access is intentionally hidden with 404 for tenant-owned entities; known but unauthorized organization administration uses 403.
@@ -29,7 +29,7 @@ Self-registration is disabled. Accounts enter through superuser provisioning or 
 
 ## Organization and membership flows
 
-Superusers create organizations and establish an owner membership. Organization managers can administer ordinary membership; owner-only rules protect ownership and sensitive admin operations. Removing a pending member also revokes outstanding invite/reset links.
+Superusers create organizations and establish an Owner Membership. Membership list, invite, role-update, and removal workflows require their corresponding Permissions; seeded Owner/Admin roles receive them. Owner-only rules protect ownership and sensitive Admin operations. Removing a pending Member also revokes outstanding invite/reset links.
 
 The UI resolves the selected organization from the route, then remembered/default state, and applies the organization header before protected child queries run. Organization switching removes known organization-scoped query caches because those keys are not organization-dimensioned.
 

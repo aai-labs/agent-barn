@@ -1,6 +1,6 @@
 # Permission-backed RBAC implementation brief
 
-Status: Accepted design; schema foundation delivered, enforcement not yet complete  
+Status: Accepted design; backend enforcement delivered, UI adoption pending
 Source proposal: [Agent farm multi-organization support](https://aai-labs.atlassian.net/wiki/x/MIA0pQ)
 
 ## Purpose
@@ -15,7 +15,7 @@ Read this together with:
 - [`../identity-and-organizations.md`](../identity-and-organizations.md) and [`../agents.md`](../agents.md) for current behavior.
 - [`../../guidelines/code.md`](../../guidelines/code.md), [`../../guidelines/webapp.md`](../../guidelines/webapp.md), [`../../guidelines/testing.md`](../../guidelines/testing.md), and [`../../guidelines/epics.md`](../../guidelines/epics.md) before implementation.
 
-Implementation is in transition. Membership references database-backed seeded Roles; scoped Role-Permission grants, Agent creator provenance, and same-Organization Agent Access are persisted and legacy data is backfilled. Agent creation now establishes creator access atomically, and Agent lifecycle, activity, logs, integration validation, and per-Agent cost paths enforce permission and assigned visibility. Organization-wide shared-resource services still contain compatibility role checks, and Agent Access grant/revoke APIs and UI are not yet delivered. Follow `CHANGELOG.md` rather than treating the full accepted design as complete.
+Implementation is in transition. Membership references database-backed seeded Roles; scoped Role-Permission grants, Agent creator provenance, and same-Organization Agent Access are persisted and legacy data is backfilled. Agent creation establishes creator access atomically; Agent aggregate paths enforce permission and assigned visibility; Agent Access management APIs are delivered; and Organization, Membership, Template, Skill, and cost-summary services enforce named Permissions. RBAC-aware UI controls are not yet delivered. Follow `CHANGELOG.md` rather than treating the full accepted design as complete.
 
 ## Authorization model
 

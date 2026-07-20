@@ -2,11 +2,19 @@ import base64
 import io
 import zipfile
 from unittest.mock import patch
+from uuid import uuid7
 
 from fastapi import status
 from hamcrest import assert_that, equal_to, has_item, has_items, not_
 from starlette.testclient import TestClient
 
+from api.domains.rbac.catalog import (
+    ADMIN_ROLE_ID,
+    MEMBER_ROLE_ID,
+    PermissionKey,
+    PermissionScope,
+)
+from api.domains.users.organization_users.models import OrganizationRole
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
     create_test_client,
@@ -28,7 +36,9 @@ from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import (
     there_is_an_organization_with_user_and_access_token,
 )
+from api.tests.steps.rbac import role_lacks_permission, role_permission_has_scope
 from api.tests.steps.template import there_is_a_template, there_is_a_template_skill
+from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
 
 _BASE = "/api/v1/skills"
 
@@ -54,6 +64,23 @@ _GIVEN = [
 
 def _auth(context) -> dict:
     return {"Authorization": f"Bearer {context.access_token}"}
+
+
+def _there_is_a_role_actor(role: OrganizationRole):
+    def step(context):
+        user_id = uuid7()
+        there_is_a_user(
+            id=user_id,
+            email=f"{role.value.lower()}-skills@example.com",
+            role=role,
+        )(context)
+        there_is_an_access_token_for_user(user_id=user_id)(context)
+
+    return step
+
+
+def _there_is_a_member_actor():
+    return _there_is_a_role_actor(OrganizationRole.MEMBER)
 
 
 def _make_zip(filename: str = "skill.md", content: str = "# Skill") -> str:
@@ -126,6 +153,89 @@ _VALID_CREATE = {
     "name": "My Skill",
     "zip_content": None,
 }
+
+
+def test_member_cannot_create_skill():
+    with given([*_GIVEN, _there_is_a_member_actor()]) as context:
+        response = context.client.post(
+            _BASE,
+            json={"name": "Member Skill", "zip_content": _make_zip()},
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_admin_without_skill_manage_cannot_create_skill():
+    with given(
+        [
+            *_GIVEN,
+            _there_is_a_role_actor(OrganizationRole.ADMIN),
+            role_lacks_permission(ADMIN_ROLE_ID, PermissionKey.SKILL_MANAGE),
+        ]
+    ) as context:
+        response = context.client.post(
+            _BASE,
+            json={"name": "Blocked Admin Skill", "zip_content": _make_zip()},
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_admin_with_assigned_skill_manage_cannot_create_skill():
+    with given(
+        [
+            *_GIVEN,
+            _there_is_a_role_actor(OrganizationRole.ADMIN),
+            role_permission_has_scope(
+                ADMIN_ROLE_ID,
+                PermissionKey.SKILL_MANAGE,
+                PermissionScope.ASSIGNED,
+            ),
+        ]
+    ) as context:
+        response = context.client.post(
+            _BASE,
+            json={"name": "Assigned Admin Skill", "zip_content": _make_zip()},
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_admin_can_create_skill():
+    with given([*_GIVEN, _there_is_a_role_actor(OrganizationRole.ADMIN)]) as context:
+        response = context.client.post(
+            _BASE,
+            json={"name": "Admin Skill", "zip_content": _make_zip()},
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+
+
+def test_superuser_without_skill_manage_grant_can_create_skill():
+    super_id = uuid7()
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_user(
+                id=super_id,
+                email="super-skills@example.com",
+                role=OrganizationRole.MEMBER,
+                is_superuser=True,
+            ),
+            there_is_an_access_token_for_user(user_id=super_id),
+        ]
+    ) as context:
+        response = context.client.post(
+            _BASE,
+            json={"name": "Superuser Skill", "zip_content": _make_zip()},
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
 
 
 def test_create_skill_returns_201():
@@ -276,6 +386,29 @@ def test_create_skill_without_auth_returns_401():
             assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
 
 
+def test_member_without_skill_read_cannot_list_skills():
+    with given(
+        [
+            *_GIVEN,
+            _there_is_a_member_actor(),
+            role_lacks_permission(MEMBER_ROLE_ID, PermissionKey.SKILL_READ),
+        ]
+    ) as context:
+        response = context.client.get(_BASE, headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_member_can_list_shared_skills():
+    with given(
+        [*_GIVEN, there_is_a_skill(name="Shared Skill"), _there_is_a_member_actor()]
+    ) as context:
+        response = context.client.get(_BASE, headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(response.json()["items"][0]["name"], equal_to("Shared Skill"))
+
+
 def test_list_skills_returns_org_and_global_skills():
     with given(
         [
@@ -410,6 +543,22 @@ def test_list_skills_requires_auth():
             assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
 
 
+def test_member_without_skill_read_cannot_get_skill():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Hidden Skill"),
+            _there_is_a_member_actor(),
+            role_lacks_permission(MEMBER_ROLE_ID, PermissionKey.SKILL_READ),
+        ]
+    ) as context:
+        response = context.client.get(
+            f"{_BASE}/{context.skill.id}", headers=_auth(context)
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
 def test_get_skill_returns_200():
     with given([*_GIVEN, there_is_a_skill(name="Fetched Skill")]) as context:
         client: TestClient = context.client
@@ -456,6 +605,23 @@ def test_get_skill_requires_auth():
 
         with then("request is rejected with 401"):
             assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
+
+
+def test_member_cannot_update_skill():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Member Cannot Update"),
+            _there_is_a_member_actor(),
+        ]
+    ) as context:
+        response = context.client.patch(
+            f"{_BASE}/{context.skill.id}",
+            json={"name": "Changed"},
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
 def test_update_skill_returns_200():
@@ -598,6 +764,21 @@ def test_update_skill_requires_auth():
 
         with then("request is rejected with 401"):
             assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
+
+
+def test_member_cannot_delete_skill():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Member Cannot Delete"),
+            _there_is_a_member_actor(),
+        ]
+    ) as context:
+        response = context.client.delete(
+            f"{_BASE}/{context.skill.id}", headers=_auth(context)
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
 def test_delete_skill_returns_204():

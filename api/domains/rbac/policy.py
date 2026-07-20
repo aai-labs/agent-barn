@@ -103,3 +103,21 @@ class PermissionPolicy:
         if authorization_scope is None:
             raise ForbiddenException(detail=detail)
         return authorization_scope
+
+    def require_organization(
+        self,
+        context: CurrentUserContext,
+        organization_id: UUID,
+        permission: PermissionKey,
+        *,
+        detail: str = "You don't have permission for this organization.",
+    ) -> AuthorizationScope:
+        authorization_scope = self.require(
+            context,
+            organization_id,
+            permission,
+            detail=detail,
+        )
+        if authorization_scope.scope != PermissionScope.ORGANIZATION:
+            raise ForbiddenException(detail=detail)
+        return authorization_scope

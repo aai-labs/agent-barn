@@ -99,6 +99,12 @@ class CostService:
         end_date: str | None = None,
     ) -> OrgCostSummaryRead:
         org_id = self._org_id(context)
+        self.permission_policy.require_organization(
+            context,
+            org_id,
+            PermissionKey.COST_READ,
+            detail="You don't have permission to view organization costs.",
+        )
         if start_date and end_date:
             start_str, end_str = start_date, end_date
         else:

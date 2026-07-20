@@ -8,12 +8,12 @@ from sqlmodel import Session
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.service import AuthService
 from api.domains.organizations.repository import OrganizationRepository
-from api.domains.rbac.catalog import system_role_id
+from api.domains.rbac.catalog import PermissionKey, system_role_id
+from api.domains.rbac.policy import PermissionPolicy
 from api.domains.users.organization_users.exceptions import (
     UserAlreadyPartOfOrganizationException,
 )
 from api.domains.users.organization_users.models import (
-    ORG_MANAGER_ROLES,
     ORG_OWNER_ONLY_ROLES,
     AddMemberRequest,
     ChangeMemberRoleRequest,
@@ -35,6 +35,7 @@ class OrganizationUserService:
     organization_repository: OrganizationRepository
     auth_service: AuthService
     user_repository: UserRepository
+    permission_policy: PermissionPolicy
 
     def find_by_user_id_and_organization_id(
         self, user_id: UUID, organization_id: UUID
@@ -122,15 +123,6 @@ class OrganizationUserService:
 
     # --- Member management (org-scoped) ---
 
-    def _ensure_can_manage_members(
-        self, context: CurrentUserContext, organization_id: UUID
-    ) -> None:
-        context.require_org_role(
-            organization_id,
-            ORG_MANAGER_ROLES,
-            detail="You don't have permission to manage this organization's members",
-        )
-
     def _ensure_is_owner(
         self, context: CurrentUserContext, organization_id: UUID
     ) -> None:
@@ -174,7 +166,12 @@ class OrganizationUserService:
     def list_members(
         self, context: CurrentUserContext, organization_id: UUID
     ) -> list[OrganizationMemberRead]:
-        self._ensure_can_manage_members(context, organization_id)
+        self.permission_policy.require_organization(
+            context,
+            organization_id,
+            PermissionKey.MEMBERSHIP_READ,
+            detail="You don't have permission to manage this organization's members",
+        )
         rows = self.organization_user_repository.get_members_with_users(organization_id)
         return [
             OrganizationMemberRead(
@@ -193,7 +190,12 @@ class OrganizationUserService:
         organization_id: UUID,
         data: AddMemberRequest,
     ) -> tuple[OrganizationMemberRead, str | None]:
-        self._ensure_can_manage_members(context, organization_id)
+        self.permission_policy.require_organization(
+            context,
+            organization_id,
+            PermissionKey.MEMBERSHIP_INVITE,
+            detail="You don't have permission to manage this organization's members",
+        )
         if data.role == OrganizationRole.OWNER:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -239,7 +241,12 @@ class OrganizationUserService:
         user_id: UUID,
         data: ChangeMemberRoleRequest,
     ) -> OrganizationMemberRead:
-        self._ensure_can_manage_members(context, organization_id)
+        self.permission_policy.require_organization(
+            context,
+            organization_id,
+            PermissionKey.MEMBERSHIP_ROLE_UPDATE,
+            detail="You don't have permission to manage this organization's members",
+        )
         if data.role == OrganizationRole.OWNER:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -268,7 +275,12 @@ class OrganizationUserService:
     def remove_member(
         self, context: CurrentUserContext, organization_id: UUID, user_id: UUID
     ) -> None:
-        self._ensure_can_manage_members(context, organization_id)
+        self.permission_policy.require_organization(
+            context,
+            organization_id,
+            PermissionKey.MEMBERSHIP_REMOVE,
+            detail="You don't have permission to manage this organization's members",
+        )
         membership = self._require_membership(user_id, organization_id)
         if membership.role == OrganizationRole.OWNER:
             raise HTTPException(
@@ -322,7 +334,12 @@ class OrganizationUserService:
     def resend_invite(
         self, context: CurrentUserContext, organization_id: UUID, user_id: UUID
     ) -> str:
-        self._ensure_can_manage_members(context, organization_id)
+        self.permission_policy.require_organization(
+            context,
+            organization_id,
+            PermissionKey.MEMBERSHIP_INVITE,
+            detail="You don't have permission to manage this organization's members",
+        )
         self._require_membership(user_id, organization_id)
         user = self.user_repository.get(user_id)
         if user is None:

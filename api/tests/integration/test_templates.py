@@ -1,3 +1,5 @@
+from uuid import uuid7
+
 from fastapi import status
 from hamcrest import (
     assert_that,
@@ -11,11 +13,18 @@ from starlette.testclient import TestClient
 
 from api.domains.organizations.models import Organization
 from api.domains.organizations.repository import OrganizationRepository
+from api.domains.rbac.catalog import (
+    ADMIN_ROLE_ID,
+    MEMBER_ROLE_ID,
+    PermissionKey,
+    PermissionScope,
+)
 from api.domains.templates.defaults import DEFAULT_SOUL_MD
 from api.domains.templates.models import TemplateSource
 from api.domains.templates.predefined import PREDEFINED_TEMPLATES
 from api.domains.templates.repository import TemplateRepository
 from api.domains.templates.service import TemplateService
+from api.domains.users.organization_users.models import OrganizationRole
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
     create_test_client,
@@ -34,7 +43,9 @@ from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import (
     there_is_an_organization_with_user_and_access_token,
 )
+from api.tests.steps.rbac import role_lacks_permission, role_permission_has_scope
 from api.tests.steps.template import there_is_a_template, there_is_a_template_skill
+from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
 
 _BASE = "/api/v1/templates"
 _AGENTS_BASE = "/api/v1/agents"
@@ -64,7 +75,51 @@ def _auth(context) -> dict:
     return {"Authorization": f"Bearer {context.access_token}"}
 
 
+def _there_is_a_role_actor(role: OrganizationRole):
+    def step(context):
+        user_id = uuid7()
+        there_is_a_user(
+            id=user_id,
+            email=f"{role.value.lower()}-templates@example.com",
+            role=role,
+        )(context)
+        there_is_an_access_token_for_user(user_id=user_id)(context)
+
+    return step
+
+
+def _there_is_a_member_actor():
+    return _there_is_a_role_actor(OrganizationRole.MEMBER)
+
+
 # --- list ---
+
+
+def test_member_without_template_read_cannot_list_templates():
+    with given(
+        [
+            *_GIVEN,
+            _there_is_a_member_actor(),
+            role_lacks_permission(MEMBER_ROLE_ID, PermissionKey.TEMPLATE_READ),
+        ]
+    ) as context:
+        response = context.client.get(_BASE, headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_member_can_list_shared_templates():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_template(slug="shared", name="Shared"),
+            _there_is_a_member_actor(),
+        ]
+    ) as context:
+        response = context.client.get(_BASE, headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(response.json()["items"][0]["template_slug"], equal_to("shared"))
 
 
 def test_list_templates_returns_latest_version_per_slug():
@@ -216,6 +271,20 @@ def test_list_templates_includes_required_skills():
 # --- get ---
 
 
+def test_member_without_template_read_cannot_get_template():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_template(slug="alpha", name="Alpha"),
+            _there_is_a_member_actor(),
+            role_lacks_permission(MEMBER_ROLE_ID, PermissionKey.TEMPLATE_READ),
+        ]
+    ) as context:
+        response = context.client.get(f"{_BASE}/alpha", headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
 def test_get_template_returns_latest_with_metadata():
     with given(
         [
@@ -249,6 +318,20 @@ def test_get_template_unknown_slug_returns_404():
 
 
 # --- versions ---
+
+
+def test_member_without_template_read_cannot_list_template_versions():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_template(slug="alpha", name="Alpha"),
+            _there_is_a_member_actor(),
+            role_lacks_permission(MEMBER_ROLE_ID, PermissionKey.TEMPLATE_READ),
+        ]
+    ) as context:
+        response = context.client.get(f"{_BASE}/alpha/versions", headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
 def test_list_template_versions_returns_all_desc():
@@ -319,6 +402,89 @@ def test_list_template_versions_includes_required_skills():
 
 
 # --- create ---
+
+
+def test_member_cannot_create_template():
+    with given([*_GIVEN, _there_is_a_member_actor()]) as context:
+        response = context.client.post(
+            _BASE,
+            json={"template_name": "Member Template"},
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_admin_without_template_manage_cannot_create_template():
+    with given(
+        [
+            *_GIVEN,
+            _there_is_a_role_actor(OrganizationRole.ADMIN),
+            role_lacks_permission(ADMIN_ROLE_ID, PermissionKey.TEMPLATE_MANAGE),
+        ]
+    ) as context:
+        response = context.client.post(
+            _BASE,
+            json={"template_name": "Blocked Admin Template"},
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_admin_with_assigned_template_manage_cannot_create_template():
+    with given(
+        [
+            *_GIVEN,
+            _there_is_a_role_actor(OrganizationRole.ADMIN),
+            role_permission_has_scope(
+                ADMIN_ROLE_ID,
+                PermissionKey.TEMPLATE_MANAGE,
+                PermissionScope.ASSIGNED,
+            ),
+        ]
+    ) as context:
+        response = context.client.post(
+            _BASE,
+            json={"template_name": "Assigned Admin Template"},
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_admin_can_create_template():
+    with given([*_GIVEN, _there_is_a_role_actor(OrganizationRole.ADMIN)]) as context:
+        response = context.client.post(
+            _BASE,
+            json={"template_name": "Admin Template"},
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+
+
+def test_superuser_without_template_manage_grant_can_create_template():
+    super_id = uuid7()
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_user(
+                id=super_id,
+                email="super-templates@example.com",
+                role=OrganizationRole.MEMBER,
+                is_superuser=True,
+            ),
+            there_is_an_access_token_for_user(user_id=super_id),
+        ]
+    ) as context:
+        response = context.client.post(
+            _BASE,
+            json={"template_name": "Superuser Template"},
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
 
 
 def test_create_template_returns_201_v1_custom():
@@ -464,6 +630,23 @@ def test_create_template_with_unknown_skill_returns_404():
 
 
 # --- update ---
+
+
+def test_member_cannot_update_template():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_template(slug="alpha", name="Alpha"),
+            _there_is_a_member_actor(),
+        ]
+    ) as context:
+        response = context.client.patch(
+            f"{_BASE}/alpha",
+            json={"description": "Changed"},
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
 def test_update_template_creates_new_version_with_merge():

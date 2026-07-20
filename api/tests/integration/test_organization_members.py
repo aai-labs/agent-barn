@@ -17,6 +17,7 @@ from hamcrest import (
     not_none,
 )
 
+from api.domains.rbac.catalog import ADMIN_ROLE_ID, PermissionKey, PermissionScope
 from api.domains.users.organization_users.models import OrganizationRole
 from api.domains.users.organization_users.repository import OrganizationUserRepository
 from api.tests.core.givenpy import given, then, when
@@ -26,6 +27,7 @@ from api.tests.core.modules import (
     prepare_injector,
 )
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
+from api.tests.steps.rbac import role_lacks_permission, role_permission_has_scope
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
 
 ORG = uuid7()
@@ -97,6 +99,77 @@ def test_owner_lists_members():
                 assert_that(by_email["member@example.com"]["role"], equal_to("MEMBER"))
 
 
+def test_superuser_without_membership_read_grant_can_list_members():
+    super_id = uuid7()
+    with given(
+        [
+            *_GIVEN,
+            _there_is_an_owner(),
+            there_is_a_user(
+                id=super_id,
+                email="super-members@example.com",
+                organization_id=ORG,
+                role=OrganizationRole.MEMBER,
+                is_superuser=True,
+            ),
+            there_is_an_access_token_for_user(user_id=super_id),
+        ]
+    ) as context:
+        response = context.client.get(_members_url(), headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+
+
+def test_owner_cannot_list_members_in_another_active_organization():
+    other_org = uuid7()
+    with given(
+        [
+            *_GIVEN,
+            _there_is_an_owner(),
+            there_is_a_user(
+                email="other-owner@example.com",
+                organization_id=other_org,
+                role=OrganizationRole.OWNER,
+            ),
+        ]
+    ) as context:
+        response = context.client.get(_members_url(other_org), headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_admin_without_membership_read_cannot_list_members():
+    admin_id = uuid7()
+    with given(
+        [
+            *_GIVEN,
+            _there_is_an_admin_actor(admin_id),
+            role_lacks_permission(ADMIN_ROLE_ID, PermissionKey.MEMBERSHIP_READ),
+        ]
+    ) as context:
+        response = context.client.get(_members_url(), headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_admin_with_assigned_membership_read_cannot_list_members():
+    admin_id = uuid7()
+    with given(
+        [
+            *_GIVEN,
+            _there_is_an_admin_actor(admin_id),
+            role_permission_has_scope(
+                ADMIN_ROLE_ID,
+                PermissionKey.MEMBERSHIP_READ,
+                PermissionScope.ASSIGNED,
+            ),
+        ]
+    ) as context:
+        response = context.client.get(_members_url(), headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
 def test_plain_member_cannot_manage_members():
     member_id = uuid7()
     with given(
@@ -117,6 +190,24 @@ def test_plain_member_cannot_manage_members():
 
             with then("it is forbidden"):
                 assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_admin_without_membership_invite_cannot_add_member():
+    admin_id = uuid7()
+    with given(
+        [
+            *_GIVEN,
+            _there_is_an_admin_actor(admin_id),
+            role_lacks_permission(ADMIN_ROLE_ID, PermissionKey.MEMBERSHIP_INVITE),
+        ]
+    ) as context:
+        response = context.client.post(
+            _members_url(),
+            json={"email": "blocked@example.com", "role": "MEMBER"},
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
 def test_owner_adds_new_member_and_gets_invite_link():
@@ -201,6 +292,31 @@ def test_add_duplicate_member_conflicts():
 
             with then("it conflicts"):
                 assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+
+
+def test_admin_without_membership_role_update_cannot_change_member_role():
+    admin_id = uuid7()
+    member_id = uuid7()
+    with given(
+        [
+            *_GIVEN,
+            _there_is_an_admin_actor(admin_id),
+            there_is_a_user(
+                id=member_id,
+                email="member-role-blocked@example.com",
+                organization_id=ORG,
+                role=OrganizationRole.MEMBER,
+            ),
+            role_lacks_permission(ADMIN_ROLE_ID, PermissionKey.MEMBERSHIP_ROLE_UPDATE),
+        ]
+    ) as context:
+        response = context.client.patch(
+            f"{_members_url()}/{member_id}",
+            json={"role": "MEMBER"},
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
 def test_owner_changes_member_role():
@@ -317,6 +433,29 @@ def test_owner_can_demote_admin_to_member():
         )
         assert_that(response.status_code, equal_to(status.HTTP_200_OK))
         assert_that(_role_of(context, admin_id), equal_to(OrganizationRole.MEMBER))
+
+
+def test_admin_without_membership_remove_cannot_remove_member():
+    admin_id = uuid7()
+    member_id = uuid7()
+    with given(
+        [
+            *_GIVEN,
+            _there_is_an_admin_actor(admin_id),
+            there_is_a_user(
+                id=member_id,
+                email="member-remove-blocked@example.com",
+                organization_id=ORG,
+                role=OrganizationRole.MEMBER,
+            ),
+            role_lacks_permission(ADMIN_ROLE_ID, PermissionKey.MEMBERSHIP_REMOVE),
+        ]
+    ) as context:
+        response = context.client.delete(
+            f"{_members_url()}/{member_id}", headers=_auth(context)
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
 def test_owner_removes_member():
@@ -541,6 +680,31 @@ def test_admin_cannot_transfer_ownership():
 
             with then("it is forbidden"):
                 assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_admin_without_membership_invite_cannot_resend_invite():
+    admin_id = uuid7()
+    pending_id = uuid7()
+    with given(
+        [
+            *_GIVEN,
+            _there_is_an_admin_actor(admin_id),
+            there_is_a_user(
+                id=pending_id,
+                email="pending-blocked@example.com",
+                organization_id=ORG,
+                role=OrganizationRole.MEMBER,
+                email_verified=False,
+            ),
+            role_lacks_permission(ADMIN_ROLE_ID, PermissionKey.MEMBERSHIP_INVITE),
+        ]
+    ) as context:
+        response = context.client.post(
+            f"{_members_url()}/{pending_id}/resend-invite",
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
 def test_resend_invite_for_pending_and_active_member():

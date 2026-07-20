@@ -29,9 +29,16 @@ Templates provide versioned agent configuration; Skills provide packaged instruc
 - Agent create/update validates assigned-skill provider requirements against Agent Secrets. Editing a skill's required providers does not revalidate existing agent assignments, and start does not repeat that validation.
 - At start time, eligible built-in provider skills are mounted implicitly when their provider credential exists. This does not create an explicit agent-skill assignment.
 
+## Authorization invariants
+
+- Template list, detail, and version-history APIs require `template.read` at `ORGANIZATION` scope; create and version-publishing APIs require `template.manage` at `ORGANIZATION` scope.
+- Skill list and detail APIs require `skill.read` at `ORGANIZATION` scope; custom Skill create, update, and delete APIs require `skill.manage` at `ORGANIZATION` scope.
+- The seeded Member Role can read and use organization Templates and Skills but cannot mutate their shared definitions. Owner/Admin and superuser organization context receive management scope.
+- Permission checks remain at user-facing service boundaries. Internal Agent workflows may resolve visible Templates and Skills directly after enforcing the Agent action Permission, so Member Agent creation and configuration do not require shared-definition management authority.
+
 ## Relationships and boundaries
 
-Template services own lineage/version behavior. Skill services own archive and deletion safety. Agent services enforce the combined assignment contract during create, update, and repin, then materialize skills at start. Association tables currently live in the Agents domain, so changes to template-skill or agent-skill relationships cross all three domains.
+Template services own lineage/version behavior and user-facing Permission enforcement. Skill services own archive, deletion safety, and user-facing Permission enforcement. Agent services enforce the combined assignment contract during create, update, and repin, then materialize skills at start. Association tables currently live in the Agents domain, so changes to template-skill or agent-skill relationships cross all three domains.
 
 ## Primary flows
 

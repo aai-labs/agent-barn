@@ -272,6 +272,29 @@ def test_resolve_observes_membership_role_changes_without_caching():
     )
 
 
+def test_require_organization_rejects_assigned_scope():
+    context, membership = _context()
+    repository = Mock()
+    repository.get_permission_scope.return_value = PermissionScope.ASSIGNED
+    policy = PermissionPolicy(repository=repository)
+
+    assert_that(
+        calling(policy.require_organization).with_args(
+            context,
+            membership.organization_id,
+            PermissionKey.TEMPLATE_MANAGE,
+            detail="Organization scope required",
+        ),
+        raises(
+            ForbiddenException,
+            matching=has_properties(
+                status_code=403,
+                detail="Organization scope required",
+            ),
+        ),
+    )
+
+
 def test_require_returns_scope_when_permission_exists():
     context, membership = _context()
     repository = Mock()
