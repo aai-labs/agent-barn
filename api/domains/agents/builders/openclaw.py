@@ -52,7 +52,7 @@ def build_openclaw_config_overlay(
         for channel_id in channel_ids
     }
 
-    overlay: dict[str, Any] = {
+    overlay = {
         "models": {
             "providers": {
                 provider: {
@@ -130,7 +130,8 @@ def build_openclaw_config_overlay(
     }
     if firecrawl_base_url and firecrawl_api_key:
         overlay["plugins"]["allow"].append("firecrawl")
-        overlay["plugins"]["entries"]["firecrawl"] = {
+        entries: dict[str, Any] = overlay["plugins"]["entries"]
+        entries["firecrawl"] = {
             "enabled": True,
             "config": {
                 "webSearch": {
@@ -146,7 +147,8 @@ def build_openclaw_config_overlay(
                 },
             },
         }
-        overlay["tools"]["web"] = {
+        tools: dict[str, Any] = overlay["tools"]
+        tools["web"] = {
             "fetch": {"provider": "firecrawl"},
             "search": {"enabled": True, "provider": "firecrawl"},
         }
@@ -162,7 +164,7 @@ def build_openclaw_config_overlay_teams(
 ) -> dict:
     provider, _, model_name = model.partition("/")
 
-    overlay: dict[str, Any] = {
+    overlay = {
         "models": {
             "providers": {
                 provider: {
@@ -229,7 +231,8 @@ def build_openclaw_config_overlay_teams(
     }
     if firecrawl_base_url and firecrawl_api_key:
         overlay["plugins"]["allow"].append("firecrawl")
-        overlay["plugins"]["entries"]["firecrawl"] = {
+        entries: dict[str, Any] = overlay["plugins"]["entries"]
+        entries["firecrawl"] = {
             "enabled": True,
             "config": {
                 "webSearch": {
@@ -245,7 +248,8 @@ def build_openclaw_config_overlay_teams(
                 },
             },
         }
-        overlay["tools"]["web"] = {
+        tools: dict[str, Any] = overlay["tools"]
+        tools["web"] = {
             "fetch": {"provider": "firecrawl"},
             "search": {"enabled": True, "provider": "firecrawl"},
         }
