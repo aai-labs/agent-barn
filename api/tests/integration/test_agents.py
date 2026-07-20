@@ -3027,9 +3027,7 @@ def test_list_agents_marks_required_skills():
 
 
 def test_create_agent_duplicate_bot_token_returns_409():
-    with given(
-        [*_GIVEN, there_is_an_agent(bot_token=TEST_SLACK_BOT_TOKEN)]
-    ) as context:
+    with given([*_GIVEN, there_is_an_agent(bot_token=TEST_SLACK_BOT_TOKEN)]) as context:
         client: TestClient = context.client
         payload = {**_VALID_CREATE, "slack_bot_token": TEST_SLACK_BOT_TOKEN}
 
@@ -3057,12 +3055,15 @@ def test_update_agent_duplicate_bot_token_returns_409():
         client: TestClient = context.client
 
         with when("I create two agents with different tokens"):
-            agent_a = client.post(
-                _BASE, json=_VALID_CREATE, headers=_auth(context)
-            ).json()
+            client.post(_BASE, json=_VALID_CREATE, headers=_auth(context))
             agent_b = client.post(
                 _BASE,
-                json={**_VALID_CREATE, "name": "Agent B", "slack_bot_token": "xoxb-other-token", "slack_app_token": "xapp-1-other-token"},
+                json={
+                    **_VALID_CREATE,
+                    "name": "Agent B",
+                    "slack_bot_token": "xoxb-other-token",
+                    "slack_app_token": "xapp-1-other-token",
+                },
                 headers=_auth(context),
             ).json()
 
@@ -3090,7 +3091,10 @@ def test_update_agent_same_token_no_conflict():
         with when("I update it with the same bot token plus a name change"):
             response = client.patch(
                 f"{_BASE}/{agent['id']}",
-                json={"name": "Renamed", "slack_bot_token": _VALID_CREATE["slack_bot_token"]},
+                json={
+                    "name": "Renamed",
+                    "slack_bot_token": _VALID_CREATE["slack_bot_token"],
+                },
                 headers=_auth(context),
             )
 
@@ -3118,9 +3122,7 @@ def test_delete_agent_frees_bot_token_for_reuse():
         payload = {**_VALID_CREATE, "slack_bot_token": "xoxb-reusable-token"}
 
         with when("I create an agent then delete it"):
-            agent = client.post(
-                _BASE, json=payload, headers=_auth(context)
-            ).json()
+            agent = client.post(_BASE, json=payload, headers=_auth(context)).json()
             delete_resp = client.delete(
                 f"{_BASE}/{agent['id']}", headers=_auth(context)
             )

@@ -124,7 +124,9 @@ def there_is_an_agent(
                 app_token_encrypted=encrypt_token(
                     TEST_SLACK_APP_TOKEN, TEST_ENCRYPTION_KEY
                 ),
-                bot_token_hash=None if deleted else compute_bot_token_hash(effective_bot_token),
+                bot_token_hash=None
+                if deleted
+                else compute_bot_token_hash(effective_bot_token),
             )
             repository.save_slack_config(slack_config)
         elif platform == AgentPlatform.TEAMS:

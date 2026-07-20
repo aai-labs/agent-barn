@@ -909,7 +909,12 @@ def test_agent_repin_moves_only_that_agent():
             ).json()
             second = client.post(
                 _AGENTS_BASE,
-                json={**create_payload, "name": "Second", "slack_bot_token": "xoxb-token-2", "slack_app_token": "xapp-1-token-2"},
+                json={
+                    **create_payload,
+                    "name": "Second",
+                    "slack_bot_token": "xoxb-token-2",
+                    "slack_app_token": "xapp-1-token-2",
+                },
                 headers=_auth(context),
             ).json()
             assert_that(first["template_version"], equal_to(2))
