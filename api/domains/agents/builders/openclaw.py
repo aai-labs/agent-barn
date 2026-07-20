@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from typing import Any
 from uuid import UUID
 
 from kubernetes import client
@@ -51,7 +52,7 @@ def build_openclaw_config_overlay(
         for channel_id in channel_ids
     }
 
-    overlay = {
+    overlay: dict[str, Any] = {
         "models": {
             "providers": {
                 provider: {
@@ -161,7 +162,7 @@ def build_openclaw_config_overlay_teams(
 ) -> dict:
     provider, _, model_name = model.partition("/")
 
-    overlay = {
+    overlay: dict[str, Any] = {
         "models": {
             "providers": {
                 provider: {

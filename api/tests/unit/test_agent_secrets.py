@@ -254,6 +254,7 @@ def test_firecrawl_encrypt_decrypt_round_trip_with_base_url():
     blob = encrypt_content(original, _KEY)
     decrypted = decrypt_content(SecretProvider.FIRECRAWL, blob, _KEY)
     assert decrypted == original
+    assert isinstance(decrypted, FirecrawlContent)
     assert decrypted.base_url == "https://api.firecrawl.dev"
 
 
