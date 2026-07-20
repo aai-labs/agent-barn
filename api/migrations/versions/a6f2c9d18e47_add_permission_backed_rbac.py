@@ -370,7 +370,9 @@ def upgrade() -> None:
             gen_random_uuid(), now(), now(),
             membership.organization_id, membership.id, agent.id
         FROM user_organization AS membership
+        JOIN "user" AS member_user ON member_user.id = membership.user_id
         JOIN agent ON agent.organization_id = membership.organization_id
+        WHERE member_user.email_verified_at IS NOT NULL
         ON CONFLICT (membership_id, agent_id) DO NOTHING
         """
     )

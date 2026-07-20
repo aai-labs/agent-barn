@@ -66,6 +66,20 @@ class OrganizationUserRepository:
             return True
         return self.delegate.delete_many(organization_users)
 
+    def get_member_with_user(
+        self, user_id: UUID, organization_id: UUID
+    ) -> tuple[OrganizationUser, User] | None:
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(OrganizationUser, User)
+                .join(User, col(User.id) == col(OrganizationUser.user_id))
+                .where(
+                    col(OrganizationUser.user_id) == user_id,
+                    col(OrganizationUser.organization_id) == organization_id,
+                )
+            )
+            return session.exec(query).first()
+
     def get_members_with_users(
         self, organization_id: UUID
     ) -> list[tuple[OrganizationUser, User]]:

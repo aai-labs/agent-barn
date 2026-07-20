@@ -93,8 +93,13 @@ def legacy_database(isolated_database):
     engine = create_engine(isolated_database)
 
     org_a, org_b = uuid7(), uuid7()
-    owner, member, admin = uuid7(), uuid7(), uuid7()
-    owner_membership, member_membership, admin_membership = uuid7(), uuid7(), uuid7()
+    owner, member, admin, pending = uuid7(), uuid7(), uuid7(), uuid7()
+    owner_membership, member_membership, admin_membership, pending_membership = (
+        uuid7(),
+        uuid7(),
+        uuid7(),
+        uuid7(),
+    )
     agent_a, deleted_agent_a, agent_b = uuid7(), uuid7(), uuid7()
     now = "2026-07-18T00:00:00+00:00"
 
@@ -108,10 +113,11 @@ def legacy_database(isolated_database):
                 ),
                 {"id": org_id, "now": now, "name": name},
             )
-        for user_id, email in (
-            (owner, "owner@example.com"),
-            (member, "member@example.com"),
-            (admin, "admin@example.com"),
+        for user_id, email, verified_at in (
+            (owner, "owner@example.com", now),
+            (member, "member@example.com", now),
+            (admin, "admin@example.com", now),
+            (pending, "pending@example.com", None),
         ):
             connection.execute(
                 text(
@@ -119,7 +125,7 @@ def legacy_database(isolated_database):
                     "(id, created_at, updated_at, email, full_name, hashed_password, "
                     "is_superuser, security_stamp, email_verified_at) "
                     "VALUES (:id, :now, :now, :email, NULL, :password, false, "
-                    ":stamp, :now)"
+                    ":stamp, :verified_at)"
                 ),
                 {
                     "id": user_id,
@@ -127,12 +133,14 @@ def legacy_database(isolated_database):
                     "email": email,
                     "password": "hash",
                     "stamp": uuid7().hex,
+                    "verified_at": verified_at,
                 },
             )
         for membership_id, user_id, org_id, role in (
             (owner_membership, owner, org_a, "OWNER"),
             (member_membership, member, org_a, "MEMBER"),
             (admin_membership, admin, org_b, "ADMIN"),
+            (pending_membership, pending, org_a, "MEMBER"),
         ):
             connection.execute(
                 text(
@@ -213,9 +221,11 @@ def legacy_database(isolated_database):
             owner=owner,
             member=member,
             admin=admin,
+            pending=pending,
             owner_membership=owner_membership,
             member_membership=member_membership,
             admin_membership=admin_membership,
+            pending_membership=pending_membership,
             agent_a=agent_a,
             deleted_agent_a=deleted_agent_a,
             agent_b=agent_b,
@@ -414,6 +424,7 @@ def test_upgrade_backfills_membership_roles(legacy_database):
                 legacy_database.owner_membership: OWNER_ROLE_ID,
                 legacy_database.member_membership: MEMBER_ROLE_ID,
                 legacy_database.admin_membership: ADMIN_ROLE_ID,
+                legacy_database.pending_membership: MEMBER_ROLE_ID,
             }
         ),
     )
@@ -609,6 +620,7 @@ def test_downgrade_restores_legacy_role_enum(legacy_database):
                     legacy_database.owner_membership: "OWNER",
                     legacy_database.member_membership: "MEMBER",
                     legacy_database.admin_membership: "ADMIN",
+                    legacy_database.pending_membership: "MEMBER",
                 },
                 "enum_labels": ["ADMIN", "MEMBER", "OWNER"],
             }

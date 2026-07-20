@@ -18,4 +18,4 @@ Agent creation establishes access for its creator. Owner/Admin may grant or revo
 
 Agent Access scopes the full Agent aggregate, including conversations, tool calls, costs, skills, configuration, and Agent Secrets; individual permissions still determine allowed operations, and secret plaintext is never returned. Visibility predicates must be applied in persistence queries before counting and pagination. Inaccessible Agents and subordinate resources return 404, while a visible resource lacking an action permission returns 403. API responses expose effective actions for UI rendering, but mutations always reauthorize server-side.
 
-Existing Agents have no recoverable creator. Migration therefore grants every existing Membership access to every existing Agent in its Organization and records legacy creator provenance as unknown; new Agents use assigned-only visibility.
+Existing Agents have no recoverable creator. Migration therefore grants every existing accepted Membership access to every existing Agent in its Organization, excludes pending invitees, and records legacy creator provenance as unknown; new Agents use assigned-only visibility.

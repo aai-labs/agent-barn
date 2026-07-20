@@ -5,7 +5,10 @@ from fastapi import APIRouter, Depends, Query, Response, status
 from fastapi.responses import StreamingResponse
 from fastapi_injector import Injected
 
+from api.domains.agents.access_service import AgentAccessService
 from api.domains.agents.models import (
+    AgentAccessGrantRequest,
+    AgentAccessMemberRead,
     AgentCreate,
     AgentFilter,
     AgentHealthRead,
@@ -56,6 +59,52 @@ def list_models(
     service: Annotated[AgentService, Injected(AgentService)],
 ):
     return service.list_models(context)
+
+
+@agents_router.get("/{agent_id}/access", response_model=list[AgentAccessMemberRead])
+def list_agent_access(
+    agent_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentAccessService, Injected(AgentAccessService)],
+):
+    return service.list_assigned_members(agent_id, context)
+
+
+@agents_router.get(
+    "/{agent_id}/access/eligible", response_model=list[AgentAccessMemberRead]
+)
+def list_eligible_agent_access(
+    agent_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentAccessService, Injected(AgentAccessService)],
+):
+    return service.list_eligible_members(agent_id, context)
+
+
+@agents_router.post("/{agent_id}/access", response_model=AgentAccessMemberRead)
+def grant_agent_access(
+    agent_id: UUID,
+    data: AgentAccessGrantRequest,
+    response: Response,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentAccessService, Injected(AgentAccessService)],
+):
+    result, created = service.grant_access(agent_id, data, context)
+    response.status_code = status.HTTP_201_CREATED if created else status.HTTP_200_OK
+    return result
+
+
+@agents_router.delete(
+    "/{agent_id}/access/{user_id}", status_code=status.HTTP_204_NO_CONTENT
+)
+def revoke_agent_access(
+    agent_id: UUID,
+    user_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentAccessService, Injected(AgentAccessService)],
+):
+    service.revoke_access(agent_id, user_id, context)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @agents_router.get("/{agent_id}/logs/stream")

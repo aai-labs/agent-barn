@@ -61,6 +61,7 @@ An Agent remains owned by its Organization. Creation is provenance and assignmen
 - A Member may grant or revoke access only for an Agent they originally created.
 - A recipient cannot forward access merely because they can manage the Agent.
 - A creator cannot revoke their own access in the initial Agent Access feature.
+- Access can be granted only to an accepted ordinary Member in the same Organization; pending invitees cannot be pre-granted access.
 - Agent transfer, relinquishment, and viewer/operator/manager grant levels are out of scope.
 - Creator and recipient otherwise receive the same assigned-Agent capabilities allowed by their Organization Role.
 
@@ -107,25 +108,16 @@ The seeded Member policy is:
 - May view and use organization Templates and Skills when creating or configuring assigned Agents.
 - May not create, update, version, publish, or delete shared Template or Skill definitions.
 - May view conversations, tool calls, activity, and cost summaries only for assigned Agents.
-- May not view organization-wide costs, activity, Membership administration, or security audit logs.
+- May not view organization-wide costs, activity, or Membership administration.
 - May add, replace, or remove masked Agent credentials only when their assigned-Agent permissions allow it.
 
 Owner/Admin may manage shared organization resources. Superuser access uses explicit Organization context.
 
-## Audit integration
+## Deferred events and auditing
 
-The RBAC feature must emit durable security events for:
+AF-150 does not introduce event infrastructure or security audit persistence. Durable internal Domain Events are tracked by [AF-218](https://aai-labs.atlassian.net/browse/AF-218), with the transactional outbox foundation in [AF-219](https://aai-labs.atlassian.net/browse/AF-219), Dramatiq/Redis delivery in [AF-220](https://aai-labs.atlassian.net/browse/AF-220), and Security Audit Records in [AF-221](https://aai-labs.atlassian.net/browse/AF-221).
 
-- Membership role changes
-- Agent Access grants and revocations
-- Agent Secret additions, replacements, and removals
-- ownership transfer
-
-Events include actor, Organization, action, target, affected Membership where applicable, timestamp, and safe changed fields. They never contain credential values.
-
-General audit infrastructure belongs to the separate audit logging feature. RBAC must integrate with that framework rather than create a second audit subsystem. Ordinary reads are outside RBAC's audit scope, although audit logging may independently capture significant reads and navigation.
-
-Owner/Admin may view their Organization's audit events. Superusers may view events across Organizations through explicit Organization context. Members cannot view the organization audit log.
+AF-150 grant/revoke, role-change, and credential workflows must preserve the transaction seams and safe changed-field information needed for later event adoption, but they do not emit or persist audit events in this epic.
 
 ## Persistence and migration shape
 
@@ -143,7 +135,7 @@ Migration requirements:
 1. Seed permissions and system roles deterministically and idempotently.
 2. Backfill existing Membership enums to the corresponding seeded roles without changing authority.
 3. Existing Agents have no recoverable creator. Mark creator provenance unknown/legacy.
-4. Preserve current access by granting every existing Membership access to every existing Agent in the same Organization. Use reviewed bulk SQL suitable for real data volume.
+4. Preserve current access by granting every existing accepted Membership access to every existing Agent in the same Organization. Pending invitees receive no backfilled access. Use reviewed bulk SQL suitable for real data volume.
 5. Enforce uniqueness, same-Organization validity, deletion behavior, PostgreSQL enum ordering, and repeatable startup seeding.
 6. Cover fresh installs and upgrades from the pre-RBAC schema with migrated PostgreSQL integration tests.
 
@@ -158,17 +150,15 @@ The initial RBAC feature does not deliver:
 - Agent transfer or creator relinquishment
 - multiple Agent Access levels
 - authorization grants in JWT claims
-- a duplicate audit-log platform
+- Domain Event, transactional outbox, worker, or Security Audit Record infrastructure; these belong to AF-218
 
 ## Remaining implementation choices
 
 The design leaves these details to implementation, provided they preserve the decisions above:
 
 - canonical Permission key names and the complete seeded action matrix
-- exact API endpoint and effective-action DTO shapes
-- whether access may be pre-granted to a pending invite before acceptance; pending users must not exercise access
-- creator-reference behavior when a User is permanently deleted, coordinated with audit retention and privacy policy
-- transaction boundaries and adapter shape for the merged audit logging implementation
+- exact effective-action DTO evolution beyond the initial canonical Permission-key list
+- creator-reference behavior when a User is permanently deleted, coordinated with the product's retention and privacy policy
 
 Material deviations from the accepted model require updating the ADRs, this brief, tests, and the RBAC change log together.
 

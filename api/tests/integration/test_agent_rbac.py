@@ -1,3 +1,5 @@
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 from uuid import UUID, uuid7
 
 import pytest
@@ -91,6 +93,38 @@ def _switch_to_member(*, member_id: UUID | None = None):
 
 def _save_current_agent_as(context, name: str) -> None:
     setattr(context, name, context.agent)
+
+
+def _add_member(
+    context,
+    *,
+    role: OrganizationRole = OrganizationRole.MEMBER,
+    email_verified: bool = True,
+    organization_id: UUID | None = None,
+):
+    """Create a target Membership without replacing the authenticated test actor."""
+    saved = {
+        name: getattr(context, name, None)
+        for name in (
+            "user",
+            "organization",
+            "organization_user",
+            "current_user_context",
+        )
+    }
+    user_id = uuid7()
+    there_is_a_user(
+        id=user_id,
+        email=f"target-{user_id}@example.com",
+        role=role,
+        organization_id=organization_id or context.organization.id,
+        email_verified=email_verified,
+    )(context)
+    user = context.user
+    membership = context.organization_user
+    for name, value in saved.items():
+        setattr(context, name, value)
+    return user, membership
 
 
 def test_member_creation_persists_creator_access_and_effective_permission_keys():
@@ -313,3 +347,218 @@ def test_repository_assigned_scope_filters_before_count_and_pagination():
 
         assert_that(total, equal_to(1))
         assert_that([agent.id for agent in agents], equal_to([context.agent.id]))
+
+
+def test_owner_lists_grants_idempotently_and_revokes_agent_access():
+    with given(_GIVEN) as context:
+        owner_id = context.user.id
+        created = context.client.post(_BASE, json=_CREATE, headers=_auth(context))
+        assert_that(created.status_code, equal_to(status.HTTP_201_CREATED))
+        agent_id = created.json()["id"]
+        target, _ = _add_member(context)
+
+        eligible = context.client.get(
+            f"{_BASE}/{agent_id}/access/eligible", headers=_auth(context)
+        )
+        first_grant = context.client.post(
+            f"{_BASE}/{agent_id}/access",
+            json={"user_id": str(target.id)},
+            headers=_auth(context),
+        )
+        second_grant = context.client.post(
+            f"{_BASE}/{agent_id}/access",
+            json={"user_id": str(target.id)},
+            headers=_auth(context),
+        )
+        assigned = context.client.get(
+            f"{_BASE}/{agent_id}/access", headers=_auth(context)
+        )
+
+        assert_that(eligible.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(
+            [item["user_id"] for item in eligible.json()], has_item(str(target.id))
+        )
+        assert_that(first_grant.status_code, equal_to(status.HTTP_201_CREATED))
+        assert_that(second_grant.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(first_grant.json(), equal_to(second_grant.json()))
+        assert_that(
+            [item["user_id"] for item in assigned.json()],
+            contains_inanyorder(str(owner_id), str(target.id)),
+        )
+
+        there_is_an_access_token_for_user(target.id)(context)
+        visible = context.client.get(f"{_BASE}/{agent_id}", headers=_auth(context))
+        there_is_an_access_token_for_user(owner_id)(context)
+        revoked = context.client.delete(
+            f"{_BASE}/{agent_id}/access/{target.id}", headers=_auth(context)
+        )
+        there_is_an_access_token_for_user(target.id)(context)
+        hidden = context.client.get(f"{_BASE}/{agent_id}", headers=_auth(context))
+
+        assert_that(visible.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(revoked.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+        assert_that(hidden.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_concurrent_duplicate_grants_create_one_access_row():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        _, membership = _add_member(context)
+        repository: AgentRepository = context.injector.get(AgentRepository)
+        barrier = Barrier(2)
+
+        def grant():
+            barrier.wait()
+            return repository.grant_access(
+                context.agent.id, membership.id, context.organization.id
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(lambda _: grant(), range(2)))
+
+        assert all(result is not None for result in results)
+        access_ids = {result[0].id for result in results if result is not None}
+        created_values = sorted(result[1] for result in results if result is not None)
+        assert_that(len(access_ids), equal_to(1))
+        assert_that(created_values, equal_to([False, True]))
+        assert_that(
+            repository.find_access_membership_ids(
+                context.agent.id, context.organization.id
+            ),
+            has_item(membership.id),
+        )
+
+
+def test_creator_can_share_but_recipient_cannot_forward_access():
+    with given([*_GIVEN, _switch_to_member()]) as context:
+        creator_id = context.user.id
+        created = context.client.post(_BASE, json=_CREATE, headers=_auth(context))
+        assert_that(created.status_code, equal_to(status.HTTP_201_CREATED))
+        agent_id = created.json()["id"]
+        recipient, _ = _add_member(context)
+        third_member, _ = _add_member(context)
+
+        granted = context.client.post(
+            f"{_BASE}/{agent_id}/access",
+            json={"user_id": str(recipient.id)},
+            headers=_auth(context),
+        )
+        there_is_an_access_token_for_user(recipient.id)(context)
+        recipient_list = context.client.get(
+            f"{_BASE}/{agent_id}/access", headers=_auth(context)
+        )
+        forwarded = context.client.post(
+            f"{_BASE}/{agent_id}/access",
+            json={"user_id": str(third_member.id)},
+            headers=_auth(context),
+        )
+        there_is_an_access_token_for_user(creator_id)(context)
+        revoked = context.client.delete(
+            f"{_BASE}/{agent_id}/access/{recipient.id}", headers=_auth(context)
+        )
+
+        assert_that(granted.status_code, equal_to(status.HTTP_201_CREATED))
+        assert_that(recipient_list.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+        assert_that(forwarded.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+        assert_that(revoked.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+
+
+def test_unassigned_member_cannot_discover_agent_access_management():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        unrelated, _ = _add_member(context)
+        there_is_an_access_token_for_user(unrelated.id)(context)
+
+        response = context.client.get(
+            f"{_BASE}/{context.agent.id}/access", headers=_auth(context)
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_creator_cannot_revoke_their_own_agent_access():
+    with given([*_GIVEN, _switch_to_member()]) as context:
+        creator_id = context.user.id
+        created = context.client.post(_BASE, json=_CREATE, headers=_auth(context))
+
+        response = context.client.delete(
+            f"{_BASE}/{created.json()['id']}/access/{creator_id}",
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+
+
+def test_grant_rejects_pending_non_member_and_cross_org_targets():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        pending, _ = _add_member(context, email_verified=False)
+        admin, _ = _add_member(context, role=OrganizationRole.ADMIN)
+        cross_org, _ = _add_member(context, organization_id=uuid7())
+
+        pending_response = context.client.post(
+            f"{_BASE}/{context.agent.id}/access",
+            json={"user_id": str(pending.id)},
+            headers=_auth(context),
+        )
+        admin_response = context.client.post(
+            f"{_BASE}/{context.agent.id}/access",
+            json={"user_id": str(admin.id)},
+            headers=_auth(context),
+        )
+        cross_org_response = context.client.post(
+            f"{_BASE}/{context.agent.id}/access",
+            json={"user_id": str(cross_org.id)},
+            headers=_auth(context),
+        )
+
+        assert_that(pending_response.status_code, equal_to(status.HTTP_409_CONFLICT))
+        assert_that(admin_response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+        assert_that(cross_org_response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_removed_membership_cascades_agent_access():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        target, target_membership = _add_member(context)
+        granted = context.client.post(
+            f"{_BASE}/{context.agent.id}/access",
+            json={"user_id": str(target.id)},
+            headers=_auth(context),
+        )
+        membership_repository: OrganizationUserRepository = context.injector.get(
+            OrganizationUserRepository
+        )
+        membership_repository.delete(target_membership)
+        repository: AgentRepository = context.injector.get(AgentRepository)
+
+        assert_that(granted.status_code, equal_to(status.HTTP_201_CREATED))
+        assert_that(
+            repository.find_access_membership_ids(
+                context.agent.id, context.organization.id
+            ),
+            is_not(has_item(target_membership.id)),
+        )
+
+
+def test_membershipless_superuser_can_manage_agent_access_in_explicit_org():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        organization = context.organization
+        target, _ = _add_member(context)
+        context.organization = None
+        there_is_a_user(
+            id=uuid7(),
+            email="rbac-superuser@example.com",
+            is_superuser=True,
+        )(context)
+        superuser_id = context.user.id
+        context.organization = organization
+        there_is_an_access_token_for_user(superuser_id)(context)
+        headers = {
+            **_auth(context),
+            "X-Organization-Id": str(organization.id),
+        }
+
+        response = context.client.post(
+            f"{_BASE}/{context.agent.id}/access",
+            json={"user_id": str(target.id)},
+            headers=headers,
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))

@@ -2,7 +2,7 @@
 
 ## Read when
 
-Read before changing agent creation, lifecycle, runtime or platform selection, template pinning, model selection, skill assignment, credentials, logs, health, or Kubernetes resources.
+Read before changing agent creation, Agent Access, lifecycle, runtime or platform selection, template pinning, model selection, skill assignment, credentials, logs, health, or Kubernetes resources.
 
 ## Role in the system
 
@@ -13,6 +13,8 @@ An Agent is the central operational aggregate. It connects organization tenancy,
 - Every agent belongs to one organization and pins an exact `(template_slug, template_version)` in that organization. The organization owns the Agent; creator identity is immutable provenance rather than ownership.
 - Human Agent creation atomically records creator provenance and Agent Access for the creator. A membership-less superuser has organization-wide authority and does not receive an access row.
 - Owner/Admin/superuser permissions see all Agents in the active organization. Member reads and actions require Agent Access; unassigned and cross-organization Agents are concealed with 404.
+- Owner/Admin/superuser may grant or revoke access to any Agent in the Organization. A Member may manage access only for an Agent they created; recipients cannot forward access, and creators cannot revoke their own access.
+- Agent Access is granted only to accepted ordinary Members in the same Organization. Pending invitees and cross-organization users are ineligible; removing a Membership cascades its access rows.
 - Agent read DTOs expose current effective Agent-related Permission keys for UI rendering. Mutations independently reauthorize and validate current state.
 - Runtime and platform are separate. Hermes supports Slack only; OpenClaw supports Slack and Teams.
 - Persisted lifecycle states are `STOPPED`, `RUNNING`, and `ERROR`.
@@ -54,6 +56,10 @@ Start renders the pinned template, decrypts credentials, selects Hermes/OpenClaw
 
 Stop snapshots logs before removing active runtime resources and marking the agent stopped. Delete removes resources, soft-deletes the row, and preserves the record for history and cost attribution.
 
+### Manage access
+
+Access-management endpoints list assigned and eligible Members, idempotently grant access, and revoke an existing grant. User-facing contracts identify recipients by User ID while persistence relates the Agent to the recipient Membership. Access changes take effect on the next request; missing, cross-organization, or unassigned resources retain the documented 404 concealment behavior.
+
 ## Source map
 
 | Concern                                    | Authoritative source                                                                                         |
@@ -62,6 +68,7 @@ Stop snapshots logs before removing active runtime resources and marking the age
 | Lifecycle and cross-domain orchestration   | `../../api/domains/agents/service.py`                                                                              |
 | Tenant/access-scoped persistence           | `../../api/domains/agents/repository.py`                                                                           |
 | Agent visibility and effective actions     | `../../api/domains/agents/authorization.py`                                                                        |
+| Agent Access workflows                     | `../../api/domains/agents/access_service.py`                                                                        |
 | HTTP routes                                | `../../api/domains/agents/routes.py`, `../../api/domains/agents/slack_routes.py`, `../../api/domains/agents/webhook_routes.py` |
 | Runtime resources                          | `../../api/domains/agents/builders/`                                                                               |
 | Integration and skill artifacts            | `../../api/domains/agents/aai_cli_artifacts.py`, `../../api/domains/agents/aai_cli_skills/`                                                 |
@@ -75,4 +82,4 @@ Stop snapshots logs before removing active runtime resources and marking the age
 
 ## Change impact
 
-Lifecycle or runtime changes affect agent API contracts, both runtime builders, Kubernetes cleanup, logs/health, UI schemas and controls, and agent integration tests. Template/skill changes also require checking creation, repinning, update validation, and template/skill integration tests. Platform changes require checking Slack and Teams credential handling separately.
+Lifecycle, visibility, or Agent Access changes affect agent API contracts, authorization predicates, Membership deletion behavior, UI schemas and controls, and agent integration tests. Runtime changes additionally affect both runtime builders, Kubernetes cleanup, and logs/health. Template/skill changes also require checking creation, repinning, update validation, and template/skill integration tests. Platform changes require checking Slack and Teams credential handling separately.

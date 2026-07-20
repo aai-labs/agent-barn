@@ -4,6 +4,7 @@ from uuid import UUID
 
 from injector import inject, singleton
 from sqlalchemy import exists, func
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
 from api.domains.agents.models import (
@@ -19,6 +20,7 @@ from api.domains.agents.models import (
 )
 from api.domains.rbac.catalog import PermissionScope
 from api.domains.rbac.policy import AuthorizationScope
+from api.domains.users.organization_users.models import OrganizationUser
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.infrastructure.shared.models import Pagination
 
@@ -167,6 +169,90 @@ class AgentRepository:
             session.commit()
             session.refresh(agent)
             return agent
+
+    def find_access_membership_ids(
+        self, agent_id: UUID, organization_id: UUID
+    ) -> set[UUID]:
+        with Session(self.delegate.engine) as session:
+            query = select(AgentAccess.membership_id).where(
+                col(AgentAccess.agent_id) == agent_id,
+                col(AgentAccess.organization_id) == organization_id,
+            )
+            return set(session.exec(query).all())
+
+    def grant_access(
+        self, agent_id: UUID, membership_id: UUID, organization_id: UUID
+    ) -> tuple[AgentAccess, bool] | None:
+        """Idempotently add one same-Organization Agent Access relationship.
+
+        ``None`` means the active Agent or Membership disappeared after service
+        validation. Row locks keep deletion/soft-deletion from racing the insert.
+        """
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            agent_exists = session.exec(
+                select(Agent.id)
+                .where(
+                    col(Agent.id) == agent_id,
+                    col(Agent.organization_id) == organization_id,
+                    col(Agent.deleted_at).is_(None),
+                )
+                .with_for_update()
+            ).first()
+            membership_exists = session.exec(
+                select(OrganizationUser.id)
+                .where(
+                    col(OrganizationUser.id) == membership_id,
+                    col(OrganizationUser.organization_id) == organization_id,
+                )
+                .with_for_update()
+            ).first()
+            if agent_exists is None or membership_exists is None:
+                return None
+
+            query = select(AgentAccess).where(
+                col(AgentAccess.agent_id) == agent_id,
+                col(AgentAccess.membership_id) == membership_id,
+                col(AgentAccess.organization_id) == organization_id,
+            )
+            existing = session.exec(query).first()
+            if existing is not None:
+                return existing, False
+
+            access = AgentAccess(
+                organization_id=organization_id,
+                membership_id=membership_id,
+                agent_id=agent_id,
+            )
+            session.add(access)
+            try:
+                session.commit()
+            except IntegrityError:
+                # A concurrent identical grant is still an idempotent success. Other
+                # constraint failures remain errors after checking the unique pair.
+                session.rollback()
+                existing = session.exec(query).first()
+                if existing is not None:
+                    return existing, False
+                raise
+            session.refresh(access)
+            return access, True
+
+    def revoke_access(
+        self, agent_id: UUID, membership_id: UUID, organization_id: UUID
+    ) -> bool:
+        with Session(self.delegate.engine) as session:
+            access = session.exec(
+                select(AgentAccess).where(
+                    col(AgentAccess.agent_id) == agent_id,
+                    col(AgentAccess.membership_id) == membership_id,
+                    col(AgentAccess.organization_id) == organization_id,
+                )
+            ).first()
+            if access is None:
+                return False
+            session.delete(access)
+            session.commit()
+            return True
 
     def find_all_active_for_org(self, org_id: UUID) -> list[Agent]:
         with Session(self.delegate.engine) as session:

@@ -10,6 +10,7 @@ from pydantic import ConfigDict, Field, model_validator
 from sqlmodel import Column, Enum, Field as SqlField, Index
 
 from api.domains.rbac.catalog import PermissionKey
+from api.domains.users.organization_users.models import OrganizationRole
 from api.infrastructure.crypto import decrypt_token, encrypt_token
 from api.infrastructure.postgres.models import BaseModel
 
@@ -542,6 +543,19 @@ class AgentSecretRead(PydanticBaseModel):  # label + provider only — no secret
 
     provider: SecretProvider
     secret_name: str
+
+
+class AgentAccessGrantRequest(PydanticBaseModel):
+    user_id: UUID
+
+
+class AgentAccessMemberRead(PydanticBaseModel):
+    user_id: UUID
+    email: str
+    full_name: str | None = None
+    role: OrganizationRole
+    is_pending: bool
+    is_creator: bool
 
 
 class AgentAssignedSkillRead(PydanticBaseModel):

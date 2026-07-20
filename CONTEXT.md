@@ -32,10 +32,6 @@ _Avoid_: agent ownership, organization membership
 The user who originally created an Agent, retained as provenance rather than ownership or current access.
 _Avoid_: agent owner, agent manager
 
-**Security Audit Event**:
-An organization-scoped record of a security-sensitive authorization or credential change. Ordinary resource reads are not Security Audit Events.
-_Avoid_: activity event, request log
-
 **Agent**:
 An organization-owned AI worker configured from a pinned template version and executed by one runtime on one chat platform.
 _Avoid_: bot, pod
