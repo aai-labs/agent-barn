@@ -42,30 +42,16 @@ TELEMETRY_PUSH_PLUGIN_INIT: str = (_TELEMETRY_PUSH / "__init__.py").read_text()
 _HERMES_APPROVAL_MODE = {"manual": "manual", "auto": "smart", "off": "off"}
 
 
-def build_hermes_config(
+def _hermes_config_core(
     model: str,
     litellm_base_url: str,
-    dm_policy: str = "off",
-    group_policy: str = "allowlist",
-    verbose_mode: bool = True,
+    enabled_plugins: list[str],
+    display_platforms: dict,
     approval_mode: str = "auto",
 ) -> dict:
     _, sep, model_name = model.partition("/")
     if not sep:
         model_name = model
-    # Slack access is gated by two plugins, each dropped entirely when its policy
-    # is "open" so the policy is truly unrestricted regardless of any retained
-    # channel/user lists (the lists persist in config so switching back to
-    # allowlist restores them):
-    #   - slack-channel-allowlist scopes channel replies to SLACK_CHANNEL_IDS
-    #   - slack-deny-dms scopes DMs to SLACK_DM_ALLOWED_USERS
-    # SLACK_ALLOW_ALL_USERS already authorizes every user at the gateway, so
-    # dropping a hook opens that surface up.
-    enabled_plugins: list[str] = ["telemetry-push"]
-    if group_policy != "open":
-        enabled_plugins.append("slack-channel-allowlist")
-    if dm_policy != "open":
-        enabled_plugins.append("slack-deny-dms")
     return {
         "toolsets": ["all"],
         "model": {
@@ -92,22 +78,9 @@ def build_hermes_config(
         },
         "display": {
             "tool_progress": "all",
-            "platforms": {
-                "slack": {
-                    "tool_progress": "off",
-                    "interim_assistant_messages": verbose_mode,
-                    "busy_ack_detail": False,
-                },
-            },
+            "platforms": display_platforms,
         },
         "group_sessions_per_user": False,
-        "slack": {
-            "reply_in_thread": True,
-            "broadcast_reply": False,
-            "require_mention": True,
-            "strict_mention": False,
-            "unauthorized_dm_behavior": "ignore",
-        },
         "plugins": {
             "enabled": enabled_plugins,
         },
@@ -115,6 +88,42 @@ def build_hermes_config(
             "mode": _HERMES_APPROVAL_MODE.get(approval_mode, "smart"),
         },
     }
+
+
+def build_hermes_config(
+    model: str,
+    litellm_base_url: str,
+    dm_policy: str = "off",
+    group_policy: str = "allowlist",
+    verbose_mode: bool = True,
+    approval_mode: str = "auto",
+) -> dict:
+    enabled_plugins: list[str] = ["telemetry-push"]
+    if group_policy != "open":
+        enabled_plugins.append("slack-channel-allowlist")
+    if dm_policy != "open":
+        enabled_plugins.append("slack-deny-dms")
+    cfg = _hermes_config_core(
+        model,
+        litellm_base_url,
+        enabled_plugins,
+        display_platforms={
+            "slack": {
+                "tool_progress": "off",
+                "interim_assistant_messages": verbose_mode,
+                "busy_ack_detail": False,
+            },
+        },
+        approval_mode=approval_mode,
+    )
+    cfg["slack"] = {
+        "reply_in_thread": True,
+        "broadcast_reply": False,
+        "require_mention": True,
+        "strict_mention": False,
+        "unauthorized_dm_behavior": "ignore",
+    }
+    return cfg
 
 
 def build_hermes_config_telegram(
@@ -124,56 +133,22 @@ def build_hermes_config_telegram(
     group_policy: str = "allowlist",
     approval_mode: str = "auto",
 ) -> dict:
-    _, sep, model_name = model.partition("/")
-    if not sep:
-        model_name = model
-
     enabled_plugins: list[str] = ["telemetry-push"]
     if group_policy != "open":
         enabled_plugins.append("telegram-channel-allowlist")
     if dm_policy != "open":
         enabled_plugins.append("telegram-deny-dms")
-
-    return {
-        "toolsets": ["all"],
-        "model": {
-            "provider": "openrouter",
-            "default": model_name,
-            "model": model_name,
-            "base_url": litellm_base_url,
-            "api_mode": "chat_completions",
-        },
-        "terminal": {
-            "backend": "local",
-            "cwd": "/workspace",
-            "timeout": 120,
-        },
-        "memory": {
-            "memory_enabled": True,
-            "user_profile_enabled": True,
-        },
-        "compression": {
-            "enabled": False,
-        },
-        "agent": {
-            "max_turns": 50,
-        },
-        "display": {
-            "tool_progress": "all",
-            "platforms": {
-                "telegram": {
-                    "tool_progress": "off",
-                },
+    return _hermes_config_core(
+        model,
+        litellm_base_url,
+        enabled_plugins,
+        display_platforms={
+            "telegram": {
+                "tool_progress": "off",
             },
         },
-        "group_sessions_per_user": False,
-        "plugins": {
-            "enabled": enabled_plugins,
-        },
-        "approvals": {
-            "mode": _HERMES_APPROVAL_MODE.get(approval_mode, "smart"),
-        },
-    }
+        approval_mode=approval_mode,
+    )
 
 
 def build_hermes_config_map(

@@ -1,63 +1,30 @@
 import logging
-import time
-
-import httpx
 
 from api.core.config import get_config
+from api.infrastructure.http import resilient_request
+from api.infrastructure.shared.cache import cached as _cached
 
 logger = logging.getLogger(__name__)
 
 _BASE = "https://api.telegram.org"
-_MAX_RETRIES = 2
-_DEFAULT_RETRY_AFTER_SECONDS = 1
-_RATE_LIMIT_MAX_WAIT_SECONDS = 30
 _TIMEOUT_SECONDS = 15
+_CHAT_CACHE_TTL_SECONDS = 600
 
 
-def _retry_after_seconds(raw: str | None) -> int:
-    if raw is None:
-        return _DEFAULT_RETRY_AFTER_SECONDS
-    try:
-        seconds = int(raw)
-    except ValueError:
-        seconds = _DEFAULT_RETRY_AFTER_SECONDS
-    return max(1, min(seconds, _RATE_LIMIT_MAX_WAIT_SECONDS))
-
-
-def _request_json(url: str) -> dict:
-    for attempt in range(_MAX_RETRIES + 1):
-        try:
-            resp = httpx.get(url, timeout=_TIMEOUT_SECONDS)
-        except httpx.TransportError as exc:
-            if attempt == _MAX_RETRIES:
-                raise
-            logger.warning(
-                "Telegram transport error on %s (%s); retrying in %ss (attempt %d/%d)",
-                url,
-                exc,
-                _DEFAULT_RETRY_AFTER_SECONDS,
-                attempt + 1,
-                _MAX_RETRIES,
-            )
-            time.sleep(_DEFAULT_RETRY_AFTER_SECONDS)
-            continue
-        if resp.status_code == 429 and attempt < _MAX_RETRIES:
-            wait = _retry_after_seconds(resp.headers.get("Retry-After"))
-            logger.warning(
-                "Telegram rate-limited; retrying in %ss (attempt %d/%d)",
-                wait,
-                attempt + 1,
-                _MAX_RETRIES,
-            )
-            time.sleep(wait)
-            continue
-        if resp.status_code == 401:
-            return {"ok": False, "description": "Unauthorized — invalid bot token"}
-        if resp.status_code == 404:
-            return {"ok": False, "description": "Not Found — invalid bot token format"}
-        resp.raise_for_status()
-        return resp.json()
-    raise RuntimeError(f"exhausted retries for {url}")
+def _request_json(url: str, *, label: str = "Telegram") -> dict:
+    resp = resilient_request(
+        "GET",
+        url,
+        timeout=_TIMEOUT_SECONDS,
+        label=label,
+        retry_server_errors=True,
+    )
+    if resp.status_code == 401:
+        return {"ok": False, "description": "Unauthorized — invalid bot token"}
+    if resp.status_code == 404:
+        return {"ok": False, "description": "Not Found — invalid bot token format"}
+    resp.raise_for_status()
+    return resp.json()
 
 
 def validate_bot_token(bot_token: str) -> tuple[bool, str, dict]:
@@ -71,9 +38,9 @@ def validate_bot_token(bot_token: str) -> tuple[bool, str, dict]:
 
     url = f"{_BASE}/bot{bot_token}/getMe"
     try:
-        data = _request_json(url)
-    except Exception as exc:
-        return False, f"Could not reach Telegram to validate bot token: {exc}", {}
+        data = _request_json(url, label="Telegram getMe")
+    except Exception:
+        return False, "Could not reach Telegram to validate bot token", {}
 
     if data.get("ok"):
         return True, "", data.get("result", {})
@@ -82,14 +49,10 @@ def validate_bot_token(bot_token: str) -> tuple[bool, str, dict]:
     return False, f"Telegram bot token is invalid: {description}", {}
 
 
-def get_chat_display_name(bot_token: str, chat_id: str) -> str | None:
-    """Resolve a Telegram chat/user ID to a human-readable name.
-
-    Returns a display name or None if the lookup fails.
-    """
+def _fetch_chat_display_name(bot_token: str, chat_id: str) -> str | None:
     url = f"{_BASE}/bot{bot_token}/getChat?chat_id={chat_id}"
     try:
-        data = _request_json(url)
+        data = _request_json(url, label="Telegram getChat")
     except Exception:
         return None
     if not data.get("ok"):
@@ -99,3 +62,12 @@ def get_chat_display_name(bot_token: str, chat_id: str) -> str | None:
     if chat_type in ("group", "supergroup", "channel"):
         return result.get("title")
     return result.get("first_name") or result.get("username") or result.get("last_name")
+
+
+def get_chat_display_name(bot_token: str, chat_id: str) -> str | None:
+    """Resolve a Telegram chat/user ID to a human-readable name (cached)."""
+    return _cached(
+        f"tg_chat:{chat_id}",
+        lambda: _fetch_chat_display_name(bot_token, chat_id),
+        ttl=_CHAT_CACHE_TTL_SECONDS,
+    )
