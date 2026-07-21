@@ -158,7 +158,7 @@ def _enrich_atlassian_content(content: Any) -> Any:
         if cloud_id:
             return content.model_copy(update={"cloud_id": cloud_id})
         else:
-            logging.warning(
+            logger.warning(
                 f"Failed to fetch Jira cloud_id for {content.site_url}: {cloud_err}"
             )
     elif (
@@ -170,7 +170,7 @@ def _enrich_atlassian_content(content: Any) -> Any:
         if cloud_id:
             return content.model_copy(update={"cloud_id": cloud_id})
         else:
-            logging.warning(
+            logger.warning(
                 f"Failed to fetch Confluence cloud_id for {content.site_url}: {cloud_err}"
             )
     return content
