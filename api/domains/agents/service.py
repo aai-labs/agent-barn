@@ -178,6 +178,9 @@ class AgentService:
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
 
+    def count_agents_in_error(self) -> int:
+        return self.repository.count_active_by_status(AgentStatus.ERROR)
+
     def _ensure_model_allowed(self, model: str | None) -> None:
         """Rejects models outside the allowlist. litellm is cluster-internal, so
         create/update are the only paths that can set an agent's model; enforcing

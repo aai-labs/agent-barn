@@ -13,6 +13,7 @@ from api.domains.agents.models import (
     AgentSecret,
     AgentSkill,
     AgentSlackConfig,
+    AgentStatus,
     AgentTeamsConfig,
     SecretProvider,
 )
@@ -51,6 +52,16 @@ class AgentRepository:
                 select(func.count())
                 .select_from(Agent)
                 .where(col(Agent.organization_id) == org_id)
+                .where(col(Agent.deleted_at).is_(None))
+            )
+            return session.scalar(count_query) or 0
+
+    def count_active_by_status(self, status: AgentStatus) -> int:
+        with Session(self.delegate.engine) as session:
+            count_query = (
+                select(func.count())
+                .select_from(Agent)
+                .where(col(Agent.status) == status)
                 .where(col(Agent.deleted_at).is_(None))
             )
             return session.scalar(count_query) or 0

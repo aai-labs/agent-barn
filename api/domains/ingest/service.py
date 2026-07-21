@@ -6,6 +6,7 @@ from uuid import UUID
 from injector import inject, singleton
 
 from api.core.config import get_config
+from api.core.metrics import TOOL_CALLS
 from api.domains.agents.models import Agent, AgentPlatform
 from api.domains.agents.repository import AgentRepository
 from api.domains.conversations.models import AgentChatMessage
@@ -101,7 +102,7 @@ class IngestService:
                     event.occurred_at,
                 )
             for event in batch.tool_results:
-                self.tool_call_repository.complete(
+                completed = self.tool_call_repository.complete(
                     session,
                     agent.id,
                     event.external_id,
@@ -109,6 +110,11 @@ class IngestService:
                     event.is_error,
                     event.completed_at,
                 )
+                if completed is not None:
+                    TOOL_CALLS.labels(
+                        tool_name=completed.tool_name,
+                        status=completed.status.value.lower(),
+                    ).inc()
             session.commit()
 
     def _platform_maps(self, agent: Agent) -> tuple[dict[str, str], dict[str, str]]:

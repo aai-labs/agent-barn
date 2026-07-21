@@ -8,7 +8,14 @@ def _resource_name(agent_id: UUID) -> str:
 
 
 def _labels(agent_id: UUID, org_id: UUID) -> dict[str, str]:
-    return {"app": _resource_name(agent_id), "org-id": str(org_id)}
+    # agentfarm.io/component is the stable selector shared by every agent's
+    # resources (Deployment/Service selectors keep matching on "app" only);
+    # the monitoring stack discovers all agent Services through it.
+    return {
+        "app": _resource_name(agent_id),
+        "org-id": str(org_id),
+        "agentfarm.io/component": "agent",
+    }
 
 
 def build_pvc(

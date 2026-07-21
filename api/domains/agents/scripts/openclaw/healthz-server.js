@@ -2,7 +2,7 @@ const http = require('http');
 const https = require('https');
 const { execFile } = require('child_process');
 
-const PORT = 8081;
+const PORT = parseInt(process.env.HEALTHZ_PORT || '8081', 10);
 const CACHE_TTL_MS = 10_000;
 const TOKEN_POLL_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -98,6 +98,28 @@ const server = http.createServer((req, res) => {
   if (req.url === '/ready') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ready: true }));
+    return;
+  }
+
+  if (req.url === '/metrics') {
+    const ok = cache?.ok ? 1 : 0;
+    const ever = (cache?.ok || cache?.everConnected) ? 1 : 0;
+    // Token gauge stays 1 while unknown/starting; 0 only on a definite
+    // failure, so a slow first validation never trips an alert.
+    const tokensOk = (tokenCache && !tokenCache.ok) ? 0 : 1;
+    const lines = [
+      '# HELP agent_healthz_ok 1 if the agent runtime is reachable, 0 otherwise',
+      '# TYPE agent_healthz_ok gauge',
+      `agent_healthz_ok ${ok}`,
+      '# HELP agent_healthz_ever_connected 1 once the runtime has connected at least once',
+      '# TYPE agent_healthz_ever_connected gauge',
+      `agent_healthz_ever_connected ${ever}`,
+      '# HELP agent_slack_tokens_ok 0 if Slack token validation definitely failed, 1 otherwise',
+      '# TYPE agent_slack_tokens_ok gauge',
+      `agent_slack_tokens_ok ${tokensOk}`,
+    ];
+    res.writeHead(200, { 'Content-Type': 'text/plain; version=0.0.4; charset=utf-8' });
+    res.end(lines.join('\n') + '\n');
     return;
   }
 

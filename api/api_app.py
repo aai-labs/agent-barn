@@ -3,13 +3,24 @@ import traceback
 from contextlib import asynccontextmanager
 from typing import Annotated
 
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi_injector import attach_injector, Injected
 from injector import Injector
+from prometheus_client import REGISTRY
 from sqlmodel import Session, select
 
 from api.core.config import get_config
+from api.core.metrics import (
+    CONTENT_TYPE_LATEST,
+    PROBE_REGISTRY,
+    refresh_agents_in_error,
+    refresh_database_gauge,
+    refresh_openrouter_credits,
+    render_metrics,
+    setup_http_metrics,
+)
+from api.domains.agents.service import AgentService
 from api.core.utils import create_injector
 from api.domains.agents.routes import agents_router
 from api.domains.agents.slack_routes import slack_router
@@ -121,6 +132,21 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(tool_calls_router)
     subapi.include_router(users_router)
     subapi.include_router(slack_router)
+
+    http_registry = setup_http_metrics(subapi)
+
+    @app_v1.get("/metrics")
+    async def metrics(
+        db: Annotated[PostgresRepositoryDelegate, Injected(PostgresRepositoryDelegate)],
+        agent_service: Annotated[AgentService, Injected(AgentService)],
+    ):
+        refresh_database_gauge(db.engine)
+        refresh_agents_in_error(agent_service.count_agents_in_error)
+        refresh_openrouter_credits()
+        return Response(
+            content=render_metrics(REGISTRY, PROBE_REGISTRY, http_registry),
+            media_type=CONTENT_TYPE_LATEST,
+        )
 
     attach_injector(app_v1, injector)
     attach_injector(subapi, injector)

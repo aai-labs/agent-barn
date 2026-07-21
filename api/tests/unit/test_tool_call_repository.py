@@ -74,9 +74,9 @@ def _complete(
     result: dict | None = None,
     is_error: bool = False,
     completed_at: datetime.datetime | None = None,
-) -> bool:
+) -> ToolCall | None:
     with repo.get_session() as session:
-        ok = repo.complete(
+        row = repo.complete(
             session,
             agent_id=agent_id,
             external_id=external_id,
@@ -85,7 +85,7 @@ def _complete(
             completed_at=completed_at or _now(),
         )
         session.commit()
-        return ok
+        return row
 
 
 def test_find_by_agent_returns_empty_when_no_rows():
@@ -187,7 +187,7 @@ def test_complete_transitions_pending_to_success():
             )
 
             with then("status is SUCCESS, result is set, duration computed"):
-                assert_that(ok, equal_to(True))
+                assert_that(ok, is_not(none()))
                 page = repository.find_by_agent(
                     context.agent.id,
                     ToolCallFilter(),
@@ -222,7 +222,7 @@ def test_complete_transitions_pending_to_error():
             )
 
             with then("status is ERROR"):
-                assert_that(ok, equal_to(True))
+                assert_that(ok, is_not(none()))
                 page = repository.find_by_agent(
                     context.agent.id,
                     ToolCallFilter(),
@@ -231,7 +231,7 @@ def test_complete_transitions_pending_to_error():
                 assert_that(page.items[0].status, equal_to(ToolCallStatus.ERROR))
 
 
-def test_complete_returns_false_when_no_match():
+def test_complete_returns_none_when_no_match():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         repository: ToolCallRepository = context.injector.get(ToolCallRepository)
 
@@ -242,8 +242,8 @@ def test_complete_returns_false_when_no_match():
                 external_id="never_seen",
             )
 
-            with then("False is returned and no row is created"):
-                assert_that(ok, equal_to(False))
+            with then("None is returned and no row is created"):
+                assert_that(ok, is_(none()))
                 page = repository.find_by_agent(
                     context.agent.id,
                     ToolCallFilter(),

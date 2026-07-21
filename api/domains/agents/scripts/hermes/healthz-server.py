@@ -6,7 +6,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-PORT = 8081
+PORT = int(os.environ.get("HEALTHZ_PORT", "8081"))
 HERMES_URL = "http://localhost:8642/v1/models"
 POLL_INTERVAL = 10
 TOKEN_POLL_INTERVAL = 300  # 5 minutes
@@ -84,6 +84,25 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         if self.path == "/ready":
             self._send(200, {"ready": True})
+        elif self.path == "/metrics":
+            with _lock:
+                ok = _cache["ok"]
+                ever = _cache["ever_connected"]
+                tok_ok = _token_cache["ok"]
+            # Token gauge stays 1 while unknown/starting; 0 only on a definite
+            # failure, so a slow first validation never trips an alert.
+            lines = [
+                "# HELP agent_healthz_ok 1 if the agent runtime is reachable, 0 otherwise",
+                "# TYPE agent_healthz_ok gauge",
+                f"agent_healthz_ok {1 if ok else 0}",
+                "# HELP agent_healthz_ever_connected 1 once the runtime has connected at least once",
+                "# TYPE agent_healthz_ever_connected gauge",
+                f"agent_healthz_ever_connected {1 if ever else 0}",
+                "# HELP agent_slack_tokens_ok 0 if Slack token validation definitely failed, 1 otherwise",
+                "# TYPE agent_slack_tokens_ok gauge",
+                f"agent_slack_tokens_ok {0 if tok_ok is False else 1}",
+            ]
+            self._send_text(200, "\n".join(lines) + "\n")
         elif self.path == "/healthz":
             with _lock:
                 ok = _cache["ok"]
@@ -115,6 +134,12 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.end_headers()
         self.wfile.write(data)
+
+    def _send_text(self, code: int, body: str) -> None:
+        self.send_response(code)
+        self.send_header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(body.encode())
 
 
 HTTPServer(("", PORT), _Handler).serve_forever()
