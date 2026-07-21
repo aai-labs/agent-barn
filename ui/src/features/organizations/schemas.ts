@@ -9,6 +9,7 @@ export const OrganizationSchema = z.object({
   isDefault: z.boolean(),
   ownerEmail: z.string().nullable().optional(),
   ownerName: z.string().nullable().optional(),
+  allowedModels: z.array(z.string()),
 });
 
 export const OrganizationCreateSchema = z.object({
