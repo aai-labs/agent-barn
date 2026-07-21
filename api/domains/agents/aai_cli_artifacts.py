@@ -120,7 +120,7 @@ def _jira_block(c: JiraContent) -> str:
         # cloud_id is required to build the API Gateway URL.
         # If cloud_id is missing, skip the profile — the user must re-save the integration.
         if not c.cloud_id:
-            return ""
+            return "# jira-work profile skipped: cloud_id missing\n"
         gateway_url = f"https://api.atlassian.com/ex/jira/{c.cloud_id}"
         return (
             "[profiles.jira-work]\n"
@@ -144,7 +144,7 @@ def _confluence_block(c: ConfluenceContent) -> str:
         # cloud_id is required to build the API Gateway URL.
         # If cloud_id is missing, skip the profile — the user must re-save the integration.
         if not c.cloud_id:
-            return ""
+            return "# confluence-work profile skipped: cloud_id missing\n"
         gateway_url = f"https://api.atlassian.com/ex/confluence/{c.cloud_id}"
         return (
             "[profiles.confluence-work]\n"

@@ -154,17 +154,25 @@ def _enrich_atlassian_content(content: Any) -> Any:
         and content.use_scoped_token
         and not content.cloud_id
     ):
-        cloud_id, _ = get_atlassian_cloud_id(content.site_url, content.api_token)
+        cloud_id, cloud_err = get_atlassian_cloud_id(content.site_url)
         if cloud_id:
             return content.model_copy(update={"cloud_id": cloud_id})
+        else:
+            logging.warning(
+                f"Failed to fetch Jira cloud_id for {content.site_url}: {cloud_err}"
+            )
     elif (
         isinstance(content, ConfluenceContent)
         and content.use_scoped_token
         and not content.cloud_id
     ):
-        cloud_id, _ = get_atlassian_cloud_id(content.site_url, content.api_token)
+        cloud_id, cloud_err = get_atlassian_cloud_id(content.site_url)
         if cloud_id:
             return content.model_copy(update={"cloud_id": cloud_id})
+        else:
+            logging.warning(
+                f"Failed to fetch Confluence cloud_id for {content.site_url}: {cloud_err}"
+            )
     return content
 
 

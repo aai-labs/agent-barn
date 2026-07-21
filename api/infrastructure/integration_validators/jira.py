@@ -15,7 +15,7 @@ def validate_jira(content: JiraContent) -> IntegrationValidationResult:
     # If scoped token is selected, we MUST route through the api.atlassian.com gateway.
     # Direct site URL does not accept OAuth scoped tokens on Atlassian Cloud.
     if content.use_scoped_token:
-        cloud_id, cloud_err = get_atlassian_cloud_id(base, content.api_token)
+        cloud_id, cloud_err = get_atlassian_cloud_id(base)
         if not cloud_id:
             return IntegrationValidationResult(
                 valid=False, error=cloud_err or "Could not resolve Atlassian Cloud ID."

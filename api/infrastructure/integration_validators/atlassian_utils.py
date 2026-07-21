@@ -4,7 +4,7 @@ _TIMEOUT = 10
 _cloud_id_cache: dict[str, str] = {}
 
 
-def get_atlassian_cloud_id(site_url: str, token: str) -> tuple[str | None, str | None]:
+def get_atlassian_cloud_id(site_url: str) -> tuple[str | None, str | None]:
     """Resolve the Atlassian cloud ID for a given site URL.
 
     For Service Account tokens, accessible-resources returns 401. Instead, we
