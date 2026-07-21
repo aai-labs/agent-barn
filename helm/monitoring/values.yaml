@@ -69,7 +69,15 @@ kube-prometheus-stack:
         group_wait: 30s
         group_interval: 5m
         repeat_interval: 4h
+        # Overrides the subchart's default child routes, which reference the
+        # "null" receiver (maps merge but arrays replace, so leaving this
+        # unset dangles that reference and Alertmanager fails to start).
+        routes:
+          - receiver: "null"
+            matchers:
+              - alertname = "Watchdog"
       receivers:
+        - name: "null"
         - name: slack-alerts
           slack_configs:
             - channel: "#alerts"
