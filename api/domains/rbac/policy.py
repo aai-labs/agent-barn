@@ -1,4 +1,3 @@
-from collections.abc import Iterable
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -45,31 +44,6 @@ class PermissionPolicy:
         ):
             return AuthorizationScope(organization_id=organization_id)
         return None
-
-    def resolve_many(
-        self,
-        context: CurrentUserContext,
-        organization_id: UUID,
-        permissions: Iterable[PermissionKey],
-    ) -> dict[PermissionKey, AuthorizationScope]:
-        requested = tuple(dict.fromkeys(permissions))
-        if not requested:
-            return {}
-
-        membership = context.require_current_user_organization()
-        if membership.organization_id != organization_id:
-            return {}
-
-        granted = (
-            set(requested)
-            if context.user.is_superuser
-            else self.repository.get_permissions(membership.role_id, requested)
-        )
-        return {
-            permission: AuthorizationScope(organization_id=organization_id)
-            for permission in requested
-            if permission in granted
-        }
 
     def require(
         self,

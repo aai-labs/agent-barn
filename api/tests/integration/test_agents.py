@@ -2277,7 +2277,7 @@ def test_existing_agent_rows_backfill_to_openclaw():
         repository: AgentRepository = context.injector.get(AgentRepository)
 
         with when("I read an agent created without an explicit agent_type"):
-            agent = repository.get_active(context.agent.id, context.organization.id)
+            agent = repository.get_by_id(context.agent.id)
 
         with then("agent_type is openclaw (server_default applied)"):
             assert_that(agent.agent_type, equal_to(AgentType.OPENCLAW))

@@ -13,6 +13,13 @@ Related context: [implementation brief](IMPLEMENTATION-BRIEF.md), [current role 
 
 ## Changes
 
+### 2026-07-21 — [AF-150](https://aai-labs.atlassian.net/browse/AF-150) — PR pending — dead-code cleanup
+
+- Delivered: removed obsolete Organization-only Agent lookups superseded by authorization-scoped queries, an unused assignment-ID query, unused Agent Access Role conversion helpers, and an unused batch Permission policy method.
+- Changed: updated the sole legacy test caller to use the retained internal lookup; no product behavior or API contract changed.
+- Verified: API lint/type checks and 28 focused policy, Agent RBAC, and legacy-row tests.
+- Follow-up: none for this cleanup.
+
 ### 2026-07-21 — [AF-150](https://aai-labs.atlassian.net/browse/AF-150) — PR pending — review hardening
 
 - Delivered: database-enforced immutability for the global Permission catalogue, fixed Organization Role grants, and locked system Agent Access Role grants.

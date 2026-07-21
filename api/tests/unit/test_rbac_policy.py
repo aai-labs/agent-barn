@@ -104,32 +104,6 @@ def test_resolve_uses_fixed_organization_role_permissions():
     )
 
 
-def test_resolve_many_omits_missing_permissions():
-    context, membership = _context(MEMBER_ROLE_ID)
-    policy = PermissionPolicy(repository=_system_catalogue_repository())
-
-    result = policy.resolve_many(
-        context,
-        membership.organization_id,
-        (
-            PermissionKey.AGENT_READ,
-            PermissionKey.AGENT_CREATE,
-            PermissionKey.MEMBERSHIP_READ,
-        ),
-    )
-
-    assert_that(
-        result,
-        equal_to(
-            {
-                PermissionKey.AGENT_CREATE: AuthorizationScope(
-                    organization_id=membership.organization_id
-                )
-            }
-        ),
-    )
-
-
 def test_resolve_denies_missing_permission_by_default():
     context, membership = _context()
     repository = Mock()

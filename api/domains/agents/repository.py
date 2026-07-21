@@ -71,17 +71,6 @@ class AgentRepository:
             )
             return session.exec(query).first()
 
-    def get_active(self, agent_id: UUID, org_id: UUID) -> Agent | None:
-        """Organization-only lookup for trusted internal and compatibility callers."""
-        with Session(self.delegate.engine) as session:
-            query = (
-                select(Agent)
-                .where(col(Agent.id) == agent_id)
-                .where(col(Agent.organization_id) == org_id)
-                .where(col(Agent.deleted_at).is_(None))
-            )
-            return session.exec(query).first()
-
     def get_active_in_scope(
         self, agent_id: UUID, authorization_scope: AuthorizationScope
     ) -> Agent | None:
@@ -115,16 +104,6 @@ class AgentRepository:
             )
             return session.scalar(count_query) or 0
 
-    def get_deleted(self, agent_id: UUID, org_id: UUID) -> Agent | None:
-        with Session(self.delegate.engine) as session:
-            query = (
-                select(Agent)
-                .where(col(Agent.id) == agent_id)
-                .where(col(Agent.organization_id) == org_id)
-                .where(col(Agent.deleted_at).is_not(None))
-            )
-            return session.exec(query).first()
-
     def find_all_active(
         self,
         authorization_scope: AuthorizationScope,
@@ -148,18 +127,6 @@ class AgentRepository:
                 .limit(pagination.size)
             )
             return list(session.exec(query).all()), total
-
-    def find_assigned_agent_ids(
-        self, membership_id: UUID, agent_ids: list[UUID]
-    ) -> set[UUID]:
-        if not agent_ids:
-            return set()
-        with Session(self.delegate.engine) as session:
-            query = select(AgentAccess.agent_id).where(
-                col(AgentAccess.membership_id) == membership_id,
-                col(AgentAccess.agent_id).in_(agent_ids),
-            )
-            return set(session.exec(query).all())
 
     def find_agent_permissions(
         self,

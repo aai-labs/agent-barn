@@ -60,13 +60,6 @@ SYSTEM_AGENT_ACCESS_ROLES: tuple[RoleSeed, ...] = (
     RoleSeed(id=AGENT_EDITOR_ROLE_ID, name="EDITOR"),
     RoleSeed(id=AGENT_VIEWER_ROLE_ID, name="VIEWER"),
 )
-SYSTEM_AGENT_ACCESS_ROLE_ID_BY_NAME = {
-    role.name: role.id for role in SYSTEM_AGENT_ACCESS_ROLES
-}
-SYSTEM_AGENT_ACCESS_ROLE_NAME_BY_ID = {
-    role.id: role.name for role in SYSTEM_AGENT_ACCESS_ROLES
-}
-
 PERMISSIONS: tuple[PermissionSeed, ...] = (
     PermissionSeed(
         UUID("9652eb48-fd1c-5880-b578-4549365e17f3"), PermissionKey.ORGANIZATION_READ
@@ -202,17 +195,3 @@ def system_role_name(role_id: UUID) -> str:
         return SYSTEM_ROLE_NAME_BY_ID[role_id]
     except KeyError as exc:
         raise ValueError(f"Role {role_id} is not a seeded system role") from exc
-
-
-def system_agent_access_role_id(role_name: str) -> UUID:
-    try:
-        return SYSTEM_AGENT_ACCESS_ROLE_ID_BY_NAME[role_name]
-    except KeyError as exc:
-        raise ValueError(f"Unknown system Agent Access Role: {role_name}") from exc
-
-
-def system_agent_access_role_name(role_id: UUID) -> str:
-    try:
-        return SYSTEM_AGENT_ACCESS_ROLE_NAME_BY_ID[role_id]
-    except KeyError as exc:
-        raise ValueError(f"Role {role_id} is not a seeded Agent Access Role") from exc
