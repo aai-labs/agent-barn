@@ -128,3 +128,5 @@ CLAUDE.md
 kubeconfig.yaml
 
 scripts/
+
+.dex/

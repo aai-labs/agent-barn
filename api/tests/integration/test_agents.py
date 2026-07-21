@@ -2200,20 +2200,20 @@ def test_start_hermes_agent_deployment_has_workspace_volume():
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             deployment = k8s.create_deployment.call_args.args[1]
             mounts = {
-                m.mount_path
+                m.mount_path: m
                 for m in deployment.spec.template.spec.containers[0].volume_mounts
             }
             assert_that("/opt/data" in mounts, equal_to(True))
             assert_that("/workspace" in mounts, equal_to(True))
 
-        with then("one volume is emptyDir for workspace"):
-            from kubernetes.client import V1EmptyDirVolumeSource
-
+        with then("the workspace persists on the agent PVC, not an emptyDir"):
+            # AF-215: /workspace is a subPath of the per-agent PVC so files the
+            # agent writes to its cwd survive restarts.
+            assert_that(mounts["/workspace"].name, equal_to("data"))
+            assert_that(mounts["/workspace"].sub_path, equal_to("workspace"))
             volumes = deployment.spec.template.spec.volumes
-            empty_dirs = [
-                v for v in volumes if isinstance(v.empty_dir, V1EmptyDirVolumeSource)
-            ]
-            assert_that(len(empty_dirs), equal_to(1))
+            empty_dirs = [v for v in volumes if v.empty_dir is not None]
+            assert_that(len(empty_dirs), equal_to(0))
 
 
 def test_pair_hermes_agent_returns_400():

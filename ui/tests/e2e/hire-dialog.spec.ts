@@ -113,7 +113,7 @@ test.describe("Hire Dialog", () => {
     await expect(page.getByText(/step 5 of 6/i)).toBeVisible();
   });
 
-  test("should show model dropdown with qwen as default and gpt-5-mini as option", async ({ page }) => {
+  test("should show model dropdown with glm-5.2 as default and gpt-5-mini as option", async ({ page }) => {
     await page.getByText("General Purpose", { exact: true }).click();
     await page.getByRole("button", { name: /continue/i }).click(); // template → agent-type
     await page.getByRole("button", { name: /continue/i }).click(); // agent-type → slack-choice
@@ -127,10 +127,10 @@ test.describe("Hire Dialog", () => {
     // default model's label, and options render once it is opened.
     const modelTrigger = page.getByRole("button", { name: /model/i });
     await expect(modelTrigger).toBeVisible();
-    await expect(modelTrigger).toContainText(/qwen3\.6 plus/i);
+    await expect(modelTrigger).toContainText(/glm 5\.2/i);
 
     await modelTrigger.click();
-    await expect(page.getByRole("option", { name: /qwen3\.6 plus/i })).toBeVisible();
+    await expect(page.getByRole("option", { name: /glm 5\.2/i })).toBeVisible();
     await expect(page.getByRole("option", { name: /gpt-5 mini/i })).toBeVisible();
   });
 
