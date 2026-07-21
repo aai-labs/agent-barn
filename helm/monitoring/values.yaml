@@ -65,7 +65,9 @@ kube-prometheus-stack:
         slack_api_url: ""
       route:
         receiver: slack-alerts
-        group_by: ["alertname"]
+        # org_name keeps different organizations' incidents in separate
+        # Slack messages (alerts without the label group under one key).
+        group_by: ["alertname", "org_name"]
         group_wait: 30s
         group_interval: 5m
         repeat_interval: 4h

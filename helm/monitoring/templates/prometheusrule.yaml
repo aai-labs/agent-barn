@@ -84,8 +84,8 @@ spec:
           labels:
             severity: warning
           annotations:
-            summary: Agent {{`{{ $labels.app }}`}} is not responding to scrapes.
-            description: The healthz sidecar of {{`{{ $labels.app }}`}} (org {{`{{ $labels.org_id }}`}}) is unreachable.
+            summary: Agent {{`{{ $labels.app }}`}} (org {{`{{ $labels.org_name }}`}}) is not responding to scrapes.
+            description: The healthz sidecar of {{`{{ $labels.app }}`}} in org {{`{{ $labels.org_name }}`}} is unreachable.
 
         - alert: AgentUnhealthy
           expr: agent_healthz_ok{job="agent"} == 0 and agent_healthz_ever_connected{job="agent"} == 1
@@ -93,7 +93,7 @@ spec:
           labels:
             severity: warning
           annotations:
-            summary: Agent {{`{{ $labels.app }}`}} lost its runtime connection.
+            summary: Agent {{`{{ $labels.app }}`}} (org {{`{{ $labels.org_name }}`}}) lost its runtime connection.
             description: The agent runtime of {{`{{ $labels.app }}`}} was connected before and is now unhealthy.
 
         - alert: AgentSlackTokensInvalid
@@ -102,7 +102,7 @@ spec:
           labels:
             severity: warning
           annotations:
-            summary: Agent {{`{{ $labels.app }}`}} has invalid Slack tokens.
+            summary: Agent {{`{{ $labels.app }}`}} (org {{`{{ $labels.org_name }}`}}) has invalid Slack tokens.
             description: Slack token validation is failing for {{`{{ $labels.app }}`}}; the agent cannot serve its workspace.
 
         - alert: AgentsInErrorState

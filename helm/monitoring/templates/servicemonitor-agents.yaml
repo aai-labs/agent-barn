@@ -12,11 +12,13 @@ spec:
     matchLabels:
       agentfarm.io/component: agent
   # job="agent" for every target (the value of the component label);
-  # app/org-id identify the individual agent (org-id sanitizes to org_id).
+  # app/org-id/org-name identify the agent and its organization
+  # (dashes sanitize to underscores: org_id, org_name).
   jobLabel: agentfarm.io/component
   targetLabels:
     - app
     - org-id
+    - org-name
   endpoints:
     - port: healthz
       path: /metrics
