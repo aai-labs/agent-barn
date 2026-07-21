@@ -372,6 +372,10 @@ class AgentSecretCreate(PydanticBaseModel):  # no secret_name — backend stamps
         return self
 
 
+class AgentSharedCredentialAttach(PydanticBaseModel):
+    shared_credential_id: UUID
+
+
 class AgentCreate(PydanticBaseModel):
     name: str = Field(min_length=1, max_length=255)
     platform: AgentPlatform = AgentPlatform.SLACK
@@ -395,6 +399,7 @@ class AgentCreate(PydanticBaseModel):
     model: str | None = None
     # Integration credentials (optional)
     secrets: list[AgentSecretCreate] = Field(default_factory=list)
+    shared_credentials: list[AgentSharedCredentialAttach] = Field(default_factory=list)
     # Custom org skills to assign on creation (optional)
     skill_ids: list[UUID] = Field(default_factory=list)
     approval_mode: CommandApprovalMode = CommandApprovalMode.AUTO
@@ -422,9 +427,16 @@ class AgentCreate(PydanticBaseModel):
 
     @model_validator(mode="after")
     def validate_unique_secret_providers(self) -> "AgentCreate":
-        providers = [s.provider for s in self.secrets]
-        if len(providers) != len(set(providers)):
+        all_providers = [s.provider for s in self.secrets]
+        if len(all_providers) != len(set(all_providers)):
             raise ValueError("Duplicate secret providers are not allowed")
+        return self
+
+    @model_validator(mode="after")
+    def validate_no_shared_and_manual_overlap(self) -> "AgentCreate":
+        """Shared credentials are validated for provider overlap in the service
+        (we need DB access to resolve the provider). This validator is a no-op
+        placeholder — the service checks the actual overlap."""
         return self
 
 
@@ -453,6 +465,7 @@ class AgentUpdate(PydanticBaseModel):
     # Integration credentials: upsert (add/replace) + explicit removal.
     # Providers not mentioned in either list are left untouched.
     secrets: list[AgentSecretCreate] | None = None
+    shared_credentials: list[AgentSharedCredentialAttach] | None = None
     removed_secret_providers: list[SecretProvider] | None = None
     approval_mode: CommandApprovalMode | None = None
 
@@ -507,6 +520,8 @@ class AgentSecretRead(PydanticBaseModel):  # label + provider only — no secret
 
     provider: SecretProvider
     secret_name: str
+    shared_credential_id: UUID | None = None
+    shared_credential_name: str | None = None
 
 
 class AgentAssignedSkillRead(PydanticBaseModel):

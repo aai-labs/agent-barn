@@ -53,6 +53,7 @@ from api.domains.agents.models import (
     AgentSecret,
     AgentSecretCreate,
     AgentSecretRead,
+    AgentSharedCredentialAttach,
     AgentSkill,
     AgentSlackConfig,
     AgentSlackConfigRead,
@@ -71,6 +72,7 @@ from api.domains.agents.models import (
 from api.domains.agents.error_messages import friendly_k8s_error, friendly_pod_reason
 from api.domains.agents.repository import AgentRepository
 from api.domains.auth.models import CurrentUserContext
+from api.domains.shared_credentials.repository import SharedCredentialRepository
 from api.domains.auth.token_service import SlackConfigTokenService
 from api.domains.templates.models import TemplateRead
 from api.domains.templates.renderer import render_template
@@ -174,6 +176,7 @@ class AgentService:
     config: Config
     skill_repository: SkillRepository
     slack_token_service: SlackConfigTokenService
+    shared_credential_repository: SharedCredentialRepository
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
@@ -329,9 +332,23 @@ class AgentService:
         teams_config_read = (
             AgentTeamsConfigRead.model_validate(teams_config) if teams_config else None
         )
-        secrets_read = [
-            AgentSecretRead.model_validate(secret) for secret in (secrets or [])
+        shared_ids = [
+            s.shared_credential_id
+            for s in (secrets or [])
+            if s.shared_credential_id is not None
         ]
+        shared_creds_by_id = {}
+        if shared_ids:
+            shared_creds = self.shared_credential_repository.get_many_by_ids(shared_ids)
+            shared_creds_by_id = {c.id: c for c in shared_creds}
+        secrets_read = []
+        for secret in secrets or []:
+            read = AgentSecretRead.model_validate(secret)
+            if secret.shared_credential_id and secret.shared_credential_id in shared_creds_by_id:
+                sc = shared_creds_by_id[secret.shared_credential_id]
+                read.shared_credential_id = sc.id
+                read.shared_credential_name = sc.name
+            secrets_read.append(read)
         req_ids = required_skill_ids or set()
         skills_read = [
             AgentAssignedSkillRead.model_validate(skill).model_copy(
@@ -529,6 +546,33 @@ class AgentService:
                     content=encrypt_content(
                         content, self.config.agent_token_encryption_key
                     ),
+                )
+            )
+            secrets.append(saved)
+
+        # Shared credentials: look up each, verify org ownership, create link rows
+        for attach in data.shared_credentials:
+            shared_cred = self.shared_credential_repository.get_by_id_and_org(
+                attach.shared_credential_id, org_id
+            )
+            if shared_cred is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Shared credential {attach.shared_credential_id} not found",
+                )
+            manual_providers = {s.provider for s in secrets}
+            if shared_cred.provider in manual_providers:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"Provider {shared_cred.provider} already has a manual credential",
+                )
+            saved = self.repository.save_secret(
+                AgentSecret(
+                    agent_id=agent.id,
+                    provider=shared_cred.provider,
+                    secret_name=shared_cred.name,
+                    content=None,
+                    shared_credential_id=shared_cred.id,
                 )
             )
             secrets.append(saved)
@@ -803,6 +847,7 @@ class AgentService:
                 existing = self.repository.get_secret(agent.id, item.provider)
                 if existing:
                     existing.content = encrypted
+                    existing.shared_credential_id = None
                     existing.secret_name = PROVIDER_DISPLAY_NAMES[item.provider]
                     self.repository.save_secret(existing)
                 else:
@@ -812,6 +857,34 @@ class AgentService:
                             provider=item.provider,
                             secret_name=PROVIDER_DISPLAY_NAMES[item.provider],
                             content=encrypted,
+                        )
+                    )
+
+        # Shared credential attachments
+        if "shared_credentials" in updated:
+            for attach in data.shared_credentials or []:
+                shared_cred = self.shared_credential_repository.get_by_id_and_org(
+                    attach.shared_credential_id, org_id
+                )
+                if shared_cred is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=f"Shared credential {attach.shared_credential_id} not found",
+                    )
+                existing = self.repository.get_secret(agent.id, shared_cred.provider)
+                if existing:
+                    existing.content = None
+                    existing.shared_credential_id = shared_cred.id
+                    existing.secret_name = shared_cred.name
+                    self.repository.save_secret(existing)
+                else:
+                    self.repository.save_secret(
+                        AgentSecret(
+                            agent_id=agent.id,
+                            provider=shared_cred.provider,
+                            secret_name=shared_cred.name,
+                            content=None,
+                            shared_credential_id=shared_cred.id,
                         )
                     )
 
