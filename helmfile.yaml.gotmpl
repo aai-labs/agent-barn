@@ -70,6 +70,9 @@ releases:
         value: {{ env "REGISTRY_PREFIX" | default "registry.k8s.aai-labs.com" | quote }}
       - name: image.repository
         value: {{ env "API_IMAGE_REPOSITORY" | default "agentfarm-api" | quote }}
+      # Local k8s dev: set IfNotPresent to run images imported via `k3d image import`.
+      - name: image.pullPolicy
+        value: {{ env "API_IMAGE_PULL_POLICY" | default "Always" | quote }}
       - name: openclawImage.repository
         value: {{ env "OPENCLAW_IMAGE_REPOSITORY" | default "agentfarm-openclaw-base" | quote }}
       - name: openclawImage.tag
@@ -134,6 +137,9 @@ releases:
         value: {{ env "REGISTRY_PREFIX" | default "registry.k8s.aai-labs.com" | quote }}
       - name: image.repository
         value: {{ env "UI_IMAGE_REPOSITORY" | default "agentfarm-ui" | quote }}
+      # Local k8s dev: set IfNotPresent to run images imported via `k3d image import`.
+      - name: image.pullPolicy
+        value: {{ env "UI_IMAGE_PULL_POLICY" | default "Always" | quote }}
       - name: ingress.hosts
         value: {{ env "UI_HOST" | required "UI_HOST is required" | quote }}
     needs:
