@@ -266,10 +266,15 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
           ...(versionTemplate?.requiredSkills?.map((s) => s.id) ?? []),
           ...selectedSkillIds,
         ],
-        secrets: skillCredentials.map((c) => ({
-          provider: c.provider,
-          content: c.provider === "github" ? expandGithubContent(c.content) : c.content,
-        })),
+        secrets: skillCredentials
+          .filter((c) => !c.sharedCredentialId)
+          .map((c) => ({
+            provider: c.provider,
+            content: c.provider === "github" ? expandGithubContent(c.content) : c.content,
+          })),
+        sharedCredentials: skillCredentials
+          .filter((c) => !!c.sharedCredentialId)
+          .map((c) => ({ sharedCredentialId: c.sharedCredentialId! })),
         approvalMode,
         ...(platform === "slack"
           ? { slackBotToken, slackAppToken, slackGroupPolicy, slackDmPolicy, slackVerboseMode }
