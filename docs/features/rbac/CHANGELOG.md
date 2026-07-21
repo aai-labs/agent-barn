@@ -1,13 +1,13 @@
 # Permission-backed RBAC — change log
 
-Status: Completed
-Epic: [AF-150](https://aai-labs.atlassian.net/browse/AF-150)
+Status: Active
+Epic: [AF-144](https://aai-labs.atlassian.net/browse/AF-144)
 Related context: [implementation brief](IMPLEMENTATION-BRIEF.md), [current role decision](../../adr/2026-07-21-separate-organization-and-agent-access-roles.md)
 
 ## Current state
 
 - Delivered: fixed Organization Role and Permission persistence; locked Agent Viewer/Editor/Owner persistence and grants; role-bearing Agent Access; legacy Member-to-Editor migration; creator Owner assignment for new Agents; request-time Organization and Agent authorization; Organization/Membership/Template/Skill/cost enforcement; and permission-aware UI without sharing or role-management surfaces.
-- In transition: none; AF-150 is complete.
+- In transition: none for the delivered AF-150 slice; the AF-144 epic remains active.
 - Next: AF-216 adds custom Agent Access Role backend management; AF-217 adds Agent sharing and role-management UI; AF-218 through AF-221 add event/audit infrastructure.
 - Blockers: none.
 
@@ -16,7 +16,7 @@ Related context: [implementation brief](IMPLEMENTATION-BRIEF.md), [current role 
 ### 2026-07-21 — [AF-150](https://aai-labs.atlassian.net/browse/AF-150) — PR pending — review hardening
 
 - Delivered: database-enforced immutability for the global Permission catalogue, fixed Organization Role grants, and locked system Agent Access Role grants.
-- Changed: removed the deferred `audit.read` Permission; recorded that the pre-AF-150 schema contains no reliable creator provenance and therefore receives no heuristic Owner grants; synchronized all authoritative documents to the completed state.
+- Changed: removed the deferred `audit.read` Permission; recorded that the pre-AF-150 schema contains no reliable creator provenance and therefore receives no heuristic Owner grants; synchronized all authoritative documents to AF-150's completed state.
 - Verified: 18 PostgreSQL migration/schema tests, 156 affected authorization integration tests, API lint/type checks, `git diff --check`, and relative Markdown links.
 - Follow-up: introduce audit Permissions with AF-218 and replace `PR pending` references with the pull-request link when available.
 
