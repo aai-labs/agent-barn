@@ -31,6 +31,7 @@ const ORG_SCOPED_QUERY_KEYS = new Set([
   "tool-calls",
   "cost",
   "skills",
+  "shared-credentials",
 ]);
 
 type OrganizationContextValue = {

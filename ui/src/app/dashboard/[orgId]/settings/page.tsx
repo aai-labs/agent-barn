@@ -4,6 +4,7 @@ import { useState } from "react";
 import { PROVIDERS } from "@/features/agents/data";
 import { TemplatesPanel } from "@/features/agents/components/templates-panel";
 import { SkillsPanel } from "@/features/skills/components/skills-panel";
+import { SharedCredentialsPanel } from "@/features/shared-credentials/components/shared-credentials-panel";
 import { PlusIcon, LockIcon, EyeIcon, ServerIcon, SearchIcon } from "@/components/icons";
 
 type SectionKey =
@@ -11,6 +12,7 @@ type SectionKey =
   | "team"
   | "models"
   | "providers"
+  | "shared-credentials"
   | "templates"
   | "skills"
   | "budgets"
@@ -24,6 +26,7 @@ const SECTIONS: [SectionKey, string, string, boolean][] = [
   ["team",      "Team & access",   "Operators who can manage agents.",                              false],
   ["models",    "Models",          "Which LLMs your agents are allowed to use.",                   false],
   ["providers", "Integrations",    "Slack, GitHub, Jira and other third parties.",                 false],
+  ["shared-credentials", "Shared Credentials", "Org-wide integration keys reusable across agents.",  true],
   ["templates", "Templates",       "Reusable agent definitions.",                                   true],
   ["skills",    "Skills",          "Vetted tools your agents can call.",                           true],
   ["budgets",   "Budgets",         "Spend caps and alerts.",                                       false],
@@ -68,6 +71,7 @@ export default function SettingsPage() {
           {tab === "team" && <TeamPanel />}
           {tab === "models" && <ModelsPanel />}
           {tab === "providers" && <ProvidersPanel />}
+          {tab === "shared-credentials" && <SharedCredentialsPanel />}
           {tab === "templates" && <TemplatesPanel />}
           {tab === "skills" && <SkillsPanel />}
           {tab === "budgets" && <BudgetsPanel />}
