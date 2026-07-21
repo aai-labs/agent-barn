@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import type { Agent, IntegrationValidationResult, AgentAssignedSkill } from "../schemas";
+import { canAgent } from "../utils";
 import { useAgentTemplate } from "../hooks/use-agent-template";
 import { useUpdateAgent } from "../hooks/use-update-agent";
 import { useDeleteAgent } from "../hooks/use-delete-agent";
@@ -30,19 +31,37 @@ interface ConfigDrawerProps {
   onClose: () => void;
 }
 
-function getTabs(platform: "slack" | "teams"): [string, string, boolean][] {
-  return [
-    ["personality", "Template", true],
-    ["secrets", "Keys", true],
-    ...(platform === "slack" ? [["channels", "Channels", true] as [string, string, boolean]] : []),
-    ...(platform === "teams" ? [["endpoint", "Endpoint", true] as [string, string, boolean]] : []),
-    ["skills", "Skills", true],
-    ["k8s", "Infrastructure", false],
-    ["danger", "Danger zone", true],
-  ];
+export type TabKey = "personality" | "channels" | "endpoint" | "skills" | "secrets" | "k8s" | "danger";
+
+export function canOpenConfigTab(agent: Agent, tab: TabKey): boolean {
+  if (tab === "secrets") return canAgent(agent, "agent.secret.manage");
+  if (tab === "danger") return canAgent(agent, "agent.delete");
+  if (tab === "k8s") return false;
+  return canAgent(agent, "agent.update");
 }
 
-export type TabKey = "personality" | "channels" | "endpoint" | "skills" | "secrets" | "k8s" | "danger";
+export function defaultConfigTab(agent: Agent): TabKey | null {
+  if (canAgent(agent, "agent.update")) return "personality";
+  if (canAgent(agent, "agent.secret.manage")) return "secrets";
+  if (canAgent(agent, "agent.delete")) return "danger";
+  return null;
+}
+
+function getTabs(agent: Agent): [TabKey, string, boolean][] {
+  return [
+    ["personality", "Template", canOpenConfigTab(agent, "personality")],
+    ["secrets", "Keys", canOpenConfigTab(agent, "secrets")],
+    ...(agent.platform === "slack"
+      ? [["channels", "Channels", canOpenConfigTab(agent, "channels")] as [TabKey, string, boolean]]
+      : []),
+    ...(agent.platform === "teams"
+      ? [["endpoint", "Endpoint", canOpenConfigTab(agent, "endpoint")] as [TabKey, string, boolean]]
+      : []),
+    ["skills", "Skills", canOpenConfigTab(agent, "skills")],
+    ["k8s", "Infrastructure", false],
+    ["danger", "Danger zone", canOpenConfigTab(agent, "danger")],
+  ];
+}
 
 export const DRAWER_TAB_KEYS: TabKey[] = [
   "personality",
@@ -90,13 +109,15 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
   const [repinSecretDrafts, setRepinSecretDrafts] = useState<IntegrationDraft[]>([]);
   const [repinVisible, setRepinVisible] = useState<Record<string, boolean>>({});
 
-  const tabs = getTabs(agent.platform);
+  const tabs = getTabs(agent);
   // Clamp the URL-provided tab to one that's actually reachable for this agent
   // (e.g. a deep-linked ?configTab=channels on a Teams agent falls back).
   const enabledKeys = tabs
     .filter(([, , enabled]) => enabled)
     .map(([k]) => k as TabKey);
-  const tab: TabKey = enabledKeys.includes(activeTab) ? activeTab : "personality";
+  const tab: TabKey = enabledKeys.includes(activeTab)
+    ? activeTab
+    : (enabledKeys[0] ?? "personality");
 
   const configuredSecrets = agent.secrets ?? [];
   const validateIntegration = useValidateIntegration();

@@ -1,5 +1,7 @@
 import { createQueryKeyStructure } from "@/shared/query-keys";
 
+import type { Agent, AgentPermissionKey } from "./schemas";
+
 export const AGENTS_PAGE_SIZE = 50;
 export const TEMPLATES_PAGE_SIZE = 50;
 export const CONVERSATION_MESSAGES_PAGE_SIZE = 6;
@@ -16,7 +18,10 @@ export type ConversationsFiltersKey = {
 export const agentsKey = {
   ..._agentsKeyBase,
   health: (id: string) => [..._agentsKeyBase.detail(id), "health"] as const,
-    conversationChannels: (agentId: string) =>
+  access: (id: string) => [..._agentsKeyBase.detail(id), "access"] as const,
+  eligibleAccess: (id: string) =>
+    [..._agentsKeyBase.detail(id), "access", "eligible"] as const,
+  conversationChannels: (agentId: string) =>
     [..._agentsKeyBase.detail(agentId), "conversation-channels"] as const,
   conversationMessages: (
     agentId: string,
@@ -47,6 +52,13 @@ const AGENT_COLORS = [
   ["#4338ca", "#5b21b6"],
   ["#0f766e", "#0e7490"],
 ];
+
+export function canAgent(
+  agent: Pick<Agent, "allowedActions"> | null | undefined,
+  permission: AgentPermissionKey,
+): boolean {
+  return agent?.allowedActions.includes(permission) ?? false;
+}
 
 export function agentColor(id: string): string {
   const seed = parseInt(id.replace(/-/g, "")[0], 16);

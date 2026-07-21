@@ -47,7 +47,7 @@ Every Organization can use these locked defaults:
 
 AF-216 adds Organization-defined custom Agent Access Roles using the same Agent Permission catalogue. AF-150 seeds only the locked defaults and implements role-bearing assignments.
 
-An Agent operation is allowed when the actor has the corresponding Permission through the effective Agent Access Role and the Agent lifecycle permits the operation. Agent role names are not authorization checks.
+An Agent operation is allowed when the actor has the corresponding Permission through the effective Agent Access Role and the Agent lifecycle permits the operation. Start and stop use one `agent.lifecycle.manage` Permission; current Agent state selects the valid transition. Agent role names are not authorization checks.
 
 ## Agent Access
 

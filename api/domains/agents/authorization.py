@@ -21,8 +21,7 @@ _AGENT_ACTION_PERMISSIONS: tuple[PermissionKey, ...] = (
     PermissionKey.AGENT_READ,
     PermissionKey.AGENT_UPDATE,
     PermissionKey.AGENT_DELETE,
-    PermissionKey.AGENT_START,
-    PermissionKey.AGENT_STOP,
+    PermissionKey.AGENT_LIFECYCLE_MANAGE,
     PermissionKey.AGENT_ACCESS_MANAGE,
     PermissionKey.AGENT_SECRET_MANAGE,
     PermissionKey.ACTIVITY_READ,
@@ -143,10 +142,6 @@ class AgentAuthorization:
             PermissionKey.AGENT_SECRET_MANAGE,
         ):
             return status_value != AgentStatus.RUNNING
-        if permission == PermissionKey.AGENT_START:
-            return status_value != AgentStatus.RUNNING
-        if permission == PermissionKey.AGENT_STOP:
-            return status_value == AgentStatus.RUNNING
         return True
 
     @staticmethod

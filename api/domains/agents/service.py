@@ -863,7 +863,7 @@ class AgentService:
     def start_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
         org_id = self._org_id(context)
         agent = self.authorization.require_action(
-            context, agent_id, PermissionKey.AGENT_START
+            context, agent_id, PermissionKey.AGENT_LIFECYCLE_MANAGE
         )
 
         if agent.status == AgentStatus.RUNNING:
@@ -1270,7 +1270,7 @@ class AgentService:
 
     def stop_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
         agent = self.authorization.require_action(
-            context, agent_id, PermissionKey.AGENT_STOP
+            context, agent_id, PermissionKey.AGENT_LIFECYCLE_MANAGE
         )
 
         if agent.status != AgentStatus.RUNNING:

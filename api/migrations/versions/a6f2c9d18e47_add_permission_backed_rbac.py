@@ -49,8 +49,7 @@ PERMISSION_IDS = {
     "agent.read": UUID("76bba6c5-b1bc-5fc2-af28-1eb57bb81fec"),
     "agent.update": UUID("86500651-f05b-5c39-bb56-dc7dcd154cd6"),
     "agent.delete": UUID("86b3798f-3409-5f7d-bbc2-2d260cfd96d1"),
-    "agent.start": UUID("61db56c3-339c-51d7-ab33-b6afbaa9fc8a"),
-    "agent.stop": UUID("b7355e30-138f-5e19-a8fd-939fe8e34c91"),
+    "agent.lifecycle.manage": UUID("61db56c3-339c-51d7-ab33-b6afbaa9fc8a"),
     "agent.access.manage": UUID("8c5ae860-1a12-52e0-8902-de39b94e8145"),
     "agent.secret.manage": UUID("4412d59f-4e8c-5e7e-81a9-b257f99f9dbf"),
     "template.read": UUID("a07c3af3-17d6-53cf-841a-80d509b94de4"),
@@ -66,8 +65,7 @@ AGENT_OPERATION_PERMISSIONS = {
     "agent.read",
     "agent.update",
     "agent.delete",
-    "agent.start",
-    "agent.stop",
+    "agent.lifecycle.manage",
     "agent.access.manage",
     "agent.secret.manage",
 }
@@ -90,8 +88,7 @@ VIEWER_PERMISSIONS = {
 }
 EDITOR_PERMISSIONS = VIEWER_PERMISSIONS | {
     "agent.update",
-    "agent.start",
-    "agent.stop",
+    "agent.lifecycle.manage",
     "agent.secret.manage",
 }
 AGENT_OWNER_PERMISSIONS = EDITOR_PERMISSIONS | {

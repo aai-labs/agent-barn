@@ -16,8 +16,7 @@ class PermissionKey(str, Enum):
     AGENT_READ = "agent.read"
     AGENT_UPDATE = "agent.update"
     AGENT_DELETE = "agent.delete"
-    AGENT_START = "agent.start"
-    AGENT_STOP = "agent.stop"
+    AGENT_LIFECYCLE_MANAGE = "agent.lifecycle.manage"
     AGENT_ACCESS_MANAGE = "agent.access.manage"
     AGENT_SECRET_MANAGE = "agent.secret.manage"
     TEMPLATE_READ = "template.read"
@@ -109,10 +108,8 @@ PERMISSIONS: tuple[PermissionSeed, ...] = (
         UUID("86b3798f-3409-5f7d-bbc2-2d260cfd96d1"), PermissionKey.AGENT_DELETE
     ),
     PermissionSeed(
-        UUID("61db56c3-339c-51d7-ab33-b6afbaa9fc8a"), PermissionKey.AGENT_START
-    ),
-    PermissionSeed(
-        UUID("b7355e30-138f-5e19-a8fd-939fe8e34c91"), PermissionKey.AGENT_STOP
+        UUID("61db56c3-339c-51d7-ab33-b6afbaa9fc8a"),
+        PermissionKey.AGENT_LIFECYCLE_MANAGE,
     ),
     PermissionSeed(
         UUID("8c5ae860-1a12-52e0-8902-de39b94e8145"), PermissionKey.AGENT_ACCESS_MANAGE
@@ -149,8 +146,7 @@ _AGENT_OPERATION_KEYS = frozenset(
         PermissionKey.AGENT_READ,
         PermissionKey.AGENT_UPDATE,
         PermissionKey.AGENT_DELETE,
-        PermissionKey.AGENT_START,
-        PermissionKey.AGENT_STOP,
+        PermissionKey.AGENT_LIFECYCLE_MANAGE,
         PermissionKey.AGENT_ACCESS_MANAGE,
         PermissionKey.AGENT_SECRET_MANAGE,
     }
@@ -184,8 +180,7 @@ _VIEWER_KEYS = frozenset(
 )
 _EDITOR_KEYS = _VIEWER_KEYS | {
     PermissionKey.AGENT_UPDATE,
-    PermissionKey.AGENT_START,
-    PermissionKey.AGENT_STOP,
+    PermissionKey.AGENT_LIFECYCLE_MANAGE,
     PermissionKey.AGENT_SECRET_MANAGE,
 }
 _OWNER_KEYS = _EDITOR_KEYS | {

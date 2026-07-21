@@ -58,8 +58,7 @@ def test_editor_effective_actions_come_from_agent_access_role_permissions():
         agent.id: {
             PermissionKey.AGENT_READ,
             PermissionKey.AGENT_UPDATE,
-            PermissionKey.AGENT_START,
-            PermissionKey.AGENT_STOP,
+            PermissionKey.AGENT_LIFECYCLE_MANAGE,
             PermissionKey.AGENT_SECRET_MANAGE,
         }
     }
@@ -73,7 +72,7 @@ def test_editor_effective_actions_come_from_agent_access_role_permissions():
             [
                 PermissionKey.AGENT_READ,
                 PermissionKey.AGENT_UPDATE,
-                PermissionKey.AGENT_START,
+                PermissionKey.AGENT_LIFECYCLE_MANAGE,
                 PermissionKey.AGENT_SECRET_MANAGE,
             ]
         ),
@@ -93,8 +92,7 @@ def test_explicit_owner_can_manage_access_regardless_of_creator_provenance():
             PermissionKey.AGENT_READ,
             PermissionKey.AGENT_UPDATE,
             PermissionKey.AGENT_DELETE,
-            PermissionKey.AGENT_START,
-            PermissionKey.AGENT_STOP,
+            PermissionKey.AGENT_LIFECYCLE_MANAGE,
             PermissionKey.AGENT_ACCESS_MANAGE,
             PermissionKey.AGENT_SECRET_MANAGE,
         }
@@ -109,7 +107,7 @@ def test_explicit_owner_can_manage_access_regardless_of_creator_provenance():
             [
                 PermissionKey.AGENT_READ,
                 PermissionKey.AGENT_DELETE,
-                PermissionKey.AGENT_STOP,
+                PermissionKey.AGENT_LIFECYCLE_MANAGE,
                 PermissionKey.AGENT_ACCESS_MANAGE,
             ]
         ),

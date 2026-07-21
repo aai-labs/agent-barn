@@ -6,12 +6,23 @@ Related context: [implementation brief](IMPLEMENTATION-BRIEF.md), [current role 
 
 ## Current state
 
-- Delivered on the branch: fixed Organization Role and Permission persistence; locked Agent Viewer/Editor/Owner persistence and grants; role-bearing Agent Access; legacy Member-to-Editor migration; creator Owner assignment; request-time Organization and Agent authorization; Organization/Membership/Template/Skill/cost enforcement; and staged permission-aware UI work.
+- Delivered on the branch: fixed Organization Role and Permission persistence; locked Agent Viewer/Editor/Owner persistence and grants; role-bearing Agent Access; legacy Member-to-Editor migration; creator Owner assignment; request-time Organization and Agent authorization; Organization/Membership/Template/Skill/cost enforcement; and permission-aware UI without sharing or role-management surfaces.
 - In transition: aggregate authorization requires final matrix hardening, and staged access-management UI must move to AF-217.
 - Next: reduce the UI to AF-150 scope and complete the cross-domain security matrix.
 - Blockers: none. Custom Agent Access Role backend management is deferred to AF-216, Agent sharing and role-management UI to AF-217, and event/audit infrastructure to AF-218 through AF-221.
 
 ## Changes
+
+### 2026-07-21 — AF-150 — permission-aware product UI
+
+- Delivered: server-permission-gated Agent lifecycle, configuration, credential, activity, cost, and deletion controls; direct-URL configuration protection; inaccessible-Agent handling; fixed Organization role management protections; and Member read-only Template/Skill surfaces.
+- Deferred: Agent assignment lists, role display, sharing controls, and custom Agent Access Role settings remain outside AF-150 and belong to AF-217.
+- Verified: UI lint and type checks; six focused RBAC Playwright tests across Viewer/Editor/Owner, inaccessible Agents, Organization role protections, and shared-resource read-only behavior; full Playwright suite with 162 passing tests.
+
+### 2026-07-21 — AF-150 — unified Agent lifecycle permission
+
+- Changed: replaced separate `agent.start` and `agent.stop` grants with one `agent.lifecycle.manage` Permission in the unreleased schema, default Agent Access Roles, backend authorization, effective-action contract, and UI schema.
+- Preserved: start and stop remain distinct lifecycle operations; current Agent state determines which transition the API and UI allow.
 
 ### 2026-07-21 — AF-150 — role-bearing Agent access operations
 

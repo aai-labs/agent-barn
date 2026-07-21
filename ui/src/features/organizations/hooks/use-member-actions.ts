@@ -4,6 +4,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/shared/api";
 import { currentUserContextKey } from "@/auth/utils";
+import { agentsKey } from "@/features/agents/utils";
 
 import {
   type AddMemberFormData,
@@ -24,6 +25,11 @@ export function useMemberActions(organizationId: string) {
       queryKey: organizationMembersKey.list({ scope: { organizationId } }),
     });
 
+  const invalidateAuthorization = () => {
+    void queryClient.invalidateQueries({ queryKey: currentUserContextKey.all });
+    void queryClient.invalidateQueries({ queryKey: agentsKey.all });
+  };
+
   const addMember = useMutation({
     mutationFn: async (data: AddMemberFormData) => {
       const response = await api.post<MemberInviteResult>(
@@ -39,12 +45,18 @@ export function useMemberActions(organizationId: string) {
   const changeRole = useMutation({
     mutationFn: (vars: { userId: string; role: OrganizationRole }) =>
       api.patch(`${base}/members/${vars.userId}`, { role: vars.role }),
-    onSuccess: invalidateMembers,
+    onSuccess: () => {
+      invalidateMembers();
+      invalidateAuthorization();
+    },
   });
 
   const removeMember = useMutation({
     mutationFn: (userId: string) => api.delete(`${base}/members/${userId}`),
-    onSuccess: invalidateMembers,
+    onSuccess: () => {
+      invalidateMembers();
+      invalidateAuthorization();
+    },
   });
 
   const transferOwnership = useMutation({
@@ -52,8 +64,7 @@ export function useMemberActions(organizationId: string) {
       api.post(`${base}/transfer-ownership`, { userId }),
     onSuccess: () => {
       invalidateMembers();
-      // Ownership changes affect the acting user's own role, so refresh their context.
-      void queryClient.invalidateQueries({ queryKey: currentUserContextKey.all });
+      invalidateAuthorization();
     },
   });
 
