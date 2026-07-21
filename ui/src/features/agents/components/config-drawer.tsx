@@ -274,12 +274,17 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
       // replace — the upsert wins (the backend rejects a provider in both lists).
       const draftProviders = new Set(secretDrafts.map((d) => d.provider));
       const updatedProviders = [...draftProviders];
+      const manualDrafts = secretDrafts.filter((d) => !d.sharedCredentialId);
+      const sharedDrafts = secretDrafts.filter((d) => !!d.sharedCredentialId);
       await updateAgent.mutateAsync({
         agentId: agent.id,
-        secrets: secretDrafts.map((d) => ({
+        secrets: manualDrafts.map((d) => ({
           provider: d.provider,
           content: d.provider === "github" ? expandGithubContent(d.content) : d.content,
         })),
+        ...(sharedDrafts.length > 0
+          ? { sharedCredentials: sharedDrafts.map((d) => ({ sharedCredentialId: d.sharedCredentialId! })) }
+          : {}),
         removedSecretProviders: removedProviders.filter(
           (p) => !draftProviders.has(p),
         ),
@@ -800,6 +805,7 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                   {configuredSecrets.map((s) => {
                     const label = getIntegrationProvider(s.provider)?.label ?? s.provider;
                     const isPendingRemoval = removedProviders.includes(s.provider);
+                    const isShared = !!s.sharedCredentialId;
                     return isPendingRemoval ? (
                       <div
                         key={s.provider}
@@ -828,9 +834,24 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                         style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
                       >
                         <div className="flex flex-col gap-0.5 min-w-0">
-                          <span className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
-                            {label}
-                          </span>
+                          <div className="flex items-center gap-2">
+                            <span className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
+                              {label}
+                            </span>
+                            {isShared && (
+                              <span
+                                className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold uppercase tracking-wide"
+                                style={{ background: "var(--bg-elev)", color: "var(--ink-3)", border: "1px solid var(--line)" }}
+                              >
+                                Shared
+                              </span>
+                            )}
+                          </div>
+                          {isShared && s.sharedCredentialName && (
+                            <span className="text-xs" style={{ color: "var(--ink-4)" }}>
+                              {s.sharedCredentialName}
+                            </span>
+                          )}
                           <ValidationBadge
                             secretName={s.secretName}
                             result={validationState[s.provider]}

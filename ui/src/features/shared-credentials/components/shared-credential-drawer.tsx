@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { CheckIcon, XIcon } from "@/components/icons";
 import {
+  expandGithubContent,
   INTEGRATION_PROVIDERS,
   type IntegrationProvider,
 } from "@/features/agents/integrations";
@@ -92,7 +93,7 @@ export function SharedCredentialDrawer({
           Array.isArray(v) ? v.length > 0 : v.trim().length > 0,
         );
         if (hasContent) {
-          payload.content = content;
+          payload.content = credential.provider === "github" ? expandGithubContent(content) : content;
         }
         await updateMutation.mutateAsync(payload);
         setEditing(false);
@@ -100,7 +101,7 @@ export function SharedCredentialDrawer({
         await createMutation.mutateAsync({
           provider,
           name: name.trim(),
-          content,
+          content: provider === "github" ? expandGithubContent(content) : content,
         });
         onClose();
       }

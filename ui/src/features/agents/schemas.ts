@@ -16,6 +16,8 @@ export const AgentTeamsConfigSchema = z.object({
 export const AgentSecretReadSchema = z.object({
   provider: z.string(),
   secretName: z.string(),
+  sharedCredentialId: z.string().uuid().nullable().optional(),
+  sharedCredentialName: z.string().nullable().optional(),
 });
 
 export const IntegrationValidationResultSchema = z.object({

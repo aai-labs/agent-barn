@@ -101,6 +101,21 @@ class SharedCredentialRepository:
             )
             return session.scalar(query) or 0
 
+    def delete_orphaned_references(self, credential_id: UUID) -> int:
+        with Session(self.delegate.engine) as session:
+            orphaned = (
+                select(AgentSecret)
+                .join(Agent, col(AgentSecret.agent_id) == col(Agent.id))
+                .where(col(AgentSecret.shared_credential_id) == credential_id)
+                .where(col(Agent.deleted_at).is_not(None))
+            )
+            rows = list(session.exec(orphaned).all())
+            for row in rows:
+                session.delete(row)
+            if rows:
+                session.commit()
+            return len(rows)
+
     def get_by_ids_and_org(
         self, ids: list[UUID], org_id: UUID
     ) -> list[SharedCredential]:

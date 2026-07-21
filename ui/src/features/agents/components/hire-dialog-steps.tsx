@@ -1501,7 +1501,7 @@ export function SkillsStep({
             }
 
             const isSharedEligible = !!SHARED_CREDENTIAL_PROVIDER_LABELS[providerId];
-            const useShared = !!draft.sharedCredentialId;
+            const useShared = draft.sharedCredentialId !== undefined;
 
             function switchToShared() {
               onSkillCredentialsChange(
@@ -1704,7 +1704,7 @@ export function IntegrationsStep({
         const provider = getIntegrationProvider(draft.provider);
         if (!provider) return null;
         const isSharedEligible = !!SHARED_CREDENTIAL_PROVIDER_LABELS[draft.provider];
-        const useShared = !!draft.sharedCredentialId;
+        const useShared = draft.sharedCredentialId !== undefined;
 
         function switchToShared() {
           onChange(

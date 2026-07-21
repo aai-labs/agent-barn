@@ -223,10 +223,13 @@ class AgentService:
         skill_ids: list[UUID],
         secrets_data: list[AgentSecretCreate],
         org_id: UUID,
+        extra_providers: set[str] | None = None,
     ) -> list[Skill]:
         if not skill_ids:
             return []
         submitted_providers = {item.provider for item in secrets_data}
+        if extra_providers:
+            submitted_providers |= extra_providers
         accessible = {
             s.id: s for s in self.skill_repository.find_accessible_for_org(org_id)
         }
@@ -285,7 +288,15 @@ class AgentService:
         current_providers = {s.provider for s in current_secrets}
         upsert_providers = {s.provider for s in data.secrets or []}
         removed_providers = set(data.removed_secret_providers or [])
-        remaining_providers = (current_providers - removed_providers) | upsert_providers
+        shared_attach_providers: set[str] = set()
+        if data.shared_credentials:
+            shared_creds = self.shared_credential_repository.get_many_by_ids(
+                [sc.shared_credential_id for sc in data.shared_credentials]
+            )
+            shared_attach_providers = {c.provider for c in shared_creds}
+        remaining_providers = (
+            (current_providers - removed_providers) | upsert_providers | shared_attach_providers
+        )
 
         remaining_skills = self.skill_repository.get_many_by_ids(
             list(remaining_skill_ids)
@@ -578,7 +589,10 @@ class AgentService:
             secrets.append(saved)
 
         # Resolve and validate skills before any DB writes.
-        skills_to_assign = self._resolve_skills(data.skill_ids, data.secrets, org_id)
+        shared_providers = {s.provider for s in secrets if s.shared_credential_id}
+        skills_to_assign = self._resolve_skills(
+            data.skill_ids, data.secrets, org_id, extra_providers=shared_providers
+        )
 
         if skills_to_assign:
             self.repository.save_skills(

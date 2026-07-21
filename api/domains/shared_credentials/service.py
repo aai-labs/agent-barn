@@ -133,6 +133,8 @@ class SharedCredentialService:
         org_id = self._require_manager(context)
         credential = self._get_or_404(credential_id, org_id)
 
+        self.repository.delete_orphaned_references(credential.id)
+
         agent_count = self.repository.count_agent_references(credential.id)
         if agent_count > 0:
             raise HTTPException(
