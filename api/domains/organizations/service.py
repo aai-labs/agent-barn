@@ -83,7 +83,6 @@ class OrganizationService:
 
         config = get_config()
         allowed_models = data.allowed_models if data.allowed_models is not None else [config.agent_default_model]
-        self._validate_allowed_models(allowed_models)
 
         # Org, owner-invite (user + token) and the OWNER membership all commit together,
         # so a failed step can't leave an org with no owner. The invite email is sent
