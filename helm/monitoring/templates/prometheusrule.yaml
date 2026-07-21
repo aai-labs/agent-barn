@@ -125,7 +125,11 @@ spec:
             description: The LiteLLM proxy is unreachable — agents cannot make LLM calls.
 
         - alert: OpenRouterCreditsLow
-          expr: agentfarm_openrouter_credits_remaining < {{ .Values.openrouterCreditsThreshold }}
+          # Gate on scrape_ok so a never-polled gauge (defaults to 0) cannot
+          # page "credits low" when the real problem is CreditsUnknown.
+          expr: >-
+            agentfarm_openrouter_credits_remaining < {{ .Values.openrouterCreditsThreshold }}
+            and agentfarm_openrouter_credits_scrape_ok == 1
           for: 15m
           labels:
             severity: critical
