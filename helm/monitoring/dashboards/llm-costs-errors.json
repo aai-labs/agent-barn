@@ -86,13 +86,13 @@
     {
       "id": 5,
       "type": "timeseries",
-      "title": "LiteLLM spend (may be empty depending on LiteLLM metric names)",
+      "title": "LiteLLM spend by agent (1h windows)",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 9, "w": 12, "x": 12, "y": 5 },
       "targets": [
         {
-          "expr": "sum by (model) (increase(litellm_spend_metric[1h]))",
-          "legendFormat": "{{model}}",
+          "expr": "sum by (api_key_alias) (increase(litellm_spend_metric_total[1h]))",
+          "legendFormat": "{{api_key_alias}}",
           "refId": "A"
         }
       ],
@@ -121,7 +121,7 @@
     {
       "id": 7,
       "type": "timeseries",
-      "title": "LiteLLM tokens",
+      "title": "LiteLLM tokens by model",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 9, "w": 12, "x": 12, "y": 14 },
       "targets": [
