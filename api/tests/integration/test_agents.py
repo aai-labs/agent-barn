@@ -741,7 +741,7 @@ def test_start_agent_sets_status_running():
             k8s.create_deployment.assert_called_once()
             service = k8s.create_service.call_args.args[1]
             assert_that(
-                service.metadata.labels["agentfarm.io/org-name"],
+                service.metadata.labels["org-name"],
                 equal_to("test-organization"),
             )
 

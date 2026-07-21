@@ -72,7 +72,7 @@ def build_service(
             # target labels from the Service (ServiceMonitor targetLabels).
             labels={
                 **_labels(agent_id, org_id),
-                "agentfarm.io/org-name": _org_name_label(org_name, org_id),
+                "org-name": _org_name_label(org_name, org_id),
             },
         ),
         spec=client.V1ServiceSpec(
