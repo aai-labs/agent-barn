@@ -175,7 +175,7 @@ class AgentService:
     config: Config
     skill_repository: SkillRepository
     slack_token_service: SlackConfigTokenService
-    organization_repository: "OrganizationRepository"
+    organization_repository: OrganizationRepository
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
