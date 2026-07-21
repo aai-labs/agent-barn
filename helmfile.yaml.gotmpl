@@ -1,3 +1,7 @@
+repositories:
+  - name: prometheus-community
+    url: https://prometheus-community.github.io/helm-charts
+
 helmDefaults:
   createNamespace: true
 
@@ -114,6 +118,8 @@ releases:
         value: {{ env "REGISTRY_PASSWORD" | required "REGISTRY_PASSWORD is required" | quote }}
       - name: ingress.hosts
         value: {{ env "API_HOST" | required "API_HOST is required" | quote }}
+      - name: openrouterManagementKey
+        value: {{ env "OPENROUTER_MANAGEMENT_KEY" | default "" | quote }}
     needs:
       - agent-farm/postgres-app
       - agent-farm/litellm
@@ -130,5 +136,32 @@ releases:
         value: {{ env "UI_IMAGE_REPOSITORY" | default "agentfarm-ui" | quote }}
       - name: ingress.hosts
         value: {{ env "UI_HOST" | required "UI_HOST is required" | quote }}
+    needs:
+      - agent-farm/agentfarm-api
+
+  # Prometheus + Grafana + Alertmanager (kube-prometheus-stack wrapper).
+  # One-time cluster prerequisite: kubectl apply -f k8s/monitoring-crd-rbac.yaml
+  # as a cluster admin, so the deployer SA may install the operator CRDs and
+  # cluster-scoped RBAC (see docs/guidelines/operations.md).
+  - name: monitoring
+    namespace: agent-farm
+    chart: ./helm/monitoring
+    labels:
+      name: monitoring
+    set:
+      - name: kube-prometheus-stack.alertmanager.config.global.slack_api_url
+        value: {{ env "SLACK_WEBHOOK_URL" | required "SLACK_WEBHOOK_URL is required" | quote }}
+      - name: kube-prometheus-stack.grafana.adminPassword
+        value: {{ env "GRAFANA_ADMIN_PASSWORD" | required "GRAFANA_ADMIN_PASSWORD is required" | quote }}
+      - name: kube-prometheus-stack.grafana.ingress.hosts[0]
+        value: {{ env "GRAFANA_HOST" | required "GRAFANA_HOST is required" | quote }}
+      - name: kube-prometheus-stack.grafana.ingress.tls[0].secretName
+        value: grafana-tls
+      - name: kube-prometheus-stack.grafana.ingress.tls[0].hosts[0]
+        value: {{ env "GRAFANA_HOST" | required "GRAFANA_HOST is required" | quote }}
+{{ if env "STORAGE_CLASS" }}
+      - name: kube-prometheus-stack.prometheus.prometheusSpec.storageSpec.volumeClaimTemplate.spec.storageClassName
+        value: {{ env "STORAGE_CLASS" | quote }}
+{{ end }}
     needs:
       - agent-farm/agentfarm-api

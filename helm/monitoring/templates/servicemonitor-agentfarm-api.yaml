@@ -1,0 +1,21 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: agentfarm-api
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "monitoring.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: agentfarm-api
+      app.kubernetes.io/instance: agentfarm-api
+  endpoints:
+    # The API container runs two processes; each exposes its own /metrics.
+    # The endpoint label ("http" vs "ingest") tells the two targets apart.
+    - port: http
+      path: /metrics
+      interval: 30s
+    - port: ingest
+      path: /metrics
+      interval: 30s

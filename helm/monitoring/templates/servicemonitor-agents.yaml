@@ -1,0 +1,23 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: agents
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "monitoring.labels" . | nindent 4 }}
+spec:
+  # One Service per agent is created dynamically by the API; all of them
+  # carry the stable component label (builders/common.py::_labels).
+  selector:
+    matchLabels:
+      agentfarm.io/component: agent
+  # job="agent" for every target (the value of the component label);
+  # app/org-id identify the individual agent (org-id sanitizes to org_id).
+  jobLabel: agentfarm.io/component
+  targetLabels:
+    - app
+    - org-id
+  endpoints:
+    - port: healthz
+      path: /metrics
+      interval: 30s

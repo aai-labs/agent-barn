@@ -129,4 +129,8 @@ kubeconfig.yaml
 
 scripts/
 
+# helm dependency archives (rebuilt by `helm dependency build`)
+helm/monitoring/charts/
+helm/**/*.tgz
+
 .dex/

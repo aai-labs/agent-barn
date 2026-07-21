@@ -35,9 +35,13 @@ Agent runtimes report messages and tool-call state to the separate Ingest API us
 
 ## Service deployment
 
-`../../helmfile.yaml.gotmpl` orders PostgreSQL releases, LiteLLM, API, and UI. API deployment mounts Kubernetes access so the service can manage agent resources. An API Helm hook runs Alembic before installation or upgrade, and health probes use `/api/v1/health`.
+`../../helmfile.yaml.gotmpl` orders PostgreSQL releases, LiteLLM, API, UI, and the monitoring stack. API deployment mounts Kubernetes access so the service can manage agent resources. An API Helm hook runs Alembic before installation or upgrade, and health probes use `/api/v1/health`.
 
 The deploy workflow reads API and UI image tags from each chart's `appVersion`, builds versioned images, and applies Helmfile. `../../AGENTS.md` is authoritative for independent API/UI `appVersion` and chart `version` rules.
+
+## Observability
+
+`../../helm/monitoring/` wraps kube-prometheus-stack (Prometheus, Grafana, Alertmanager) in the `agent-farm` namespace. Scrape topology: the API exposes `/metrics` on both processes (main `:8000` with probe gauges for database, agents-in-ERROR, and OpenRouter credits; ingest `:8001` with the tool-call counter), LiteLLM exposes `/metrics` on `:4000` via its `prometheus` callback, and every agent's healthz server serves `/metrics` on `:8081`, discovered through one ServiceMonitor selecting the stable `agentfarm.io/component: agent` label. Alerting is declarative: `PrometheusRule` → Alertmanager → Slack `#alerts` webhook (injected from `SLACK_WEBHOOK_URL`, never committed). Grafana is dashboards-only, provisioned from ConfigMaps in the chart and exposed via traefik ingress at `GRAFANA_HOST`. One-time cluster prerequisite before the first deploy: `kubectl apply -f ../../k8s/monitoring-crd-rbac.yaml` as cluster admin (the deployer SA is namespace-scoped and cannot install CRDs).
 
 ## Kubernetes client constraint
 
@@ -56,6 +60,8 @@ Kubernetes `stream()` and `portforward()` temporarily monkey-patch `ApiClient.re
 | Kubernetes client               | `../../api/infrastructure/kubernetes/`                                                |
 | Charts and release ordering     | `../../helm/`, `../../helmfile.yaml.gotmpl`                                                 |
 | Deployment workflow             | `../../.github/workflows/deploy.yml`                                                  |
+| Monitoring stack                | `../../helm/monitoring/`, `../../k8s/monitoring-crd-rbac.yaml`                              |
+| API metrics                     | `../../api/core/metrics.py`                                                            |
 
 ## Change impact
 

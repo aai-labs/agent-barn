@@ -1,0 +1,8 @@
+apiVersion: v2
+name: monitoring
+description: Observability stack for agent-farm (kube-prometheus-stack wrapper)
+version: 0.1.0
+dependencies:
+  - name: kube-prometheus-stack
+    version: "87.17.0"
+    repository: https://prometheus-community.github.io/helm-charts

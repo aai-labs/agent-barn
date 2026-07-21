@@ -1,0 +1,143 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: agent-farm-alerts
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "monitoring.labels" . | nindent 4 }}
+spec:
+  groups:
+    - name: agent-farm.rules
+      rules:
+        # --- system up (API + DB) ---
+        - alert: APIDown
+          expr: up{job="agentfarm-api", endpoint="http"} == 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: The agent-farm API is not responding to scrapes.
+            description: Prometheus cannot scrape the main API process on :8000.
+
+        - alert: APIAbsent
+          expr: absent(up{job="agentfarm-api", endpoint="http"})
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: The agent-farm API target has disappeared entirely.
+            description: No scrape target exists for the API — the Service or ServiceMonitor is gone.
+
+        - alert: IngestAPIDown
+          expr: up{job="agentfarm-api", endpoint="ingest"} == 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: The ingest API process is not responding to scrapes.
+            description: Agent telemetry (messages, tool calls) is not being recorded while this fires.
+
+        - alert: DatabaseDown
+          expr: agentfarm_database_up == 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: The API cannot reach Postgres.
+            description: The database probe on the API /metrics endpoint is failing.
+
+        # --- error rates ---
+        - alert: HighAPI5xxRate
+          expr: >-
+            (
+              sum(rate(http_requests_total{job="agentfarm-api", status="5xx"}[5m]))
+              /
+              clamp_min(sum(rate(http_requests_total{job="agentfarm-api"}[5m])), 1e-9)
+            ) > {{ .Values.apiErrorRateThreshold }}
+            and sum(rate(http_requests_total{job="agentfarm-api"}[5m])) > 0.1
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: More than {{ .Values.apiErrorRateThreshold | mulf 100 }}% of API requests are failing with 5xx.
+            description: Sustained server-error ratio over the last 5 minutes with non-trivial traffic.
+
+        - alert: HighToolCallErrorRate
+          expr: >-
+            (
+              sum(rate(agentfarm_tool_calls_total{status="error"}[15m]))
+              /
+              clamp_min(sum(rate(agentfarm_tool_calls_total[15m])), 1e-9)
+            ) > {{ .Values.toolCallErrorRateThreshold }}
+            and sum(rate(agentfarm_tool_calls_total[15m])) > 0.01
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: More than {{ .Values.toolCallErrorRateThreshold | mulf 100 }}% of agent tool calls are failing.
+            description: Error ratio of ingested tool-call results over the last 15 minutes.
+
+        # --- agents running ---
+        - alert: AgentTargetDown
+          expr: up{job="agent"} == 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: Agent {{`{{ $labels.app }}`}} is not responding to scrapes.
+            description: The healthz sidecar of {{`{{ $labels.app }}`}} (org {{`{{ $labels.org_id }}`}}) is unreachable.
+
+        - alert: AgentUnhealthy
+          expr: agent_healthz_ok{job="agent"} == 0 and agent_healthz_ever_connected{job="agent"} == 1
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: Agent {{`{{ $labels.app }}`}} lost its runtime connection.
+            description: The agent runtime of {{`{{ $labels.app }}`}} was connected before and is now unhealthy.
+
+        - alert: AgentSlackTokensInvalid
+          expr: agent_slack_tokens_ok{job="agent"} == 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: Agent {{`{{ $labels.app }}`}} has invalid Slack tokens.
+            description: Slack token validation is failing for {{`{{ $labels.app }}`}}; the agent cannot serve its workspace.
+
+        - alert: AgentsInErrorState
+          expr: agentfarm_agents_in_error > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{`{{ $value }}`}} agent(s) are in ERROR state."
+            description: The control plane has marked agents as ERROR (see the agents table / UI for last_error).
+
+        # --- LLM health ---
+        - alert: LiteLLMDown
+          expr: up{job="litellm"} == 0 or absent(up{job="litellm"})
+          for: 3m
+          labels:
+            severity: critical
+          annotations:
+            summary: LiteLLM is not responding to scrapes.
+            description: The LiteLLM proxy is unreachable — agents cannot make LLM calls.
+
+        - alert: OpenRouterCreditsLow
+          expr: agentfarm_openrouter_credits_remaining < {{ .Values.openrouterCreditsThreshold }}
+          for: 15m
+          labels:
+            severity: critical
+          annotations:
+            summary: OpenRouter credits below ${{ .Values.openrouterCreditsThreshold }}.
+            description: Remaining balance is {{`{{ $value | printf "%.2f" }}`}} USD — top up before requests start failing.
+
+        - alert: OpenRouterCreditsUnknown
+          expr: agentfarm_openrouter_credits_scrape_ok == 0
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: OpenRouter credits cannot be polled.
+            description: The credits probe is failing — management key missing/invalid or the OpenRouter API is unreachable.

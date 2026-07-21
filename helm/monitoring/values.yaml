@@ -1,0 +1,102 @@
+# Alert thresholds used by templates/prometheusrule.yaml.
+apiErrorRateThreshold: 0.05        # 5xx ratio over 5m
+toolCallErrorRateThreshold: 0.25   # tool-call error ratio over 15m
+openrouterCreditsThreshold: 5      # USD
+
+kube-prometheus-stack:
+  fullnameOverride: monitoring
+  crds:
+    enabled: true
+
+  # No upstream rule noise: our PrometheusRule is the only alert source.
+  defaultRules:
+    create: false
+
+  # Lean single-cluster setup: kube-state-metrics powers restart/pod panels;
+  # node-exporter and control-plane scrapes (embedded in k3s, not reachable
+  # as pods) are disabled.
+  nodeExporter:
+    enabled: false
+  kubeStateMetrics:
+    enabled: true
+  kubeControllerManager:
+    enabled: false
+  kubeScheduler:
+    enabled: false
+  kubeProxy:
+    enabled: false
+  kubeEtcd:
+    enabled: false
+
+  prometheus:
+    prometheusSpec:
+      retention: 15d
+      # Pick up every ServiceMonitor/PrometheusRule in the namespace instead
+      # of only those carrying the Helm release label.
+      serviceMonitorSelectorNilUsesHelmValues: false
+      podMonitorSelectorNilUsesHelmValues: false
+      ruleSelectorNilUsesHelmValues: false
+      probeSelectorNilUsesHelmValues: false
+      scrapeConfigSelectorNilUsesHelmValues: false
+      storageSpec:
+        volumeClaimTemplate:
+          spec:
+            # storageClassName is set by helmfile from STORAGE_CLASS only when
+            # non-empty; omitting it here lets the cluster default apply.
+            accessModes: ["ReadWriteOnce"]
+            resources:
+              requests:
+                storage: 10Gi
+      resources:
+        requests:
+          memory: 512Mi
+          cpu: 100m
+        limits:
+          memory: 1Gi
+
+  alertmanager:
+    alertmanagerSpec:
+      retention: 120h
+    # Rendered into a Secret by the chart; slack_api_url is injected by
+    # helmfile from SLACK_WEBHOOK_URL and must never be committed.
+    config:
+      global:
+        resolve_timeout: 5m
+        slack_api_url: ""
+      route:
+        receiver: slack-alerts
+        group_by: ["alertname"]
+        group_wait: 30s
+        group_interval: 5m
+        repeat_interval: 4h
+      receivers:
+        - name: slack-alerts
+          slack_configs:
+            - channel: "#alerts"
+              send_resolved: true
+              title: >-
+                [{{ .Status | toUpper }}{{ if eq .Status "firing" }}:{{ .Alerts.Firing | len }}{{ end }}] {{ .CommonLabels.alertname }}
+              text: >-
+                {{ range .Alerts }}*{{ .Labels.alertname }}* ({{ .Labels.severity }}): {{ .Annotations.summary }}
+                {{ end }}
+
+  grafana:
+    # adminPassword is injected by helmfile from GRAFANA_ADMIN_PASSWORD.
+    adminPassword: ""
+    defaultDashboardsEnabled: false
+    sidecar:
+      dashboards:
+        enabled: true
+        label: grafana_dashboard
+    ingress:
+      enabled: true
+      ingressClassName: traefik
+      annotations:
+        cert-manager.io/cluster-issuer: letsencrypt-http01
+        traefik.ingress.kubernetes.io/router.entrypoints: websecure
+        traefik.ingress.kubernetes.io/router.tls: "true"
+      # hosts and tls hosts are injected by helmfile from GRAFANA_HOST.
+      hosts: []
+      tls:
+        - secretName: grafana-tls
+          hosts: []

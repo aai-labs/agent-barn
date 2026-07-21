@@ -58,9 +58,17 @@ Rules:
 - Bump versions late, ideally immediately before the PR, to reduce merge conflicts.
 - The git commit or PR is the product release identifier; there is no shared API/UI release number.
 - `../../.github/workflows/deploy.yml` reads API and UI image tags from `../../helm/agentfarm-api/Chart.yaml` and `../../helm/agentfarm-ui/Chart.yaml`.
-- LiteLLM and PostgreSQL charts run upstream images and have no `appVersion`; bump only chart `version` when their chart templates change.
+- LiteLLM, PostgreSQL, and monitoring charts run upstream images and have no `appVersion`; bump only chart `version` when their chart templates change.
 
 Documentation-only changes do not change a service image and do not require an `appVersion` bump.
+
+## Monitoring stack
+
+`../../helm/monitoring/` (kube-prometheus-stack wrapper) deploys with the regular Helmfile sync. Operational notes:
+
+- One-time cluster prerequisite: `kubectl apply -f ../../k8s/monitoring-crd-rbac.yaml` as a cluster admin before the first monitoring deploy — the deployer SA cannot install CRDs or cluster RBAC on its own.
+- Required GitHub Actions config: secrets `SLACK_WEBHOOK_URL` (incoming webhook for `#alerts`), `GRAFANA_ADMIN_PASSWORD`, `OPENROUTER_MANAGEMENT_KEY` (management key for the credits metric; the inference key cannot read `/credits`); variable `GRAFANA_HOST` (DNS must resolve for the http01 challenge).
+- The pinned kube-prometheus-stack dependency is rebuilt locally with `helm dependency build helm/monitoring` (`Chart.lock` is committed, the fetched `charts/*.tgz` is gitignored).
 
 ## Operational safety
 
