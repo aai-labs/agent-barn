@@ -19,7 +19,6 @@ from api.domains.agents.models import (
     SecretProvider,
 )
 from api.domains.rbac.catalog import (
-    AGENT_EDITOR_ROLE_ID,
     AGENT_OWNER_ROLE_ID,
     PERMISSION_ID_BY_KEY,
     PermissionKey,
@@ -212,18 +211,33 @@ class AgentRepository:
             session.refresh(agent)
             return agent
 
+    def find_access_assignments(
+        self, agent_id: UUID, organization_id: UUID
+    ) -> list[AgentAccess]:
+        with Session(self.delegate.engine) as session:
+            return list(
+                session.exec(
+                    select(AgentAccess).where(
+                        col(AgentAccess.agent_id) == agent_id,
+                        col(AgentAccess.organization_id) == organization_id,
+                    )
+                ).all()
+            )
+
     def find_access_membership_ids(
         self, agent_id: UUID, organization_id: UUID
     ) -> set[UUID]:
-        with Session(self.delegate.engine) as session:
-            query = select(AgentAccess.membership_id).where(
-                col(AgentAccess.agent_id) == agent_id,
-                col(AgentAccess.organization_id) == organization_id,
-            )
-            return set(session.exec(query).all())
+        return {
+            access.membership_id
+            for access in self.find_access_assignments(agent_id, organization_id)
+        }
 
     def grant_access(
-        self, agent_id: UUID, membership_id: UUID, organization_id: UUID
+        self,
+        agent_id: UUID,
+        membership_id: UUID,
+        organization_id: UUID,
+        access_role_id: UUID,
     ) -> tuple[AgentAccess, bool] | None:
         """Idempotently add one same-Organization Agent Access relationship.
 
@@ -264,7 +278,7 @@ class AgentRepository:
                 organization_id=organization_id,
                 membership_id=membership_id,
                 agent_id=agent_id,
-                access_role_id=AGENT_EDITOR_ROLE_ID,
+                access_role_id=access_role_id,
             )
             session.add(access)
             try:
@@ -279,6 +293,30 @@ class AgentRepository:
                 raise
             session.refresh(access)
             return access, True
+
+    def change_access_role(
+        self,
+        agent_id: UUID,
+        membership_id: UUID,
+        organization_id: UUID,
+        access_role_id: UUID,
+    ) -> AgentAccess | None:
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            access = session.exec(
+                select(AgentAccess)
+                .where(
+                    col(AgentAccess.agent_id) == agent_id,
+                    col(AgentAccess.membership_id) == membership_id,
+                    col(AgentAccess.organization_id) == organization_id,
+                )
+                .with_for_update()
+            ).first()
+            if access is None:
+                return None
+            access.access_role_id = access_role_id
+            session.add(access)
+            session.commit()
+            return access
 
     def revoke_access(
         self, agent_id: UUID, membership_id: UUID, organization_id: UUID

@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from injector import inject, singleton
-from sqlmodel import Session, col, select
+from sqlmodel import Session, col, or_, select
 
 from api.domains.rbac.catalog import (
     PERMISSION_ID_BY_KEY,
@@ -78,6 +78,62 @@ class RbacRepository:
                 )
             ).all()
         return {by_value[key] for key in keys}
+
+    def list_agent_access_roles(
+        self, organization_id: UUID
+    ) -> list[tuple[AgentAccessRole, set[PermissionKey]]]:
+        """Return locked defaults and roles owned by the active Organization."""
+        with Session(self.delegate.engine) as session:
+            roles = list(
+                session.exec(
+                    select(AgentAccessRole)
+                    .where(
+                        or_(
+                            col(AgentAccessRole.is_system).is_(True),
+                            col(AgentAccessRole.organization_id) == organization_id,
+                        )
+                    )
+                    .order_by(
+                        col(AgentAccessRole.is_system).desc(),
+                        col(AgentAccessRole.name).asc(),
+                    )
+                ).all()
+            )
+            role_ids = [role.id for role in roles]
+            grants = (
+                session.exec(
+                    select(AgentAccessRolePermission.role_id, Permission.key)
+                    .join(
+                        Permission,
+                        col(Permission.id)
+                        == col(AgentAccessRolePermission.permission_id),
+                    )
+                    .where(col(AgentAccessRolePermission.role_id).in_(role_ids))
+                ).all()
+                if role_ids
+                else []
+            )
+        permissions_by_role: dict[UUID, set[PermissionKey]] = {
+            role_id: set() for role_id in role_ids
+        }
+        for role_id, key in grants:
+            permissions_by_role[role_id].add(PermissionKey(key))
+        return [(role, permissions_by_role[role.id]) for role in roles]
+
+    def get_agent_access_role(
+        self, role_id: UUID, organization_id: UUID
+    ) -> AgentAccessRole | None:
+        """Resolve a system role or a custom role owned by one Organization."""
+        with Session(self.delegate.engine) as session:
+            return session.exec(
+                select(AgentAccessRole).where(
+                    col(AgentAccessRole.id) == role_id,
+                    or_(
+                        col(AgentAccessRole.is_system).is_(True),
+                        col(AgentAccessRole.organization_id) == organization_id,
+                    ),
+                )
+            ).first()
 
     def ensure_system_catalogue(self) -> None:
         with Session(self.delegate.engine) as session:

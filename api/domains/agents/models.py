@@ -551,17 +551,33 @@ class AgentSecretRead(PydanticBaseModel):  # label + provider only — no secret
     secret_name: str
 
 
+class AgentAccessRoleRead(PydanticBaseModel):
+    id: UUID
+    name: str
+    permissions: list[PermissionKey]
+    is_locked: bool
+
+
 class AgentAccessGrantRequest(PydanticBaseModel):
     user_id: UUID
+    access_role_id: UUID
 
 
-class AgentAccessMemberRead(PydanticBaseModel):
+class AgentAccessUpdate(PydanticBaseModel):
+    access_role_id: UUID
+
+
+class AgentAccessCandidateRead(PydanticBaseModel):
     user_id: UUID
     email: str
     full_name: str | None = None
-    role: OrganizationRole
+    organization_role: OrganizationRole
     is_pending: bool
     is_creator: bool
+
+
+class AgentAccessMemberRead(AgentAccessCandidateRead):
+    access_role: AgentAccessRoleRead
 
 
 class AgentAssignedSkillRead(PydanticBaseModel):

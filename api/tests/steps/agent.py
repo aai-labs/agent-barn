@@ -149,6 +149,7 @@ def there_is_an_agent(
 def there_is_agent_access(
     membership_id: UUID | None = None,
     agent_id: UUID | None = None,
+    access_role_id: UUID = AGENT_EDITOR_ROLE_ID,
 ):
     def step(context):
         repository: AgentRepository = context.injector.get(AgentRepository)
@@ -159,7 +160,7 @@ def there_is_agent_access(
                 organization_id=context.organization.id,
                 membership_id=membership,
                 agent_id=target_agent,
-                access_role_id=AGENT_EDITOR_ROLE_ID,
+                access_role_id=access_role_id,
             )
         )
 

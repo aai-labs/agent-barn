@@ -7,8 +7,11 @@ from fastapi_injector import Injected
 
 from api.domains.agents.access_service import AgentAccessService
 from api.domains.agents.models import (
+    AgentAccessCandidateRead,
     AgentAccessGrantRequest,
     AgentAccessMemberRead,
+    AgentAccessRoleRead,
+    AgentAccessUpdate,
     AgentCreate,
     AgentFilter,
     AgentHealthRead,
@@ -61,6 +64,14 @@ def list_models(
     return service.list_models(context)
 
 
+@agents_router.get("/access-roles", response_model=list[AgentAccessRoleRead])
+def list_agent_access_roles(
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentAccessService, Injected(AgentAccessService)],
+):
+    return service.list_roles(context)
+
+
 @agents_router.get("/{agent_id}/access", response_model=list[AgentAccessMemberRead])
 def list_agent_access(
     agent_id: UUID,
@@ -71,7 +82,7 @@ def list_agent_access(
 
 
 @agents_router.get(
-    "/{agent_id}/access/eligible", response_model=list[AgentAccessMemberRead]
+    "/{agent_id}/access/eligible", response_model=list[AgentAccessCandidateRead]
 )
 def list_eligible_agent_access(
     agent_id: UUID,
@@ -92,6 +103,19 @@ def grant_agent_access(
     result, created = service.grant_access(agent_id, data, context)
     response.status_code = status.HTTP_201_CREATED if created else status.HTTP_200_OK
     return result
+
+
+@agents_router.patch(
+    "/{agent_id}/access/{user_id}", response_model=AgentAccessMemberRead
+)
+def change_agent_access_role(
+    agent_id: UUID,
+    user_id: UUID,
+    data: AgentAccessUpdate,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentAccessService, Injected(AgentAccessService)],
+):
+    return service.change_access_role(agent_id, user_id, data, context)
 
 
 @agents_router.delete(
