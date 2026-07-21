@@ -12,10 +12,9 @@ _TIMEOUT = 10
 def validate_confluence(content: ConfluenceContent) -> IntegrationValidationResult:
     base = content.site_url.rstrip("/")
 
-    # No email = OAuth Bearer token (Atlassian service account / scoped token).
-    # These MUST route through the api.atlassian.com gateway — direct site URL
-    # does not accept OAuth tokens on Atlassian Cloud.
-    if not content.email:
+    # If scoped token is selected, we MUST route through the api.atlassian.com gateway.
+    # Direct site URL does not accept OAuth scoped tokens on Atlassian Cloud.
+    if content.use_scoped_token:
         cloud_id, cloud_err = get_atlassian_cloud_id(base, content.api_token)
         if not cloud_id:
             return IntegrationValidationResult(
@@ -58,9 +57,10 @@ def validate_confluence(content: ConfluenceContent) -> IntegrationValidationResu
         # /space returns paginated results — any 200 means the token is valid
         data = resp.json()
         count = len(data.get("results", [])) if isinstance(data, dict) else "?"
+        site_label = base.replace("https://", "").replace("http://", "")
         return IntegrationValidationResult(
             valid=True,
-            identity=f"Service account (ocbw-agents) · {count} space(s) accessible",
+            identity=f"Service account ({site_label}) · {count} space(s) accessible",
         )
 
     data = resp.json()

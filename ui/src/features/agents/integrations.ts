@@ -53,7 +53,17 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
     scopeNote: "API token inherits your Atlassian account's project permissions — account needs Browse Projects and Add Comments on the target project",
     fields: [
       { key: "siteUrl", label: "Site URL", type: "text", required: true, placeholder: "https://your-domain.atlassian.net" },
-      { key: "email", label: "Email", type: "text", required: false, placeholder: "you@example.com", hint: "Leave blank if using a scoped service account token (OAuth Bearer)." },
+      { 
+        key: "useScopedToken", 
+        label: "Authentication Type", 
+        type: "radio", 
+        required: true, 
+        options: [
+          { label: "Non-scoped token (Basic Auth)", value: "false" },
+          { label: "Scoped token (OAuth Bearer)", value: "true" }
+        ] 
+      },
+      { key: "email", label: "Email", type: "text", required: true, placeholder: "you@example.com", dependsOn: { key: "useScopedToken", value: "false" } },
       { key: "apiToken", label: "API token", type: "secret", required: true },
     ],
   },
@@ -63,7 +73,17 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
     scopeNote: "API token inherits your Atlassian account's space permissions — account needs Space View and Add Page Comments on the target space",
     fields: [
       { key: "siteUrl", label: "Site URL", type: "text", required: true, placeholder: "https://your-domain.atlassian.net" },
-      { key: "email", label: "Email", type: "text", required: false, placeholder: "you@example.com", hint: "Leave blank if using a scoped service account token (OAuth Bearer)." },
+      { 
+        key: "useScopedToken", 
+        label: "Authentication Type", 
+        type: "radio", 
+        required: true, 
+        options: [
+          { label: "Non-scoped token (Basic Auth)", value: "false" },
+          { label: "Scoped token (OAuth Bearer)", value: "true" }
+        ] 
+      },
+      { key: "email", label: "Email", type: "text", required: true, placeholder: "you@example.com", dependsOn: { key: "useScopedToken", value: "false" } },
       { key: "apiToken", label: "API token", type: "secret", required: true },
     ],
   },
@@ -150,6 +170,15 @@ export function hasIncompleteIntegration(integrations: IntegrationDraft[]): bool
     if (provider.authMethod === "google_oauth") return !isOAuthConnected(draft);
     return provider.fields.some((f) => {
       if (!f.required) return false;
+      
+      // If the field depends on another field, check if the condition is met
+      if (f.dependsOn) {
+        const dependentValue = draft.content[f.dependsOn.key];
+        if (dependentValue !== f.dependsOn.value) {
+            return false; // Skip validation since this field is not active
+        }
+      }
+
       const value = draft.content[f.key];
       return typeof value !== "string" || value.trim().length === 0;
     });

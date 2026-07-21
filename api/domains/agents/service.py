@@ -142,20 +142,24 @@ def _allowlist_patterns(allowlist: str) -> list[str]:
 
 
 def _enrich_atlassian_content(content: Any) -> Any:
-    """For Atlassian service accounts (no email), fetch and store the cloud_id.
+    """For Atlassian integrations using OAuth scoped tokens, fetch and store the cloud_id.
 
     This allows aai-cli to use the correct bearer-token API Gateway URL
     (https://api.atlassian.com/ex/jira/<cloud_id>) instead of the standard
     Basic Auth site URL, which does not accept OAuth tokens.
     Best-effort: if the lookup fails, the content is returned unchanged.
     """
-    if isinstance(content, JiraContent) and not content.email and not content.cloud_id:
+    if (
+        isinstance(content, JiraContent)
+        and content.use_scoped_token
+        and not content.cloud_id
+    ):
         cloud_id, _ = get_atlassian_cloud_id(content.site_url, content.api_token)
         if cloud_id:
             return content.model_copy(update={"cloud_id": cloud_id})
     elif (
         isinstance(content, ConfluenceContent)
-        and not content.email
+        and content.use_scoped_token
         and not content.cloud_id
     ):
         cloud_id, _ = get_atlassian_cloud_id(content.site_url, content.api_token)

@@ -102,6 +102,7 @@ class GithubContent(_RepoListCompat):
 
 class JiraContent(SecretContent):
     site_url: str
+    use_scoped_token: bool = False
     email: str = ""
     api_token: str
     # Populated at save time for service accounts (no email).
@@ -111,6 +112,7 @@ class JiraContent(SecretContent):
 
 class ConfluenceContent(SecretContent):
     site_url: str
+    use_scoped_token: bool = False
     email: str = ""
     api_token: str
     # Populated at save time for service accounts (no email).
