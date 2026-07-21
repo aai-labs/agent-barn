@@ -11,12 +11,11 @@ from sqlmodel import Session, col, select
 from api.domains.agents.models import Agent, AgentAccess, AgentFilter
 from api.domains.agents.repository import AgentRepository
 from api.domains.rbac.catalog import (
+    AGENT_OWNER_ROLE_ID,
+    AGENT_VIEWER_ROLE_ID,
     MEMBER_ROLE_ID,
-    PERMISSION_ID_BY_KEY,
     PermissionKey,
-    PermissionScope,
 )
-from api.domains.rbac.models import Role, RolePermission
 from api.domains.users.organization_users.models import OrganizationRole
 from api.domains.users.organization_users.repository import OrganizationUserRepository
 from api.infrastructure.shared.models import Pagination
@@ -159,6 +158,7 @@ def test_member_creation_persists_creator_access_and_effective_permission_keys()
                 )
             ).first()
         assert access is not None
+        assert_that(access.access_role_id, equal_to(AGENT_OWNER_ROLE_ID))
 
 
 def test_creator_keeps_assigned_agent_after_owner_is_demoted_to_member():
@@ -242,26 +242,16 @@ def test_assigned_list_count_detail_and_recipient_actions_are_scoped():
 
 def test_visible_agent_without_update_permission_returns_403():
     with given([*_GIVEN, there_is_an_agent()]) as context:
-        role = Role(
-            organization_id=context.organization.id,
-            name="Agent Reader",
-            is_system=False,
-        )
+        _switch_to_member()(context)
         repository: AgentRepository = context.injector.get(AgentRepository)
-        repository.delegate.save(role)
         repository.delegate.save(
-            RolePermission(
-                role_id=role.id,
-                permission_id=PERMISSION_ID_BY_KEY[PermissionKey.AGENT_READ],
-                scope=PermissionScope.ORGANIZATION,
+            AgentAccess(
+                organization_id=context.organization.id,
+                membership_id=context.member_membership.id,
+                agent_id=context.agent.id,
+                access_role_id=AGENT_VIEWER_ROLE_ID,
             )
         )
-        _switch_to_member()(context)
-        context.member_membership.role_id = role.id
-        membership_repository: OrganizationUserRepository = context.injector.get(
-            OrganizationUserRepository
-        )
-        membership_repository.save(context.member_membership)
 
         visible = context.client.get(
             f"{_BASE}/{context.agent.id}", headers=_auth(context)
@@ -329,7 +319,7 @@ def test_access_revocation_is_observed_on_next_request():
         assert_that(second.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
-def test_repository_assigned_scope_filters_before_count_and_pagination():
+def test_repository_agent_access_filters_before_count_and_pagination():
     with given([*_GIVEN, there_is_an_agent(), _switch_to_member()]) as context:
         there_is_agent_access()(context)
         repository: AgentRepository = context.injector.get(AgentRepository)
@@ -338,8 +328,8 @@ def test_repository_assigned_scope_filters_before_count_and_pagination():
         agents, total = repository.find_all_active(
             AuthorizationScope(
                 organization_id=context.organization.id,
-                scope=PermissionScope.ASSIGNED,
                 membership_id=context.member_membership.id,
+                permission=PermissionKey.AGENT_READ,
             ),
             AgentFilter(),
             Pagination(page=1, size=1),

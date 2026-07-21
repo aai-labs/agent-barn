@@ -6,24 +6,28 @@ from injector import inject, singleton
 
 from api.domains.auth.exceptions import ForbiddenException
 from api.domains.auth.models import CurrentUserContext
-from api.domains.rbac.catalog import PermissionKey, PermissionScope
+from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.repository import RbacRepository
 
 
 @dataclass(frozen=True)
 class AuthorizationScope:
-    """The resource boundary a caller may use for one permission."""
+    """Repository visibility for an Organization or explicit Agent assignment."""
 
     organization_id: UUID
-    scope: PermissionScope
-    membership_id: UUID | None
+    membership_id: UUID | None = None
+    permission: PermissionKey | None = None
+
+    @property
+    def has_organization_visibility(self) -> bool:
+        return self.membership_id is None
 
 
 @inject
 @singleton
 @dataclass
 class PermissionPolicy:
-    """Resolve current database-backed permission grants for an active organization."""
+    """Resolve fixed Organization Role permissions for the active Organization."""
 
     repository: RbacRepository
 
@@ -36,22 +40,11 @@ class PermissionPolicy:
         membership = context.require_current_user_organization()
         if membership.organization_id != organization_id:
             return None
-        if context.user.is_superuser:
-            return AuthorizationScope(
-                organization_id=organization_id,
-                scope=PermissionScope.ORGANIZATION,
-                membership_id=None,
-            )
-        scope = self.repository.get_permission_scope(membership.role_id, permission)
-        if scope is None:
-            return None
-        return AuthorizationScope(
-            organization_id=organization_id,
-            scope=scope,
-            membership_id=(
-                membership.id if scope == PermissionScope.ASSIGNED else None
-            ),
-        )
+        if context.user.is_superuser or self.repository.has_permission(
+            membership.role_id, permission
+        ):
+            return AuthorizationScope(organization_id=organization_id)
+        return None
 
     def resolve_many(
         self,
@@ -63,32 +56,19 @@ class PermissionPolicy:
         if not requested:
             return {}
 
-        # Explicit Organization context is represented by the active Membership. Auth
-        # supplies a transient, unpersisted Membership for superusers targeting an org.
         membership = context.require_current_user_organization()
         if membership.organization_id != organization_id:
             return {}
 
-        if context.user.is_superuser:
-            return {
-                permission: AuthorizationScope(
-                    organization_id=organization_id,
-                    scope=PermissionScope.ORGANIZATION,
-                    membership_id=None,
-                )
-                for permission in requested
-            }
-
-        grants = self.repository.get_permission_scopes(membership.role_id, requested)
+        granted = (
+            set(requested)
+            if context.user.is_superuser
+            else self.repository.get_permissions(membership.role_id, requested)
+        )
         return {
-            permission: AuthorizationScope(
-                organization_id=organization_id,
-                scope=scope,
-                membership_id=(
-                    membership.id if scope == PermissionScope.ASSIGNED else None
-                ),
-            )
-            for permission, scope in grants.items()
+            permission: AuthorizationScope(organization_id=organization_id)
+            for permission in requested
+            if permission in granted
         }
 
     def require(
@@ -112,12 +92,9 @@ class PermissionPolicy:
         *,
         detail: str = "You don't have permission for this organization.",
     ) -> AuthorizationScope:
-        authorization_scope = self.require(
+        return self.require(
             context,
             organization_id,
             permission,
             detail=detail,
         )
-        if authorization_scope.scope != PermissionScope.ORGANIZATION:
-            raise ForbiddenException(detail=detail)
-        return authorization_scope

@@ -6,12 +6,20 @@ Related context: [implementation brief](IMPLEMENTATION-BRIEF.md), [current role 
 
 ## Current state
 
-- Delivered on the branch: fixed Organization Role and Permission persistence; request-time Organization policy; creator provenance; binary Agent assignment enforcement; backend access operations; Organization/Membership/Template/Skill/cost authorization; and staged permission-aware UI work.
-- In transition: AF-150 now requires separate Agent Access Roles. The binary assignment policy, Organization Role `ASSIGNED` grants, creator-only sharing rules, role-less access contracts, and staged access-management UI are superseded and must not be treated as the target contract.
-- Next: refactor schema and migration for locked Agent Viewer/Editor/Owner roles, then make Agent Access Roles the Agent authorization source and reduce the UI to AF-150 scope.
+- Delivered on the branch: fixed Organization Role and Permission persistence; locked Agent Viewer/Editor/Owner persistence and grants; role-bearing Agent Access; legacy Member-to-Editor migration; creator Owner assignment; request-time Organization and Agent authorization; Organization/Membership/Template/Skill/cost enforcement; and staged permission-aware UI work.
+- In transition: backend access-management contracts still need explicit role selection and role changes, aggregate authorization requires final matrix hardening, and staged access-management UI must move to AF-217.
+- Next: complete role-bearing Agent access operations, harden the full Agent aggregate, and reduce the UI to AF-150 scope.
 - Blockers: none. Custom Agent Access Role backend management is deferred to AF-216, Agent sharing and role-management UI to AF-217, and event/audit infrastructure to AF-218 through AF-221.
 
 ## Changes
+
+### 2026-07-21 — AF-150 — Agent Access Role schema and authorization foundation
+
+- Delivered: separate fixed Organization Role and Agent Access Role persistence, locked Viewer/Editor/Owner grants, required role-bearing Agent Access, implicit Organization Owner/Admin authority, and explicit creator Owner assignment.
+- Changed: Organization Role grants no longer carry resource scope or Agent-operation permissions; Agent visibility and permitted operations resolve from implicit Owner authority or explicit Agent Access Role permissions.
+- Migrated: existing accepted Organization Members receive Editor on existing Agents, pending Members receive none, Organization Owner/Admin remain implicit, and legacy creator provenance remains unknown where unrecoverable.
+- Verified: API lint/type checks; 17 migration/schema tests; 45 focused schema, policy, authorization, and Agent RBAC tests; full API suite reached 832 passing with three unrelated email-delivery failures in `test_auth_flow_extended.py`.
+- Follow-up: add selected-role grant/change contracts and complete aggregate security hardening.
 
 ### 2026-07-21 — AF-150 — Agent Access Role contract correction
 

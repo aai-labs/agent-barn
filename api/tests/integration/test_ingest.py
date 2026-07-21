@@ -9,7 +9,6 @@ from api.domains.conversations.models import (
     ConversationsFilter,
 )
 from api.domains.conversations.repository import ConversationRepository
-from api.domains.rbac.catalog import PermissionScope
 from api.domains.rbac.policy import AuthorizationScope
 from api.domains.tool_calls.repository import ToolCallRepository
 from api.infrastructure.crypto import encrypt_token
@@ -169,11 +168,7 @@ def test_ingest_messages_returns_204_and_persists():
             )
             channels = conv_repo.distinct_channels(
                 context.agent.id,
-                AuthorizationScope(
-                    organization_id=context.organization.id,
-                    scope=PermissionScope.ORGANIZATION,
-                    membership_id=None,
-                ),
+                AuthorizationScope(organization_id=context.organization.id),
             )
             assert_that(channels, has_length(1))
 
@@ -202,9 +197,7 @@ def test_ingest_duplicate_messages_are_idempotent():
                 channel_id="D123",
                 filter=ConversationsFilter(),
                 authorization_scope=AuthorizationScope(
-                    organization_id=context.organization.id,
-                    scope=PermissionScope.ORGANIZATION,
-                    membership_id=None,
+                    organization_id=context.organization.id
                 ),
             )
             assert_that(messages, has_length(1))
@@ -234,11 +227,7 @@ def test_ingest_tool_calls_returns_204_and_persists():
                 context.agent.id,
                 ToolCallFilter(),
                 Pagination(page=1, size=10),
-                AuthorizationScope(
-                    organization_id=context.organization.id,
-                    scope=PermissionScope.ORGANIZATION,
-                    membership_id=None,
-                ),
+                AuthorizationScope(organization_id=context.organization.id),
             )
             assert_that(page.total, equal_to(1))
             assert_that(page.items[0].tool_name, equal_to("read"))

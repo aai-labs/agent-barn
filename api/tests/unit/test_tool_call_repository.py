@@ -4,7 +4,6 @@ from uuid import UUID
 from hamcrest import assert_that, equal_to, has_length, is_, is_not, none
 from sqlmodel import Session
 
-from api.domains.rbac.catalog import PermissionScope
 from api.domains.rbac.policy import AuthorizationScope
 from api.domains.tool_calls.models import (
     ToolCall,
@@ -54,11 +53,7 @@ def _find_by_agent(
         agent_id,
         tool_call_filter,
         pagination,
-        AuthorizationScope(
-            organization_id=context.organization.id,
-            scope=PermissionScope.ORGANIZATION,
-            membership_id=None,
-        ),
+        AuthorizationScope(organization_id=context.organization.id),
     )
 
 

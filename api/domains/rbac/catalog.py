@@ -3,11 +3,6 @@ from enum import Enum
 from uuid import UUID
 
 
-class PermissionScope(str, Enum):
-    ASSIGNED = "ASSIGNED"
-    ORGANIZATION = "ORGANIZATION"
-
-
 class PermissionKey(str, Enum):
     ORGANIZATION_READ = "organization.read"
     ORGANIZATION_UPDATE = "organization.update"
@@ -35,7 +30,7 @@ class PermissionKey(str, Enum):
 
 
 @dataclass(frozen=True)
-class SystemRoleSeed:
+class RoleSeed:
     id: UUID
     name: str
 
@@ -50,13 +45,29 @@ OWNER_ROLE_ID = UUID("5dd0b6b3-2a19-5d6d-9c91-50f9503563a6")
 ADMIN_ROLE_ID = UUID("1222b10c-3f24-54ca-bbeb-fce956134f70")
 MEMBER_ROLE_ID = UUID("d369b23a-01dd-5aeb-bd53-c463b3c4cd1a")
 
-SYSTEM_ROLES: tuple[SystemRoleSeed, ...] = (
-    SystemRoleSeed(id=OWNER_ROLE_ID, name="OWNER"),
-    SystemRoleSeed(id=ADMIN_ROLE_ID, name="ADMIN"),
-    SystemRoleSeed(id=MEMBER_ROLE_ID, name="MEMBER"),
+AGENT_OWNER_ROLE_ID = UUID("8f2a47ff-7caf-5ded-9027-4a16b85620b3")
+AGENT_EDITOR_ROLE_ID = UUID("30e5e846-5e24-548f-a068-2505f774ce35")
+AGENT_VIEWER_ROLE_ID = UUID("c7da77aa-bf9c-5626-8bad-5e0ca5159b5d")
+
+SYSTEM_ROLES: tuple[RoleSeed, ...] = (
+    RoleSeed(id=OWNER_ROLE_ID, name="OWNER"),
+    RoleSeed(id=ADMIN_ROLE_ID, name="ADMIN"),
+    RoleSeed(id=MEMBER_ROLE_ID, name="MEMBER"),
 )
 SYSTEM_ROLE_ID_BY_NAME = {role.name: role.id for role in SYSTEM_ROLES}
 SYSTEM_ROLE_NAME_BY_ID = {role.id: role.name for role in SYSTEM_ROLES}
+
+SYSTEM_AGENT_ACCESS_ROLES: tuple[RoleSeed, ...] = (
+    RoleSeed(id=AGENT_OWNER_ROLE_ID, name="OWNER"),
+    RoleSeed(id=AGENT_EDITOR_ROLE_ID, name="EDITOR"),
+    RoleSeed(id=AGENT_VIEWER_ROLE_ID, name="VIEWER"),
+)
+SYSTEM_AGENT_ACCESS_ROLE_ID_BY_NAME = {
+    role.name: role.id for role in SYSTEM_AGENT_ACCESS_ROLES
+}
+SYSTEM_AGENT_ACCESS_ROLE_NAME_BY_ID = {
+    role.id: role.name for role in SYSTEM_AGENT_ACCESS_ROLES
+}
 
 PERMISSIONS: tuple[PermissionSeed, ...] = (
     PermissionSeed(
@@ -133,8 +144,19 @@ PERMISSIONS: tuple[PermissionSeed, ...] = (
 )
 PERMISSION_ID_BY_KEY = {permission.key: permission.id for permission in PERMISSIONS}
 
-_OWNER_KEYS = frozenset(PermissionKey)
-_ADMIN_KEYS = _OWNER_KEYS - {
+_AGENT_OPERATION_KEYS = frozenset(
+    {
+        PermissionKey.AGENT_READ,
+        PermissionKey.AGENT_UPDATE,
+        PermissionKey.AGENT_DELETE,
+        PermissionKey.AGENT_START,
+        PermissionKey.AGENT_STOP,
+        PermissionKey.AGENT_ACCESS_MANAGE,
+        PermissionKey.AGENT_SECRET_MANAGE,
+    }
+)
+_OWNER_ORGANIZATION_KEYS = frozenset(PermissionKey) - _AGENT_OPERATION_KEYS
+_ADMIN_ORGANIZATION_KEYS = _OWNER_ORGANIZATION_KEYS - {
     PermissionKey.ORGANIZATION_DELETE,
     PermissionKey.ORGANIZATION_OWNERSHIP_TRANSFER,
 }
@@ -146,27 +168,34 @@ _MEMBER_ORGANIZATION_KEYS = frozenset(
         PermissionKey.SKILL_READ,
     }
 )
-_MEMBER_ASSIGNED_KEYS = frozenset(
+
+SYSTEM_ROLE_GRANTS: dict[UUID, frozenset[PermissionKey]] = {
+    OWNER_ROLE_ID: _OWNER_ORGANIZATION_KEYS,
+    ADMIN_ROLE_ID: _ADMIN_ORGANIZATION_KEYS,
+    MEMBER_ROLE_ID: _MEMBER_ORGANIZATION_KEYS,
+}
+
+_VIEWER_KEYS = frozenset(
     {
         PermissionKey.AGENT_READ,
-        PermissionKey.AGENT_UPDATE,
-        PermissionKey.AGENT_DELETE,
-        PermissionKey.AGENT_START,
-        PermissionKey.AGENT_STOP,
-        PermissionKey.AGENT_ACCESS_MANAGE,
-        PermissionKey.AGENT_SECRET_MANAGE,
         PermissionKey.ACTIVITY_READ,
         PermissionKey.COST_READ,
     }
 )
-
-SYSTEM_ROLE_GRANTS: dict[UUID, dict[PermissionKey, PermissionScope]] = {
-    OWNER_ROLE_ID: {key: PermissionScope.ORGANIZATION for key in _OWNER_KEYS},
-    ADMIN_ROLE_ID: {key: PermissionScope.ORGANIZATION for key in _ADMIN_KEYS},
-    MEMBER_ROLE_ID: {
-        **{key: PermissionScope.ORGANIZATION for key in _MEMBER_ORGANIZATION_KEYS},
-        **{key: PermissionScope.ASSIGNED for key in _MEMBER_ASSIGNED_KEYS},
-    },
+_EDITOR_KEYS = _VIEWER_KEYS | {
+    PermissionKey.AGENT_UPDATE,
+    PermissionKey.AGENT_START,
+    PermissionKey.AGENT_STOP,
+    PermissionKey.AGENT_SECRET_MANAGE,
+}
+_OWNER_KEYS = _EDITOR_KEYS | {
+    PermissionKey.AGENT_DELETE,
+    PermissionKey.AGENT_ACCESS_MANAGE,
+}
+SYSTEM_AGENT_ACCESS_ROLE_GRANTS: dict[UUID, frozenset[PermissionKey]] = {
+    AGENT_VIEWER_ROLE_ID: _VIEWER_KEYS,
+    AGENT_EDITOR_ROLE_ID: _EDITOR_KEYS,
+    AGENT_OWNER_ROLE_ID: _OWNER_KEYS,
 }
 
 
@@ -182,3 +211,17 @@ def system_role_name(role_id: UUID) -> str:
         return SYSTEM_ROLE_NAME_BY_ID[role_id]
     except KeyError as exc:
         raise ValueError(f"Role {role_id} is not a seeded system role") from exc
+
+
+def system_agent_access_role_id(role_name: str) -> UUID:
+    try:
+        return SYSTEM_AGENT_ACCESS_ROLE_ID_BY_NAME[role_name]
+    except KeyError as exc:
+        raise ValueError(f"Unknown system Agent Access Role: {role_name}") from exc
+
+
+def system_agent_access_role_name(role_id: UUID) -> str:
+    try:
+        return SYSTEM_AGENT_ACCESS_ROLE_NAME_BY_ID[role_id]
+    except KeyError as exc:
+        raise ValueError(f"Role {role_id} is not a seeded Agent Access Role") from exc

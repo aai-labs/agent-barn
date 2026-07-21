@@ -270,6 +270,7 @@ class AgentAccess(BaseModel, table=True):
         ),
         sa.Index("ix_agent_access_membership", "membership_id"),
         sa.Index("ix_agent_access_agent", "agent_id"),
+        sa.Index("ix_agent_access_role", "access_role_id"),
     )
 
     organization_id: UUID = SqlField(
@@ -279,6 +280,11 @@ class AgentAccess(BaseModel, table=True):
     )
     membership_id: UUID = SqlField(nullable=False)
     agent_id: UUID = SqlField(nullable=False)
+    access_role_id: UUID = SqlField(
+        foreign_key="agent_access_roles.id",
+        nullable=False,
+        ondelete="RESTRICT",
+    )
 
 
 class AgentSlackConfig(BaseModel, table=True):

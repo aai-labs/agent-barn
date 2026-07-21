@@ -19,7 +19,7 @@ from api.domains.costs.models import (
     CostTimeSeriesPoint,
     OrgCostSummaryRead,
 )
-from api.domains.rbac.catalog import PermissionKey, PermissionScope
+from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import PermissionPolicy
 from api.infrastructure.crypto import decrypt_token
 from api.infrastructure.litellm.client import LiteLLMClient
@@ -176,7 +176,6 @@ class CostService:
     def get_agent_cost(
         self, agent_id: UUID, context: CurrentUserContext
     ) -> AgentCostRead:
-        org_id = self._org_id(context)
         try:
             agent = self.agent_authorization.require_action(
                 context, agent_id, PermissionKey.COST_READ
@@ -184,22 +183,12 @@ class CostService:
         except HTTPException as exc:
             if exc.status_code != status.HTTP_404_NOT_FOUND:
                 raise
-            # Organization-scoped managers retain historical spend access after an
-            # Agent is soft-deleted. Assigned grants never reveal deleted Agents.
-            scopes = self.permission_policy.resolve_many(
+            # Implicit Organization Owner/Admin authority retains historical spend
+            # access after soft deletion. Explicit Agent assignments never do.
+            cost_scope = self.agent_authorization.require_collection_scope(
                 context,
-                org_id,
-                (PermissionKey.AGENT_READ, PermissionKey.COST_READ),
+                PermissionKey.COST_READ,
             )
-            read_scope = scopes.get(PermissionKey.AGENT_READ)
-            cost_scope = scopes.get(PermissionKey.COST_READ)
-            if (
-                read_scope is None
-                or cost_scope is None
-                or read_scope.scope != PermissionScope.ORGANIZATION
-                or cost_scope.scope != PermissionScope.ORGANIZATION
-            ):
-                raise
             agent = self.agent_repository.get_deleted_in_scope(agent_id, cost_scope)
             if agent is None:
                 raise

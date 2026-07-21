@@ -12,7 +12,6 @@ from api.domains.rbac.catalog import (
     OWNER_ROLE_ID,
     SYSTEM_ROLE_GRANTS,
     PermissionKey,
-    PermissionScope,
 )
 from api.domains.rbac.policy import AuthorizationScope, PermissionPolicy
 from api.domains.users.models import User
@@ -54,42 +53,35 @@ def _context(
 
 def _system_catalogue_repository() -> Mock:
     repository = Mock()
-    repository.get_permission_scope.side_effect = lambda role_id, permission: (
-        SYSTEM_ROLE_GRANTS.get(role_id, {}).get(permission)
+    repository.has_permission.side_effect = lambda role_id, permission: (
+        permission in SYSTEM_ROLE_GRANTS.get(role_id, set())
     )
-    repository.get_permission_scopes.side_effect = lambda role_id, permissions: {
-        permission: scope
+    repository.get_permissions.side_effect = lambda role_id, permissions: {
+        permission
         for permission in permissions
-        if (scope := SYSTEM_ROLE_GRANTS.get(role_id, {}).get(permission)) is not None
+        if permission in SYSTEM_ROLE_GRANTS.get(role_id, set())
     }
     return repository
 
 
-def test_resolve_returns_seeded_owner_admin_and_member_scopes():
+def test_resolve_uses_fixed_organization_role_permissions():
     policy = PermissionPolicy(repository=_system_catalogue_repository())
-
-    owner_context, owner_membership = _context(OWNER_ROLE_ID)
-    admin_context, admin_membership = _context(ADMIN_ROLE_ID)
-    member_context, member_membership = _context(MEMBER_ROLE_ID)
+    owner_context, owner = _context(OWNER_ROLE_ID)
+    admin_context, admin = _context(ADMIN_ROLE_ID)
+    member_context, member = _context(MEMBER_ROLE_ID)
 
     assert_that(
         policy.resolve(
             owner_context,
-            owner_membership.organization_id,
+            owner.organization_id,
             PermissionKey.ORGANIZATION_DELETE,
         ),
-        equal_to(
-            AuthorizationScope(
-                organization_id=owner_membership.organization_id,
-                scope=PermissionScope.ORGANIZATION,
-                membership_id=None,
-            )
-        ),
+        equal_to(AuthorizationScope(organization_id=owner.organization_id)),
     )
     assert_that(
         policy.resolve(
             admin_context,
-            admin_membership.organization_id,
+            admin.organization_id,
             PermissionKey.ORGANIZATION_DELETE,
         ),
         none(),
@@ -97,34 +89,22 @@ def test_resolve_returns_seeded_owner_admin_and_member_scopes():
     assert_that(
         policy.resolve(
             member_context,
-            member_membership.organization_id,
+            member.organization_id,
             PermissionKey.AGENT_CREATE,
         ),
-        equal_to(
-            AuthorizationScope(
-                organization_id=member_membership.organization_id,
-                scope=PermissionScope.ORGANIZATION,
-                membership_id=None,
-            )
-        ),
+        equal_to(AuthorizationScope(organization_id=member.organization_id)),
     )
     assert_that(
         policy.resolve(
             member_context,
-            member_membership.organization_id,
+            member.organization_id,
             PermissionKey.AGENT_READ,
         ),
-        equal_to(
-            AuthorizationScope(
-                organization_id=member_membership.organization_id,
-                scope=PermissionScope.ASSIGNED,
-                membership_id=member_membership.id,
-            )
-        ),
+        none(),
     )
 
 
-def test_resolve_many_returns_current_scopes_without_missing_permissions():
+def test_resolve_many_omits_missing_permissions():
     context, membership = _context(MEMBER_ROLE_ID)
     policy = PermissionPolicy(repository=_system_catalogue_repository())
 
@@ -142,16 +122,9 @@ def test_resolve_many_returns_current_scopes_without_missing_permissions():
         result,
         equal_to(
             {
-                PermissionKey.AGENT_READ: AuthorizationScope(
-                    organization_id=membership.organization_id,
-                    scope=PermissionScope.ASSIGNED,
-                    membership_id=membership.id,
-                ),
                 PermissionKey.AGENT_CREATE: AuthorizationScope(
-                    organization_id=membership.organization_id,
-                    scope=PermissionScope.ORGANIZATION,
-                    membership_id=None,
-                ),
+                    organization_id=membership.organization_id
+                )
             }
         ),
     )
@@ -160,7 +133,7 @@ def test_resolve_many_returns_current_scopes_without_missing_permissions():
 def test_resolve_denies_missing_permission_by_default():
     context, membership = _context()
     repository = Mock()
-    repository.get_permission_scope.return_value = None
+    repository.has_permission.return_value = False
     policy = PermissionPolicy(repository=repository)
 
     assert_that(
@@ -169,7 +142,6 @@ def test_resolve_denies_missing_permission_by_default():
         ),
         none(),
     )
-
     assert_that(
         calling(policy.require).with_args(
             context,
@@ -187,7 +159,7 @@ def test_resolve_denies_missing_permission_by_default():
     )
 
 
-def test_resolve_superuser_uses_transient_explicit_org_context_without_membership():
+def test_resolve_superuser_uses_transient_explicit_org_context():
     organization_id = uuid7()
     user = _user(is_superuser=True)
     transient_membership = OrganizationUser(
@@ -206,15 +178,9 @@ def test_resolve_superuser_uses_transient_explicit_org_context_without_membershi
 
     assert_that(
         policy.resolve(context, organization_id, PermissionKey.ORGANIZATION_DELETE),
-        equal_to(
-            AuthorizationScope(
-                organization_id=organization_id,
-                scope=PermissionScope.ORGANIZATION,
-                membership_id=None,
-            )
-        ),
+        equal_to(AuthorizationScope(organization_id=organization_id)),
     )
-    repository.get_permission_scope.assert_not_called()
+    repository.has_permission.assert_not_called()
 
 
 def test_resolve_rejects_target_outside_active_organization():
@@ -225,7 +191,7 @@ def test_resolve_rejects_target_outside_active_organization():
     assert_that(
         policy.resolve(context, uuid7(), PermissionKey.ORGANIZATION_READ), none()
     )
-    repository.get_permission_scope.assert_not_called()
+    repository.has_permission.assert_not_called()
 
 
 def test_resolve_requires_active_organization_context_even_for_superuser():
@@ -236,10 +202,7 @@ def test_resolve_requires_active_organization_context_even_for_superuser():
         calling(policy.resolve).with_args(
             context, uuid7(), PermissionKey.ORGANIZATION_READ
         ),
-        raises(
-            ForbiddenException,
-            matching=has_properties(status_code=403),
-        ),
+        raises(ForbiddenException, matching=has_properties(status_code=403)),
     )
 
 
@@ -248,63 +211,36 @@ def test_resolve_observes_membership_role_changes_without_caching():
     policy = PermissionPolicy(repository=_system_catalogue_repository())
 
     assert_that(
-        policy.require(context, membership.organization_id, PermissionKey.AGENT_READ),
-        equal_to(
-            AuthorizationScope(
-                organization_id=membership.organization_id,
-                scope=PermissionScope.ASSIGNED,
-                membership_id=membership.id,
-            )
+        policy.resolve(
+            context,
+            membership.organization_id,
+            PermissionKey.MEMBERSHIP_READ,
         ),
+        none(),
     )
 
     membership.role_id = ADMIN_ROLE_ID
 
     assert_that(
-        policy.require(context, membership.organization_id, PermissionKey.AGENT_READ),
-        equal_to(
-            AuthorizationScope(
-                organization_id=membership.organization_id,
-                scope=PermissionScope.ORGANIZATION,
-                membership_id=None,
-            )
-        ),
-    )
-
-
-def test_require_organization_rejects_assigned_scope():
-    context, membership = _context()
-    repository = Mock()
-    repository.get_permission_scope.return_value = PermissionScope.ASSIGNED
-    policy = PermissionPolicy(repository=repository)
-
-    assert_that(
-        calling(policy.require_organization).with_args(
+        policy.require(
             context,
             membership.organization_id,
-            PermissionKey.TEMPLATE_MANAGE,
-            detail="Organization scope required",
+            PermissionKey.MEMBERSHIP_READ,
         ),
-        raises(
-            ForbiddenException,
-            matching=has_properties(
-                status_code=403,
-                detail="Organization scope required",
-            ),
-        ),
+        equal_to(AuthorizationScope(organization_id=membership.organization_id)),
     )
 
 
-def test_require_returns_scope_when_permission_exists():
+def test_require_organization_returns_scope_when_permission_exists():
     context, membership = _context()
     repository = Mock()
-    repository.get_permission_scope.return_value = PermissionScope.ASSIGNED
+    repository.has_permission.return_value = True
     policy = PermissionPolicy(repository=repository)
 
-    result = policy.require(
-        context, membership.organization_id, PermissionKey.AGENT_UPDATE
+    result = policy.require_organization(
+        context,
+        membership.organization_id,
+        PermissionKey.TEMPLATE_MANAGE,
     )
 
-    assert_that(result.scope, equal_to(PermissionScope.ASSIGNED))
-    assert_that(result.membership_id, equal_to(membership.id))
-    assert_that(result.organization_id, equal_to(membership.organization_id))
+    assert_that(result, equal_to(AuthorizationScope(membership.organization_id)))

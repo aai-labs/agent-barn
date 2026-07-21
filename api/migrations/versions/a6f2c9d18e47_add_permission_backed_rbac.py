@@ -1,4 +1,4 @@
-"""Add permission-backed roles and assigned Agent access.
+"""Add permission-backed Organization and Agent Access Roles.
 
 Revision ID: a6f2c9d18e47
 Revises: d3f9a1c7b2e5
@@ -21,10 +21,19 @@ OWNER_ROLE_ID = UUID("5dd0b6b3-2a19-5d6d-9c91-50f9503563a6")
 ADMIN_ROLE_ID = UUID("1222b10c-3f24-54ca-bbeb-fce956134f70")
 MEMBER_ROLE_ID = UUID("d369b23a-01dd-5aeb-bd53-c463b3c4cd1a")
 
+AGENT_OWNER_ROLE_ID = UUID("8f2a47ff-7caf-5ded-9027-4a16b85620b3")
+AGENT_EDITOR_ROLE_ID = UUID("30e5e846-5e24-548f-a068-2505f774ce35")
+AGENT_VIEWER_ROLE_ID = UUID("c7da77aa-bf9c-5626-8bad-5e0ca5159b5d")
+
 ROLE_IDS = {
     "OWNER": OWNER_ROLE_ID,
     "ADMIN": ADMIN_ROLE_ID,
     "MEMBER": MEMBER_ROLE_ID,
+}
+AGENT_ACCESS_ROLE_IDS = {
+    "OWNER": AGENT_OWNER_ROLE_ID,
+    "EDITOR": AGENT_EDITOR_ROLE_ID,
+    "VIEWER": AGENT_VIEWER_ROLE_ID,
 }
 
 PERMISSION_IDS = {
@@ -53,8 +62,17 @@ PERMISSION_IDS = {
     "audit.read": UUID("9143455b-b4d6-58d6-9968-2086e9a24ebf"),
 }
 
-OWNER_PERMISSIONS = frozenset(PERMISSION_IDS)
-ADMIN_PERMISSIONS = OWNER_PERMISSIONS - {
+AGENT_OPERATION_PERMISSIONS = {
+    "agent.read",
+    "agent.update",
+    "agent.delete",
+    "agent.start",
+    "agent.stop",
+    "agent.access.manage",
+    "agent.secret.manage",
+}
+OWNER_ORGANIZATION_PERMISSIONS = frozenset(PERMISSION_IDS) - AGENT_OPERATION_PERMISSIONS
+ADMIN_ORGANIZATION_PERMISSIONS = OWNER_ORGANIZATION_PERMISSIONS - {
     "organization.delete",
     "organization.ownership.transfer",
 }
@@ -64,24 +82,23 @@ MEMBER_ORGANIZATION_PERMISSIONS = {
     "template.read",
     "skill.read",
 }
-MEMBER_ASSIGNED_PERMISSIONS = {
+
+VIEWER_PERMISSIONS = {
     "agent.read",
-    "agent.update",
-    "agent.delete",
-    "agent.start",
-    "agent.stop",
-    "agent.access.manage",
-    "agent.secret.manage",
     "activity.read",
     "cost.read",
 }
+EDITOR_PERMISSIONS = VIEWER_PERMISSIONS | {
+    "agent.update",
+    "agent.start",
+    "agent.stop",
+    "agent.secret.manage",
+}
+AGENT_OWNER_PERMISSIONS = EDITOR_PERMISSIONS | {
+    "agent.delete",
+    "agent.access.manage",
+}
 
-permission_scope_enum = postgresql.ENUM(
-    "ASSIGNED",
-    "ORGANIZATION",
-    name="permissionscope",
-    create_type=False,
-)
 organization_role_enum = postgresql.ENUM(
     "ADMIN",
     "MEMBER",
@@ -91,46 +108,33 @@ organization_role_enum = postgresql.ENUM(
 )
 
 
-def _role_permission_rows() -> list[dict[str, object]]:
-    rows: list[dict[str, object]] = []
-    for key in sorted(OWNER_PERMISSIONS):
-        rows.append(
-            {
-                "role_id": OWNER_ROLE_ID,
-                "permission_id": PERMISSION_IDS[key],
-                "scope": "ORGANIZATION",
-            }
-        )
-    for key in sorted(ADMIN_PERMISSIONS):
-        rows.append(
-            {
-                "role_id": ADMIN_ROLE_ID,
-                "permission_id": PERMISSION_IDS[key],
-                "scope": "ORGANIZATION",
-            }
-        )
-    for key in sorted(MEMBER_ORGANIZATION_PERMISSIONS):
-        rows.append(
-            {
-                "role_id": MEMBER_ROLE_ID,
-                "permission_id": PERMISSION_IDS[key],
-                "scope": "ORGANIZATION",
-            }
-        )
-    for key in sorted(MEMBER_ASSIGNED_PERMISSIONS):
-        rows.append(
-            {
-                "role_id": MEMBER_ROLE_ID,
-                "permission_id": PERMISSION_IDS[key],
-                "scope": "ASSIGNED",
-            }
-        )
-    return rows
+def _organization_role_permission_rows() -> list[dict[str, UUID]]:
+    grants = {
+        OWNER_ROLE_ID: OWNER_ORGANIZATION_PERMISSIONS,
+        ADMIN_ROLE_ID: ADMIN_ORGANIZATION_PERMISSIONS,
+        MEMBER_ROLE_ID: MEMBER_ORGANIZATION_PERMISSIONS,
+    }
+    return [
+        {"role_id": role_id, "permission_id": PERMISSION_IDS[key]}
+        for role_id, permissions in grants.items()
+        for key in sorted(permissions)
+    ]
+
+
+def _agent_access_role_permission_rows() -> list[dict[str, UUID]]:
+    grants = {
+        AGENT_OWNER_ROLE_ID: AGENT_OWNER_PERMISSIONS,
+        AGENT_EDITOR_ROLE_ID: EDITOR_PERMISSIONS,
+        AGENT_VIEWER_ROLE_ID: VIEWER_PERMISSIONS,
+    }
+    return [
+        {"role_id": role_id, "permission_id": PERMISSION_IDS[key]}
+        for role_id, permissions in grants.items()
+        for key in sorted(permissions)
+    ]
 
 
 def upgrade() -> None:
-    permission_scope_enum.create(op.get_bind(), checkfirst=True)
-
     op.create_table(
         "permissions",
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
@@ -146,6 +150,33 @@ def upgrade() -> None:
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("name", sa.String(length=64), nullable=False),
+        sa.CheckConstraint(
+            "(id = '5dd0b6b3-2a19-5d6d-9c91-50f9503563a6'::uuid AND name = 'OWNER') OR "
+            "(id = '1222b10c-3f24-54ca-bbeb-fce956134f70'::uuid AND name = 'ADMIN') OR "
+            "(id = 'd369b23a-01dd-5aeb-bd53-c463b3c4cd1a'::uuid AND name = 'MEMBER')",
+            name="ck_roles_fixed_identity",
+        ),
+        sa.PrimaryKeyConstraint("id"),
+    )
+    op.create_index("uq_roles_name", "roles", ["name"], unique=True)
+
+    op.create_table(
+        "role_permissions",
+        sa.Column("role_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("permission_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.ForeignKeyConstraint(
+            ["permission_id"], ["permissions.id"], ondelete="CASCADE"
+        ),
+        sa.ForeignKeyConstraint(["role_id"], ["roles.id"], ondelete="CASCADE"),
+        sa.PrimaryKeyConstraint("role_id", "permission_id"),
+    )
+
+    op.create_table(
+        "agent_access_roles",
+        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("organization_id", postgresql.UUID(as_uuid=True), nullable=True),
         sa.Column("name", sa.String(length=64), nullable=False),
         sa.Column(
@@ -157,37 +188,43 @@ def upgrade() -> None:
         sa.CheckConstraint(
             "(is_system AND organization_id IS NULL) OR "
             "(NOT is_system AND organization_id IS NOT NULL)",
-            name="ck_roles_system_scope",
+            name="ck_agent_access_roles_system_scope",
         ),
         sa.ForeignKeyConstraint(
             ["organization_id"], ["organization.id"], ondelete="CASCADE"
         ),
         sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint(
+            "id",
+            "organization_id",
+            name="uq_agent_access_role_id_organization",
+        ),
     )
     op.create_index(
-        "uq_roles_system_name",
-        "roles",
+        "uq_agent_access_roles_system_name",
+        "agent_access_roles",
         ["name"],
         unique=True,
         postgresql_where=sa.text("is_system"),
     )
     op.create_index(
-        "uq_roles_organization_name",
-        "roles",
+        "uq_agent_access_roles_organization_name",
+        "agent_access_roles",
         ["organization_id", "name"],
         unique=True,
         postgresql_where=sa.text("NOT is_system"),
     )
 
     op.create_table(
-        "role_permissions",
+        "agent_access_role_permissions",
         sa.Column("role_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("permission_id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column("scope", permission_scope_enum, nullable=False),
         sa.ForeignKeyConstraint(
             ["permission_id"], ["permissions.id"], ondelete="CASCADE"
         ),
-        sa.ForeignKeyConstraint(["role_id"], ["roles.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(
+            ["role_id"], ["agent_access_roles.id"], ondelete="CASCADE"
+        ),
         sa.PrimaryKeyConstraint("role_id", "permission_id"),
     )
 
@@ -217,9 +254,7 @@ def upgrade() -> None:
         sa.column("id", postgresql.UUID(as_uuid=True)),
         sa.column("created_at", sa.DateTime(timezone=True)),
         sa.column("updated_at", sa.DateTime(timezone=True)),
-        sa.column("organization_id", postgresql.UUID(as_uuid=True)),
         sa.column("name", sa.String(length=64)),
-        sa.column("is_system", sa.Boolean()),
     )
     op.bulk_insert(
         roles_table,
@@ -228,11 +263,33 @@ def upgrade() -> None:
                 "id": role_id,
                 "created_at": timestamp,
                 "updated_at": timestamp,
+                "name": name,
+            }
+            for name, role_id in ROLE_IDS.items()
+        ],
+    )
+
+    agent_access_roles_table = sa.table(
+        "agent_access_roles",
+        sa.column("id", postgresql.UUID(as_uuid=True)),
+        sa.column("created_at", sa.DateTime(timezone=True)),
+        sa.column("updated_at", sa.DateTime(timezone=True)),
+        sa.column("organization_id", postgresql.UUID(as_uuid=True)),
+        sa.column("name", sa.String(length=64)),
+        sa.column("is_system", sa.Boolean()),
+    )
+    op.bulk_insert(
+        agent_access_roles_table,
+        [
+            {
+                "id": role_id,
+                "created_at": timestamp,
+                "updated_at": timestamp,
                 "organization_id": None,
-                "name": role_name,
+                "name": name,
                 "is_system": True,
             }
-            for role_name, role_id in ROLE_IDS.items()
+            for name, role_id in AGENT_ACCESS_ROLE_IDS.items()
         ],
     )
 
@@ -240,9 +297,18 @@ def upgrade() -> None:
         "role_permissions",
         sa.column("role_id", postgresql.UUID(as_uuid=True)),
         sa.column("permission_id", postgresql.UUID(as_uuid=True)),
-        sa.column("scope", permission_scope_enum),
     )
-    op.bulk_insert(role_permissions_table, _role_permission_rows())
+    op.bulk_insert(role_permissions_table, _organization_role_permission_rows())
+
+    agent_access_role_permissions_table = sa.table(
+        "agent_access_role_permissions",
+        sa.column("role_id", postgresql.UUID(as_uuid=True)),
+        sa.column("permission_id", postgresql.UUID(as_uuid=True)),
+    )
+    op.bulk_insert(
+        agent_access_role_permissions_table,
+        _agent_access_role_permission_rows(),
+    )
 
     op.add_column(
         "user_organization",
@@ -277,7 +343,7 @@ def upgrade() -> None:
         DO $$
         BEGIN
             IF EXISTS (SELECT 1 FROM user_organization WHERE role_id IS NULL) THEN
-                RAISE EXCEPTION 'Unable to map every membership to a system role';
+                RAISE EXCEPTION 'Unable to map every Membership to a fixed Organization Role';
             END IF;
         END $$;
         """
@@ -336,6 +402,7 @@ def upgrade() -> None:
         sa.Column("organization_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("membership_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("agent_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("access_role_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.ForeignKeyConstraint(
             ["organization_id"], ["organization.id"], ondelete="CASCADE"
         ),
@@ -351,6 +418,12 @@ def upgrade() -> None:
             name="fk_agent_access_agent_organization",
             ondelete="CASCADE",
         ),
+        sa.ForeignKeyConstraint(
+            ["access_role_id"],
+            ["agent_access_roles.id"],
+            name="fk_agent_access_role",
+            ondelete="RESTRICT",
+        ),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint(
             "membership_id",
@@ -360,26 +433,57 @@ def upgrade() -> None:
     )
     op.create_index("ix_agent_access_membership", "agent_access", ["membership_id"])
     op.create_index("ix_agent_access_agent", "agent_access", ["agent_id"])
+    op.create_index("ix_agent_access_role", "agent_access", ["access_role_id"])
 
     op.execute(
-        """
-        INSERT INTO agent_access (
-            id, created_at, updated_at, organization_id, membership_id, agent_id
+        sa.text(
+            """
+            INSERT INTO agent_access (
+                id, created_at, updated_at, organization_id,
+                membership_id, agent_id, access_role_id
+            )
+            SELECT
+                gen_random_uuid(), now(), now(),
+                membership.organization_id, membership.id, agent.id, :editor_role_id
+            FROM user_organization AS membership
+            JOIN "user" AS member_user ON member_user.id = membership.user_id
+            JOIN agent ON agent.organization_id = membership.organization_id
+            WHERE membership.role_id = :member_role_id
+              AND member_user.email_verified_at IS NOT NULL
+            ON CONFLICT (membership_id, agent_id) DO NOTHING
+            """
+        ).bindparams(
+            editor_role_id=AGENT_EDITOR_ROLE_ID,
+            member_role_id=MEMBER_ROLE_ID,
         )
-        SELECT
-            gen_random_uuid(), now(), now(),
-            membership.organization_id, membership.id, agent.id
-        FROM user_organization AS membership
-        JOIN "user" AS member_user ON member_user.id = membership.user_id
-        JOIN agent ON agent.organization_id = membership.organization_id
-        WHERE member_user.email_verified_at IS NOT NULL
-        ON CONFLICT (membership_id, agent_id) DO NOTHING
-        """
+    )
+    op.execute(
+        sa.text(
+            """
+            INSERT INTO agent_access (
+                id, created_at, updated_at, organization_id,
+                membership_id, agent_id, access_role_id
+            )
+            SELECT
+                gen_random_uuid(), now(), now(),
+                membership.organization_id, membership.id, agent.id, :owner_role_id
+            FROM agent
+            JOIN user_organization AS membership
+              ON membership.organization_id = agent.organization_id
+             AND membership.user_id = agent.created_by_user_id
+            JOIN "user" AS creator ON creator.id = membership.user_id
+            WHERE agent.created_by_user_id IS NOT NULL
+              AND creator.email_verified_at IS NOT NULL
+            ON CONFLICT (membership_id, agent_id)
+            DO UPDATE SET access_role_id = EXCLUDED.access_role_id,
+                          updated_at = EXCLUDED.updated_at
+            """
+        ).bindparams(owner_role_id=AGENT_OWNER_ROLE_ID)
     )
 
     op.execute(
         """
-        CREATE FUNCTION validate_user_organization_role_scope()
+        CREATE FUNCTION validate_agent_access_role_scope()
         RETURNS trigger AS $$
         DECLARE
             target_organization_id uuid;
@@ -387,18 +491,18 @@ def upgrade() -> None:
         BEGIN
             SELECT organization_id, is_system
             INTO target_organization_id, target_is_system
-            FROM roles
-            WHERE id = NEW.role_id;
+            FROM agent_access_roles
+            WHERE id = NEW.access_role_id;
 
             IF NOT FOUND THEN
-                RAISE EXCEPTION 'Role % does not exist', NEW.role_id
+                RAISE EXCEPTION 'Agent Access Role % does not exist', NEW.access_role_id
                     USING ERRCODE = 'foreign_key_violation';
             END IF;
 
             IF NOT target_is_system
                AND target_organization_id IS DISTINCT FROM NEW.organization_id THEN
-                RAISE EXCEPTION 'Role % does not belong to organization %',
-                    NEW.role_id, NEW.organization_id
+                RAISE EXCEPTION 'Agent Access Role % does not belong to Organization %',
+                    NEW.access_role_id, NEW.organization_id
                     USING ERRCODE = 'check_violation';
             END IF;
 
@@ -409,30 +513,48 @@ def upgrade() -> None:
     )
     op.execute(
         """
-        CREATE TRIGGER trg_user_organization_role_scope
-        BEFORE INSERT OR UPDATE OF role_id, organization_id
-        ON user_organization
-        FOR EACH ROW EXECUTE FUNCTION validate_user_organization_role_scope();
+        CREATE TRIGGER trg_agent_access_role_scope
+        BEFORE INSERT OR UPDATE OF access_role_id, organization_id
+        ON agent_access
+        FOR EACH ROW EXECUTE FUNCTION validate_agent_access_role_scope();
         """
     )
     op.execute(
         """
-        CREATE FUNCTION enforce_role_scope_immutability()
+        CREATE FUNCTION enforce_fixed_organization_role_immutability()
+        RETURNS trigger AS $$
+        BEGIN
+            RAISE EXCEPTION 'Fixed Organization Role % cannot be changed', OLD.id
+                USING ERRCODE = 'check_violation';
+        END;
+        $$ LANGUAGE plpgsql;
+        """
+    )
+    op.execute(
+        """
+        CREATE TRIGGER trg_fixed_organization_role_immutability
+        BEFORE UPDATE OR DELETE ON roles
+        FOR EACH ROW EXECUTE FUNCTION enforce_fixed_organization_role_immutability();
+        """
+    )
+    op.execute(
+        """
+        CREATE FUNCTION enforce_agent_access_role_scope_immutability()
         RETURNS trigger AS $$
         BEGIN
             IF TG_OP = 'DELETE' AND OLD.is_system THEN
-                RAISE EXCEPTION 'System Role % cannot be deleted', OLD.id
+                RAISE EXCEPTION 'System Agent Access Role % cannot be deleted', OLD.id
                     USING ERRCODE = 'check_violation';
             END IF;
 
             IF TG_OP = 'UPDATE' THEN
                 IF OLD.is_system THEN
-                    RAISE EXCEPTION 'System Role % cannot be changed', OLD.id
+                    RAISE EXCEPTION 'System Agent Access Role % cannot be changed', OLD.id
                         USING ERRCODE = 'check_violation';
                 END IF;
                 IF NEW.organization_id IS DISTINCT FROM OLD.organization_id
                    OR NEW.is_system IS DISTINCT FROM OLD.is_system THEN
-                    RAISE EXCEPTION 'Role scope cannot be changed'
+                    RAISE EXCEPTION 'Agent Access Role scope cannot be changed'
                         USING ERRCODE = 'check_violation';
                 END IF;
             END IF;
@@ -447,9 +569,9 @@ def upgrade() -> None:
     )
     op.execute(
         """
-        CREATE TRIGGER trg_roles_scope_immutability
-        BEFORE UPDATE OR DELETE ON roles
-        FOR EACH ROW EXECUTE FUNCTION enforce_role_scope_immutability();
+        CREATE TRIGGER trg_agent_access_role_scope_immutability
+        BEFORE UPDATE OR DELETE ON agent_access_roles
+        FOR EACH ROW EXECUTE FUNCTION enforce_agent_access_role_scope_immutability();
         """
     )
 
@@ -457,10 +579,14 @@ def upgrade() -> None:
 def downgrade() -> None:
     organization_role_enum.create(op.get_bind(), checkfirst=True)
 
-    op.execute("DROP TRIGGER trg_user_organization_role_scope ON user_organization")
-    op.execute("DROP FUNCTION validate_user_organization_role_scope()")
-    op.execute("DROP TRIGGER trg_roles_scope_immutability ON roles")
-    op.execute("DROP FUNCTION enforce_role_scope_immutability()")
+    op.execute("DROP TRIGGER trg_agent_access_role_scope ON agent_access")
+    op.execute("DROP FUNCTION validate_agent_access_role_scope()")
+    op.execute("DROP TRIGGER trg_fixed_organization_role_immutability ON roles")
+    op.execute("DROP FUNCTION enforce_fixed_organization_role_immutability()")
+    op.execute(
+        "DROP TRIGGER trg_agent_access_role_scope_immutability ON agent_access_roles"
+    )
+    op.execute("DROP FUNCTION enforce_agent_access_role_scope_immutability()")
 
     op.add_column(
         "user_organization",
@@ -487,7 +613,7 @@ def downgrade() -> None:
         DO $$
         BEGIN
             IF EXISTS (SELECT 1 FROM user_organization WHERE role IS NULL) THEN
-                RAISE EXCEPTION 'Cannot downgrade memberships using custom roles';
+                RAISE EXCEPTION 'Cannot downgrade unknown Organization Roles';
             END IF;
         END $$;
         """
@@ -506,6 +632,7 @@ def downgrade() -> None:
         postgresql_where=sa.text("role = 'OWNER'"),
     )
 
+    op.drop_index("ix_agent_access_role", table_name="agent_access")
     op.drop_index("ix_agent_access_agent", table_name="agent_access")
     op.drop_index("ix_agent_access_membership", table_name="agent_access")
     op.drop_table("agent_access")
@@ -527,10 +654,18 @@ def downgrade() -> None:
     )
     op.drop_column("user_organization", "role_id")
 
+    op.drop_table("agent_access_role_permissions")
+    op.drop_index(
+        "uq_agent_access_roles_organization_name",
+        table_name="agent_access_roles",
+    )
+    op.drop_index(
+        "uq_agent_access_roles_system_name",
+        table_name="agent_access_roles",
+    )
+    op.drop_table("agent_access_roles")
     op.drop_table("role_permissions")
-    op.drop_index("uq_roles_organization_name", table_name="roles")
-    op.drop_index("uq_roles_system_name", table_name="roles")
+    op.drop_index("uq_roles_name", table_name="roles")
     op.drop_table("roles")
     op.drop_index("uq_permissions_key", table_name="permissions")
     op.drop_table("permissions")
-    permission_scope_enum.drop(op.get_bind(), checkfirst=True)

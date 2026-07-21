@@ -9,13 +9,16 @@ from hamcrest import assert_that, equal_to
 from api.domains.agents.authorization import AgentAuthorization
 from api.domains.agents.models import Agent, AgentStatus
 from api.domains.auth.models import CurrentUserContext
-from api.domains.rbac.catalog import MEMBER_ROLE_ID, PermissionKey, PermissionScope
-from api.domains.rbac.policy import AuthorizationScope
+from api.domains.rbac.catalog import (
+    ADMIN_ROLE_ID,
+    MEMBER_ROLE_ID,
+    PermissionKey,
+)
 from api.domains.users.models import User
 from api.domains.users.organization_users.models import OrganizationUser
 
 
-def _context():
+def _context(role_id=MEMBER_ROLE_ID):
     organization_id = uuid7()
     user = User(
         email=f"{uuid7()}@example.com",
@@ -25,7 +28,7 @@ def _context():
     membership = OrganizationUser(
         user_id=user.id,
         organization_id=organization_id,
-        role_id=MEMBER_ROLE_ID,
+        role_id=role_id,
     )
     context = CurrentUserContext(
         user=user,
@@ -47,32 +50,20 @@ def _agent(organization_id, *, creator_id=None, status=AgentStatus.STOPPED):
     )
 
 
-def _assigned_scope(organization_id, membership_id):
-    return AuthorizationScope(
-        organization_id=organization_id,
-        scope=PermissionScope.ASSIGNED,
-        membership_id=membership_id,
-    )
-
-
-def test_recipient_effective_actions_use_permission_keys_and_cannot_manage_access():
+def test_editor_effective_actions_come_from_agent_access_role_permissions():
     context, membership = _context()
-    agent = _agent(membership.organization_id, creator_id=uuid7())
-    scope = _assigned_scope(membership.organization_id, membership.id)
-    policy = Mock()
-    policy.resolve_many.return_value = {
-        permission: scope
-        for permission in (
+    agent = _agent(membership.organization_id)
+    repository = Mock()
+    repository.find_agent_permissions.return_value = {
+        agent.id: {
             PermissionKey.AGENT_READ,
             PermissionKey.AGENT_UPDATE,
             PermissionKey.AGENT_START,
             PermissionKey.AGENT_STOP,
-            PermissionKey.AGENT_ACCESS_MANAGE,
-        )
+            PermissionKey.AGENT_SECRET_MANAGE,
+        }
     }
-    repository = Mock()
-    repository.find_assigned_agent_ids.return_value = {agent.id}
-    authorization = AgentAuthorization(policy=policy, repository=repository)
+    authorization = AgentAuthorization(policy=Mock(), repository=repository)
 
     actions = authorization.allowed_actions(context, [agent])[agent.id]
 
@@ -83,34 +74,32 @@ def test_recipient_effective_actions_use_permission_keys_and_cannot_manage_acces
                 PermissionKey.AGENT_READ,
                 PermissionKey.AGENT_UPDATE,
                 PermissionKey.AGENT_START,
+                PermissionKey.AGENT_SECRET_MANAGE,
             ]
         ),
     )
 
 
-def test_creator_can_manage_access_and_running_state_filters_actions():
+def test_explicit_owner_can_manage_access_regardless_of_creator_provenance():
     context, membership = _context()
     agent = _agent(
         membership.organization_id,
-        creator_id=context.user.id,
+        creator_id=uuid7(),
         status=AgentStatus.RUNNING,
     )
-    scope = _assigned_scope(membership.organization_id, membership.id)
-    policy = Mock()
-    policy.resolve_many.return_value = {
-        permission: scope
-        for permission in (
+    repository = Mock()
+    repository.find_agent_permissions.return_value = {
+        agent.id: {
             PermissionKey.AGENT_READ,
             PermissionKey.AGENT_UPDATE,
+            PermissionKey.AGENT_DELETE,
             PermissionKey.AGENT_START,
             PermissionKey.AGENT_STOP,
             PermissionKey.AGENT_ACCESS_MANAGE,
             PermissionKey.AGENT_SECRET_MANAGE,
-        )
+        }
     }
-    repository = Mock()
-    repository.find_assigned_agent_ids.return_value = {agent.id}
-    authorization = AgentAuthorization(policy=policy, repository=repository)
+    authorization = AgentAuthorization(policy=Mock(), repository=repository)
 
     actions = authorization.allowed_actions(context, [agent])[agent.id]
 
@@ -119,6 +108,7 @@ def test_creator_can_manage_access_and_running_state_filters_actions():
         equal_to(
             [
                 PermissionKey.AGENT_READ,
+                PermissionKey.AGENT_DELETE,
                 PermissionKey.AGENT_STOP,
                 PermissionKey.AGENT_ACCESS_MANAGE,
             ]
@@ -126,23 +116,31 @@ def test_creator_can_manage_access_and_running_state_filters_actions():
     )
 
 
+def test_organization_admin_has_implicit_owner_actions():
+    context, membership = _context(ADMIN_ROLE_ID)
+    agent = _agent(membership.organization_id)
+    repository = Mock()
+    authorization = AgentAuthorization(policy=Mock(), repository=repository)
+
+    actions = authorization.allowed_actions(context, [agent])[agent.id]
+
+    assert PermissionKey.AGENT_DELETE in actions
+    assert PermissionKey.AGENT_ACCESS_MANAGE in actions
+    repository.find_agent_permissions.assert_not_called()
+
+
 def test_unassigned_agent_is_concealed_and_visible_missing_action_is_forbidden():
     context, membership = _context()
     agent = _agent(membership.organization_id)
-    scope = _assigned_scope(membership.organization_id, membership.id)
-    policy = Mock()
-    policy.resolve.side_effect = lambda _context, _org, permission: (
-        scope if permission == PermissionKey.AGENT_READ else None
-    )
     repository = Mock()
     repository.get_active_in_scope.return_value = None
-    authorization = AgentAuthorization(policy=policy, repository=repository)
+    authorization = AgentAuthorization(policy=Mock(), repository=repository)
 
     with pytest.raises(HTTPException) as concealed:
         authorization.require_visible(context, agent.id)
     assert_that(concealed.value.status_code, equal_to(404))
 
-    repository.get_active_in_scope.return_value = agent
+    repository.get_active_in_scope.side_effect = [agent, None]
     with pytest.raises(HTTPException) as forbidden:
         authorization.require_action(context, agent.id, PermissionKey.AGENT_UPDATE)
     assert_that(forbidden.value.status_code, equal_to(403))

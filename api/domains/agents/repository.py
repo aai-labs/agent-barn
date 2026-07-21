@@ -18,7 +18,13 @@ from api.domains.agents.models import (
     AgentTeamsConfig,
     SecretProvider,
 )
-from api.domains.rbac.catalog import PermissionScope
+from api.domains.rbac.catalog import (
+    AGENT_EDITOR_ROLE_ID,
+    AGENT_OWNER_ROLE_ID,
+    PERMISSION_ID_BY_KEY,
+    PermissionKey,
+)
+from api.domains.rbac.models import AgentAccessRolePermission, Permission
 from api.domains.rbac.policy import AuthorizationScope
 from api.domains.users.organization_users.models import OrganizationUser
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
@@ -28,20 +34,24 @@ from api.infrastructure.shared.models import Pagination
 def agent_scope_predicates(
     authorization_scope: AuthorizationScope, *, include_deleted: bool = False
 ):
-    """SQL predicates for the Agent resource boundary represented by a grant."""
+    """SQL predicates for implicit Organization or explicit Agent visibility."""
     predicates = [
         col(Agent.organization_id) == authorization_scope.organization_id,
     ]
     if not include_deleted:
         predicates.append(col(Agent.deleted_at).is_(None))
-    if authorization_scope.scope == PermissionScope.ASSIGNED:
-        if authorization_scope.membership_id is None:
-            raise ValueError("ASSIGNED authorization requires a Membership")
+    if authorization_scope.membership_id is not None:
+        if authorization_scope.permission is None:
+            raise ValueError("Explicit Agent visibility requires a Permission")
         predicates.append(
             exists().where(
                 col(AgentAccess.agent_id) == col(Agent.id),
                 col(AgentAccess.organization_id) == authorization_scope.organization_id,
                 col(AgentAccess.membership_id) == authorization_scope.membership_id,
+                col(AgentAccessRolePermission.role_id)
+                == col(AgentAccess.access_role_id),
+                col(AgentAccessRolePermission.permission_id)
+                == PERMISSION_ID_BY_KEY[authorization_scope.permission],
             )
         )
     return tuple(predicates)
@@ -86,7 +96,7 @@ class AgentRepository:
     def get_deleted_in_scope(
         self, agent_id: UUID, authorization_scope: AuthorizationScope
     ) -> Agent | None:
-        if authorization_scope.scope != PermissionScope.ORGANIZATION:
+        if not authorization_scope.has_organization_visibility:
             return None
         with Session(self.delegate.engine) as session:
             query = select(Agent).where(
@@ -152,6 +162,37 @@ class AgentRepository:
             )
             return set(session.exec(query).all())
 
+    def find_agent_permissions(
+        self,
+        membership_id: UUID,
+        organization_id: UUID,
+        agent_ids: list[UUID],
+    ) -> dict[UUID, set[PermissionKey]]:
+        if not agent_ids:
+            return {}
+        with Session(self.delegate.engine) as session:
+            rows = session.exec(
+                select(AgentAccess.agent_id, Permission.key)
+                .join(
+                    AgentAccessRolePermission,
+                    col(AgentAccessRolePermission.role_id)
+                    == col(AgentAccess.access_role_id),
+                )
+                .join(
+                    Permission,
+                    col(Permission.id) == col(AgentAccessRolePermission.permission_id),
+                )
+                .where(
+                    col(AgentAccess.membership_id) == membership_id,
+                    col(AgentAccess.organization_id) == organization_id,
+                    col(AgentAccess.agent_id).in_(agent_ids),
+                )
+            ).all()
+        permissions: dict[UUID, set[PermissionKey]] = {}
+        for agent_id, key in rows:
+            permissions.setdefault(agent_id, set()).add(PermissionKey(key))
+        return permissions
+
     def create_with_creator_access(
         self, agent: Agent, membership_id: UUID | None
     ) -> Agent:
@@ -164,6 +205,7 @@ class AgentRepository:
                         organization_id=agent.organization_id,
                         membership_id=membership_id,
                         agent_id=agent.id,
+                        access_role_id=AGENT_OWNER_ROLE_ID,
                     )
                 )
             session.commit()
@@ -222,6 +264,7 @@ class AgentRepository:
                 organization_id=organization_id,
                 membership_id=membership_id,
                 agent_id=agent_id,
+                access_role_id=AGENT_EDITOR_ROLE_ID,
             )
             session.add(access)
             try:

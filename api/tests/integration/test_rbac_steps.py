@@ -1,7 +1,6 @@
 import pytest
-from hamcrest import assert_that, equal_to, none
 
-from api.domains.rbac.catalog import ADMIN_ROLE_ID, PermissionKey, PermissionScope
+from api.domains.rbac.catalog import ADMIN_ROLE_ID, PermissionKey
 from api.domains.rbac.repository import RbacRepository
 from api.tests.core.givenpy import given
 from api.tests.core.modules import (
@@ -31,17 +30,11 @@ def test_temporary_missing_permission_is_restored_after_normal_exit():
         ]
     ) as context:
         repository = context.injector.get(RbacRepository)
-        assert_that(
-            repository.get_permission_scope(
-                ADMIN_ROLE_ID, PermissionKey.TEMPLATE_MANAGE
-            ),
-            none(),
+        assert not repository.has_permission(
+            ADMIN_ROLE_ID, PermissionKey.TEMPLATE_MANAGE
         )
 
-    assert_that(
-        repository.get_permission_scope(ADMIN_ROLE_ID, PermissionKey.TEMPLATE_MANAGE),
-        equal_to(PermissionScope.ORGANIZATION),
-    )
+    assert repository.has_permission(ADMIN_ROLE_ID, PermissionKey.TEMPLATE_MANAGE)
 
 
 def test_temporary_missing_permission_is_restored_after_exception():
@@ -55,15 +48,9 @@ def test_temporary_missing_permission_is_restored_after_exception():
             ]
         ) as context:
             repository = context.injector.get(RbacRepository)
-            assert_that(
-                repository.get_permission_scope(
-                    ADMIN_ROLE_ID, PermissionKey.SKILL_MANAGE
-                ),
-                none(),
+            assert not repository.has_permission(
+                ADMIN_ROLE_ID, PermissionKey.SKILL_MANAGE
             )
             raise RuntimeError("exercise cleanup")
 
-    assert_that(
-        repository.get_permission_scope(ADMIN_ROLE_ID, PermissionKey.SKILL_MANAGE),
-        equal_to(PermissionScope.ORGANIZATION),
-    )
+    assert repository.has_permission(ADMIN_ROLE_ID, PermissionKey.SKILL_MANAGE)

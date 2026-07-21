@@ -17,6 +17,7 @@ from api.domains.agents.models import (
 )
 from api.domains.agents.repository import AgentRepository
 from api.domains.auth.utils import set_default_org_id
+from api.domains.rbac.catalog import AGENT_EDITOR_ROLE_ID
 from api.domains.templates.defaults import (
     DEFAULT_AGENTS_MD,
     DEFAULT_BOOT_MD,
@@ -158,6 +159,7 @@ def there_is_agent_access(
                 organization_id=context.organization.id,
                 membership_id=membership,
                 agent_id=target_agent,
+                access_role_id=AGENT_EDITOR_ROLE_ID,
             )
         )
 

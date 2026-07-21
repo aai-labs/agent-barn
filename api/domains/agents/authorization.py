@@ -8,7 +8,13 @@ from injector import inject, singleton
 from api.domains.agents.models import Agent, AgentStatus
 from api.domains.agents.repository import AgentRepository
 from api.domains.auth.models import CurrentUserContext
-from api.domains.rbac.catalog import PermissionKey, PermissionScope
+from api.domains.rbac.catalog import (
+    ADMIN_ROLE_ID,
+    AGENT_OWNER_ROLE_ID,
+    OWNER_ROLE_ID,
+    SYSTEM_AGENT_ACCESS_ROLE_GRANTS,
+    PermissionKey,
+)
 from api.domains.rbac.policy import AuthorizationScope, PermissionPolicy
 
 _AGENT_ACTION_PERMISSIONS: tuple[PermissionKey, ...] = (
@@ -28,10 +34,27 @@ _AGENT_ACTION_PERMISSIONS: tuple[PermissionKey, ...] = (
 @singleton
 @dataclass
 class AgentAuthorization:
-    """Agent visibility and action policy shared by user-facing services."""
+    """Resolve implicit or explicit Agent authority behind one interface."""
 
     policy: PermissionPolicy
     repository: AgentRepository
+
+    def _scope(
+        self,
+        context: CurrentUserContext,
+        permission: PermissionKey,
+    ) -> AuthorizationScope:
+        membership = context.require_current_user_organization()
+        if context.user.is_superuser or membership.role_id in {
+            OWNER_ROLE_ID,
+            ADMIN_ROLE_ID,
+        }:
+            return AuthorizationScope(organization_id=membership.organization_id)
+        return AuthorizationScope(
+            organization_id=membership.organization_id,
+            membership_id=membership.id,
+            permission=permission,
+        )
 
     def require_collection_scope(
         self,
@@ -41,21 +64,18 @@ class AgentAuthorization:
         detail: str = "You don't have permission for this organization.",
     ) -> AuthorizationScope:
         organization_id = context.require_current_user_organization().organization_id
-        return self.policy.require(
-            context,
-            organization_id,
-            permission,
-            detail=detail,
-        )
+        if permission == PermissionKey.AGENT_CREATE:
+            return self.policy.require(
+                context,
+                organization_id,
+                permission,
+                detail=detail,
+            )
+        return self._scope(context, permission)
 
     def require_visible(self, context: CurrentUserContext, agent_id: UUID) -> Agent:
-        organization_id = context.require_current_user_organization().organization_id
-        read_scope = self.policy.resolve(
-            context, organization_id, PermissionKey.AGENT_READ
-        )
-        if read_scope is None:
-            self._raise_not_found(agent_id)
-        agent = self.repository.get_active_in_scope(agent_id, read_scope)
+        scope = self._scope(context, PermissionKey.AGENT_READ)
+        agent = self.repository.get_active_in_scope(agent_id, scope)
         if agent is None:
             self._raise_not_found(agent_id)
         return agent
@@ -80,16 +100,8 @@ class AgentAuthorization:
         *,
         detail: str = "You don't have permission to perform this action.",
     ) -> AuthorizationScope:
-        action_scope = self.policy.resolve(context, agent.organization_id, permission)
-        if action_scope is None:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+        action_scope = self._scope(context, permission)
         if self.repository.get_active_in_scope(agent.id, action_scope) is None:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
-        if (
-            permission == PermissionKey.AGENT_ACCESS_MANAGE
-            and action_scope.scope == PermissionScope.ASSIGNED
-            and agent.created_by_user_id != context.user.id
-        ):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
         return action_scope
 
@@ -98,46 +110,31 @@ class AgentAuthorization:
     ) -> dict[UUID, list[PermissionKey]]:
         if not agents:
             return {}
-        organization_id = context.require_current_user_organization().organization_id
-        scopes = self.policy.resolve_many(
-            context, organization_id, _AGENT_ACTION_PERMISSIONS
-        )
-        assigned_membership_ids = {
-            scope.membership_id
-            for scope in scopes.values()
-            if scope.scope == PermissionScope.ASSIGNED
-            and scope.membership_id is not None
-        }
-        assigned_ids: set[UUID] = set()
-        agent_ids = [agent.id for agent in agents]
-        for membership_id in assigned_membership_ids:
-            assigned_ids.update(
-                self.repository.find_assigned_agent_ids(membership_id, agent_ids)
+        membership = context.require_current_user_organization()
+        if context.user.is_superuser or membership.role_id in {
+            OWNER_ROLE_ID,
+            ADMIN_ROLE_ID,
+        }:
+            permissions_by_agent = {
+                agent.id: set(SYSTEM_AGENT_ACCESS_ROLE_GRANTS[AGENT_OWNER_ROLE_ID])
+                for agent in agents
+            }
+        else:
+            permissions_by_agent = self.repository.find_agent_permissions(
+                membership.id,
+                membership.organization_id,
+                [agent.id for agent in agents],
             )
 
-        result: dict[UUID, list[PermissionKey]] = {}
-        for agent in agents:
-            actions: list[PermissionKey] = []
-            for permission in _AGENT_ACTION_PERMISSIONS:
-                scope = scopes.get(permission)
-                if scope is None:
-                    continue
-                if (
-                    scope.scope == PermissionScope.ASSIGNED
-                    and agent.id not in assigned_ids
-                ):
-                    continue
-                if (
-                    permission == PermissionKey.AGENT_ACCESS_MANAGE
-                    and scope.scope == PermissionScope.ASSIGNED
-                    and agent.created_by_user_id != context.user.id
-                ):
-                    continue
-                if not self._state_allows(agent.status, permission):
-                    continue
-                actions.append(permission)
-            result[agent.id] = actions
-        return result
+        return {
+            agent.id: [
+                permission
+                for permission in _AGENT_ACTION_PERMISSIONS
+                if permission in permissions_by_agent.get(agent.id, set())
+                and self._state_allows(agent.status, permission)
+            ]
+            for agent in agents
+        }
 
     @staticmethod
     def _state_allows(status_value: AgentStatus, permission: PermissionKey) -> bool:

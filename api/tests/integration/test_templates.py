@@ -17,7 +17,6 @@ from api.domains.rbac.catalog import (
     ADMIN_ROLE_ID,
     MEMBER_ROLE_ID,
     PermissionKey,
-    PermissionScope,
 )
 from api.domains.templates.defaults import DEFAULT_SOUL_MD
 from api.domains.templates.models import TemplateSource
@@ -43,7 +42,7 @@ from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import (
     there_is_an_organization_with_user_and_access_token,
 )
-from api.tests.steps.rbac import role_lacks_permission, role_permission_has_scope
+from api.tests.steps.rbac import role_lacks_permission
 from api.tests.steps.template import there_is_a_template, there_is_a_template_skill
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
 
@@ -437,10 +436,9 @@ def test_admin_with_assigned_template_manage_cannot_create_template():
         [
             *_GIVEN,
             _there_is_a_role_actor(OrganizationRole.ADMIN),
-            role_permission_has_scope(
+            role_lacks_permission(
                 ADMIN_ROLE_ID,
                 PermissionKey.TEMPLATE_MANAGE,
-                PermissionScope.ASSIGNED,
             ),
         ]
     ) as context:
