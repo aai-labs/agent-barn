@@ -5,7 +5,7 @@ Source: [AF-150](https://aai-labs.atlassian.net/browse/AF-150)
 
 ## Purpose
 
-Read this brief before changing Organization authorization, Agent visibility or operations, Agent Access, role seeding, or the AF-150 migration. It records the delivered contract; [`CHANGELOG.md`](CHANGELOG.md) retains the implementation history.
+Read this brief before changing Organization authorization, Agent visibility or operations, Agent Access Role seeding, or the AF-150 migration. It records the delivered contract; [`CHANGELOG.md`](CHANGELOG.md) retains the implementation history.
 
 Related context:
 
@@ -23,7 +23,7 @@ Authorization combines three independent sources:
 2. **Organization authority** — each Membership has exactly one fixed Organization Role: Owner, Admin, or Member.
 3. **Agent authority** — Organization Owner/Admin have implicit Agent Owner authority; an Organization Member requires explicit Agent Access carrying one Agent Access Role.
 
-Permissions are allow-only and missing capabilities deny by default. Grants are resolved from current database state on every request rather than embedded in tokens.
+Permissions are allow-only and missing capabilities deny by default. Organization authorization resolves the Membership's current persisted Organization Role against an immutable code-owned Permission mapping. Agent authorization resolves current database-backed Agent Access and Agent Access Role grants. Grants are not embedded in tokens.
 
 ### Organization Roles
 
@@ -33,7 +33,7 @@ Permissions are allow-only and missing capabilities deny by default. Grants are 
 | Organization Admin | Normal Organization and Membership administration, but no Owner recovery operations or control of other Admins. |
 | Organization Member | May create Agents and use shared Templates and Skills, but cannot administer the Organization or shared definitions. |
 
-These roles are locked and cannot be created, edited, renamed, or deleted. Organization Role permissions govern Organization capabilities; they do not grant operations on assigned Agents.
+These roles are a closed enum persisted directly on Membership. They cannot be created, edited, renamed, or deleted, and their immutable Permission mapping is defined with the authorization policy in code. Organization Role permissions govern Organization capabilities; they do not grant operations on assigned Agents.
 
 ### Agent Access Roles
 
@@ -81,7 +81,7 @@ Repositories own tenant and visibility query composition. Services own Permissio
 
 ## Backend and UI contract
 
-Agent read responses communicate the operations permitted for the current actor and Agent. The UI uses that server result for lifecycle, configuration, credential, activity, cost, and deletion controls rather than inferring authority from either role family. Every backend mutation independently reauthorizes current database state and Agent lifecycle.
+Agent read responses communicate the operations permitted for the current actor and Agent. The UI uses that server result for lifecycle, configuration, credential, activity, cost, and deletion controls rather than inferring authority from either role family. Every backend mutation independently reauthorizes the current Membership, Agent Access state, and Agent lifecycle.
 
 AF-150 UI is limited to permission-aware Agent controls, fixed Organization Role protections, inaccessible-Agent handling, and Member read-only Template/Skill surfaces. Agent assignment lists, access grant/change/revoke controls, assigned-role display, and custom Agent Access Role settings belong to AF-217.
 
@@ -95,10 +95,10 @@ Organization Members may read and use Templates and Skills when creating or conf
 
 The target model contains:
 
-- a global immutable Permission catalogue;
-- fixed database-backed Organization Roles and their Organization Permission mappings;
+- exactly one fixed Organization Role enum value persisted directly on each Membership;
+- an immutable code-owned Organization Role Permission mapping;
+- a global immutable Permission catalogue used by database-backed Agent Access Roles;
 - locked Agent Viewer, Editor, and Owner roles with Agent Permission mappings;
-- exactly one Organization Role reference per Membership;
 - immutable, nullable-for-legacy Agent creator provenance;
 - unique same-Organization Agent Access relating Membership, Agent, and one Agent Access Role.
 
@@ -106,12 +106,12 @@ Because the AF-150 migration is unreleased, it should install the target model d
 
 Migration requirements:
 
-1. Seed Permissions and both locked role catalogues deterministically and idempotently.
-2. Backfill Memberships to fixed Organization Roles without changing Organization authority.
+1. Preserve the existing fixed Organization Role enum and Membership role values without translation.
+2. Seed Permissions and locked Agent Access Roles deterministically and idempotently.
 3. Preserve existing Agent visibility by granting every existing accepted Organization Member Agent Editor access to every existing Agent in the same Organization; pending and removed Memberships receive none.
 4. Grant Agent Owner only when creator provenance is reliable. The pre-AF-150 schema stored no creator ID, Agent assignment, or audit event, so its existing Agents have no recoverable known creator and remain `NULL`; no heuristic Owner grant is made.
 5. Keep Organization Owner/Admin Agent authority implicit rather than materializing bulk assignments.
-6. Enforce role-family validity, same-Organization relationships, uniqueness, deletion behavior, and repeatable startup validation.
+6. Enforce Agent role-family validity, same-Organization relationships, uniqueness, deletion behavior, and repeatable startup validation.
 7. Cover fresh installs and upgrades from the pre-AF-150 schema with migrated PostgreSQL integration tests.
 
 New Agents grant explicit Agent Owner access only to their creator.
@@ -134,4 +134,4 @@ AF-150 workflows must retain clean transaction seams for later event adoption wi
 
 Test superuser, Organization Owner/Admin, creator, explicit Agent Owner/Editor/Viewer, unassigned Member, pending/removed Membership, wrong Organization, soft-deleted Agent, and migrated legacy data across list/count/detail/mutation and subordinate-resource paths.
 
-Verify fresh and pre-AF-150 migration paths, seed idempotency, constraints, 404/403 behavior, direct mutation authorization, persistence-level pagination, and UI control differences. Run the required targets from [`../../guidelines/testing.md`](../../guidelines/testing.md) and keep [`CHANGELOG.md`](CHANGELOG.md) synchronized with every delivered slice.
+Verify fresh and pre-AF-150 migration paths, Organization Role policy coverage, Agent Access Role seed idempotency, constraints, 404/403 behavior, direct mutation authorization, persistence-level pagination, and UI control differences. Run the required targets from [`../../guidelines/testing.md`](../../guidelines/testing.md) and keep [`CHANGELOG.md`](CHANGELOG.md) synchronized with every delivered slice.

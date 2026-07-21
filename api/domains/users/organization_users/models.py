@@ -1,32 +1,14 @@
-import enum
 from datetime import datetime
-from typing import Any
 from uuid import UUID
 
 import sqlalchemy as sa
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic import EmailStr
-from sqlmodel import Field, Index
+from sqlmodel import Column, Enum, Field, Index
 
 from api.domains.organizations.models import OrganizationRead
-from api.domains.rbac.catalog import (
-    MEMBER_ROLE_ID,
-    OWNER_ROLE_ID,
-    system_role_id,
-    system_role_name,
-)
+from api.domains.rbac.catalog import OrganizationRole
 from api.infrastructure.postgres.models import BaseModel
-
-
-class OrganizationRole(str, enum.Enum):
-    ADMIN = "ADMIN"
-    MEMBER = "MEMBER"
-    OWNER = "OWNER"
-
-
-# Recovery/governance invariants intentionally remain role-based even though ordinary
-# capabilities resolve through database-backed Permissions.
-ORG_OWNER_ONLY_ROLES: frozenset[OrganizationRole] = frozenset({OrganizationRole.OWNER})
 
 
 class OrganizationUser(BaseModel, table=True):
@@ -37,7 +19,7 @@ class OrganizationUser(BaseModel, table=True):
             "uq_user_organization_one_owner_per_org",
             "organization_id",
             unique=True,
-            postgresql_where=sa.text(f"role_id = '{OWNER_ROLE_ID}'::uuid"),
+            postgresql_where=sa.text("role = 'OWNER'"),
         ),
         Index("uq_user_organization", "user_id", "organization_id", unique=True),
         sa.UniqueConstraint(
@@ -52,30 +34,10 @@ class OrganizationUser(BaseModel, table=True):
     organization_id: UUID = Field(
         foreign_key="organization.id", nullable=False, ondelete="CASCADE"
     )
-    role_id: UUID = Field(
-        default=MEMBER_ROLE_ID,
-        foreign_key="roles.id",
-        nullable=False,
-        ondelete="RESTRICT",
+    role: OrganizationRole = Field(
+        default=OrganizationRole.MEMBER,
+        sa_column=Column(Enum(OrganizationRole), nullable=False),
     )
-
-    def __init__(self, **data: Any) -> None:
-        compatibility_role = data.pop("role", None)
-        if compatibility_role is not None:
-            if "role_id" in data:
-                raise ValueError("Provide role or role_id, not both")
-            role = OrganizationRole(compatibility_role)
-            data["role_id"] = system_role_id(role.value)
-        super().__init__(**data)
-
-    @property
-    def role(self) -> OrganizationRole:
-        """Compatibility view for the seeded system roles exposed by current APIs."""
-        return OrganizationRole(system_role_name(self.role_id))
-
-    @role.setter
-    def role(self, value: OrganizationRole) -> None:
-        self.role_id = system_role_id(value.value)
 
 
 class OrganizationUserRead(PydanticBaseModel):

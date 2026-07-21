@@ -1,33 +1,27 @@
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from unittest.mock import patch
-from uuid import UUID
 
-from api.domains.rbac.catalog import PermissionKey
-from api.domains.rbac.repository import RbacRepository
+from api.domains.rbac.catalog import (
+    OrganizationRole,
+    PermissionKey,
+    organization_role_allows,
+)
 
 
-def _without_permission(
-    repository: RbacRepository,
-    role_id: UUID,
-    permission: PermissionKey,
-):
-    original = repository.get_permissions
-
+def _without_permission(role: OrganizationRole, permission: PermissionKey):
     def filtered_permissions(
-        requested_role_id: UUID,
-        permissions: Iterable[PermissionKey],
-    ) -> set[PermissionKey]:
-        result = original(requested_role_id, permissions)
-        if requested_role_id == role_id:
-            result.discard(permission)
-        return result
+        requested_role: OrganizationRole,
+        requested_permission: PermissionKey,
+    ) -> bool:
+        if requested_role == role and requested_permission == permission:
+            return False
+        return organization_role_allows(requested_role, requested_permission)
 
     @contextmanager
     def changed_grant() -> Iterator[None]:
-        with patch.object(
-            repository,
-            "get_permissions",
+        with patch(
+            "api.domains.rbac.policy.organization_role_allows",
             side_effect=filtered_permissions,
         ):
             yield
@@ -36,12 +30,11 @@ def _without_permission(
 
 
 def role_lacks_permission(
-    role_id: UUID, permission: PermissionKey
+    role: OrganizationRole, permission: PermissionKey
 ) -> Callable[[object], object]:
-    """Temporarily simulate a denied repository lookup without mutating locked grants."""
+    """Temporarily simulate a denied policy decision for a fixed Organization Role."""
 
     def step(context) -> object:
-        repository: RbacRepository = context.injector.get(RbacRepository)
-        return _without_permission(repository, role_id, permission)
+        return _without_permission(role, permission)
 
     return step

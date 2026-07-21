@@ -11,7 +11,6 @@ from api.domains.auth.hashing import check_hash, hash_text
 from api.domains.auth.password_validation import validate_strong_password
 from api.domains.auth.repository import RefreshTokenRepository
 from api.domains.organizations.repository import OrganizationRepository
-from api.domains.rbac.catalog import system_role_id
 from api.domains.users.models import (
     AdminUserCreate,
     User,
@@ -89,7 +88,7 @@ class UserService:
             OrganizationUser(
                 user_id=user.id,
                 organization_id=data.organization_id,
-                role_id=system_role_id(data.role.value),
+                role=data.role,
             )
         )
         return user

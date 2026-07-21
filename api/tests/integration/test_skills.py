@@ -8,11 +8,7 @@ from fastapi import status
 from hamcrest import assert_that, equal_to, has_item, has_items, not_
 from starlette.testclient import TestClient
 
-from api.domains.rbac.catalog import (
-    ADMIN_ROLE_ID,
-    MEMBER_ROLE_ID,
-    PermissionKey,
-)
+from api.domains.rbac.catalog import PermissionKey
 from api.domains.users.organization_users.models import OrganizationRole
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
@@ -170,7 +166,7 @@ def test_admin_without_skill_manage_cannot_create_skill():
         [
             *_GIVEN,
             _there_is_a_role_actor(OrganizationRole.ADMIN),
-            role_lacks_permission(ADMIN_ROLE_ID, PermissionKey.SKILL_MANAGE),
+            role_lacks_permission(OrganizationRole.ADMIN, PermissionKey.SKILL_MANAGE),
         ]
     ) as context:
         response = context.client.post(
@@ -188,7 +184,7 @@ def test_admin_with_assigned_skill_manage_cannot_create_skill():
             *_GIVEN,
             _there_is_a_role_actor(OrganizationRole.ADMIN),
             role_lacks_permission(
-                ADMIN_ROLE_ID,
+                OrganizationRole.ADMIN,
                 PermissionKey.SKILL_MANAGE,
             ),
         ]
@@ -389,7 +385,7 @@ def test_member_without_skill_read_cannot_list_skills():
         [
             *_GIVEN,
             _there_is_a_member_actor(),
-            role_lacks_permission(MEMBER_ROLE_ID, PermissionKey.SKILL_READ),
+            role_lacks_permission(OrganizationRole.MEMBER, PermissionKey.SKILL_READ),
         ]
     ) as context:
         response = context.client.get(_BASE, headers=_auth(context))
@@ -547,7 +543,7 @@ def test_member_without_skill_read_cannot_get_skill():
             *_GIVEN,
             there_is_a_skill(name="Hidden Skill"),
             _there_is_a_member_actor(),
-            role_lacks_permission(MEMBER_ROLE_ID, PermissionKey.SKILL_READ),
+            role_lacks_permission(OrganizationRole.MEMBER, PermissionKey.SKILL_READ),
         ]
     ) as context:
         response = context.client.get(

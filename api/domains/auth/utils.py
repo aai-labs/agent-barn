@@ -17,7 +17,6 @@ from api.domains.auth.exceptions import (
 )
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.service import JWT_ENCODING_ALGORITHM
-from api.domains.rbac.catalog import OWNER_ROLE_ID
 from api.domains.users.organization_users.models import (
     OrganizationRole,
     OrganizationUser,
@@ -100,7 +99,7 @@ def get_authenticated_user(
                 user_organization = OrganizationUser(
                     user_id=user.id,
                     organization_id=organization_id,
-                    role_id=OWNER_ROLE_ID,
+                    role=OrganizationRole.OWNER,
                 )
             else:
                 raise ForbiddenException(

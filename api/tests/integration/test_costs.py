@@ -5,7 +5,7 @@ from fastapi import status
 from hamcrest import assert_that, equal_to, has_length
 from starlette.testclient import TestClient
 
-from api.domains.rbac.catalog import ADMIN_ROLE_ID, PermissionKey
+from api.domains.rbac.catalog import PermissionKey
 from api.domains.users.organization_users.models import OrganizationRole
 from api.infrastructure.litellm.client import LiteLLMClient
 from api.tests.core.givenpy import given, then, when
@@ -85,7 +85,7 @@ def test_admin_with_assigned_cost_scope_cannot_view_organization_summary():
             ),
             there_is_an_access_token_for_user(user_id=admin_id),
             role_lacks_permission(
-                ADMIN_ROLE_ID,
+                OrganizationRole.ADMIN,
                 PermissionKey.COST_READ,
             ),
         ]
@@ -106,7 +106,7 @@ def test_admin_without_cost_read_cannot_view_organization_summary():
                 role=OrganizationRole.ADMIN,
             ),
             there_is_an_access_token_for_user(user_id=admin_id),
-            role_lacks_permission(ADMIN_ROLE_ID, PermissionKey.COST_READ),
+            role_lacks_permission(OrganizationRole.ADMIN, PermissionKey.COST_READ),
         ]
     ) as context:
         response = context.client.get(f"{_BASE}/summary", headers=_auth(context))

@@ -13,7 +13,6 @@ from api.domains.auth.exceptions import (
 )
 from api.domains.auth.utils import get_authenticated_user
 from api.core.config import Config
-from api.domains.rbac.catalog import system_role_id
 from api.domains.users.models import User
 from api.domains.users.repository import UserRepository
 from api.domains.users.organization_users.models import (
@@ -48,7 +47,7 @@ def test_get_authenticated_user_returns_context():
     org_user = OrganizationUser(
         user_id=user.id,
         organization_id=uuid7(),
-        role_id=system_role_id(OrganizationRole.OWNER.value),
+        role=OrganizationRole.OWNER,
     )
     config = SimpleNamespace(secret_signing_key="x" * 32)
     token = jwt.encode(
@@ -105,7 +104,7 @@ def test_get_authenticated_user_requires_role_for_non_superuser():
     org_user = OrganizationUser(
         user_id=user.id,
         organization_id=uuid7(),
-        role_id=system_role_id(OrganizationRole.MEMBER.value),
+        role=OrganizationRole.MEMBER,
     )
     config = SimpleNamespace(secret_signing_key="x" * 32)
     token = jwt.encode(

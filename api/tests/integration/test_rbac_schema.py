@@ -13,17 +13,15 @@ from sqlalchemy.exc import IntegrityError
 
 from api.core.config import Config as AppConfig
 from api.domains.rbac.catalog import (
-    ADMIN_ROLE_ID,
     AGENT_EDITOR_ROLE_ID,
     AGENT_OWNER_ROLE_ID,
     AGENT_VIEWER_ROLE_ID,
-    MEMBER_ROLE_ID,
-    OWNER_ROLE_ID,
     PERMISSION_ID_BY_KEY,
     PERMISSIONS,
     SYSTEM_AGENT_ACCESS_ROLE_GRANTS,
-    SYSTEM_ROLE_GRANTS,
+    OrganizationRole,
     PermissionKey,
+    organization_role_allows,
 )
 from api.domains.rbac.repository import RbacRepository
 from api.domains.rbac.seeder import RbacSeeder
@@ -273,11 +271,22 @@ def _insert_custom_agent_access_role(db, organization_id):
 def test_fresh_upgrade_seeds_exact_system_catalogues(fresh_database):
     with fresh_database.engine.connect() as connection:
         actual = {
-            "organization_roles": dict(
-                (name, role_id)
-                for role_id, name in connection.execute(
-                    text("SELECT id, name FROM roles ORDER BY name")
-                ).all()
+            "organization_role_tables": connection.execute(
+                text(
+                    "SELECT count(*) FROM information_schema.tables "
+                    "WHERE table_schema = 'public' "
+                    "AND table_name IN ('roles', 'role_permissions')"
+                )
+            ).scalar_one(),
+            "membership_role_columns": set(
+                connection.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = 'public' "
+                        "AND table_name = 'user_organization' "
+                        "AND column_name IN ('role', 'role_id')"
+                    )
+                ).scalars()
             ),
             "agent_access_roles": dict(
                 (name, role_id)
@@ -294,13 +303,10 @@ def test_fresh_upgrade_seeds_exact_system_catalogues(fresh_database):
                     text("SELECT id, key FROM permissions ORDER BY key")
                 ).all()
             ),
-            "organization_grants": connection.execute(
-                text("SELECT count(*) FROM role_permissions")
-            ).scalar_one(),
             "agent_grants": connection.execute(
                 text("SELECT count(*) FROM agent_access_role_permissions")
             ).scalar_one(),
-            "legacy_enum_count": connection.execute(
+            "organization_role_enum_count": connection.execute(
                 text("SELECT count(*) FROM pg_type WHERE typname = 'organizationrole'")
             ).scalar_one(),
             "scope_enum_count": connection.execute(
@@ -312,11 +318,8 @@ def test_fresh_upgrade_seeds_exact_system_catalogues(fresh_database):
         actual,
         equal_to(
             {
-                "organization_roles": {
-                    "ADMIN": ADMIN_ROLE_ID,
-                    "MEMBER": MEMBER_ROLE_ID,
-                    "OWNER": OWNER_ROLE_ID,
-                },
+                "organization_role_tables": 0,
+                "membership_role_columns": {"role"},
                 "agent_access_roles": {
                     "EDITOR": AGENT_EDITOR_ROLE_ID,
                     "OWNER": AGENT_OWNER_ROLE_ID,
@@ -325,24 +328,23 @@ def test_fresh_upgrade_seeds_exact_system_catalogues(fresh_database):
                 "permissions": {
                     permission.key.value: permission.id for permission in PERMISSIONS
                 },
-                "organization_grants": sum(
-                    len(grants) for grants in SYSTEM_ROLE_GRANTS.values()
-                ),
                 "agent_grants": sum(
                     len(grants) for grants in SYSTEM_AGENT_ACCESS_ROLE_GRANTS.values()
                 ),
-                "legacy_enum_count": 0,
+                "organization_role_enum_count": 1,
                 "scope_enum_count": 0,
             }
         ),
     )
 
 
-def test_repository_resolves_separate_role_permissions(fresh_database):
+def test_policy_and_repository_resolve_separate_role_permissions(fresh_database):
     repository = _repository_for(fresh_database.url)
 
-    assert repository.has_permission(MEMBER_ROLE_ID, PermissionKey.AGENT_CREATE)
-    assert not repository.has_permission(MEMBER_ROLE_ID, PermissionKey.AGENT_READ)
+    assert organization_role_allows(OrganizationRole.MEMBER, PermissionKey.AGENT_CREATE)
+    assert not organization_role_allows(
+        OrganizationRole.MEMBER, PermissionKey.AGENT_READ
+    )
     assert_that(
         repository.get_agent_access_role_permissions(AGENT_VIEWER_ROLE_ID),
         equal_to(
@@ -362,14 +364,10 @@ def test_rbac_seeder_is_idempotent(fresh_database):
 
     with fresh_database.engine.connect() as connection:
         counts = (
-            connection.execute(text("SELECT count(*) FROM roles")).scalar_one(),
             connection.execute(
                 text("SELECT count(*) FROM agent_access_roles")
             ).scalar_one(),
             connection.execute(text("SELECT count(*) FROM permissions")).scalar_one(),
-            connection.execute(
-                text("SELECT count(*) FROM role_permissions")
-            ).scalar_one(),
             connection.execute(
                 text("SELECT count(*) FROM agent_access_role_permissions")
             ).scalar_one(),
@@ -380,55 +378,11 @@ def test_rbac_seeder_is_idempotent(fresh_database):
         equal_to(
             (
                 3,
-                3,
                 len(PERMISSIONS),
-                sum(len(grants) for grants in SYSTEM_ROLE_GRANTS.values()),
                 sum(len(grants) for grants in SYSTEM_AGENT_ACCESS_ROLE_GRANTS.values()),
             )
         ),
     )
-
-
-def test_fixed_organization_role_grants_reject_mutation(fresh_database):
-    mutations = (
-        (
-            "INSERT INTO role_permissions (role_id, permission_id) "
-            "VALUES (:role_id, :permission_id)",
-            {
-                "role_id": ADMIN_ROLE_ID,
-                "permission_id": PERMISSION_ID_BY_KEY[
-                    PermissionKey.ORGANIZATION_DELETE
-                ],
-            },
-        ),
-        (
-            "DELETE FROM role_permissions "
-            "WHERE role_id = :role_id AND permission_id = :permission_id",
-            {
-                "role_id": ADMIN_ROLE_ID,
-                "permission_id": PERMISSION_ID_BY_KEY[PermissionKey.TEMPLATE_MANAGE],
-            },
-        ),
-        (
-            "UPDATE role_permissions SET permission_id = :new_permission_id "
-            "WHERE role_id = :role_id AND permission_id = :permission_id",
-            {
-                "role_id": MEMBER_ROLE_ID,
-                "permission_id": PERMISSION_ID_BY_KEY[PermissionKey.TEMPLATE_READ],
-                "new_permission_id": PERMISSION_ID_BY_KEY[PermissionKey.COST_READ],
-            },
-        ),
-    )
-
-    for statement, parameters in mutations:
-        assert_that(
-            calling(_execute).with_args(
-                fresh_database.engine,
-                statement,
-                parameters,
-            ),
-            raises(IntegrityError),
-        )
 
 
 def test_system_agent_access_role_grants_reject_mutation(fresh_database):
@@ -537,20 +491,22 @@ def test_permission_catalogue_rejects_mutation(fresh_database):
         )
 
 
-def test_upgrade_backfills_membership_roles(legacy_database):
+def test_upgrade_preserves_membership_roles(legacy_database):
     with legacy_database.engine.connect() as connection:
         actual = dict(
-            connection.execute(text("SELECT id, role_id FROM user_organization")).all()
+            connection.execute(
+                text("SELECT id, role::text FROM user_organization")
+            ).all()
         )
 
     assert_that(
         actual,
         equal_to(
             {
-                legacy_database.owner_membership: OWNER_ROLE_ID,
-                legacy_database.member_membership: MEMBER_ROLE_ID,
-                legacy_database.admin_membership: ADMIN_ROLE_ID,
-                legacy_database.pending_membership: MEMBER_ROLE_ID,
+                legacy_database.owner_membership: "OWNER",
+                legacy_database.member_membership: "MEMBER",
+                legacy_database.admin_membership: "ADMIN",
+                legacy_database.pending_membership: "MEMBER",
             }
         ),
     )
@@ -686,21 +642,8 @@ def test_agent_access_rejects_custom_role_from_another_organization(
     )
 
 
-def test_locked_roles_reject_mutation(legacy_database):
+def test_locked_agent_access_roles_reject_mutation(legacy_database):
     mutations = (
-        (
-            "INSERT INTO roles (id, created_at, updated_at, name) "
-            "VALUES (:id, now(), now(), :name)",
-            {"id": uuid7(), "name": "CUSTOM"},
-        ),
-        (
-            "UPDATE roles SET name = :name WHERE id = :id",
-            {"name": "CHANGED", "id": MEMBER_ROLE_ID},
-        ),
-        (
-            "DELETE FROM roles WHERE id = :id",
-            {"id": MEMBER_ROLE_ID},
-        ),
         (
             "INSERT INTO agent_access_roles "
             "(id, created_at, updated_at, organization_id, name, is_system) "
@@ -749,9 +692,10 @@ def test_membership_enforces_one_owner_per_organization(legacy_database):
     assert_that(
         calling(_execute).with_args(
             legacy_database.engine,
-            "UPDATE user_organization SET role_id = :role_id WHERE id = :membership_id",
+            "UPDATE user_organization "
+            "SET role = CAST(:role AS organizationrole) WHERE id = :membership_id",
             {
-                "role_id": OWNER_ROLE_ID,
+                "role": OrganizationRole.OWNER.value,
                 "membership_id": legacy_database.member_membership,
             },
         ),
@@ -759,7 +703,7 @@ def test_membership_enforces_one_owner_per_organization(legacy_database):
     )
 
 
-def test_downgrade_restores_legacy_role_enum(legacy_database):
+def test_downgrade_preserves_organization_role_enum(legacy_database):
     command.downgrade(legacy_database.config, PRE_RBAC_REVISION)
     with legacy_database.engine.connect() as connection:
         actual = {

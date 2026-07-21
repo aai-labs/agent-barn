@@ -6,7 +6,6 @@ from api.domains.auth.models import CurrentUserContext, TokenData
 from api.domains.auth.service import AuthService
 from api.domains.organizations.models import Organization
 from api.domains.organizations.repository import OrganizationRepository
-from api.domains.rbac.catalog import system_role_id
 from api.domains.users.models import User
 from api.domains.users.organization_users.models import (
     OrganizationRole,
@@ -95,7 +94,7 @@ def there_is_a_user(
                     id=organization_user_id or uuid7(),
                     user_id=user.id,
                     organization_id=org_id,
-                    role_id=system_role_id(org_role.value),
+                    role=org_role,
                 )
                 organization_user_repository.save(organization_user)
             organization_ids = [org_id]

@@ -1,5 +1,4 @@
 from datetime import datetime, timezone
-from unittest.mock import Mock
 from uuid import UUID, uuid7
 
 from hamcrest import assert_that, calling, equal_to, has_properties, none, raises
@@ -7,11 +6,9 @@ from hamcrest import assert_that, calling, equal_to, has_properties, none, raise
 from api.domains.auth.exceptions import ForbiddenException
 from api.domains.auth.models import CurrentUserContext
 from api.domains.rbac.catalog import (
-    ADMIN_ROLE_ID,
-    MEMBER_ROLE_ID,
-    OWNER_ROLE_ID,
-    SYSTEM_ROLE_GRANTS,
+    OrganizationRole,
     PermissionKey,
+    organization_role_allows,
 )
 from api.domains.rbac.policy import AuthorizationScope, PermissionPolicy
 from api.domains.users.models import User
@@ -28,7 +25,7 @@ def _user(*, is_superuser: bool = False) -> User:
 
 
 def _context(
-    role_id: UUID = MEMBER_ROLE_ID,
+    role: OrganizationRole = OrganizationRole.MEMBER,
     *,
     organization_id: UUID | None = None,
     is_superuser: bool = False,
@@ -38,7 +35,7 @@ def _context(
     membership = OrganizationUser(
         user_id=user.id,
         organization_id=organization_id,
-        role_id=role_id,
+        role=role,
     )
     return (
         CurrentUserContext(
@@ -51,24 +48,55 @@ def _context(
     )
 
 
-def _system_catalogue_repository() -> Mock:
-    repository = Mock()
-    repository.has_permission.side_effect = lambda role_id, permission: (
-        permission in SYSTEM_ROLE_GRANTS.get(role_id, set())
-    )
-    repository.get_permissions.side_effect = lambda role_id, permissions: {
-        permission
-        for permission in permissions
-        if permission in SYSTEM_ROLE_GRANTS.get(role_id, set())
+def test_organization_role_permission_matrix_is_exact():
+    owner_permissions = {
+        PermissionKey.ORGANIZATION_READ,
+        PermissionKey.ORGANIZATION_UPDATE,
+        PermissionKey.ORGANIZATION_DELETE,
+        PermissionKey.ORGANIZATION_OWNERSHIP_TRANSFER,
+        PermissionKey.MEMBERSHIP_READ,
+        PermissionKey.MEMBERSHIP_INVITE,
+        PermissionKey.MEMBERSHIP_ROLE_UPDATE,
+        PermissionKey.MEMBERSHIP_REMOVE,
+        PermissionKey.AGENT_CREATE,
+        PermissionKey.TEMPLATE_READ,
+        PermissionKey.TEMPLATE_MANAGE,
+        PermissionKey.SKILL_READ,
+        PermissionKey.SKILL_MANAGE,
+        PermissionKey.ACTIVITY_READ,
+        PermissionKey.COST_READ,
     }
-    return repository
+    expected = {
+        OrganizationRole.OWNER: owner_permissions,
+        OrganizationRole.ADMIN: owner_permissions
+        - {
+            PermissionKey.ORGANIZATION_DELETE,
+            PermissionKey.ORGANIZATION_OWNERSHIP_TRANSFER,
+        },
+        OrganizationRole.MEMBER: {
+            PermissionKey.ORGANIZATION_READ,
+            PermissionKey.AGENT_CREATE,
+            PermissionKey.TEMPLATE_READ,
+            PermissionKey.SKILL_READ,
+        },
+    }
+    actual = {
+        role: {
+            permission
+            for permission in PermissionKey
+            if organization_role_allows(role, permission)
+        }
+        for role in OrganizationRole
+    }
+
+    assert_that(actual, equal_to(expected))
 
 
 def test_resolve_uses_fixed_organization_role_permissions():
-    policy = PermissionPolicy(repository=_system_catalogue_repository())
-    owner_context, owner = _context(OWNER_ROLE_ID)
-    admin_context, admin = _context(ADMIN_ROLE_ID)
-    member_context, member = _context(MEMBER_ROLE_ID)
+    policy = PermissionPolicy()
+    owner_context, owner = _context(OrganizationRole.OWNER)
+    admin_context, admin = _context(OrganizationRole.ADMIN)
+    member_context, member = _context(OrganizationRole.MEMBER)
 
     assert_that(
         policy.resolve(
@@ -106,9 +134,7 @@ def test_resolve_uses_fixed_organization_role_permissions():
 
 def test_resolve_denies_missing_permission_by_default():
     context, membership = _context()
-    repository = Mock()
-    repository.has_permission.return_value = False
-    policy = PermissionPolicy(repository=repository)
+    policy = PermissionPolicy()
 
     assert_that(
         policy.resolve(
@@ -139,7 +165,7 @@ def test_resolve_superuser_uses_transient_explicit_org_context():
     transient_membership = OrganizationUser(
         user_id=user.id,
         organization_id=organization_id,
-        role_id=OWNER_ROLE_ID,
+        role=OrganizationRole.OWNER,
     )
     context = CurrentUserContext(
         user=user,
@@ -147,29 +173,25 @@ def test_resolve_superuser_uses_transient_explicit_org_context():
         user_organization_map={},
         current_user_organization=transient_membership,
     )
-    repository = Mock()
-    policy = PermissionPolicy(repository=repository)
+    policy = PermissionPolicy()
 
     assert_that(
         policy.resolve(context, organization_id, PermissionKey.ORGANIZATION_DELETE),
         equal_to(AuthorizationScope(organization_id=organization_id)),
     )
-    repository.has_permission.assert_not_called()
 
 
 def test_resolve_rejects_target_outside_active_organization():
     context, _ = _context()
-    repository = Mock()
-    policy = PermissionPolicy(repository=repository)
+    policy = PermissionPolicy()
 
     assert_that(
         policy.resolve(context, uuid7(), PermissionKey.ORGANIZATION_READ), none()
     )
-    repository.has_permission.assert_not_called()
 
 
 def test_resolve_requires_active_organization_context_even_for_superuser():
-    policy = PermissionPolicy(repository=Mock())
+    policy = PermissionPolicy()
     context = CurrentUserContext(user=_user(is_superuser=True))
 
     assert_that(
@@ -181,8 +203,8 @@ def test_resolve_requires_active_organization_context_even_for_superuser():
 
 
 def test_resolve_observes_membership_role_changes_without_caching():
-    context, membership = _context(MEMBER_ROLE_ID)
-    policy = PermissionPolicy(repository=_system_catalogue_repository())
+    context, membership = _context(OrganizationRole.MEMBER)
+    policy = PermissionPolicy()
 
     assert_that(
         policy.resolve(
@@ -193,7 +215,7 @@ def test_resolve_observes_membership_role_changes_without_caching():
         none(),
     )
 
-    membership.role_id = ADMIN_ROLE_ID
+    membership.role = OrganizationRole.ADMIN
 
     assert_that(
         policy.require(
@@ -206,10 +228,8 @@ def test_resolve_observes_membership_role_changes_without_caching():
 
 
 def test_require_organization_returns_scope_when_permission_exists():
-    context, membership = _context()
-    repository = Mock()
-    repository.has_permission.return_value = True
-    policy = PermissionPolicy(repository=repository)
+    context, membership = _context(OrganizationRole.OWNER)
+    policy = PermissionPolicy()
 
     result = policy.require_organization(
         context,

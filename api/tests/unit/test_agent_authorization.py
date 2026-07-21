@@ -9,16 +9,12 @@ from hamcrest import assert_that, equal_to
 from api.domains.agents.authorization import AgentAuthorization
 from api.domains.agents.models import Agent, AgentStatus
 from api.domains.auth.models import CurrentUserContext
-from api.domains.rbac.catalog import (
-    ADMIN_ROLE_ID,
-    MEMBER_ROLE_ID,
-    PermissionKey,
-)
+from api.domains.rbac.catalog import OrganizationRole, PermissionKey
 from api.domains.users.models import User
 from api.domains.users.organization_users.models import OrganizationUser
 
 
-def _context(role_id=MEMBER_ROLE_ID):
+def _context(role: OrganizationRole = OrganizationRole.MEMBER):
     organization_id = uuid7()
     user = User(
         email=f"{uuid7()}@example.com",
@@ -28,7 +24,7 @@ def _context(role_id=MEMBER_ROLE_ID):
     membership = OrganizationUser(
         user_id=user.id,
         organization_id=organization_id,
-        role_id=role_id,
+        role=role,
     )
     context = CurrentUserContext(
         user=user,
@@ -115,7 +111,7 @@ def test_explicit_owner_can_manage_access_regardless_of_creator_provenance():
 
 
 def test_organization_admin_has_implicit_owner_actions():
-    context, membership = _context(ADMIN_ROLE_ID)
+    context, membership = _context(OrganizationRole.ADMIN)
     agent = _agent(membership.organization_id)
     repository = Mock()
     authorization = AgentAuthorization(policy=Mock(), repository=repository)

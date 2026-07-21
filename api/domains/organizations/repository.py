@@ -11,9 +11,11 @@ from api.domains.organizations.models import (
     OrganizationFilter,
     OrganizationRead,
 )
-from api.domains.rbac.catalog import OWNER_ROLE_ID
 from api.domains.users.models import User
-from api.domains.users.organization_users.models import OrganizationUser
+from api.domains.users.organization_users.models import (
+    OrganizationRole,
+    OrganizationUser,
+)
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
@@ -48,7 +50,7 @@ class OrganizationRepository:
                 OrganizationUser,
                 and_(
                     col(OrganizationUser.organization_id) == Organization.id,
-                    col(OrganizationUser.role_id) == OWNER_ROLE_ID,
+                    col(OrganizationUser.role) == OrganizationRole.OWNER,
                 ),
             )
             .outerjoin(User, col(User.id) == col(OrganizationUser.user_id))
@@ -122,7 +124,7 @@ class OrganizationRepository:
                     OrganizationUser,
                     and_(
                         col(OrganizationUser.organization_id) == Organization.id,
-                        col(OrganizationUser.role_id) == OWNER_ROLE_ID,
+                        col(OrganizationUser.role) == OrganizationRole.OWNER,
                     ),
                 )
                 .outerjoin(User, col(User.id) == col(OrganizationUser.user_id))

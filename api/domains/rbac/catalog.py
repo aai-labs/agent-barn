@@ -1,6 +1,14 @@
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
+from types import MappingProxyType
 from uuid import UUID
+
+
+class OrganizationRole(str, Enum):
+    ADMIN = "ADMIN"
+    MEMBER = "MEMBER"
+    OWNER = "OWNER"
 
 
 class PermissionKey(str, Enum):
@@ -39,21 +47,9 @@ class PermissionSeed:
     key: PermissionKey
 
 
-OWNER_ROLE_ID = UUID("5dd0b6b3-2a19-5d6d-9c91-50f9503563a6")
-ADMIN_ROLE_ID = UUID("1222b10c-3f24-54ca-bbeb-fce956134f70")
-MEMBER_ROLE_ID = UUID("d369b23a-01dd-5aeb-bd53-c463b3c4cd1a")
-
 AGENT_OWNER_ROLE_ID = UUID("8f2a47ff-7caf-5ded-9027-4a16b85620b3")
 AGENT_EDITOR_ROLE_ID = UUID("30e5e846-5e24-548f-a068-2505f774ce35")
 AGENT_VIEWER_ROLE_ID = UUID("c7da77aa-bf9c-5626-8bad-5e0ca5159b5d")
-
-SYSTEM_ROLES: tuple[RoleSeed, ...] = (
-    RoleSeed(id=OWNER_ROLE_ID, name="OWNER"),
-    RoleSeed(id=ADMIN_ROLE_ID, name="ADMIN"),
-    RoleSeed(id=MEMBER_ROLE_ID, name="MEMBER"),
-)
-SYSTEM_ROLE_ID_BY_NAME = {role.name: role.id for role in SYSTEM_ROLES}
-SYSTEM_ROLE_NAME_BY_ID = {role.id: role.name for role in SYSTEM_ROLES}
 
 SYSTEM_AGENT_ACCESS_ROLES: tuple[RoleSeed, ...] = (
     RoleSeed(id=AGENT_OWNER_ROLE_ID, name="OWNER"),
@@ -130,17 +126,25 @@ PERMISSIONS: tuple[PermissionSeed, ...] = (
 )
 PERMISSION_ID_BY_KEY = {permission.key: permission.id for permission in PERMISSIONS}
 
-_AGENT_OPERATION_KEYS = frozenset(
+_OWNER_ORGANIZATION_KEYS = frozenset(
     {
-        PermissionKey.AGENT_READ,
-        PermissionKey.AGENT_UPDATE,
-        PermissionKey.AGENT_DELETE,
-        PermissionKey.AGENT_LIFECYCLE_MANAGE,
-        PermissionKey.AGENT_ACCESS_MANAGE,
-        PermissionKey.AGENT_SECRET_MANAGE,
+        PermissionKey.ORGANIZATION_READ,
+        PermissionKey.ORGANIZATION_UPDATE,
+        PermissionKey.ORGANIZATION_DELETE,
+        PermissionKey.ORGANIZATION_OWNERSHIP_TRANSFER,
+        PermissionKey.MEMBERSHIP_READ,
+        PermissionKey.MEMBERSHIP_INVITE,
+        PermissionKey.MEMBERSHIP_ROLE_UPDATE,
+        PermissionKey.MEMBERSHIP_REMOVE,
+        PermissionKey.AGENT_CREATE,
+        PermissionKey.TEMPLATE_READ,
+        PermissionKey.TEMPLATE_MANAGE,
+        PermissionKey.SKILL_READ,
+        PermissionKey.SKILL_MANAGE,
+        PermissionKey.ACTIVITY_READ,
+        PermissionKey.COST_READ,
     }
 )
-_OWNER_ORGANIZATION_KEYS = frozenset(PermissionKey) - _AGENT_OPERATION_KEYS
 _ADMIN_ORGANIZATION_KEYS = _OWNER_ORGANIZATION_KEYS - {
     PermissionKey.ORGANIZATION_DELETE,
     PermissionKey.ORGANIZATION_OWNERSHIP_TRANSFER,
@@ -153,12 +157,20 @@ _MEMBER_ORGANIZATION_KEYS = frozenset(
         PermissionKey.SKILL_READ,
     }
 )
+_ORGANIZATION_ROLE_GRANTS: Mapping[OrganizationRole, frozenset[PermissionKey]] = (
+    MappingProxyType(
+        {
+            OrganizationRole.OWNER: _OWNER_ORGANIZATION_KEYS,
+            OrganizationRole.ADMIN: _ADMIN_ORGANIZATION_KEYS,
+            OrganizationRole.MEMBER: _MEMBER_ORGANIZATION_KEYS,
+        }
+    )
+)
 
-SYSTEM_ROLE_GRANTS: dict[UUID, frozenset[PermissionKey]] = {
-    OWNER_ROLE_ID: _OWNER_ORGANIZATION_KEYS,
-    ADMIN_ROLE_ID: _ADMIN_ORGANIZATION_KEYS,
-    MEMBER_ROLE_ID: _MEMBER_ORGANIZATION_KEYS,
-}
+ORG_OWNER_ONLY_ROLES: frozenset[OrganizationRole] = frozenset({OrganizationRole.OWNER})
+IMPLICIT_AGENT_OWNER_ROLES: frozenset[OrganizationRole] = frozenset(
+    {OrganizationRole.OWNER, OrganizationRole.ADMIN}
+)
 
 _VIEWER_KEYS = frozenset(
     {
@@ -183,15 +195,5 @@ SYSTEM_AGENT_ACCESS_ROLE_GRANTS: dict[UUID, frozenset[PermissionKey]] = {
 }
 
 
-def system_role_id(role_name: str) -> UUID:
-    try:
-        return SYSTEM_ROLE_ID_BY_NAME[role_name]
-    except KeyError as exc:
-        raise ValueError(f"Unknown system role: {role_name}") from exc
-
-
-def system_role_name(role_id: UUID) -> str:
-    try:
-        return SYSTEM_ROLE_NAME_BY_ID[role_id]
-    except KeyError as exc:
-        raise ValueError(f"Role {role_id} is not a seeded system role") from exc
+def organization_role_allows(role: OrganizationRole, permission: PermissionKey) -> bool:
+    return permission in _ORGANIZATION_ROLE_GRANTS.get(role, frozenset())

@@ -5,8 +5,7 @@ from injector import inject, singleton
 
 from api.domains.auth.exceptions import ForbiddenException
 from api.domains.auth.models import CurrentUserContext
-from api.domains.rbac.catalog import PermissionKey
-from api.domains.rbac.repository import RbacRepository
+from api.domains.rbac.catalog import PermissionKey, organization_role_allows
 
 
 @dataclass(frozen=True)
@@ -28,8 +27,6 @@ class AuthorizationScope:
 class PermissionPolicy:
     """Resolve fixed Organization Role permissions for the active Organization."""
 
-    repository: RbacRepository
-
     def resolve(
         self,
         context: CurrentUserContext,
@@ -39,8 +36,8 @@ class PermissionPolicy:
         membership = context.require_current_user_organization()
         if membership.organization_id != organization_id:
             return None
-        if context.user.is_superuser or self.repository.has_permission(
-            membership.role_id, permission
+        if context.user.is_superuser or organization_role_allows(
+            membership.role, permission
         ):
             return AuthorizationScope(organization_id=organization_id)
         return None

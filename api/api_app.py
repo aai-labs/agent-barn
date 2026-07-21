@@ -5,7 +5,7 @@ from typing import Annotated
 
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi_injector import attach_injector, Injected
+from fastapi_injector import Injected, attach_injector
 from injector import Injector
 from sqlmodel import Session, select
 
@@ -15,25 +15,27 @@ from api.domains.agents.routes import agents_router
 from api.domains.agents.slack_routes import slack_router
 from api.domains.agents.webhook_routes import webhook_router
 from api.domains.auth.routes import auth_router
+from api.domains.auth.utils import set_default_org_id
 from api.domains.conversations.routes import conversations_router
 from api.domains.costs.routes import costs_router
 from api.domains.integrations.google_oauth.routes import integrations_router
 from api.domains.organizations.routes import org_router
+from api.domains.organizations.service import OrganizationService
 from api.domains.rbac.seeder import RbacSeeder
+from api.domains.skills.repository import SkillRepository
 from api.domains.skills.routes import skills_router
 from api.domains.skills.skill_seeder import seed_aai_cli_skills
 from api.domains.templates.routes import templates_router
 from api.domains.templates.service import TemplateService
 from api.domains.tool_calls.routes import tool_calls_router
+from api.domains.users.organization_users.models import (
+    OrganizationRole,
+    OrganizationUser,
+)
+from api.domains.users.organization_users.repository import OrganizationUserRepository
 from api.domains.users.organization_users.routes import member_router
 from api.domains.users.routes import users_router
 from api.domains.users.service import UserService
-from api.domains.organizations.service import OrganizationService
-from api.domains.skills.repository import SkillRepository
-from api.domains.auth.utils import set_default_org_id
-from api.domains.rbac.catalog import OWNER_ROLE_ID
-from api.domains.users.organization_users.models import OrganizationUser
-from api.domains.users.organization_users.repository import OrganizationUserRepository
 from api.infrastructure.email.logging_utils import (
     log_email_delivery_disabled_warning,
 )
@@ -72,7 +74,7 @@ async def lifespan(_: FastAPI):
                 OrganizationUser(
                     user_id=superuser.id,
                     organization_id=default_org.id,
-                    role_id=OWNER_ROLE_ID,
+                    role=OrganizationRole.OWNER,
                 )
             )
     except Exception:

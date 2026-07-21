@@ -13,11 +13,7 @@ from starlette.testclient import TestClient
 
 from api.domains.organizations.models import Organization
 from api.domains.organizations.repository import OrganizationRepository
-from api.domains.rbac.catalog import (
-    ADMIN_ROLE_ID,
-    MEMBER_ROLE_ID,
-    PermissionKey,
-)
+from api.domains.rbac.catalog import PermissionKey
 from api.domains.templates.defaults import DEFAULT_SOUL_MD
 from api.domains.templates.models import TemplateSource
 from api.domains.templates.predefined import PREDEFINED_TEMPLATES
@@ -99,7 +95,7 @@ def test_member_without_template_read_cannot_list_templates():
         [
             *_GIVEN,
             _there_is_a_member_actor(),
-            role_lacks_permission(MEMBER_ROLE_ID, PermissionKey.TEMPLATE_READ),
+            role_lacks_permission(OrganizationRole.MEMBER, PermissionKey.TEMPLATE_READ),
         ]
     ) as context:
         response = context.client.get(_BASE, headers=_auth(context))
@@ -276,7 +272,7 @@ def test_member_without_template_read_cannot_get_template():
             *_GIVEN,
             there_is_a_template(slug="alpha", name="Alpha"),
             _there_is_a_member_actor(),
-            role_lacks_permission(MEMBER_ROLE_ID, PermissionKey.TEMPLATE_READ),
+            role_lacks_permission(OrganizationRole.MEMBER, PermissionKey.TEMPLATE_READ),
         ]
     ) as context:
         response = context.client.get(f"{_BASE}/alpha", headers=_auth(context))
@@ -325,7 +321,7 @@ def test_member_without_template_read_cannot_list_template_versions():
             *_GIVEN,
             there_is_a_template(slug="alpha", name="Alpha"),
             _there_is_a_member_actor(),
-            role_lacks_permission(MEMBER_ROLE_ID, PermissionKey.TEMPLATE_READ),
+            role_lacks_permission(OrganizationRole.MEMBER, PermissionKey.TEMPLATE_READ),
         ]
     ) as context:
         response = context.client.get(f"{_BASE}/alpha/versions", headers=_auth(context))
@@ -419,7 +415,9 @@ def test_admin_without_template_manage_cannot_create_template():
         [
             *_GIVEN,
             _there_is_a_role_actor(OrganizationRole.ADMIN),
-            role_lacks_permission(ADMIN_ROLE_ID, PermissionKey.TEMPLATE_MANAGE),
+            role_lacks_permission(
+                OrganizationRole.ADMIN, PermissionKey.TEMPLATE_MANAGE
+            ),
         ]
     ) as context:
         response = context.client.post(
@@ -437,7 +435,7 @@ def test_admin_with_assigned_template_manage_cannot_create_template():
             *_GIVEN,
             _there_is_a_role_actor(OrganizationRole.ADMIN),
             role_lacks_permission(
-                ADMIN_ROLE_ID,
+                OrganizationRole.ADMIN,
                 PermissionKey.TEMPLATE_MANAGE,
             ),
         ]

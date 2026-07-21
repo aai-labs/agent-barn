@@ -9,9 +9,8 @@ from api.domains.agents.models import Agent, AgentStatus
 from api.domains.agents.repository import AgentRepository
 from api.domains.auth.models import CurrentUserContext
 from api.domains.rbac.catalog import (
-    ADMIN_ROLE_ID,
     AGENT_OWNER_ROLE_ID,
-    OWNER_ROLE_ID,
+    IMPLICIT_AGENT_OWNER_ROLES,
     SYSTEM_AGENT_ACCESS_ROLE_GRANTS,
     PermissionKey,
 )
@@ -44,10 +43,7 @@ class AgentAuthorization:
         permission: PermissionKey,
     ) -> AuthorizationScope:
         membership = context.require_current_user_organization()
-        if context.user.is_superuser or membership.role_id in {
-            OWNER_ROLE_ID,
-            ADMIN_ROLE_ID,
-        }:
+        if context.user.is_superuser or membership.role in IMPLICIT_AGENT_OWNER_ROLES:
             return AuthorizationScope(organization_id=membership.organization_id)
         return AuthorizationScope(
             organization_id=membership.organization_id,
@@ -110,10 +106,7 @@ class AgentAuthorization:
         if not agents:
             return {}
         membership = context.require_current_user_organization()
-        if context.user.is_superuser or membership.role_id in {
-            OWNER_ROLE_ID,
-            ADMIN_ROLE_ID,
-        }:
+        if context.user.is_superuser or membership.role in IMPLICIT_AGENT_OWNER_ROLES:
             permissions_by_agent = {
                 agent.id: set(SYSTEM_AGENT_ACCESS_ROLE_GRANTS[AGENT_OWNER_ROLE_ID])
                 for agent in agents

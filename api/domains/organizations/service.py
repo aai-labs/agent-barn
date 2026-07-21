@@ -17,11 +17,11 @@ from api.domains.organizations.models import (
     OrganizationUpdate,
 )
 from api.domains.organizations.repository import OrganizationRepository
-from api.domains.rbac.catalog import OWNER_ROLE_ID, PermissionKey
+from api.domains.rbac.catalog import ORG_OWNER_ONLY_ROLES, PermissionKey
 from api.domains.rbac.policy import PermissionPolicy
 from api.domains.templates.service import TemplateService
 from api.domains.users.organization_users.models import (
-    ORG_OWNER_ONLY_ROLES,
+    OrganizationRole,
     OrganizationUser,
 )
 from api.domains.users.organization_users.service import OrganizationUserService
@@ -75,7 +75,7 @@ class OrganizationService:
                 OrganizationUser(
                     user_id=prepared.user.id,
                     organization_id=organization.id,
-                    role_id=OWNER_ROLE_ID,
+                    role=OrganizationRole.OWNER,
                 ),
                 session,
             )

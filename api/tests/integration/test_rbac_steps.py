@@ -1,7 +1,7 @@
 import pytest
 
-from api.domains.rbac.catalog import ADMIN_ROLE_ID, PermissionKey
-from api.domains.rbac.repository import RbacRepository
+from api.domains.rbac import policy as rbac_policy
+from api.domains.rbac.catalog import OrganizationRole, PermissionKey
 from api.tests.core.givenpy import given
 from api.tests.core.modules import (
     create_test_client,
@@ -21,36 +21,38 @@ _GIVEN = [
 
 
 def test_temporary_missing_permission_is_restored_after_normal_exit():
-    repository: RbacRepository
-
     with given(
         [
             *_GIVEN,
-            role_lacks_permission(ADMIN_ROLE_ID, PermissionKey.TEMPLATE_MANAGE),
+            role_lacks_permission(
+                OrganizationRole.ADMIN, PermissionKey.TEMPLATE_MANAGE
+            ),
         ]
-    ) as context:
-        repository = context.injector.get(RbacRepository)
-        assert not repository.has_permission(
-            ADMIN_ROLE_ID, PermissionKey.TEMPLATE_MANAGE
+    ):
+        assert not rbac_policy.organization_role_allows(
+            OrganizationRole.ADMIN, PermissionKey.TEMPLATE_MANAGE
         )
 
-    assert repository.has_permission(ADMIN_ROLE_ID, PermissionKey.TEMPLATE_MANAGE)
+    assert rbac_policy.organization_role_allows(
+        OrganizationRole.ADMIN, PermissionKey.TEMPLATE_MANAGE
+    )
 
 
 def test_temporary_missing_permission_is_restored_after_exception():
-    repository: RbacRepository
-
     with pytest.raises(RuntimeError):
         with given(
             [
                 *_GIVEN,
-                role_lacks_permission(ADMIN_ROLE_ID, PermissionKey.SKILL_MANAGE),
+                role_lacks_permission(
+                    OrganizationRole.ADMIN, PermissionKey.SKILL_MANAGE
+                ),
             ]
-        ) as context:
-            repository = context.injector.get(RbacRepository)
-            assert not repository.has_permission(
-                ADMIN_ROLE_ID, PermissionKey.SKILL_MANAGE
+        ):
+            assert not rbac_policy.organization_role_allows(
+                OrganizationRole.ADMIN, PermissionKey.SKILL_MANAGE
             )
             raise RuntimeError("exercise cleanup")
 
-    assert repository.has_permission(ADMIN_ROLE_ID, PermissionKey.SKILL_MANAGE)
+    assert rbac_policy.organization_role_allows(
+        OrganizationRole.ADMIN, PermissionKey.SKILL_MANAGE
+    )

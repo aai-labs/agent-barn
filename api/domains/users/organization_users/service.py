@@ -8,13 +8,12 @@ from sqlmodel import Session
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.service import AuthService
 from api.domains.organizations.repository import OrganizationRepository
-from api.domains.rbac.catalog import PermissionKey, system_role_id
+from api.domains.rbac.catalog import ORG_OWNER_ONLY_ROLES, PermissionKey
 from api.domains.rbac.policy import PermissionPolicy
 from api.domains.users.organization_users.exceptions import (
     UserAlreadyPartOfOrganizationException,
 )
 from api.domains.users.organization_users.models import (
-    ORG_OWNER_ONLY_ROLES,
     AddMemberRequest,
     ChangeMemberRoleRequest,
     OrganizationMemberRead,
@@ -61,7 +60,6 @@ class OrganizationUserService:
 
         return OrganizationUserRead(
             **organization_user.model_dump(),
-            role=organization_user.role,
             organization=organization,
         )
 
@@ -81,7 +79,6 @@ class OrganizationUserService:
             organization_user = self.organization_user_repository.save(user_data)
             return OrganizationUserRead(
                 **organization_user.model_dump(),
-                role=organization_user.role,
                 organization=organization,
             )
         except UserAlreadyPartOfOrganizationException as e:
@@ -114,7 +111,6 @@ class OrganizationUserService:
             organization_reads.append(
                 OrganizationUserRead(
                     **organization_user.model_dump(),
-                    role=organization_user.role,
                     organization=organization,
                 )
             )
@@ -220,7 +216,7 @@ class OrganizationUserService:
                     OrganizationUser(
                         user_id=prepared.user.id,
                         organization_id=organization_id,
-                        role_id=system_role_id(data.role.value),
+                        role=data.role,
                     ),
                     session,
                 )
@@ -268,7 +264,7 @@ class OrganizationUserService:
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Only an owner can promote or demote admins",
             )
-        membership.role_id = system_role_id(data.role.value)
+        membership.role = data.role
         self.organization_user_repository.save(membership)
         return self._to_member_read(membership)
 

@@ -4,7 +4,7 @@ from fastapi import status
 from hamcrest import assert_that, equal_to
 from starlette.testclient import TestClient
 
-from api.domains.rbac.catalog import OWNER_ROLE_ID, PermissionKey
+from api.domains.rbac.catalog import PermissionKey
 from api.domains.users.organization_users.models import OrganizationRole
 from api.tests.core.givenpy import given
 from api.tests.core.modules import (
@@ -173,7 +173,9 @@ def test_owner_without_organization_read_cannot_view_their_organization():
                 role=OrganizationRole.OWNER,
             ),
             there_is_an_access_token_for_user(user_id=owner_id),
-            role_lacks_permission(OWNER_ROLE_ID, PermissionKey.ORGANIZATION_READ),
+            role_lacks_permission(
+                OrganizationRole.OWNER, PermissionKey.ORGANIZATION_READ
+            ),
         ]
     ) as context:
         response = context.client.get(
@@ -278,7 +280,9 @@ def test_owner_without_organization_update_cannot_update_organization():
                 role=OrganizationRole.OWNER,
             ),
             there_is_an_access_token_for_user(user_id=owner_id),
-            role_lacks_permission(OWNER_ROLE_ID, PermissionKey.ORGANIZATION_UPDATE),
+            role_lacks_permission(
+                OrganizationRole.OWNER, PermissionKey.ORGANIZATION_UPDATE
+            ),
         ]
     ) as context:
         response = context.client.patch(
@@ -308,7 +312,7 @@ def test_owner_with_assigned_organization_update_cannot_update_organization():
             ),
             there_is_an_access_token_for_user(user_id=owner_id),
             role_lacks_permission(
-                OWNER_ROLE_ID,
+                OrganizationRole.OWNER,
                 PermissionKey.ORGANIZATION_UPDATE,
             ),
         ]

@@ -13,40 +13,6 @@ class Permission(BaseModel, table=True):
     key: str = Field(nullable=False, max_length=255)
 
 
-class Role(BaseModel, table=True):
-    """One of the fixed Organization Roles assigned to Memberships."""
-
-    __tablename__: str = "roles"
-    __table_args__ = (
-        sa.CheckConstraint(
-            "(id = '5dd0b6b3-2a19-5d6d-9c91-50f9503563a6'::uuid AND name = 'OWNER') OR "
-            "(id = '1222b10c-3f24-54ca-bbeb-fce956134f70'::uuid AND name = 'ADMIN') OR "
-            "(id = 'd369b23a-01dd-5aeb-bd53-c463b3c4cd1a'::uuid AND name = 'MEMBER')",
-            name="ck_roles_fixed_identity",
-        ),
-        sa.Index("uq_roles_name", "name", unique=True),
-    )
-
-    name: str = Field(nullable=False, max_length=64)
-
-
-class RolePermission(SQLModel, table=True):
-    __tablename__: str = "role_permissions"
-
-    role_id: UUID = Field(
-        foreign_key="roles.id",
-        primary_key=True,
-        nullable=False,
-        ondelete="CASCADE",
-    )
-    permission_id: UUID = Field(
-        foreign_key="permissions.id",
-        primary_key=True,
-        nullable=False,
-        ondelete="CASCADE",
-    )
-
-
 class AgentAccessRole(BaseModel, table=True):
     __tablename__: str = "agent_access_roles"
     __table_args__ = (

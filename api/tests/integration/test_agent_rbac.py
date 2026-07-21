@@ -15,7 +15,6 @@ from api.domains.rbac.catalog import (
     AGENT_EDITOR_ROLE_ID,
     AGENT_OWNER_ROLE_ID,
     AGENT_VIEWER_ROLE_ID,
-    MEMBER_ROLE_ID,
     SYSTEM_AGENT_ACCESS_ROLE_GRANTS,
     PermissionKey,
 )
@@ -176,7 +175,7 @@ def test_creator_keeps_assigned_agent_after_owner_is_demoted_to_member():
             context.user.id, context.organization.id
         )
         assert membership is not None
-        membership.role_id = MEMBER_ROLE_ID
+        membership.role = OrganizationRole.MEMBER
         membership_repository.save(membership)
 
         response = context.client.get(
@@ -621,7 +620,7 @@ def test_explicit_owner_can_revoke_creator_assignment():
         assert_that(hidden.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
-def test_grant_rejects_missing_wrong_family_or_foreign_access_role():
+def test_grant_rejects_missing_or_foreign_access_role():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         target, _ = _add_member(context)
         repository: AgentRepository = context.injector.get(AgentRepository)
@@ -639,11 +638,6 @@ def test_grant_rejects_missing_wrong_family_or_foreign_access_role():
             json={"user_id": str(target.id), "access_role_id": str(uuid7())},
             headers=_auth(context),
         )
-        organization_role = context.client.post(
-            f"{_BASE}/{context.agent.id}/access",
-            json={"user_id": str(target.id), "access_role_id": str(MEMBER_ROLE_ID)},
-            headers=_auth(context),
-        )
         foreign = context.client.post(
             f"{_BASE}/{context.agent.id}/access",
             json={"user_id": str(target.id), "access_role_id": str(foreign_role.id)},
@@ -651,9 +645,6 @@ def test_grant_rejects_missing_wrong_family_or_foreign_access_role():
         )
 
         assert_that(missing.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
-        assert_that(
-            organization_role.status_code, equal_to(status.HTTP_400_BAD_REQUEST)
-        )
         assert_that(foreign.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
 
 

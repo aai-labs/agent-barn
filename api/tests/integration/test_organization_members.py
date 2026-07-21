@@ -17,7 +17,7 @@ from hamcrest import (
     not_none,
 )
 
-from api.domains.rbac.catalog import ADMIN_ROLE_ID, PermissionKey
+from api.domains.rbac.catalog import PermissionKey
 from api.domains.users.organization_users.models import OrganizationRole
 from api.domains.users.organization_users.repository import OrganizationUserRepository
 from api.tests.core.givenpy import given, then, when
@@ -144,7 +144,9 @@ def test_admin_without_membership_read_cannot_list_members():
         [
             *_GIVEN,
             _there_is_an_admin_actor(admin_id),
-            role_lacks_permission(ADMIN_ROLE_ID, PermissionKey.MEMBERSHIP_READ),
+            role_lacks_permission(
+                OrganizationRole.ADMIN, PermissionKey.MEMBERSHIP_READ
+            ),
         ]
     ) as context:
         response = context.client.get(_members_url(), headers=_auth(context))
@@ -159,7 +161,7 @@ def test_admin_with_assigned_membership_read_cannot_list_members():
             *_GIVEN,
             _there_is_an_admin_actor(admin_id),
             role_lacks_permission(
-                ADMIN_ROLE_ID,
+                OrganizationRole.ADMIN,
                 PermissionKey.MEMBERSHIP_READ,
             ),
         ]
@@ -197,7 +199,9 @@ def test_admin_without_membership_invite_cannot_add_member():
         [
             *_GIVEN,
             _there_is_an_admin_actor(admin_id),
-            role_lacks_permission(ADMIN_ROLE_ID, PermissionKey.MEMBERSHIP_INVITE),
+            role_lacks_permission(
+                OrganizationRole.ADMIN, PermissionKey.MEMBERSHIP_INVITE
+            ),
         ]
     ) as context:
         response = context.client.post(
@@ -306,7 +310,9 @@ def test_admin_without_membership_role_update_cannot_change_member_role():
                 organization_id=ORG,
                 role=OrganizationRole.MEMBER,
             ),
-            role_lacks_permission(ADMIN_ROLE_ID, PermissionKey.MEMBERSHIP_ROLE_UPDATE),
+            role_lacks_permission(
+                OrganizationRole.ADMIN, PermissionKey.MEMBERSHIP_ROLE_UPDATE
+            ),
         ]
     ) as context:
         response = context.client.patch(
@@ -447,7 +453,9 @@ def test_admin_without_membership_remove_cannot_remove_member():
                 organization_id=ORG,
                 role=OrganizationRole.MEMBER,
             ),
-            role_lacks_permission(ADMIN_ROLE_ID, PermissionKey.MEMBERSHIP_REMOVE),
+            role_lacks_permission(
+                OrganizationRole.ADMIN, PermissionKey.MEMBERSHIP_REMOVE
+            ),
         ]
     ) as context:
         response = context.client.delete(
@@ -695,7 +703,9 @@ def test_admin_without_membership_invite_cannot_resend_invite():
                 role=OrganizationRole.MEMBER,
                 email_verified=False,
             ),
-            role_lacks_permission(ADMIN_ROLE_ID, PermissionKey.MEMBERSHIP_INVITE),
+            role_lacks_permission(
+                OrganizationRole.ADMIN, PermissionKey.MEMBERSHIP_INVITE
+            ),
         ]
     ) as context:
         response = context.client.post(

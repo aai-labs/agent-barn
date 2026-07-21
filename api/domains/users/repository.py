@@ -6,9 +6,11 @@ from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
-from api.domains.rbac.catalog import OWNER_ROLE_ID, system_role_id
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
-from api.domains.users.organization_users.models import OrganizationUser
+from api.domains.users.organization_users.models import (
+    OrganizationRole,
+    OrganizationUser,
+)
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 from api.domains.users.exceptions import EmailTakenHTTPException
 from api.domains.users.models import User, UserFilter
@@ -45,7 +47,7 @@ class UserRepository:
             .join(OrganizationUser, col(OrganizationUser.user_id) == col(User.id))
             .where(
                 col(OrganizationUser.organization_id) == organization_id,
-                col(OrganizationUser.role_id) == OWNER_ROLE_ID,
+                col(OrganizationUser.role) == OrganizationRole.OWNER,
             )
         )
         return self.delegate.find_one_by_query(model=User, query=query)
@@ -80,12 +82,7 @@ class UserRepository:
 
             if query_filters.organization_roles:
                 query = query.where(
-                    col(OrganizationUser.role_id).in_(
-                        [
-                            system_role_id(role.value)
-                            for role in query_filters.organization_roles
-                        ]
-                    )
+                    col(OrganizationUser.role).in_(query_filters.organization_roles)
                 )
 
         if query_filters.search:
