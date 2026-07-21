@@ -6,7 +6,7 @@ from uuid import uuid7
 import pytest
 from alembic import command
 from alembic.config import Config
-from hamcrest import assert_that, calling, equal_to, none, raises
+from hamcrest import assert_that, calling, equal_to, has_item, is_not, none, raises
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL, make_url
 from sqlalchemy.exc import IntegrityError
@@ -26,7 +26,7 @@ from api.domains.rbac.catalog import (
     PermissionKey,
 )
 from api.domains.rbac.repository import RbacRepository
-from api.domains.rbac.seeder import RbacSeedConflictError, RbacSeeder
+from api.domains.rbac.seeder import RbacSeeder
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
 PRE_RBAC_REVISION = "d3f9a1c7b2e5"
@@ -213,6 +213,16 @@ def legacy_database(isolated_database):
                 },
             )
 
+    with engine.connect() as connection:
+        pre_rbac_agent_columns = set(
+            connection.execute(
+                text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = 'public' AND table_name = 'agent'"
+                )
+            ).scalars()
+        )
+
     command.upgrade(config, RBAC_REVISION)
     try:
         yield SimpleNamespace(
@@ -232,6 +242,7 @@ def legacy_database(isolated_database):
             agent_a=agent_a,
             deleted_agent_a=deleted_agent_a,
             agent_b=agent_b,
+            pre_rbac_agent_columns=pre_rbac_agent_columns,
         )
     finally:
         engine.dispose()
@@ -378,61 +389,152 @@ def test_rbac_seeder_is_idempotent(fresh_database):
     )
 
 
-def test_rbac_seeder_rejects_unexpected_organization_grant(fresh_database):
-    unexpected_permission_id = PERMISSION_ID_BY_KEY[PermissionKey.ORGANIZATION_DELETE]
-    _execute(
-        fresh_database.engine,
-        "INSERT INTO role_permissions (role_id, permission_id) "
-        "VALUES (:role_id, :permission_id)",
-        {
-            "role_id": ADMIN_ROLE_ID,
-            "permission_id": unexpected_permission_id,
-        },
+def test_fixed_organization_role_grants_reject_mutation(fresh_database):
+    mutations = (
+        (
+            "INSERT INTO role_permissions (role_id, permission_id) "
+            "VALUES (:role_id, :permission_id)",
+            {
+                "role_id": ADMIN_ROLE_ID,
+                "permission_id": PERMISSION_ID_BY_KEY[
+                    PermissionKey.ORGANIZATION_DELETE
+                ],
+            },
+        ),
+        (
+            "DELETE FROM role_permissions "
+            "WHERE role_id = :role_id AND permission_id = :permission_id",
+            {
+                "role_id": ADMIN_ROLE_ID,
+                "permission_id": PERMISSION_ID_BY_KEY[PermissionKey.TEMPLATE_MANAGE],
+            },
+        ),
+        (
+            "UPDATE role_permissions SET permission_id = :new_permission_id "
+            "WHERE role_id = :role_id AND permission_id = :permission_id",
+            {
+                "role_id": MEMBER_ROLE_ID,
+                "permission_id": PERMISSION_ID_BY_KEY[PermissionKey.TEMPLATE_READ],
+                "new_permission_id": PERMISSION_ID_BY_KEY[PermissionKey.COST_READ],
+            },
+        ),
     )
 
-    assert_that(
-        calling(_seeder_for(fresh_database.url).seed),
-        raises(RbacSeedConflictError),
+    for statement, parameters in mutations:
+        assert_that(
+            calling(_execute).with_args(
+                fresh_database.engine,
+                statement,
+                parameters,
+            ),
+            raises(IntegrityError),
+        )
+
+
+def test_system_agent_access_role_grants_reject_mutation(fresh_database):
+    mutations = (
+        (
+            "INSERT INTO agent_access_role_permissions (role_id, permission_id) "
+            "VALUES (:role_id, :permission_id)",
+            {
+                "role_id": AGENT_VIEWER_ROLE_ID,
+                "permission_id": PERMISSION_ID_BY_KEY[
+                    PermissionKey.ORGANIZATION_DELETE
+                ],
+            },
+        ),
+        (
+            "DELETE FROM agent_access_role_permissions "
+            "WHERE role_id = :role_id AND permission_id = :permission_id",
+            {
+                "role_id": AGENT_VIEWER_ROLE_ID,
+                "permission_id": PERMISSION_ID_BY_KEY[PermissionKey.AGENT_READ],
+            },
+        ),
+        (
+            "UPDATE agent_access_role_permissions "
+            "SET permission_id = :new_permission_id "
+            "WHERE role_id = :role_id AND permission_id = :permission_id",
+            {
+                "role_id": AGENT_VIEWER_ROLE_ID,
+                "permission_id": PERMISSION_ID_BY_KEY[PermissionKey.AGENT_READ],
+                "new_permission_id": PERMISSION_ID_BY_KEY[PermissionKey.AGENT_UPDATE],
+            },
+        ),
     )
 
+    for statement, parameters in mutations:
+        assert_that(
+            calling(_execute).with_args(
+                fresh_database.engine,
+                statement,
+                parameters,
+            ),
+            raises(IntegrityError),
+        )
 
-def test_rbac_seeder_rejects_unexpected_system_agent_grant(fresh_database):
-    unexpected_permission_id = PERMISSION_ID_BY_KEY[PermissionKey.ORGANIZATION_DELETE]
+
+def test_custom_agent_access_role_grants_remain_mutable(legacy_database):
+    custom_role_id = _insert_custom_agent_access_role(
+        legacy_database,
+        legacy_database.org_a,
+    )
+    parameters = {
+        "role_id": custom_role_id,
+        "permission_id": PERMISSION_ID_BY_KEY[PermissionKey.AGENT_READ],
+    }
+
     _execute(
-        fresh_database.engine,
+        legacy_database.engine,
         "INSERT INTO agent_access_role_permissions (role_id, permission_id) "
         "VALUES (:role_id, :permission_id)",
-        {
-            "role_id": AGENT_VIEWER_ROLE_ID,
-            "permission_id": unexpected_permission_id,
-        },
+        parameters,
+    )
+    _execute(
+        legacy_database.engine,
+        "DELETE FROM agent_access_role_permissions "
+        "WHERE role_id = :role_id AND permission_id = :permission_id",
+        parameters,
     )
 
-    assert_that(
-        calling(_seeder_for(fresh_database.url).seed),
-        raises(RbacSeedConflictError),
-    )
-
-
-def test_rbac_seeder_rejects_conflicting_permission_identity(fresh_database):
-    conflicting_permission = PERMISSIONS[0]
-    with fresh_database.engine.begin() as connection:
-        connection.execute(
-            text("DELETE FROM permissions WHERE id = :id"),
-            {"id": conflicting_permission.id},
-        )
-        connection.execute(
+    with legacy_database.engine.connect() as connection:
+        count = connection.execute(
             text(
-                "INSERT INTO permissions (id, created_at, updated_at, key) "
-                "VALUES (:id, now(), now(), :key)"
+                "SELECT count(*) FROM agent_access_role_permissions "
+                "WHERE role_id = :role_id"
             ),
-            {"id": conflicting_permission.id, "key": "conflicting.permission"},
-        )
+            {"role_id": custom_role_id},
+        ).scalar_one()
+    assert_that(count, equal_to(0))
 
-    assert_that(
-        calling(_seeder_for(fresh_database.url).seed),
-        raises(RbacSeedConflictError),
+
+def test_permission_catalogue_rejects_mutation(fresh_database):
+    permission = PERMISSIONS[0]
+    mutations = (
+        (
+            "INSERT INTO permissions (id, created_at, updated_at, key) "
+            "VALUES (:id, now(), now(), :key)",
+            {"id": uuid7(), "key": "unexpected.permission"},
+        ),
+        (
+            "UPDATE permissions SET key = :key WHERE id = :id",
+            {"id": permission.id, "key": "changed.permission"},
+        ),
+        (
+            "DELETE FROM permissions WHERE id = :id",
+            {"id": permission.id},
+        ),
     )
+
+    for statement, parameters in mutations:
+        assert_that(
+            calling(_execute).with_args(
+                fresh_database.engine,
+                statement,
+                parameters,
+            ),
+            raises(IntegrityError),
+        )
 
 
 def test_upgrade_backfills_membership_roles(legacy_database):
@@ -486,7 +588,13 @@ def test_upgrade_backfills_only_accepted_members_with_editor(legacy_database):
     )
 
 
-def test_upgrade_leaves_legacy_agent_creator_unknown(legacy_database):
+def test_upgrade_leaves_creator_unknown_when_legacy_schema_has_no_provenance(
+    legacy_database,
+):
+    assert_that(
+        legacy_database.pre_rbac_agent_columns,
+        is_not(has_item("created_by_user_id")),
+    )
     with legacy_database.engine.connect() as connection:
         creators = (
             connection.execute(text("SELECT created_by_user_id FROM agent"))
@@ -578,23 +686,46 @@ def test_agent_access_rejects_custom_role_from_another_organization(
     )
 
 
-def test_locked_roles_reject_updates(legacy_database):
-    assert_that(
-        calling(_execute).with_args(
-            legacy_database.engine,
+def test_locked_roles_reject_mutation(legacy_database):
+    mutations = (
+        (
+            "INSERT INTO roles (id, created_at, updated_at, name) "
+            "VALUES (:id, now(), now(), :name)",
+            {"id": uuid7(), "name": "CUSTOM"},
+        ),
+        (
             "UPDATE roles SET name = :name WHERE id = :id",
             {"name": "CHANGED", "id": MEMBER_ROLE_ID},
         ),
-        raises(IntegrityError),
-    )
-    assert_that(
-        calling(_execute).with_args(
-            legacy_database.engine,
+        (
+            "DELETE FROM roles WHERE id = :id",
+            {"id": MEMBER_ROLE_ID},
+        ),
+        (
+            "INSERT INTO agent_access_roles "
+            "(id, created_at, updated_at, organization_id, name, is_system) "
+            "VALUES (:id, now(), now(), NULL, :name, true)",
+            {"id": uuid7(), "name": "SYSTEM-CUSTOM"},
+        ),
+        (
             "UPDATE agent_access_roles SET name = :name WHERE id = :id",
             {"name": "CHANGED", "id": AGENT_EDITOR_ROLE_ID},
         ),
-        raises(IntegrityError),
+        (
+            "DELETE FROM agent_access_roles WHERE id = :id",
+            {"id": AGENT_EDITOR_ROLE_ID},
+        ),
     )
+
+    for statement, parameters in mutations:
+        assert_that(
+            calling(_execute).with_args(
+                legacy_database.engine,
+                statement,
+                parameters,
+            ),
+            raises(IntegrityError),
+        )
 
 
 def test_custom_agent_access_role_scope_is_immutable(legacy_database):

@@ -24,8 +24,6 @@ Nearby domains are the implementation template. Costs and Ingest intentionally d
 
 ## Tenancy and authorization
 
-> **AF-150 transition:** The role-family separation described here is the accepted target architecture. Track delivered slices in [`../features/rbac/CHANGELOG.md`](../features/rbac/CHANGELOG.md).
-
 Authentication builds `CurrentUserContext`; organization-scoped services derive the active organization from it. `X-Organization-Id` selects the active organization, with the configured default organization as fallback. Normal users require membership. Tenant resolution synthesizes owner-level organization context for superusers, and authorization helpers explicitly preserve the superuser bypass.
 
 Database-backed Permissions are resolved for the active Organization on each request. Fixed Organization Roles govern Organization, Membership, Template, Skill, and Organization-summary capabilities; protected Organization Owner recovery actions remain explicit governance invariants. Agent Access Roles separately govern one Agent aggregate, while Organization Owner/Admin and superuser in explicit Organization context have implicit Agent Owner authority. Agent user-facing queries apply visibility in repositories before count and pagination, and Agent services use the shared authorization module for effective operations and action checks. Runtime Ingest and Teams webhook authentication remain separate non-user boundaries.

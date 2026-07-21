@@ -58,7 +58,6 @@ PERMISSION_IDS = {
     "skill.manage": UUID("222ab95b-f67b-5275-8139-3f601574f3e1"),
     "activity.read": UUID("3f24e385-7c5e-56f0-828c-502985376af9"),
     "cost.read": UUID("b6557147-248a-5d34-8bb2-7c51944d9ee7"),
-    "audit.read": UUID("9143455b-b4d6-58d6-9968-2086e9a24ebf"),
 }
 
 AGENT_OPERATION_PERMISSIONS = {
@@ -186,6 +185,13 @@ def upgrade() -> None:
             "(is_system AND organization_id IS NULL) OR "
             "(NOT is_system AND organization_id IS NOT NULL)",
             name="ck_agent_access_roles_system_scope",
+        ),
+        sa.CheckConstraint(
+            "NOT is_system OR "
+            "(id = '8f2a47ff-7caf-5ded-9027-4a16b85620b3'::uuid AND name = 'OWNER') OR "
+            "(id = '30e5e846-5e24-548f-a068-2505f774ce35'::uuid AND name = 'EDITOR') OR "
+            "(id = 'c7da77aa-bf9c-5626-8bad-5e0ca5159b5d'::uuid AND name = 'VIEWER')",
+            name="ck_agent_access_roles_fixed_system_identity",
         ),
         sa.ForeignKeyConstraint(
             ["organization_id"], ["organization.id"], ondelete="CASCADE"
@@ -372,6 +378,9 @@ def upgrade() -> None:
         ["id", "organization_id"],
     )
 
+    # The pre-AF-150 schema stored no creator ID, access assignment, or audit
+    # event from which creator provenance could be recovered reliably. Existing
+    # rows therefore remain unknown rather than receiving a heuristic Owner.
     op.add_column(
         "agent",
         sa.Column("created_by_user_id", postgresql.UUID(as_uuid=True), nullable=True),
@@ -454,30 +463,6 @@ def upgrade() -> None:
             member_role_id=MEMBER_ROLE_ID,
         )
     )
-    op.execute(
-        sa.text(
-            """
-            INSERT INTO agent_access (
-                id, created_at, updated_at, organization_id,
-                membership_id, agent_id, access_role_id
-            )
-            SELECT
-                gen_random_uuid(), now(), now(),
-                membership.organization_id, membership.id, agent.id, :owner_role_id
-            FROM agent
-            JOIN user_organization AS membership
-              ON membership.organization_id = agent.organization_id
-             AND membership.user_id = agent.created_by_user_id
-            JOIN "user" AS creator ON creator.id = membership.user_id
-            WHERE agent.created_by_user_id IS NOT NULL
-              AND creator.email_verified_at IS NOT NULL
-            ON CONFLICT (membership_id, agent_id)
-            DO UPDATE SET access_role_id = EXCLUDED.access_role_id,
-                          updated_at = EXCLUDED.updated_at
-            """
-        ).bindparams(owner_role_id=AGENT_OWNER_ROLE_ID)
-    )
-
     op.execute(
         """
         CREATE FUNCTION validate_agent_access_role_scope()
@@ -571,6 +556,80 @@ def upgrade() -> None:
         FOR EACH ROW EXECUTE FUNCTION enforce_agent_access_role_scope_immutability();
         """
     )
+    op.execute(
+        """
+        CREATE FUNCTION enforce_permission_catalogue_immutability()
+        RETURNS trigger AS $$
+        BEGIN
+            RAISE EXCEPTION 'Permission catalogue cannot be changed'
+                USING ERRCODE = 'check_violation';
+        END;
+        $$ LANGUAGE plpgsql;
+        """
+    )
+    op.execute(
+        """
+        CREATE TRIGGER trg_permission_catalogue_immutability
+        BEFORE INSERT OR UPDATE OR DELETE ON permissions
+        FOR EACH ROW EXECUTE FUNCTION enforce_permission_catalogue_immutability();
+        """
+    )
+    op.execute(
+        """
+        CREATE FUNCTION enforce_fixed_organization_role_grant_immutability()
+        RETURNS trigger AS $$
+        DECLARE
+            target_role_id uuid;
+        BEGIN
+            target_role_id := CASE WHEN TG_OP = 'DELETE' THEN OLD.role_id ELSE NEW.role_id END;
+            RAISE EXCEPTION 'Fixed Organization Role % grants cannot be changed',
+                target_role_id USING ERRCODE = 'check_violation';
+        END;
+        $$ LANGUAGE plpgsql;
+        """
+    )
+    op.execute(
+        """
+        CREATE TRIGGER trg_fixed_organization_role_grant_immutability
+        BEFORE INSERT OR UPDATE OR DELETE ON role_permissions
+        FOR EACH ROW EXECUTE FUNCTION enforce_fixed_organization_role_grant_immutability();
+        """
+    )
+    op.execute(
+        """
+        CREATE FUNCTION enforce_system_agent_role_grant_immutability()
+        RETURNS trigger AS $$
+        DECLARE
+            old_is_system boolean := false;
+            new_is_system boolean := false;
+        BEGIN
+            IF TG_OP <> 'INSERT' THEN
+                SELECT is_system INTO old_is_system
+                FROM agent_access_roles WHERE id = OLD.role_id;
+            END IF;
+            IF TG_OP <> 'DELETE' THEN
+                SELECT is_system INTO new_is_system
+                FROM agent_access_roles WHERE id = NEW.role_id;
+            END IF;
+            IF COALESCE(old_is_system, false) OR COALESCE(new_is_system, false) THEN
+                RAISE EXCEPTION 'System Agent Access Role grants cannot be changed'
+                    USING ERRCODE = 'check_violation';
+            END IF;
+            IF TG_OP = 'DELETE' THEN
+                RETURN OLD;
+            END IF;
+            RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql;
+        """
+    )
+    op.execute(
+        """
+        CREATE TRIGGER trg_system_agent_role_grant_immutability
+        BEFORE INSERT OR UPDATE OR DELETE ON agent_access_role_permissions
+        FOR EACH ROW EXECUTE FUNCTION enforce_system_agent_role_grant_immutability();
+        """
+    )
 
 
 def downgrade() -> None:
@@ -578,6 +637,18 @@ def downgrade() -> None:
 
     op.execute("DROP TRIGGER trg_agent_access_role_scope ON agent_access")
     op.execute("DROP FUNCTION validate_agent_access_role_scope()")
+    op.execute("DROP TRIGGER trg_permission_catalogue_immutability ON permissions")
+    op.execute("DROP FUNCTION enforce_permission_catalogue_immutability()")
+    op.execute(
+        "DROP TRIGGER trg_system_agent_role_grant_immutability "
+        "ON agent_access_role_permissions"
+    )
+    op.execute("DROP FUNCTION enforce_system_agent_role_grant_immutability()")
+    op.execute(
+        "DROP TRIGGER trg_fixed_organization_role_grant_immutability "
+        "ON role_permissions"
+    )
+    op.execute("DROP FUNCTION enforce_fixed_organization_role_grant_immutability()")
     op.execute("DROP TRIGGER trg_fixed_organization_role_immutability ON roles")
     op.execute("DROP FUNCTION enforce_fixed_organization_role_immutability()")
     op.execute(

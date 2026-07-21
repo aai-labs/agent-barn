@@ -8,8 +8,6 @@ Read before changing agent creation, Agent Access Roles or assignments, lifecycl
 
 An Agent is the central operational aggregate. It connects organization tenancy, a pinned template version, skills, platform credentials, provider integrations, a runtime deployment, ingest telemetry, and LiteLLM identity.
 
-> **AF-150 transition:** The Agent Access Role invariants below are the accepted target contract. The branch is being refactored from binary Agent assignment; consult [`rbac/CHANGELOG.md`](rbac/CHANGELOG.md) before assuming a slice is delivered.
-
 ## Invariants
 
 - Every agent belongs to one organization and pins an exact `(template_slug, template_version)` in that organization. The organization owns the Agent; creator identity is immutable provenance rather than ownership.

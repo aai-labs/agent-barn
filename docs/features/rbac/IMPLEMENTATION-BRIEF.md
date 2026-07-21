@@ -1,11 +1,11 @@
 # Permission-backed RBAC and Agent Access Roles
 
-Status: Accepted design; corrective AF-150 refactor in progress
+Status: Implemented by AF-150
 Source: [AF-150](https://aai-labs.atlassian.net/browse/AF-150)
 
 ## Purpose
 
-Read this brief before changing Organization authorization, Agent visibility or operations, Agent Access, role seeding, or the AF-150 migration. It records the target contract; [`CHANGELOG.md`](CHANGELOG.md) records which slices are currently delivered.
+Read this brief before changing Organization authorization, Agent visibility or operations, Agent Access, role seeding, or the AF-150 migration. It records the delivered contract; [`CHANGELOG.md`](CHANGELOG.md) retains the implementation history.
 
 Related context:
 
@@ -109,7 +109,7 @@ Migration requirements:
 1. Seed Permissions and both locked role catalogues deterministically and idempotently.
 2. Backfill Memberships to fixed Organization Roles without changing Organization authority.
 3. Preserve existing Agent visibility by granting every existing accepted Organization Member Agent Editor access to every existing Agent in the same Organization; pending and removed Memberships receive none.
-4. Grant Agent Owner to a recoverable known creator; legacy creator provenance may remain unknown.
+4. Grant Agent Owner only when creator provenance is reliable. The pre-AF-150 schema stored no creator ID, Agent assignment, or audit event, so its existing Agents have no recoverable known creator and remain `NULL`; no heuristic Owner grant is made.
 5. Keep Organization Owner/Admin Agent authority implicit rather than materializing bulk assignments.
 6. Enforce role-family validity, same-Organization relationships, uniqueness, deletion behavior, and repeatable startup validation.
 7. Cover fresh installs and upgrades from the pre-AF-150 schema with migrated PostgreSQL integration tests.

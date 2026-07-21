@@ -55,6 +55,13 @@ class AgentAccessRole(BaseModel, table=True):
             "(NOT is_system AND organization_id IS NOT NULL)",
             name="ck_agent_access_roles_system_scope",
         ),
+        sa.CheckConstraint(
+            "NOT is_system OR "
+            "(id = '8f2a47ff-7caf-5ded-9027-4a16b85620b3'::uuid AND name = 'OWNER') OR "
+            "(id = '30e5e846-5e24-548f-a068-2505f774ce35'::uuid AND name = 'EDITOR') OR "
+            "(id = 'c7da77aa-bf9c-5626-8bad-5e0ca5159b5d'::uuid AND name = 'VIEWER')",
+            name="ck_agent_access_roles_fixed_system_identity",
+        ),
         sa.UniqueConstraint(
             "id",
             "organization_id",

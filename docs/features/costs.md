@@ -8,8 +8,6 @@ Read before changing spend attribution, LiteLLM integration, cost summaries, del
 
 Costs provides organization and per-agent spend views by querying LiteLLM and joining its key-based records to Agent Farm agents. Cost records are not persisted by the Costs domain.
 
-> **AF-150 transition:** Agent Access Role authorization below is the accepted target contract. Track the authorization refactor in [`rbac/CHANGELOG.md`](rbac/CHANGELOG.md).
-
 ## Invariants
 
 - Organization summaries consider active and soft-deleted agents so historical spend remains attributable, but omit agents that have no LiteLLM key.

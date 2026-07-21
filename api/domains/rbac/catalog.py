@@ -25,7 +25,6 @@ class PermissionKey(str, Enum):
     SKILL_MANAGE = "skill.manage"
     ACTIVITY_READ = "activity.read"
     COST_READ = "cost.read"
-    AUDIT_READ = "audit.read"
 
 
 @dataclass(frozen=True)
@@ -134,9 +133,6 @@ PERMISSIONS: tuple[PermissionSeed, ...] = (
     ),
     PermissionSeed(
         UUID("b6557147-248a-5d34-8bb2-7c51944d9ee7"), PermissionKey.COST_READ
-    ),
-    PermissionSeed(
-        UUID("9143455b-b4d6-58d6-9968-2086e9a24ebf"), PermissionKey.AUDIT_READ
     ),
 )
 PERMISSION_ID_BY_KEY = {permission.key: permission.id for permission in PERMISSIONS}

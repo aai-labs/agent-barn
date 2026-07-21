@@ -8,8 +8,6 @@ Read before changing login, token refresh, password/invite flows, current-user c
 
 Authentication establishes a user and membership context; Organization is the tenancy boundary used by services and the UI to scope product data. Global user administration and organization administration have separate authority rules.
 
-> **AF-150 transition:** Fixed Organization governance is delivered, while the separation of Agent authority into Agent Access Roles is being refactored. Track delivered slices in [`rbac/CHANGELOG.md`](rbac/CHANGELOG.md).
-
 ## Authorization invariants
 
 - Organization roles are database-backed. The immutable seeded roles are `OWNER`, `ADMIN`, and `MEMBER`; current APIs continue to expose those stable names.
