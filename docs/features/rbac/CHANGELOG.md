@@ -1,17 +1,24 @@
 # Permission-backed RBAC — change log
 
-Status: Active  
+Status: Implemented on branch
 Feature: Permission-backed RBAC and Agent Access Roles
 Related context: [implementation brief](IMPLEMENTATION-BRIEF.md), [current role decision](../../adr/2026-07-21-separate-organization-and-agent-access-roles.md)
 
 ## Current state
 
 - Delivered on the branch: fixed Organization Role and Permission persistence; locked Agent Viewer/Editor/Owner persistence and grants; role-bearing Agent Access; legacy Member-to-Editor migration; creator Owner assignment; request-time Organization and Agent authorization; Organization/Membership/Template/Skill/cost enforcement; and permission-aware UI without sharing or role-management surfaces.
-- In transition: aggregate authorization requires final matrix hardening, and staged access-management UI must move to AF-217.
-- Next: reduce the UI to AF-150 scope and complete the cross-domain security matrix.
-- Blockers: none. Custom Agent Access Role backend management is deferred to AF-216, Agent sharing and role-management UI to AF-217, and event/audit infrastructure to AF-218 through AF-221.
+- Verification: schema/migration, authorization, access operations, aggregate bypass paths, UI controls, and documentation synchronization are complete for AF-150. The full API suite has 836 passing tests and three unrelated password-reset email-mock failures in `test_auth_flow_extended.py`; all focused RBAC/API checks pass.
+- Next: AF-216 adds custom Agent Access Role backend management; AF-217 adds Agent sharing and role-management UI; AF-218 through AF-221 add event/audit infrastructure.
+- Blockers: none for AF-150.
 
 ## Changes
+
+### 2026-07-21 — AF-150 — final hardening
+
+- Verified: fresh and pre-AF-150 migration paths, accepted-Member Editor preservation, pending exclusion, explicitly unknown legacy creator provenance, atomic Owner assignment for new creators, constraints, seed idempotency, downgrade, and the superuser/implicit administrator/explicit Owner/Editor/Viewer/unassigned authorization matrix.
+- Audited: Agent list/detail/count/pagination, lifecycle, configuration, Skills, conversations, tool calls, activity, costs, logs/health, integrations, credentials, direct mutations, Organization switching, and authorization-sensitive cache refresh.
+- Checks: `make check-api`, focused API RBAC suites, `make lint-ui`, `make check-ui`, focused RBAC Playwright, full 162-test Playwright suite, `git diff --check`, and relative Markdown link validation pass. `make test-api` reports 836 passed and only the three isolated password-reset email-mock failures noted above.
+- Residual scope: custom Agent Access Role CRUD, sharing/role-management UI, and durable audit events remain intentionally deferred to their owning follow-up tickets.
 
 ### 2026-07-21 — AF-150 — permission-aware product UI
 
