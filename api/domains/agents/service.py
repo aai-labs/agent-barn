@@ -1054,14 +1054,26 @@ class AgentService:
 
         # aai-cli integration secrets — all agent types.
         agent_secrets = self.repository.get_secrets_for_agent(agent.id)
-        decrypted = {
-            SecretProvider(s.provider): decrypt_content(
-                SecretProvider(s.provider),
-                s.content,
-                self.config.agent_token_encryption_key,
-            )
+        shared_ids = [
+            s.shared_credential_id
             for s in agent_secrets
-        }
+            if s.shared_credential_id is not None
+        ]
+        shared_by_id = {}
+        if shared_ids:
+            shared_creds = self.shared_credential_repository.get_many_by_ids(
+                shared_ids
+            )
+            shared_by_id = {c.id: c for c in shared_creds}
+        key = self.config.agent_token_encryption_key
+        decrypted = {}
+        for s in agent_secrets:
+            provider = SecretProvider(s.provider)
+            if s.shared_credential_id and s.shared_credential_id in shared_by_id:
+                ciphertext = shared_by_id[s.shared_credential_id].content
+            else:
+                ciphertext = s.content
+            decrypted[provider] = decrypt_content(provider, ciphertext, key)
         self._backfill_gmail_client_credentials(decrypted)
         gmail = decrypted.get(SecretProvider.GMAIL)
         if isinstance(gmail, GmailContent) and (
@@ -1531,8 +1543,20 @@ class AgentService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"No validator available for {provider.value}",
             )
+        if secret.shared_credential_id:
+            shared = self.shared_credential_repository.get_many_by_ids(
+                [secret.shared_credential_id]
+            )
+            if not shared:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Referenced shared credential no longer exists",
+                )
+            ciphertext = shared[0].content
+        else:
+            ciphertext = secret.content
         content = decrypt_content(
-            provider, secret.content, self.config.agent_token_encryption_key
+            provider, ciphertext, self.config.agent_token_encryption_key
         )
         self._backfill_gmail_client_credentials({provider: content})
         result = validator(content)  # type: ignore[arg-type]
