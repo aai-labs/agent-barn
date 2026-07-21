@@ -67,7 +67,7 @@ Documentation-only changes do not change a service image and do not require an `
 `../../helm/monitoring/` (kube-prometheus-stack wrapper) deploys with the regular Helmfile sync. Operational notes:
 
 - One-time cluster prerequisite: `kubectl apply -f ../../k8s/monitoring-crd-rbac.yaml` as a cluster admin before the first monitoring deploy — the deployer SA cannot install CRDs or cluster RBAC on its own.
-- Required GitHub Actions config: secrets `SLACK_WEBHOOK_URL` (incoming webhook for `#alerts`), `GRAFANA_ADMIN_PASSWORD`, `OPENROUTER_MANAGEMENT_KEY` (management key for the credits metric; the inference key cannot read `/credits`); variable `GRAFANA_HOST` (DNS must resolve for the http01 challenge).
+- Required GitHub Actions config: secrets `SLACK_ALERTS_WEBHOOK_URL` (incoming webhook for `#alerts`), `GRAFANA_ADMIN_PASSWORD`, `OPENROUTER_MANAGEMENT_KEY` (management key for the credits metric; the inference key cannot read `/credits`); variable `GRAFANA_HOST` (DNS must resolve for the http01 challenge).
 - The pinned kube-prometheus-stack dependency is rebuilt locally with `helm dependency build helm/monitoring` (`Chart.lock` is committed, the fetched `charts/*.tgz` is gitignored).
 
 ## Operational safety

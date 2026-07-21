@@ -156,7 +156,7 @@ releases:
       name: monitoring
     set:
       - name: kube-prometheus-stack.alertmanager.config.global.slack_api_url
-        value: {{ env "SLACK_WEBHOOK_URL" | required "SLACK_WEBHOOK_URL is required" | quote }}
+        value: {{ env "SLACK_ALERTS_WEBHOOK_URL" | required "SLACK_ALERTS_WEBHOOK_URL is required" | quote }}
       - name: kube-prometheus-stack.grafana.adminPassword
         value: {{ env "GRAFANA_ADMIN_PASSWORD" | required "GRAFANA_ADMIN_PASSWORD is required" | quote }}
       - name: kube-prometheus-stack.grafana.ingress.hosts[0]

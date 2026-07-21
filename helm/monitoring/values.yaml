@@ -58,7 +58,7 @@ kube-prometheus-stack:
     alertmanagerSpec:
       retention: 120h
     # Rendered into a Secret by the chart; slack_api_url is injected by
-    # helmfile from SLACK_WEBHOOK_URL and must never be committed.
+    # helmfile from SLACK_ALERTS_WEBHOOK_URL and must never be committed.
     config:
       global:
         resolve_timeout: 5m
