@@ -8,11 +8,14 @@ Read before changing login, token refresh, password/invite flows, current-user c
 
 Authentication establishes a user and membership context; Organization is the tenancy boundary used by services and the UI to scope product data. Global user administration and organization administration have separate authority rules.
 
+> **AF-150 transition:** Fixed Organization governance is delivered, while the separation of Agent authority into Agent Access Roles is being refactored. Track delivered slices in [`rbac/CHANGELOG.md`](rbac/CHANGELOG.md).
+
 ## Authorization invariants
 
 - Organization roles are database-backed. The immutable seeded roles are `OWNER`, `ADMIN`, and `MEMBER`; current APIs continue to expose those stable names.
 - A user has at most one membership per organization, and the database permits at most one owner membership per organization. Normal creation and transfer flows establish an owner, but global user deletion can leave an organization without one.
-- Ordinary organization and Membership capabilities require current database-backed Permission grants at `ORGANIZATION` scope. Organization deletion, ownership transfer, and sensitive Admin changes remain protected Owner/superuser governance invariants.
+- Ordinary Organization and Membership capabilities require current database-backed Organization Role Permissions. Organization deletion, ownership transfer, and sensitive Admin changes remain protected Organization Owner/superuser governance invariants.
+- Organization Roles do not grant per-Agent operations to Members. Organization Owner/Admin have implicit Agent Owner authority; Organization Members receive Agent authority through explicit Agent Access Roles.
 - `X-Organization-Id` selects the active organization; an absent header falls back to the process default organization.
 - Normal users require membership in the selected organization. Superusers can target organizations without persisted membership through explicit context behavior.
 - Cross-organization resource access is intentionally hidden with 404 for tenant-owned entities; known but unauthorized organization administration uses 403.
@@ -43,7 +46,7 @@ The UI resolves the selected organization from the route, then remembered/defaul
 | User administration                   | `../../api/domains/users/service.py`, `../../api/domains/users/routes.py`                                                                                                                                                                                                                                         |
 | Organization policy                   | `../../api/domains/organizations/service.py`                                                                                                                                                                                                                                                                |
 | Membership roles and constraints      | `../../api/domains/users/organization_users/models.py`                                                                                                                                                                                                                                                      |
-| Permission and Role catalogue          | `../../api/domains/rbac/catalog.py`, `../../api/domains/rbac/models.py`, `../../api/domains/rbac/repository.py`, `../../api/domains/rbac/seeder.py`                                                                                                                                                        |
+| Permission and Organization Role catalogue | `../../api/domains/rbac/catalog.py`, `../../api/domains/rbac/models.py`, `../../api/domains/rbac/repository.py`, `../../api/domains/rbac/seeder.py`                                                                                                                                                    |
 | Membership workflows                  | `../../api/domains/users/organization_users/service.py`                                                                                                                                                                                                                                                     |
 | UI user gate                          | `../../ui/src/auth/providers/user-context-provider.tsx`                                                                                                                                                                                                                                                     |
 | UI organization context               | `../../ui/src/features/organizations/providers/organization-provider.tsx`                                                                                                                                                                                                                                   |
@@ -52,7 +55,7 @@ The UI resolves the selected organization from the route, then remembered/defaul
 ## Related decisions
 
 - [`2026-07-17-explicit-organization-context.md`](../adr/2026-07-17-explicit-organization-context.md)
-- [`2026-07-18-permission-backed-organization-roles.md`](../adr/2026-07-18-permission-backed-organization-roles.md)
+- [`2026-07-21-separate-organization-and-agent-access-roles.md`](../adr/2026-07-21-separate-organization-and-agent-access-roles.md)
 
 ## Change impact
 

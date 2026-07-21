@@ -24,11 +24,13 @@ Nearby domains are the implementation template. Costs and Ingest intentionally d
 
 ## Tenancy and authorization
 
+> **AF-150 transition:** The role-family separation described here is the accepted target architecture. Track delivered slices in [`../features/rbac/CHANGELOG.md`](../features/rbac/CHANGELOG.md).
+
 Authentication builds `CurrentUserContext`; organization-scoped services derive the active organization from it. `X-Organization-Id` selects the active organization, with the configured default organization as fallback. Normal users require membership. Tenant resolution synthesizes owner-level organization context for superusers, and authorization helpers explicitly preserve the superuser bypass.
 
-Database-backed Permission grants are resolved for the active organization on each request and carry `ORGANIZATION` or `ASSIGNED` resource scope. Organization, Membership, Template, Skill, cost-summary, and Agent services enforce named Permissions; protected Owner recovery actions remain explicit role invariants. Agent user-facing queries apply scope in repositories before count and pagination, and Agent services use the shared authorization boundary for effective actions and action checks. Runtime Ingest and Teams webhook authentication remain separate non-user boundaries.
+Database-backed Permissions are resolved for the active Organization on each request. Fixed Organization Roles govern Organization, Membership, Template, Skill, and Organization-summary capabilities; protected Organization Owner recovery actions remain explicit governance invariants. Agent Access Roles separately govern one Agent aggregate, while Organization Owner/Admin and superuser in explicit Organization context have implicit Agent Owner authority. Agent user-facing queries apply visibility in repositories before count and pagination, and Agent services use the shared authorization module for effective operations and action checks. Runtime Ingest and Teams webhook authentication remain separate non-user boundaries.
 
-Tenant-sensitive reads generally return 404 when a resource is absent, belongs to another organization, or is outside the caller's assigned visibility. A visible resource with a missing action Permission returns 403. Organization administration retains its documented 403 behavior. The integration contract is exercised in `../../api/tests/integration/test_cross_org_isolation.py`, `../../api/tests/integration/test_tenant_resolution.py`, and `../../api/tests/integration/test_agent_rbac.py`.
+Tenant-sensitive reads generally return 404 when a resource is absent, belongs to another Organization, or is outside the caller's Agent Access visibility. A visible resource with a missing action Permission returns 403. Organization administration retains its documented 403 behavior. The integration contract is exercised in `../../api/tests/integration/test_cross_org_isolation.py`, `../../api/tests/integration/test_tenant_resolution.py`, and `../../api/tests/integration/test_agent_rbac.py`.
 
 ## Persistence and transactions
 

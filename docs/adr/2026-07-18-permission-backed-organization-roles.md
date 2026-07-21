@@ -1,6 +1,6 @@
 # Use permission-backed organization roles
 
-Status: Accepted
+Status: Superseded by [Separate Organization Roles from Agent Access Roles](2026-07-21-separate-organization-and-agent-access-roles.md)
 Date: 2026-07-18
 Origin: [Agent farm multi-organization support](https://aai-labs.atlassian.net/wiki/x/MIA0pQ)
 

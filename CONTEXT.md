@@ -13,24 +13,24 @@ The relationship between a user and an organization, carrying exactly one organi
 _Avoid_: organization user, user organization
 
 **Organization Role**:
-A membership's organization-scoped authority. The predefined roles are owner, admin, and member; an organization can have at most one owner.
-_Avoid_: user role, global role, superuser
+A Membership's fixed organization-scoped authority. The roles are Organization Owner, Organization Admin, and Organization Member; an Organization can have at most one Organization Owner.
+_Avoid_: Agent Access Role, user role, global role, superuser
 
 **Permission**:
-A named capability granted through an Organization Role and evaluated for a specific organization, action, and when applicable resource.
+A named capability granted through an Organization Role or Agent Access Role and evaluated for the active Organization and, when applicable, one Agent.
 _Avoid_: role check, global permission
 
-**Permission Scope**:
-The resource boundary of a role's Permission grant: organization covers all matching resources in that Organization, while assigned covers only Agent aggregates linked through Agent Access.
-_Avoid_: global scope, tenant bypass
+**Agent Access Role**:
+A permission-backed role governing what one Membership may do with one Agent. The locked defaults are Agent Viewer, Agent Editor, and Agent Owner; Organizations may define custom Agent Access Roles.
+_Avoid_: Organization Role, Agent ownership, access level
 
 **Agent Access**:
-The relationship that makes an Agent assigned to a Membership. A member sees and may exercise assigned-agent permissions only for Agents they created or were explicitly granted access to.
-_Avoid_: agent ownership, organization membership
+The relationship assigning one Agent Access Role to one Membership for one Agent. Organization Owner/Admin authority over all Agents is implicit and is not an Agent Access relationship.
+_Avoid_: Agent ownership, Organization Membership
 
 **Agent Creator**:
-The user who originally created an Agent, retained as provenance rather than ownership or current access.
-_Avoid_: agent owner, agent manager
+The user who originally created an Agent, retained as immutable provenance. Creation grants explicit Agent Owner access, but creator identity is not itself an authorization source.
+_Avoid_: Organization Owner, permanent Agent authority
 
 **Agent**:
 An organization-owned AI worker configured from a pinned template version and executed by one runtime on one chat platform.
@@ -80,9 +80,10 @@ _Avoid_: webhook
 
 - An **Organization** has many **Memberships**, **Agents**, **Templates**, and custom **Skills**.
 - A **Membership** links one user to one **Organization** with one **Organization Role**.
-- An **Organization Role** grants **Permissions** with a **Permission Scope** within its Organization.
+- An **Organization Role** grants **Permissions** for Organization capabilities.
+- An **Agent Access Role** grants **Permissions** for one Agent aggregate.
 - An **Agent** belongs to one **Organization**, has one original **Agent Creator**, pins one **Template Version**, uses one **Runtime**, and connects to one **Platform**.
-- A **Membership** may have **Agent Access** to many Agents; creating an Agent establishes access without making the creator its owner.
+- A **Membership** may have **Agent Access** to many Agents, and each relationship carries one **Agent Access Role**; creating an Agent grants its creator explicit Agent Owner access without transferring Organization ownership.
 - A **Template Version** may require multiple **Skills**.
 - An **Agent** may have multiple **Skills** and **Agent Secrets**.
 - An Agent runtime sends **Conversation Messages** and **Tool Calls** through **Ingest**.
@@ -92,3 +93,4 @@ _Avoid_: webhook
 - The API field `agent_type` represents the **Runtime**, while product documentation uses “runtime.” Treat Runtime as the domain term; changing the API field requires a compatibility decision.
 - The persisted field `openclaw_msg_id` stores the runtime-external message identifier for both OpenClaw and Hermes messages. Its name is narrower than its current meaning.
 - “Integration” is sometimes used for both the external service and its credential. Use **Integration** for the service and **Agent Secret** for the stored credential payload.
+- “Owner” names both an Organization Role and a default Agent Access Role. Use **Organization Owner** for tenant governance and **Agent Owner** for full authority over one Agent.

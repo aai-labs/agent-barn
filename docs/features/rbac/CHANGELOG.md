@@ -1,17 +1,33 @@
 # Permission-backed RBAC — change log
 
 Status: Active  
-Feature: Permission-backed RBAC and assigned Agent access
-Related context: [implementation brief](IMPLEMENTATION-BRIEF.md), [role decision](../../adr/2026-07-18-permission-backed-organization-roles.md), [Agent Access decision](../../adr/2026-07-18-assigned-agent-access-boundary.md)
+Feature: Permission-backed RBAC and Agent Access Roles
+Related context: [implementation brief](IMPLEMENTATION-BRIEF.md), [current role decision](../../adr/2026-07-21-separate-organization-and-agent-access-roles.md)
 
 ## Current state
 
-- Delivered: accepted RBAC language and decisions; deterministic Permission/system Role catalogue; scoped grants; Membership role foreign keys; legacy backfill; request-time permission resolution; assigned Agent aggregate enforcement and effective actions; Agent Access management APIs; named Organization and Membership Permission gates; read/manage separation for Templates and Skills; and organization-scoped cost-summary authorization.
-- In transition: APIs still expose Owner/Admin/Member compatibility values and RBAC-aware UI controls are not yet active. Protected Owner recovery actions intentionally remain role-based.
-- Next: update the UI to consume effective actions and Agent Access management contracts.
-- Blockers: none. Durable Domain Events and Security Audit Records are deferred to [AF-218](https://aai-labs.atlassian.net/browse/AF-218) and do not block AF-150.
+- Delivered on the branch: fixed Organization Role and Permission persistence; request-time Organization policy; creator provenance; binary Agent assignment enforcement; backend access operations; Organization/Membership/Template/Skill/cost authorization; and staged permission-aware UI work.
+- In transition: AF-150 now requires separate Agent Access Roles. The binary assignment policy, Organization Role `ASSIGNED` grants, creator-only sharing rules, role-less access contracts, and staged access-management UI are superseded and must not be treated as the target contract.
+- Next: refactor schema and migration for locked Agent Viewer/Editor/Owner roles, then make Agent Access Roles the Agent authorization source and reduce the UI to AF-150 scope.
+- Blockers: none. Custom Agent Access Role backend management is deferred to AF-216, Agent sharing and role-management UI to AF-217, and event/audit infrastructure to AF-218 through AF-221.
 
 ## Changes
+
+### 2026-07-21 — AF-150 — Agent Access Role contract correction
+
+- Decided: fixed Organization Owner/Admin/Member roles remain the Organization-governance model; per-Agent authority moves to locked Viewer, Editor, and Owner Agent Access Roles.
+- Changed: Organization Owner/Admin receive implicit Agent Owner authority, creators receive explicit Agent Owner, existing accepted Members migrate to Editor on existing Agents, and new Agents are creator-only.
+- Scope: AF-150 delivers locked role persistence, role-bearing assignments, backend list/grant/change/revoke, aggregate enforcement, and permission-aware product surfaces. AF-216 owns custom Agent Access Role backend management; AF-217 owns access and role-management UI.
+- Follow-up: supersede the previous ADRs, rewrite the unreleased migration, refactor authorization and access contracts, remove deferred UI, and rerun the complete security matrix.
+
+Entries below record implementation slices produced before this correction. They are historical branch state, not the current authorization contract.
+
+### 2026-07-20 — AF-150 — pending PR — RBAC-aware UI
+
+- Delivered: typed effective Agent actions, action-gated lifecycle/configuration/access controls, Agent Access assigned/eligible member management, immediate grant/revoke cache refresh, Member read-only Template/Skill surfaces, and protected Admin member-management controls.
+- Changed: the browser consumes server-computed Agent actions instead of inferring resource authority from Organization Role names; role and ownership changes invalidate current-user and Agent authorization caches; organization switching removes Agent Access queries through the existing Agent key family.
+- Verified: focused RBAC, Agent detail, Template, and Skill Playwright coverage; UI type checking and linting.
+- Follow-up: complete the final cross-domain authorization and migration hardening task.
 
 ### 2026-07-20 — AF-150 — pending PR — organization-wide Permission enforcement
 

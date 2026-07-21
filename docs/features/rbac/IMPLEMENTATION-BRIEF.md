@@ -1,169 +1,137 @@
-# Permission-backed RBAC implementation brief
+# Permission-backed RBAC and Agent Access Roles
 
-Status: Accepted design; backend enforcement delivered, UI adoption pending
-Source proposal: [Agent farm multi-organization support](https://aai-labs.atlassian.net/wiki/x/MIA0pQ)
+Status: Accepted design; corrective AF-150 refactor in progress
+Source: [AF-150](https://aai-labs.atlassian.net/browse/AF-150)
 
 ## Purpose
 
-This brief preserves the implementation-relevant decisions for permission-backed RBAC without reproducing the design conversation. It is the handoff context for agents implementing database-backed RBAC and assigned Agent access.
+Read this brief before changing Organization authorization, Agent visibility or operations, Agent Access, role seeding, or the AF-150 migration. It records the target contract; [`CHANGELOG.md`](CHANGELOG.md) records which slices are currently delivered.
 
-Read this together with:
+Related context:
 
-- [`../../../CONTEXT.md`](../../../CONTEXT.md) for canonical terminology.
-- [`../../adr/2026-07-18-permission-backed-organization-roles.md`](../../adr/2026-07-18-permission-backed-organization-roles.md) for role-model rationale.
-- [`../../adr/2026-07-18-assigned-agent-access-boundary.md`](../../adr/2026-07-18-assigned-agent-access-boundary.md) for resource-access rationale.
-- [`../identity-and-organizations.md`](../identity-and-organizations.md) and [`../agents.md`](../agents.md) for current behavior.
-- [`../../guidelines/code.md`](../../guidelines/code.md), [`../../guidelines/webapp.md`](../../guidelines/webapp.md), [`../../guidelines/testing.md`](../../guidelines/testing.md), and [`../../guidelines/epics.md`](../../guidelines/epics.md) before implementation.
-
-Implementation is in transition. Membership references database-backed seeded Roles; scoped Role-Permission grants, Agent creator provenance, and same-Organization Agent Access are persisted and legacy data is backfilled. Agent creation establishes creator access atomically; Agent aggregate paths enforce permission and assigned visibility; Agent Access management APIs are delivered; and Organization, Membership, Template, Skill, and cost-summary services enforce named Permissions. RBAC-aware UI controls are not yet delivered. Follow `CHANGELOG.md` rather than treating the full accepted design as complete.
+- [`../../../CONTEXT.md`](../../../CONTEXT.md) defines canonical terms.
+- [`../../adr/2026-07-21-separate-organization-and-agent-access-roles.md`](../../adr/2026-07-21-separate-organization-and-agent-access-roles.md) explains the role-family decision.
+- [`../identity-and-organizations.md`](../identity-and-organizations.md) defines Organization governance.
+- [`../agents.md`](../agents.md) defines the Agent aggregate.
+- [`../../guidelines/code.md`](../../guidelines/code.md), [`../../guidelines/webapp.md`](../../guidelines/webapp.md), [`../../guidelines/testing.md`](../../guidelines/testing.md), and [`../../guidelines/epics.md`](../../guidelines/epics.md) govern implementation and verification.
 
 ## Authorization model
 
-Authorization combines three independent facts:
+Authorization combines three independent sources:
 
-1. **Platform authority** — a superuser may act across Organizations through explicit Organization context.
-2. **Capability** — a Membership's Organization Role grants a named Permission.
-3. **Resource scope** — the role-permission grant applies to every matching resource in the Organization or only assigned Agent aggregates.
+1. **Platform authority** — superuser may act through explicit Organization context.
+2. **Organization authority** — each Membership has exactly one fixed Organization Role: Owner, Admin, or Member.
+3. **Agent authority** — Organization Owner/Admin have implicit Agent Owner authority; an Organization Member requires explicit Agent Access carrying one Agent Access Role.
 
-Permissions are allow-only. Missing permission means deny; there are no explicit deny rules. Authorization grants are resolved server-side for each request and are not embedded in access tokens, so role and access revocation takes effect on the next request.
+Permissions are allow-only and missing capabilities deny by default. Grants are resolved from current database state on every request rather than embedded in tokens.
 
-### Roles
+### Organization Roles
 
-Every Membership has exactly one Organization Role.
-
-| Authority | Scope and responsibilities |
+| Role | Authority |
 | --- | --- |
-| Superuser | Platform-wide authority rather than an Organization Role. Uses explicit Organization context and bypasses organization permission checks. |
-| Owner | Unique recovery role. Has all organization permissions and alone may delete the Organization, transfer ownership, or promote, demote, and remove Admins. |
-| Admin | Manages normal organization operations, Memberships, and all organization resources, but cannot perform Owner recovery actions or control other Admins. |
-| Member | May create Agents and see or act only on assigned Agents. Cannot administer the Organization or shared organization definitions. |
+| Organization Owner | Unique recovery authority; all normal Organization operations plus deletion, ownership transfer, and control of Admin Memberships. |
+| Organization Admin | Normal Organization and Membership administration, but no Owner recovery operations or control of other Admins. |
+| Organization Member | May create Agents and use shared Templates and Skills, but cannot administer the Organization or shared definitions. |
 
-Permissions and the immutable Owner, Admin, and Member system roles are global records. Future custom roles belong to one Organization, but custom-role APIs, permission editing, and role-editor UI are outside the initial RBAC feature. Organizations must never mutate seeded roles; a future custom role may be cloned from one.
+These roles are locked and cannot be created, edited, renamed, or deleted. Organization Role permissions govern Organization capabilities; they do not grant operations on assigned Agents.
 
-### Permission scope
+### Agent Access Roles
 
-A role-permission mapping carries scope rather than encoding scope into the permission name:
+Every Organization can use these locked defaults:
 
-- `ORGANIZATION` means all matching resources inside the active Organization, never cross-tenant.
-- `ASSIGNED` means only Agent aggregates connected to the current Membership through Agent Access.
+| Role | Permissions |
+| --- | --- |
+| Agent Viewer | Read Agent metadata, conversations, tool calls, activity, logs, and Agent-specific costs. |
+| Agent Editor | Viewer capabilities plus configuration, lifecycle, Skill assignment, and Agent Secret management. |
+| Agent Owner | Editor capabilities plus Agent deletion and access management. |
 
-For example, Admin may receive `agent.update` at `ORGANIZATION` scope while Member receives the same action at `ASSIGNED` scope. Permissions that do not support assignment use organization scope.
+AF-216 adds Organization-defined custom Agent Access Roles using the same Agent Permission catalogue. AF-150 seeds only the locked defaults and implements role-bearing assignments.
+
+An Agent operation is allowed when the actor has the corresponding Permission through the effective Agent Access Role and the Agent lifecycle permits the operation. Agent role names are not authorization checks.
 
 ## Agent Access
 
-An Agent remains owned by its Organization. Creation is provenance and assignment, not ownership.
+An Agent remains owned by its Organization. Agent Creator is immutable provenance; authority comes from implicit Organization governance or explicit Agent Access.
 
-- Agent Creator is immutable historical provenance.
-- Agent Access relates one Membership to one Agent and makes that Agent assigned to the Membership.
-- Creating an Agent atomically creates access for its creator, including an Owner/Admin creator so a later demotion preserves access to Agents they created.
-- A superuser acting without a Membership needs no Agent Access row.
-- Owner/Admin may grant or revoke access to any Agent in the Organization.
-- A Member may grant or revoke access only for an Agent they originally created.
-- A recipient cannot forward access merely because they can manage the Agent.
-- A creator cannot revoke their own access in the initial Agent Access feature.
-- Access can be granted only to an accepted ordinary Member in the same Organization; pending invitees cannot be pre-granted access.
-- Agent transfer, relinquishment, and viewer/operator/manager grant levels are out of scope.
-- Creator and recipient otherwise receive the same assigned-Agent capabilities allowed by their Organization Role.
+- Organization Owner/Admin and superuser in explicit Organization context have implicit Agent Owner authority over every Agent in that Organization. No bulk Agent Access rows are required.
+- Creating an Agent atomically records creator provenance and grants the creator explicit Agent Owner access, including when the creator is currently Organization Owner/Admin.
+- An Organization Member without explicit Agent Access cannot see the Agent or any subordinate resource.
+- One Membership has at most one explicit Agent Access Role per Agent.
+- A role containing access-management Permission may list, grant, change, and revoke explicit assignments, including granting Agent Owner onward.
+- Creator provenance does not create a separate sharing rule or permanent authorization exception.
+- Targets must be accepted Memberships in the same Organization. Pending, removed, and cross-Organization Memberships are ineligible.
+- Implicit Organization Owner/Admin authority is not an explicit assignment and cannot be revoked through Agent Access operations.
+- Assignment and role changes take effect on the next request.
 
-Agent Access scopes the entire Agent aggregate:
-
-- Agent lifecycle and configuration
-- conversations and tool calls
-- Agent-specific activity and cost data
-- assigned Skills
-- Slack/Teams and other Agent configuration
-- Agent Secrets and integrations
-- logs and related runtime-facing control-plane data
-
-Aggregate scope does not automatically permit every operation. The Membership still needs the relevant Permission. Agent Secret plaintext is never returned; only safe provider and masked metadata may be read.
+Agent Access scopes the complete Agent aggregate: lifecycle, configuration, conversations, tool calls, activity, costs, logs, Skills, Agent Secrets, and platform/integration configuration. Secret plaintext is never returned.
 
 ## Data-access enforcement
 
-Visibility must be part of repository queries, not post-fetch filtering.
+Visibility belongs in repository queries rather than post-fetch filtering. Member list, search, count, and detail queries must constrain by Organization, soft-deletion state, and explicit Agent Access before ordering, totals, or pagination. Organization Owner/Admin and explicit superuser context use implicit Organization-wide visibility.
 
-For Member list, search, and count operations, SQL must constrain by Organization, soft-deletion state, and an Agent Access `EXISTS` predicate before ordering, totals, or pagination. Owner/Admin organization-scoped permissions do not require one access row per Agent.
-
-Single-resource reads must use an accessible-resource query rather than loading an unrestricted row and authorizing afterward. Subordinate repositories must join or use an accessible-Agent subquery so conversations, tool calls, costs, secrets, logs, and configuration cannot bypass Agent visibility through alternate endpoints.
+Subordinate repositories must join or use an accessible-Agent query so alternate endpoints cannot reveal conversations, tool calls, costs, logs, Skills, configuration, or credential metadata.
 
 HTTP semantics remain deliberate:
 
-- Return `404` when an Agent or subordinate resource is cross-organization or unassigned and therefore concealed.
-- Return `403` when the resource is visible but the actor lacks the requested action Permission.
+- Return `404` when an Agent or subordinate resource is absent, cross-Organization, or inaccessible and therefore concealed.
+- Return `403` when the resource is visible but the actor lacks the requested operation.
 - Use `400` or `409` for invalid state transitions and conflicting mutations.
 
-Repositories own tenant/resource query composition. Services own permission-sensitive policy and orchestration. Routes remain thin.
+Repositories own tenant and visibility query composition. Services own Permission-sensitive policy and orchestration. Routes remain thin.
 
-## API and UI contract
+## Backend and UI contract
 
-Agent read/list DTOs expose server-computed effective actions as canonical Agent-related `PermissionKey` values for the current actor and resource. This deliberately reuses the Permission catalogue rather than maintaining a second action vocabulary; the UI must validate the typed subset it consumes.
+Agent read responses communicate the operations permitted for the current actor and Agent. The UI uses that server result for lifecycle, configuration, credential, activity, cost, and deletion controls rather than inferring authority from either role family. Every backend mutation independently reauthorizes current database state and Agent lifecycle.
 
-The UI uses effective actions to render edit, delete, start, stop, configuration, secret, and access-management controls. It must not reconstruct authorization from role names. Hidden or disabled controls are usability only: every mutation re-resolves authorization and Agent state on the server.
+AF-150 UI is limited to permission-aware Agent controls, fixed Organization Role protections, inaccessible-Agent handling, and Member read-only Template/Skill surfaces. Agent assignment lists, access grant/change/revoke controls, assigned-role display, and custom Agent Access Role settings belong to AF-217.
 
-After grant, revoke, or role changes, invalidate affected Agent lists/details, effective-action data, access lists, current-user context, and organization-scoped caches. Organization switching must retain the existing safe cache-isolation behavior.
+AF-150 backend supports listing explicit assignments and locked roles, granting a selected locked role, changing an assignment's role, and revoking an assignment. Custom Agent Access Role create/edit/delete belongs to AF-216.
 
-## Shared organization resources
+## Shared Organization resources
 
-The seeded Member policy is:
+Organization Members may read and use Templates and Skills when creating or configuring an Agent but may not create, update, version, publish, or delete shared definitions. Organization Owner/Admin may manage those resources. Organization-wide cost and activity summaries remain Organization-authorized; Agent Viewer/Editor/Owner permissions authorize only the corresponding Agent aggregate.
 
-- May view and use organization Templates and Skills when creating or configuring assigned Agents.
-- May not create, update, version, publish, or delete shared Template or Skill definitions.
-- May view conversations, tool calls, activity, and cost summaries only for assigned Agents.
-- May not view organization-wide costs, activity, or Membership administration.
-- May add, replace, or remove masked Agent credentials only when their assigned-Agent permissions allow it.
+## Persistence and migration
 
-Owner/Admin may manage shared organization resources. Superuser access uses explicit Organization context.
+The target model contains:
 
-## Deferred events and auditing
+- a global immutable Permission catalogue;
+- fixed database-backed Organization Roles and their Organization Permission mappings;
+- locked Agent Viewer, Editor, and Owner roles with Agent Permission mappings;
+- exactly one Organization Role reference per Membership;
+- immutable, nullable-for-legacy Agent creator provenance;
+- unique same-Organization Agent Access relating Membership, Agent, and one Agent Access Role.
 
-AF-150 does not introduce event infrastructure or security audit persistence. Durable internal Domain Events are tracked by [AF-218](https://aai-labs.atlassian.net/browse/AF-218), with the transactional outbox foundation in [AF-219](https://aai-labs.atlassian.net/browse/AF-219), Dramatiq/Redis delivery in [AF-220](https://aai-labs.atlassian.net/browse/AF-220), and Security Audit Records in [AF-221](https://aai-labs.atlassian.net/browse/AF-221).
-
-AF-150 grant/revoke, role-change, and credential workflows must preserve the transaction seams and safe changed-field information needed for later event adoption, but they do not emit or persist audit events in this epic.
-
-## Persistence and migration shape
-
-The intended model contains:
-
-- `permissions` — global immutable capability catalogue.
-- `roles` — global immutable system roles and future Organization-scoped custom roles.
-- `role_permissions` — role-to-permission grants carrying `ORGANIZATION` or `ASSIGNED` scope.
-- Membership role foreign key — replaces enum persistence while keeping exactly one role per Membership.
-- Agent creator reference — immutable provenance, nullable for legacy/system cases according to user-deletion policy.
-- `agent_access` — unique same-Organization relationship between Membership and Agent.
+Because the AF-150 migration is unreleased, it should install the target model directly rather than first installing the superseded binary-access model.
 
 Migration requirements:
 
-1. Seed permissions and system roles deterministically and idempotently.
-2. Backfill existing Membership enums to the corresponding seeded roles without changing authority.
-3. Existing Agents have no recoverable creator. Mark creator provenance unknown/legacy.
-4. Preserve current access by granting every existing accepted Membership access to every existing Agent in the same Organization. Pending invitees receive no backfilled access. Use reviewed bulk SQL suitable for real data volume.
-5. Enforce uniqueness, same-Organization validity, deletion behavior, PostgreSQL enum ordering, and repeatable startup seeding.
-6. Cover fresh installs and upgrades from the pre-RBAC schema with migrated PostgreSQL integration tests.
+1. Seed Permissions and both locked role catalogues deterministically and idempotently.
+2. Backfill Memberships to fixed Organization Roles without changing Organization authority.
+3. Preserve existing Agent visibility by granting every existing accepted Organization Member Agent Editor access to every existing Agent in the same Organization; pending and removed Memberships receive none.
+4. Grant Agent Owner to a recoverable known creator; legacy creator provenance may remain unknown.
+5. Keep Organization Owner/Admin Agent authority implicit rather than materializing bulk assignments.
+6. Enforce role-family validity, same-Organization relationships, uniqueness, deletion behavior, and repeatable startup validation.
+7. Cover fresh installs and upgrades from the pre-AF-150 schema with migrated PostgreSQL integration tests.
 
-## Explicit non-goals
+New Agents grant explicit Agent Owner access only to their creator.
 
-The initial RBAC feature does not deliver:
+## Deferred scope
 
-- organization-defined custom-role CRUD or UI
-- mutation of seeded roles or the Permission catalogue
-- multiple additive roles per Membership
-- explicit deny rules
-- Agent transfer or creator relinquishment
-- multiple Agent Access levels
-- authorization grants in JWT claims
-- Domain Event, transactional outbox, worker, or Security Audit Record infrastructure; these belong to AF-218
+AF-150 does not deliver:
 
-## Remaining implementation choices
+- custom Agent Access Role CRUD, owned by AF-216;
+- Agent sharing or Agent Access Role management UI, owned by AF-217;
+- custom Organization Roles;
+- multiple additive Organization Roles per Membership;
+- explicit deny rules;
+- authorization grants in JWT claims;
+- Domain Events, transactional outbox, workers, or Security Audit Records, owned by AF-218 through AF-221.
 
-The design leaves these details to implementation, provided they preserve the decisions above:
-
-- canonical Permission key names and the complete seeded action matrix
-- exact effective-action DTO evolution beyond the initial canonical Permission-key list
-- creator-reference behavior when a User is permanently deleted, coordinated with the product's retention and privacy policy
-
-Material deviations from the accepted model require updating the ADRs, this brief, tests, and the RBAC change log together.
+AF-150 workflows must retain clean transaction seams for later event adoption without introducing temporary audit infrastructure.
 
 ## Verification expectations
 
-At minimum, test superuser, Owner, Admin, creator Member, recipient Member, unassigned Member, removed/pending Membership, wrong Organization, soft-deleted Agent, and migrated legacy data across list/count/detail/mutation and subordinate-resource paths.
+Test superuser, Organization Owner/Admin, creator, explicit Agent Owner/Editor/Viewer, unassigned Member, pending/removed Membership, wrong Organization, soft-deleted Agent, and migrated legacy data across list/count/detail/mutation and subordinate-resource paths.
 
-Run the relevant repository targets from `docs/guidelines/testing.md`: `make check-api`, `make test-api`, `make lint-ui`, `make check-ui`, and `make test-ui`. Add focused migration, tenant-isolation, service, repository, and Playwright coverage. Use `docs/features/rbac/CHANGELOG.md` for every delivered PR slice as required by `docs/guidelines/epics.md`.
+Verify fresh and pre-AF-150 migration paths, seed idempotency, constraints, 404/403 behavior, direct mutation authorization, persistence-level pagination, and UI control differences. Run the required targets from [`../../guidelines/testing.md`](../../guidelines/testing.md) and keep [`CHANGELOG.md`](CHANGELOG.md) synchronized with every delivered slice.
