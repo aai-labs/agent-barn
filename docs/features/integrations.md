@@ -12,6 +12,18 @@ Integrations make external services available to an Agent. Agent Secrets hold en
 
 Provider credential contracts are defined by `SecretProvider` and its content models in `../../api/domains/agents/models.py`. Current providers cover GitHub, Jira, Confluence, Bitbucket, Gmail, Google Calendar, Zoho Mail, and Zoho Calendar.
 
+## Shared credentials
+
+Shared Credentials are org-scoped, admin-managed credential payloads that any member can attach to an agent. They use the same encryption and provider content models as Agent Secrets.
+
+- Only manual-entry providers are supported for shared credentials (v1): GitHub, Jira, Confluence, Bitbucket, Zoho Mail. OAuth-based providers (Gmail, Google Calendar) are excluded.
+- An agent gets either a shared credential or a per-agent secret for a given provider, not both.
+- Any org member can list and attach shared credentials; only admins (owner/admin roles) can create, update, or delete them.
+- Multiple shared credentials per provider per org are allowed (e.g. "Production GitHub" and "Staging GitHub").
+- Deletion is blocked while any non-deleted agent references the shared credential (RESTRICT FK).
+- Shared credential names are unique within an organization.
+- When an agent starts, the runtime resolves shared credential content by following the `agent_secret.shared_credential_id` FK to decrypt from the shared credential row.
+
 ## Invariants
 
 - Agent Secret payloads are validated against provider-specific schemas before encryption and again after decryption.
@@ -20,7 +32,7 @@ Provider credential contracts are defined by `SecretProvider` and its content mo
 - Read APIs return provider and display label, not credential contents.
 - Agent updates validate that remaining skill provider requirements are satisfied. Updating a Skill's provider metadata later does not revalidate existing agents.
 - Eligible built-in aai-cli skills are mounted at start when their provider credential is configured.
-- Application deployment secrets, per-user Slack configuration tokens, and per-agent Agent Secrets are distinct credential classes with different ownership and lifecycles.
+- Application deployment secrets, per-user Slack configuration tokens, per-agent Agent Secrets, and Shared Credentials are distinct credential classes with different ownership and lifecycles.
 
 ## Slack setup
 
@@ -41,13 +53,14 @@ At start, Agent Service decrypts provider payloads, backfills configured Google 
 | Concern                                            | Authoritative source                                                                                                                                |
 | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Provider enum, content schemas, encryption helpers | `../../api/domains/agents/models.py`                                                                                                                |
+| Shared Credential CRUD and lifecycle               | `../../api/domains/shared_credentials/`                                                                                                             |
 | Agent Secret persistence and lifecycle             | `../../api/domains/agents/service.py`, `../../api/domains/agents/repository.py`                                                                     |
 | aai-cli runtime materialization                    | `../../api/domains/agents/aai_cli_artifacts.py`, `../../api/domains/agents/aai_cli_skills/`                                                         |
 | Built-in skill definitions                         | `../../api/domains/agents/aai_cli_skills/`                                                                                                          |
 | Slack configuration token lifecycle                | `../../api/domains/auth/token_service.py`, `../../api/domains/auth/routes.py`                                                                       |
 | Gmail OAuth                                        | `../../api/domains/integrations/google_oauth/routes.py`                                                                                             |
 | UI credential forms                                | `../../ui/src/features/agents/`, `../../ui/src/features/account/`                                                                                   |
-| Tests                                              | `../../api/tests/integration/test_agents.py`, `../../api/tests/integration/test_slack_config_token.py`, `../../api/tests/unit/test_google_oauth.py` |
+| Tests                                              | `../../api/tests/integration/test_agents.py`, `../../api/tests/integration/test_shared_credentials.py`, `../../api/tests/integration/test_slack_config_token.py`, `../../api/tests/unit/test_google_oauth.py` |
 
 ## Change impact
 

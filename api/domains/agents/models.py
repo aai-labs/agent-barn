@@ -282,16 +282,27 @@ class AgentSecret(BaseModel, table=True):
         sa.UniqueConstraint(
             "agent_id", "provider", name="uq_agent_secret_agent_provider"
         ),
+        sa.CheckConstraint(
+            "(shared_credential_id IS NULL AND content IS NOT NULL) OR "
+            "(shared_credential_id IS NOT NULL AND content IS NULL)",
+            name="ck_agent_secret_content_xor_shared",
+        ),
     )
 
     agent_id: UUID = SqlField(
         foreign_key="agent.id", nullable=False, ondelete="CASCADE"
     )
     provider: SecretProvider = SqlField(sa_column=Column(sa.String(), nullable=False))
-    secret_name: str = SqlField(nullable=False, max_length=255)  # predefined label
-    content: str = SqlField(
-        sa_column=Column(sa.Text(), nullable=False)
-    )  # Fernet-encrypted JSON blob
+    secret_name: str = SqlField(nullable=False, max_length=255)
+    content: str | None = SqlField(
+        sa_column=Column(sa.Text(), nullable=True)
+    )  # Fernet-encrypted JSON blob; NULL when shared_credential_id is set
+    shared_credential_id: UUID | None = SqlField(
+        default=None,
+        foreign_key="shared_credential.id",
+        nullable=True,
+        ondelete="RESTRICT",
+    )
 
 
 class AgentSkill(BaseModel, table=True):

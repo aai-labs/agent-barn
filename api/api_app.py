@@ -19,6 +19,7 @@ from api.domains.conversations.routes import conversations_router
 from api.domains.costs.routes import costs_router
 from api.domains.integrations.google_oauth.routes import integrations_router
 from api.domains.organizations.routes import org_router
+from api.domains.shared_credentials.routes import shared_credentials_router
 from api.domains.skills.routes import skills_router
 from api.domains.skills.skill_seeder import seed_aai_cli_skills
 from api.domains.templates.routes import templates_router
@@ -115,6 +116,7 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(costs_router)
     subapi.include_router(org_router)
     subapi.include_router(member_router)
+    subapi.include_router(shared_credentials_router)
     subapi.include_router(skills_router)
     subapi.include_router(integrations_router)
     subapi.include_router(templates_router)
