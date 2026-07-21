@@ -1,10 +1,20 @@
+import re
 from uuid import UUID
 
 from kubernetes import client
 
+_NON_LABEL_CHARS = re.compile(r"[^a-z0-9]+")
+
 
 def _resource_name(agent_id: UUID) -> str:
     return f"agent-{agent_id}"
+
+
+def _org_name_label(org_name: str, org_id: UUID) -> str:
+    """Slugify an org name into a valid k8s label value (63 chars, alnum
+    edges); falls back to the org id so the label is never empty."""
+    slug = _NON_LABEL_CHARS.sub("-", org_name.lower()).strip("-")[:63].strip("-")
+    return slug or str(org_id)
 
 
 def _labels(agent_id: UUID, org_id: UUID) -> dict[str, str]:
@@ -46,6 +56,7 @@ def build_service(
     org_id: UUID,
     namespace: str,
     include_webhook_port: bool = False,
+    org_name: str = "",
 ) -> client.V1Service:
     ports = [
         client.V1ServicePort(port=80, target_port=8080, name="gateway"),
@@ -57,7 +68,12 @@ def build_service(
         metadata=client.V1ObjectMeta(
             name=_resource_name(agent_id),
             namespace=namespace,
-            labels=_labels(agent_id, org_id),
+            # The Service carries the org-name slug because Prometheus copies
+            # target labels from the Service (ServiceMonitor targetLabels).
+            labels={
+                **_labels(agent_id, org_id),
+                "agentfarm.io/org-name": _org_name_label(org_name, org_id),
+            },
         ),
         spec=client.V1ServiceSpec(
             selector={"app": _resource_name(agent_id)},

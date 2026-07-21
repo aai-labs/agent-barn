@@ -410,7 +410,9 @@ class AgentService:
         except Exception:
             return cached[0] if cached else None
 
-    def create_agent(self, data: AgentCreate, context: CurrentUserContext) -> AgentRead:
+    def create_agent(
+        self, data: AgentCreate, context: CurrentUserContext, org_name: str = ""
+    ) -> AgentRead:
         org_id = self._org_id(context)
         self._ensure_model_allowed(data.model)
 
@@ -545,7 +547,7 @@ class AgentService:
             )
 
         if data.platform == AgentPlatform.TEAMS:
-            return self.start_agent(agent.id, context)
+            return self.start_agent(agent.id, context, org_name=org_name)
         return self._build_agent_read(
             agent, slack_config, teams_config, secrets, skills_to_assign, required_ids
         )
@@ -827,7 +829,9 @@ class AgentService:
         self.repository.save(agent)
         return self._get_agent_read(agent)
 
-    def start_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
+    def start_agent(
+        self, agent_id: UUID, context: CurrentUserContext, org_name: str = ""
+    ) -> AgentRead:
         org_id = self._org_id(context)
         agent = self._get_active_or_404(agent_id, org_id)
 
@@ -880,7 +884,7 @@ class AgentService:
 
             if slack_config.channel_ids:
                 self._join_public_channels(bot_token, slack_config.channel_ids)
-            service = build_service(agent.id, org_id, ns)
+            service = build_service(agent.id, org_id, ns, org_name=org_name)
 
             if agent.agent_type == AgentType.HERMES:
                 api_server_key = secrets.token_urlsafe(32)
@@ -968,7 +972,9 @@ class AgentService:
                 litellm_api_key=litellm_key,
                 litellm_base_url=self.config.agent_litellm_base_url,
             )
-            service = build_service(agent.id, org_id, ns, include_webhook_port=True)
+            service = build_service(
+                agent.id, org_id, ns, include_webhook_port=True, org_name=org_name
+            )
             deployment = build_deployment(
                 agent.id,
                 org_id,

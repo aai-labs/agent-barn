@@ -20,10 +20,19 @@ from api.domains.agents.models import (
 from api.domains.agents.service import AgentService
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import get_current_user
+from api.domains.organizations.service import OrganizationService
 from api.domains.templates.models import TemplateRead
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 agents_router = APIRouter(prefix="/agents", tags=["agents"])
+
+
+def _org_name(org_service: OrganizationService, context: CurrentUserContext) -> str:
+    """Current org's display name, stamped as a label on agent k8s resources
+    for monitoring. Resolved here because OrganizationService already depends
+    on AgentService (delete-org guardrail), so the service cannot inject it."""
+    org_user = context.require_current_user_organization()
+    return org_service.get_organization(org_user.organization_id, context).name
 
 
 @agents_router.post("", response_model=AgentRead, status_code=status.HTTP_201_CREATED)
@@ -31,8 +40,9 @@ def create_agent(
     data: AgentCreate,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[AgentService, Injected(AgentService)],
+    org_service: Annotated[OrganizationService, Injected(OrganizationService)],
 ):
-    return service.create_agent(data, context)
+    return service.create_agent(data, context, org_name=_org_name(org_service, context))
 
 
 @agents_router.get("", response_model=PaginatedItems[AgentRead])
@@ -144,8 +154,11 @@ def start_agent(
     agent_id: UUID,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[AgentService, Injected(AgentService)],
+    org_service: Annotated[OrganizationService, Injected(OrganizationService)],
 ):
-    return service.start_agent(agent_id, context)
+    return service.start_agent(
+        agent_id, context, org_name=_org_name(org_service, context)
+    )
 
 
 @agents_router.post("/{agent_id}/stop", response_model=AgentRead)
