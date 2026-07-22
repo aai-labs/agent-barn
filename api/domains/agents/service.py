@@ -884,7 +884,9 @@ class AgentService:
 
             if slack_config.channel_ids:
                 self._join_public_channels(bot_token, slack_config.channel_ids)
-            service = build_service(agent.id, org_id, ns, org_name=org_name)
+            service = build_service(
+                agent.id, org_id, ns, org_name=org_name, agent_name=agent.name
+            )
 
             if agent.agent_type == AgentType.HERMES:
                 api_server_key = secrets.token_urlsafe(32)
@@ -973,7 +975,12 @@ class AgentService:
                 litellm_base_url=self.config.agent_litellm_base_url,
             )
             service = build_service(
-                agent.id, org_id, ns, include_webhook_port=True, org_name=org_name
+                agent.id,
+                org_id,
+                ns,
+                include_webhook_port=True,
+                org_name=org_name,
+                agent_name=agent.name,
             )
             deployment = build_deployment(
                 agent.id,

@@ -58,7 +58,7 @@
       },
       "targets": [
         {
-          "expr": "count(up{job=\"agent\", org_name=~\"$org\"})",
+          "expr": "count(max by (app) (up{job=\"agent\", org_name=~\"$org\"}))",
           "refId": "A"
         }
       ],
@@ -83,7 +83,7 @@
       },
       "targets": [
         {
-          "expr": "count(up{job=\"agent\", org_name=~\"$org\"} == 0) or vector(0)",
+          "expr": "count(max by (app) (up{job=\"agent\", org_name=~\"$org\"}) == 0) or vector(0)",
           "refId": "A"
         }
       ],
@@ -161,7 +161,7 @@
       },
       "targets": [
         {
-          "expr": "count(agent_slack_tokens_ok{job=\"agent\", org_name=~\"$org\"} == 0) or vector(0)",
+          "expr": "count(min by (app) (agent_slack_tokens_ok{job=\"agent\", org_name=~\"$org\"}) == 0) or vector(0)",
           "refId": "A"
         }
       ],
@@ -200,8 +200,8 @@
       },
       "targets": [
         {
-          "expr": "agent_healthz_ok{job=\"agent\", org_name=~\"$org\"}",
-          "legendFormat": "{{app}}",
+          "expr": "max by (agent_name) (agent_healthz_ok{job=\"agent\", org_name=~\"$org\"})",
+          "legendFormat": "{{agent_name}}",
           "refId": "A"
         }
       ],
@@ -216,7 +216,7 @@
     {
       "id": 6,
       "type": "timeseries",
-      "title": "Agent pod memory (working set) (all orgs)",
+      "title": "Agent memory (working set)",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -229,8 +229,8 @@
       },
       "targets": [
         {
-          "expr": "sum by (pod) (container_memory_working_set_bytes{namespace=\"agent-farm\", pod=~\"agent-.*\", container=\"agent\"})",
-          "legendFormat": "{{pod}}",
+          "expr": "sum by (agent_name) (container_memory_working_set_bytes{namespace=\"agent-farm\", pod=~\"agent-.*\", container=\"agent\"} * on (pod) group_left (label_app) kube_pod_labels{namespace=\"agent-farm\", label_app=~\"agent-.*\"} * on (label_app) group_left (agent_name) group by (label_app, agent_name) (label_replace(up{job=\"agent\", org_name=~\"$org\"}, \"label_app\", \"$1\", \"app\", \"(.*)\")))",
+          "legendFormat": "{{agent_name}}",
           "refId": "A"
         }
       ],
@@ -244,27 +244,80 @@
     {
       "id": 7,
       "type": "timeseries",
-      "title": "Agent pod CPU (all orgs)",
+      "title": "Agent CPU",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
       },
       "gridPos": {
         "h": 8,
-        "w": 24,
+        "w": 12,
         "x": 0,
         "y": 14
       },
       "targets": [
         {
-          "expr": "sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=\"agent-farm\", pod=~\"agent-.*\", container=\"agent\"}[5m]))",
-          "legendFormat": "{{pod}}",
+          "expr": "sum by (agent_name) (rate(container_cpu_usage_seconds_total{namespace=\"agent-farm\", pod=~\"agent-.*\", container=\"agent\"}[5m]) * on (pod) group_left (label_app) kube_pod_labels{namespace=\"agent-farm\", label_app=~\"agent-.*\"} * on (label_app) group_left (agent_name) group by (label_app, agent_name) (label_replace(up{job=\"agent\", org_name=~\"$org\"}, \"label_app\", \"$1\", \"app\", \"(.*)\")))",
+          "legendFormat": "{{agent_name}}",
           "refId": "A"
         }
       ],
       "fieldConfig": {
         "defaults": {
           "unit": "none"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 8,
+      "type": "bargauge",
+      "title": "Pod generations per agent (dashboard range)",
+      "description": "How many distinct pods served each agent over the selected time range. 1 = stable; higher values mean the agent was redeployed or crash-looped.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 14
+      },
+      "targets": [
+        {
+          "expr": "count by (agent_name) (count by (agent_name, pod) (last_over_time(up{job=\"agent\", org_name=~\"$org\"}[$__range])))",
+          "legendFormat": "{{agent_name}}",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"]
+        },
+        "orientation": "horizontal"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 2
+              },
+              {
+                "color": "red",
+                "value": 4
+              }
+            ]
+          }
         },
         "overrides": []
       }

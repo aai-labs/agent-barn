@@ -12,11 +12,13 @@ spec:
     matchLabels:
       agentfarm.io/component: agent
   # job="agent" for every target (the value of the component label);
-  # app/org-id/org-name identify the agent and its organization
-  # (dashes sanitize to underscores: org_id, org_name).
+  # app/agent-name/org-id/org-name identify the agent and its organization
+  # (dashes sanitize to underscores: agent_name, org_id, org_name). All of
+  # them come from the Service, so they stay stable across pod generations.
   jobLabel: agentfarm.io/component
   targetLabels:
     - app
+    - agent-name
     - org-id
     - org-name
   endpoints:

@@ -744,6 +744,10 @@ def test_start_agent_sets_status_running():
                 service.metadata.labels["org-name"],
                 equal_to("test-organization"),
             )
+            assert_that(
+                service.metadata.labels["agent-name"],
+                equal_to("test-agent"),
+            )
 
 
 def test_start_already_running_returns_409():

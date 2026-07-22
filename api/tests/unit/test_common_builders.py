@@ -65,6 +65,23 @@ def test_build_service_org_name_falls_back_to_org_id():
         )
 
 
+def test_build_service_carries_agent_name_slug_label():
+    service = build_service(_AGENT_ID, _ORG_ID, _NS, agent_name="Naria the 2nd!")
+    assert_that(
+        service.metadata.labels["agent-name"],
+        equal_to("naria-the-2nd"),
+    )
+
+
+def test_build_service_agent_name_falls_back_to_agent_id():
+    for empty_name in ("", "!!!"):
+        service = build_service(_AGENT_ID, _ORG_ID, _NS, agent_name=empty_name)
+        assert_that(
+            service.metadata.labels["agent-name"],
+            equal_to(str(_AGENT_ID)),
+        )
+
+
 def test_build_service_org_name_slug_fits_k8s_label_limits():
     service = build_service(
         _AGENT_ID, _ORG_ID, _NS, org_name="Org " + "x" * 100 + " Ltd"

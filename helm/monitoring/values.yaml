@@ -19,6 +19,12 @@ kube-prometheus-stack:
     enabled: false
   kubeStateMetrics:
     enabled: true
+  kube-state-metrics:
+    # Expose the agent pods' stable `app` label as kube_pod_labels{label_app}
+    # so dashboards can group cAdvisor CPU/memory by agent identity instead of
+    # per-generation pod names (an agent keeps its `app` across every pod).
+    metricLabelsAllowlist:
+      - pods=[app]
   kubeControllerManager:
     enabled: false
   kubeScheduler:
