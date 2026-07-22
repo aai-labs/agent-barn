@@ -28,6 +28,10 @@ _Avoid_: Organization Role, Agent ownership, access level
 The relationship assigning one Agent Access Role to one Membership for one Agent. Organization Owner/Admin authority over all Agents is implicit and is not an Agent Access relationship.
 _Avoid_: Agent ownership, Organization Membership
 
+**Agent General Access**:
+An Agent-scoped setting granting one Agent Access Role to all current and future accepted Organization Members, additive with explicit Agent Access. It is either Restricted or All Organization Members; new and migrated Agents are Restricted. Pending and removed Memberships receive nothing from it, and it never reduces Permissions granted by explicit Agent Access.
+_Avoid_: General access, public Agent, shared Agent
+
 **Agent Creator**:
 The user who originally created an Agent, retained as immutable provenance. Creation grants explicit Agent Owner access, but creator identity is not itself an authorization source.
 _Avoid_: Organization Owner, permanent Agent authority
@@ -84,6 +88,7 @@ _Avoid_: webhook
 - An **Agent Access Role** grants **Permissions** for one Agent aggregate.
 - An **Agent** belongs to one **Organization**, has one original **Agent Creator**, pins one **Template Version**, uses one **Runtime**, and connects to one **Platform**.
 - A **Membership** may have **Agent Access** to many Agents, and each relationship carries one **Agent Access Role**; creating an Agent grants its creator explicit Agent Owner access without transferring Organization ownership.
+- An **Agent** has one **Agent General Access** setting whose Permissions combine with (never subtract from) explicit Agent Access grants.
 - A **Template Version** may require multiple **Skills**.
 - An **Agent** may have multiple **Skills** and **Agent Secrets**.
 - An Agent runtime sends **Conversation Messages** and **Tool Calls** through **Ingest**.
