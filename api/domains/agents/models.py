@@ -213,6 +213,12 @@ class Agent(BaseModel, table=True):
         ondelete="SET NULL",
         index=True,
     )
+    general_access_role_id: UUID | None = SqlField(
+        default=None,
+        foreign_key="agent_access_roles.id",
+        nullable=True,
+        ondelete="RESTRICT",
+    )
     name: str = SqlField(nullable=False, max_length=255)
     litellm_key_encrypted: str = SqlField(nullable=False, default="")
     status: AgentStatus = SqlField(
@@ -578,6 +584,14 @@ class AgentAccessCandidateRead(PydanticBaseModel):
 
 class AgentAccessMemberRead(AgentAccessCandidateRead):
     access_role: AgentAccessRoleRead
+
+
+class AgentGeneralAccessRead(PydanticBaseModel):
+    role: AgentAccessRoleRead | None
+
+
+class AgentGeneralAccessUpdate(PydanticBaseModel):
+    access_role_id: UUID
 
 
 class AgentAssignedSkillRead(PydanticBaseModel):
