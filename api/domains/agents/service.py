@@ -222,7 +222,7 @@ class AgentService:
         skill_ids: list[UUID],
         secrets_data: list[AgentSecretCreate],
         org_id: UUID,
-        extra_providers: set[str] | None = None,
+        extra_providers: set[SecretProvider] | None = None,
     ) -> list[Skill]:
         if not skill_ids:
             return []
@@ -1089,6 +1089,7 @@ class AgentService:
                 ciphertext = shared_by_id[s.shared_credential_id].content
             else:
                 ciphertext = s.content
+            assert ciphertext is not None
             decrypted[provider] = decrypt_content(provider, ciphertext, key)
         self._backfill_gmail_client_credentials(decrypted)
         gmail = decrypted.get(SecretProvider.GMAIL)
@@ -1571,6 +1572,7 @@ class AgentService:
             ciphertext = shared[0].content
         else:
             ciphertext = secret.content
+        assert ciphertext is not None
         content = decrypt_content(
             provider, ciphertext, self.config.agent_token_encryption_key
         )
