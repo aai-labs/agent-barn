@@ -41,7 +41,9 @@ def create_shared_credential(
 def list_shared_credentials(
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[SharedCredentialService, Injected(SharedCredentialService)],
-    cred_filter: Annotated[SharedCredentialFilter, Depends(get_shared_credential_filter)],
+    cred_filter: Annotated[
+        SharedCredentialFilter, Depends(get_shared_credential_filter)
+    ],
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1)] = 15,
 ):
@@ -52,9 +54,7 @@ def list_shared_credentials(
     )
 
 
-@shared_credentials_router.get(
-    "/briefs", response_model=list[SharedCredentialBrief]
-)
+@shared_credentials_router.get("/briefs", response_model=list[SharedCredentialBrief])
 def list_shared_credential_briefs(
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[SharedCredentialService, Injected(SharedCredentialService)],
@@ -62,9 +62,7 @@ def list_shared_credential_briefs(
     return service.list_shared_credential_briefs(context)
 
 
-@shared_credentials_router.get(
-    "/{credential_id}", response_model=SharedCredentialRead
-)
+@shared_credentials_router.get("/{credential_id}", response_model=SharedCredentialRead)
 def get_shared_credential(
     credential_id: UUID,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],

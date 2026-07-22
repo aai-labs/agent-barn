@@ -53,9 +53,7 @@ def _auth(context) -> dict:
 
 
 def test_start_agent_with_shared_credential_sets_status_running():
-    with given(
-        [*_GIVEN, there_is_an_agent(), there_is_a_shared_credential()]
-    ) as ctx:
+    with given([*_GIVEN, there_is_an_agent(), there_is_a_shared_credential()]) as ctx:
         client: TestClient = ctx.client
         k8s: KubernetesClient = ctx.injector.get(KubernetesClient)
 

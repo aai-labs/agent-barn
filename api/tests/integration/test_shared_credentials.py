@@ -82,9 +82,7 @@ def test_create_shared_credential_returns_201():
             body = response.json()
             assert_that(body["name"], equal_to("Production Jira"))
             assert_that(body["provider"], equal_to("jira"))
-            assert_that(
-                body["organization_id"], equal_to(str(context.organization.id))
-            )
+            assert_that(body["organization_id"], equal_to(str(context.organization.id)))
             assert_that(body["agent_count"], equal_to(0))
             assert "content" not in body
 

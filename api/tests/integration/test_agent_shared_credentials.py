@@ -90,9 +90,7 @@ def test_create_agent_with_shared_credential():
             body = response.json()
             providers = [s["provider"] for s in body["secrets"]]
             assert_that(providers, has_item("jira"))
-            jira_secret = next(
-                s for s in body["secrets"] if s["provider"] == "jira"
-            )
+            jira_secret = next(s for s in body["secrets"] if s["provider"] == "jira")
             assert_that(
                 jira_secret["shared_credential_id"],
                 equal_to(str(ctx.shared_credential.id)),
@@ -158,9 +156,7 @@ def test_update_agent_attach_shared_credential():
             body = response.json()
             providers = [s["provider"] for s in body["secrets"]]
             assert_that(providers, has_item("jira"))
-            jira_secret = next(
-                s for s in body["secrets"] if s["provider"] == "jira"
-            )
+            jira_secret = next(s for s in body["secrets"] if s["provider"] == "jira")
             assert_that(
                 jira_secret["shared_credential_id"],
                 equal_to(str(ctx.shared_credential.id)),

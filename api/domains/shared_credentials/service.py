@@ -85,9 +85,7 @@ class SharedCredentialService:
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=e.errors(),
             )
-        encrypted = encrypt_content(
-            validated, self.config.agent_token_encryption_key
-        )
+        encrypted = encrypt_content(validated, self.config.agent_token_encryption_key)
 
         credential = SharedCredential(
             organization_id=org_id,

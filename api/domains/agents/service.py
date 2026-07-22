@@ -53,7 +53,6 @@ from api.domains.agents.models import (
     AgentSecret,
     AgentSecretCreate,
     AgentSecretRead,
-    AgentSharedCredentialAttach,
     AgentSkill,
     AgentSlackConfig,
     AgentSlackConfigRead,
@@ -295,7 +294,9 @@ class AgentService:
             )
             shared_attach_providers = {c.provider for c in shared_creds}
         remaining_providers = (
-            (current_providers - removed_providers) | upsert_providers | shared_attach_providers
+            (current_providers - removed_providers)
+            | upsert_providers
+            | shared_attach_providers
         )
 
         remaining_skills = self.skill_repository.get_many_by_ids(
@@ -355,7 +356,10 @@ class AgentService:
         secrets_read = []
         for secret in secrets or []:
             read = AgentSecretRead.model_validate(secret)
-            if secret.shared_credential_id and secret.shared_credential_id in shared_creds_by_id:
+            if (
+                secret.shared_credential_id
+                and secret.shared_credential_id in shared_creds_by_id
+            ):
                 sc = shared_creds_by_id[secret.shared_credential_id]
                 read.shared_credential_id = sc.id
                 read.shared_credential_name = sc.name
@@ -1075,9 +1079,7 @@ class AgentService:
         ]
         shared_by_id = {}
         if shared_ids:
-            shared_creds = self.shared_credential_repository.get_many_by_ids(
-                shared_ids
-            )
+            shared_creds = self.shared_credential_repository.get_many_by_ids(shared_ids)
             shared_by_id = {c.id: c for c in shared_creds}
         key = self.config.agent_token_encryption_key
         decrypted = {}
