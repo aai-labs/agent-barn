@@ -209,9 +209,9 @@ def test_refresh_agents_in_error_keeps_last_value_on_failure():
 # --- openrouter credits probe ---
 
 
-def _config(management_key: str = "mk-test", ttl: int = 300) -> MagicMock:
+def _config(api_key: str = "sk-test", ttl: int = 300) -> MagicMock:
     return MagicMock(
-        openrouter_management_key=management_key,
+        openrouter_api_key=api_key,
         openrouter_base_url="https://openrouter.test/api/v1",
         openrouter_credits_cache_ttl_seconds=ttl,
     )
@@ -219,19 +219,17 @@ def _config(management_key: str = "mk-test", ttl: int = 300) -> MagicMock:
 
 @patch("api.core.metrics.httpx.get")
 @patch("api.core.metrics.get_config")
-def test_refresh_openrouter_credits_sets_remaining(mock_config, mock_get):
+def test_refresh_openrouter_credits_sets_key_limit_remaining(mock_config, mock_get):
     with given():
         mock_config.return_value = _config()
         response = MagicMock(status_code=200)
-        response.json.return_value = {
-            "data": {"total_credits": 100.5, "total_usage": 25.5}
-        }
+        response.json.return_value = {"data": {"limit_remaining": 75.0}}
         mock_get.return_value = response
 
         with when("I refresh the credits gauge"):
             refresh_openrouter_credits()
 
-        with then("remaining credits and scrape_ok are set"):
+        with then("the key's remaining credit limit and scrape_ok are set"):
             assert_that(
                 PROBE_REGISTRY.get_sample_value(
                     "agentfarm_openrouter_credits_remaining"
@@ -248,11 +246,63 @@ def test_refresh_openrouter_credits_sets_remaining(mock_config, mock_get):
 
 @patch("api.core.metrics.httpx.get")
 @patch("api.core.metrics.get_config")
+def test_refresh_openrouter_credits_unlimited_key_reads_infinite(mock_config, mock_get):
+    with given():
+        mock_config.return_value = _config()
+        response = MagicMock(status_code=200)
+        response.json.return_value = {"data": {"limit_remaining": None}}
+        mock_get.return_value = response
+
+        with when("I refresh against a key with no credit limit"):
+            refresh_openrouter_credits()
+
+        with then("the gauge reads +Inf and the poll counts as healthy"):
+            assert_that(
+                PROBE_REGISTRY.get_sample_value(
+                    "agentfarm_openrouter_credits_remaining"
+                ),
+                equal_to(float("inf")),
+            )
+            assert_that(
+                PROBE_REGISTRY.get_sample_value(
+                    "agentfarm_openrouter_credits_scrape_ok"
+                ),
+                equal_to(1.0),
+            )
+
+
+@patch("api.core.metrics.httpx.get")
+@patch("api.core.metrics.get_config")
+def test_refresh_openrouter_credits_polls_key_endpoint_with_inference_key(
+    mock_config, mock_get
+):
+    with given():
+        mock_config.return_value = _config(api_key="sk-inference")
+        response = MagicMock(status_code=200)
+        response.json.return_value = {"data": {"limit_remaining": 1.0}}
+        mock_get.return_value = response
+
+        with when("I refresh the credits gauge"):
+            refresh_openrouter_credits()
+
+        with then("it calls GET /key with the inference key"):
+            assert_that(
+                mock_get.call_args.args[0],
+                equal_to("https://openrouter.test/api/v1/key"),
+            )
+            assert_that(
+                mock_get.call_args.kwargs["headers"]["Authorization"],
+                equal_to("Bearer sk-inference"),
+            )
+
+
+@patch("api.core.metrics.httpx.get")
+@patch("api.core.metrics.get_config")
 def test_refresh_openrouter_credits_scrape_not_ok_without_key(mock_config, mock_get):
     with given():
-        mock_config.return_value = _config(management_key="")
+        mock_config.return_value = _config(api_key="")
 
-        with when("I refresh with no management key configured"):
+        with when("I refresh with no OpenRouter API key configured"):
             refresh_openrouter_credits()
 
         with then("scrape_ok is 0 and no request is made"):
@@ -290,7 +340,7 @@ def test_refresh_openrouter_credits_respects_ttl_cache(mock_config, mock_get):
     with given():
         mock_config.return_value = _config(ttl=300)
         response = MagicMock(status_code=200)
-        response.json.return_value = {"data": {"total_credits": 10, "total_usage": 1}}
+        response.json.return_value = {"data": {"limit_remaining": 10}}
         mock_get.return_value = response
 
         with when("I refresh twice within the TTL"):

@@ -327,9 +327,7 @@ def test_create_service_refreshes_labels_on_conflict():
     )
     k8s = _make_client(core_api=core)
     desired_labels = {"app": "agent-x", "org-name": "acme", "org-id": "o1"}
-    manifest = V1Service(
-        metadata=V1ObjectMeta(name="agent-x", labels=desired_labels)
-    )
+    manifest = V1Service(metadata=V1ObjectMeta(name="agent-x", labels=desired_labels))
 
     result = k8s.create_service("agent-farm", manifest)
 

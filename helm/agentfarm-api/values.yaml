@@ -39,10 +39,11 @@ emailFromAddress: ""
 googleCloudClientId: ""
 googleCloudClientSecret: ""
 
-# OpenRouter management (provisioning) key polled for the credits-balance
-# metric (k8s Secret env var OPENROUTER_MANAGEMENT_KEY). The inference key
-# cannot read /credits; leave blank to skip the poll.
-openrouterManagementKey: ""
+# OpenRouter inference key (k8s Secret env var OPENROUTER_API_KEY), polled
+# via GET /key for the key's remaining credit limit metric. Same key litellm
+# uses; leave blank to skip the poll. The gauge reads +Inf until a credit
+# limit is set on the key at openrouter.ai.
+openrouterApiKey: ""
 
 litellmBaseUrl: "http://litellm:4000"
 agentLitellmBaseUrl: "http://litellm:4000"

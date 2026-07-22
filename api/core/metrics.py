@@ -59,7 +59,8 @@ AGENTS_IN_ERROR = Gauge(
 
 OPENROUTER_CREDITS = Gauge(
     "agentfarm_openrouter_credits_remaining",
-    "OpenRouter account credits remaining (total_credits - total_usage), USD",
+    "Credits remaining on the OpenRouter API key's credit limit "
+    "(limit_remaining, USD); +Inf when the key has no limit set",
     registry=PROBE_REGISTRY,
 )
 
@@ -110,16 +111,20 @@ def refresh_agents_in_error(count_agents_in_error: Callable[[], int]) -> None:
 
 
 def refresh_openrouter_credits() -> None:
-    """Poll OpenRouter's credits API, TTL-cached across scrapes.
+    """Poll the key's remaining credit limit, TTL-cached across scrapes.
 
-    Requires a management key (the inference key gets a 403 on /credits). On
-    a missing key or failed poll, scrape_ok drops to 0 and the credits gauge
-    keeps its last value so alerts can distinguish "stale" from "low".
+    Uses GET /key with the ordinary inference key (the account-wide /credits
+    endpoint needs a management key, which can also mint/delete keys — too
+    much privilege for a metrics probe). limit_remaining is null for a key
+    without a credit limit; that maps to +Inf so CreditsLow can never fire
+    until an operator sets a limit on the key. On a missing key or failed
+    poll, scrape_ok drops to 0 and the credits gauge keeps its last value so
+    alerts can distinguish "stale" from "low".
     """
     global _openrouter_polled_at
     config = get_config()
 
-    if not config.openrouter_management_key:
+    if not config.openrouter_api_key:
         OPENROUTER_SCRAPE_OK.set(0)
         return
 
@@ -135,14 +140,14 @@ def refresh_openrouter_credits() -> None:
 
     try:
         response = httpx.get(
-            f"{config.openrouter_base_url.rstrip('/')}/credits",
-            headers={"Authorization": f"Bearer {config.openrouter_management_key}"},
+            f"{config.openrouter_base_url.rstrip('/')}/key",
+            headers={"Authorization": f"Bearer {config.openrouter_api_key}"},
             timeout=10,
         )
         response.raise_for_status()
-        data = response.json()["data"]
+        limit_remaining = response.json()["data"]["limit_remaining"]
         OPENROUTER_CREDITS.set(
-            float(data["total_credits"]) - float(data["total_usage"])
+            float("inf") if limit_remaining is None else float(limit_remaining)
         )
         OPENROUTER_SCRAPE_OK.set(1)
     except Exception:

@@ -39,7 +39,7 @@
     {
       "id": 2,
       "type": "stat",
-      "title": "OpenRouter credits remaining (USD)",
+      "title": "OpenRouter key credits remaining (USD)",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 5, "w": 8, "x": 8, "y": 0 },
       "targets": [
@@ -75,7 +75,7 @@
     {
       "id": 4,
       "type": "timeseries",
-      "title": "OpenRouter credits trend",
+      "title": "OpenRouter key credits trend",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 9, "w": 12, "x": 0, "y": 5 },
       "targets": [

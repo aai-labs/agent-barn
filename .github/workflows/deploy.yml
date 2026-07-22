@@ -188,5 +188,4 @@ jobs:
           SLACK_ALERTS_WEBHOOK_URL: ${{ secrets.SLACK_ALERTS_WEBHOOK_URL }}
           GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
           GRAFANA_HOST: ${{ vars.GRAFANA_HOST }}
-          OPENROUTER_MANAGEMENT_KEY: ${{ secrets.OPENROUTER_MANAGEMENT_KEY }}
         run: helmfile -f helmfile.yaml.gotmpl sync --wait

@@ -121,8 +121,10 @@ releases:
         value: {{ env "REGISTRY_PASSWORD" | required "REGISTRY_PASSWORD is required" | quote }}
       - name: ingress.hosts
         value: {{ env "API_HOST" | required "API_HOST is required" | quote }}
-      - name: openrouterManagementKey
-        value: {{ env "OPENROUTER_MANAGEMENT_KEY" | default "" | quote }}
+      # Same inference key the litellm release uses; the API polls GET /key
+      # with it for the remaining-credit-limit metric.
+      - name: openrouterApiKey
+        value: {{ env "OPENROUTER_API_KEY" | default "" | quote }}
     needs:
       - agent-farm/postgres-app
       - agent-farm/litellm

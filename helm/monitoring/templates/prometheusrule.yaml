@@ -145,8 +145,8 @@ spec:
           labels:
             severity: critical
           annotations:
-            summary: OpenRouter credits below ${{ .Values.openrouterCreditsThreshold }}.
-            description: Remaining balance is {{`{{ $value | printf "%.2f" }}`}} USD — top up before requests start failing.
+            summary: OpenRouter key credits below ${{ .Values.openrouterCreditsThreshold }}.
+            description: The API key's remaining credit limit is {{`{{ $value | printf "%.2f" }}`}} USD — raise the key limit or top up before requests start failing.
 
         - alert: OpenRouterCreditsUnknown
           # max(): healthy if any replica polls successfully; drops
@@ -158,4 +158,4 @@ spec:
             severity: warning
           annotations:
             summary: OpenRouter credits cannot be polled.
-            description: The credits probe is failing — management key missing/invalid or the OpenRouter API is unreachable.
+            description: The credits probe is failing — OPENROUTER_API_KEY missing/invalid on the API or the OpenRouter API is unreachable.

@@ -58,10 +58,8 @@ class Config(BaseSettings):
     openrouter_api_key: str = ""
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     openrouter_models_cache_ttl_seconds: int = 3600
-    # Management (provisioning) key for the credits balance poll behind the
-    # agentfarm_openrouter_credits_remaining metric. The inference key above
-    # cannot read /credits (403) and management keys cannot run inference.
-    openrouter_management_key: str = ""
+    # TTL for the credits poll behind agentfarm_openrouter_credits_remaining
+    # (GET /key with the inference key above; no management key involved).
     openrouter_credits_cache_ttl_seconds: int = 300
     # Comma-separated glob patterns (fnmatch) matched against OpenRouter model
     # ids to limit what the model picker offers, e.g. "qwen/*,openai/gpt-5*".

@@ -36,6 +36,9 @@ _GIVEN = [
             "LITELLM_SECRET_NAME": "litellm",
             "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
             "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
+            # Keep the credits probe offline: a developer's real key in the
+            # environment would otherwise make /metrics call OpenRouter.
+            "OPENROUTER_API_KEY": "",
         }
     ),
     prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
@@ -99,7 +102,7 @@ def test_metrics_reports_openrouter_scrape_not_ok_without_key():
     with given(_GIVEN) as context:
         client: TestClient = context.client
 
-        with when("I scrape /metrics without an OpenRouter management key"):
+        with when("I scrape /metrics without an OpenRouter API key"):
             response = client.get("/metrics")
 
         with then("the credits scrape_ok gauge reads 0"):
