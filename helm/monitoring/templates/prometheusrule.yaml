@@ -38,8 +38,12 @@ spec:
             description: Agent telemetry (messages, tool calls) is not being recorded while this fires.
 
         - alert: DatabaseDown
-          expr: agentfarm_database_up == 0
+          # min() drops the pod/instance labels so the alert identity survives
+          # API redeploys instead of resolving + re-firing on every rollout;
+          # keep_firing_for bridges the series gap while pods are swapped.
+          expr: min(agentfarm_database_up) == 0
           for: 2m
+          keep_firing_for: 5m
           labels:
             severity: critical
           annotations:
@@ -106,8 +110,12 @@ spec:
             description: Slack token validation is failing for {{`{{ $labels.app }}`}}; the agent cannot serve its workspace.
 
         - alert: AgentsInErrorState
-          expr: agentfarm_agents_in_error > 0
+          # max() drops pod/instance labels: stable identity across API
+          # redeploys, and a fresh replica's default-0 gauge can't mask the
+          # real count.
+          expr: max(agentfarm_agents_in_error) > 0
           for: 5m
+          keep_firing_for: 5m
           labels:
             severity: warning
           annotations:
@@ -127,10 +135,13 @@ spec:
         - alert: OpenRouterCreditsLow
           # Gate on scrape_ok so a never-polled gauge (defaults to 0) cannot
           # page "credits low" when the real problem is CreditsUnknown.
+          # max() drops pod/instance labels (stable identity across API
+          # redeploys) and ignores fresh replicas that still export default 0.
           expr: >-
-            agentfarm_openrouter_credits_remaining < {{ .Values.openrouterCreditsThreshold }}
-            and agentfarm_openrouter_credits_scrape_ok == 1
+            max(agentfarm_openrouter_credits_remaining) < {{ .Values.openrouterCreditsThreshold }}
+            and max(agentfarm_openrouter_credits_scrape_ok) == 1
           for: 15m
+          keep_firing_for: 5m
           labels:
             severity: critical
           annotations:
@@ -138,8 +149,11 @@ spec:
             description: Remaining balance is {{`{{ $value | printf "%.2f" }}`}} USD — top up before requests start failing.
 
         - alert: OpenRouterCreditsUnknown
-          expr: agentfarm_openrouter_credits_scrape_ok == 0
+          # max(): healthy if any replica polls successfully; drops
+          # pod/instance labels so redeploys don't resolve + re-fire it.
+          expr: max(agentfarm_openrouter_credits_scrape_ok) == 0
           for: 30m
+          keep_firing_for: 5m
           labels:
             severity: warning
           annotations:

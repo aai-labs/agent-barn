@@ -68,7 +68,7 @@
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 5, "w": 6, "x": 12, "y": 0 },
       "targets": [
-        { "expr": "agentfarm_database_up", "refId": "A" }
+        { "expr": "min(agentfarm_database_up)", "refId": "A" }
       ],
       "fieldConfig": {
         "defaults": {

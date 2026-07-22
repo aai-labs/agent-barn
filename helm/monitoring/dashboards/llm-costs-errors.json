@@ -43,7 +43,7 @@
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 5, "w": 8, "x": 8, "y": 0 },
       "targets": [
-        { "expr": "agentfarm_openrouter_credits_remaining", "refId": "A" }
+        { "expr": "max(agentfarm_openrouter_credits_remaining)", "refId": "A" }
       ],
       "fieldConfig": {
         "defaults": {
@@ -60,7 +60,7 @@
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 5, "w": 8, "x": 16, "y": 0 },
       "targets": [
-        { "expr": "agentfarm_openrouter_credits_scrape_ok", "refId": "A" }
+        { "expr": "max(agentfarm_openrouter_credits_scrape_ok)", "refId": "A" }
       ],
       "fieldConfig": {
         "defaults": {
@@ -79,7 +79,7 @@
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 9, "w": 12, "x": 0, "y": 5 },
       "targets": [
-        { "expr": "agentfarm_openrouter_credits_remaining", "legendFormat": "credits", "refId": "A" }
+        { "expr": "max(agentfarm_openrouter_credits_remaining)", "legendFormat": "credits", "refId": "A" }
       ],
       "fieldConfig": { "defaults": { "unit": "currencyUSD" }, "overrides": [] }
     },
