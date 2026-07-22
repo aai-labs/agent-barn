@@ -347,7 +347,7 @@ def test_repository_agent_access_filters_before_count_and_pagination():
 
 def test_locked_agent_access_roles_are_listed_with_exact_permissions():
     with given(_GIVEN) as context:
-        response = context.client.get(f"{_BASE}/access-roles", headers=_auth(context))
+        response = context.client.get(f"{_BASE}/share-roles", headers=_auth(context))
 
         assert_that(response.status_code, equal_to(status.HTTP_200_OK))
         roles = {role["name"]: role for role in response.json()}
@@ -384,11 +384,8 @@ def test_owner_lists_grants_idempotently_and_revokes_agent_access():
         agent_id = created.json()["id"]
         target, _ = _add_member(context)
 
-        eligible = context.client.get(
-            f"{_BASE}/{agent_id}/access/eligible", headers=_auth(context)
-        )
         first_grant = context.client.post(
-            f"{_BASE}/{agent_id}/access",
+            f"{_BASE}/{agent_id}/share/members",
             json={
                 "user_id": str(target.id),
                 "access_role_id": str(AGENT_VIEWER_ROLE_ID),
@@ -396,7 +393,7 @@ def test_owner_lists_grants_idempotently_and_revokes_agent_access():
             headers=_auth(context),
         )
         second_grant = context.client.post(
-            f"{_BASE}/{agent_id}/access",
+            f"{_BASE}/{agent_id}/share/members",
             json={
                 "user_id": str(target.id),
                 "access_role_id": str(AGENT_VIEWER_ROLE_ID),
@@ -404,7 +401,7 @@ def test_owner_lists_grants_idempotently_and_revokes_agent_access():
             headers=_auth(context),
         )
         conflicting_grant = context.client.post(
-            f"{_BASE}/{agent_id}/access",
+            f"{_BASE}/{agent_id}/share/members",
             json={
                 "user_id": str(target.id),
                 "access_role_id": str(AGENT_EDITOR_ROLE_ID),
@@ -412,13 +409,9 @@ def test_owner_lists_grants_idempotently_and_revokes_agent_access():
             headers=_auth(context),
         )
         assigned = context.client.get(
-            f"{_BASE}/{agent_id}/access", headers=_auth(context)
+            f"{_BASE}/{agent_id}/share/members", headers=_auth(context)
         )
 
-        assert_that(eligible.status_code, equal_to(status.HTTP_200_OK))
-        assert_that(
-            [item["user_id"] for item in eligible.json()], has_item(str(target.id))
-        )
         assert_that(first_grant.status_code, equal_to(status.HTTP_201_CREATED))
         assert_that(second_grant.status_code, equal_to(status.HTTP_200_OK))
         assert_that(conflicting_grant.status_code, equal_to(status.HTTP_409_CONFLICT))
@@ -438,7 +431,7 @@ def test_owner_lists_grants_idempotently_and_revokes_agent_access():
         visible = context.client.get(f"{_BASE}/{agent_id}", headers=_auth(context))
         there_is_an_access_token_for_user(owner_id)(context)
         revoked = context.client.delete(
-            f"{_BASE}/{agent_id}/access/{target.id}", headers=_auth(context)
+            f"{_BASE}/{agent_id}/share/members/{target.id}", headers=_auth(context)
         )
         there_is_an_access_token_for_user(target.id)(context)
         hidden = context.client.get(f"{_BASE}/{agent_id}", headers=_auth(context))
@@ -448,54 +441,12 @@ def test_owner_lists_grants_idempotently_and_revokes_agent_access():
         assert_that(hidden.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
-def test_eligible_access_search_filters_by_name_and_email():
-    with given([*_GIVEN, there_is_an_agent()]) as context:
-        agent_id = context.agent.id
-        _add_member(context, full_name="Ada Lovelace", email="ada@example.com")
-        _add_member(context, full_name="Grace Hopper", email="grace@example.com")
-
-        by_name = context.client.get(
-            f"{_BASE}/{agent_id}/access/eligible",
-            params={"search": "ada"},
-            headers=_auth(context),
-        )
-        by_email = context.client.get(
-            f"{_BASE}/{agent_id}/access/eligible",
-            params={"search": "GRACE@EXAMPLE"},
-            headers=_auth(context),
-        )
-        no_match = context.client.get(
-            f"{_BASE}/{agent_id}/access/eligible",
-            params={"search": "nonexistent"},
-            headers=_auth(context),
-        )
-        unfiltered = context.client.get(
-            f"{_BASE}/{agent_id}/access/eligible", headers=_auth(context)
-        )
-
-        assert_that(by_name.status_code, equal_to(status.HTTP_200_OK))
-        assert_that(
-            [item["full_name"] for item in by_name.json()], equal_to(["Ada Lovelace"])
-        )
-        assert_that(by_email.status_code, equal_to(status.HTTP_200_OK))
-        assert_that(
-            [item["full_name"] for item in by_email.json()],
-            equal_to(["Grace Hopper"]),
-        )
-        assert_that(no_match.status_code, equal_to(status.HTTP_200_OK))
-        assert_that(no_match.json(), equal_to([]))
-        assert_that(
-            [item["full_name"] for item in unfiltered.json()],
-            contains_inanyorder("Ada Lovelace", "Grace Hopper"),
-        )
-
-
 def test_role_change_takes_effect_on_the_next_request():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         owner_id = context.user.id
         target, _ = _add_member(context)
         grant = context.client.post(
-            f"{_BASE}/{context.agent.id}/access",
+            f"{_BASE}/{context.agent.id}/share/members",
             json={
                 "user_id": str(target.id),
                 "access_role_id": str(AGENT_VIEWER_ROLE_ID),
@@ -510,7 +461,7 @@ def test_role_change_takes_effect_on_the_next_request():
         )
         there_is_an_access_token_for_user(owner_id)(context)
         changed = context.client.patch(
-            f"{_BASE}/{context.agent.id}/access/{target.id}",
+            f"{_BASE}/{context.agent.id}/share/members/{target.id}",
             json={"access_role_id": str(AGENT_EDITOR_ROLE_ID)},
             headers=_auth(context),
         )
@@ -569,7 +520,7 @@ def test_explicit_owner_can_share_onward_while_editor_cannot():
         third_member, _ = _add_member(context)
 
         owner_grant = context.client.post(
-            f"{_BASE}/{agent_id}/access",
+            f"{_BASE}/{agent_id}/share/members",
             json={
                 "user_id": str(owner_recipient.id),
                 "access_role_id": str(AGENT_OWNER_ROLE_ID),
@@ -577,7 +528,7 @@ def test_explicit_owner_can_share_onward_while_editor_cannot():
             headers=_auth(context),
         )
         editor_grant = context.client.post(
-            f"{_BASE}/{agent_id}/access",
+            f"{_BASE}/{agent_id}/share/members",
             json={
                 "user_id": str(editor_recipient.id),
                 "access_role_id": str(AGENT_EDITOR_ROLE_ID),
@@ -587,7 +538,7 @@ def test_explicit_owner_can_share_onward_while_editor_cannot():
 
         there_is_an_access_token_for_user(owner_recipient.id)(context)
         forwarded = context.client.post(
-            f"{_BASE}/{agent_id}/access",
+            f"{_BASE}/{agent_id}/share/members",
             json={
                 "user_id": str(third_member.id),
                 "access_role_id": str(AGENT_VIEWER_ROLE_ID),
@@ -596,7 +547,7 @@ def test_explicit_owner_can_share_onward_while_editor_cannot():
         )
         there_is_an_access_token_for_user(editor_recipient.id)(context)
         forbidden = context.client.get(
-            f"{_BASE}/{agent_id}/access", headers=_auth(context)
+            f"{_BASE}/{agent_id}/share/members", headers=_auth(context)
         )
 
         assert_that(owner_grant.status_code, equal_to(status.HTTP_201_CREATED))
@@ -611,7 +562,7 @@ def test_unassigned_member_cannot_discover_agent_access_management():
         there_is_an_access_token_for_user(unrelated.id)(context)
 
         response = context.client.get(
-            f"{_BASE}/{context.agent.id}/access", headers=_auth(context)
+            f"{_BASE}/{context.agent.id}/share/members", headers=_auth(context)
         )
 
         assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
@@ -624,7 +575,7 @@ def test_creator_assignment_follows_normal_change_and_revoke_rules():
         agent_id = created.json()["id"]
 
         changed = context.client.patch(
-            f"{_BASE}/{agent_id}/access/{creator_id}",
+            f"{_BASE}/{agent_id}/share/members/{creator_id}",
             json={"access_role_id": str(AGENT_VIEWER_ROLE_ID)},
             headers=_auth(context),
         )
@@ -646,7 +597,7 @@ def test_explicit_owner_can_revoke_creator_assignment():
         agent_id = created.json()["id"]
         other_owner, _ = _add_member(context)
         granted = context.client.post(
-            f"{_BASE}/{agent_id}/access",
+            f"{_BASE}/{agent_id}/share/members",
             json={
                 "user_id": str(other_owner.id),
                 "access_role_id": str(AGENT_OWNER_ROLE_ID),
@@ -655,7 +606,7 @@ def test_explicit_owner_can_revoke_creator_assignment():
         )
         there_is_an_access_token_for_user(other_owner.id)(context)
         revoked = context.client.delete(
-            f"{_BASE}/{agent_id}/access/{creator_id}", headers=_auth(context)
+            f"{_BASE}/{agent_id}/share/members/{creator_id}", headers=_auth(context)
         )
         there_is_an_access_token_for_user(creator_id)(context)
         hidden = context.client.get(f"{_BASE}/{agent_id}", headers=_auth(context))
@@ -679,12 +630,12 @@ def test_grant_rejects_missing_or_foreign_access_role():
         repository.delegate.save(foreign_role)
 
         missing = context.client.post(
-            f"{_BASE}/{context.agent.id}/access",
+            f"{_BASE}/{context.agent.id}/share/members",
             json={"user_id": str(target.id), "access_role_id": str(uuid7())},
             headers=_auth(context),
         )
         foreign = context.client.post(
-            f"{_BASE}/{context.agent.id}/access",
+            f"{_BASE}/{context.agent.id}/share/members",
             json={"user_id": str(target.id), "access_role_id": str(foreign_role.id)},
             headers=_auth(context),
         )
@@ -701,17 +652,17 @@ def test_grant_rejects_pending_non_member_and_cross_org_targets():
 
         request_role = {"access_role_id": str(AGENT_EDITOR_ROLE_ID)}
         pending_response = context.client.post(
-            f"{_BASE}/{context.agent.id}/access",
+            f"{_BASE}/{context.agent.id}/share/members",
             json={"user_id": str(pending.id), **request_role},
             headers=_auth(context),
         )
         admin_response = context.client.post(
-            f"{_BASE}/{context.agent.id}/access",
+            f"{_BASE}/{context.agent.id}/share/members",
             json={"user_id": str(admin.id), **request_role},
             headers=_auth(context),
         )
         cross_org_response = context.client.post(
-            f"{_BASE}/{context.agent.id}/access",
+            f"{_BASE}/{context.agent.id}/share/members",
             json={"user_id": str(cross_org.id), **request_role},
             headers=_auth(context),
         )
@@ -725,7 +676,7 @@ def test_removed_membership_cascades_agent_access():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         target, target_membership = _add_member(context)
         granted = context.client.post(
-            f"{_BASE}/{context.agent.id}/access",
+            f"{_BASE}/{context.agent.id}/share/members",
             json={
                 "user_id": str(target.id),
                 "access_role_id": str(AGENT_EDITOR_ROLE_ID),
@@ -766,7 +717,7 @@ def test_membershipless_superuser_can_manage_agent_access_in_explicit_org():
         }
 
         response = context.client.post(
-            f"{_BASE}/{context.agent.id}/access",
+            f"{_BASE}/{context.agent.id}/share/members",
             json={
                 "user_id": str(target.id),
                 "access_role_id": str(AGENT_EDITOR_ROLE_ID),

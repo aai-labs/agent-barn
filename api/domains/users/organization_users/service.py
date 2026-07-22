@@ -166,7 +166,11 @@ class OrganizationUserService:
         )
 
     def list_members(
-        self, context: CurrentUserContext, organization_id: UUID
+        self,
+        context: CurrentUserContext,
+        organization_id: UUID,
+        *,
+        search: str | None = None,
     ) -> list[OrganizationMemberRead]:
         self.permission_policy.require_organization(
             context,
@@ -174,7 +178,9 @@ class OrganizationUserService:
             PermissionKey.MEMBERSHIP_READ,
             detail="You don't have permission to manage this organization's members",
         )
-        rows = self.organization_user_repository.get_members_with_users(organization_id)
+        rows = self.organization_user_repository.get_members_with_users(
+            organization_id, search=search
+        )
         return [
             OrganizationMemberRead(
                 user_id=user.id,

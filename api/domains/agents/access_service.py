@@ -52,51 +52,18 @@ class AgentAccessService:
         self, agent_id: UUID, context: CurrentUserContext
     ) -> list[AgentAccessMemberRead]:
         agent = self._require_manage_access(context, agent_id)
-        assignments = {
-            access.membership_id: access
-            for access in self.repository.find_access_assignments(
-                agent.id, agent.organization_id
-            )
-        }
-        roles = {
-            role.id: self._role_to_read(role, permissions)
-            for role, permissions in self.rbac_repository.list_agent_access_roles(
-                agent.organization_id
-            )
-        }
-        result = []
-        for membership, user in self.membership_repository.get_members_with_users(
-            agent.organization_id
-        ):
-            access = assignments.get(membership.id)
-            if access is None:
-                continue
-            role = roles.get(access.access_role_id)
-            if role is None:
-                continue
-            result.append(self._to_assignment(agent, membership, user, role))
-        return result
+        return self._assigned_members_for_agent(agent)
 
-    def list_eligible_members(
-        self,
-        agent_id: UUID,
-        context: CurrentUserContext,
-        *,
-        search: str | None = None,
-    ) -> list[AgentAccessCandidateRead]:
+    def get_access_settings(
+        self, agent_id: UUID, context: CurrentUserContext
+    ) -> AgentAccessSettingsRead:
         agent = self._require_manage_access(context, agent_id)
-        assigned_ids = self.repository.find_access_membership_ids(
-            agent.id, agent.organization_id
+        return AgentAccessSettingsRead(
+            general_access=AgentGeneralAccessRead(
+                role=self._general_access_role_read(agent)
+            ),
+            assignments=self._assigned_members_for_agent(agent),
         )
-        return [
-            self._to_candidate(agent, membership, user)
-            for membership, user in self.membership_repository.get_members_with_users(
-                agent.organization_id, search=search
-            )
-            if membership.id not in assigned_ids
-            and membership.role == OrganizationRole.MEMBER
-            and user.email_verified_at is not None
-        ]
 
     def grant_access(
         self,
@@ -281,6 +248,32 @@ class AgentAccessService:
             return None
         permissions = self.rbac_repository.get_agent_access_role_permissions(role.id)
         return self._role_to_read(role, permissions)
+
+    def _assigned_members_for_agent(self, agent: Agent) -> list[AgentAccessMemberRead]:
+        assignments = {
+            access.membership_id: access
+            for access in self.repository.find_access_assignments(
+                agent.id, agent.organization_id
+            )
+        }
+        roles = {
+            role.id: self._role_to_read(role, permissions)
+            for role, permissions in self.rbac_repository.list_agent_access_roles(
+                agent.organization_id
+            )
+        }
+        result = []
+        for membership, user in self.membership_repository.get_members_with_users(
+            agent.organization_id
+        ):
+            access = assignments.get(membership.id)
+            if access is None:
+                continue
+            role = roles.get(access.access_role_id)
+            if role is None:
+                continue
+            result.append(self._to_assignment(agent, membership, user, role))
+        return result
 
     def _require_manage_access(
         self, context: CurrentUserContext, agent_id: UUID

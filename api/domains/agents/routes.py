@@ -7,7 +7,6 @@ from fastapi_injector import Injected
 
 from api.domains.agents.access_service import AgentAccessService
 from api.domains.agents.models import (
-    AgentAccessCandidateRead,
     AgentAccessGrantRequest,
     AgentAccessMemberRead,
     AgentAccessRoleRead,
@@ -68,16 +67,18 @@ def list_models(
     return service.list_models(context)
 
 
-@agents_router.get("/access-roles", response_model=list[AgentAccessRoleRead])
-def list_agent_access_roles(
+@agents_router.get("/share-roles", response_model=list[AgentAccessRoleRead])
+def list_agent_share_roles(
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[AgentAccessService, Injected(AgentAccessService)],
 ):
     return service.list_roles(context)
 
 
-@agents_router.get("/{agent_id}/general-access", response_model=AgentGeneralAccessRead)
-def get_agent_general_access(
+@agents_router.get(
+    "/{agent_id}/share/general-access", response_model=AgentGeneralAccessRead
+)
+def get_agent_share_general_access(
     agent_id: UUID,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[AgentAccessService, Injected(AgentAccessService)],
@@ -85,8 +86,10 @@ def get_agent_general_access(
     return service.get_general_access(agent_id, context)
 
 
-@agents_router.put("/{agent_id}/general-access", response_model=AgentGeneralAccessRead)
-def set_agent_general_access(
+@agents_router.put(
+    "/{agent_id}/share/general-access", response_model=AgentGeneralAccessRead
+)
+def set_agent_share_general_access(
     agent_id: UUID,
     data: AgentGeneralAccessUpdate,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
@@ -96,9 +99,9 @@ def set_agent_general_access(
 
 
 @agents_router.delete(
-    "/{agent_id}/general-access", status_code=status.HTTP_204_NO_CONTENT
+    "/{agent_id}/share/general-access", status_code=status.HTTP_204_NO_CONTENT
 )
-def remove_agent_general_access(
+def remove_agent_share_general_access(
     agent_id: UUID,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[AgentAccessService, Injected(AgentAccessService)],
@@ -107,10 +110,17 @@ def remove_agent_general_access(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@agents_router.put(
-    "/{agent_id}/access-settings", response_model=AgentAccessSettingsRead
-)
-def replace_agent_access_settings(
+@agents_router.get("/{agent_id}/share", response_model=AgentAccessSettingsRead)
+def get_agent_share_settings(
+    agent_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentAccessService, Injected(AgentAccessService)],
+):
+    return service.get_access_settings(agent_id, context)
+
+
+@agents_router.put("/{agent_id}/share", response_model=AgentAccessSettingsRead)
+def replace_agent_share_settings(
     agent_id: UUID,
     data: AgentAccessSettingsUpdate,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
@@ -119,8 +129,10 @@ def replace_agent_access_settings(
     return service.replace_access_settings(agent_id, data, context)
 
 
-@agents_router.get("/{agent_id}/access", response_model=list[AgentAccessMemberRead])
-def list_agent_access(
+@agents_router.get(
+    "/{agent_id}/share/members", response_model=list[AgentAccessMemberRead]
+)
+def list_agent_share_members(
     agent_id: UUID,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[AgentAccessService, Injected(AgentAccessService)],
@@ -128,20 +140,8 @@ def list_agent_access(
     return service.list_assigned_members(agent_id, context)
 
 
-@agents_router.get(
-    "/{agent_id}/access/eligible", response_model=list[AgentAccessCandidateRead]
-)
-def list_eligible_agent_access(
-    agent_id: UUID,
-    context: Annotated[CurrentUserContext, Depends(get_current_user())],
-    service: Annotated[AgentAccessService, Injected(AgentAccessService)],
-    search: Annotated[str | None, Query()] = None,
-):
-    return service.list_eligible_members(agent_id, context, search=search)
-
-
-@agents_router.post("/{agent_id}/access", response_model=AgentAccessMemberRead)
-def grant_agent_access(
+@agents_router.post("/{agent_id}/share/members", response_model=AgentAccessMemberRead)
+def grant_agent_share_member(
     agent_id: UUID,
     data: AgentAccessGrantRequest,
     response: Response,
@@ -154,9 +154,9 @@ def grant_agent_access(
 
 
 @agents_router.patch(
-    "/{agent_id}/access/{user_id}", response_model=AgentAccessMemberRead
+    "/{agent_id}/share/members/{user_id}", response_model=AgentAccessMemberRead
 )
-def change_agent_access_role(
+def change_agent_share_member_role(
     agent_id: UUID,
     user_id: UUID,
     data: AgentAccessUpdate,
@@ -167,9 +167,9 @@ def change_agent_access_role(
 
 
 @agents_router.delete(
-    "/{agent_id}/access/{user_id}", status_code=status.HTTP_204_NO_CONTENT
+    "/{agent_id}/share/members/{user_id}", status_code=status.HTTP_204_NO_CONTENT
 )
-def revoke_agent_access(
+def revoke_agent_share_member(
     agent_id: UUID,
     user_id: UUID,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],

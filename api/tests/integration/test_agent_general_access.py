@@ -63,11 +63,11 @@ def _auth(context) -> dict[str, str]:
 
 
 def _general_access_url(agent_id: UUID) -> str:
-    return f"{_BASE}/{agent_id}/general-access"
+    return f"{_BASE}/{agent_id}/share/general-access"
 
 
 def _access_settings_url(agent_id: UUID) -> str:
-    return f"{_BASE}/{agent_id}/access-settings"
+    return f"{_BASE}/{agent_id}/share"
 
 
 def test_general_access_defaults_to_restricted():
@@ -387,7 +387,7 @@ def test_direct_and_general_access_permissions_are_additive():
         detail = context.client.get(f"{_BASE}/{agent_id}", headers=_auth(context))
         there_is_an_access_token_for_user(owner_id)(context)
         revoked = context.client.delete(
-            f"{_BASE}/{agent_id}/access/{member_id}", headers=_auth(context)
+            f"{_BASE}/{agent_id}/share/members/{member_id}", headers=_auth(context)
         )
         there_is_an_access_token_for_user(member_id)(context)
         still_visible = context.client.get(
@@ -485,7 +485,7 @@ def test_access_settings_snapshot_replaces_general_and_direct_access():
             headers=_auth(context),
         )
         assigned = context.client.get(
-            f"{_BASE}/{agent_id}/access", headers=_auth(context)
+            f"{_BASE}/{agent_id}/share/members", headers=_auth(context)
         )
 
         assert_that(response.status_code, equal_to(status.HTTP_200_OK))
@@ -538,7 +538,7 @@ def test_access_settings_rolls_back_when_snapshot_is_invalid():
             _general_access_url(agent_id), headers=_auth(context)
         )
         assigned = context.client.get(
-            f"{_BASE}/{agent_id}/access", headers=_auth(context)
+            f"{_BASE}/{agent_id}/share/members", headers=_auth(context)
         )
 
         assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
