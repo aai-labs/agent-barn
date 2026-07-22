@@ -122,6 +122,12 @@ class OrganizationUserService:
     def _ensure_is_owner(
         self, context: CurrentUserContext, organization_id: UUID
     ) -> None:
+        self.permission_policy.require_organization(
+            context,
+            organization_id,
+            PermissionKey.ORGANIZATION_OWNERSHIP_TRANSFER,
+            detail="Only the organization owner can transfer ownership",
+        )
         context.require_org_role(
             organization_id,
             ORG_OWNER_ONLY_ROLES,

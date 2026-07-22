@@ -297,6 +297,7 @@ def upgrade() -> None:
             JOIN agent ON agent.organization_id = membership.organization_id
             WHERE membership.role = 'MEMBER'::organizationrole
               AND member_user.email_verified_at IS NOT NULL
+              AND agent.deleted_at IS NULL
             ON CONFLICT (membership_id, agent_id) DO NOTHING
             """
         ).bindparams(editor_role_id=AGENT_EDITOR_ROLE_ID)

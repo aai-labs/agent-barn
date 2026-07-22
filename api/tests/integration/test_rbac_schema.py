@@ -513,7 +513,9 @@ def test_upgrade_preserves_membership_roles(legacy_database):
     )
 
 
-def test_upgrade_backfills_only_accepted_members_with_editor(legacy_database):
+def test_upgrade_backfills_only_accepted_members_with_editor_excluding_deleted_agents(
+    legacy_database,
+):
     with legacy_database.engine.connect() as connection:
         actual = set(
             connection.execute(
@@ -531,12 +533,6 @@ def test_upgrade_backfills_only_accepted_members_with_editor(legacy_database):
                 (
                     legacy_database.member_membership,
                     legacy_database.agent_a,
-                    legacy_database.org_a,
-                    AGENT_EDITOR_ROLE_ID,
-                ),
-                (
-                    legacy_database.member_membership,
-                    legacy_database.deleted_agent_a,
                     legacy_database.org_a,
                     AGENT_EDITOR_ROLE_ID,
                 ),

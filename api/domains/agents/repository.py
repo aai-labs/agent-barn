@@ -344,11 +344,13 @@ class AgentRepository:
     ) -> bool:
         with Session(self.delegate.engine) as session:
             access = session.exec(
-                select(AgentAccess).where(
+                select(AgentAccess)
+                .where(
                     col(AgentAccess.agent_id) == agent_id,
                     col(AgentAccess.membership_id) == membership_id,
                     col(AgentAccess.organization_id) == organization_id,
                 )
+                .with_for_update()
             ).first()
             if access is None:
                 return False
