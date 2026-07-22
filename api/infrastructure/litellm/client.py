@@ -197,7 +197,7 @@ class LiteLLMClient:
                 "spend": 0.0, "total_input_tokens": 0, "total_output_tokens": 0, "total_tokens": 0,
                 "daily_spend": {"2026-06-23": 0.01},
                 "models": {
-                    "openrouter/qwen/qwen3.6-plus": {"spend": 0.0, "prompt_tokens": 0, "completion_tokens": 0}
+                    "openrouter/z-ai/glm-5.2": {"spend": 0.0, "prompt_tokens": 0, "completion_tokens": 0}
                 }
             }
         }
