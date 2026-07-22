@@ -11,6 +11,8 @@ from api.domains.agents.models import (
     AgentAccessGrantRequest,
     AgentAccessMemberRead,
     AgentAccessRoleRead,
+    AgentAccessSettingsRead,
+    AgentAccessSettingsUpdate,
     AgentAccessUpdate,
     AgentGeneralAccessRead,
     AgentGeneralAccessUpdate,
@@ -76,7 +78,11 @@ class AgentAccessService:
         return result
 
     def list_eligible_members(
-        self, agent_id: UUID, context: CurrentUserContext
+        self,
+        agent_id: UUID,
+        context: CurrentUserContext,
+        *,
+        search: str | None = None,
     ) -> list[AgentAccessCandidateRead]:
         agent = self._require_manage_access(context, agent_id)
         assigned_ids = self.repository.find_access_membership_ids(
@@ -85,7 +91,7 @@ class AgentAccessService:
         return [
             self._to_candidate(agent, membership, user)
             for membership, user in self.membership_repository.get_members_with_users(
-                agent.organization_id
+                agent.organization_id, search=search
             )
             if membership.id not in assigned_ids
             and membership.role == OrganizationRole.MEMBER
@@ -182,18 +188,11 @@ class AgentAccessService:
         context: CurrentUserContext,
     ) -> AgentGeneralAccessRead:
         agent = self._require_manage_access(context, agent_id)
-        role, role_read = self._require_access_role(
+        role_read = self._require_general_access_role(
             data.access_role_id, agent.organization_id
         )
-        permissions = self.rbac_repository.get_agent_access_role_permissions(role.id)
-        if PermissionKey.AGENT_READ not in permissions:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Agent General Access requires an Agent Access Role that "
-                "grants agent.read",
-            )
         if not self.repository.set_general_access_role(
-            agent.id, agent.organization_id, role.id
+            agent.id, agent.organization_id, data.access_role_id
         ):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -212,6 +211,65 @@ class AgentAccessService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Agent is no longer available",
             )
+
+    def replace_access_settings(
+        self,
+        agent_id: UUID,
+        data: AgentAccessSettingsUpdate,
+        context: CurrentUserContext,
+    ) -> AgentAccessSettingsRead:
+        agent = self._require_manage_access(context, agent_id)
+        general_role_read = self._require_general_access_role(
+            data.general_access_role_id, agent.organization_id
+        )
+
+        seen_user_ids: set[UUID] = set()
+        assignment_roles: dict[UUID, UUID] = {}
+        assignments: list[AgentAccessMemberRead] = []
+        for assignment in data.assignments:
+            if assignment.user_id in seen_user_ids:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Each member can appear only once in Agent access settings",
+                )
+            seen_user_ids.add(assignment.user_id)
+            role, role_read = self._require_access_role(
+                assignment.access_role_id, agent.organization_id
+            )
+            membership, user = self._require_accepted_member(
+                assignment.user_id, agent.organization_id
+            )
+            assignment_roles[membership.id] = role.id
+            assignments.append(self._to_assignment(agent, membership, user, role_read))
+
+        if not self.repository.replace_access_settings(
+            agent.id,
+            agent.organization_id,
+            general_access_role_id=data.general_access_role_id,
+            assignment_roles=assignment_roles,
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Agent or member is no longer available",
+            )
+        return AgentAccessSettingsRead(
+            general_access=AgentGeneralAccessRead(role=general_role_read),
+            assignments=assignments,
+        )
+
+    def _require_general_access_role(
+        self, role_id: UUID | None, organization_id: UUID
+    ) -> AgentAccessRoleRead | None:
+        if role_id is None:
+            return None
+        role, role_read = self._require_access_role(role_id, organization_id)
+        permissions = self.rbac_repository.get_agent_access_role_permissions(role.id)
+        if PermissionKey.AGENT_READ not in permissions:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Agent General Access requires an Agent Access Role that grants agent.read",
+            )
+        return role_read
 
     def _general_access_role_read(self, agent: Agent) -> AgentAccessRoleRead | None:
         if agent.general_access_role_id is None:

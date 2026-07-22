@@ -11,6 +11,8 @@ from api.domains.agents.models import (
     AgentAccessGrantRequest,
     AgentAccessMemberRead,
     AgentAccessRoleRead,
+    AgentAccessSettingsRead,
+    AgentAccessSettingsUpdate,
     AgentAccessUpdate,
     AgentCreate,
     AgentFilter,
@@ -105,6 +107,18 @@ def remove_agent_general_access(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+@agents_router.put(
+    "/{agent_id}/access-settings", response_model=AgentAccessSettingsRead
+)
+def replace_agent_access_settings(
+    agent_id: UUID,
+    data: AgentAccessSettingsUpdate,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentAccessService, Injected(AgentAccessService)],
+):
+    return service.replace_access_settings(agent_id, data, context)
+
+
 @agents_router.get("/{agent_id}/access", response_model=list[AgentAccessMemberRead])
 def list_agent_access(
     agent_id: UUID,
@@ -121,8 +135,9 @@ def list_eligible_agent_access(
     agent_id: UUID,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[AgentAccessService, Injected(AgentAccessService)],
+    search: Annotated[str | None, Query()] = None,
 ):
-    return service.list_eligible_members(agent_id, context)
+    return service.list_eligible_members(agent_id, context, search=search)
 
 
 @agents_router.post("/{agent_id}/access", response_model=AgentAccessMemberRead)

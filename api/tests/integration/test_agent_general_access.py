@@ -66,6 +66,10 @@ def _general_access_url(agent_id: UUID) -> str:
     return f"{_BASE}/{agent_id}/general-access"
 
 
+def _access_settings_url(agent_id: UUID) -> str:
+    return f"{_BASE}/{agent_id}/access-settings"
+
+
 def test_general_access_defaults_to_restricted():
     with given(_GIVEN) as context:
         response = context.client.get(
@@ -126,6 +130,31 @@ def _switch_to_member(context, *, email_verified: bool = True) -> None:
         email_verified=email_verified,
     )(context)
     there_is_an_access_token_for_user(member_id)(context)
+
+
+def _add_target_member(context, *, email_verified: bool = True):
+    saved = {
+        name: getattr(context, name, None)
+        for name in (
+            "user",
+            "organization",
+            "organization_user",
+            "current_user_context",
+        )
+    }
+    member_id = uuid7()
+    there_is_a_user(
+        id=member_id,
+        email=f"target-{member_id}@example.com",
+        role=OrganizationRole.MEMBER,
+        organization_id=context.organization.id,
+        email_verified=email_verified,
+    )(context)
+    member = context.user
+    membership = context.organization_user
+    for name, value in saved.items():
+        setattr(context, name, value)
+    return member, membership
 
 
 def test_member_without_access_manage_cannot_read_or_change_general_access():
@@ -425,3 +454,121 @@ def test_removing_general_access_leaves_direct_access_intact():
 
         assert_that(removed_general.status_code, equal_to(status.HTTP_204_NO_CONTENT))
         assert_that(still_editable.status_code, equal_to(status.HTTP_200_OK))
+
+
+def test_access_settings_snapshot_replaces_general_and_direct_access():
+    with given(_GIVEN) as context:
+        agent_id = context.agent.id
+        first_member, first_membership = _add_target_member(context)
+        second_member, _ = _add_target_member(context)
+        repository: AgentRepository = context.injector.get(AgentRepository)
+        repository.delegate.save(
+            AgentAccess(
+                organization_id=context.organization.id,
+                membership_id=first_membership.id,
+                agent_id=agent_id,
+                access_role_id=AGENT_EDITOR_ROLE_ID,
+            )
+        )
+
+        response = context.client.put(
+            _access_settings_url(agent_id),
+            json={
+                "general_access_role_id": str(AGENT_VIEWER_ROLE_ID),
+                "assignments": [
+                    {
+                        "user_id": str(second_member.id),
+                        "access_role_id": str(AGENT_EDITOR_ROLE_ID),
+                    }
+                ],
+            },
+            headers=_auth(context),
+        )
+        assigned = context.client.get(
+            f"{_BASE}/{agent_id}/access", headers=_auth(context)
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(
+            response.json()["general_access"]["role"]["id"],
+            equal_to(str(AGENT_VIEWER_ROLE_ID)),
+        )
+        assert_that(
+            [item["user_id"] for item in response.json()["assignments"]],
+            contains_inanyorder(str(second_member.id)),
+        )
+        assert_that(
+            [item["user_id"] for item in assigned.json()],
+            contains_inanyorder(str(second_member.id)),
+        )
+        assert_that(
+            [item["user_id"] for item in assigned.json()],
+            is_not(has_item(str(first_member.id))),
+        )
+
+
+def test_access_settings_rolls_back_when_snapshot_is_invalid():
+    with given(_GIVEN) as context:
+        agent_id = context.agent.id
+        member, membership = _add_target_member(context)
+        repository: AgentRepository = context.injector.get(AgentRepository)
+        repository.delegate.save(
+            AgentAccess(
+                organization_id=context.organization.id,
+                membership_id=membership.id,
+                agent_id=agent_id,
+                access_role_id=AGENT_VIEWER_ROLE_ID,
+            )
+        )
+
+        response = context.client.put(
+            _access_settings_url(agent_id),
+            json={
+                "general_access_role_id": str(AGENT_EDITOR_ROLE_ID),
+                "assignments": [
+                    {
+                        "user_id": str(uuid7()),
+                        "access_role_id": str(AGENT_EDITOR_ROLE_ID),
+                    }
+                ],
+            },
+            headers=_auth(context),
+        )
+        general_access = context.client.get(
+            _general_access_url(agent_id), headers=_auth(context)
+        )
+        assigned = context.client.get(
+            f"{_BASE}/{agent_id}/access", headers=_auth(context)
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+        assert_that(general_access.json()["role"], none())
+        assert_that(
+            [item["user_id"] for item in assigned.json()],
+            contains_inanyorder(str(member.id)),
+        )
+
+
+def test_access_settings_rejects_duplicate_assignment_users():
+    with given(_GIVEN) as context:
+        member, _ = _add_target_member(context)
+
+        response = context.client.put(
+            _access_settings_url(context.agent.id),
+            json={
+                "general_access_role_id": None,
+                "assignments": [
+                    {
+                        "user_id": str(member.id),
+                        "access_role_id": str(AGENT_VIEWER_ROLE_ID),
+                    },
+                    {
+                        "user_id": str(member.id),
+                        "access_role_id": str(AGENT_EDITOR_ROLE_ID),
+                    },
+                ],
+            },
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))

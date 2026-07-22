@@ -594,6 +594,21 @@ class AgentGeneralAccessUpdate(PydanticBaseModel):
     access_role_id: UUID
 
 
+class AgentAccessSettingsAssignmentUpdate(PydanticBaseModel):
+    user_id: UUID
+    access_role_id: UUID
+
+
+class AgentAccessSettingsUpdate(PydanticBaseModel):
+    general_access_role_id: UUID | None = None
+    assignments: list[AgentAccessSettingsAssignmentUpdate] = Field(default_factory=list)
+
+
+class AgentAccessSettingsRead(PydanticBaseModel):
+    general_access: AgentGeneralAccessRead
+    assignments: list[AgentAccessMemberRead]
+
+
 class AgentAssignedSkillRead(PydanticBaseModel):
     model_config = ConfigDict(from_attributes=True)
 

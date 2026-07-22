@@ -23,7 +23,11 @@ from api.domains.rbac.catalog import (
     PERMISSION_ID_BY_KEY,
     PermissionKey,
 )
-from api.domains.rbac.models import AgentAccessRolePermission, Permission
+from api.domains.rbac.models import (
+    AgentAccessRole,
+    AgentAccessRolePermission,
+    Permission,
+)
 from api.domains.rbac.policy import AuthorizationScope
 from api.domains.users.organization_users.models import OrganizationUser
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
@@ -196,6 +200,22 @@ class AgentRepository:
         access_role_id: UUID | None,
     ) -> bool:
         """Set or clear Agent General Access; False means the Agent disappeared."""
+        return self.replace_access_settings(
+            agent_id,
+            organization_id,
+            general_access_role_id=access_role_id,
+            assignment_roles=None,
+        )
+
+    def replace_access_settings(
+        self,
+        agent_id: UUID,
+        organization_id: UUID,
+        *,
+        general_access_role_id: UUID | None,
+        assignment_roles: dict[UUID, UUID] | None,
+    ) -> bool:
+        """Replace General Access and optionally explicit assignments atomically."""
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             agent = session.exec(
                 select(Agent)
@@ -208,8 +228,73 @@ class AgentRepository:
             ).first()
             if agent is None:
                 return False
-            agent.general_access_role_id = access_role_id
+
+            desired_role_ids = (
+                set(assignment_roles.values()) if assignment_roles else set()
+            )
+            if general_access_role_id is not None:
+                desired_role_ids.add(general_access_role_id)
+            if desired_role_ids:
+                existing_role_ids = set(
+                    session.exec(
+                        select(AgentAccessRole.id)
+                        .where(col(AgentAccessRole.id).in_(desired_role_ids))
+                        .with_for_update()
+                    ).all()
+                )
+                if existing_role_ids != desired_role_ids:
+                    return False
+
+            if assignment_roles:
+                existing_membership_ids = set(
+                    session.exec(
+                        select(OrganizationUser.id)
+                        .where(
+                            col(OrganizationUser.id).in_(set(assignment_roles)),
+                            col(OrganizationUser.organization_id) == organization_id,
+                        )
+                        .with_for_update()
+                    ).all()
+                )
+                if existing_membership_ids != set(assignment_roles):
+                    return False
+
+            agent.general_access_role_id = general_access_role_id
             session.add(agent)
+
+            if assignment_roles is not None:
+                existing_access = session.exec(
+                    select(AgentAccess)
+                    .where(
+                        col(AgentAccess.agent_id) == agent_id,
+                        col(AgentAccess.organization_id) == organization_id,
+                    )
+                    .with_for_update()
+                ).all()
+                existing_by_membership = {
+                    access.membership_id: access for access in existing_access
+                }
+                desired_membership_ids = set(assignment_roles)
+
+                for membership_id, access in existing_by_membership.items():
+                    if membership_id not in desired_membership_ids:
+                        session.delete(access)
+
+                for membership_id, access_role_id in assignment_roles.items():
+                    access = existing_by_membership.get(membership_id)
+                    if access is None:
+                        session.add(
+                            AgentAccess(
+                                organization_id=organization_id,
+                                membership_id=membership_id,
+                                agent_id=agent_id,
+                                access_role_id=access_role_id,
+                            )
+                        )
+                    else:
+                        access.access_role_id = access_role_id
+                        session.add(access)
+
             session.commit()
             return True
 

@@ -103,6 +103,8 @@ def _add_member(
     role: OrganizationRole = OrganizationRole.MEMBER,
     email_verified: bool = True,
     organization_id: UUID | None = None,
+    full_name: str = "Test User",
+    email: str | None = None,
 ):
     """Create a target Membership without replacing the authenticated test actor."""
     saved = {
@@ -116,8 +118,9 @@ def _add_member(
     }
     user_id = uuid7()
     there_is_a_user(
+        name=full_name,
         id=user_id,
-        email=f"target-{user_id}@example.com",
+        email=email or f"target-{user_id}@example.com",
         role=role,
         organization_id=organization_id or context.organization.id,
         email_verified=email_verified,
@@ -443,6 +446,48 @@ def test_owner_lists_grants_idempotently_and_revokes_agent_access():
         assert_that(visible.status_code, equal_to(status.HTTP_200_OK))
         assert_that(revoked.status_code, equal_to(status.HTTP_204_NO_CONTENT))
         assert_that(hidden.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_eligible_access_search_filters_by_name_and_email():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        agent_id = context.agent.id
+        _add_member(context, full_name="Ada Lovelace", email="ada@example.com")
+        _add_member(context, full_name="Grace Hopper", email="grace@example.com")
+
+        by_name = context.client.get(
+            f"{_BASE}/{agent_id}/access/eligible",
+            params={"search": "ada"},
+            headers=_auth(context),
+        )
+        by_email = context.client.get(
+            f"{_BASE}/{agent_id}/access/eligible",
+            params={"search": "GRACE@EXAMPLE"},
+            headers=_auth(context),
+        )
+        no_match = context.client.get(
+            f"{_BASE}/{agent_id}/access/eligible",
+            params={"search": "nonexistent"},
+            headers=_auth(context),
+        )
+        unfiltered = context.client.get(
+            f"{_BASE}/{agent_id}/access/eligible", headers=_auth(context)
+        )
+
+        assert_that(by_name.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(
+            [item["full_name"] for item in by_name.json()], equal_to(["Ada Lovelace"])
+        )
+        assert_that(by_email.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(
+            [item["full_name"] for item in by_email.json()],
+            equal_to(["Grace Hopper"]),
+        )
+        assert_that(no_match.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(no_match.json(), equal_to([]))
+        assert_that(
+            [item["full_name"] for item in unfiltered.json()],
+            contains_inanyorder("Ada Lovelace", "Grace Hopper"),
+        )
 
 
 def test_role_change_takes_effect_on_the_next_request():
