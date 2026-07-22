@@ -564,15 +564,6 @@ class AgentAccessRoleRead(PydanticBaseModel):
     is_locked: bool
 
 
-class AgentAccessGrantRequest(PydanticBaseModel):
-    user_id: UUID
-    access_role_id: UUID
-
-
-class AgentAccessUpdate(PydanticBaseModel):
-    access_role_id: UUID
-
-
 class AgentAccessCandidateRead(PydanticBaseModel):
     user_id: UUID
     email: str
@@ -588,10 +579,6 @@ class AgentAccessMemberRead(AgentAccessCandidateRead):
 
 class AgentGeneralAccessRead(PydanticBaseModel):
     role: AgentAccessRoleRead | None
-
-
-class AgentGeneralAccessUpdate(PydanticBaseModel):
-    access_role_id: UUID
 
 
 class AgentAccessSettingsAssignmentUpdate(PydanticBaseModel):

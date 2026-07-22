@@ -62,10 +62,6 @@ def _auth(context) -> dict[str, str]:
     return {"Authorization": f"Bearer {context.access_token}"}
 
 
-def _general_access_url(agent_id: UUID) -> str:
-    return f"{_BASE}/{agent_id}/share/general-access"
-
-
 def _access_settings_url(agent_id: UUID) -> str:
     return f"{_BASE}/{agent_id}/share"
 
@@ -73,47 +69,54 @@ def _access_settings_url(agent_id: UUID) -> str:
 def test_general_access_defaults_to_restricted():
     with given(_GIVEN) as context:
         response = context.client.get(
-            _general_access_url(context.agent.id), headers=_auth(context)
+            _access_settings_url(context.agent.id), headers=_auth(context)
         )
 
         assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-        assert_that(response.json()["role"], none())
+        assert_that(response.json()["general_access"]["role"], none())
 
 
 def test_owner_sets_changes_and_removes_general_access():
     with given(_GIVEN) as context:
         set_response = context.client.put(
-            _general_access_url(context.agent.id),
-            json={"access_role_id": str(AGENT_VIEWER_ROLE_ID)},
+            _access_settings_url(context.agent.id),
+            json={
+                "general_access_role_id": str(AGENT_VIEWER_ROLE_ID),
+                "assignments": [],
+            },
             headers=_auth(context),
         )
 
         assert_that(set_response.status_code, equal_to(status.HTTP_200_OK))
-        role = set_response.json()["role"]
+        role = set_response.json()["general_access"]["role"]
         assert_that(role["id"], equal_to(str(AGENT_VIEWER_ROLE_ID)))
         assert_that(role["name"], equal_to("VIEWER"))
         assert_that(role["is_locked"], equal_to(True))
 
         read_response = context.client.get(
-            _general_access_url(context.agent.id), headers=_auth(context)
+            _access_settings_url(context.agent.id), headers=_auth(context)
         )
-        assert_that(read_response.json()["role"]["id"], equal_to(role["id"]))
+        assert_that(
+            read_response.json()["general_access"]["role"]["id"], equal_to(role["id"])
+        )
 
-        removed = context.client.delete(
-            _general_access_url(context.agent.id), headers=_auth(context)
+        removed = context.client.put(
+            _access_settings_url(context.agent.id),
+            json={"general_access_role_id": None, "assignments": []},
+            headers=_auth(context),
         )
-        assert_that(removed.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+        assert_that(removed.status_code, equal_to(status.HTTP_200_OK))
         restricted = context.client.get(
-            _general_access_url(context.agent.id), headers=_auth(context)
+            _access_settings_url(context.agent.id), headers=_auth(context)
         )
-        assert_that(restricted.json()["role"], none())
+        assert_that(restricted.json()["general_access"]["role"], none())
 
 
 def test_general_access_rejects_unknown_role():
     with given(_GIVEN) as context:
         response = context.client.put(
-            _general_access_url(context.agent.id),
-            json={"access_role_id": str(uuid7())},
+            _access_settings_url(context.agent.id),
+            json={"general_access_role_id": str(uuid7()), "assignments": []},
             headers=_auth(context),
         )
 
@@ -172,20 +175,18 @@ def test_member_without_access_manage_cannot_read_or_change_general_access():
         )
 
         read_response = context.client.get(
-            _general_access_url(agent_id), headers=_auth(context)
+            _access_settings_url(agent_id), headers=_auth(context)
         )
         set_response = context.client.put(
-            _general_access_url(agent_id),
-            json={"access_role_id": str(AGENT_VIEWER_ROLE_ID)},
+            _access_settings_url(agent_id),
+            json={
+                "general_access_role_id": str(AGENT_VIEWER_ROLE_ID),
+                "assignments": [],
+            },
             headers=_auth(context),
         )
-        delete_response = context.client.delete(
-            _general_access_url(agent_id), headers=_auth(context)
-        )
-
         assert_that(read_response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
         assert_that(set_response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
-        assert_that(delete_response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
 def test_unassigned_member_cannot_discover_general_access():
@@ -194,7 +195,7 @@ def test_unassigned_member_cannot_discover_general_access():
         _switch_to_member(context)
 
         response = context.client.get(
-            _general_access_url(agent_id), headers=_auth(context)
+            _access_settings_url(agent_id), headers=_auth(context)
         )
 
         assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
@@ -232,8 +233,8 @@ def test_general_access_rejects_foreign_custom_role():
         )
 
         response = context.client.put(
-            _general_access_url(context.agent.id),
-            json={"access_role_id": str(foreign_role.id)},
+            _access_settings_url(context.agent.id),
+            json={"general_access_role_id": str(foreign_role.id), "assignments": []},
             headers=_auth(context),
         )
 
@@ -254,27 +255,33 @@ def test_general_access_requires_role_granting_agent_read():
         )
 
         rejected = context.client.put(
-            _general_access_url(context.agent.id),
-            json={"access_role_id": str(readless_role.id)},
+            _access_settings_url(context.agent.id),
+            json={"general_access_role_id": str(readless_role.id), "assignments": []},
             headers=_auth(context),
         )
         accepted = context.client.put(
-            _general_access_url(context.agent.id),
-            json={"access_role_id": str(readable_role.id)},
+            _access_settings_url(context.agent.id),
+            json={"general_access_role_id": str(readable_role.id), "assignments": []},
             headers=_auth(context),
         )
 
         assert_that(rejected.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
         assert_that(accepted.status_code, equal_to(status.HTTP_200_OK))
-        assert_that(accepted.json()["role"]["id"], equal_to(str(readable_role.id)))
+        assert_that(
+            accepted.json()["general_access"]["role"]["id"],
+            equal_to(str(readable_role.id)),
+        )
 
 
 def test_general_access_makes_agent_visible_with_role_permissions():
     with given(_GIVEN) as context:
         agent_id = context.agent.id
         context.client.put(
-            _general_access_url(agent_id),
-            json={"access_role_id": str(AGENT_VIEWER_ROLE_ID)},
+            _access_settings_url(agent_id),
+            json={
+                "general_access_role_id": str(AGENT_VIEWER_ROLE_ID),
+                "assignments": [],
+            },
             headers=_auth(context),
         )
         _switch_to_member(context)
@@ -312,8 +319,11 @@ def test_general_access_scopes_subordinate_agent_resources():
         there_is_an_agent(name="Restricted Agent")(context)
         restricted_agent = context.agent
         context.client.put(
-            _general_access_url(general_agent.id),
-            json={"access_role_id": str(AGENT_VIEWER_ROLE_ID)},
+            _access_settings_url(general_agent.id),
+            json={
+                "general_access_role_id": str(AGENT_VIEWER_ROLE_ID),
+                "assignments": [],
+            },
             headers=_auth(context),
         )
         _switch_to_member(context)
@@ -343,8 +353,11 @@ def test_pending_members_do_not_receive_general_access():
     with given(_GIVEN) as context:
         agent_id = context.agent.id
         context.client.put(
-            _general_access_url(agent_id),
-            json={"access_role_id": str(AGENT_VIEWER_ROLE_ID)},
+            _access_settings_url(agent_id),
+            json={
+                "general_access_role_id": str(AGENT_VIEWER_ROLE_ID),
+                "assignments": [],
+            },
             headers=_auth(context),
         )
         _switch_to_member(context, email_verified=False)
@@ -362,8 +375,11 @@ def test_direct_and_general_access_permissions_are_additive():
         owner_id = context.user.id
         agent_id = context.agent.id
         context.client.put(
-            _general_access_url(agent_id),
-            json={"access_role_id": str(AGENT_VIEWER_ROLE_ID)},
+            _access_settings_url(agent_id),
+            json={
+                "general_access_role_id": str(AGENT_VIEWER_ROLE_ID),
+                "assignments": [],
+            },
             headers=_auth(context),
         )
         _switch_to_member(context)
@@ -386,8 +402,13 @@ def test_direct_and_general_access_permissions_are_additive():
         )
         detail = context.client.get(f"{_BASE}/{agent_id}", headers=_auth(context))
         there_is_an_access_token_for_user(owner_id)(context)
-        revoked = context.client.delete(
-            f"{_BASE}/{agent_id}/share/members/{member_id}", headers=_auth(context)
+        revoked = context.client.put(
+            _access_settings_url(agent_id),
+            json={
+                "general_access_role_id": str(AGENT_VIEWER_ROLE_ID),
+                "assignments": [],
+            },
+            headers=_auth(context),
         )
         there_is_an_access_token_for_user(member_id)(context)
         still_visible = context.client.get(
@@ -404,7 +425,7 @@ def test_direct_and_general_access_permissions_are_additive():
             detail.json()["allowed_actions"],
             has_item(PermissionKey.AGENT_UPDATE.value),
         )
-        assert_that(revoked.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+        assert_that(revoked.status_code, equal_to(status.HTTP_200_OK))
         assert_that(still_visible.status_code, equal_to(status.HTTP_200_OK))
         assert_that(
             still_visible.json()["allowed_actions"],
@@ -425,8 +446,11 @@ def test_removing_general_access_leaves_direct_access_intact():
         owner_id = context.user.id
         agent_id = context.agent.id
         context.client.put(
-            _general_access_url(agent_id),
-            json={"access_role_id": str(AGENT_VIEWER_ROLE_ID)},
+            _access_settings_url(agent_id),
+            json={
+                "general_access_role_id": str(AGENT_VIEWER_ROLE_ID),
+                "assignments": [],
+            },
             headers=_auth(context),
         )
         _switch_to_member(context)
@@ -441,8 +465,18 @@ def test_removing_general_access_leaves_direct_access_intact():
             )
         )
         there_is_an_access_token_for_user(owner_id)(context)
-        removed_general = context.client.delete(
-            _general_access_url(agent_id), headers=_auth(context)
+        removed_general = context.client.put(
+            _access_settings_url(agent_id),
+            json={
+                "general_access_role_id": None,
+                "assignments": [
+                    {
+                        "user_id": str(member_id),
+                        "access_role_id": str(AGENT_EDITOR_ROLE_ID),
+                    }
+                ],
+            },
+            headers=_auth(context),
         )
         there_is_an_access_token_for_user(member_id)(context)
 
@@ -452,7 +486,7 @@ def test_removing_general_access_leaves_direct_access_intact():
             headers=_auth(context),
         )
 
-        assert_that(removed_general.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+        assert_that(removed_general.status_code, equal_to(status.HTTP_200_OK))
         assert_that(still_editable.status_code, equal_to(status.HTTP_200_OK))
 
 
@@ -485,7 +519,7 @@ def test_access_settings_snapshot_replaces_general_and_direct_access():
             headers=_auth(context),
         )
         assigned = context.client.get(
-            f"{_BASE}/{agent_id}/share/members", headers=_auth(context)
+            _access_settings_url(agent_id), headers=_auth(context)
         )
 
         assert_that(response.status_code, equal_to(status.HTTP_200_OK))
@@ -498,11 +532,11 @@ def test_access_settings_snapshot_replaces_general_and_direct_access():
             contains_inanyorder(str(second_member.id)),
         )
         assert_that(
-            [item["user_id"] for item in assigned.json()],
+            [item["user_id"] for item in assigned.json()["assignments"]],
             contains_inanyorder(str(second_member.id)),
         )
         assert_that(
-            [item["user_id"] for item in assigned.json()],
+            [item["user_id"] for item in assigned.json()["assignments"]],
             is_not(has_item(str(first_member.id))),
         )
 
@@ -535,16 +569,16 @@ def test_access_settings_rolls_back_when_snapshot_is_invalid():
             headers=_auth(context),
         )
         general_access = context.client.get(
-            _general_access_url(agent_id), headers=_auth(context)
+            _access_settings_url(agent_id), headers=_auth(context)
         )
         assigned = context.client.get(
-            f"{_BASE}/{agent_id}/share/members", headers=_auth(context)
+            _access_settings_url(agent_id), headers=_auth(context)
         )
 
         assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
-        assert_that(general_access.json()["role"], none())
+        assert_that(general_access.json()["general_access"]["role"], none())
         assert_that(
-            [item["user_id"] for item in assigned.json()],
+            [item["user_id"] for item in assigned.json()["assignments"]],
             contains_inanyorder(str(member.id)),
         )
 

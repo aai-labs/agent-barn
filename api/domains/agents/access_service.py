@@ -8,14 +8,11 @@ from api.domains.agents.authorization import AgentAuthorization
 from api.domains.agents.models import (
     Agent,
     AgentAccessCandidateRead,
-    AgentAccessGrantRequest,
     AgentAccessMemberRead,
     AgentAccessRoleRead,
     AgentAccessSettingsRead,
     AgentAccessSettingsUpdate,
-    AgentAccessUpdate,
     AgentGeneralAccessRead,
-    AgentGeneralAccessUpdate,
 )
 from api.domains.agents.repository import AgentRepository
 from api.domains.auth.models import CurrentUserContext
@@ -48,12 +45,6 @@ class AgentAccessService:
             )
         ]
 
-    def list_assigned_members(
-        self, agent_id: UUID, context: CurrentUserContext
-    ) -> list[AgentAccessMemberRead]:
-        agent = self._require_manage_access(context, agent_id)
-        return self._assigned_members_for_agent(agent)
-
     def get_access_settings(
         self, agent_id: UUID, context: CurrentUserContext
     ) -> AgentAccessSettingsRead:
@@ -64,120 +55,6 @@ class AgentAccessService:
             ),
             assignments=self._assigned_members_for_agent(agent),
         )
-
-    def grant_access(
-        self,
-        agent_id: UUID,
-        data: AgentAccessGrantRequest,
-        context: CurrentUserContext,
-    ) -> tuple[AgentAccessMemberRead, bool]:
-        agent = self._require_manage_access(context, agent_id)
-        role, role_read = self._require_access_role(
-            data.access_role_id, agent.organization_id
-        )
-        membership, user = self._require_accepted_member(
-            data.user_id, agent.organization_id
-        )
-
-        result = self.repository.grant_access(
-            agent.id,
-            membership.id,
-            agent.organization_id,
-            role.id,
-        )
-        if result is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Agent or member is no longer available",
-            )
-        access, created = result
-        if not created and access.access_role_id != role.id:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Agent Access already exists with a different role",
-            )
-        return self._to_assignment(agent, membership, user, role_read), created
-
-    def change_access_role(
-        self,
-        agent_id: UUID,
-        user_id: UUID,
-        data: AgentAccessUpdate,
-        context: CurrentUserContext,
-    ) -> AgentAccessMemberRead:
-        agent = self._require_manage_access(context, agent_id)
-        role, role_read = self._require_access_role(
-            data.access_role_id, agent.organization_id
-        )
-        membership, user = self._require_target_member(user_id, agent.organization_id)
-        access = self.repository.change_access_role(
-            agent.id,
-            membership.id,
-            agent.organization_id,
-            role.id,
-        )
-        if access is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Agent Access not found",
-            )
-        return self._to_assignment(agent, membership, user, role_read)
-
-    def revoke_access(
-        self, agent_id: UUID, user_id: UUID, context: CurrentUserContext
-    ) -> None:
-        agent = self._require_manage_access(context, agent_id)
-        membership, _ = self._require_target_member(user_id, agent.organization_id)
-        # No "last explicit Agent Owner" guard: Org Owner/Admin always retain
-        # implicit access (agent_scope_predicates skips the AgentAccess EXISTS
-        # check for them, see AgentAuthorization._scope), so revoking the last
-        # explicit Owner row can't lock an agent out, only require an Org
-        # Owner/Admin to re-grant it. Revisit if AF-216 custom roles change
-        # what "implicit Owner/Admin" authority means.
-        if not self.repository.revoke_access(
-            agent.id, membership.id, agent.organization_id
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Agent Access not found",
-            )
-
-    def get_general_access(
-        self, agent_id: UUID, context: CurrentUserContext
-    ) -> AgentGeneralAccessRead:
-        agent = self._require_manage_access(context, agent_id)
-        return AgentGeneralAccessRead(role=self._general_access_role_read(agent))
-
-    def set_general_access(
-        self,
-        agent_id: UUID,
-        data: AgentGeneralAccessUpdate,
-        context: CurrentUserContext,
-    ) -> AgentGeneralAccessRead:
-        agent = self._require_manage_access(context, agent_id)
-        role_read = self._require_general_access_role(
-            data.access_role_id, agent.organization_id
-        )
-        if not self.repository.set_general_access_role(
-            agent.id, agent.organization_id, data.access_role_id
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Agent is no longer available",
-            )
-        return AgentGeneralAccessRead(role=role_read)
-
-    def remove_general_access(
-        self, agent_id: UUID, context: CurrentUserContext
-    ) -> None:
-        agent = self._require_manage_access(context, agent_id)
-        if not self.repository.set_general_access_role(
-            agent.id, agent.organization_id, None
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Agent is no longer available",
-            )
 
     def replace_access_settings(
         self,
