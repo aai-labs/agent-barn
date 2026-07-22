@@ -14,6 +14,8 @@ from api.domains.agents.models import (
     AgentAccessUpdate,
     AgentCreate,
     AgentFilter,
+    AgentGeneralAccessRead,
+    AgentGeneralAccessUpdate,
     AgentHealthRead,
     AgentLogHistoryRead,
     AgentLogsRead,
@@ -70,6 +72,37 @@ def list_agent_access_roles(
     service: Annotated[AgentAccessService, Injected(AgentAccessService)],
 ):
     return service.list_roles(context)
+
+
+@agents_router.get("/{agent_id}/general-access", response_model=AgentGeneralAccessRead)
+def get_agent_general_access(
+    agent_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentAccessService, Injected(AgentAccessService)],
+):
+    return service.get_general_access(agent_id, context)
+
+
+@agents_router.put("/{agent_id}/general-access", response_model=AgentGeneralAccessRead)
+def set_agent_general_access(
+    agent_id: UUID,
+    data: AgentGeneralAccessUpdate,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentAccessService, Injected(AgentAccessService)],
+):
+    return service.set_general_access(agent_id, data, context)
+
+
+@agents_router.delete(
+    "/{agent_id}/general-access", status_code=status.HTTP_204_NO_CONTENT
+)
+def remove_agent_general_access(
+    agent_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentAccessService, Injected(AgentAccessService)],
+):
+    service.remove_general_access(agent_id, context)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @agents_router.get("/{agent_id}/access", response_model=list[AgentAccessMemberRead])

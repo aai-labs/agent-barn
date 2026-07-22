@@ -12,6 +12,8 @@ from api.domains.agents.models import (
     AgentAccessMemberRead,
     AgentAccessRoleRead,
     AgentAccessUpdate,
+    AgentGeneralAccessRead,
+    AgentGeneralAccessUpdate,
 )
 from api.domains.agents.repository import AgentRepository
 from api.domains.auth.models import CurrentUserContext
@@ -160,6 +162,61 @@ class AgentAccessService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Agent Access not found",
             )
+
+    def get_general_access(
+        self, agent_id: UUID, context: CurrentUserContext
+    ) -> AgentGeneralAccessRead:
+        agent = self._require_manage_access(context, agent_id)
+        return AgentGeneralAccessRead(role=self._general_access_role_read(agent))
+
+    def set_general_access(
+        self,
+        agent_id: UUID,
+        data: AgentGeneralAccessUpdate,
+        context: CurrentUserContext,
+    ) -> AgentGeneralAccessRead:
+        agent = self._require_manage_access(context, agent_id)
+        role, role_read = self._require_access_role(
+            data.access_role_id, agent.organization_id
+        )
+        permissions = self.rbac_repository.get_agent_access_role_permissions(role.id)
+        if PermissionKey.AGENT_READ not in permissions:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Agent General Access requires an Agent Access Role that "
+                "grants agent.read",
+            )
+        if not self.repository.set_general_access_role(
+            agent.id, agent.organization_id, role.id
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Agent is no longer available",
+            )
+        return AgentGeneralAccessRead(role=role_read)
+
+    def remove_general_access(
+        self, agent_id: UUID, context: CurrentUserContext
+    ) -> None:
+        agent = self._require_manage_access(context, agent_id)
+        if not self.repository.set_general_access_role(
+            agent.id, agent.organization_id, None
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Agent is no longer available",
+            )
+
+    def _general_access_role_read(self, agent: Agent) -> AgentAccessRoleRead | None:
+        if agent.general_access_role_id is None:
+            return None
+        role = self.rbac_repository.get_agent_access_role(
+            agent.general_access_role_id, agent.organization_id
+        )
+        if role is None:
+            return None
+        permissions = self.rbac_repository.get_agent_access_role_permissions(role.id)
+        return self._role_to_read(role, permissions)
 
     def _require_manage_access(
         self, context: CurrentUserContext, agent_id: UUID

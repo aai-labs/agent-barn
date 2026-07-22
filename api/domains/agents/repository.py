@@ -3,7 +3,7 @@ from datetime import datetime
 from uuid import UUID
 
 from injector import inject, singleton
-from sqlalchemy import exists, func
+from sqlalchemy import exists, func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
@@ -42,17 +42,24 @@ def agent_scope_predicates(
     if authorization_scope.membership_id is not None:
         if authorization_scope.permission is None:
             raise ValueError("Explicit Agent visibility requires a Permission")
-        predicates.append(
-            exists().where(
-                col(AgentAccess.agent_id) == col(Agent.id),
-                col(AgentAccess.organization_id) == authorization_scope.organization_id,
-                col(AgentAccess.membership_id) == authorization_scope.membership_id,
+        direct_access = exists().where(
+            col(AgentAccess.agent_id) == col(Agent.id),
+            col(AgentAccess.organization_id) == authorization_scope.organization_id,
+            col(AgentAccess.membership_id) == authorization_scope.membership_id,
+            col(AgentAccessRolePermission.role_id) == col(AgentAccess.access_role_id),
+            col(AgentAccessRolePermission.permission_id)
+            == PERMISSION_ID_BY_KEY[authorization_scope.permission],
+        )
+        if authorization_scope.include_general_access:
+            general_access = exists().where(
                 col(AgentAccessRolePermission.role_id)
-                == col(AgentAccess.access_role_id),
+                == col(Agent.general_access_role_id),
                 col(AgentAccessRolePermission.permission_id)
                 == PERMISSION_ID_BY_KEY[authorization_scope.permission],
             )
-        )
+            predicates.append(or_(direct_access, general_access))
+        else:
+            predicates.append(direct_access)
     return tuple(predicates)
 
 
@@ -133,11 +140,13 @@ class AgentRepository:
         membership_id: UUID,
         organization_id: UUID,
         agent_ids: list[UUID],
+        *,
+        include_general_access: bool = True,
     ) -> dict[UUID, set[PermissionKey]]:
         if not agent_ids:
             return {}
         with Session(self.delegate.engine) as session:
-            rows = session.exec(
+            direct_rows = session.exec(
                 select(AgentAccess.agent_id, Permission.key)
                 .join(
                     AgentAccessRolePermission,
@@ -154,10 +163,55 @@ class AgentRepository:
                     col(AgentAccess.agent_id).in_(agent_ids),
                 )
             ).all()
+            general_rows = []
+            if include_general_access:
+                general_rows = session.exec(
+                    select(Agent.id, Permission.key)
+                    .join(
+                        AgentAccessRolePermission,
+                        col(AgentAccessRolePermission.role_id)
+                        == col(Agent.general_access_role_id),
+                    )
+                    .join(
+                        Permission,
+                        col(Permission.id)
+                        == col(AgentAccessRolePermission.permission_id),
+                    )
+                    .where(
+                        col(Agent.organization_id) == organization_id,
+                        col(Agent.id).in_(agent_ids),
+                        col(Agent.deleted_at).is_(None),
+                        col(Agent.general_access_role_id).is_not(None),
+                    )
+                ).all()
         permissions: dict[UUID, set[PermissionKey]] = {}
-        for agent_id, key in rows:
+        for agent_id, key in [*direct_rows, *general_rows]:
             permissions.setdefault(agent_id, set()).add(PermissionKey(key))
         return permissions
+
+    def set_general_access_role(
+        self,
+        agent_id: UUID,
+        organization_id: UUID,
+        access_role_id: UUID | None,
+    ) -> bool:
+        """Set or clear Agent General Access; False means the Agent disappeared."""
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            agent = session.exec(
+                select(Agent)
+                .where(
+                    col(Agent.id) == agent_id,
+                    col(Agent.organization_id) == organization_id,
+                    col(Agent.deleted_at).is_(None),
+                )
+                .with_for_update()
+            ).first()
+            if agent is None:
+                return False
+            agent.general_access_role_id = access_role_id
+            session.add(agent)
+            session.commit()
+            return True
 
     def create_with_creator_access(
         self, agent: Agent, membership_id: UUID | None
