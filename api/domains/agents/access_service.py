@@ -60,18 +60,18 @@ class AgentAccessService:
                 agent.organization_id
             )
         }
-        return [
-            self._to_assignment(
-                agent,
-                membership,
-                user,
-                roles[assignments[membership.id].access_role_id],
-            )
-            for membership, user in self.membership_repository.get_members_with_users(
-                agent.organization_id
-            )
-            if membership.id in assignments
-        ]
+        result = []
+        for membership, user in self.membership_repository.get_members_with_users(
+            agent.organization_id
+        ):
+            access = assignments.get(membership.id)
+            if access is None:
+                continue
+            role = roles.get(access.access_role_id)
+            if role is None:
+                continue
+            result.append(self._to_assignment(agent, membership, user, role))
+        return result
 
     def list_eligible_members(
         self, agent_id: UUID, context: CurrentUserContext
@@ -153,6 +153,12 @@ class AgentAccessService:
     ) -> None:
         agent = self._require_manage_access(context, agent_id)
         membership, _ = self._require_target_member(user_id, agent.organization_id)
+        # No "last explicit Agent Owner" guard: Org Owner/Admin always retain
+        # implicit access (agent_scope_predicates skips the AgentAccess EXISTS
+        # check for them, see AgentAuthorization._scope), so revoking the last
+        # explicit Owner row can't lock an agent out, only require an Org
+        # Owner/Admin to re-grant it. Revisit if AF-216 custom roles change
+        # what "implicit Owner/Admin" authority means.
         if not self.repository.revoke_access(
             agent.id, membership.id, agent.organization_id
         ):

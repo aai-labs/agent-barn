@@ -103,7 +103,7 @@ def get_authenticated_user(
                 )
             else:
                 raise ForbiddenException(
-                    detail=f"User {user.id} does not have access to organization {organization_id}"
+                    detail="You do not have access to this organization"
                 )
 
     if organization_roles and not user.is_superuser:
