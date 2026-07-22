@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { OrganizationRoleSchema } from "@/features/organizations/schemas";
+
 export const AgentSlackConfigSchema = z.object({
   channelIds: z.array(z.string()),
   dmUserIds: z.array(z.string()),
@@ -49,6 +51,30 @@ export const AgentPermissionKeySchema = z.enum([
   "activity.read",
   "cost.read",
 ]);
+
+export const AgentAccessRoleReadSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+  permissions: z.array(AgentPermissionKeySchema),
+  isLocked: z.boolean(),
+});
+
+export const AgentAccessCandidateReadSchema = z.object({
+  userId: z.string().uuid(),
+  email: z.string(),
+  fullName: z.string().nullable(),
+  organizationRole: OrganizationRoleSchema,
+  isPending: z.boolean(),
+  isCreator: z.boolean(),
+});
+
+export const AgentAccessMemberReadSchema = AgentAccessCandidateReadSchema.extend({
+  accessRole: AgentAccessRoleReadSchema,
+});
+
+export const AgentGeneralAccessReadSchema = z.object({
+  role: AgentAccessRoleReadSchema.nullable(),
+});
 
 export const AgentSchema = z.object({
   id: z.string().uuid(),
@@ -235,3 +261,7 @@ export type SlackUser = z.infer<typeof SlackUserSchema>;
 export type ModelOption = z.infer<typeof ModelOptionSchema>;
 export type AgentLogHistoryRead = z.infer<typeof AgentLogHistoryReadSchema>;
 export type AgentLogsRead = z.infer<typeof AgentLogsReadSchema>;
+export type AgentAccessRoleRead = z.infer<typeof AgentAccessRoleReadSchema>;
+export type AgentAccessCandidateRead = z.infer<typeof AgentAccessCandidateReadSchema>;
+export type AgentAccessMemberRead = z.infer<typeof AgentAccessMemberReadSchema>;
+export type AgentGeneralAccessRead = z.infer<typeof AgentGeneralAccessReadSchema>;

@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useQueryState, parseAsStringEnum, parseAsString } from "nuqs";
@@ -8,7 +9,7 @@ import { useAgent } from "../hooks/use-agent";
 import { useAgentHealth } from "../hooks/use-agent-health";
 import { useStartAgent } from "../hooks/use-start-agent";
 import { useStopAgent } from "../hooks/use-stop-agent";
-import { ChevLeftIcon, PauseIcon, PlayIcon, CogIcon } from "@/components/icons";
+import { ChevLeftIcon, PauseIcon, PlayIcon, CogIcon, ShareIcon } from "@/components/icons";
 import { AppErrorState } from "@/components/app-error-state";
 import { toastError } from "@/shared/toast";
 import { AgentAvatar } from "./agent-avatar";
@@ -19,6 +20,7 @@ import { ToolCallsTab } from "./tool-calls-tab";
 import { LogsTab } from "./logs-tab";
 import { WorkTab } from "./work-tab";
 import { AboutTab } from "./about-tab";
+import { ShareDialog } from "./share-dialog";
 import {
   canOpenConfigTab,
   ConfigDrawer,
@@ -91,6 +93,8 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
 
   const isRunning = agent?.status === "RUNNING";
   const canManageLifecycle = canAgent(agent, "agent.lifecycle.manage");
+  const canManageAccess = canAgent(agent, "agent.access.manage");
+  const [shareOpen, setShareOpen] = useState(false);
   const initialConfigTab = agent ? defaultConfigTab(agent) : null;
   const canConfigure = initialConfigTab !== null;
   const authorizedConfigTab =
@@ -175,6 +179,11 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
                     <CogIcon /> Configure
                   </button>
                 )}
+                {canManageAccess && (
+                  <button className="af-btn" onClick={() => setShareOpen(true)}>
+                    <ShareIcon /> Share
+                  </button>
+                )}
               </div>
             </div>
 
@@ -230,6 +239,14 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
         />
       )}
 
+      {agent && canManageAccess && (
+        <ShareDialog
+          agentId={agent.id}
+          agentName={agent.name}
+          open={shareOpen}
+          onOpenChange={setShareOpen}
+        />
+      )}
     </div>
   );
 }

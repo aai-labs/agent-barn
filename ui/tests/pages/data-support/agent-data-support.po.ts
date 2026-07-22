@@ -5,6 +5,71 @@ export const MOCK_TEMPLATE_ID = "44444444-4444-4444-8444-444444444444";
 export const MOCK_TEMPLATE_SLUG = "maya-3f9a2c1b";
 export const MOCK_ORG_ID = "22222222-2222-4222-8222-222222222222";
 
+export const MOCK_VIEWER_ROLE_ID = "77777777-0000-4000-8000-000000000001";
+export const MOCK_EDITOR_ROLE_ID = "77777777-0000-4000-8000-000000000002";
+export const MOCK_OWNER_ROLE_ID = "77777777-0000-4000-8000-000000000003";
+export const MOCK_MEMBER_USER_ID = "88888888-8888-4888-8888-888888888888";
+export const MOCK_ELIGIBLE_USER_ID = "99999999-9999-4999-8999-999999999999";
+
+export const mockAccessRoles = [
+  {
+    id: MOCK_VIEWER_ROLE_ID,
+    name: "VIEWER",
+    permissions: ["agent.read", "activity.read", "cost.read"],
+    is_locked: true,
+  },
+  {
+    id: MOCK_EDITOR_ROLE_ID,
+    name: "EDITOR",
+    permissions: [
+      "agent.read",
+      "activity.read",
+      "cost.read",
+      "agent.update",
+      "agent.lifecycle.manage",
+      "agent.secret.manage",
+    ],
+    is_locked: true,
+  },
+  {
+    id: MOCK_OWNER_ROLE_ID,
+    name: "OWNER",
+    permissions: [
+      "agent.read",
+      "activity.read",
+      "cost.read",
+      "agent.update",
+      "agent.lifecycle.manage",
+      "agent.secret.manage",
+      "agent.delete",
+      "agent.access.manage",
+    ],
+    is_locked: true,
+  },
+];
+
+export const mockAssignedMember = {
+  user_id: MOCK_MEMBER_USER_ID,
+  email: "member@example.com",
+  full_name: "Ada Lovelace",
+  organization_role: "MEMBER",
+  is_pending: false,
+  is_creator: false,
+  access_role: mockAccessRoles[0],
+};
+
+export const mockEligibleCandidate = {
+  user_id: MOCK_ELIGIBLE_USER_ID,
+  email: "grace@example.com",
+  full_name: "Grace Hopper",
+  organization_role: "MEMBER",
+  is_pending: false,
+  is_creator: false,
+};
+
+export const mockGeneralAccessRestricted = { role: null };
+export const mockGeneralAccessAll = { role: mockAccessRoles[0] };
+
 export const mockAgentAllowedActions = [
   "agent.read",
   "agent.update",
@@ -230,6 +295,267 @@ export class AgentDataSupport {
           body: JSON.stringify(
             status >= 400 ? { detail } : (body ?? mockAgentTemplate),
           ),
+        });
+      },
+    );
+  }
+
+  async interceptGetAccessRolesRequest({
+    status = 200,
+    detail = "Unable to load access roles",
+    body,
+  }: {
+    status?: number;
+    detail?: string;
+    body?: unknown;
+  } = {}) {
+    await this.page.route("**/api/v1/agents/access-roles", async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status,
+        contentType: "application/json",
+        body: JSON.stringify(status >= 400 ? { detail } : (body ?? mockAccessRoles)),
+      });
+    });
+  }
+
+  async interceptGetAgentAccessListRequest({
+    agentId = MOCK_AGENT_ID,
+    status = 200,
+    detail = "Unable to load Agent access",
+    body,
+  }: {
+    agentId?: string;
+    status?: number;
+    detail?: string;
+    body?: unknown;
+  } = {}) {
+    await this.page.route(`**/api/v1/agents/${agentId}/access`, async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status,
+        contentType: "application/json",
+        body: JSON.stringify(
+          status >= 400 ? { detail } : (body ?? [mockAssignedMember]),
+        ),
+      });
+    });
+  }
+
+  async interceptGetEligibleAgentAccessRequest({
+    agentId = MOCK_AGENT_ID,
+    status = 200,
+    detail = "Unable to load eligible Members",
+    body,
+  }: {
+    agentId?: string;
+    status?: number;
+    detail?: string;
+    body?: unknown;
+  } = {}) {
+    await this.page.route(
+      `**/api/v1/agents/${agentId}/access/eligible*`,
+      async (route) => {
+        if (route.request().method() !== "GET") {
+          await route.fallback();
+          return;
+        }
+        const url = new URL(route.request().url());
+        const search = url.searchParams.get("search")?.toLowerCase();
+        let items = body ? (body as unknown[]) : [mockEligibleCandidate];
+        if (search && !body) {
+          items = items.filter((c) => {
+            const candidate = c as typeof mockEligibleCandidate;
+            return (
+              candidate.full_name.toLowerCase().includes(search) ||
+              candidate.email.toLowerCase().includes(search)
+            );
+          });
+        }
+        await route.fulfill({
+          status,
+          contentType: "application/json",
+          body: JSON.stringify(status >= 400 ? { detail } : items),
+        });
+      },
+    );
+  }
+
+  async interceptGrantAgentAccessRequest({
+    agentId = MOCK_AGENT_ID,
+    status = 201,
+    detail = "Unable to grant access",
+    body,
+  }: {
+    agentId?: string;
+    status?: number;
+    detail?: string;
+    body?: unknown;
+  } = {}) {
+    await this.page.route(`**/api/v1/agents/${agentId}/access`, async (route) => {
+      if (route.request().method() !== "POST") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status,
+        contentType: "application/json",
+        body: JSON.stringify(
+          status >= 400
+            ? { detail }
+            : (body ?? {
+                ...mockEligibleCandidate,
+                access_role: mockAccessRoles[0],
+              }),
+        ),
+      });
+    });
+  }
+
+  async interceptChangeAgentAccessRoleRequest({
+    agentId = MOCK_AGENT_ID,
+    userId = MOCK_MEMBER_USER_ID,
+    status = 200,
+    detail = "Unable to change access role",
+    body,
+  }: {
+    agentId?: string;
+    userId?: string;
+    status?: number;
+    detail?: string;
+    body?: unknown;
+  } = {}) {
+    await this.page.route(
+      `**/api/v1/agents/${agentId}/access/${userId}`,
+      async (route) => {
+        if (route.request().method() !== "PATCH") {
+          await route.fallback();
+          return;
+        }
+        await route.fulfill({
+          status,
+          contentType: "application/json",
+          body: JSON.stringify(
+            status >= 400
+              ? { detail }
+              : (body ?? { ...mockAssignedMember, access_role: mockAccessRoles[1] }),
+          ),
+        });
+      },
+    );
+  }
+
+  async interceptRevokeAgentAccessRequest({
+    agentId = MOCK_AGENT_ID,
+    userId = MOCK_MEMBER_USER_ID,
+    status = 204,
+    detail = "Unable to remove access",
+  }: {
+    agentId?: string;
+    userId?: string;
+    status?: number;
+    detail?: string;
+  } = {}) {
+    await this.page.route(
+      `**/api/v1/agents/${agentId}/access/${userId}`,
+      async (route) => {
+        if (route.request().method() !== "DELETE") {
+          await route.fallback();
+          return;
+        }
+        await route.fulfill({
+          status,
+          contentType: "application/json",
+          body: status >= 400 ? JSON.stringify({ detail }) : "",
+        });
+      },
+    );
+  }
+
+  async interceptGetGeneralAccessRequest({
+    agentId = MOCK_AGENT_ID,
+    status = 200,
+    detail = "Unable to load General access",
+    body,
+  }: {
+    agentId?: string;
+    status?: number;
+    detail?: string;
+    body?: unknown;
+  } = {}) {
+    await this.page.route(
+      `**/api/v1/agents/${agentId}/general-access`,
+      async (route) => {
+        if (route.request().method() !== "GET") {
+          await route.fallback();
+          return;
+        }
+        await route.fulfill({
+          status,
+          contentType: "application/json",
+          body: JSON.stringify(
+            status >= 400 ? { detail } : (body ?? mockGeneralAccessRestricted),
+          ),
+        });
+      },
+    );
+  }
+
+  async interceptSetGeneralAccessRequest({
+    agentId = MOCK_AGENT_ID,
+    status = 200,
+    detail = "Unable to update General access",
+    body,
+  }: {
+    agentId?: string;
+    status?: number;
+    detail?: string;
+    body?: unknown;
+  } = {}) {
+    await this.page.route(
+      `**/api/v1/agents/${agentId}/general-access`,
+      async (route) => {
+        if (route.request().method() !== "PUT") {
+          await route.fallback();
+          return;
+        }
+        await route.fulfill({
+          status,
+          contentType: "application/json",
+          body: JSON.stringify(
+            status >= 400 ? { detail } : (body ?? mockGeneralAccessAll),
+          ),
+        });
+      },
+    );
+  }
+
+  async interceptRemoveGeneralAccessRequest({
+    agentId = MOCK_AGENT_ID,
+    status = 204,
+    detail = "Unable to update General access",
+  }: {
+    agentId?: string;
+    status?: number;
+    detail?: string;
+  } = {}) {
+    await this.page.route(
+      `**/api/v1/agents/${agentId}/general-access`,
+      async (route) => {
+        if (route.request().method() !== "DELETE") {
+          await route.fallback();
+          return;
+        }
+        await route.fulfill({
+          status,
+          contentType: "application/json",
+          body: status >= 400 ? JSON.stringify({ detail }) : "",
         });
       },
     );

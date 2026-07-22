@@ -56,6 +56,17 @@ export function LockIcon({ size = 13, ...p }: IconProps) {
   return <Svg size={size} {...p}><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></Svg>;
 }
 
+export function ShareIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <circle cx="18" cy="5" r="3"/>
+      <circle cx="6" cy="12" r="3"/>
+      <circle cx="18" cy="19" r="3"/>
+      <path d="M8.6 10.5 15.4 6.5M8.6 13.5 15.4 17.5"/>
+    </Svg>
+  );
+}
+
 export function SlackIcon(p: IconProps) {
   return (
     <Svg {...p}>

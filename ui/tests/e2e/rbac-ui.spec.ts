@@ -68,7 +68,7 @@ test.describe("RBAC-aware Agent controls", () => {
     await expect(page.getByRole("heading", { name: "Maya" })).toBeVisible();
     await expect(rbac.agentAction(/pause/i)).toHaveCount(0);
     await expect(rbac.agentAction(/configure/i)).toHaveCount(0);
-    await expect(rbac.agentAction(/^access$/i)).toHaveCount(0);
+    await expect(rbac.agentAction(/^share$/i)).toHaveCount(0);
     await expect(rbac.agentAction("Conversations")).toBeVisible();
   });
 
@@ -101,7 +101,7 @@ test.describe("RBAC-aware Agent controls", () => {
       `/dashboard/${TEST_ORG_ID}/agents/${MOCK_AGENT_ID}?configTab=danger`,
     );
     await expect(page.getByRole("button", { name: "Retire agent" })).toHaveCount(0);
-    await expect(rbac.agentAction(/^access$/i)).toHaveCount(0);
+    await expect(rbac.agentAction(/^share$/i)).toHaveCount(0);
   });
 
   test("Owner deletion is available without exposing sharing UI", async ({ page }) => {
@@ -118,7 +118,7 @@ test.describe("RBAC-aware Agent controls", () => {
     );
 
     await expect(page.getByRole("button", { name: "Retire agent" })).toBeVisible();
-    await expect(rbac.agentAction(/^access$/i)).toHaveCount(0);
+    await expect(rbac.agentAction(/^share$/i)).toHaveCount(0);
   });
 
   test("inaccessible Agents use normal not-found handling", async ({ page }) => {
@@ -133,7 +133,7 @@ test.describe("RBAC-aware Agent controls", () => {
 
     await expect(page.getByText("We couldn't load this agent")).toBeVisible();
     await expect(rbac.agentAction(/configure/i)).toHaveCount(0);
-    await expect(rbac.agentAction(/^access$/i)).toHaveCount(0);
+    await expect(rbac.agentAction(/^share$/i)).toHaveCount(0);
   });
 });
 
