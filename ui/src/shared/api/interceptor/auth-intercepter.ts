@@ -6,6 +6,7 @@ import { AuthConfig, AuthTokens } from "../types";
 
 type AuthAwareRequestConfig = InternalAxiosRequestConfig & {
   skipAuth?: boolean;
+  _retried?: boolean;
 };
 
 export class AuthInterceptor {
@@ -68,7 +69,13 @@ export class AuthInterceptor {
       | AuthAwareRequestConfig
       | undefined;
 
-    if (error.status === 401 && originalRequest && !originalRequest.skipAuth) {
+    if (
+      error.status === 401 &&
+      originalRequest &&
+      !originalRequest.skipAuth &&
+      !originalRequest._retried
+    ) {
+      originalRequest._retried = true;
       try {
         const tokens = await this.refreshTokens();
         if (tokens) {
@@ -76,7 +83,7 @@ export class AuthInterceptor {
           return this.axiosInstance(originalRequest);
         }
       } catch (_) {
-        this.config.clearTokens();
+        this.config.onSessionExpired?.();
         throw ApiError.unauthorizedError("Token refresh failed.");
       }
     }
@@ -111,7 +118,11 @@ export class AuthInterceptor {
 
   private async refreshTokens(): Promise<AuthTokens | null> {
     if (this.refreshPromise) {
-      return this.refreshPromise;
+      try {
+        return await this.refreshPromise;
+      } catch {
+        return null;
+      }
     }
 
     this.refreshPromise = this.performTokenRefresh();
@@ -145,7 +156,6 @@ export class AuthInterceptor {
       this.config.setTokens(newTokens);
       return newTokens;
     } catch (_) {
-      this.config.clearTokens();
       this.config.onSessionExpired?.();
       throw new Error("Token refresh failed");
     }

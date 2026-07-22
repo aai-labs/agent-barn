@@ -1,5 +1,6 @@
 from uuid import UUID, uuid7
 
+from api.domains.auth.utils import set_default_org_id
 from api.domains.organizations.models import Organization
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.users.organization_users.models import (
@@ -7,7 +8,19 @@ from api.domains.users.organization_users.models import (
     OrganizationUser,
 )
 from api.domains.users.organization_users.repository import OrganizationUserRepository
+from api.tests.core.givenpy import LambdaWith
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
+
+
+def the_default_organization_id_is(org_id: UUID):
+    """Set the global default-org fallback used when no X-Organization-Id header is
+    sent, restoring it after the test."""
+
+    def step(context):
+        set_default_org_id(org_id)
+        return LambdaWith(lambda: None, lambda: set_default_org_id(None))
+
+    return step
 
 
 def there_is_an_organization(

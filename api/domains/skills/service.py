@@ -170,6 +170,16 @@ class SkillService:
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Skill is currently assigned to one or more agents",
             )
+        blocking_templates = self.repository.get_latest_template_slugs_requiring_skill(
+            skill_id, org_id
+        )
+        if blocking_templates:
+            slugs = ", ".join(blocking_templates)
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Skill is required by template(s): {slugs}. Remove it from those templates before deleting.",
+            )
+        self.repository.delete_stale_template_skill_refs(skill_id, org_id)
         self.repository.delete(skill)
 
     def get_skill(self, skill_id: UUID, context: CurrentUserContext) -> SkillRead:

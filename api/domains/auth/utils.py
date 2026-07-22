@@ -1,8 +1,9 @@
 import uuid
+from collections.abc import Set as AbstractSet
 from typing import Annotated, Callable
 
 import jwt
-from fastapi import Depends, Request
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from fastapi_injector import Injected
 from injector import inject
@@ -16,7 +17,10 @@ from api.domains.auth.exceptions import (
 )
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.service import JWT_ENCODING_ALGORITHM
-from api.domains.users.organization_users.models import OrganizationRole
+from api.domains.users.organization_users.models import (
+    OrganizationRole,
+    OrganizationUser,
+)
 from api.domains.users.organization_users.repository import OrganizationUserRepository
 from api.domains.users.repository import UserRepository
 
@@ -29,7 +33,25 @@ def set_default_org_id(org_id: uuid.UUID | None) -> None:
     _default_org_id = org_id
 
 
+ORGANIZATION_ID_HEADER = "X-Organization-Id"
+
+
 def get_organization_id(request: Request) -> uuid.UUID | None:
+    """Resolve the active organization for the request.
+
+    Prefers the ``X-Organization-Id`` header (validated as a UUID); membership is
+    enforced later in ``get_authenticated_user``. Falls back to the global default org
+    when the header is absent (legacy single-tenant behaviour).
+    """
+    header_value = request.headers.get(ORGANIZATION_ID_HEADER)
+    if header_value:
+        try:
+            return uuid.UUID(header_value)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid {ORGANIZATION_ID_HEADER} header",
+            )
     return _default_org_id
 
 
@@ -39,7 +61,7 @@ def get_authenticated_user(
     user_repository: UserRepository,
     organization_user_repository: OrganizationUserRepository,
     organization_id: uuid.UUID | None = None,
-    organization_roles: list[OrganizationRole] | None = None,
+    organization_roles: AbstractSet[OrganizationRole] | None = None,
     verified_required: bool = False,
 ) -> CurrentUserContext:
     try:
@@ -70,10 +92,19 @@ def get_authenticated_user(
 
     if organization_id:
         user_organization = user_organization_map.get(organization_id, None)
-        if not user_organization and not user.is_superuser:
-            raise ForbiddenException(
-                detail=f"User {user.id} does not have access to organization {organization_id}"
-            )
+        if not user_organization:
+            if user.is_superuser:
+                # Superusers transcend org boundaries: synthesize a transient
+                # (unpersisted) membership so scoping resolves to the targeted org.
+                user_organization = OrganizationUser(
+                    user_id=user.id,
+                    organization_id=organization_id,
+                    role=OrganizationRole.OWNER,
+                )
+            else:
+                raise ForbiddenException(
+                    detail=f"User {user.id} does not have access to organization {organization_id}"
+                )
 
     if organization_roles and not user.is_superuser:
         if not user_organization or user_organization.role not in organization_roles:
@@ -90,9 +121,10 @@ def get_authenticated_user(
 
 
 def get_current_user(
-    organization_roles: list[OrganizationRole] | None = None,
+    organization_roles: AbstractSet[OrganizationRole] | None = None,
     check_superuser: bool = False,
     verified_required: bool = False,
+    require_organization: bool = True,
 ) -> Callable[..., CurrentUserContext]:
     @inject
     def wrapper(
@@ -104,7 +136,11 @@ def get_current_user(
         ),
         config: Config = Injected(Config),
     ) -> CurrentUserContext:
-        organization_id = get_organization_id(request)
+        # Some endpoints (e.g. /auth/me) only need the authenticated user and must work
+        # before an org is chosen. Skipping org resolution avoids a 403 when the request
+        # falls back to a default org the user isn't a member of. The user's full
+        # membership map is still populated for the caller.
+        organization_id = get_organization_id(request) if require_organization else None
         context = get_authenticated_user(
             token=token,
             config=config,

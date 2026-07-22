@@ -21,14 +21,16 @@ users_router = APIRouter(prefix="/users", tags=["users"])
 
 @users_router.get("", response_model=PaginatedItems[UserRead])
 def list_users(
-    _: Annotated[CurrentUserContext, Depends(get_current_user(check_superuser=True))],
+    context: Annotated[
+        CurrentUserContext, Depends(get_current_user(check_superuser=True))
+    ],
     filters: Annotated[UserFilter, Depends(get_user_filter)],
     page: int = 1,
     page_size: int = 15,
     user_service: UserService = Injected(UserService),
 ):
     return user_service.get_paginated_users(
-        filters=filters, page=page, page_size=page_size
+        filters=filters, context=context, page=page, page_size=page_size
     )
 
 

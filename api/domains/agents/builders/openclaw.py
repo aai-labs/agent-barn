@@ -7,10 +7,14 @@ from kubernetes import client
 from .common import _labels, _resource_name
 
 _SCRIPTS = Path(__file__).parent.parent / "scripts" / "openclaw"
+_TELEMETRY_PUSH = _SCRIPTS / "plugins" / "telemetry-push"
 
 INIT_OPENCLAW_JS: str = (_SCRIPTS / "init-openclaw.js").read_text()
 HEALTHZ_SERVER_JS: str = (_SCRIPTS / "healthz-server.js").read_text()
 START_SH: str = (_SCRIPTS / "start.sh").read_text()
+TELEMETRY_PUSH_INDEX_JS: str = (_TELEMETRY_PUSH / "index.js").read_text()
+TELEMETRY_PUSH_PACKAGE_JSON: str = (_TELEMETRY_PUSH / "package.json").read_text()
+TELEMETRY_PUSH_PLUGIN_JSON: str = (_TELEMETRY_PUSH / "openclaw.plugin.json").read_text()
 
 
 def build_openclaw_config_overlay(
@@ -20,6 +24,7 @@ def build_openclaw_config_overlay(
     slack_dm_user_ids: list[str] | None = None,
     slack_group_policy: str = "open",
     slack_dm_policy: str = "open",
+    approval_mode: str = "auto",
 ) -> dict:
     provider, _, model_name = model.partition("/")
 
@@ -57,7 +62,10 @@ def build_openclaw_config_overlay(
             "defaults": {
                 "model": {
                     "primary": model,
-                }
+                },
+                "memorySearch": {
+                    "provider": "none",
+                },
             }
         },
         "channels": {
@@ -84,10 +92,14 @@ def build_openclaw_config_overlay(
         "bindings": [
             {"type": "route", "agentId": "main", "match": {"channel": "slack"}}
         ],
-        "tools": {"profile": "full"},
+        "tools": {
+            "profile": "full",
+            "exec": {"mode": "full"},
+        },
         "memory": {"backend": "builtin"},
         "plugins": {
-            "allow": ["memory-core", "active-memory"],
+            "allow": ["memory-core", "active-memory", "telemetry-push"],
+            "load": {"paths": ["/home/node/.openclaw/local-plugins/telemetry-push"]},
             "slots": {"memory": "memory-core"},
             "entries": {
                 "memory-core": {"enabled": True},
@@ -105,14 +117,20 @@ def build_openclaw_config_overlay(
                         "logging": True,
                     },
                 },
+                "telemetry-push": {
+                    "enabled": True,
+                    "hooks": {"allowConversationAccess": True},
+                },
             },
         },
+        "gateway": {"auth": {"mode": "none"}},
     }
 
 
 def build_openclaw_config_overlay_teams(
     model: str,
     litellm_base_url: str,
+    approval_mode: str = "auto",
 ) -> dict:
     provider, _, model_name = model.partition("/")
 
@@ -129,7 +147,10 @@ def build_openclaw_config_overlay_teams(
             "defaults": {
                 "model": {
                     "primary": model,
-                }
+                },
+                "memorySearch": {
+                    "provider": "none",
+                },
             }
         },
         "channels": {
@@ -145,10 +166,14 @@ def build_openclaw_config_overlay_teams(
         "bindings": [
             {"type": "route", "agentId": "main", "match": {"channel": "msteams"}}
         ],
-        "tools": {"profile": "full"},
+        "tools": {
+            "profile": "full",
+            "exec": {"mode": "full"},
+        },
         "memory": {"backend": "builtin"},
         "plugins": {
-            "allow": ["memory-core", "active-memory"],
+            "allow": ["memory-core", "active-memory", "telemetry-push"],
+            "load": {"paths": ["/home/node/.openclaw/local-plugins/telemetry-push"]},
             "slots": {"memory": "memory-core"},
             "entries": {
                 "memory-core": {"enabled": True},
@@ -166,8 +191,13 @@ def build_openclaw_config_overlay_teams(
                         "logging": True,
                     },
                 },
+                "telemetry-push": {
+                    "enabled": True,
+                    "hooks": {"allowConversationAccess": True},
+                },
             },
         },
+        "gateway": {"auth": {"mode": "none"}},
     }
 
 
@@ -203,6 +233,9 @@ def build_config_map(
         data["init-openclaw.js"] = INIT_OPENCLAW_JS
         data["healthz-server.js"] = HEALTHZ_SERVER_JS
         data["start.sh"] = START_SH
+        data["telemetry-push-index.js"] = TELEMETRY_PUSH_INDEX_JS
+        data["telemetry-push-package.json"] = TELEMETRY_PUSH_PACKAGE_JSON
+        data["telemetry-push-plugin.json"] = TELEMETRY_PUSH_PLUGIN_JSON
     if aai_cli_config_toml is not None:
         data["aai-cli-config.toml"] = aai_cli_config_toml
     if aai_cli_setup_sh is not None:
@@ -296,6 +329,22 @@ def build_deployment(
                         if image_pull_secret
                         else None
                     ),
+                    init_containers=[
+                        client.V1Container(
+                            name="fix-pvc-owner",
+                            image=image,
+                            command=["chown", "1000:1000", "/home/node/.openclaw"],
+                            security_context=client.V1SecurityContext(
+                                run_as_user=0,
+                            ),
+                            volume_mounts=[
+                                client.V1VolumeMount(
+                                    name="data",
+                                    mount_path="/home/node/.openclaw",
+                                ),
+                            ],
+                        ),
+                    ],
                     containers=[
                         client.V1Container(
                             name="agent",

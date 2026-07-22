@@ -37,12 +37,17 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: `pnpm exec next dev -p ${PORT}`,
+    // In CI, serve a production build: `next dev` compiles routes on-demand on first
+    // hit, and under a constrained runner that first-hit latency flakes late-in-suite
+    // routes (e.g. /set-password, /forgot-password). A prebuilt server has no compile
+    // step, so route timing is deterministic. Locally we keep `next dev` for fast DX.
+    command: isCI
+      ? `pnpm exec next build && pnpm exec next start -p ${PORT}`
+      : `pnpm exec next dev -p ${PORT}`,
     url: baseURL,
     reuseExistingServer: false,
-    timeout: 120 * 1000,
+    timeout: (isCI ? 240 : 120) * 1000,
     env: {
-      NODE_ENV: "test",
       NEXT_PUBLIC_E2E: "true",
       NEXT_PUBLIC_BACKEND_URL: "http://127.0.0.1:8000",
     },

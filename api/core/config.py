@@ -16,6 +16,13 @@ class Config(BaseSettings):
     super_user_full_name: str = "Super User"
     email_server_credential: str | None = None
     email_smtp_server: str | None = None
+    # Optional visible "From" for outgoing mail. The SMTP login always uses the email
+    # in EMAIL_SERVER_CREDENTIAL; set EMAIL_FROM_ADDRESS to send *as* another address
+    # (e.g. no-reply@agentbarn.dev) while still authenticating with that credential.
+    # For good deliverability the sending domain should be authorized by the SMTP
+    # provider and DKIM/SPF/DMARC-configured. Defaults to the credential email.
+    email_from_address: str | None = None
+    email_from_name: str = "Agent Barn"
 
     environment: str = "local"
     web_app_url: str = "http://localhost:3000"
@@ -36,8 +43,11 @@ class Config(BaseSettings):
     litellm_secret_name: str = "litellm"
     agent_litellm_base_url: str = ""
     agent_image_pull_secret: str = ""
-    agent_default_model: str = "litellm/openrouter/qwen/qwen3.6-plus"
+    agent_default_model: str = "litellm/openrouter/z-ai/glm-5.2"
     api_external_url: str = ""
+    ingest_base_url: str = (
+        "http://agentfarm-api.agent-farm.svc.cluster.local:8001/ingest/v1"
+    )
     skip_slack_token_validation: bool = False
     slack_directory_cache_ttl_seconds: int = 600
     # Socket timeout for Slack Web API calls. Large sweeps (e.g. users.list can be
@@ -49,9 +59,16 @@ class Config(BaseSettings):
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     openrouter_models_cache_ttl_seconds: int = 3600
     # Comma-separated glob patterns (fnmatch) matched against OpenRouter model
-    # ids to limit what the model picker offers, e.g. "qwen/*,openai/gpt-5*".
+    # ids to limit what the model picker offers, e.g. "z-ai/glm-5.2,openai/gpt-5*".
     # Empty allows the full catalogue.
     agent_model_allowlist: str = ""
+
+    # Shared Google OAuth 2.0 "Web application" client used by the "Authenticate
+    # with Google" flow when a user connects the Gmail skill. The refresh token is
+    # minted per-agent; these app-owned credentials are never shown to users and are
+    # injected into the agent's aai-cli gmail-work profile at start time.
+    google_cloud_client_id: str = ""
+    google_cloud_client_secret: str = ""
 
     @property
     def is_email_delivery_enabled(self) -> bool:

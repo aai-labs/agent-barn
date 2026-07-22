@@ -32,6 +32,8 @@ export const CreateUserSchema = z.object({
       message: "Password must include at least one number",
     }),
   fullName: z.string().optional(),
+  organizationId: z.string().uuid({ message: "Select an organization" }),
+  role: z.enum(["MEMBER", "ADMIN"]),
 });
 
 export type UserRead = z.infer<typeof UserReadSchema>;

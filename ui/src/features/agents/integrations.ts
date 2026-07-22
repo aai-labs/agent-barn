@@ -7,7 +7,7 @@
 // (smtp/imap host+port, folders, …) are NOT inputs here — the backend fills them
 // as schema defaults.
 
-export type IntegrationFieldType = "text" | "secret" | "repo-url";
+export type IntegrationFieldType = "text" | "secret" | "repo-list";
 
 export interface IntegrationField {
   key: string;
@@ -23,11 +23,15 @@ export interface IntegrationProvider {
   label: string;
   scopeNote?: string;
   fields: IntegrationField[];
+  // When set, the provider is configured via an OAuth flow (an "Authenticate with
+  // <provider>" button) instead of manual field entry. "google_oauth" captures a Gmail
+  // refresh token via the popup flow and writes it to content.refreshToken.
+  authMethod?: "google_oauth";
 }
 
 export interface IntegrationDraft {
   provider: string;
-  content: Record<string, string>;
+  content: Record<string, string | string[]>;
 }
 
 export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
@@ -37,7 +41,8 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
     scopeNote: "Classic PAT: repo, read:user, read:org — Fine-grained PAT: Contents (read), Pull requests (read + write), Metadata (read, mandatory)",
     fields: [
       { key: "token", label: "Personal access token", type: "secret", required: true, placeholder: "github_pat_… or ghp_…" },
-      { key: "repoUrl", label: "Repository URL", type: "repo-url", required: true, placeholder: "https://github.com/owner/repo.git" },
+      { key: "owner", label: "Owner / Org", type: "text", required: true, placeholder: "owner-or-org" },
+      { key: "repos", label: "Repositories", type: "repo-list", required: false, placeholder: "repository name", hint: "Leave empty to allow access to any repository the token can reach — the agent will need to pass a repo name explicitly." },
     ],
   },
   {
@@ -66,29 +71,72 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
     scopeNote: "App password scopes: Account (read), Repositories (read), Pull requests (read + write)",
     fields: [
       { key: "workspace", label: "Workspace", type: "text", required: true, placeholder: "workspace id" },
-      { key: "repo", label: "Repository", type: "text", required: true, placeholder: "repository" },
+      { key: "repos", label: "Repositories", type: "repo-list", required: false, placeholder: "repository name", hint: "Leave empty to allow access to any repository the token can reach — the agent will need to pass a repo name explicitly." },
       { key: "email", label: "Email", type: "text", required: true, placeholder: "you@example.com" },
       { key: "apiToken", label: "API token", type: "secret", required: true },
     ],
   },
+  {
+    id: "gmail",
+    label: "Gmail",
+    authMethod: "google_oauth",
+    scopeNote: "Read-only Gmail access via Google sign-in (gmail.readonly). No manual keys needed.",
+    fields: [],
+  },
+  // google_calendar disabled: not currently offered as an integration. Re-enable by
+  // uncommenting once it's wired up (e.g. behind the Google OAuth flow like gmail).
+  // {
+  //   id: "google_calendar",
+  //   label: "Google Calendar",
+  //   scopeNote: "OAuth2 access token with calendar.readonly or calendar scope",
+  //   fields: [
+  //     { key: "accessToken", label: "Access token", type: "secret", required: true },
+  //     { key: "calendarId", label: "Calendar ID", type: "text", required: true, placeholder: "primary or calendar@group.calendar.google.com" },
+  //   ],
+  // },
+  {
+    id: "zoho_mail",
+    label: "Zoho Mail",
+    scopeNote: "OAuth 2.0 client credentials with ZohoMail.messages.READ scope",
+    fields: [
+      { key: "email", label: "Email", type: "text", required: true, placeholder: "you@yourdomain.com", hint: "Zoho Mail account email address" },
+      { key: "accountId", label: "Account ID", type: "text", required: true, placeholder: "56218000000008002", hint: "Zoho Mail account ID (from API console)" },
+      { key: "clientId", label: "Client ID", type: "text", required: true, placeholder: "1000.…", hint: "Zoho OAuth 2.0 client ID" },
+      { key: "clientSecret", label: "Client secret", type: "secret", required: true, hint: "Zoho OAuth 2.0 client secret" },
+      { key: "refreshToken", label: "Refresh token", type: "secret", required: true, hint: "OAuth 2.0 refresh token for the Zoho Mail account" },
+    ],
+  },
+  // zoho_calendar disabled: not currently offered as an integration. Re-enable by
+  // uncommenting if needed again.
+  // {
+  //   id: "zoho_calendar",
+  //   label: "Zoho Calendar",
+  //   scopeNote: "App password from Zoho account security settings (two-factor must be enabled)",
+  //   fields: [
+  //     { key: "username", label: "Username", type: "text", required: true, placeholder: "you@zoho.com" },
+  //     { key: "email", label: "Email", type: "text", required: true, placeholder: "you@zoho.com" },
+  //     { key: "appPassword", label: "App password", type: "secret", required: true },
+  //     { key: "caldavUrl", label: "CalDAV URL", type: "text", required: true, placeholder: "https://calendar.zoho.com/caldav/..." },
+  //   ],
+  // },
 ];
 
 export function getIntegrationProvider(id: string): IntegrationProvider | undefined {
   return INTEGRATION_PROVIDERS.find((p) => p.id === id);
 }
 
-export function parseGithubRepoUrl(url: string): { owner: string; repo: string } | null {
-  const m = url.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?$/);
-  return m ? { owner: m[1], repo: m[2] } : null;
+export function expandGithubContent(
+  content: Record<string, string | string[]>,
+): Record<string, string | string[]> {
+  const owner = typeof content.owner === "string" ? content.owner : "";
+  const repos = Array.isArray(content.repos) ? content.repos : [];
+  return { ...content, owner, org: owner, repos };
 }
 
-export function expandGithubContent(content: Record<string, string>): Record<string, string> {
-  const parsed = parseGithubRepoUrl(content.repoUrl ?? "");
-  if (!parsed) return content;
-  const { owner, repo } = parsed;
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { repoUrl: _repoUrl, ...rest } = content;
-  return { ...rest, owner, repo, org: owner };
+// True if the OAuth-based provider hasn't captured its refresh token yet.
+export function isOAuthConnected(draft: IntegrationDraft): boolean {
+  const token = draft.content.refreshToken;
+  return typeof token === "string" && token.trim().length > 0;
 }
 
 // True if any added integration is missing a required field — used to gate "Hire".
@@ -96,12 +144,12 @@ export function hasIncompleteIntegration(integrations: IntegrationDraft[]): bool
   return integrations.some((draft) => {
     const provider = getIntegrationProvider(draft.provider);
     if (!provider) return true;
+    // OAuth providers have no manual fields; they're complete once connected.
+    if (provider.authMethod === "google_oauth") return !isOAuthConnected(draft);
     return provider.fields.some((f) => {
       if (!f.required) return false;
-      const value = (draft.content[f.key] ?? "").trim();
-      if (!value) return true;
-      if (f.type === "repo-url") return parseGithubRepoUrl(value) === null;
-      return false;
+      const value = draft.content[f.key];
+      return typeof value !== "string" || value.trim().length === 0;
     });
   });
 }

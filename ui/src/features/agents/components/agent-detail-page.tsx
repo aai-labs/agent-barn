@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useParams } from "next/navigation";
 import { useQueryState, parseAsStringEnum, parseAsString } from "nuqs";
 import { formatModelName } from "../utils";
 import { useAgent } from "../hooks/use-agent";
@@ -15,6 +16,7 @@ import { AgentMetaBadges } from "./agent-meta-badges";
 import { StatusLine } from "./status-line";
 import { ConversationsTab } from "./conversations-tab";
 import { ToolCallsTab } from "./tool-calls-tab";
+import { LogsTab } from "./logs-tab";
 import { WorkTab } from "./work-tab";
 import { AboutTab } from "./about-tab";
 import { ConfigDrawer, DRAWER_TAB_KEYS } from "./config-drawer";
@@ -23,8 +25,8 @@ interface AgentDetailPageProps {
   agentId: string;
 }
 
-type Tab = "conversations" | "tool-calls" | "work" | "about";
-const VALID_TABS: Tab[] = ["conversations", "tool-calls", "work", "about"];
+type Tab = "conversations" | "tool-calls" | "logs" | "work" | "about";
+const VALID_TABS: Tab[] = ["conversations", "tool-calls", "logs", "work", "about"];
 
 function HeaderSkeleton() {
   return (
@@ -68,17 +70,22 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   const tabs: [Tab, string][] = [
     ["conversations", "Conversations"],
     ["tool-calls", "Tool calls"],
+    ["logs", "Logs"],
     ["work", "Work"],
     ["about", "About"],
   ];
 
   const isRunning = agent?.status === "RUNNING";
 
+  const params = useParams();
+  const orgId = typeof params?.orgId === "string" ? params.orgId : null;
+  const homeHref = orgId ? `/dashboard/${orgId}` : "/dashboard";
+
   return (
     <div style={{ background: "var(--bg)" }}>
       <div className="max-w-[73.75rem] mx-auto px-10 pt-7 pb-24">
         <Link
-          href="/dashboard"
+          href={homeHref}
           className="inline-flex items-center gap-1.5 text-[0.8125rem] mb-6 px-2 py-1 -ml-2 rounded-lg hover:bg-[var(--bg-soft)] transition-colors"
           style={{ color: "var(--ink-3)" }}
         >
@@ -177,6 +184,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
 
             {tab === "conversations" && <ConversationsTab agent={agent} />}
             {tab === "tool-calls" && <ToolCallsTab agent={agent} />}
+            {tab === "logs" && <LogsTab agent={agent} />}
             {tab === "work" && <WorkTab agent={agent} />}
             {tab === "about" && <AboutTab agent={agent} onConfigure={() => { void setConfigTab("personality"); }} />}
           </>

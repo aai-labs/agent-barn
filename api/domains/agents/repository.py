@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import datetime
 from uuid import UUID
 
 from injector import inject, singleton
@@ -8,6 +9,7 @@ from sqlmodel import Session, col, select
 from api.domains.agents.models import (
     Agent,
     AgentFilter,
+    AgentLogSnapshot,
     AgentSecret,
     AgentSkill,
     AgentSlackConfig,
@@ -40,6 +42,26 @@ class AgentRepository:
                 .where(col(Agent.id) == agent_id)
                 .where(col(Agent.organization_id) == org_id)
                 .where(col(Agent.deleted_at).is_(None))
+            )
+            return session.exec(query).first()
+
+    def count_active_by_org(self, org_id: UUID) -> int:
+        with Session(self.delegate.engine) as session:
+            count_query = (
+                select(func.count())
+                .select_from(Agent)
+                .where(col(Agent.organization_id) == org_id)
+                .where(col(Agent.deleted_at).is_(None))
+            )
+            return session.scalar(count_query) or 0
+
+    def get_deleted(self, agent_id: UUID, org_id: UUID) -> Agent | None:
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(Agent)
+                .where(col(Agent.id) == agent_id)
+                .where(col(Agent.organization_id) == org_id)
+                .where(col(Agent.deleted_at).is_not(None))
             )
             return session.exec(query).first()
 
@@ -79,6 +101,26 @@ class AgentRepository:
 
             agents = list(session.exec(query).all())
             return agents, total
+
+    def find_all_active_for_org(self, org_id: UUID) -> list[Agent]:
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(Agent)
+                .where(col(Agent.organization_id) == org_id)
+                .where(col(Agent.deleted_at).is_(None))
+                .order_by(col(Agent.created_at).asc())
+            )
+            return list(session.exec(query).all())
+
+    def find_all_for_org(self, org_id: UUID) -> list[Agent]:
+        """Return all agents for an org — both live and deleted."""
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(Agent)
+                .where(col(Agent.organization_id) == org_id)
+                .order_by(col(Agent.created_at).asc())
+            )
+            return list(session.exec(query).all())
 
     # --- Slack config ---
 
@@ -205,6 +247,68 @@ class AgentRepository:
         with Session(self.delegate.engine) as session:
             query = select(AgentSkill).where(col(AgentSkill.agent_id) == agent_id)
             return list(session.exec(query).all())
+
+    # --- Log snapshots ---
+
+    def save_log_snapshot(self, snapshot: AgentLogSnapshot) -> AgentLogSnapshot:
+        self.delegate.save(snapshot)
+        return snapshot
+
+    def get_latest_log_snapshot(self, agent_id: UUID) -> AgentLogSnapshot | None:
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(AgentLogSnapshot)
+                .where(col(AgentLogSnapshot.agent_id) == agent_id)
+                .order_by(col(AgentLogSnapshot.session_ended_at).desc())
+                .limit(1)
+            )
+            return session.exec(query).first()
+
+    def get_snapshot_by_id(
+        self, agent_id: UUID, snapshot_id: UUID
+    ) -> AgentLogSnapshot | None:
+        with Session(self.delegate.engine) as session:
+            query = select(AgentLogSnapshot).where(
+                col(AgentLogSnapshot.agent_id) == agent_id,
+                col(AgentLogSnapshot.id) == snapshot_id,
+            )
+            return session.exec(query).first()
+
+    def get_previous_snapshot(
+        self, agent_id: UUID, before: datetime
+    ) -> AgentLogSnapshot | None:
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(AgentLogSnapshot)
+                .where(
+                    col(AgentLogSnapshot.agent_id) == agent_id,
+                    col(AgentLogSnapshot.session_ended_at) < before,
+                )
+                .order_by(col(AgentLogSnapshot.session_ended_at).desc())
+                .limit(1)
+            )
+            return session.exec(query).first()
+
+    def delete_old_snapshots(self, agent_id: UUID, keep: int) -> None:
+        with Session(self.delegate.engine) as session:
+            keep_ids_query = (
+                select(AgentLogSnapshot.id)
+                .where(col(AgentLogSnapshot.agent_id) == agent_id)
+                .order_by(col(AgentLogSnapshot.session_ended_at).desc())
+                .limit(keep)
+            )
+            keep_ids = list(session.exec(keep_ids_query).all())
+            if not keep_ids:
+                return
+            old_query = select(AgentLogSnapshot).where(
+                col(AgentLogSnapshot.agent_id) == agent_id,
+                col(AgentLogSnapshot.id).notin_(keep_ids),
+            )
+            old_snapshots = list(session.exec(old_query).all())
+            for snap in old_snapshots:
+                session.delete(snap)
+            if old_snapshots:
+                session.commit()
 
     def save(self, agent: Agent) -> Agent:
         self.delegate.save(agent)

@@ -9,6 +9,8 @@ from .common import _labels, _resource_name
 _SCRIPTS = Path(__file__).parent.parent / "scripts" / "hermes"
 _DENY_DMS = _SCRIPTS / "plugins" / "slack-deny-dms"
 _CHANNEL_ALLOWLIST = _SCRIPTS / "plugins" / "slack-channel-allowlist"
+_TELEMETRY_PUSH = _SCRIPTS / "plugins" / "telemetry-push"
+_NO_HOME_CHANNEL = "C0000000000"
 
 HERMES_BOOTLOADER_FOOTER: str = (_SCRIPTS / "bootloader-footer.md").read_text()
 HERMES_HEALTHZ_PY: str = (_SCRIPTS / "healthz-server.py").read_text()
@@ -21,6 +23,11 @@ SLACK_CHANNEL_ALLOWLIST_PLUGIN_YAML: str = (
 SLACK_CHANNEL_ALLOWLIST_PLUGIN_INIT: str = (
     _CHANNEL_ALLOWLIST / "__init__.py"
 ).read_text()
+TELEMETRY_PUSH_PLUGIN_YAML: str = (_TELEMETRY_PUSH / "plugin.yaml").read_text()
+TELEMETRY_PUSH_PLUGIN_INIT: str = (_TELEMETRY_PUSH / "__init__.py").read_text()
+
+
+_HERMES_APPROVAL_MODE = {"manual": "manual", "auto": "smart", "off": "off"}
 
 
 def build_hermes_config(
@@ -28,6 +35,8 @@ def build_hermes_config(
     litellm_base_url: str,
     dm_policy: str = "off",
     group_policy: str = "allowlist",
+    verbose_mode: bool = True,
+    approval_mode: str = "auto",
 ) -> dict:
     _, sep, model_name = model.partition("/")
     if not sep:
@@ -40,7 +49,7 @@ def build_hermes_config(
     #   - slack-deny-dms scopes DMs to SLACK_DM_ALLOWED_USERS
     # SLACK_ALLOW_ALL_USERS already authorizes every user at the gateway, so
     # dropping a hook opens that surface up.
-    enabled_plugins: list[str] = []
+    enabled_plugins: list[str] = ["telemetry-push"]
     if group_policy != "open":
         enabled_plugins.append("slack-channel-allowlist")
     if dm_policy != "open":
@@ -74,6 +83,8 @@ def build_hermes_config(
             "platforms": {
                 "slack": {
                     "tool_progress": "off",
+                    "interim_assistant_messages": verbose_mode,
+                    "busy_ack_detail": False,
                 },
             },
         },
@@ -87,6 +98,9 @@ def build_hermes_config(
         },
         "plugins": {
             "enabled": enabled_plugins,
+        },
+        "approvals": {
+            "mode": _HERMES_APPROVAL_MODE.get(approval_mode, "smart"),
         },
     }
 
@@ -122,6 +136,8 @@ def build_hermes_config_map(
         "slack-deny-dms-init.py": SLACK_DENY_DMS_PLUGIN_INIT,
         "slack-channel-allowlist-plugin.yaml": SLACK_CHANNEL_ALLOWLIST_PLUGIN_YAML,
         "slack-channel-allowlist-init.py": SLACK_CHANNEL_ALLOWLIST_PLUGIN_INIT,
+        "telemetry-push-plugin.yaml": TELEMETRY_PUSH_PLUGIN_YAML,
+        "telemetry-push-init.py": TELEMETRY_PUSH_PLUGIN_INIT,
         "healthz-server.py": HERMES_HEALTHZ_PY,
         "start.sh": HERMES_START_SH,
     }
@@ -179,7 +195,7 @@ def build_secret_hermes_slack(
             "API_SERVER_MODEL_NAME": agent_name,
             "GATEWAY_ALLOW_ALL_USERS": "true",
             "SLACK_ALLOW_ALL_USERS": "true",
-            "SLACK_HOME_CHANNEL": channel_ids[0] if channel_ids else "",
+            "SLACK_HOME_CHANNEL": channel_ids[0] if channel_ids else _NO_HOME_CHANNEL,
             "SLACK_CHANNEL_IDS": ",".join(channel_ids),
             "SLACK_DM_ALLOWED_USERS": ",".join(allowed_dm_users),
         },
@@ -227,6 +243,20 @@ def build_hermes_deployment(
                                 period_seconds=15,
                                 failure_threshold=6,
                             ),
+                            env=[
+                                # The hermes process starts in its install dir
+                                # (/opt/hermes) and the runtime user's HOME is
+                                # /opt/data (the state dir), so without these the
+                                # agent's shell is anchored in the wrong place and
+                                # relative writes miss the persistent /workspace.
+                                # ocbw sets both alongside terminal.cwd — mirror it.
+                                client.V1EnvVar(
+                                    name="TERMINAL_CWD", value="/workspace"
+                                ),
+                                client.V1EnvVar(
+                                    name="MESSAGING_CWD", value="/workspace"
+                                ),
+                            ],
                             env_from=[
                                 client.V1EnvFromSource(
                                     secret_ref=client.V1SecretEnvSource(name=name)
@@ -241,9 +271,16 @@ def build_hermes_deployment(
                                     name="data",
                                     mount_path="/opt/data",
                                 ),
+                                # /workspace is the agent's cwd; back it with the
+                                # per-agent PVC so agent-written files survive
+                                # restarts (AF-215) — like ocbw's persistent
+                                # ./agents/<name>/workspace and OpenClaw's
+                                # PVC-nested workspace. subPath keeps it a
+                                # sibling of the /opt/data content on one PVC.
                                 client.V1VolumeMount(
-                                    name="workspace",
+                                    name="data",
                                     mount_path="/workspace",
+                                    sub_path="workspace",
                                 ),
                             ],
                         )
@@ -258,10 +295,6 @@ def build_hermes_deployment(
                             persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(
                                 claim_name=name
                             ),
-                        ),
-                        client.V1Volume(
-                            name="workspace",
-                            empty_dir=client.V1EmptyDirVolumeSource(),
                         ),
                     ],
                 ),

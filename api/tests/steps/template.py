@@ -51,3 +51,28 @@ def there_is_a_template(
         context.template = template
 
     return step
+
+
+def there_is_a_template_skill():
+    """Attach context.skill to context.template as a required skill."""
+
+    def step(context):
+        from sqlmodel import Session
+
+        from api.domains.agents.models import AgentTemplateSkill
+        from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
+
+        delegate: PostgresRepositoryDelegate = context.injector.get(
+            PostgresRepositoryDelegate
+        )
+        with Session(delegate.engine) as session:
+            session.add(
+                AgentTemplateSkill(
+                    template_id=context.template.id,
+                    skill_id=context.skill.id,
+                )
+            )
+            session.commit()
+        context.template_skill = (context.template.id, context.skill.id)
+
+    return step

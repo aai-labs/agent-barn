@@ -1,10 +1,14 @@
+import { TEST_ORG_ID } from "../constants";
 import { expect, test } from "@playwright/test";
 
 import {
   mockAgentTemplate,
+  mockAssignedSkill,
   mockTemplates,
+  mockVersionsForSlug,
 } from "../pages/data-support/agent-data-support.po";
 import { DataSupport } from "../pages/data-support/data-support.po";
+import { MOCK_PLATFORM_SKILL_ID } from "../pages/data-support/skill-data-support.po";
 
 test.describe("Settings · Templates", () => {
   test.describe.configure({ mode: "serial" });
@@ -17,10 +21,12 @@ test.describe("Settings · Templates", () => {
 
     await dataSupport.auth.interceptRefreshRequest();
     await dataSupport.users.interceptGetUserContextRequest();
+    await dataSupport.users.interceptGetOrganizationsRequest();
     await dataSupport.agents.interceptGetTemplatesRequest();
     await dataSupport.agents.interceptGetTemplateVersionsRequest();
+    await dataSupport.skills.interceptGetSkillsRequest();
 
-    await page.goto("/dashboard/settings");
+    await page.goto(`/dashboard/${TEST_ORG_ID}/settings`);
     await page.getByRole("button", { name: "Templates", exact: true }).click();
   });
 
@@ -122,5 +128,43 @@ test.describe("Settings · Templates", () => {
     await page.getByRole("button", { name: "Create template" }).click();
 
     await expect(page.getByText(/already exists/)).toBeVisible();
+  });
+
+  test("view mode shows Required skills None when template has no required skills", async ({ page }) => {
+    await page.getByText("My Custom", { exact: true }).click();
+
+    await expect(page.getByText("Required skills")).toBeVisible();
+    await expect(page.getByText("None", { exact: true })).toBeVisible();
+  });
+
+  test("view mode shows required skill pill when template has required skills", async ({ page }) => {
+    const versions = mockVersionsForSlug("my-custom").map((v) => ({
+      ...v,
+      required_skills: [mockAssignedSkill],
+    }));
+    await dataSupport.agents.interceptGetTemplateVersionsRequest({ body: versions });
+
+    await page.getByText("My Custom", { exact: true }).click();
+
+    await expect(page.getByText("Required skills")).toBeVisible();
+    await expect(page.getByText(mockAssignedSkill.name, { exact: true })).toBeVisible();
+  });
+
+  test("edit mode adding a skill sends required_skill_ids in PATCH body", async ({ page }) => {
+    await dataSupport.agents.interceptUpdateTemplateRequest({ slug: "my-custom" });
+
+    await page.getByText("My Custom", { exact: true }).click();
+    await page.getByRole("button", { name: "Edit template" }).click();
+
+    // Add the first available skill (github).
+    await page.getByRole("button", { name: "Add" }).first().click();
+
+    const patchPromise = page.waitForRequest(
+      (req) => req.url().includes("/api/v1/templates/my-custom") && req.method() === "PATCH",
+    );
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    const patchRequest = await patchPromise;
+    const body = patchRequest.postDataJSON() as Record<string, unknown>;
+    expect(body.required_skill_ids).toEqual([MOCK_PLATFORM_SKILL_ID]);
   });
 });

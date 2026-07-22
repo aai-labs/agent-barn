@@ -23,7 +23,7 @@ OPENCLAW_IMAGE_REPOSITORY=agentfarm-openclaw-base
 # ── Image tags (pin to specific versions for a real deploy) ──────────────────
 API_IMAGE_TAG=0.13.0
 UI_IMAGE_TAG=0.13.0
-OPENCLAW_IMAGE_TAG=0.3.0
+OPENCLAW_IMAGE_TAG=0.4.0
 HERMES_IMAGE_TAG=0.1.0
 
 # ── Postgres (app DB) ────────────────────────────────────────────────────────
@@ -60,6 +60,13 @@ API_HOST=api.agentfarm.local
 UI_HOST=agentfarm.local
 WEB_APP_URL=http://agentfarm.local
 
+# ── Gmail OAuth (AF-153) ─────────────────────────────────────────────────────
+# Shared Google OAuth 2.0 "Web application" client for the Gmail "Authenticate
+# with Google" flow. Leave blank to disable. Register
+# "<WEB_APP_URL>/api/v1/integrations/google/callback" as an authorized redirect URI.
+GOOGLE_CLOUD_CLIENT_ID=
+GOOGLE_CLOUD_CLIENT_SECRET=
+
 # ── Ingress TLS ──────────────────────────────────────────────────────────────
 # cert-manager ClusterIssuer that signs the api/ui ingress certs. cert-manager
 # is required. letsencrypt-http01 needs a publicly reachable host, so for a
@@ -73,11 +80,11 @@ INGRESS_CLUSTER_ISSUER=letsencrypt-http01
 STORAGE_CLASS=local-path
 
 # ── Model picker (AF-128) ────────────────────────────────────────────────────
-# Comma-separated fnmatch globs limiting OpenRouter models, e.g. qwen/*,openai/gpt-5*
+# Comma-separated fnmatch globs limiting OpenRouter models, e.g. z-ai/glm-5.2,openai/gpt-5*
 # Empty offers the full catalogue.
 AGENT_MODEL_ALLOWLIST=
 # Default model. Format: litellm/openrouter/<slug>
-# e.g. litellm/openrouter/qwen/qwen3.6-plus. Empty uses the API's built-in default.
+# e.g. litellm/openrouter/z-ai/glm-5.2. Empty uses the API's built-in default.
 AGENT_DEFAULT_MODEL=
 
 # ── Optional ─────────────────────────────────────────────────────────────────

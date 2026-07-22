@@ -137,14 +137,14 @@ def downgrade() -> None:
     op.execute(
         sa.text("""
             UPDATE agent SET
-                slack_bot_token_encrypted = asc.bot_token_encrypted,
-                slack_app_token_encrypted = asc.app_token_encrypted,
-                slack_channel_ids = asc.channel_ids,
-                slack_dm_user_ids = asc.dm_user_ids,
-                slack_group_policy = asc.group_policy,
-                slack_dm_policy = asc.dm_policy
-            FROM agent_slack_config asc
-            WHERE agent.id = asc.agent_id
+                slack_bot_token_encrypted = cfg.bot_token_encrypted,
+                slack_app_token_encrypted = cfg.app_token_encrypted,
+                slack_channel_ids = cfg.channel_ids,
+                slack_dm_user_ids = cfg.dm_user_ids,
+                slack_group_policy = cfg.group_policy,
+                slack_dm_policy = cfg.dm_policy
+            FROM agent_slack_config cfg
+            WHERE agent.id = cfg.agent_id
         """)
     )
 

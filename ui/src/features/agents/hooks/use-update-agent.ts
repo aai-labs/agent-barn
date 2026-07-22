@@ -20,14 +20,16 @@ export type UpdateAgentData = {
   slackDmUserIds?: string[];
   slackGroupPolicy?: "open" | "allowlist";
   slackDmPolicy?: "off" | "open" | "allowlist";
+  slackVerboseMode?: boolean;
   teamsAppId?: string;
   teamsAppPassword?: string;
   teamsTenantId?: string;
   skillIds?: string[];
   removedSkillIds?: string[];
   // Integration credentials: upsert (add/replace) + explicit removal.
-  secrets?: Array<{ provider: string; content: Record<string, string> }>;
+  secrets?: Array<{ provider: string; content: Record<string, string | string[]> }>;
   removedSecretProviders?: string[];
+  approvalMode?: "manual" | "auto" | "off";
 };
 
 export function useUpdateAgent() {

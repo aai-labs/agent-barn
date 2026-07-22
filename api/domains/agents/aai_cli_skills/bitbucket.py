@@ -44,6 +44,10 @@ api_token_secret = "bitbucket.api_token"
 
 Commands that operate on a repository require `--repo REPO` (bare slug) and `--owner WORKSPACE`. Always pass both explicitly.
 
+**Multiple repositories:** if the configured credential lists more than one repository, additional profiles `bitbucket-work-2`, `bitbucket-work-3`, ... are set up — one per repo, all sharing the same token and workspace. Check the `## Configured Integrations` section of this agent's tool context (TOOLS.md) for the authoritative profile-to-repo mapping; don't guess which numbered profile maps to which repo. Since `--repo` always overrides the profile default, the simplest approach is usually to keep `--profile bitbucket-work` and just pass whichever `--repo` you need explicitly — you rarely need to switch `--profile`.
+
+**No repository configured:** if the credential has zero repositories configured, `profile.repo` is absent entirely. `--repo REPO` then becomes mandatory on every command that needs one — omitting it returns a `config_error`.
+
 ## Response shapes
 
 Successful command output is JSON on stdout.
@@ -348,9 +352,10 @@ Most commands accept `--repo REPO`. Newer commands also accept `--owner WORKSPAC
 ## prs list
 
 List pull requests for a repository. Returns the raw Bitbucket provider page.
+By default Bitbucket returns only **OPEN** PRs — pass `--state` to change that.
 
 ```
-aai-cli bitbucket prs list [--repo REPO] [--owner WORKSPACE] [--limit N] --profile bitbucket-work
+aai-cli bitbucket prs list [--repo REPO] [--owner WORKSPACE] [--limit N] [--state STATE] [--sort updated] --profile bitbucket-work
 ```
 
 | Flag | Required | Description |
@@ -358,11 +363,13 @@ aai-cli bitbucket prs list [--repo REPO] [--owner WORKSPACE] [--limit N] --profi
 | `--repo` | **yes** | Bare repository slug (e.g. `my-repo`) |
 | `--owner` | **yes** | Bitbucket workspace |
 | `--limit` | no | Provider page length. Default: `50` |
+| `--state` | no | PR state: `OPEN` (default), `MERGED`, `DECLINED`, or `SUPERSEDED` |
+| `--sort` | no | Order results. `updated` = most-recently-updated first (maps to `-updated_on`). Omitted = provider default (Bitbucket already orders by updated) |
 
-**Example**
+**Example — merged PRs**
 
 ```
-aai-cli bitbucket prs list --repo my-repo --limit 5 --profile bitbucket-work
+aai-cli bitbucket prs list --repo my-repo --state MERGED --limit 5 --profile bitbucket-work
 ```
 
 ---

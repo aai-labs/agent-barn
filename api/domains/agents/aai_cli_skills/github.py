@@ -44,6 +44,10 @@ repo = "my-repo"
 
 Most commands accept `--owner OWNER --repo REPO` overrides. When omitted they fall back to `profile.owner` / `profile.repo`. `repos list` falls back to `profile.org` (org repos) or the authenticated user's repos when `org` is unset.
 
+**Multiple repositories:** if the configured credential lists more than one repository, additional profiles `github-work-2`, `github-work-3`, ... are set up — one per repo, all sharing the same token and owner. Check the `## Configured Integrations` section of this agent's tool context (TOOLS.md) for the authoritative profile-to-repo mapping; don't guess which numbered profile maps to which repo. Since `--repo` always overrides the profile default, the simplest approach is usually to keep `--profile github-work` and just pass whichever `--repo` you need explicitly — you rarely need to switch `--profile`.
+
+**No repository configured:** if the credential has zero repositories configured, `profile.repo` is absent entirely. `--repo REPO` then becomes mandatory on every command that needs one — omitting it returns a `config_error`.
+
 ## Response shapes
 
 Successful command output is JSON on stdout.
@@ -374,10 +378,20 @@ GitHub exposes three distinct PR comment resources. This skill keeps them as sep
 ## prs list
 
 List pull requests for a repository. Returns the raw GitHub provider page.
+By default GitHub returns only **open** PRs — pass `--state` to change that.
 
 ```
-aai-cli github prs list [--owner OWNER] [--repo REPO] [--limit N] --profile github-work
+aai-cli github prs list [--owner OWNER] [--repo REPO] [--limit N] [--state STATE] [--sort updated] --profile github-work
 ```
+
+`--state` accepts `open` (default), `closed`, or `all`. GitHub has no "merged"
+state: to find **merged** PRs, use `--state closed` and keep those whose
+`merged_at` is not null.
+
+`--sort updated` orders by most-recently-updated first. Without it the page is in
+creation order, so a PR opened long ago but merged recently sits deep in the list
+and can fall past `--limit`. Use `--sort updated` when you need recently-merged
+PRs regardless of when they were opened.
 
 ---
 

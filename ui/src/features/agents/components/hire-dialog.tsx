@@ -47,25 +47,21 @@ function getSteps(
   configTokenReady: boolean,
 ): WizardStep[] {
   if (agentType === "hermes") {
-    // The runtime picker (agent-type) and platform picker (platform-choice) are
-    // intentionally skipped: creation is locked to Hermes + Slack from the
-    // frontend. The picker components and the openclaw/teams branches below stay
-    // in place but are unreachable.
     if (!setupNewBot) {
-      return ["template", "slack-choice", "slack-tokens", "details", "skills"];
+      return ["template", "agent-type", "slack-choice", "slack-tokens", "details", "skills"];
     }
-    const base: WizardStep[] = ["template", "slack-choice"];
+    const base: WizardStep[] = ["template", "agent-type", "slack-choice"];
     if (!configTokenReady) base.push("config-token");
     base.push("bot-builder", "slack-tokens", "details", "skills");
     return base;
   }
   if (platform === "teams") {
-    return ["template", "agent-type", "platform-choice", "teams-credentials", "teams-bot-builder", "details", "skills"];
+    return ["template", "agent-type", "teams-credentials", "teams-bot-builder", "details", "skills"];
   }
   if (!setupNewBot) {
-    return ["template", "agent-type", "platform-choice", "slack-choice", "slack-tokens", "details", "skills"];
+    return ["template", "agent-type", "slack-choice", "slack-tokens", "details", "skills"];
   }
-  const base: WizardStep[] = ["template", "agent-type", "platform-choice", "slack-choice"];
+  const base: WizardStep[] = ["template", "agent-type", "slack-choice"];
   if (!configTokenReady) base.push("config-token");
   base.push("bot-builder", "slack-tokens", "details", "skills");
   return base;
@@ -123,6 +119,8 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   const [agentType, setAgentType] = useState<"openclaw" | "hermes">("hermes");
   const [slackGroupPolicy, setSlackGroupPolicy] = useState<"open" | "allowlist">("allowlist");
   const [slackDmPolicy, setSlackDmPolicy] = useState<"off" | "open" | "allowlist">("off");
+  const [slackVerboseMode, setSlackVerboseMode] = useState(true);
+  const [approvalMode, setApprovalMode] = useState<"manual" | "auto" | "off">("auto");
   const [teamsAppId, setTeamsAppId] = useState("");
   const [teamsAppPassword, setTeamsAppPassword] = useState("");
   const [showTeamsAppPassword, setShowTeamsAppPassword] = useState(false);
@@ -264,13 +262,17 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
         agentType,
         templateSlug: effectiveTemplate.templateSlug,
         ...(resolvedVersion != null ? { templateVersion: resolvedVersion } : {}),
-        skillIds: selectedSkillIds,
+        skillIds: [
+          ...(versionTemplate?.requiredSkills?.map((s) => s.id) ?? []),
+          ...selectedSkillIds,
+        ],
         secrets: skillCredentials.map((c) => ({
           provider: c.provider,
           content: c.provider === "github" ? expandGithubContent(c.content) : c.content,
         })),
+        approvalMode,
         ...(platform === "slack"
-          ? { slackBotToken, slackAppToken, slackGroupPolicy, slackDmPolicy }
+          ? { slackBotToken, slackAppToken, slackGroupPolicy, slackDmPolicy, slackVerboseMode }
           : { teamsAppId, teamsAppPassword, teamsTenantId }),
       });
       setCreatedAgent(agent);
@@ -588,10 +590,13 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
           <DetailsStep
             template={versionTemplate}
             platform={platform}
+            agentType={agentType}
             name={name} onNameChange={setName}
             model={model} onModelChange={setModel}
             slackGroupPolicy={slackGroupPolicy} onSlackGroupPolicyChange={(v) => setSlackGroupPolicy(v as "open" | "allowlist")}
             slackDmPolicy={slackDmPolicy} onSlackDmPolicyChange={(v) => setSlackDmPolicy(v as "off" | "open" | "allowlist")}
+            slackVerboseMode={slackVerboseMode} onSlackVerboseModeChange={setSlackVerboseMode}
+            approvalMode={approvalMode} onApprovalModeChange={(v) => setApprovalMode(v as "manual" | "auto" | "off")}
             onChangeTemplate={() => setStep("template")}
           />
         )}
@@ -601,6 +606,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
             skillCredentials={skillCredentials}
             onSkillIdsChange={setSelectedSkillIds}
             onSkillCredentialsChange={setSkillCredentials}
+            templateRequiredSkills={versionTemplate?.requiredSkills ?? []}
           />
         )}
       </div>
@@ -619,10 +625,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
           <button
             className="af-btn af-btn-primary af-btn-lg"
             disabled={!effectiveTemplate}
-            // Skip the runtime (agent-type) and platform (platform-choice) pickers:
-            // creation is locked to Hermes + Slack (the state defaults). Those steps'
-            // components and Continue handlers below stay but are now unreachable.
-            onClick={() => setStep("slack-choice")}
+            onClick={() => setStep("agent-type")}
           >
             Continue
           </button>
@@ -630,7 +633,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
         {step === "agent-type" && (
           <button
             className="af-btn af-btn-primary af-btn-lg"
-            onClick={() => setStep(agentType === "hermes" ? "slack-choice" : "platform-choice")}
+            onClick={() => setStep("slack-choice")}
           >
             Continue
           </button>
@@ -691,7 +694,21 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
           <button
             className="af-btn af-btn-primary af-btn-lg"
             disabled={!name.trim()}
-            onClick={() => setStep("skills")}
+            onClick={() => {
+              // Pre-populate credential drafts for template required skills.
+              const requiredProviders = [
+                ...new Set(
+                  (versionTemplate?.requiredSkills ?? []).flatMap((s) => s.requiredProviders),
+                ),
+              ];
+              setSkillCredentials((prev) => {
+                const existing = new Set(prev.map((c) => c.provider));
+                const toAdd = requiredProviders.filter((p) => !existing.has(p));
+                if (toAdd.length === 0) return prev;
+                return [...prev, ...toAdd.map((p) => ({ provider: p, content: {} }))];
+              });
+              setStep("skills");
+            }}
           >
             Continue
           </button>

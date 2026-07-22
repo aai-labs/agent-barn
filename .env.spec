@@ -15,6 +15,12 @@ SUPER_USER_FULL_NAME=Super User
 EMAIL_SERVER_CREDENTIAL=
 EMAIL_SMTP_SERVER=
 
+# Optional: shared Google OAuth 2.0 "Web application" client for the Gmail
+# "Authenticate with Google" flow. If unset, the flow is disabled. Register
+# "<WEB_APP_URL>/api/v1/integrations/google/callback" as an authorized redirect URI.
+GOOGLE_CLOUD_CLIENT_ID=
+GOOGLE_CLOUD_CLIENT_SECRET=
+
 # Kubernetes client
 # Path to kubeconfig file. If unset, tries in-cluster auth then ~/.kube/config.
 K8S_KUBECONFIG_PATH=
@@ -42,10 +48,10 @@ AGENT_LITELLM_BASE_URL=
 # Name of the k8s Secret containing LITELLM_MASTER_KEY. Defaults to "litellm".
 LITELLM_SECRET_NAME=litellm
 # Default model for openclaw agents when agent.model is not set. Format: litellm/openrouter/<slug>
-AGENT_DEFAULT_MODEL=litellm/openrouter/qwen/qwen3.6-plus
+AGENT_DEFAULT_MODEL=litellm/openrouter/z-ai/glm-5.2
 # OpenRouter API key used to fetch the model catalogue for the picker. Optional —
 # the public catalogue endpoint works unauthenticated.
 OPENROUTER_API_KEY=
 # Comma-separated fnmatch globs limiting which OpenRouter models the picker offers,
-# e.g. "qwen/*,openai/gpt-5*". Empty offers the full catalogue.
+# e.g. "z-ai/glm-5.2,openai/gpt-5*". Empty offers the full catalogue.
 AGENT_MODEL_ALLOWLIST=

@@ -14,6 +14,7 @@ export const mockAgent = {
   template_slug: MOCK_TEMPLATE_SLUG,
   template_version: 1,
   model: "litellm/gpt-5-mini",
+  approval_mode: "auto",
   slack_config: {
     channel_ids: [],
     dm_user_ids: [],
@@ -39,6 +40,7 @@ export const mockAssignedSkill = {
   source: "aai_cli",
   required_providers: ["github"],
   tools_pointer: null,
+  required: false,
   created_at: "2026-01-01T00:00:00Z",
   updated_at: "2026-01-01T00:00:00Z",
 };
@@ -71,6 +73,7 @@ export const mockAgentTemplate = {
   boot_md: "",
   bootstrap_md: "",
   heartbeat_md: "",
+  required_skills: [],
   created_at: "2026-03-14T00:00:00Z",
   updated_at: "2026-05-14T09:14:00Z",
 };
@@ -518,9 +521,11 @@ export class AgentDataSupport {
   async interceptGetTemplateVersionsRequest({
     status = 200,
     detail = "Unable to load versions",
+    body,
   }: {
     status?: number;
     detail?: string;
+    body?: unknown;
   } = {}) {
     await this.page.route("**/api/v1/templates/*/versions", async (route) => {
       if (route.request().method() !== "GET") {
@@ -535,7 +540,7 @@ export class AgentDataSupport {
         status,
         contentType: "application/json",
         body: JSON.stringify(
-          status >= 400 ? { detail } : mockVersionsForSlug(slug),
+          status >= 400 ? { detail } : (body ?? mockVersionsForSlug(slug)),
         ),
       });
     });
@@ -624,6 +629,33 @@ export class AgentDataSupport {
                   items: [mockToolCall],
                 }),
           ),
+        });
+      },
+    );
+  }
+
+  async interceptValidateIntegrationRequest({
+    agentId = MOCK_AGENT_ID,
+    provider = "github",
+    status = 404,
+    detail = "Agent not found",
+  }: {
+    agentId?: string;
+    provider?: string;
+    status?: number;
+    detail?: string;
+  } = {}) {
+    await this.page.route(
+      `**/api/v1/agents/${agentId}/integrations/${provider}/validate`,
+      async (route) => {
+        if (route.request().method() !== "POST") {
+          await route.fallback();
+          return;
+        }
+        await route.fulfill({
+          status,
+          contentType: "application/json",
+          body: JSON.stringify({ detail }),
         });
       },
     );

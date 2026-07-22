@@ -30,11 +30,14 @@ export function SlackConfigPanel({ agent, onSaved }: SlackConfigPanelProps) {
   const [userIds, setUserIds] = useState<string[]>(agent.slackConfig?.dmUserIds ?? []);
   const [groupPolicy, setGroupPolicy] = useState<"open" | "allowlist">(agent.slackConfig?.groupPolicy ?? "open");
   const [dmPolicy, setDmPolicy] = useState<"off" | "open" | "allowlist">(agent.slackConfig?.dmPolicy ?? "off");
+  const [verboseMode, setVerboseMode] = useState<boolean>(agent.slackConfig?.verboseMode ?? true);
   const [channelSearch, setChannelSearch] = useState("");
   const [userSearch, setUserSearch] = useState("");
   const [channelFocused, setChannelFocused] = useState(false);
   const [userFocused, setUserFocused] = useState(false);
   const [saved, setSaved] = useState(false);
+  const shouldShowHermesHomeChannelMessage =
+    agent.agentType === "hermes" && channelIds.length === 0;
 
   const selectedChannels = channelIds
     .map((id) => channels.find((c) => c.id === id))
@@ -63,6 +66,7 @@ export function SlackConfigPanel({ agent, onSaved }: SlackConfigPanelProps) {
         slackDmUserIds: userIds,
         slackGroupPolicy: groupPolicy,
         slackDmPolicy: dmPolicy,
+        ...(agent.agentType === "hermes" ? { slackVerboseMode: verboseMode } : {}),
       });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
@@ -94,6 +98,12 @@ export function SlackConfigPanel({ agent, onSaved }: SlackConfigPanelProps) {
             <option value="allowlist">Allowlist — only allowed channels</option>
           </select>
         </div>
+
+        {shouldShowHermesHomeChannelMessage && (
+          <p className="text-[0.781rem]" style={{ color: "var(--err)" }}>
+            Set up a home channel for Hermes if you want scheduled or proactive Slack delivery.
+          </p>
+        )}
 
         {groupPolicy === "allowlist" && (
           <div className="flex flex-col gap-2">
@@ -293,6 +303,34 @@ export function SlackConfigPanel({ agent, onSaved }: SlackConfigPanelProps) {
           </div>
         )}
       </section>
+
+      {agent.agentType === "hermes" && (
+        <section className="flex flex-col gap-3">
+          <div className="flex flex-col gap-1.5">
+            <label
+              htmlFor="slack-verbose-mode"
+              className="font-medium text-[0.844rem]"
+              style={{ color: "var(--ink)" }}
+            >
+              Verbosity
+            </label>
+            <select
+              id="slack-verbose-mode"
+              className="af-input"
+              value={verboseMode ? "verbose" : "concise"}
+              disabled={isRunning}
+              onChange={(e) => setVerboseMode(e.target.value === "verbose")}
+            >
+              <option value="verbose">Verbose — announces each step</option>
+              <option value="concise">Concise — final answers only</option>
+            </select>
+            <p className="text-[0.781rem]" style={{ color: "var(--ink-4)" }}>
+              When verbose, the agent announces what it&apos;s about to do at each step.
+              Takes effect the next time the agent starts.
+            </p>
+          </div>
+        </section>
+      )}
 
       <div className="flex items-center gap-2">
         <button

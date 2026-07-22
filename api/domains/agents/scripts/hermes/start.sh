@@ -3,7 +3,7 @@ set -e
 
 python3 /app/config/healthz-server.py &
 
-mkdir -p /opt/data/plugins/slack-deny-dms /opt/data/plugins/slack-channel-allowlist /opt/data/memories /workspace
+mkdir -p /opt/data/plugins/slack-deny-dms /opt/data/plugins/slack-channel-allowlist /opt/data/plugins/telemetry-push /opt/data/memories /workspace
 
 
 if [ ! -f /opt/data/memories/USER.md ]; then
@@ -24,6 +24,9 @@ cp /app/config/slack-deny-dms-init.py /opt/data/plugins/slack-deny-dms/__init__.
 cp /app/config/slack-channel-allowlist-plugin.yaml /opt/data/plugins/slack-channel-allowlist/plugin.yaml
 cp /app/config/slack-channel-allowlist-init.py /opt/data/plugins/slack-channel-allowlist/__init__.py
 
+cp /app/config/telemetry-push-plugin.yaml /opt/data/plugins/telemetry-push/plugin.yaml
+cp /app/config/telemetry-push-init.py /opt/data/plugins/telemetry-push/__init__.py
+
 for f in IDENTITY.md AGENTS.md TOOLS.md BOOT.md HEARTBEAT.md; do
     cp /app/config/$f /workspace/$f
 done
@@ -31,6 +34,11 @@ done
 if [ -f /app/config/aai-cli-setup.sh ]; then
   sh /app/config/aai-cli-setup.sh || echo "[aai-cli] setup failed; continuing"
 fi
+
+# /workspace persists across restarts (PVC). The personality files above are
+# overwritten from the configmap every boot, but skills are additive — prune
+# them so a skill from a removed integration can't linger from a previous boot.
+rm -rf /workspace/skills
 
 if [ -f /app/config/skills.json ]; then
   python3 - <<'PYEOF'

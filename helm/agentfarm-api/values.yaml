@@ -26,11 +26,24 @@ agentTokenEncryptionKey: ""
 environment: ""
 webAppUrl: ""
 
+# Transactional email (invites, password reset, verification). Leave blank to disable
+# email delivery — the app logs a warning and no-ops sends. Both credential and SMTP
+# server must be set for delivery to be enabled.
+emailServerCredential: ""
+emailSmtpServer: ""
+emailFromAddress: ""
+
+# Shared Google OAuth 2.0 "Web application" client for the Gmail "Authenticate with
+# Google" flow. Leave blank to disable the flow. Registered redirect URI must be
+# "<webAppUrl>/api/v1/integrations/google/callback".
+googleCloudClientId: ""
+googleCloudClientSecret: ""
+
 litellmBaseUrl: "http://litellm:4000"
 agentLitellmBaseUrl: "http://litellm:4000"
 
 # Comma-separated fnmatch globs limiting which OpenRouter models the picker
-# offers, e.g. "qwen/*,openai/gpt-5*". Empty offers the full catalogue.
+# offers, e.g. "z-ai/glm-5.2,openai/gpt-5*". Empty offers the full catalogue.
 agentModelAllowlist: ""
 
 # Default model preselected in the picker and used at runtime when an agent has
@@ -54,7 +67,7 @@ litellmApiKeySecretName: litellm-api-key
 # Pre-existing litellm Secret (used by hook Job to call /key/generate)
 litellmSecretName: litellm
 
-#  kubeconfig Secret for kubectl exec into agent pods
+#  kubeconfig Secret for managing agent k8s resources
 kubeconfigSecretName: agent-farm-user-kubeconfig
 
 imagePullSecrets:
@@ -62,11 +75,12 @@ imagePullSecrets:
 
 service:
   port: 8000
+  ingestPort: 8001
 
 apiExternalUrl: "https://api.agent-farm.k8s.aai-labs.com"
 
 ingress:
-  host: api.agent-farm.k8s.aai-labs.com
+  hosts: "api.agent-farm.k8s.aai-labs.com"
   clusterIssuer: letsencrypt-http01
   tlsSecretName: agentfarm-api-tls
 

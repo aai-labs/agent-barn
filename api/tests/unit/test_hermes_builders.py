@@ -152,6 +152,7 @@ def test_build_secret_hermes_slack_contains_required_keys():
     assert_that(data["SLACK_BOT_TOKEN"], equal_to("xoxb-bot"))
     assert_that(data["SLACK_APP_TOKEN"], equal_to("xapp-app"))
     assert_that(data["API_SERVER_KEY"], equal_to("secret-key-123"))
+    assert_that(data["SLACK_HOME_CHANNEL"], equal_to("C001"))
     assert_that(data["SLACK_CHANNEL_IDS"], equal_to("C001,C002"))
     assert_that(data["SLACK_DM_ALLOWED_USERS"], equal_to("U001,U002"))
     assert_that(data["SLACK_ALLOW_ALL_USERS"], equal_to("true"))
@@ -174,6 +175,7 @@ def test_build_secret_hermes_slack_empty_lists_give_empty_strings():
         channel_ids=[],
         dm_user_ids=[],
     )
+    assert_that(secret.string_data["SLACK_HOME_CHANNEL"], equal_to("C0000000000"))
     assert_that(secret.string_data["SLACK_CHANNEL_IDS"], equal_to(""))
     assert_that(secret.string_data["SLACK_DM_ALLOWED_USERS"], equal_to(""))
 
@@ -227,7 +229,26 @@ def test_open_group_and_dm_policy_drops_both_gating_plugins():
     cfg = build_hermes_config(
         "litellm/qwen3", "http://x:4000", dm_policy="open", group_policy="open"
     )
-    assert_that(cfg["plugins"]["enabled"], equal_to([]))
+    enabled = cfg["plugins"]["enabled"]
+    assert_that("slack-deny-dms" in enabled, equal_to(False))
+    assert_that("slack-channel-allowlist" in enabled, equal_to(False))
+
+
+def test_default_verbose_mode_enables_interim_assistant_messages():
+    cfg = build_hermes_config("litellm/qwen3", "http://x:4000")
+    slack_display = cfg["display"]["platforms"]["slack"]
+    assert_that(slack_display["interim_assistant_messages"], equal_to(True))
+    # Verbosity drives interim messages only; progress spam stays suppressed.
+    assert_that(slack_display["tool_progress"], equal_to("off"))
+    assert_that(slack_display["busy_ack_detail"], equal_to(False))
+
+
+def test_concise_mode_disables_interim_assistant_messages():
+    cfg = build_hermes_config("litellm/qwen3", "http://x:4000", verbose_mode=False)
+    slack_display = cfg["display"]["platforms"]["slack"]
+    assert_that(slack_display["interim_assistant_messages"], equal_to(False))
+    assert_that(slack_display["tool_progress"], equal_to("off"))
+    assert_that(slack_display["busy_ack_detail"], equal_to(False))
 
 
 def test_allowlist_policy_seeds_dm_allowed_users():
@@ -300,17 +321,54 @@ def test_build_hermes_deployment_mounts_opt_data_and_workspace():
     assert_that("/workspace" in mounts, equal_to(True))
 
 
-def test_build_hermes_deployment_has_empty_dir_workspace():
-    from kubernetes.client import V1EmptyDirVolumeSource
-
+def test_build_hermes_deployment_workspace_is_pvc_backed():
+    # /workspace must persist across restarts (AF-215): it is a subPath of the
+    # per-agent PVC, not an ephemeral emptyDir — mirroring ocbw's persistent
+    # ./agents/<name>/workspace bind-mount and OpenClaw's PVC-nested workspace.
     dep = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:latest")
-    workspace_vols = [
-        v for v in dep.spec.template.spec.volumes if v.name == "workspace"
-    ]
-    assert_that(len(workspace_vols), equal_to(1))
-    assert_that(
-        isinstance(workspace_vols[0].empty_dir, V1EmptyDirVolumeSource), equal_to(True)
-    )
+    mounts = {
+        m.mount_path: m for m in dep.spec.template.spec.containers[0].volume_mounts
+    }
+    workspace = mounts["/workspace"]
+    assert_that(workspace.name, equal_to("data"))
+    assert_that(workspace.sub_path, equal_to("workspace"))
+
+
+def test_build_hermes_deployment_opt_data_stays_on_pvc_root():
+    dep = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:latest")
+    mounts = {
+        m.mount_path: m for m in dep.spec.template.spec.containers[0].volume_mounts
+    }
+    data = mounts["/opt/data"]
+    assert_that(data.name, equal_to("data"))
+    assert_that(data.sub_path, equal_to(None))
+
+
+def test_build_hermes_deployment_has_no_empty_dir_workspace_volume():
+    dep = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:latest")
+    volume_names = {v.name for v in dep.spec.template.spec.volumes}
+    assert_that("workspace" in volume_names, equal_to(False))
+
+
+def test_build_hermes_deployment_anchors_cwd_env_to_workspace():
+    # The hermes process starts in its install dir (/opt/hermes) and the user's
+    # HOME is /opt/data, so without these env vars the agent's shell is anchored
+    # in the wrong place and relative writes miss the persistent /workspace.
+    # ocbw sets both alongside terminal.cwd (openclaw_bootstrap/hermes.py) —
+    # mirror that.
+    dep = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:latest")
+    env = {e.name: e.value for e in dep.spec.template.spec.containers[0].env or []}
+    assert_that(env.get("TERMINAL_CWD"), equal_to("/workspace"))
+    assert_that(env.get("MESSAGING_CWD"), equal_to("/workspace"))
+
+
+def test_start_sh_prunes_stale_skills_before_seeding():
+    # /workspace persists now, so a skill file from a removed integration would
+    # linger without an explicit prune before re-seeding.
+    assert_that(HERMES_START_SH, contains_string("rm -rf /workspace/skills"))
+    prune_at = HERMES_START_SH.index("rm -rf /workspace/skills")
+    seed_at = HERMES_START_SH.index("skills.json")
+    assert_that(prune_at < seed_at, equal_to(True))
 
 
 def test_build_hermes_config_map_includes_aai_cli_kwargs_when_provided():
@@ -364,3 +422,29 @@ def test_start_sh_includes_aai_cli_setup_hook():
 def test_start_sh_includes_skills_json_reconstruction():
     assert_that(HERMES_START_SH, contains_string("skills.json"))
     assert_that(HERMES_START_SH, contains_string("/workspace/skills"))
+
+
+def test_build_hermes_config_approval_mode_auto_maps_to_smart():
+    cfg = build_hermes_config(
+        "litellm/qwen3", "http://litellm:4000", approval_mode="auto"
+    )
+    assert_that(cfg["approvals"]["mode"], equal_to("smart"))
+
+
+def test_build_hermes_config_approval_mode_off():
+    cfg = build_hermes_config(
+        "litellm/qwen3", "http://litellm:4000", approval_mode="off"
+    )
+    assert_that(cfg["approvals"]["mode"], equal_to("off"))
+
+
+def test_build_hermes_config_approval_mode_manual():
+    cfg = build_hermes_config(
+        "litellm/qwen3", "http://litellm:4000", approval_mode="manual"
+    )
+    assert_that(cfg["approvals"]["mode"], equal_to("manual"))
+
+
+def test_build_hermes_config_default_approval_mode_is_smart():
+    cfg = build_hermes_config("litellm/qwen3", "http://litellm:4000")
+    assert_that(cfg["approvals"]["mode"], equal_to("smart"))
