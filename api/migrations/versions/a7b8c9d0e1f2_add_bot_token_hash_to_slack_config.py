@@ -32,14 +32,23 @@ def upgrade() -> None:
         sa.Column("bot_token_hash", sa.String(64), nullable=True),
     )
 
-    key = os.environ.get("AGENT_TOKEN_ENCRYPTION_KEY", "")
-    if not key:
-        logger.warning(
-            "AGENT_TOKEN_ENCRYPTION_KEY not set; skipping bot_token_hash backfill. "
-            "Run this migration with the key set to populate hashes."
+    conn = op.get_bind()
+    pending = conn.execute(
+        sa.text(
+            "SELECT COUNT(*) FROM agent_slack_config sc "
+            "JOIN agent a ON a.id = sc.agent_id "
+            "WHERE a.deleted_at IS NULL AND sc.bot_token_hash IS NULL"
         )
-    else:
-        conn = op.get_bind()
+    ).scalar()
+
+    key = os.environ.get("AGENT_TOKEN_ENCRYPTION_KEY", "")
+    if not key and pending:
+        raise RuntimeError(
+            "AGENT_TOKEN_ENCRYPTION_KEY is required to backfill bot_token_hash "
+            f"for {pending} existing agent(s). Set the env var and re-run the migration."
+        )
+
+    if key and pending:
         fernet = Fernet(key.encode())
 
         rows = conn.execute(

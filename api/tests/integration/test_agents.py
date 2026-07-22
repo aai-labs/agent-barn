@@ -37,6 +37,7 @@ from api.tests.steps.agent import (
     there_is_an_agent,
     there_is_a_skill,
     there_is_a_skill_for_another_org,
+    there_is_an_agent_in_another_org,
     use_org_for_auth,
 )
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
@@ -3135,3 +3136,41 @@ def test_delete_agent_frees_bot_token_for_reuse():
 
         with then("it returns 201"):
             assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+
+
+def test_create_agent_duplicate_bot_token_cross_org_hides_name():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent_in_another_org(
+                name="Secret Agent", bot_token=TEST_SLACK_BOT_TOKEN
+            ),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("I create an agent using a bot token owned by another org's agent"):
+            payload = {**_VALID_CREATE, "slack_bot_token": TEST_SLACK_BOT_TOKEN}
+            response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("it returns 409 without revealing the other org's agent name"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+            detail = response.json()["detail"]
+            assert_that(detail, contains_string("another agent"))
+            assert_that(detail, is_not(contains_string("Secret Agent")))
+
+
+def test_create_agent_duplicate_token_does_not_leave_orphan():
+    with given([*_GIVEN, there_is_an_agent(bot_token=TEST_SLACK_BOT_TOKEN)]) as context:
+        client: TestClient = context.client
+
+        with when("I try to create an agent with a duplicate bot token"):
+            payload = {**_VALID_CREATE, "slack_bot_token": TEST_SLACK_BOT_TOKEN}
+            response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("it returns 409"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+
+        with then("no orphaned agent row is left behind"):
+            agents = client.get(_BASE, headers=_auth(context)).json()["items"]
+            assert_that(len(agents), equal_to(1))

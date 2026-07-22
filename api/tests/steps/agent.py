@@ -167,6 +167,26 @@ def skill_is_assigned_to_agent():
     return step
 
 
+def there_is_an_agent_in_another_org(
+    name: str = "Other Org Agent",
+    bot_token: str = TEST_SLACK_BOT_TOKEN,
+):
+    def step(context):
+        from api.tests.steps.organization import there_is_an_organization
+
+        original_org = context.organization
+        there_is_an_organization(name="Other Org")(context)
+        other_org_id = context.organization.id
+        context.organization = original_org
+
+        there_is_an_agent(name=name, bot_token=bot_token, organization_id=other_org_id)(
+            context
+        )
+        context.other_org_agent = context.agent
+
+    return step
+
+
 def there_is_a_skill_for_another_org():
     def step(context):
         from api.tests.steps.organization import there_is_an_organization

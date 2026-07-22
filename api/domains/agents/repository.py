@@ -138,14 +138,7 @@ class AgentRepository:
             self.delegate.save(config)
         except IntegrityError as e:
             if "ix_agent_slack_config_bot_token_hash" in str(e).lower():
-                name = "another agent"
-                if config.bot_token_hash:
-                    conflicting = self.find_active_agent_by_bot_token_hash(
-                        config.bot_token_hash, exclude_agent_id=config.agent_id
-                    )
-                    if conflicting:
-                        name = conflicting.name
-                raise BotTokenConflictHTTPException(name)
+                raise BotTokenConflictHTTPException("another agent")
             raise
         return config
 
@@ -341,3 +334,6 @@ class AgentRepository:
     def save(self, agent: Agent) -> Agent:
         self.delegate.save(agent)
         return agent
+
+    def hard_delete(self, agent_id: UUID) -> None:
+        self.delegate.delete_one(Agent, agent_id)
