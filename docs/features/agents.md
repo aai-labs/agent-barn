@@ -11,9 +11,9 @@ An Agent is the central operational aggregate. It connects organization tenancy,
 ## Invariants
 
 - Every agent belongs to one organization and pins an exact `(template_slug, template_version)` in that organization.
-- Runtime and platform are separate. Hermes supports Slack only; OpenClaw supports Slack and Teams.
+- Runtime and platform are separate. Hermes supports Slack and Telegram; OpenClaw supports Slack, Teams, and Telegram.
 - Persisted lifecycle states are `STOPPED`, `RUNNING`, and `ERROR`.
-- Slack agents require bot and app tokens. Teams agents require app ID, app password, and tenant ID.
+- Slack agents require bot and app tokens. Teams agents require app ID, app password, and tenant ID. Telegram agents require a bot token.
 - Platform is not changed through agent update. Runtime/platform compatibility is schema-validated.
 - Running agents reject configuration updates.
 - Template-required skills are validated as explicit assignments during agent create, update, and repin, and cannot be removed while currently required.
@@ -24,11 +24,12 @@ An Agent is the central operational aggregate. It connects organization tenancy,
 ## State model
 
 ```text
-create Slack agent ───────────────→ STOPPED
-create Teams agent ── auto-start ─→ RUNNING or ERROR
-STOPPED or ERROR ─────── start ───→ RUNNING or ERROR
-RUNNING ──────────────── stop ────→ STOPPED
-any non-deleted state ── delete ──→ soft-deleted
+create Slack agent ─────────────────→ STOPPED
+create Teams agent ──── auto-start ─→ RUNNING or ERROR
+create Telegram agent ─ auto-start ─→ RUNNING or ERROR
+STOPPED or ERROR ───────── start ───→ RUNNING or ERROR
+RUNNING ────────────────── stop ────→ STOPPED
+any non-deleted state ──── delete ──→ soft-deleted
 ```
 
 Starting an already running agent and stopping an agent that is not running are conflicts. Start renders the pinned template anew, creates a fresh ingest key, rebuilds runtime resources, and clears a previous error on success.
@@ -37,7 +38,7 @@ Starting an already running agent and stopping an agent that is not running are 
 
 ### Create
 
-Creation resolves the requested template version or the latest version, validates required skills and provider credentials, persists encrypted platform/integration configuration, assigns skills, and creates a per-agent LiteLLM key when configured. Teams creation continues into start; Slack creation remains stopped.
+Creation resolves the requested template version or the latest version, validates required skills and provider credentials, persists encrypted platform/integration configuration, assigns skills, and creates a per-agent LiteLLM key when configured. Teams and Telegram creation continues into start; Slack creation remains stopped.
 
 ### Update
 
@@ -67,4 +68,4 @@ Stop snapshots logs before removing active runtime resources and marking the age
 
 ## Change impact
 
-Lifecycle or runtime changes affect agent API contracts, both runtime builders, Kubernetes cleanup, logs/health, UI schemas and controls, and agent integration tests. Template/skill changes also require checking creation, repinning, update validation, and template/skill integration tests. Platform changes require checking Slack and Teams credential handling separately.
+Lifecycle or runtime changes affect agent API contracts, both runtime builders, Kubernetes cleanup, logs/health, UI schemas and controls, and agent integration tests. Template/skill changes also require checking creation, repinning, update validation, and template/skill integration tests. Platform changes require checking Slack, Teams, and Telegram credential handling separately.
