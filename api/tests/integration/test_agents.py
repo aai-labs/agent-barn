@@ -2200,20 +2200,20 @@ def test_start_hermes_agent_deployment_has_workspace_volume():
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             deployment = k8s.create_deployment.call_args.args[1]
             mounts = {
-                m.mount_path
+                m.mount_path: m
                 for m in deployment.spec.template.spec.containers[0].volume_mounts
             }
             assert_that("/opt/data" in mounts, equal_to(True))
             assert_that("/workspace" in mounts, equal_to(True))
 
-        with then("one volume is emptyDir for workspace"):
-            from kubernetes.client import V1EmptyDirVolumeSource
-
+        with then("the workspace persists on the agent PVC, not an emptyDir"):
+            # AF-215: /workspace is a subPath of the per-agent PVC so files the
+            # agent writes to its cwd survive restarts.
+            assert_that(mounts["/workspace"].name, equal_to("data"))
+            assert_that(mounts["/workspace"].sub_path, equal_to("workspace"))
             volumes = deployment.spec.template.spec.volumes
-            empty_dirs = [
-                v for v in volumes if isinstance(v.empty_dir, V1EmptyDirVolumeSource)
-            ]
-            assert_that(len(empty_dirs), equal_to(1))
+            empty_dirs = [v for v in volumes if v.empty_dir is not None]
+            assert_that(len(empty_dirs), equal_to(0))
 
 
 def test_pair_hermes_agent_returns_400():
@@ -2836,7 +2836,45 @@ def test_start_agent_injects_profile_mapping_into_agents_md_hermes():
             assert_that(agents_md, contains_string("./skills/aai-cli/"))
 
 
-def test_start_agent_no_integrations_leaves_agents_md_unmodified():
+def test_start_agent_injects_chat_commands_policy_into_agents_md_openclaw():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+
+        with when("the OpenClaw agent starts"):
+            response = client.post(
+                f"{_BASE}/{context.agent.id}/start", headers=_auth(context)
+            )
+
+        with then("AGENTS.md tells the agent not to advertise chat commands"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            agents_md = config_map.data["AGENTS.md"]
+            assert_that(agents_md, contains_string("## Chat Commands"))
+            assert_that(agents_md, contains_string("/help"))
+
+
+def test_start_agent_injects_chat_commands_policy_into_agents_md_hermes():
+    with given(
+        [*_GIVEN_WITH_HERMES_IMAGE, there_is_an_agent(agent_type=AgentType.HERMES)]
+    ) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+
+        with when("the Hermes agent starts"):
+            response = client.post(
+                f"{_BASE}/{context.agent.id}/start", headers=_auth(context)
+            )
+
+        with then("AGENTS.md tells the agent not to advertise chat commands"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            agents_md = config_map.data["AGENTS.md"]
+            assert_that(agents_md, contains_string("## Chat Commands"))
+            assert_that(agents_md, contains_string("/help"))
+
+
+def test_start_agent_no_integrations_omits_integrations_block():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         client: TestClient = context.client
         k8s: KubernetesClient = context.injector.get(KubernetesClient)

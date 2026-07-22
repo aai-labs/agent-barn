@@ -22,6 +22,7 @@ from api.domains.agents.aai_cli_artifacts import (
     provider_secrets_map,
 )
 from api.domains.agents.aai_cli_skills import build_skills_manifest_from_zips
+from api.domains.agents.runtime_policy import build_chat_commands_policy_md
 from api.domains.skills.models import Skill
 from api.domains.skills.repository import SkillRepository
 from api.domains.agents.builders import (
@@ -1221,7 +1222,13 @@ class AgentService:
         )
         # AGENTS.md is auto-loaded into the startup prompt by both runtimes, so the
         # --profile mapping + no-fallback policy is appended here (not just to TOOLS.md).
-        agents_md = rendered.agents_md + build_integrations_policy_md(decrypted)
+        # The chat-commands policy rides along unconditionally — it applies to every
+        # agent, integrations or not, and to custom templates we don't control.
+        agents_md = (
+            rendered.agents_md
+            + build_integrations_policy_md(decrypted)
+            + build_chat_commands_policy_md()
+        )
 
         if agent.agent_type == AgentType.HERMES:
             assert hermes_cfg is not None

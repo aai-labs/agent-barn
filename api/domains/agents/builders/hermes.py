@@ -349,6 +349,20 @@ def build_hermes_deployment(
                                 period_seconds=15,
                                 failure_threshold=6,
                             ),
+                            env=[
+                                # The hermes process starts in its install dir
+                                # (/opt/hermes) and the runtime user's HOME is
+                                # /opt/data (the state dir), so without these the
+                                # agent's shell is anchored in the wrong place and
+                                # relative writes miss the persistent /workspace.
+                                # ocbw sets both alongside terminal.cwd — mirror it.
+                                client.V1EnvVar(
+                                    name="TERMINAL_CWD", value="/workspace"
+                                ),
+                                client.V1EnvVar(
+                                    name="MESSAGING_CWD", value="/workspace"
+                                ),
+                            ],
                             env_from=[
                                 client.V1EnvFromSource(
                                     secret_ref=client.V1SecretEnvSource(name=name)
@@ -363,9 +377,16 @@ def build_hermes_deployment(
                                     name="data",
                                     mount_path="/opt/data",
                                 ),
+                                # /workspace is the agent's cwd; back it with the
+                                # per-agent PVC so agent-written files survive
+                                # restarts (AF-215) — like ocbw's persistent
+                                # ./agents/<name>/workspace and OpenClaw's
+                                # PVC-nested workspace. subPath keeps it a
+                                # sibling of the /opt/data content on one PVC.
                                 client.V1VolumeMount(
-                                    name="workspace",
+                                    name="data",
                                     mount_path="/workspace",
+                                    sub_path="workspace",
                                 ),
                             ],
                         )
@@ -380,10 +401,6 @@ def build_hermes_deployment(
                             persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(
                                 claim_name=name
                             ),
-                        ),
-                        client.V1Volume(
-                            name="workspace",
-                            empty_dir=client.V1EmptyDirVolumeSource(),
                         ),
                     ],
                 ),
