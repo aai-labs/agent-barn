@@ -18,6 +18,9 @@ import {
   isOAuthConnected,
   type IntegrationDraft,
 } from "../integrations";
+import { SharedCredentialPicker } from "@/features/shared-credentials/components/shared-credential-picker";
+import { SHARED_CREDENTIAL_PROVIDER_LABELS } from "@/features/shared-credentials/utils";
+import type { SharedCredentialBrief } from "@/features/shared-credentials/schemas";
 import { FormField, GoogleAuthButton, TokenInput } from "./hire-dialog-primitives";
 import { RepoListField } from "./hire-dialog-steps";
 import { useUpdateAgent } from "../hooks/use-update-agent";
@@ -121,6 +124,36 @@ export function AgentSkillsTab({ agent, isRunning }: AgentSkillsTabProps) {
     );
   }
 
+  function switchToShared(provider: string) {
+    setNewSecretDrafts((prev) =>
+      prev.map((d) =>
+        d.provider === provider
+          ? { ...d, content: {}, sharedCredentialId: "" }
+          : d,
+      ),
+    );
+  }
+
+  function switchToManual(provider: string) {
+    setNewSecretDrafts((prev) =>
+      prev.map((d) =>
+        d.provider === provider
+          ? { ...d, sharedCredentialId: undefined }
+          : d,
+      ),
+    );
+  }
+
+  function handlePickShared(provider: string, brief: SharedCredentialBrief | null) {
+    setNewSecretDrafts((prev) =>
+      prev.map((d) =>
+        d.provider === provider
+          ? { ...d, sharedCredentialId: brief?.id ?? "" }
+          : d,
+      ),
+    );
+  }
+
   async function handleSave() {
     updateAgent.reset();
     try {
@@ -141,18 +174,24 @@ export function AgentSkillsTab({ agent, isRunning }: AgentSkillsTabProps) {
         ),
       ];
 
+      const manualDrafts = newSecretDrafts.filter((d) => !d.sharedCredentialId);
+      const sharedDrafts = newSecretDrafts.filter((d) => !!d.sharedCredentialId);
+
       await updateAgent.mutateAsync({
         agentId: agent.id,
         skillIds: pendingAddIds,
         removedSkillIds: pendingRemoveIds,
         ...(orphanedProviders.length > 0 ? { removedSecretProviders: orphanedProviders } : {}),
-        ...(newSecretDrafts.length > 0
+        ...(manualDrafts.length > 0
           ? {
-              secrets: newSecretDrafts.map((d) => ({
+              secrets: manualDrafts.map((d) => ({
                 provider: d.provider,
                 content: d.provider === "github" ? expandGithubContent(d.content) : d.content,
               })),
             }
+          : {}),
+        ...(sharedDrafts.length > 0
+          ? { sharedCredentials: sharedDrafts.map((d) => ({ sharedCredentialId: d.sharedCredentialId! })) }
           : {}),
       });
       setPendingAddIds([]);
@@ -301,6 +340,9 @@ export function AgentSkillsTab({ agent, isRunning }: AgentSkillsTabProps) {
               );
             }
 
+            const isSharedEligible = !!SHARED_CREDENTIAL_PROVIDER_LABELS[providerId];
+            const useShared = draft.sharedCredentialId !== undefined;
+
             return (
               <div
                 key={providerId}
@@ -310,70 +352,110 @@ export function AgentSkillsTab({ agent, isRunning }: AgentSkillsTabProps) {
                 <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
                   {providerSpec.label}
                 </div>
-                {providerSpec.authMethod === "google_oauth" && (
-                  <GoogleAuthButton
-                    connected={isOAuthConnected(draft)}
-                    onConnected={({ refreshToken, clientId, clientSecret }) => {
-                      setField(providerId, "refreshToken", refreshToken);
-                      setField(providerId, "clientId", clientId);
-                      setField(providerId, "clientSecret", clientSecret);
-                    }}
-                  />
+
+                {isSharedEligible && (
+                  <div className="flex gap-1.5">
+                    <button
+                      type="button"
+                      className="af-btn af-btn-sm"
+                      style={
+                        !useShared
+                          ? { background: "var(--ink)", color: "var(--bg)", borderColor: "var(--ink)" }
+                          : undefined
+                      }
+                      onClick={() => switchToManual(providerId)}
+                    >
+                      Enter credentials
+                    </button>
+                    <button
+                      type="button"
+                      className="af-btn af-btn-sm"
+                      style={
+                        useShared
+                          ? { background: "var(--ink)", color: "var(--bg)", borderColor: "var(--ink)" }
+                          : undefined
+                      }
+                      onClick={() => switchToShared(providerId)}
+                    >
+                      Use shared credential
+                    </button>
+                  </div>
                 )}
-                {providerSpec.fields.map((field) => {
-                  const label = field.required
-                    ? field.label
-                    : `${field.label} (optional)`;
 
-                  if (field.type === "repo-list") {
-                    const repos = Array.isArray(draft.content[field.key])
-                      ? (draft.content[field.key] as string[])
-                      : [];
-                    return (
-                      <FormField key={field.key} label={label} hint={field.hint}>
-                        <RepoListField
-                          repos={repos}
-                          onChange={(next) => setRepos(providerId, field.key, next)}
-                          placeholder={field.placeholder}
-                        />
-                      </FormField>
-                    );
-                  }
-
-                  const rawValue = draft.content[field.key];
-                  const value = typeof rawValue === "string" ? rawValue : "";
-
-                  if (field.type === "secret") {
-                    const vkey = `${providerId}:${field.key}`;
-                    return (
-                      <FormField key={field.key} label={label} hint={field.hint}>
-                        <TokenInput
-                          value={value}
-                          onChange={(v) => setField(providerId, field.key, v)}
-                          visible={!!visible[vkey]}
-                          onToggle={() =>
-                            setVisible((s) => ({ ...s, [vkey]: !s[vkey] }))
-                          }
-                          placeholder={field.placeholder}
-                        />
-                      </FormField>
-                    );
-                  }
-
-                  return (
-                    <FormField key={field.key} label={label} hint={field.hint}>
-                      <input
-                        className="af-input"
-                        value={value}
-                        onChange={(e) =>
-                          setField(providerId, field.key, e.target.value)
-                        }
-                        placeholder={field.placeholder}
-                        autoComplete="off"
+                {useShared ? (
+                  <SharedCredentialPicker
+                    provider={providerId}
+                    value={draft.sharedCredentialId || undefined}
+                    onChange={(brief) => handlePickShared(providerId, brief)}
+                  />
+                ) : (
+                  <>
+                    {providerSpec.authMethod === "google_oauth" && (
+                      <GoogleAuthButton
+                        connected={isOAuthConnected(draft)}
+                        onConnected={({ refreshToken, clientId, clientSecret }) => {
+                          setField(providerId, "refreshToken", refreshToken);
+                          setField(providerId, "clientId", clientId);
+                          setField(providerId, "clientSecret", clientSecret);
+                        }}
                       />
-                    </FormField>
-                  );
-                })}
+                    )}
+                    {providerSpec.fields.map((field) => {
+                      const label = field.required
+                        ? field.label
+                        : `${field.label} (optional)`;
+
+                      if (field.type === "repo-list") {
+                        const repos = Array.isArray(draft.content[field.key])
+                          ? (draft.content[field.key] as string[])
+                          : [];
+                        return (
+                          <FormField key={field.key} label={label} hint={field.hint}>
+                            <RepoListField
+                              repos={repos}
+                              onChange={(next) => setRepos(providerId, field.key, next)}
+                              placeholder={field.placeholder}
+                            />
+                          </FormField>
+                        );
+                      }
+
+                      const rawValue = draft.content[field.key];
+                      const value = typeof rawValue === "string" ? rawValue : "";
+
+                      if (field.type === "secret") {
+                        const vkey = `${providerId}:${field.key}`;
+                        return (
+                          <FormField key={field.key} label={label} hint={field.hint}>
+                            <TokenInput
+                              value={value}
+                              onChange={(v) => setField(providerId, field.key, v)}
+                              visible={!!visible[vkey]}
+                              onToggle={() =>
+                                setVisible((s) => ({ ...s, [vkey]: !s[vkey] }))
+                              }
+                              placeholder={field.placeholder}
+                            />
+                          </FormField>
+                        );
+                      }
+
+                      return (
+                        <FormField key={field.key} label={label} hint={field.hint}>
+                          <input
+                            className="af-input"
+                            value={value}
+                            onChange={(e) =>
+                              setField(providerId, field.key, e.target.value)
+                            }
+                            placeholder={field.placeholder}
+                            autoComplete="off"
+                          />
+                        </FormField>
+                      );
+                    })}
+                  </>
+                )}
               </div>
             );
           })}

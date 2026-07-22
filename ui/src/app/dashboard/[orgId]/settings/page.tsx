@@ -6,6 +6,7 @@ import { TemplatesPanel } from "@/features/agents/components/templates-panel";
 import { SkillsPanel } from "@/features/skills/components/skills-panel";
 import { SharedCredentialsPanel } from "@/features/shared-credentials/components/shared-credentials-panel";
 import { PlusIcon, LockIcon, EyeIcon, ServerIcon, SearchIcon } from "@/components/icons";
+import { useActiveOrgRole } from "@/features/organizations/hooks/use-active-org-role";
 
 type SectionKey =
   | "general"
@@ -20,30 +21,32 @@ type SectionKey =
   | "infra"
   | "advanced";
 
-// real: true = backed by API; false = mock UI kept in code but hidden from nav
-const SECTIONS: [SectionKey, string, string, boolean][] = [
-  ["general",   "General",         "Your install's identity and defaults.",                         false],
-  ["team",      "Team & access",   "Operators who can manage agents.",                              false],
-  ["models",    "Models",          "Which LLMs your agents are allowed to use.",                   false],
-  ["providers", "Integrations",    "Slack, GitHub, Jira and other third parties.",                 false],
-  ["shared-credentials", "Shared Credentials", "Org-wide integration keys reusable across agents.",  true],
-  ["templates", "Templates",       "Reusable agent definitions.",                                   true],
-  ["skills",    "Skills",          "Vetted tools your agents can call.",                           true],
-  ["budgets",   "Budgets",         "Spend caps and alerts.",                                       false],
-  ["audit",     "Audit log",       "Searchable history of every conversation and tool call.",      false],
-  ["infra",     "Infrastructure",  "Cluster, storage, and proxy details.",                         false],
-  ["advanced",  "Advanced",        "Power-user flags. Touch carefully.",                           false],
+// [key, label, description, real (backed by API), adminOnly]
+const SECTIONS: [SectionKey, string, string, boolean, boolean][] = [
+  ["general",   "General",         "Your install's identity and defaults.",                         false, false],
+  ["team",      "Team & access",   "Operators who can manage agents.",                              false, false],
+  ["models",    "Models",          "Which LLMs your agents are allowed to use.",                   false, false],
+  ["providers", "Integrations",    "Slack, GitHub, Jira and other third parties.",                 false, false],
+  ["shared-credentials", "Shared Credentials", "Org-wide integration keys reusable across agents.",  true, true],
+  ["templates", "Templates",       "Reusable agent definitions.",                                   true, false],
+  ["skills",    "Skills",          "Vetted tools your agents can call.",                           true, false],
+  ["budgets",   "Budgets",         "Spend caps and alerts.",                                       false, false],
+  ["audit",     "Audit log",       "Searchable history of every conversation and tool call.",      false, false],
+  ["infra",     "Infrastructure",  "Cluster, storage, and proxy details.",                         false, false],
+  ["advanced",  "Advanced",        "Power-user flags. Touch carefully.",                           false, false],
 ];
 
 export default function SettingsPage() {
+  const { canManage } = useActiveOrgRole();
   const [tab, setTab] = useState<SectionKey>("templates");
-  const current = SECTIONS.find((s) => s[0] === tab)!;
+  const visibleSections = SECTIONS.filter(([,,,real, adminOnly]) => real && (!adminOnly || canManage));
+  const current = visibleSections.find((s) => s[0] === tab) ?? visibleSections[0];
 
   return (
     <div className="max-w-[1320px] mx-auto px-10 pt-9 pb-24">
       <div className="flex gap-8 items-start">
         <aside className="w-48 flex-shrink-0 sticky top-[77px]">
-          {SECTIONS.filter(([,,,real]) => real).map(([k, l]) => (
+          {visibleSections.map(([k, l]) => (
             <button
               key={k}
               className="w-full text-left px-3 py-2 rounded-lg text-[13.5px] font-medium mb-0.5 transition-colors"
