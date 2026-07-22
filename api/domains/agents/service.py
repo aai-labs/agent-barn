@@ -856,6 +856,9 @@ class AgentService:
             else ""
         )
         effective_model = agent.model or self.config.agent_default_model
+        if effective_model and not effective_model.startswith("litellm/openrouter/"):
+            effective_model = f"litellm/openrouter/{effective_model}"
+        
         overlay: dict | None = None
         hermes_cfg: dict | None = None
 
@@ -1381,28 +1384,18 @@ class AgentService:
             {
                 "value": f"litellm/openrouter/{model['id']}",
                 "label": model["name"],
-                "context_length": model.get("context_length"),
+                "contextLength": model.get("context_length"),
                 "pricing": model.get("pricing"),
             }
             for model in allowed
         ]
 
         default_value = self.config.agent_default_model
-        if default_value and not any(o["value"] == default_value for o in options):
-            options.insert(
-                0,
-                {
-                    "value": default_value,
-                    "label": default_value.removeprefix(_OPENROUTER_MODEL_PREFIX),
-                    "context_length": None,
-                    "pricing": None,
-                },
-            )
 
         # Stable sort puts the default first while preserving catalogue order.
         options.sort(key=lambda o: o["value"] != default_value)
         for option in options:
-            option["is_default"] = option["value"] == default_value
+            option["isDefault"] = option["value"] == default_value
         return options
 
     def list_slack_channels(

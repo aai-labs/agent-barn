@@ -164,9 +164,9 @@ def test_service_maps_catalog_to_litellm_openrouter_picker_options():
         {
             "value": "litellm/openrouter/qwen/qwen3.6-plus",
             "label": "Qwen3.6 Plus",
-            "context_length": 32000,
+            "contextLength": 32000,
             "pricing": {"prompt": "0.1"},
-            "is_default": False,
+            "isDefault": False,
         }
     ]
 
@@ -183,8 +183,8 @@ def test_service_flags_and_surfaces_configured_default_first():
     options = service.list_models(MagicMock())
 
     assert options[0]["value"] == "litellm/openrouter/openai/gpt-5-mini"
-    assert options[0]["is_default"] is True
-    assert [o["is_default"] for o in options] == [True, False]
+    assert options[0]["isDefault"] is True
+    assert [o["isDefault"] for o in options] == [True, False]
 
 
 def test_service_injects_default_when_absent_from_catalog():
@@ -202,9 +202,9 @@ def test_service_injects_default_when_absent_from_catalog():
     assert options[0] == {
         "value": "litellm/openrouter/openai/gpt-5-mini",
         "label": "openai/gpt-5-mini",
-        "context_length": None,
+        "contextLength": None,
         "pricing": None,
-        "is_default": True,
+        "isDefault": True,
     }
     assert {o["value"] for o in options} == {
         "litellm/openrouter/openai/gpt-5-mini",

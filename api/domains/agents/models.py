@@ -104,12 +104,14 @@ class JiraContent(SecretContent):
     site_url: str
     email: str
     api_token: str
+    cloud_id: str | None = None
 
 
 class ConfluenceContent(SecretContent):
     site_url: str
     email: str
     api_token: str
+    cloud_id: str | None = None
 
 
 class BitbucketContent(_RepoListCompat):

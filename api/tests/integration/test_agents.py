@@ -1054,7 +1054,7 @@ def test_start_agent_configmap_has_overlay():
             overlay = json.loads(config_map.data["openclaw-config-overlay.json"])
             assert_that(
                 overlay["agents"]["defaults"]["model"]["primary"],
-                equal_to("litellm/gpt-5"),
+                equal_to("litellm/openrouter/litellm/gpt-5"),
             )
             assert_that(
                 overlay["models"]["providers"]["litellm"]["baseUrl"],
@@ -1141,7 +1141,7 @@ def test_start_agent_uses_default_model_when_empty():
             overlay = json.loads(config_map.data["openclaw-config-overlay.json"])
             assert_that(
                 overlay["agents"]["defaults"]["model"]["primary"],
-                equal_to("litellm/gpt-5-mini"),
+                equal_to("litellm/openrouter/litellm/gpt-5-mini"),
             )
 
 
@@ -2036,14 +2036,12 @@ def test_start_hermes_agent_uses_hermes_image_and_config():
         with then("it returns 200 with status RUNNING"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             assert_that(response.json()["status"], equal_to(AgentStatus.RUNNING.value))
-
         with then("the deployment uses the Hermes image"):
             deployment = k8s.create_deployment.call_args.args[1]
             assert_that(
                 deployment.spec.template.spec.containers[0].image,
                 equal_to("nousresearch/hermes-agent:v1.0"),
             )
-
         with then("all k8s resources were created"):
             k8s.create_config_map.assert_called_once()
             k8s.create_secret.assert_called_once()

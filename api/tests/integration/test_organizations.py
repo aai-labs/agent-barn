@@ -5,6 +5,8 @@
 so the superuser can also deliver it manually.
 """
 
+from typing import Any
+from unittest.mock import patch
 from uuid import uuid7
 
 from fastapi import status
@@ -195,3 +197,34 @@ def test_create_organization_requires_auth():
                 assert_that(
                     response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED)
                 )
+
+@patch("api.infrastructure.openrouter.client.OpenRouterClient.list_models")
+def test_get_organization_strips_model_prefixes(mock_list_models):
+    mock_list_models.return_value = [{"id": "google/gemini"}, {"id": "openai/gpt-4"}]
+    with given([*_GIVEN, _there_is_a_superuser()]) as context:
+        with when("superuser creates an org with prefixed models"):
+            response = context.client.post(
+                _ORGS,
+                json={
+                    "name": "Model Inc",
+                    "owner_email": "model@corp.com",
+                    "allowed_models": ["litellm/openrouter/google/gemini", "litellm/openrouter/openai/gpt-4"],
+                },
+                headers=_auth(context),
+            )
+            
+            with then("org is created and models are stripped"):
+                assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+                body = response.json()
+                assert_that(body["organization"]["allowed_models"], equal_to(["google/gemini", "openai/gpt-4"]))
+
+        with when("I fetch the organization"):
+            org_id = body["organization"]["id"]
+            response2 = context.client.get(
+                f"{_ORGS}/{org_id}",
+                headers=_auth(context),
+            )
+
+        with then("the fetched organization has stripped prefixes"):
+            body2 = response2.json()
+            assert_that(body2["allowed_models"], equal_to(["google/gemini", "openai/gpt-4"]))

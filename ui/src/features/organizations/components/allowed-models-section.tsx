@@ -32,14 +32,24 @@ export function AllowedModelsSection({
       .filter((m): m is string => m !== null);
   };
 
-  const [selectedModels, setSelectedModels] = useState<string[]>(
-    getPrefixedModels(organization.allowedModels, models)
-  );
+  const [selectedModels, setSelectedModels] = useState<string[]>(() => {
+    const initial = getPrefixedModels(organization.allowedModels, models);
+    const def = models.find((m) => m.isDefault);
+    if (def && !initial.includes(def.value)) {
+      return [...initial, def.value];
+    }
+    return initial;
+  });
   const [searchQuery, setSearchQuery] = useState("");
 
   useEffect(() => {
     if (!isLoading) {
-      setSelectedModels(getPrefixedModels(organization.allowedModels, models));
+      const dbModels = getPrefixedModels(organization.allowedModels, models);
+      const def = models.find((m) => m.isDefault);
+      if (def && !dbModels.includes(def.value)) {
+        dbModels.push(def.value);
+      }
+      setSelectedModels(dbModels);
     }
   }, [organization.allowedModels, models, isLoading]);
 
@@ -54,6 +64,8 @@ export function AllowedModelsSection({
   }, [models, searchQuery]);
 
   const toggleModel = (value: string) => {
+    const isDefault = models.find((m) => m.value === value)?.isDefault;
+    if (isDefault) return;
     setSelectedModels((prev) =>
       prev.includes(value) ? prev.filter((m) => m !== value) : [...prev, value],
     );
@@ -76,7 +88,7 @@ export function AllowedModelsSection({
   return (
     <div className="pt-6">
       <div className="flex items-center justify-between mb-4">
-        <div>
+        <div className="mr-8">
           <h2
             className="text-[15px] font-semibold"
             style={{ color: "var(--ink)" }}
@@ -84,8 +96,7 @@ export function AllowedModelsSection({
             Allowed Models
           </h2>
           <p className="text-[13.5px] mt-1" style={{ color: "var(--ink-3)" }}>
-            Select which LLMs are available to agents in this organization. If
-            none are selected, agents cannot be created.
+            Select which LLMs are available to agents in this organization. The default model ({models.find(m => m.isDefault)?.label || "GLM 5.2"}) is automatically selected and required. If none are selected, agents cannot be created.
           </p>
         </div>
         <button
@@ -120,13 +131,15 @@ export function AllowedModelsSection({
                       <span className="text-neutral-700">
                         {model ? model.label : value}
                       </span>
-                      <button
-                        type="button"
-                        onClick={() => toggleModel(value)}
-                        className="text-neutral-400 hover:text-neutral-700"
-                      >
-                        <X width={14} height={14} />
-                      </button>
+                      {!(model?.isDefault) && (
+                        <button
+                          type="button"
+                          onClick={() => toggleModel(value)}
+                          className="text-neutral-400 hover:text-neutral-700"
+                        >
+                          <X width={14} height={14} />
+                        </button>
+                      )}
                     </div>
                   );
                 })}
@@ -157,9 +170,10 @@ export function AllowedModelsSection({
                   >
                     <input
                       type="checkbox"
-                      className="w-4 h-4 rounded border-gray-300"
+                      className="w-4 h-4 rounded border-gray-300 disabled:opacity-50 disabled:cursor-not-allowed"
                       style={{ accentColor: "var(--ink)" }}
                       checked={isSelected}
+                      disabled={model.isDefault}
                       onChange={() => toggleModel(model.value)}
                     />
                     <div className="flex flex-col">
@@ -168,6 +182,11 @@ export function AllowedModelsSection({
                         style={{ color: "var(--ink)" }}
                       >
                         {model.label}
+                        {model.isDefault && (
+                          <span className="ml-2 text-[11px] text-neutral-500 font-normal bg-neutral-100 px-1.5 py-0.5 rounded border border-neutral-200">
+                            Default (required)
+                          </span>
+                        )}
                       </span>
                       <span
                         className="text-[12px]"

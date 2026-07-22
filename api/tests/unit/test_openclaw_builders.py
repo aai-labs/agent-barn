@@ -9,23 +9,7 @@ from api.domains.agents.builders.openclaw import (
 )
 
 
-def test_build_openclaw_config_overlay_exec_mode_is_full():
-    overlay = build_openclaw_config_overlay("litellm/gpt-4o", "http://litellm:4000")
-    assert_that(overlay["tools"]["exec"]["mode"], equal_to("full"))
 
-
-def test_build_openclaw_config_overlay_exec_mode_ignores_approval_mode():
-    overlay = build_openclaw_config_overlay(
-        "litellm/gpt-4o", "http://litellm:4000", approval_mode="manual"
-    )
-    assert_that(overlay["tools"]["exec"]["mode"], equal_to("full"))
-
-
-def test_build_openclaw_config_overlay_teams_exec_mode_is_full():
-    overlay = build_openclaw_config_overlay_teams(
-        "litellm/gpt-4o", "http://litellm:4000"
-    )
-    assert_that(overlay["tools"]["exec"]["mode"], equal_to("full"))
 
 
 def test_build_openclaw_config_overlay_gateway_auth_is_none():

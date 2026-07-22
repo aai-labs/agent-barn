@@ -16,7 +16,6 @@ TELEMETRY_PUSH_INDEX_JS: str = (_TELEMETRY_PUSH / "index.js").read_text()
 TELEMETRY_PUSH_PACKAGE_JSON: str = (_TELEMETRY_PUSH / "package.json").read_text()
 TELEMETRY_PUSH_PLUGIN_JSON: str = (_TELEMETRY_PUSH / "openclaw.plugin.json").read_text()
 
-
 def build_openclaw_config_overlay(
     model: str,
     litellm_base_url: str,
@@ -93,8 +92,7 @@ def build_openclaw_config_overlay(
             {"type": "route", "agentId": "main", "match": {"channel": "slack"}}
         ],
         "tools": {
-            "profile": "full",
-            "exec": {"mode": "full"},
+            "profile": "full"
         },
         "memory": {"backend": "builtin"},
         "plugins": {
@@ -167,8 +165,7 @@ def build_openclaw_config_overlay_teams(
             {"type": "route", "agentId": "main", "match": {"channel": "msteams"}}
         ],
         "tools": {
-            "profile": "full",
-            "exec": {"mode": "full"},
+            "profile": "full"
         },
         "memory": {"backend": "builtin"},
         "plugins": {

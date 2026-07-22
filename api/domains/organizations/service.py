@@ -82,7 +82,11 @@ class OrganizationService:
         actor.require_superuser(detail="Only a superuser can create organizations")
 
         config = get_config()
-        allowed_models = data.allowed_models if data.allowed_models is not None else [config.agent_default_model]
+        if data.allowed_models is not None:
+            self._validate_allowed_models(data.allowed_models)
+            allowed_models = [m.removeprefix("litellm/openrouter/") for m in data.allowed_models]
+        else:
+            allowed_models = [config.agent_default_model.removeprefix("litellm/openrouter/")]
 
         # Org, owner-invite (user + token) and the OWNER membership all commit together,
         # so a failed step can't leave an org with no owner. The invite email is sent
@@ -180,25 +184,30 @@ class OrganizationService:
     ) -> OrganizationRead:
         self._ensure_can_manage_organization(organization_id, context)
 
+        # Fetch via repository to respect mock tests and authorization flows
+        organization = self.organization_repository.get(organization_id)
+        if not organization:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Organization {organization_id} not found",
+            )
+
         dump = organization_data.model_dump(exclude_unset=True)
 
-        # Fetch, mutate, and commit inside a single live session
+        # Mutate and commit inside a single live session
         # so SQLAlchemy properly tracks list mutations and flushes the UPDATE.
         with Session(self.organization_repository.delegate.engine, expire_on_commit=False) as session:
-            from sqlmodel import select
-            organization = session.exec(select(Organization).where(Organization.id == organization_id)).first()
-            if not organization:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Organization {organization_id} not found",
-                )
-
-            for key, value in dump.items():
-                setattr(organization, key, value)
+            session.add(organization)
             
             from sqlalchemy.orm.attributes import flag_modified
             if "allowed_models" in dump:
+                if dump["allowed_models"] is not None:
+                    self._validate_allowed_models(dump["allowed_models"])
+                    dump["allowed_models"] = [m.removeprefix("litellm/openrouter/") for m in dump["allowed_models"]]
                 flag_modified(organization, "allowed_models")
+
+            for key, value in dump.items():
+                setattr(organization, key, value)
 
             session.commit()
 
