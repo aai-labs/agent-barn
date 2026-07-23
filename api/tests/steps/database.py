@@ -59,7 +59,7 @@ def database_is_clean():
         with delegate.engine.connect() as conn:
             conn.execute(
                 text(
-                    "TRUNCATE skill, agent_chat_message, tool_call, agent_slack_config, agent_teams_config, agent_template, agent CASCADE"
+                    "TRUNCATE skill, agent_chat_message, tool_call, agent_slack_config, agent_teams_config, agent_telegram_config, agent_template, agent CASCADE"
                 )
             )
             conn.commit()

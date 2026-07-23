@@ -17,7 +17,7 @@ The separately served Ingest API receives authenticated runtime telemetry. It pe
 - Tool calls are unique per `(agent_id, external_id)` and use `PENDING`, `SUCCESS`, or `ERROR` status.
 - Duplicate message and pending tool-call identities are handled idempotently. Tool results update any matching row regardless of its current status; a result arriving before its pending event is currently dropped.
 - Conversation and tool-call reads are scoped through an organization-owned, non-deleted agent.
-- Slack channel and sender names may be enriched best-effort; Teams activity has no equivalent directory enrichment in this domain.
+- Slack channel and sender names may be enriched best-effort; Telegram chat names are cached with a 10-minute TTL. Teams activity has no equivalent directory enrichment in this domain.
 
 ## Data flow
 

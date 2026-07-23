@@ -1,31 +1,21 @@
-import logging
-import time
-
-import httpx
+import time  # noqa: F401 — kept so tests can patch transport.time
 
 from api.core.config import get_config
-from api.infrastructure.slack.errors import SlackFetchError
+from api.infrastructure.http import (
+    DEFAULT_RETRY_AFTER_SECONDS as _DEFAULT_RETRY_AFTER_SECONDS,
+    MAX_RETRIES as _MAX_RETRIES,
+    RATE_LIMIT_MAX_WAIT_SECONDS as _RATE_LIMIT_MAX_WAIT_SECONDS,
+    resilient_request,
+    retry_after_seconds as _retry_after_seconds,
+)
 
-logger = logging.getLogger(__name__)
-
-# A request is retried a bounded number of times so transient Slack failures
-# don't surface as a hard error (or poison the directory cache): HTTP 429 (rate
-# limit, honoring Retry-After) and transport errors (connection dropped mid-body,
-# resets, timeouts) — httpx.TransportError covers all of these.
-_MAX_RETRIES = 2
-_RATE_LIMIT_MAX_WAIT_SECONDS = 30
-_DEFAULT_RETRY_AFTER_SECONDS = 1
-
-
-def _retry_after_seconds(raw: str | None) -> int:
-    """Seconds to wait per a 429 response's Retry-After header, clamped to a sane range."""
-    if raw is None:
-        return _DEFAULT_RETRY_AFTER_SECONDS
-    try:
-        seconds = int(raw)
-    except ValueError:
-        seconds = _DEFAULT_RETRY_AFTER_SECONDS
-    return max(1, min(seconds, _RATE_LIMIT_MAX_WAIT_SECONDS))
+__all__ = [
+    "_DEFAULT_RETRY_AFTER_SECONDS",
+    "_MAX_RETRIES",
+    "_RATE_LIMIT_MAX_WAIT_SECONDS",
+    "_retry_after_seconds",
+    "request_json",
+]
 
 
 def request_json(
@@ -36,49 +26,16 @@ def request_json(
     params: dict | None = None,
     content: bytes | None = None,
 ) -> dict:
-    """Performs the request via httpx and parses the JSON body, retrying transient failures.
-
-    Retries up to _MAX_RETRIES times on HTTP 429 (honoring Retry-After) and on
-    transport errors (connection dropped mid-body, resets, timeouts). Slack signals
-    application errors as HTTP 200 with {"ok": false}, so those flow to the caller;
-    other non-2xx statuses raise. A retryable error past the budget propagates.
-    """
+    """Perform a Slack API request with retry logic, returning parsed JSON."""
     timeout = get_config().slack_request_timeout_seconds
-    for attempt in range(_MAX_RETRIES + 1):
-        try:
-            resp = httpx.request(
-                method,
-                url,
-                headers=headers,
-                params=params,
-                content=content,
-                timeout=timeout,
-            )
-        except httpx.TransportError as exc:
-            if attempt == _MAX_RETRIES:
-                raise
-            logger.warning(
-                "Slack transport error on %s (%s); retrying in %ss (attempt %d/%d)",
-                url,
-                exc,
-                _DEFAULT_RETRY_AFTER_SECONDS,
-                attempt + 1,
-                _MAX_RETRIES,
-            )
-            time.sleep(_DEFAULT_RETRY_AFTER_SECONDS)
-            continue
-        if resp.status_code == 429 and attempt < _MAX_RETRIES:
-            wait = _retry_after_seconds(resp.headers.get("Retry-After"))
-            logger.warning(
-                "Slack rate-limited on %s; retrying in %ss (attempt %d/%d)",
-                url,
-                wait,
-                attempt + 1,
-                _MAX_RETRIES,
-            )
-            time.sleep(wait)
-            continue
-        resp.raise_for_status()
-        return resp.json()
-    # Unreachable: the loop either returns or raises on the final attempt.
-    raise SlackFetchError(f"exhausted retries for {url}")
+    resp = resilient_request(
+        method,
+        url,
+        headers=headers,
+        params=params,
+        content=content,
+        timeout=timeout,
+        label="Slack",
+    )
+    resp.raise_for_status()
+    return resp.json()

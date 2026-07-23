@@ -16,8 +16,8 @@ logger = logging.getLogger(__name__)
 
 HERMES_SESSIONS_PATH = "/opt/data/sessions/sessions.json"
 
-_DM_PREFIXES = ("agent:main:slack:dm:",)
-_CHANNEL_PREFIXES = ("agent:main:slack:group:",)
+_DM_PREFIXES = ("agent:main:slack:dm:", "agent:main:telegram:dm:")
+_CHANNEL_PREFIXES = ("agent:main:slack:group:", "agent:main:telegram:group:")
 _ALL_PREFIXES = _DM_PREFIXES + _CHANNEL_PREFIXES
 
 

@@ -21,6 +21,7 @@ from api.domains.conversations.models import (
 from api.domains.conversations.repository import ConversationRepository
 from api.infrastructure.crypto import decrypt_token
 from api.infrastructure.slack.client import SlackClient
+from api.infrastructure.telegram.client import get_chat_display_name
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +75,9 @@ class ConversationService:
         ]
         if not unresolved_channels and not unresolved_dms:
             return
-        user_map, channel_map, dm_map = self._platform_maps(agent_id)
+        user_map, channel_map, dm_map = self._platform_maps(
+            agent_id, unresolved_ids=unresolved_channels + unresolved_dms
+        )
         for cid in unresolved_channels:
             resolved = channel_map.get(cid)
             if resolved:
@@ -85,13 +88,17 @@ class ConversationService:
                 merged[cid] = (resolved, merged[cid][1])
 
     def _platform_maps(
-        self, agent_id: UUID
+        self,
+        agent_id: UUID,
+        unresolved_ids: list[str] | None = None,
     ) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
         agent = self.agent_repository.get_by_id(agent_id)
         if not (agent and self.config.agent_token_encryption_key):
             return {}, {}, {}
         if agent.platform == AgentPlatform.TEAMS:
             return {}, {}, {}
+        if agent.platform == AgentPlatform.TELEGRAM:
+            return self._telegram_maps(agent_id, unresolved_ids or [])
         try:
             slack_config = self.agent_repository.get_slack_config(agent_id)
             if not slack_config:
@@ -121,6 +128,28 @@ class ConversationService:
         except Exception as e:
             logger.warning("Failed to fetch Slack maps for agent %s: %s", agent_id, e)
             return {}, {}, {}
+
+    def _telegram_maps(
+        self, agent_id: UUID, unresolved_ids: list[str]
+    ) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
+        if not unresolved_ids:
+            return {}, {}, {}
+        telegram_config = self.agent_repository.get_telegram_config(agent_id)
+        if not telegram_config:
+            return {}, {}, {}
+        bot_token = decrypt_token(
+            telegram_config.bot_token_encrypted,
+            self.config.agent_token_encryption_key,
+        )
+        resolved: dict[str, str] = {}
+        for chat_id in unresolved_ids:
+            raw_id = chat_id
+            if raw_id.upper().startswith("TELEGRAM:"):
+                raw_id = raw_id[len("TELEGRAM:") :]
+            name = get_chat_display_name(bot_token, raw_id)
+            if name:
+                resolved[chat_id] = name
+        return {}, resolved, resolved
 
     def list_threads(
         self,

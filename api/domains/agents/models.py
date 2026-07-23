@@ -28,6 +28,7 @@ class CommandApprovalMode(str, enum.Enum):
 class AgentPlatform(str, enum.Enum):
     SLACK = "slack"
     TEAMS = "teams"
+    TELEGRAM = "telegram"
 
 
 class AgentType(str, enum.Enum):
@@ -41,6 +42,17 @@ class SlackGroupPolicy(str, enum.Enum):
 
 
 class SlackDmPolicy(str, enum.Enum):
+    OFF = "off"
+    OPEN = "open"
+    ALLOWLIST = "allowlist"
+
+
+class TelegramGroupPolicy(str, enum.Enum):
+    OPEN = "open"
+    ALLOWLIST = "allowlist"
+
+
+class TelegramDmPolicy(str, enum.Enum):
     OFF = "off"
     OPEN = "open"
     ALLOWLIST = "allowlist"
@@ -275,6 +287,32 @@ class AgentTeamsConfig(BaseModel, table=True):
     tenant_id: str = SqlField(nullable=False, max_length=255)
 
 
+class AgentTelegramConfig(BaseModel, table=True):
+    __tablename__: str = "agent_telegram_config"
+
+    agent_id: UUID = SqlField(
+        foreign_key="agent.id", nullable=False, unique=True, ondelete="CASCADE"
+    )
+    bot_token_encrypted: str = SqlField(nullable=False)
+    bot_username: str = SqlField(nullable=False, max_length=255)
+    allowed_user_ids: list[str] = SqlField(
+        default_factory=list,
+        sa_column=Column(sa.JSON(), nullable=False, server_default="[]"),
+    )
+    allowed_chat_ids: list[str] = SqlField(
+        default_factory=list,
+        sa_column=Column(sa.JSON(), nullable=False, server_default="[]"),
+    )
+    group_policy: TelegramGroupPolicy = SqlField(
+        default=TelegramGroupPolicy.ALLOWLIST,
+        sa_column=Column(sa.String(), nullable=False, server_default="allowlist"),
+    )
+    dm_policy: TelegramDmPolicy = SqlField(
+        default=TelegramDmPolicy.OFF,
+        sa_column=Column(sa.String(), nullable=False, server_default="off"),
+    )
+
+
 class AgentSecret(BaseModel, table=True):
     __tablename__: str = "agent_secret"
 
@@ -377,6 +415,12 @@ class AgentCreate(PydanticBaseModel):
     teams_app_id: str | None = Field(default=None, min_length=1)
     teams_app_password: str | None = Field(default=None, min_length=1)
     teams_tenant_id: str | None = Field(default=None, min_length=1)
+    # Telegram credentials (required when platform=telegram)
+    telegram_bot_token: str | None = Field(default=None, min_length=1)
+    telegram_allowed_user_ids: list[str] = Field(default_factory=list)
+    telegram_allowed_chat_ids: list[str] = Field(default_factory=list)
+    telegram_group_policy: TelegramGroupPolicy = TelegramGroupPolicy.ALLOWLIST
+    telegram_dm_policy: TelegramDmPolicy = TelegramDmPolicy.OFF
     # Template reference. The agent pins to template_version if given, else to
     # the lineage's latest version.
     template_slug: str = Field(min_length=1, max_length=255)
@@ -407,6 +451,9 @@ class AgentCreate(PydanticBaseModel):
                     "teams_app_id, teams_app_password, and teams_tenant_id "
                     "are required for Teams agents"
                 )
+        elif self.platform == AgentPlatform.TELEGRAM:
+            if not self.telegram_bot_token:
+                raise ValueError("telegram_bot_token is required for Telegram agents")
         return self
 
     @model_validator(mode="after")
@@ -431,6 +478,12 @@ class AgentUpdate(PydanticBaseModel):
     teams_app_id: str | None = Field(default=None, min_length=1)
     teams_app_password: str | None = Field(default=None, min_length=1)
     teams_tenant_id: str | None = Field(default=None, min_length=1)
+    # Telegram
+    telegram_bot_token: str | None = Field(default=None, min_length=1)
+    telegram_allowed_user_ids: list[str] | None = None
+    telegram_allowed_chat_ids: list[str] | None = None
+    telegram_group_policy: TelegramGroupPolicy | None = None
+    telegram_dm_policy: TelegramDmPolicy | None = None
     # Template re-pin: point the agent at a different (slug, version). Both must
     # be provided together. Per-agent markdown editing is no longer supported —
     # persona changes happen by editing templates in the catalog.
@@ -491,6 +544,16 @@ class AgentTeamsConfigRead(PydanticBaseModel):
     tenant_id: str
 
 
+class AgentTelegramConfigRead(PydanticBaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    allowed_user_ids: list[str]
+    allowed_chat_ids: list[str]
+    group_policy: TelegramGroupPolicy
+    dm_policy: TelegramDmPolicy
+    bot_username: str | None = None
+
+
 class AgentSecretRead(PydanticBaseModel):  # label + provider only — no secret values
     model_config = ConfigDict(from_attributes=True)
 
@@ -525,6 +588,7 @@ class AgentRead(PydanticBaseModel):
     model: str
     slack_config: AgentSlackConfigRead | None = None
     teams_config: AgentTeamsConfigRead | None = None
+    telegram_config: AgentTelegramConfigRead | None = None
     secrets: list[AgentSecretRead] = Field(default_factory=list)
     skills: list[AgentAssignedSkillRead] = Field(default_factory=list)
     approval_mode: CommandApprovalMode
