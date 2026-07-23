@@ -243,6 +243,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
         <ShareDialog
           agentId={agent.id}
           agentName={agent.name}
+          organizationId={agent.organizationId}
           open={shareOpen}
           onOpenChange={setShareOpen}
         />

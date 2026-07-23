@@ -104,13 +104,28 @@ test.describe("RBAC-aware Agent controls", () => {
     await expect(rbac.agentAction(/^share$/i)).toHaveCount(0);
   });
 
-  test("Owner deletion is available without exposing sharing UI", async ({ page }) => {
+  test("Owner deletion is available without exposing sharing UI when agent.access.manage is absent", async ({
+    page,
+  }) => {
     const data = new DataSupport(page);
     const rbac = new RbacUiPage(page);
     await data.auth.interceptRefreshRequest();
     await data.users.interceptGetUserContextRequest();
     await data.users.interceptGetOrganizationsRequest();
-    await data.agents.interceptGetAgentRequest({ body: mockAgent });
+    await data.agents.interceptGetAgentRequest({
+      body: {
+        ...mockAgent,
+        allowed_actions: [
+          "agent.read",
+          "agent.update",
+          "agent.delete",
+          "agent.lifecycle.manage",
+          "agent.secret.manage",
+          "activity.read",
+          "cost.read",
+        ],
+      },
+    });
     await data.agents.interceptGetAgentTemplateRequest();
 
     await page.goto(
@@ -119,6 +134,20 @@ test.describe("RBAC-aware Agent controls", () => {
 
     await expect(page.getByRole("button", { name: "Retire agent" })).toBeVisible();
     await expect(rbac.agentAction(/^share$/i)).toHaveCount(0);
+  });
+
+  test("Share button is shown when agent.access.manage is granted", async ({ page }) => {
+    const data = new DataSupport(page);
+    const rbac = new RbacUiPage(page);
+    await data.auth.interceptRefreshRequest();
+    await data.users.interceptGetUserContextRequest();
+    await data.users.interceptGetOrganizationsRequest();
+    await data.agents.interceptGetAgentRequest({ body: mockAgent });
+    await data.agents.interceptGetAgentTemplateRequest();
+
+    await rbac.gotoAgent(MOCK_AGENT_ID);
+
+    await expect(rbac.agentAction(/^share$/i)).toBeVisible();
   });
 
   test("inaccessible Agents use normal not-found handling", async ({ page }) => {

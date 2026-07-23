@@ -14,12 +14,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import type { OrganizationMember } from "@/features/organizations/schemas";
 
-import { useAgentAccess } from "../hooks/use-agent-access";
-import { useAgentAccessMutations } from "../hooks/use-agent-access-mutations";
-import { useAgentAccessRoles } from "../hooks/use-agent-access-roles";
-import { useAgentGeneralAccess } from "../hooks/use-agent-general-access";
-import type { AgentAccessCandidateRead } from "../schemas";
+import { useAgentShareRoles } from "../hooks/use-agent-share-roles";
+import { useAgentShareSettings } from "../hooks/use-agent-share-settings";
 import { defaultRoleId } from "../permissions";
 import { ShareAddMember } from "./share-add-member";
 import { ShareMemberRow } from "./share-member-row";
@@ -29,6 +27,7 @@ import { formatRoleName, ShareRoleSelect } from "./share-role-select";
 interface ShareDialogProps {
   agentId: string;
   agentName: string;
+  organizationId: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
@@ -39,7 +38,6 @@ type DraftRow = {
   fullName: string | null;
   isCreator: boolean;
   roleId: string;
-  isNew: boolean;
 };
 
 type DraftGeneralAccess = { all: boolean; roleId: string | null };
@@ -47,6 +45,7 @@ type DraftGeneralAccess = { all: boolean; roleId: string | null };
 export function ShareDialog({
   agentId,
   agentName,
+  organizationId,
   open,
   onOpenChange,
 }: ShareDialogProps) {
@@ -55,33 +54,23 @@ export function ShareDialog({
     isLoading: rolesLoading,
     error: rolesError,
     refetch: refetchRoles,
-  } = useAgentAccessRoles(open);
+  } = useAgentShareRoles(open);
   const {
-    members,
-    isLoading: membersLoading,
-    error: membersError,
-    refetch: refetchMembers,
-  } = useAgentAccess(agentId, open);
-  const {
-    generalAccess,
-    isLoading: generalAccessLoading,
-    error: generalAccessError,
-    setGeneralAccess,
-    removeGeneralAccess,
-  } = useAgentGeneralAccess(agentId, open);
-  const { grantAccess, changeAccessRole, revokeAccess } =
-    useAgentAccessMutations(agentId);
+    settings,
+    isLoading: settingsLoading,
+    error: settingsError,
+    refetch: refetchSettings,
+    save,
+  } = useAgentShareSettings(agentId, open);
 
-  const isLoading = rolesLoading || membersLoading || generalAccessLoading;
-  const loadError = rolesError || membersError || generalAccessError;
+  const isLoading = rolesLoading || settingsLoading;
+  const loadError = rolesError || settingsError;
 
   const [rows, setRows] = useState<DraftRow[]>([]);
-  const [removedUserIds, setRemovedUserIds] = useState<Set<string>>(new Set());
   const [draftGeneral, setDraftGeneral] = useState<DraftGeneralAccess>({
     all: false,
     roleId: null,
   });
-  const [isSaving, setIsSaving] = useState(false);
   const initializedRef = useRef(false);
 
   useEffect(() => {
@@ -89,31 +78,32 @@ export function ShareDialog({
       initializedRef.current = false;
       return;
     }
-    if (initializedRef.current || isLoading || loadError) return;
+    if (initializedRef.current || isLoading || loadError || !settings) return;
     setRows(
-      members.map((m) => ({
-        userId: m.userId,
-        email: m.email,
-        fullName: m.fullName,
-        isCreator: m.isCreator,
-        roleId: m.accessRole.id,
-        isNew: false,
+      settings.assignments.map((a) => ({
+        userId: a.userId,
+        email: a.email,
+        fullName: a.fullName,
+        isCreator: a.isCreator,
+        roleId: a.accessRole.id,
       })),
     );
-    setRemovedUserIds(new Set());
-    setDraftGeneral({ all: !!generalAccess?.role, roleId: generalAccess?.role?.id ?? null });
+    setDraftGeneral({
+      all: !!settings.generalAccess.role,
+      roleId: settings.generalAccess.role?.id ?? null,
+    });
     initializedRef.current = true;
-  }, [open, isLoading, loadError, members, generalAccess]);
+  }, [open, isLoading, loadError, settings]);
 
   const isDirty =
-    removedUserIds.size > 0 ||
-    rows.some((row) => {
-      if (row.isNew) return true;
-      const original = members.find((m) => m.userId === row.userId);
-      return original && original.accessRole.id !== row.roleId;
-    }) ||
-    draftGeneral.all !== !!generalAccess?.role ||
-    (draftGeneral.all && draftGeneral.roleId !== (generalAccess?.role?.id ?? null));
+    !!settings &&
+    (draftGeneral.all !== !!settings.generalAccess.role ||
+      (draftGeneral.all && draftGeneral.roleId !== (settings.generalAccess.role?.id ?? null)) ||
+      rows.length !== settings.assignments.length ||
+      rows.some((row) => {
+        const original = settings.assignments.find((a) => a.userId === row.userId);
+        return !original || original.accessRole.id !== row.roleId;
+      }));
 
   function onGeneralAccessModeChange(mode: "restricted" | "all") {
     setDraftGeneral(
@@ -127,26 +117,15 @@ export function ShareDialog({
     setDraftGeneral({ all: true, roleId });
   }
 
-  function onGrant(candidate: AgentAccessCandidateRead, roleId: string) {
-    // If this Member was staged for removal (not yet saved), re-adding them restores
-    // the original grant rather than staging a brand-new one.
-    const wasStagedForRemoval = removedUserIds.has(candidate.userId);
-    if (wasStagedForRemoval) {
-      setRemovedUserIds((prev) => {
-        const next = new Set(prev);
-        next.delete(candidate.userId);
-        return next;
-      });
-    }
+  function onGrant(member: OrganizationMember, roleId: string) {
     setRows((prev) => [
       ...prev,
       {
-        userId: candidate.userId,
-        email: candidate.email,
-        fullName: candidate.fullName,
-        isCreator: candidate.isCreator,
+        userId: member.userId,
+        email: member.email,
+        fullName: member.fullName ?? null,
+        isCreator: false,
         roleId,
-        isNew: !wasStagedForRemoval && !members.some((m) => m.userId === candidate.userId),
       },
     ]);
   }
@@ -155,10 +134,17 @@ export function ShareDialog({
     setRows((prev) => prev.map((r) => (r.userId === userId ? { ...r, roleId } : r)));
   }
 
-  function onRemoveRow(row: DraftRow) {
-    setRows((prev) => prev.filter((r) => r.userId !== row.userId));
-    if (!row.isNew) {
-      setRemovedUserIds((prev) => new Set(prev).add(row.userId));
+  function onRemoveRow(userId: string) {
+    setRows((prev) => prev.filter((r) => r.userId !== userId));
+    // Tied to the specific removal (a toast), not a persistent section banner — a
+    // static banner has nothing to anchor to once every direct grant is removed.
+    if (draftGeneral.all && draftGeneral.roleId) {
+      const generalRoleName = formatRoleName(
+        roles.find((r) => r.id === draftGeneral.roleId)?.name ?? "",
+      );
+      toast.info(
+        `Removed direct access. This Member still has ${generalRoleName} access via General access.`,
+      );
     }
   }
 
@@ -167,47 +153,17 @@ export function ShareDialog({
   }
 
   async function onSave() {
-    const originalById = new Map(members.map((m) => [m.userId, m.accessRole.id]));
-    const originalGeneralRoleId = generalAccess?.role?.id ?? null;
-    const ops: Promise<unknown>[] = [];
-
-    if (draftGeneral.all && draftGeneral.roleId && draftGeneral.roleId !== originalGeneralRoleId) {
-      ops.push(setGeneralAccess.mutateAsync(draftGeneral.roleId));
-    } else if (!draftGeneral.all && originalGeneralRoleId) {
-      ops.push(removeGeneralAccess.mutateAsync());
-    }
-
-    for (const userId of removedUserIds) {
-      ops.push(revokeAccess.mutateAsync(userId));
-    }
-    for (const row of rows) {
-      if (row.isNew) {
-        ops.push(grantAccess.mutateAsync({ userId: row.userId, accessRoleId: row.roleId }));
-      } else if (originalById.get(row.userId) !== row.roleId) {
-        ops.push(
-          changeAccessRole.mutateAsync({ userId: row.userId, accessRoleId: row.roleId }),
-        );
-      }
-    }
-
-    if (ops.length === 0) {
-      onOpenChange(false);
-      return;
-    }
-
-    setIsSaving(true);
-    const results = await Promise.allSettled(ops);
-    setIsSaving(false);
-
-    const failed = results.filter(
-      (r): r is PromiseRejectedResult => r.status === "rejected",
-    );
-    if (failed.length === 0) {
+    try {
+      await save.mutateAsync({
+        generalAccessRoleId: draftGeneral.all ? draftGeneral.roleId : null,
+        assignments: rows.map((r) => ({ userId: r.userId, accessRoleId: r.roleId })),
+      });
       toast.success("Sharing updated.");
       onOpenChange(false);
-    } else {
-      const reason = failed[0].reason;
-      toast.error(reason instanceof Error ? reason.message : "Some changes couldn't be saved");
+    } catch (e) {
+      // Draft stays exactly as the user left it — the PUT is atomic server-side, so a
+      // failure means nothing was applied; there is no partial state to reconcile.
+      toast.error(e instanceof Error ? e.message : "Couldn't save sharing changes");
     }
   }
 
@@ -215,7 +171,7 @@ export function ShareDialog({
     <Dialog
       open={open}
       onOpenChange={(next) => {
-        if (!next && isSaving) return;
+        if (!next && save.isPending) return;
         onOpenChange(next);
       }}
     >
@@ -244,7 +200,7 @@ export function ShareDialog({
             description="This Agent may no longer be available."
             onRetry={() => {
               void refetchRoles();
-              void refetchMembers();
+              void refetchSettings();
             }}
             retryLabel="Retry"
             className="min-h-[200px] p-0"
@@ -253,13 +209,12 @@ export function ShareDialog({
           <>
             <div className="flex flex-col gap-5">
               <ShareAddMember
-                agentId={agentId}
+                organizationId={organizationId}
                 roles={roles}
                 onGrant={onGrant}
-                disabled={isSaving}
+                disabled={save.isPending}
                 isOpen={open}
-                excludeUserIds={rows.map((r) => r.userId)}
-                localCandidates={members.filter((m) => removedUserIds.has(m.userId))}
+                assignedUserIds={rows.map((r) => r.userId)}
               />
 
               <section>
@@ -270,15 +225,6 @@ export function ShareDialog({
                   Organization Owners and Admins always have full access to every Agent
                   and aren&apos;t listed here.
                 </p>
-                {draftGeneral.all && draftGeneral.roleId && (
-                  <p className="text-[12px] mb-2" style={{ color: "var(--ink-4)" }}>
-                    Removing a direct grant removes only that grant — Members still get{" "}
-                    {formatRoleName(
-                      roles.find((r) => r.id === draftGeneral.roleId)?.name ?? "",
-                    )}{" "}
-                    access via General access.
-                  </p>
-                )}
                 {rows.length === 0 ? (
                   <p className="text-[13px] py-2" style={{ color: "var(--ink-4)" }}>
                     No direct access grants yet.
@@ -292,8 +238,8 @@ export function ShareDialog({
                         roleId={row.roleId}
                         roles={roles}
                         onChangeRole={(roleId) => onChangeRole(row.userId, roleId)}
-                        onRemove={() => onRemoveRow(row)}
-                        disabled={isSaving}
+                        onRemove={() => onRemoveRow(row.userId)}
+                        disabled={save.isPending}
                       />
                     ))}
                   </div>
@@ -316,7 +262,7 @@ export function ShareDialog({
                       className="af-select"
                       aria-label="General access"
                       value={draftGeneral.all ? "all" : "restricted"}
-                      disabled={isSaving}
+                      disabled={save.isPending}
                       onChange={(e) =>
                         onGeneralAccessModeChange(e.target.value as "restricted" | "all")
                       }
@@ -335,7 +281,7 @@ export function ShareDialog({
                       roles={roles}
                       value={draftGeneral.roleId}
                       onChange={onGeneralAccessRoleChange}
-                      disabled={isSaving}
+                      disabled={save.isPending}
                       ariaLabel="General access role"
                       className="w-32 flex-shrink-0"
                     />
@@ -345,15 +291,15 @@ export function ShareDialog({
             </div>
 
             <DialogFooter>
-              <button className="af-btn" onClick={onCancel} disabled={isSaving}>
+              <button className="af-btn" onClick={onCancel} disabled={save.isPending}>
                 Cancel
               </button>
               <button
                 className="af-btn af-btn-primary"
                 onClick={() => { void onSave(); }}
-                disabled={isSaving || !isDirty}
+                disabled={save.isPending || !isDirty}
               >
-                {isSaving ? "Saving…" : "Save"}
+                {save.isPending ? "Saving…" : "Save"}
               </button>
             </DialogFooter>
           </>

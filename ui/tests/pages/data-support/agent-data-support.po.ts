@@ -70,6 +70,16 @@ export const mockEligibleCandidate = {
 export const mockGeneralAccessRestricted = { role: null };
 export const mockGeneralAccessAll = { role: mockAccessRoles[0] };
 
+export const mockShareSettingsRestricted = {
+  general_access: mockGeneralAccessRestricted,
+  assignments: [mockAssignedMember],
+};
+
+export const mockShareSettingsAll = {
+  general_access: mockGeneralAccessAll,
+  assignments: [mockAssignedMember],
+};
+
 export const mockAgentAllowedActions = [
   "agent.read",
   "agent.update",
@@ -300,16 +310,16 @@ export class AgentDataSupport {
     );
   }
 
-  async interceptGetAccessRolesRequest({
+  async interceptGetShareRolesRequest({
     status = 200,
-    detail = "Unable to load access roles",
+    detail = "Unable to load share roles",
     body,
   }: {
     status?: number;
     detail?: string;
     body?: unknown;
   } = {}) {
-    await this.page.route("**/api/v1/agents/access-roles", async (route) => {
+    await this.page.route("**/api/v1/agents/share-roles", async (route) => {
       if (route.request().method() !== "GET") {
         await route.fallback();
         return;
@@ -322,10 +332,10 @@ export class AgentDataSupport {
     });
   }
 
-  async interceptGetAgentAccessListRequest({
+  async interceptGetAgentShareRequest({
     agentId = MOCK_AGENT_ID,
     status = 200,
-    detail = "Unable to load Agent access",
+    detail = "Unable to load sharing settings",
     body,
   }: {
     agentId?: string;
@@ -333,7 +343,7 @@ export class AgentDataSupport {
     detail?: string;
     body?: unknown;
   } = {}) {
-    await this.page.route(`**/api/v1/agents/${agentId}/access`, async (route) => {
+    await this.page.route(`**/api/v1/agents/${agentId}/share`, async (route) => {
       if (route.request().method() !== "GET") {
         await route.fallback();
         return;
@@ -342,16 +352,16 @@ export class AgentDataSupport {
         status,
         contentType: "application/json",
         body: JSON.stringify(
-          status >= 400 ? { detail } : (body ?? [mockAssignedMember]),
+          status >= 400 ? { detail } : (body ?? mockShareSettingsRestricted),
         ),
       });
     });
   }
 
-  async interceptGetEligibleAgentAccessRequest({
+  async interceptPutAgentShareRequest({
     agentId = MOCK_AGENT_ID,
     status = 200,
-    detail = "Unable to load eligible Members",
+    detail = "Unable to save sharing settings",
     body,
   }: {
     agentId?: string;
@@ -359,47 +369,8 @@ export class AgentDataSupport {
     detail?: string;
     body?: unknown;
   } = {}) {
-    await this.page.route(
-      `**/api/v1/agents/${agentId}/access/eligible*`,
-      async (route) => {
-        if (route.request().method() !== "GET") {
-          await route.fallback();
-          return;
-        }
-        const url = new URL(route.request().url());
-        const search = url.searchParams.get("search")?.toLowerCase();
-        let items = body ? (body as unknown[]) : [mockEligibleCandidate];
-        if (search && !body) {
-          items = items.filter((c) => {
-            const candidate = c as typeof mockEligibleCandidate;
-            return (
-              candidate.full_name.toLowerCase().includes(search) ||
-              candidate.email.toLowerCase().includes(search)
-            );
-          });
-        }
-        await route.fulfill({
-          status,
-          contentType: "application/json",
-          body: JSON.stringify(status >= 400 ? { detail } : items),
-        });
-      },
-    );
-  }
-
-  async interceptGrantAgentAccessRequest({
-    agentId = MOCK_AGENT_ID,
-    status = 201,
-    detail = "Unable to grant access",
-    body,
-  }: {
-    agentId?: string;
-    status?: number;
-    detail?: string;
-    body?: unknown;
-  } = {}) {
-    await this.page.route(`**/api/v1/agents/${agentId}/access`, async (route) => {
-      if (route.request().method() !== "POST") {
+    await this.page.route(`**/api/v1/agents/${agentId}/share`, async (route) => {
+      if (route.request().method() !== "PUT") {
         await route.fallback();
         return;
       }
@@ -407,158 +378,10 @@ export class AgentDataSupport {
         status,
         contentType: "application/json",
         body: JSON.stringify(
-          status >= 400
-            ? { detail }
-            : (body ?? {
-                ...mockEligibleCandidate,
-                access_role: mockAccessRoles[0],
-              }),
+          status >= 400 ? { detail } : (body ?? mockShareSettingsRestricted),
         ),
       });
     });
-  }
-
-  async interceptChangeAgentAccessRoleRequest({
-    agentId = MOCK_AGENT_ID,
-    userId = MOCK_MEMBER_USER_ID,
-    status = 200,
-    detail = "Unable to change access role",
-    body,
-  }: {
-    agentId?: string;
-    userId?: string;
-    status?: number;
-    detail?: string;
-    body?: unknown;
-  } = {}) {
-    await this.page.route(
-      `**/api/v1/agents/${agentId}/access/${userId}`,
-      async (route) => {
-        if (route.request().method() !== "PATCH") {
-          await route.fallback();
-          return;
-        }
-        await route.fulfill({
-          status,
-          contentType: "application/json",
-          body: JSON.stringify(
-            status >= 400
-              ? { detail }
-              : (body ?? { ...mockAssignedMember, access_role: mockAccessRoles[1] }),
-          ),
-        });
-      },
-    );
-  }
-
-  async interceptRevokeAgentAccessRequest({
-    agentId = MOCK_AGENT_ID,
-    userId = MOCK_MEMBER_USER_ID,
-    status = 204,
-    detail = "Unable to remove access",
-  }: {
-    agentId?: string;
-    userId?: string;
-    status?: number;
-    detail?: string;
-  } = {}) {
-    await this.page.route(
-      `**/api/v1/agents/${agentId}/access/${userId}`,
-      async (route) => {
-        if (route.request().method() !== "DELETE") {
-          await route.fallback();
-          return;
-        }
-        await route.fulfill({
-          status,
-          contentType: "application/json",
-          body: status >= 400 ? JSON.stringify({ detail }) : "",
-        });
-      },
-    );
-  }
-
-  async interceptGetGeneralAccessRequest({
-    agentId = MOCK_AGENT_ID,
-    status = 200,
-    detail = "Unable to load General access",
-    body,
-  }: {
-    agentId?: string;
-    status?: number;
-    detail?: string;
-    body?: unknown;
-  } = {}) {
-    await this.page.route(
-      `**/api/v1/agents/${agentId}/general-access`,
-      async (route) => {
-        if (route.request().method() !== "GET") {
-          await route.fallback();
-          return;
-        }
-        await route.fulfill({
-          status,
-          contentType: "application/json",
-          body: JSON.stringify(
-            status >= 400 ? { detail } : (body ?? mockGeneralAccessRestricted),
-          ),
-        });
-      },
-    );
-  }
-
-  async interceptSetGeneralAccessRequest({
-    agentId = MOCK_AGENT_ID,
-    status = 200,
-    detail = "Unable to update General access",
-    body,
-  }: {
-    agentId?: string;
-    status?: number;
-    detail?: string;
-    body?: unknown;
-  } = {}) {
-    await this.page.route(
-      `**/api/v1/agents/${agentId}/general-access`,
-      async (route) => {
-        if (route.request().method() !== "PUT") {
-          await route.fallback();
-          return;
-        }
-        await route.fulfill({
-          status,
-          contentType: "application/json",
-          body: JSON.stringify(
-            status >= 400 ? { detail } : (body ?? mockGeneralAccessAll),
-          ),
-        });
-      },
-    );
-  }
-
-  async interceptRemoveGeneralAccessRequest({
-    agentId = MOCK_AGENT_ID,
-    status = 204,
-    detail = "Unable to update General access",
-  }: {
-    agentId?: string;
-    status?: number;
-    detail?: string;
-  } = {}) {
-    await this.page.route(
-      `**/api/v1/agents/${agentId}/general-access`,
-      async (route) => {
-        if (route.request().method() !== "DELETE") {
-          await route.fallback();
-          return;
-        }
-        await route.fulfill({
-          status,
-          contentType: "application/json",
-          body: status >= 400 ? JSON.stringify({ detail }) : "",
-        });
-      },
-    );
   }
 
   async interceptCreateAgentRequest({

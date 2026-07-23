@@ -18,12 +18,8 @@ export type ConversationsFiltersKey = {
 export const agentsKey = {
   ..._agentsKeyBase,
   health: (id: string) => [..._agentsKeyBase.detail(id), "health"] as const,
-  access: (id: string) => [..._agentsKeyBase.detail(id), "access"] as const,
-  eligibleAccess: (id: string, search = "") =>
-    [..._agentsKeyBase.detail(id), "access", "eligible", search] as const,
-  generalAccess: (id: string) =>
-    [..._agentsKeyBase.detail(id), "general-access"] as const,
-  accessRoles: () => [..._agentsKeyBase.all, "access-roles"] as const,
+  shareSettings: (id: string) => [..._agentsKeyBase.detail(id), "share"] as const,
+  shareRoles: () => [..._agentsKeyBase.all, "share-roles"] as const,
   conversationChannels: (agentId: string) =>
     [..._agentsKeyBase.detail(agentId), "conversation-channels"] as const,
   conversationMessages: (

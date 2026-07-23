@@ -8,12 +8,12 @@ import { api } from "@/shared/api";
 import { AgentAccessRoleRead, AgentAccessRoleReadSchema } from "../schemas";
 import { agentsKey } from "../utils";
 
-export function useAgentAccessRoles(enabled = true) {
+export function useAgentShareRoles(enabled = true) {
   const query = useQuery({
-    queryKey: agentsKey.accessRoles(),
+    queryKey: agentsKey.shareRoles(),
     queryFn: async () => {
       const response = await api.get<AgentAccessRoleRead[]>(
-        "/api/v1/agents/access-roles",
+        "/api/v1/agents/share-roles",
         { schema: z.array(AgentAccessRoleReadSchema) },
       );
       return response.data;
