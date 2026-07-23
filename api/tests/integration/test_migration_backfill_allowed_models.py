@@ -2,18 +2,21 @@ import subprocess
 import os
 from uuid import uuid7
 from sqlalchemy import text, create_engine
-from hamcrest import assert_that, equal_to, has_items
+from hamcrest import assert_that, equal_to
 
 from api.core.config import Config
 
+
 def test_backfill_allowed_models_migration():
     engine = create_engine(str(Config().db_connection_url))
-    
+
     # We will use alembic CLI via subprocess since it's reliable
-    api_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..", "api"))
+    api_dir = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "../../..", "api")
+    )
     env = os.environ.copy()
     env["AGENT_MODEL_ALLOWLIST"] = "openai/*,anthropic/*"
-    
+
     # Revisions
     target_revision = "181dcfcc93ef"
     previous_revision = f"{target_revision}-1"
@@ -26,14 +29,16 @@ def test_backfill_allowed_models_migration():
             ["uv", "run", "python", "-m", "alembic", "downgrade", previous_revision],
             cwd=api_dir,
             env=env,
-            check=True
+            check=True,
         )
 
         # Insert a raw organization (simulating pre-migration state where allowed_models does not exist)
         with engine.begin() as conn:
             conn.execute(
-                text("INSERT INTO organization (id, name, is_default, created_at, updated_at) VALUES (:id, 'Old Org', false, now(), now())"),
-                {"id": org_id}
+                text(
+                    "INSERT INTO organization (id, name, is_default, created_at, updated_at) VALUES (:id, 'Old Org', false, now(), now())"
+                ),
+                {"id": org_id},
             )
 
         # Upgrade through our migration
@@ -41,16 +46,16 @@ def test_backfill_allowed_models_migration():
             ["uv", "run", "python", "-m", "alembic", "upgrade", target_revision],
             cwd=api_dir,
             env=env,
-            check=True
+            check=True,
         )
 
         # Verify backfill
         with engine.begin() as conn:
             result = conn.execute(
                 text("SELECT allowed_models FROM organization WHERE id = :id"),
-                {"id": org_id}
+                {"id": org_id},
             ).fetchone()
-            
+
             assert_that(result, equal_to((["openai/*", "anthropic/*"],)))
 
     finally:
@@ -59,10 +64,9 @@ def test_backfill_allowed_models_migration():
             ["uv", "run", "python", "-m", "alembic", "upgrade", "head"],
             cwd=api_dir,
             env=env,
-            check=False  # Don't fail the finally block if already at head
+            check=False,  # Don't fail the finally block if already at head
         )
         with engine.begin() as conn:
             conn.execute(
-                text("DELETE FROM organization WHERE id = :id"),
-                {"id": org_id}
+                text("DELETE FROM organization WHERE id = :id"), {"id": org_id}
             )

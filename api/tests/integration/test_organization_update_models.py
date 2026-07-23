@@ -16,6 +16,7 @@ from api.tests.steps.agent import MockK8sModule, MockLiteLLMModule
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
 
+
 def test_update_organization_with_invalid_model_id_is_rejected():
     org_a = uuid7()
     owner_a = uuid7()
@@ -37,15 +38,21 @@ def test_update_organization_with_invalid_model_id_is_rejected():
         ]
     ) as context:
         client: TestClient = context.client
-        with patch("api.infrastructure.openrouter.client.OpenRouterClient.list_models") as mock_list_models:
+        with patch(
+            "api.infrastructure.openrouter.client.OpenRouterClient.list_models"
+        ) as mock_list_models:
             mock_list_models.return_value = [{"id": "openai/gpt-4o"}]
             response = client.patch(
                 f"/api/v1/organizations/{org_a}",
                 headers={"Authorization": f"Bearer {context.access_token}"},
-                json={"allowed_models": ["this-is-not-a-valid-model-id"]}
+                json={"allowed_models": ["this-is-not-a-valid-model-id"]},
             )
             assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
-            assert_that(response.json()["detail"], contains_string("does not match any known models"))
+            assert_that(
+                response.json()["detail"],
+                contains_string("does not match any known models"),
+            )
+
 
 def test_update_organization_allowed_models_by_non_admin_is_rejected():
     org_a = uuid7()
@@ -76,6 +83,6 @@ def test_update_organization_allowed_models_by_non_admin_is_rejected():
         response = client.patch(
             f"/api/v1/organizations/{org_a}",
             headers={"Authorization": f"Bearer {context.access_token}"},
-            json={"allowed_models": ["*"]}
+            json={"allowed_models": ["*"]},
         )
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))

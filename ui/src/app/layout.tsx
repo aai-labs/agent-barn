@@ -41,7 +41,7 @@ export default function RootLayout({
         "font-sans",
       )}
     >
-      <body className="min-h-full flex flex-col" suppressHydrationWarning>
+      <body className="min-h-full flex flex-col">
         <NuqsAdapter>
           <QueryProvider>
             <TooltipProvider>

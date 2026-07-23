@@ -856,9 +856,7 @@ class AgentService:
             else ""
         )
         effective_model = agent.model or self.config.agent_default_model
-        if effective_model and not effective_model.startswith("litellm/openrouter/"):
-            effective_model = f"litellm/openrouter/{effective_model}"
-        
+
         overlay: dict | None = None
         hermes_cfg: dict | None = None
 
@@ -1048,6 +1046,8 @@ class AgentService:
         )
         # AGENTS.md is auto-loaded into the startup prompt by both runtimes, so the
         # --profile mapping + no-fallback policy is appended here (not just to TOOLS.md).
+        # The chat-commands policy rides along unconditionally — it applies to every
+        # agent, integrations or not, and to custom templates we don't control.
         agents_md = rendered.agents_md + build_integrations_policy_md(decrypted)
 
         if agent.agent_type == AgentType.HERMES:
@@ -1359,16 +1359,19 @@ class AgentService:
             except Exception as e:
                 logger.warning("Unexpected error joining channel %s: %s", channel_id, e)
 
-    def list_models(self, context: CurrentUserContext, catalog: bool = False) -> list[dict]:
+    def list_models(
+        self, context: CurrentUserContext, catalog: bool = False
+    ) -> list[dict]:
         """Returns the allowlisted OpenRouter models as picker options. The
         configured default (AGENT_DEFAULT_MODEL) is guaranteed present, flagged
         is_default, and listed first so the frontend and backend agree on it.
         """
         org_id = self._org_id(context)
         raw_catalog = self.openrouter.list_models()
-        
+
         if catalog:
             from api.domains.users.organization_users.models import ORG_MANAGER_ROLES
+
             context.require_org_role(
                 org_id,
                 ORG_MANAGER_ROLES,
@@ -1379,7 +1382,9 @@ class AgentService:
             organization = self.organization_repository.get(org_id)
             if not organization:
                 raise HTTPException(status_code=404, detail="Organization not found")
-            allowed = filter_models_by_allowlist(raw_catalog, organization.allowed_models)
+            allowed = filter_models_by_allowlist(
+                raw_catalog, organization.allowed_models
+            )
         options = [
             {
                 "value": f"litellm/openrouter/{model['id']}",
@@ -1391,6 +1396,15 @@ class AgentService:
         ]
 
         default_value = self.config.agent_default_model
+        if default_value and not any(o["value"] == default_value for o in options):
+            options.append(
+                {
+                    "value": default_value,
+                    "label": default_value.removeprefix("litellm/openrouter/"),
+                    "contextLength": None,
+                    "pricing": None,
+                }
+            )
 
         # Stable sort puts the default first while preserving catalogue order.
         options.sort(key=lambda o: o["value"] != default_value)

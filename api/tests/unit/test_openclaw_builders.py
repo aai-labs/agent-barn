@@ -9,9 +9,6 @@ from api.domains.agents.builders.openclaw import (
 )
 
 
-
-
-
 def test_build_openclaw_config_overlay_gateway_auth_is_none():
     overlay = build_openclaw_config_overlay("litellm/gpt-4o", "http://litellm:4000")
     assert_that(overlay["gateway"]["auth"]["mode"], equal_to("none"))

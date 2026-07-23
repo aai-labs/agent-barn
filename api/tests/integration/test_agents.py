@@ -1054,7 +1054,7 @@ def test_start_agent_configmap_has_overlay():
             overlay = json.loads(config_map.data["openclaw-config-overlay.json"])
             assert_that(
                 overlay["agents"]["defaults"]["model"]["primary"],
-                equal_to("litellm/openrouter/litellm/gpt-5"),
+                equal_to("litellm/gpt-5"),
             )
             assert_that(
                 overlay["models"]["providers"]["litellm"]["baseUrl"],
@@ -1141,7 +1141,7 @@ def test_start_agent_uses_default_model_when_empty():
             overlay = json.loads(config_map.data["openclaw-config-overlay.json"])
             assert_that(
                 overlay["agents"]["defaults"]["model"]["primary"],
-                equal_to("litellm/openrouter/litellm/gpt-5-mini"),
+                equal_to("litellm/gpt-5-mini"),
             )
 
 

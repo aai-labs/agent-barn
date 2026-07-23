@@ -66,7 +66,7 @@ export function useUpdateOrganization() {
         queryKey: organizationsKey.detail(variables.organizationId),
       });
     },
-    onError: (error: any) => {
+    onError: (error: Error) => {
       const message = error?.message || "Failed to save changes. Please try again.";
       alert(`Save failed: ${message}`);
     },

@@ -15,6 +15,7 @@ from api.tests.steps.agent import MockK8sModule, MockLiteLLMModule
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
 
+
 def test_catalog_access_by_non_admin_is_rejected():
     org_a = uuid7()
     member_a = uuid7()
@@ -49,6 +50,7 @@ def test_catalog_access_by_non_admin_is_rejected():
             },
         )
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
 
 def test_catalog_access_by_admin_is_allowed():
     org_a = uuid7()

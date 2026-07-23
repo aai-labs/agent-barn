@@ -84,15 +84,22 @@ class OrganizationService:
         config = get_config()
         if data.allowed_models is not None:
             self._validate_allowed_models(data.allowed_models)
-            allowed_models = [m.removeprefix("litellm/openrouter/") for m in data.allowed_models]
+            allowed_models = [
+                m.removeprefix("litellm/openrouter/") for m in data.allowed_models
+            ]
         else:
-            allowed_models = [config.agent_default_model.removeprefix("litellm/openrouter/")]
+            allowed_models = [
+                config.agent_default_model.removeprefix("litellm/openrouter/")
+            ]
 
         # Org, owner-invite (user + token) and the OWNER membership all commit together,
         # so a failed step can't leave an org with no owner. The invite email is sent
         # only after commit.
         organization = Organization(
-            name=data.name, description=data.description, is_default=False, allowed_models=allowed_models
+            name=data.name,
+            description=data.description,
+            is_default=False,
+            allowed_models=allowed_models,
         )
         with Session(
             self.organization_repository.delegate.engine, expire_on_commit=False
@@ -196,14 +203,20 @@ class OrganizationService:
 
         # Mutate and commit inside a single live session
         # so SQLAlchemy properly tracks list mutations and flushes the UPDATE.
-        with Session(self.organization_repository.delegate.engine, expire_on_commit=False) as session:
+        with Session(
+            self.organization_repository.delegate.engine, expire_on_commit=False
+        ) as session:
             session.add(organization)
-            
+
             from sqlalchemy.orm.attributes import flag_modified
+
             if "allowed_models" in dump:
                 if dump["allowed_models"] is not None:
                     self._validate_allowed_models(dump["allowed_models"])
-                    dump["allowed_models"] = [m.removeprefix("litellm/openrouter/") for m in dump["allowed_models"]]
+                    dump["allowed_models"] = [
+                        m.removeprefix("litellm/openrouter/")
+                        for m in dump["allowed_models"]
+                    ]
                 flag_modified(organization, "allowed_models")
 
             for key, value in dump.items():

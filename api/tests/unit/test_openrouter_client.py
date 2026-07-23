@@ -123,10 +123,14 @@ def test_is_model_allowed_handles_unprefixed_value():
 
 def _service(openrouter, allowlist=None, default_model=""):
     if allowlist is None:
-        allowlist = ["qwen/*", "openai/*", "anthropic/*"] # pass everything in tests unless blocked
+        allowlist = [
+            "qwen/*",
+            "openai/*",
+            "anthropic/*",
+        ]  # pass everything in tests unless blocked
     config = MagicMock()
     config.agent_default_model = default_model
-    
+
     org_repo = MagicMock()
     org = MagicMock()
     org.allowed_models = allowlist
@@ -177,7 +181,11 @@ def test_service_flags_and_surfaces_configured_default_first():
         {"id": "qwen/qwen3.6-plus", "name": "Qwen"},
         {"id": "openai/gpt-5-mini", "name": "GPT-5 mini"},
     ]
-    service = _service(openrouter, allowlist=["qwen/*", "openai/*"], default_model="litellm/openrouter/openai/gpt-5-mini")
+    service = _service(
+        openrouter,
+        allowlist=["qwen/*", "openai/*"],
+        default_model="litellm/openrouter/openai/gpt-5-mini",
+    )
     service._org_id = MagicMock()
 
     options = service.list_models(MagicMock())

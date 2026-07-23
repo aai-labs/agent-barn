@@ -7,6 +7,22 @@ import { useModels } from "@/features/agents/hooks/use-models";
 import { useUpdateOrganization } from "../hooks/use-organization-actions";
 import { Organization } from "../schemas";
 
+const getPrefixedModels = (dbModels: string[] | undefined, catalog: { value: string }[]) => {
+  const catalogValues = new Set(catalog.map((c) => c.value));
+  return (dbModels || [])
+    .map((m) => {
+      // Already in the correct prefixed form
+      if (catalogValues.has(m)) return m;
+      // Try adding the prefix (handles bare OpenRouter slugs like "kwaipilot/..." and
+      // also models like "litellm/gpt-5-mini")
+      const withPrefix = `litellm/openrouter/${m}`;
+      if (catalogValues.has(withPrefix)) return withPrefix;
+      // Unknown / truly orphaned value — discard
+      return null;
+    })
+    .filter((m): m is string => m !== null);
+};
+
 export function AllowedModelsSection({
   organization,
 }: {
@@ -15,23 +31,6 @@ export function AllowedModelsSection({
   const { models, isLoading } = useModels({ catalog: true });
   const updateOrg = useUpdateOrganization();
   
-  const getPrefixedModels = (dbModels: string[] | undefined, catalog: typeof models) => {
-    const catalogValues = new Set(catalog.map((c) => c.value));
-    return (dbModels || [])
-      .map((m) => {
-        // Already in the correct prefixed form
-        if (catalogValues.has(m)) return m;
-        // Try adding the prefix (handles bare OpenRouter slugs like "kwaipilot/..." and
-        // also models like "litellm/gpt-5-mini" whose catalog value is
-        // "litellm/openrouter/litellm/gpt-5-mini")
-        const withPrefix = `litellm/openrouter/${m}`;
-        if (catalogValues.has(withPrefix)) return withPrefix;
-        // Unknown / truly orphaned value — discard
-        return null;
-      })
-      .filter((m): m is string => m !== null);
-  };
-
   const [selectedModels, setSelectedModels] = useState<string[]>(() => {
     const initial = getPrefixedModels(organization.allowedModels, models);
     const def = models.find((m) => m.isDefault);
@@ -49,6 +48,7 @@ export function AllowedModelsSection({
       if (def && !dbModels.includes(def.value)) {
         dbModels.push(def.value);
       }
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSelectedModels(dbModels);
     }
   }, [organization.allowedModels, models, isLoading]);

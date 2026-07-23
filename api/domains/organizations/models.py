@@ -20,8 +20,7 @@ class Organization(BaseModel, table=True):
         default=False, nullable=False, sa_column_kwargs={"server_default": "false"}
     )
     allowed_models: list[str] = Field(
-        default_factory=list, 
-        sa_column=sa.Column(JSONB, server_default="[]")
+        default_factory=list, sa_column=sa.Column(JSONB, server_default="[]")
     )
 
     __table_args__ = (
