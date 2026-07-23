@@ -43,14 +43,10 @@ class AgentAccessService:
             for role, permissions in self.rbac_repository.list_agent_access_roles(organization_id)
         ]
 
-    def get_access_settings(
-        self, agent_id: UUID, context: CurrentUserContext
-    ) -> AgentAccessSettingsRead:
+    def get_access_settings(self, agent_id: UUID, context: CurrentUserContext) -> AgentAccessSettingsRead:
         agent = self._require_manage_access(context, agent_id)
         return AgentAccessSettingsRead(
-            general_access=AgentGeneralAccessRead(
-                role=self._general_access_role_read(agent)
-            ),
+            general_access=AgentGeneralAccessRead(role=self._general_access_role_read(agent)),
             assignments=self._assigned_members_for_agent(agent),
         )
 
@@ -61,9 +57,7 @@ class AgentAccessService:
         context: CurrentUserContext,
     ) -> AgentAccessSettingsRead:
         agent = self._require_manage_access(context, agent_id)
-        general_role_read = self._require_general_access_role(
-            data.general_access_role_id, agent.organization_id
-        )
+        general_role_read = self._require_general_access_role(data.general_access_role_id, agent.organization_id)
 
         seen_user_ids: set[UUID] = set()
         assignment_roles: dict[UUID, UUID] = {}
@@ -75,12 +69,8 @@ class AgentAccessService:
                     detail="Each member can appear only once in Agent access settings",
                 )
             seen_user_ids.add(assignment.user_id)
-            role, role_read = self._require_access_role(
-                assignment.access_role_id, agent.organization_id
-            )
-            membership, user = self._require_accepted_member(
-                assignment.user_id, agent.organization_id
-            )
+            role, role_read = self._require_access_role(assignment.access_role_id, agent.organization_id)
+            membership, user = self._require_accepted_member(assignment.user_id, agent.organization_id)
             assignment_roles[membership.id] = role.id
             assignments.append(self._to_assignment(agent, membership, user, role_read))
 
@@ -99,9 +89,7 @@ class AgentAccessService:
             assignments=assignments,
         )
 
-    def _require_general_access_role(
-        self, role_id: UUID | None, organization_id: UUID
-    ) -> AgentAccessRoleRead | None:
+    def _require_general_access_role(self, role_id: UUID | None, organization_id: UUID) -> AgentAccessRoleRead | None:
         if role_id is None:
             return None
         role, role_read = self._require_access_role(role_id, organization_id)
@@ -116,9 +104,7 @@ class AgentAccessService:
     def _general_access_role_read(self, agent: Agent) -> AgentAccessRoleRead | None:
         if agent.general_access_role_id is None:
             return None
-        role = self.rbac_repository.get_agent_access_role(
-            agent.general_access_role_id, agent.organization_id
-        )
+        role = self.rbac_repository.get_agent_access_role(agent.general_access_role_id, agent.organization_id)
         if role is None:
             return None
         permissions = self.rbac_repository.get_agent_access_role_permissions(role.id)
@@ -144,9 +130,7 @@ class AgentAccessService:
             result.append(self._to_assignment(agent, membership, user, role))
         return result
 
-    def _require_manage_access(
-        self, context: CurrentUserContext, agent_id: UUID
-    ) -> Agent:
+    def _require_manage_access(self, context: CurrentUserContext, agent_id: UUID) -> Agent:
         return self.authorization.require_action(
             context,
             agent_id,

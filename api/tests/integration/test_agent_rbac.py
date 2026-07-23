@@ -483,9 +483,7 @@ def test_unassigned_member_cannot_discover_share_settings():
         unrelated, _ = _add_member(context)
         there_is_an_access_token_for_user(unrelated.id)(context)
 
-        response = context.client.get(
-            _share_url(context.agent.id), headers=_auth(context)
-        )
+        response = context.client.get(_share_url(context.agent.id), headers=_auth(context))
 
         assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 

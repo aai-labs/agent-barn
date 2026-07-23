@@ -85,9 +85,7 @@ class OrganizationUserRepository:
             )
             if search:
                 pattern = f"%{search}%"
-                query = query.where(
-                    col(User.full_name).ilike(pattern) | col(User.email).ilike(pattern)
-                )
+                query = query.where(col(User.full_name).ilike(pattern) | col(User.email).ilike(pattern))
             query = query.order_by(col(OrganizationUser.created_at).asc())
             return list(session.exec(query).all())
 

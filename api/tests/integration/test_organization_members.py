@@ -119,21 +119,13 @@ def test_member_search_filters_by_name_and_email():
             ),
         ]
     ) as context:
-        by_name = context.client.get(
-            _members_url(), params={"search": "ada"}, headers=_auth(context)
-        )
-        by_email = context.client.get(
-            _members_url(), params={"search": "GRACE@EXAMPLE"}, headers=_auth(context)
-        )
-        no_match = context.client.get(
-            _members_url(), params={"search": "nonexistent"}, headers=_auth(context)
-        )
+        by_name = context.client.get(_members_url(), params={"search": "ada"}, headers=_auth(context))
+        by_email = context.client.get(_members_url(), params={"search": "GRACE@EXAMPLE"}, headers=_auth(context))
+        no_match = context.client.get(_members_url(), params={"search": "nonexistent"}, headers=_auth(context))
         unfiltered = context.client.get(_members_url(), headers=_auth(context))
 
         assert_that(by_name.status_code, equal_to(status.HTTP_200_OK))
-        assert_that(
-            [item["full_name"] for item in by_name.json()], equal_to(["Ada Lovelace"])
-        )
+        assert_that([item["full_name"] for item in by_name.json()], equal_to(["Ada Lovelace"]))
         assert_that(by_email.status_code, equal_to(status.HTTP_200_OK))
         assert_that(
             [item["full_name"] for item in by_email.json()],
