@@ -183,9 +183,9 @@ class AgentRepository:
         organization_id: UUID,
         *,
         general_access_role_id: UUID | None,
-        assignment_roles: dict[UUID, UUID] | None,
+        assignment_roles: dict[UUID, UUID],
     ) -> bool:
-        """Replace General Access and optionally explicit assignments atomically."""
+        """Replace General Access and explicit assignments atomically."""
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             agent = session.exec(
                 select(Agent)
@@ -199,7 +199,7 @@ class AgentRepository:
             if agent is None:
                 return False
 
-            desired_role_ids = set(assignment_roles.values()) if assignment_roles else set()
+            desired_role_ids = set(assignment_roles.values())
             if general_access_role_id is not None:
                 desired_role_ids.add(general_access_role_id)
             if desired_role_ids:
@@ -230,36 +230,35 @@ class AgentRepository:
             agent.general_access_role_id = general_access_role_id
             session.add(agent)
 
-            if assignment_roles is not None:
-                existing_access = session.exec(
-                    select(AgentAccess)
-                    .where(
-                        col(AgentAccess.agent_id) == agent_id,
-                        col(AgentAccess.organization_id) == organization_id,
-                    )
-                    .with_for_update()
-                ).all()
-                existing_by_membership = {access.membership_id: access for access in existing_access}
-                desired_membership_ids = set(assignment_roles)
+            existing_access = session.exec(
+                select(AgentAccess)
+                .where(
+                    col(AgentAccess.agent_id) == agent_id,
+                    col(AgentAccess.organization_id) == organization_id,
+                )
+                .with_for_update()
+            ).all()
+            existing_by_membership = {access.membership_id: access for access in existing_access}
+            desired_membership_ids = set(assignment_roles)
 
-                for membership_id, access in existing_by_membership.items():
-                    if membership_id not in desired_membership_ids:
-                        session.delete(access)
+            for membership_id, access in existing_by_membership.items():
+                if membership_id not in desired_membership_ids:
+                    session.delete(access)
 
-                for membership_id, access_role_id in assignment_roles.items():
-                    access = existing_by_membership.get(membership_id)
-                    if access is None:
-                        session.add(
-                            AgentAccess(
-                                organization_id=organization_id,
-                                membership_id=membership_id,
-                                agent_id=agent_id,
-                                access_role_id=access_role_id,
-                            )
+            for membership_id, access_role_id in assignment_roles.items():
+                access = existing_by_membership.get(membership_id)
+                if access is None:
+                    session.add(
+                        AgentAccess(
+                            organization_id=organization_id,
+                            membership_id=membership_id,
+                            agent_id=agent_id,
+                            access_role_id=access_role_id,
                         )
-                    else:
-                        access.access_role_id = access_role_id
-                        session.add(access)
+                    )
+                else:
+                    access.access_role_id = access_role_id
+                    session.add(access)
 
             session.commit()
             return True

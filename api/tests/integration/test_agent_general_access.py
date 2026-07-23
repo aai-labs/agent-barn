@@ -34,6 +34,7 @@ from api.domains.agents.models import AgentAccess
 from api.domains.agents.repository import AgentRepository
 from api.domains.organizations.models import Organization
 from api.domains.users.organization_users.models import OrganizationRole
+from api.domains.users.organization_users.repository import OrganizationUserRepository
 
 _BASE = "/api/v1/agents"
 _GIVEN = [
@@ -354,6 +355,36 @@ def test_pending_members_do_not_receive_general_access():
         assert_that(listed.status_code, equal_to(status.HTTP_200_OK))
         assert_that(listed.json()["total"], equal_to(0))
         assert_that(detail.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_removed_membership_receives_no_general_access():
+    with given(_GIVEN) as context:
+        agent_id = context.agent.id
+        context.client.put(
+            _access_settings_url(agent_id),
+            json={
+                "general_access_role_id": str(AGENT_VIEWER_ROLE_ID),
+                "assignments": [],
+            },
+            headers=_auth(context),
+        )
+        target, target_membership = _add_target_member(context)
+        there_is_an_access_token_for_user(target.id)(context)
+
+        visible_before_removal = context.client.get(f"{_BASE}/{agent_id}", headers=_auth(context))
+
+        membership_repository: OrganizationUserRepository = context.injector.get(OrganizationUserRepository)
+        membership_repository.delete(target_membership)
+
+        listed_after_removal = context.client.get(_BASE, headers=_auth(context))
+        detail_after_removal = context.client.get(f"{_BASE}/{agent_id}", headers=_auth(context))
+
+        assert_that(visible_before_removal.status_code, equal_to(status.HTTP_200_OK))
+        # A removed Membership has no organization_users row at all, so the request is
+        # rejected at the organization-authorization boundary before Agent visibility
+        # is even evaluated, unlike a pending Member whose row still exists.
+        assert_that(listed_after_removal.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+        assert_that(detail_after_removal.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
 def test_direct_and_general_access_permissions_are_additive():
