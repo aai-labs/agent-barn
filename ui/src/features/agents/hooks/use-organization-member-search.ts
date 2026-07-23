@@ -16,16 +16,17 @@ export function useOrganizationMemberSearch(
   organizationId: string | undefined,
   search: string,
   enabled = true,
+  limit?: number,
 ) {
   const query = useQuery({
     queryKey: organizationMembersKey.list({
       scope: { organizationId: organizationId ?? "" },
-      filters: { search },
+      filters: { search, limit },
     }),
     queryFn: async () => {
       const response = await api.get<OrganizationMember[]>(
         `/api/v1/organizations/${organizationId}/members`,
-        { schema: OrganizationMembersSchema, params: { search } },
+        { schema: OrganizationMembersSchema, params: { search, limit } },
       );
       return response.data;
     },

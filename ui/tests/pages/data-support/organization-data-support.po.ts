@@ -177,10 +177,10 @@ export class OrganizationDataSupport {
         return;
       }
       const source = members ?? DEFAULT_MEMBERS;
-      const search = new URL(route.request().url()).searchParams
-        .get("search")
-        ?.toLowerCase();
-      const items =
+      const params = new URL(route.request().url()).searchParams;
+      const search = params.get("search")?.toLowerCase();
+      const limit = params.get("limit");
+      let items =
         search && !members
           ? (source as typeof DEFAULT_MEMBERS).filter(
               (m) =>
@@ -188,6 +188,7 @@ export class OrganizationDataSupport {
                 m.email.toLowerCase().includes(search),
             )
           : source;
+      if (limit) items = items.slice(0, Number(limit));
       await route.fulfill({
         status,
         contentType: "application/json",

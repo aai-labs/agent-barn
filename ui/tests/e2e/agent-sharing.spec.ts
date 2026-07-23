@@ -174,6 +174,45 @@ test.describe("Agent sharing", () => {
     ).toHaveCount(0);
   });
 
+  test("Search results are capped so a broad query can't dump the whole Organization into the dialog", async ({
+    page,
+  }) => {
+    const manyMembers = Array.from({ length: 25 }, (_, i) => ({
+      user_id: `cccccccc-0000-4ccc-8ccc-${String(i).padStart(12, "0")}`,
+      email: `member${i}@example.com`,
+      full_name: `Member Number ${i}`,
+      role: "MEMBER",
+      is_pending: false,
+    }));
+    let requestedLimit: string | null = null;
+    await page.route("**/api/v1/organizations/*/members*", async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      const url = new URL(route.request().url());
+      requestedLimit = url.searchParams.get("limit");
+      const limit = requestedLimit ? Number(requestedLimit) : undefined;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(limit ? manyMembers.slice(0, limit) : manyMembers),
+      });
+    });
+
+    await agentDetailPage.shareButton().click();
+    await agentDetailPage.shareSearchInput().fill("member");
+
+    await expect(
+      agentDetailPage.shareDialog().getByText(/showing the first 8 matches/i),
+    ).toBeVisible();
+    await expect(
+      agentDetailPage.addCandidateButton("member0@example.com"),
+    ).toBeVisible();
+    // Bounded by a server-side `limit`, not fetched in full and truncated client-side.
+    expect(requestedLimit).toBe("9");
+  });
+
   test("Searching for a Member just removed (not yet saved) finds them to restore access", async () => {
     // The share snapshot loaded at open time still lists this Member — removing them
     // only edits the local draft. Re-searching for them must reflect the draft's

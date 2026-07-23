@@ -11,6 +11,12 @@ import type { AgentAccessRoleRead } from "../schemas";
 import { defaultRoleId } from "../permissions";
 import { formatRoleName, ShareRoleSelect } from "./share-role-select";
 
+// Cap what's rendered so a broad query (e.g. a single letter) against a large
+// Organization can't dump hundreds of rows into the dialog. Fetch one extra row past
+// the cap purely to detect "there are more" without a separate count query.
+const RESULTS_LIMIT = 8;
+const FETCH_LIMIT = RESULTS_LIMIT + 1;
+
 type RowStatus =
   | { kind: "addable" }
   | { kind: "already-has-access" }
@@ -48,7 +54,10 @@ function ShareCandidateRow({
   return (
     <div className="flex items-center gap-3 py-2.5">
       <div className="min-w-0 flex-1">
-        <div className="font-medium text-[13.5px] truncate" style={{ color: "var(--ink)" }}>
+        <div
+          className="font-medium text-[13.5px] truncate"
+          style={{ color: "var(--ink)" }}
+        >
           {member.fullName || member.email}
         </div>
         <div className="text-[12px] truncate" style={{ color: "var(--ink-3)" }}>
@@ -56,17 +65,26 @@ function ShareCandidateRow({
         </div>
       </div>
       {status.kind === "already-has-access" && (
-        <span className="text-[12px] flex-shrink-0" style={{ color: "var(--ink-4)" }}>
+        <span
+          className="text-[12px] shrink-0"
+          style={{ color: "var(--ink-4)" }}
+        >
           Already has access
         </span>
       )}
       {status.kind === "implicit-owner" && (
-        <span className="text-[12px] flex-shrink-0" style={{ color: "var(--ink-4)" }}>
+        <span
+          className="text-[12px] shrink-0"
+          style={{ color: "var(--ink-4)" }}
+        >
           {formatRoleName(member.role)} — full access already
         </span>
       )}
       {status.kind === "pending" && (
-        <span className="text-[12px] flex-shrink-0" style={{ color: "var(--ink-4)" }}>
+        <span
+          className="text-[12px] shrink-0"
+          style={{ color: "var(--ink-4)" }}
+        >
           Pending invite
         </span>
       )}
@@ -78,10 +96,10 @@ function ShareCandidateRow({
             onChange={setRoleId}
             disabled={disabled}
             ariaLabel={`Access role for ${member.email}`}
-            className="w-32 flex-shrink-0"
+            className="w-32 shrink-0"
           />
           <button
-            className="af-btn flex-shrink-0"
+            className="af-btn shrink-0"
             aria-label={`Add ${member.email}`}
             disabled={!roleId || disabled}
             onClick={() => onGrant(member, roleId)}
@@ -115,11 +133,14 @@ export function ShareAddMember({
 }: ShareAddMemberProps) {
   const [search, setSearch] = useState("");
   const term = search.trim();
-  const { members: results, isLoading } = useOrganizationMemberSearch(
+  const { members: fetched, isLoading } = useOrganizationMemberSearch(
     organizationId,
     term,
     isOpen && term.length > 0,
+    FETCH_LIMIT,
   );
+  const hasMore = fetched.length > RESULTS_LIMIT;
+  const results = fetched.slice(0, RESULTS_LIMIT);
   const assigned = new Set(assignedUserIds);
 
   return (
@@ -145,18 +166,26 @@ export function ShareAddMember({
           No matching Members found.
         </p>
       ) : (
-        <div className="mt-1 divide-y" style={{ borderColor: "var(--line)" }}>
-          {results.map((member) => (
-            <ShareCandidateRow
-              key={member.userId}
-              member={member}
-              status={statusFor(member, assigned)}
-              roles={roles}
-              onGrant={onGrant}
-              disabled={disabled}
-            />
-          ))}
-        </div>
+        <>
+          <div className="mt-1 divide-y" style={{ borderColor: "var(--line)" }}>
+            {results.map((member) => (
+              <ShareCandidateRow
+                key={member.userId}
+                member={member}
+                status={statusFor(member, assigned)}
+                roles={roles}
+                onGrant={onGrant}
+                disabled={disabled}
+              />
+            ))}
+          </div>
+          {hasMore && (
+            <p className="mt-1 text-[12px]" style={{ color: "var(--ink-4)" }}>
+              Showing the first {RESULTS_LIMIT} matches — refine your search to
+              see more.
+            </p>
+          )}
+        </>
       )}
     </div>
   );
