@@ -1091,9 +1091,7 @@ class AgentService:
 
         fc_content = decrypted.get(SecretProvider.FIRECRAWL)
         fc_api_key = (
-            fc_content.api_key
-            if isinstance(fc_content, FirecrawlContent)
-            else self.config.agent_firecrawl_api_key
+            fc_content.api_key if isinstance(fc_content, FirecrawlContent) else self.config.agent_firecrawl_api_key
         )
         fc_base_url = (
             fc_content.base_url

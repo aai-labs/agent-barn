@@ -277,9 +277,7 @@ def test_tool_context_md_omits_non_aai_cli_providers():
 
 
 def test_tool_context_md_empty_when_only_firecrawl():
-    md = build_tool_context_md(
-        {SecretProvider.FIRECRAWL: FirecrawlContent(api_key="fc-x")}
-    )
+    md = build_tool_context_md({SecretProvider.FIRECRAWL: FirecrawlContent(api_key="fc-x")})
     assert md == ""
 
 
