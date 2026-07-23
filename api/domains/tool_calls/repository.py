@@ -41,8 +41,7 @@ class ToolCallRepository:
                 .join(Agent, col(Agent.id) == col(ToolCall.agent_id))
                 .where(
                     col(ToolCall.agent_id) == agent_id,
-                    col(ToolCall.organization_id)
-                    == authorization_scope.organization_id,
+                    col(ToolCall.organization_id) == authorization_scope.organization_id,
                     *visibility,
                 )
             )
@@ -55,21 +54,15 @@ class ToolCallRepository:
                 .join(Agent, col(Agent.id) == col(ToolCall.agent_id))
                 .where(
                     col(ToolCall.agent_id) == agent_id,
-                    col(ToolCall.organization_id)
-                    == authorization_scope.organization_id,
+                    col(ToolCall.organization_id) == authorization_scope.organization_id,
                     *visibility,
                 )
             )
             count_query = self._apply_filter(count_query, tool_call_filter)
             total = session.scalar(count_query) or 0
 
-            page_query = base.offset((pagination.page - 1) * pagination.size).limit(
-                pagination.size
-            )
-            items = [
-                ToolCallRead.model_validate(row)
-                for row in session.exec(page_query).all()
-            ]
+            page_query = base.offset((pagination.page - 1) * pagination.size).limit(pagination.size)
+            items = [ToolCallRead.model_validate(row) for row in session.exec(page_query).all()]
 
             return PaginatedItems(
                 page=pagination.page,
@@ -81,9 +74,7 @@ class ToolCallRepository:
     @staticmethod
     def _apply_filter(query, tool_call_filter: ToolCallFilter):
         if tool_call_filter.tool_name:
-            query = query.where(
-                col(ToolCall.tool_name).ilike(f"%{tool_call_filter.tool_name}%")
-            )
+            query = query.where(col(ToolCall.tool_name).ilike(f"%{tool_call_filter.tool_name}%"))
         if tool_call_filter.status is not None:
             query = query.where(col(ToolCall.status) == tool_call_filter.status)
         if tool_call_filter.from_date is not None:
@@ -131,9 +122,7 @@ class ToolCallRepository:
     ) -> bool:
         """Transition a PENDING row to SUCCESS/ERROR. Returns True if a row matched."""
         target = session.exec(
-            select(ToolCall)
-            .where(col(ToolCall.agent_id) == agent_id)
-            .where(col(ToolCall.external_id) == external_id)
+            select(ToolCall).where(col(ToolCall.agent_id) == agent_id).where(col(ToolCall.external_id) == external_id)
         ).first()
         if target is None:
             return False

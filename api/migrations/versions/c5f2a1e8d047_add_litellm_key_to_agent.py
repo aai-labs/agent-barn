@@ -19,9 +19,7 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     op.add_column("agent", sa.Column("litellm_key_encrypted", sa.Text(), nullable=True))
-    op.execute(
-        "UPDATE agent SET litellm_key_encrypted = '' WHERE litellm_key_encrypted IS NULL"
-    )
+    op.execute("UPDATE agent SET litellm_key_encrypted = '' WHERE litellm_key_encrypted IS NULL")
     op.alter_column("agent", "litellm_key_encrypted", nullable=False)
 
 

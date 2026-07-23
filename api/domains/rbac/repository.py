@@ -51,9 +51,7 @@ class RbacRepository:
             ).all()
         return {by_value[key] for key in keys}
 
-    def list_agent_access_roles(
-        self, organization_id: UUID
-    ) -> list[tuple[AgentAccessRole, set[PermissionKey]]]:
+    def list_agent_access_roles(self, organization_id: UUID) -> list[tuple[AgentAccessRole, set[PermissionKey]]]:
         """Return locked defaults and roles owned by the active Organization."""
         with Session(self.delegate.engine) as session:
             roles = list(
@@ -77,24 +75,19 @@ class RbacRepository:
                     select(AgentAccessRolePermission.role_id, Permission.key)
                     .join(
                         Permission,
-                        col(Permission.id)
-                        == col(AgentAccessRolePermission.permission_id),
+                        col(Permission.id) == col(AgentAccessRolePermission.permission_id),
                     )
                     .where(col(AgentAccessRolePermission.role_id).in_(role_ids))
                 ).all()
                 if role_ids
                 else []
             )
-        permissions_by_role: dict[UUID, set[PermissionKey]] = {
-            role_id: set() for role_id in role_ids
-        }
+        permissions_by_role: dict[UUID, set[PermissionKey]] = {role_id: set() for role_id in role_ids}
         for role_id, key in grants:
             permissions_by_role[role_id].add(PermissionKey(key))
         return [(role, permissions_by_role[role.id]) for role in roles]
 
-    def get_agent_access_role(
-        self, role_id: UUID, organization_id: UUID
-    ) -> AgentAccessRole | None:
+    def get_agent_access_role(self, role_id: UUID, organization_id: UUID) -> AgentAccessRole | None:
         """Resolve a system role or a custom role owned by one Organization."""
         with Session(self.delegate.engine) as session:
             return session.exec(
@@ -119,17 +112,11 @@ class RbacRepository:
     def _seed_permissions(session: Session) -> None:
         for seed in PERMISSIONS:
             by_id = session.get(Permission, seed.id)
-            by_key = session.exec(
-                select(Permission).where(col(Permission.key) == seed.key.value)
-            ).first()
+            by_key = session.exec(select(Permission).where(col(Permission.key) == seed.key.value)).first()
             if by_id is not None and by_id.key != seed.key.value:
-                raise RbacSeedConflictError(
-                    f"Permission ID {seed.id} has unexpected key {by_id.key}"
-                )
+                raise RbacSeedConflictError(f"Permission ID {seed.id} has unexpected key {by_id.key}")
             if by_key is not None and by_key.id != seed.id:
-                raise RbacSeedConflictError(
-                    f"Permission key {seed.key.value} has unexpected ID {by_key.id}"
-                )
+                raise RbacSeedConflictError(f"Permission key {seed.key.value} has unexpected ID {by_key.id}")
             if by_id is None:
                 session.add(Permission(id=seed.id, key=seed.key.value))
         session.flush()
@@ -145,18 +132,11 @@ class RbacRepository:
                 )
             ).first()
             if by_id is not None and (
-                by_id.name != seed.name
-                or not by_id.is_system
-                or by_id.organization_id is not None
+                by_id.name != seed.name or not by_id.is_system or by_id.organization_id is not None
             ):
-                raise RbacSeedConflictError(
-                    f"System Agent Access Role ID {seed.id} has unexpected attributes"
-                )
+                raise RbacSeedConflictError(f"System Agent Access Role ID {seed.id} has unexpected attributes")
             if by_name is not None and by_name.id != seed.id:
-                raise RbacSeedConflictError(
-                    f"System Agent Access Role {seed.name} has unexpected ID "
-                    f"{by_name.id}"
-                )
+                raise RbacSeedConflictError(f"System Agent Access Role {seed.name} has unexpected ID {by_name.id}")
             if by_id is None:
                 session.add(
                     AgentAccessRole(
@@ -190,31 +170,18 @@ class RbacRepository:
 
     @staticmethod
     def _validate_exact_system_catalogue(session: Session) -> None:
-        expected_permissions = {
-            (permission.id, permission.key.value) for permission in PERMISSIONS
-        }
-        actual_permissions = {
-            (permission.id, permission.key)
-            for permission in session.exec(select(Permission)).all()
-        }
+        expected_permissions = {(permission.id, permission.key.value) for permission in PERMISSIONS}
+        actual_permissions = {(permission.id, permission.key) for permission in session.exec(select(Permission)).all()}
         if actual_permissions != expected_permissions:
-            raise RbacSeedConflictError(
-                "Permission catalogue contains unexpected or missing rows"
-            )
+            raise RbacSeedConflictError("Permission catalogue contains unexpected or missing rows")
 
-        expected_agent_roles = {
-            (role.id, role.name) for role in SYSTEM_AGENT_ACCESS_ROLES
-        }
+        expected_agent_roles = {(role.id, role.name) for role in SYSTEM_AGENT_ACCESS_ROLES}
         actual_agent_roles = {
             (role.id, role.name)
-            for role in session.exec(
-                select(AgentAccessRole).where(col(AgentAccessRole.is_system).is_(True))
-            ).all()
+            for role in session.exec(select(AgentAccessRole).where(col(AgentAccessRole.is_system).is_(True))).all()
         }
         if actual_agent_roles != expected_agent_roles:
-            raise RbacSeedConflictError(
-                "System Agent Access Role catalogue contains unexpected or missing rows"
-            )
+            raise RbacSeedConflictError("System Agent Access Role catalogue contains unexpected or missing rows")
 
         expected_agent_grants = {
             (role_id, PERMISSION_ID_BY_KEY[permission_key])
@@ -231,6 +198,4 @@ class RbacRepository:
             ).all()
         }
         if actual_agent_grants != expected_agent_grants:
-            raise RbacSeedConflictError(
-                "System Agent Access Role grants contain unexpected or missing rows"
-            )
+            raise RbacSeedConflictError("System Agent Access Role grants contain unexpected or missing rows")

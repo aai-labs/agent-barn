@@ -19,16 +19,12 @@ def test_i_can_get_user_organization_by_user_and_org_id():
             there_is_a_user(email="member@example.com", role=OrganizationRole.MEMBER),
         ]
     ) as context:
-        repository: OrganizationUserRepository = context.injector.get(
-            OrganizationUserRepository
-        )
+        repository: OrganizationUserRepository = context.injector.get(OrganizationUserRepository)
 
         with when("I fetch organization membership"):
             user_id = context.user.id
             organization_id = context.organization.id
-            result = repository.get_by_user_id_and_organization_id(
-                user_id, organization_id
-            )
+            result = repository.get_by_user_id_and_organization_id(user_id, organization_id)
 
             with then("membership should exist"):
                 assert_that(result, is_not(none()))

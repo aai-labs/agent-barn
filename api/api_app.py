@@ -67,9 +67,7 @@ async def lifespan(_: FastAPI):
         template_service.seed_predefined_templates(default_org.id)
 
         org_user_repo = injector.get(OrganizationUserRepository)
-        if not org_user_repo.get_by_user_id_and_organization_id(
-            superuser.id, default_org.id
-        ):
+        if not org_user_repo.get_by_user_id_and_organization_id(superuser.id, default_org.id):
             org_user_repo.save(
                 OrganizationUser(
                     user_id=superuser.id,

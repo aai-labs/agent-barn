@@ -119,21 +119,13 @@ def test_member_search_filters_by_name_and_email():
             ),
         ]
     ) as context:
-        by_name = context.client.get(
-            _members_url(), params={"search": "ada"}, headers=_auth(context)
-        )
-        by_email = context.client.get(
-            _members_url(), params={"search": "GRACE@EXAMPLE"}, headers=_auth(context)
-        )
-        no_match = context.client.get(
-            _members_url(), params={"search": "nonexistent"}, headers=_auth(context)
-        )
+        by_name = context.client.get(_members_url(), params={"search": "ada"}, headers=_auth(context))
+        by_email = context.client.get(_members_url(), params={"search": "GRACE@EXAMPLE"}, headers=_auth(context))
+        no_match = context.client.get(_members_url(), params={"search": "nonexistent"}, headers=_auth(context))
         unfiltered = context.client.get(_members_url(), headers=_auth(context))
 
         assert_that(by_name.status_code, equal_to(status.HTTP_200_OK))
-        assert_that(
-            [item["full_name"] for item in by_name.json()], equal_to(["Ada Lovelace"])
-        )
+        assert_that([item["full_name"] for item in by_name.json()], equal_to(["Ada Lovelace"]))
         assert_that(by_email.status_code, equal_to(status.HTTP_200_OK))
         assert_that(
             [item["full_name"] for item in by_email.json()],
@@ -221,9 +213,7 @@ def test_admin_without_membership_read_cannot_list_members():
         [
             *_GIVEN,
             _there_is_an_admin_actor(admin_id),
-            role_lacks_permission(
-                OrganizationRole.ADMIN, PermissionKey.MEMBERSHIP_READ
-            ),
+            role_lacks_permission(OrganizationRole.ADMIN, PermissionKey.MEMBERSHIP_READ),
         ]
     ) as context:
         response = context.client.get(_members_url(), headers=_auth(context))
@@ -276,9 +266,7 @@ def test_admin_without_membership_invite_cannot_add_member():
         [
             *_GIVEN,
             _there_is_an_admin_actor(admin_id),
-            role_lacks_permission(
-                OrganizationRole.ADMIN, PermissionKey.MEMBERSHIP_INVITE
-            ),
+            role_lacks_permission(OrganizationRole.ADMIN, PermissionKey.MEMBERSHIP_INVITE),
         ]
     ) as context:
         response = context.client.post(
@@ -310,9 +298,7 @@ def test_owner_adds_new_member_and_gets_invite_link():
                 assert_that(body["member"]["full_name"], equal_to("New Bie"))
                 assert_that(body["member"]["role"], equal_to("MEMBER"))
                 assert_that(body["member"]["is_pending"], is_(True))
-                assert_that(
-                    body["invite_link"], contains_string("/set-password?token=")
-                )
+                assert_that(body["invite_link"], contains_string("/set-password?token="))
 
 
 def test_add_member_with_owner_role_is_rejected():
@@ -387,9 +373,7 @@ def test_admin_without_membership_role_update_cannot_change_member_role():
                 organization_id=ORG,
                 role=OrganizationRole.MEMBER,
             ),
-            role_lacks_permission(
-                OrganizationRole.ADMIN, PermissionKey.MEMBERSHIP_ROLE_UPDATE
-            ),
+            role_lacks_permission(OrganizationRole.ADMIN, PermissionKey.MEMBERSHIP_ROLE_UPDATE),
         ]
     ) as context:
         response = context.client.patch(
@@ -425,9 +409,7 @@ def test_owner_changes_member_role():
             with then("role is updated"):
                 assert_that(response.status_code, equal_to(status.HTTP_200_OK))
                 assert_that(response.json()["role"], equal_to("ADMIN"))
-                assert_that(
-                    _role_of(context, member_id), equal_to(OrganizationRole.ADMIN)
-                )
+                assert_that(_role_of(context, member_id), equal_to(OrganizationRole.ADMIN))
 
 
 def _there_is_an_admin_actor(admin_id):
@@ -530,14 +512,10 @@ def test_admin_without_membership_remove_cannot_remove_member():
                 organization_id=ORG,
                 role=OrganizationRole.MEMBER,
             ),
-            role_lacks_permission(
-                OrganizationRole.ADMIN, PermissionKey.MEMBERSHIP_REMOVE
-            ),
+            role_lacks_permission(OrganizationRole.ADMIN, PermissionKey.MEMBERSHIP_REMOVE),
         ]
     ) as context:
-        response = context.client.delete(
-            f"{_members_url()}/{member_id}", headers=_auth(context)
-        )
+        response = context.client.delete(f"{_members_url()}/{member_id}", headers=_auth(context))
 
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
@@ -557,15 +535,11 @@ def test_owner_removes_member():
         ]
     ) as context:
         with when("the owner removes the member"):
-            response = context.client.delete(
-                f"{_members_url()}/{member_id}", headers=_auth(context)
-            )
+            response = context.client.delete(f"{_members_url()}/{member_id}", headers=_auth(context))
 
             with then("the member is gone"):
                 assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
-                repo: OrganizationUserRepository = context.injector.get(
-                    OrganizationUserRepository
-                )
+                repo: OrganizationUserRepository = context.injector.get(OrganizationUserRepository)
                 assert_that(
                     repo.get_by_user_id_and_organization_id(member_id, ORG),
                     is_(none()),
@@ -588,13 +562,9 @@ def test_admin_cannot_remove_another_admin():
             ),
         ]
     ) as context:
-        response = context.client.delete(
-            f"{_members_url()}/{other_admin_id}", headers=_auth(context)
-        )
+        response = context.client.delete(f"{_members_url()}/{other_admin_id}", headers=_auth(context))
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
-        repo: OrganizationUserRepository = context.injector.get(
-            OrganizationUserRepository
-        )
+        repo: OrganizationUserRepository = context.injector.get(OrganizationUserRepository)
         assert_that(
             repo.get_by_user_id_and_organization_id(other_admin_id, ORG),
             is_(not_none()),
@@ -605,13 +575,9 @@ def test_admin_can_remove_themselves():
     """The other-admin gate must not trap an admin in the org: they can still leave."""
     admin_id = uuid7()
     with given([*_GIVEN, _there_is_an_admin_actor(admin_id)]) as context:
-        response = context.client.delete(
-            f"{_members_url()}/{admin_id}", headers=_auth(context)
-        )
+        response = context.client.delete(f"{_members_url()}/{admin_id}", headers=_auth(context))
         assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
-        repo: OrganizationUserRepository = context.injector.get(
-            OrganizationUserRepository
-        )
+        repo: OrganizationUserRepository = context.injector.get(OrganizationUserRepository)
         assert_that(
             repo.get_by_user_id_and_organization_id(admin_id, ORG),
             is_(none()),
@@ -632,13 +598,9 @@ def test_owner_can_remove_admin():
             ),
         ]
     ) as context:
-        response = context.client.delete(
-            f"{_members_url()}/{admin_id}", headers=_auth(context)
-        )
+        response = context.client.delete(f"{_members_url()}/{admin_id}", headers=_auth(context))
         assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
-        repo: OrganizationUserRepository = context.injector.get(
-            OrganizationUserRepository
-        )
+        repo: OrganizationUserRepository = context.injector.get(OrganizationUserRepository)
         assert_that(
             repo.get_by_user_id_and_organization_id(admin_id, ORG),
             is_(none()),
@@ -658,9 +620,7 @@ def test_removing_pending_member_revokes_their_invite():
         member_id = body["member"]["user_id"]
         token = body["invite_link"].split("token=")[1]
 
-        remove = context.client.delete(
-            f"{_members_url()}/{member_id}", headers=_auth(context)
-        )
+        remove = context.client.delete(f"{_members_url()}/{member_id}", headers=_auth(context))
         assert_that(remove.status_code, equal_to(status.HTTP_204_NO_CONTENT))
 
         # The invite link the (now-removed) user was emailed must be dead.
@@ -701,9 +661,7 @@ def test_duplicate_add_does_not_invalidate_existing_invite():
 def test_cannot_remove_owner():
     with given([*_GIVEN, _there_is_an_owner()]) as context:
         with when("the owner tries to remove themselves (the owner)"):
-            response = context.client.delete(
-                f"{_members_url()}/{OWNER_ID}", headers=_auth(context)
-            )
+            response = context.client.delete(f"{_members_url()}/{OWNER_ID}", headers=_auth(context))
 
             with then("it is rejected"):
                 assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
@@ -732,12 +690,8 @@ def test_owner_transfers_ownership():
 
             with then("ownership swaps atomically"):
                 assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
-                assert_that(
-                    _role_of(context, member_id), equal_to(OrganizationRole.OWNER)
-                )
-                assert_that(
-                    _role_of(context, OWNER_ID), equal_to(OrganizationRole.ADMIN)
-                )
+                assert_that(_role_of(context, member_id), equal_to(OrganizationRole.OWNER))
+                assert_that(_role_of(context, OWNER_ID), equal_to(OrganizationRole.ADMIN))
 
 
 def test_admin_cannot_transfer_ownership():
@@ -780,9 +734,7 @@ def test_admin_without_membership_invite_cannot_resend_invite():
                 role=OrganizationRole.MEMBER,
                 email_verified=False,
             ),
-            role_lacks_permission(
-                OrganizationRole.ADMIN, PermissionKey.MEMBERSHIP_INVITE
-            ),
+            role_lacks_permission(OrganizationRole.ADMIN, PermissionKey.MEMBERSHIP_INVITE),
         ]
     ) as context:
         response = context.client.post(

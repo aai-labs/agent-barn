@@ -29,9 +29,7 @@ def get_conversations_cursor(
     before_occurred_at: datetime | None = Query(default=None),
     before_id: UUID | None = Query(default=None),
 ) -> ConversationsCursor:
-    return ConversationsCursor(
-        before_occurred_at=before_occurred_at, before_id=before_id
-    )
+    return ConversationsCursor(before_occurred_at=before_occurred_at, before_id=before_id)
 
 
 @conversations_router.get(

@@ -60,9 +60,7 @@ def test_get_authenticated_user_returns_context():
         token=token,
         config=cast(Config, config),
         user_repository=cast(UserRepository, DummyUserRepo(user)),
-        organization_user_repository=cast(
-            OrganizationUserRepository, DummyOrgUserRepo([org_user])
-        ),
+        organization_user_repository=cast(OrganizationUserRepository, DummyOrgUserRepo([org_user])),
     )
 
     assert_that(context.user.id, equal_to(user.id))
@@ -70,9 +68,7 @@ def test_get_authenticated_user_returns_context():
 
 
 def test_get_authenticated_user_rejects_unverified_user_when_required():
-    user = User(
-        email="unverified@example.com", hashed_password="x", email_verified_at=None
-    )
+    user = User(email="unverified@example.com", hashed_password="x", email_verified_at=None)
     config = SimpleNamespace(secret_signing_key="x" * 32)
     token = jwt.encode(
         {"user_id": str(user.id), "token_type": "access"},
@@ -85,9 +81,7 @@ def test_get_authenticated_user_rejects_unverified_user_when_required():
             token=token,
             config=cast(Config, config),
             user_repository=cast(UserRepository, DummyUserRepo(user)),
-            organization_user_repository=cast(
-                OrganizationUserRepository, DummyOrgUserRepo([])
-            ),
+            organization_user_repository=cast(OrganizationUserRepository, DummyOrgUserRepo([])),
             verified_required=True,
         ),
         raises(EmailNotVerifiedException),
@@ -118,9 +112,7 @@ def test_get_authenticated_user_requires_role_for_non_superuser():
             token=token,
             config=cast(Config, config),
             user_repository=cast(UserRepository, DummyUserRepo(user)),
-            organization_user_repository=cast(
-                OrganizationUserRepository, DummyOrgUserRepo([org_user])
-            ),
+            organization_user_repository=cast(OrganizationUserRepository, DummyOrgUserRepo([org_user])),
             organization_id=org_user.organization_id,
             organization_roles=[OrganizationRole.ADMIN],
         ),
@@ -146,9 +138,7 @@ def test_get_authenticated_user_rejects_invalid_token_type():
             token=token,
             config=cast(Config, config),
             user_repository=cast(UserRepository, DummyUserRepo(user)),
-            organization_user_repository=cast(
-                OrganizationUserRepository, DummyOrgUserRepo([])
-            ),
+            organization_user_repository=cast(OrganizationUserRepository, DummyOrgUserRepo([])),
         ),
         raises(CredentialsException),
     )

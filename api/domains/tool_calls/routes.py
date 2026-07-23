@@ -17,9 +17,7 @@ from api.infrastructure.shared.models import PaginatedItems, Pagination
 tool_calls_router = APIRouter(prefix="/agents", tags=["tool-calls"])
 
 
-@tool_calls_router.get(
-    "/{agent_id}/tool-calls", response_model=PaginatedItems[ToolCallRead]
-)
+@tool_calls_router.get("/{agent_id}/tool-calls", response_model=PaginatedItems[ToolCallRead])
 def list_tool_calls(
     agent_id: UUID,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
@@ -28,6 +26,4 @@ def list_tool_calls(
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1)] = 50,
 ):
-    return tool_call_service.list_tool_calls(
-        agent_id, context, tool_call_filter, Pagination(page=page, size=page_size)
-    )
+    return tool_call_service.list_tool_calls(agent_id, context, tool_call_filter, Pagination(page=page, size=page_size))

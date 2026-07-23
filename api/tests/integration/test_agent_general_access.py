@@ -34,6 +34,7 @@ from api.domains.agents.models import AgentAccess
 from api.domains.agents.repository import AgentRepository
 from api.domains.organizations.models import Organization
 from api.domains.users.organization_users.models import OrganizationRole
+from api.domains.users.organization_users.repository import OrganizationUserRepository
 
 _BASE = "/api/v1/agents"
 _GIVEN = [
@@ -68,9 +69,7 @@ def _access_settings_url(agent_id: UUID) -> str:
 
 def test_general_access_defaults_to_restricted():
     with given(_GIVEN) as context:
-        response = context.client.get(
-            _access_settings_url(context.agent.id), headers=_auth(context)
-        )
+        response = context.client.get(_access_settings_url(context.agent.id), headers=_auth(context))
 
         assert_that(response.status_code, equal_to(status.HTTP_200_OK))
         assert_that(response.json()["general_access"]["role"], none())
@@ -93,12 +92,8 @@ def test_owner_sets_changes_and_removes_general_access():
         assert_that(role["name"], equal_to("VIEWER"))
         assert_that(role["is_locked"], equal_to(True))
 
-        read_response = context.client.get(
-            _access_settings_url(context.agent.id), headers=_auth(context)
-        )
-        assert_that(
-            read_response.json()["general_access"]["role"]["id"], equal_to(role["id"])
-        )
+        read_response = context.client.get(_access_settings_url(context.agent.id), headers=_auth(context))
+        assert_that(read_response.json()["general_access"]["role"]["id"], equal_to(role["id"]))
 
         removed = context.client.put(
             _access_settings_url(context.agent.id),
@@ -106,9 +101,7 @@ def test_owner_sets_changes_and_removes_general_access():
             headers=_auth(context),
         )
         assert_that(removed.status_code, equal_to(status.HTTP_200_OK))
-        restricted = context.client.get(
-            _access_settings_url(context.agent.id), headers=_auth(context)
-        )
+        restricted = context.client.get(_access_settings_url(context.agent.id), headers=_auth(context))
         assert_that(restricted.json()["general_access"]["role"], none())
 
 
@@ -174,9 +167,7 @@ def test_member_without_access_manage_cannot_read_or_change_general_access():
             )
         )
 
-        read_response = context.client.get(
-            _access_settings_url(agent_id), headers=_auth(context)
-        )
+        read_response = context.client.get(_access_settings_url(agent_id), headers=_auth(context))
         set_response = context.client.put(
             _access_settings_url(agent_id),
             json={
@@ -194,16 +185,12 @@ def test_unassigned_member_cannot_discover_general_access():
         agent_id = context.agent.id
         _switch_to_member(context)
 
-        response = context.client.get(
-            _access_settings_url(agent_id), headers=_auth(context)
-        )
+        response = context.client.get(_access_settings_url(agent_id), headers=_auth(context))
 
         assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
-def _insert_custom_role(
-    context, *, organization_id: UUID, permissions: set[PermissionKey]
-) -> AgentAccessRole:
+def _insert_custom_role(context, *, organization_id: UUID, permissions: set[PermissionKey]) -> AgentAccessRole:
     repository: AgentRepository = context.injector.get(AgentRepository)
     role = AgentAccessRole(
         organization_id=organization_id,
@@ -370,6 +357,36 @@ def test_pending_members_do_not_receive_general_access():
         assert_that(detail.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
+def test_removed_membership_receives_no_general_access():
+    with given(_GIVEN) as context:
+        agent_id = context.agent.id
+        context.client.put(
+            _access_settings_url(agent_id),
+            json={
+                "general_access_role_id": str(AGENT_VIEWER_ROLE_ID),
+                "assignments": [],
+            },
+            headers=_auth(context),
+        )
+        target, target_membership = _add_target_member(context)
+        there_is_an_access_token_for_user(target.id)(context)
+
+        visible_before_removal = context.client.get(f"{_BASE}/{agent_id}", headers=_auth(context))
+
+        membership_repository: OrganizationUserRepository = context.injector.get(OrganizationUserRepository)
+        membership_repository.delete(target_membership)
+
+        listed_after_removal = context.client.get(_BASE, headers=_auth(context))
+        detail_after_removal = context.client.get(f"{_BASE}/{agent_id}", headers=_auth(context))
+
+        assert_that(visible_before_removal.status_code, equal_to(status.HTTP_200_OK))
+        # A removed Membership has no organization_users row at all, so the request is
+        # rejected at the organization-authorization boundary before Agent visibility
+        # is even evaluated, unlike a pending Member whose row still exists.
+        assert_that(listed_after_removal.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+        assert_that(detail_after_removal.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
 def test_direct_and_general_access_permissions_are_additive():
     with given(_GIVEN) as context:
         owner_id = context.user.id
@@ -411,9 +428,7 @@ def test_direct_and_general_access_permissions_are_additive():
             headers=_auth(context),
         )
         there_is_an_access_token_for_user(member_id)(context)
-        still_visible = context.client.get(
-            f"{_BASE}/{agent_id}", headers=_auth(context)
-        )
+        still_visible = context.client.get(f"{_BASE}/{agent_id}", headers=_auth(context))
         no_longer_editable = context.client.patch(
             f"{_BASE}/{agent_id}",
             json={"name": "General Viewer only"},
@@ -518,9 +533,7 @@ def test_access_settings_snapshot_replaces_general_and_direct_access():
             },
             headers=_auth(context),
         )
-        assigned = context.client.get(
-            _access_settings_url(agent_id), headers=_auth(context)
-        )
+        assigned = context.client.get(_access_settings_url(agent_id), headers=_auth(context))
 
         assert_that(response.status_code, equal_to(status.HTTP_200_OK))
         assert_that(
@@ -568,12 +581,8 @@ def test_access_settings_rolls_back_when_snapshot_is_invalid():
             },
             headers=_auth(context),
         )
-        general_access = context.client.get(
-            _access_settings_url(agent_id), headers=_auth(context)
-        )
-        assigned = context.client.get(
-            _access_settings_url(agent_id), headers=_auth(context)
-        )
+        general_access = context.client.get(_access_settings_url(agent_id), headers=_auth(context))
+        assigned = context.client.get(_access_settings_url(agent_id), headers=_auth(context))
 
         assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
         assert_that(general_access.json()["general_access"]["role"], none())

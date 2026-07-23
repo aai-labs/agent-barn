@@ -29,9 +29,7 @@ def _without_permission(role: OrganizationRole, permission: PermissionKey):
     return changed_grant()
 
 
-def role_lacks_permission(
-    role: OrganizationRole, permission: PermissionKey
-) -> Callable[[object], object]:
+def role_lacks_permission(role: OrganizationRole, permission: PermissionKey) -> Callable[[object], object]:
     """Temporarily simulate a denied policy decision for a fixed Organization Role."""
 
     def step(context) -> object:

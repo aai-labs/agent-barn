@@ -15,7 +15,9 @@ _lock = threading.Lock()
 _cache: dict = {"ok": None, "ever_connected": False, "reason": None}
 _token_cache: dict = {"ok": None, "reason": None}
 
+AGENT_PLATFORM = os.environ.get("AGENT_PLATFORM", "slack")
 _SLACK_API = "https://slack.com/api"
+_TELEGRAM_API = "https://api.telegram.org"
 _SKIP_VALIDATION = os.environ.get("SKIP_SLACK_TOKEN_VALIDATION", "").lower() in ("1", "true", "yes")
 
 
@@ -53,6 +55,19 @@ def _check_token(url: str, token: str, label: str) -> tuple[bool, str]:
         return False, f"{label} validation failed: {exc}"
 
 
+def _check_telegram_token(token: str) -> tuple[bool, str]:
+    try:
+        url = f"{_TELEGRAM_API}/bot{token}/getMe"
+        req = Request(url)
+        with urlopen(req, timeout=15) as resp:
+            body = json.loads(resp.read())
+        if body.get("ok"):
+            return True, ""
+        return False, f"Invalid Telegram bot token: {body.get('description', 'unknown_error')}"
+    except Exception as exc:
+        return False, f"Telegram token validation failed: {exc}"
+
+
 def _poll_tokens() -> None:
     if _SKIP_VALIDATION:
         with _lock:
@@ -60,13 +75,16 @@ def _poll_tokens() -> None:
             _token_cache["reason"] = None
         return
 
-    bot_token = os.environ.get("SLACK_BOT_TOKEN", "")
-    app_token = os.environ.get("SLACK_APP_TOKEN", "")
-
     while True:
-        ok, reason = _check_token(f"{_SLACK_API}/auth.test", bot_token, "bot token")
-        if ok:
-            ok, reason = _check_token(f"{_SLACK_API}/apps.connections.open", app_token, "app token")
+        if AGENT_PLATFORM == "telegram":
+            telegram_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+            ok, reason = _check_telegram_token(telegram_token)
+        else:
+            bot_token = os.environ.get("SLACK_BOT_TOKEN", "")
+            app_token = os.environ.get("SLACK_APP_TOKEN", "")
+            ok, reason = _check_token(f"{_SLACK_API}/auth.test", bot_token, "bot token")
+            if ok:
+                ok, reason = _check_token(f"{_SLACK_API}/apps.connections.open", app_token, "app token")
         with _lock:
             _token_cache["ok"] = ok
             _token_cache["reason"] = reason if not ok else None
