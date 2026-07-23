@@ -3,6 +3,7 @@ from typing import cast
 
 from api.infrastructure.email.client import EmailClient
 from api.infrastructure.email.models import Email
+from api.infrastructure.email.service import EmailService
 
 
 class MockEmailModule(Module):
@@ -20,3 +21,26 @@ class MockEmailModule(Module):
                 return email
 
         return cast(EmailClient, MockEmailClient())
+
+    @singleton
+    @provider
+    def provide_email_service(self) -> EmailService:
+        parent = self
+
+        class MockEmailService:
+            def send_password_reset_email(
+                self,
+                receiver_email: str,
+                password_reset_link: str,
+                receiver_name: str | None = None,
+            ) -> bool:
+                parent.emails.append(
+                    Email(
+                        to_email=receiver_email,
+                        subject="Reset your password",
+                        html_part=f'<a href="{password_reset_link}">Reset password</a>',
+                    )
+                )
+                return True
+
+        return cast(EmailService, MockEmailService())
