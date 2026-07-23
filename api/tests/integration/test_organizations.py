@@ -227,6 +227,4 @@ def test_get_organization_strips_model_prefixes(mock_list_models):
 
         with then("the fetched organization has stripped prefixes"):
             body2 = response2.json()
-            assert_that(
-                body2["allowed_models"], equal_to(["google/gemini", "openai/gpt-4"])
-            )
+            assert_that(body2["allowed_models"], equal_to(["google/gemini", "openai/gpt-4"]))

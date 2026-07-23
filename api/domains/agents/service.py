@@ -175,11 +175,7 @@ def filter_models_by_allowlist(catalog: list[dict], allowlist: list[str]) -> lis
     patterns = [p.strip().lower() for p in allowlist if p.strip()]
     if not patterns:
         return []
-    return [
-        model
-        for model in catalog
-        if any(fnmatch.fnmatch(model["id"].lower(), pattern) for pattern in patterns)
-    ]
+    return [model for model in catalog if any(fnmatch.fnmatch(model["id"].lower(), pattern) for pattern in patterns)]
 
 
 def is_model_allowed(model: str, allowlist: list[str]) -> bool:
@@ -1411,9 +1407,7 @@ class AgentService:
             except Exception as e:
                 logger.warning("Unexpected error joining channel %s: %s", channel_id, e)
 
-    def list_models(
-        self, context: CurrentUserContext, catalog: bool = False
-    ) -> list[dict]:
+    def list_models(self, context: CurrentUserContext, catalog: bool = False) -> list[dict]:
         """Returns the allowlisted OpenRouter models as picker options. The
         configured default (AGENT_DEFAULT_MODEL) is guaranteed present, flagged
         is_default, and listed first so the frontend and backend agree on it.
@@ -1434,9 +1428,7 @@ class AgentService:
             organization = self.organization_repository.get(org_id)
             if not organization:
                 raise HTTPException(status_code=404, detail="Organization not found")
-            allowed = filter_models_by_allowlist(
-                raw_catalog, organization.allowed_models
-            )
+            allowed = filter_models_by_allowlist(raw_catalog, organization.allowed_models)
         options = [
             {
                 "value": f"litellm/openrouter/{model['id']}",

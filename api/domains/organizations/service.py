@@ -74,21 +74,15 @@ class OrganizationService:
                     detail=f"Model pattern '{pattern}' does not match any known models in the catalog.",
                 )
 
-    def create_organization(
-        self, data: OrganizationCreate, actor: CurrentUserContext
-    ) -> OrganizationCreateResult:
+    def create_organization(self, data: OrganizationCreate, actor: CurrentUserContext) -> OrganizationCreateResult:
         actor.require_superuser(detail="Only a superuser can create organizations")
 
         config = get_config()
         if data.allowed_models is not None:
             self._validate_allowed_models(data.allowed_models)
-            allowed_models = [
-                m.removeprefix("litellm/openrouter/") for m in data.allowed_models
-            ]
+            allowed_models = [m.removeprefix("litellm/openrouter/") for m in data.allowed_models]
         else:
-            allowed_models = [
-                config.agent_default_model.removeprefix("litellm/openrouter/")
-            ]
+            allowed_models = [config.agent_default_model.removeprefix("litellm/openrouter/")]
 
         # Org, owner-invite (user + token) and the OWNER membership all commit together,
         # so a failed step can't leave an org with no owner. The invite email is sent
@@ -99,9 +93,7 @@ class OrganizationService:
             is_default=False,
             allowed_models=allowed_models,
         )
-        with Session(
-            self.organization_repository.delegate.engine, expire_on_commit=False
-        ) as session:
+        with Session(self.organization_repository.delegate.engine, expire_on_commit=False) as session:
             self.organization_repository.save_with_session(organization, session)
             prepared = self.auth_service.prepare_invite(session, email=str(data.owner_email), full_name=data.owner_name)
             self.user_organization_service.add_membership_with_session(
@@ -201,9 +193,7 @@ class OrganizationService:
 
         # Mutate and commit inside a single live session
         # so SQLAlchemy properly tracks list mutations and flushes the UPDATE.
-        with Session(
-            self.organization_repository.delegate.engine, expire_on_commit=False
-        ) as session:
+        with Session(self.organization_repository.delegate.engine, expire_on_commit=False) as session:
             session.add(organization)
 
             from sqlalchemy.orm.attributes import flag_modified
@@ -211,10 +201,7 @@ class OrganizationService:
             if "allowed_models" in dump:
                 if dump["allowed_models"] is not None:
                     self._validate_allowed_models(dump["allowed_models"])
-                    dump["allowed_models"] = [
-                        m.removeprefix("litellm/openrouter/")
-                        for m in dump["allowed_models"]
-                    ]
+                    dump["allowed_models"] = [m.removeprefix("litellm/openrouter/") for m in dump["allowed_models"]]
                 flag_modified(organization, "allowed_models")
 
             for key, value in dump.items():

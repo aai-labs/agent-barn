@@ -8,12 +8,8 @@ def test_is_model_allowed_empty_rejects_everything():
 
 
 def test_is_model_allowed_matches_glob():
-    assert (
-        is_model_allowed("litellm/openrouter/openai/gpt-4o", ["openai/gpt-4*"]) is True
-    )
-    assert (
-        is_model_allowed("litellm/openrouter/anthropic/claude-3", ["openai/*"]) is False
-    )
+    assert is_model_allowed("litellm/openrouter/openai/gpt-4o", ["openai/gpt-4*"]) is True
+    assert is_model_allowed("litellm/openrouter/anthropic/claude-3", ["openai/*"]) is False
     assert is_model_allowed("litellm/openrouter/anthropic/claude-3", ["*"]) is True
 
 

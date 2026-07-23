@@ -195,9 +195,7 @@ def upgrade() -> None:
     raw_allowlist = config.agent_model_allowlist
     allowed = [m.strip() for m in raw_allowlist.split(",")] if raw_allowlist else []
 
-    op.execute(
-        f"UPDATE organization SET allowed_models = '{json.dumps(allowed)}'::jsonb"
-    )
+    op.execute(f"UPDATE organization SET allowed_models = '{json.dumps(allowed)}'::jsonb")
     # ------------------------------
     op.alter_column(
         "tool_call",

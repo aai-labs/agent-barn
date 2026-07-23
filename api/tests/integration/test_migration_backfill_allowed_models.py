@@ -11,9 +11,7 @@ def test_backfill_allowed_models_migration():
     engine = create_engine(str(get_config().db_connection_url))
 
     # We will use alembic CLI via subprocess since it's reliable
-    api_dir = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "../../..", "api")
-    )
+    api_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..", "api"))
     env = os.environ.copy()
     env["AGENT_MODEL_ALLOWLIST"] = "openai/*,anthropic/*"
 
@@ -67,6 +65,4 @@ def test_backfill_allowed_models_migration():
             check=False,  # Don't fail the finally block if already at head
         )
         with engine.begin() as conn:
-            conn.execute(
-                text("DELETE FROM organization WHERE id = :id"), {"id": org_id}
-            )
+            conn.execute(text("DELETE FROM organization WHERE id = :id"), {"id": org_id})

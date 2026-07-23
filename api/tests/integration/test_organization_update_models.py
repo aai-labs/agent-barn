@@ -38,13 +38,14 @@ def test_update_organization_with_invalid_model_id_is_rejected():
         ]
     ) as context:
         client: TestClient = context.client
-        with patch(
-            "api.infrastructure.openrouter.client.OpenRouterClient.list_models"
-        ) as mock_list_models:
+        with patch("api.infrastructure.openrouter.client.OpenRouterClient.list_models") as mock_list_models:
             mock_list_models.return_value = [{"id": "openai/gpt-4o"}]
             response = client.patch(
                 f"/api/v1/organizations/{org_a}",
-                headers={"Authorization": f"Bearer {context.access_token}"},
+                headers={
+                    "Authorization": f"Bearer {context.access_token}",
+                    "X-Organization-Id": str(org_a),
+                },
                 json={"allowed_models": ["this-is-not-a-valid-model-id"]},
             )
             assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
@@ -82,7 +83,10 @@ def test_update_organization_allowed_models_by_non_admin_is_rejected():
         client: TestClient = context.client
         response = client.patch(
             f"/api/v1/organizations/{org_a}",
-            headers={"Authorization": f"Bearer {context.access_token}"},
+            headers={
+                "Authorization": f"Bearer {context.access_token}",
+                "X-Organization-Id": str(org_a),
+            },
             json={"allowed_models": ["*"]},
         )
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
