@@ -80,9 +80,7 @@ def test_super_admin_can_delete_any_user():
             create_test_client(),
             database_repo_is_ready(),
             database_is_clean(),
-            there_is_a_user(
-                id=super_id, email="super-delete-user@example.com", is_superuser=True
-            ),
+            there_is_a_user(id=super_id, email="super-delete-user@example.com", is_superuser=True),
             there_is_a_user(
                 id=target_id,
                 email="target-delete-user@example.com",
@@ -120,9 +118,7 @@ def test_super_admin_can_list_all_organizations():
             create_test_client(),
             database_repo_is_ready(),
             database_is_clean(),
-            there_is_a_user(
-                id=super_id, email="super-list-orgs@example.com", is_superuser=True
-            ),
+            there_is_a_user(id=super_id, email="super-list-orgs@example.com", is_superuser=True),
             there_is_a_user(email="owner-org-a@example.com", organization_id=uuid7()),
             there_is_a_user(email="owner-org-b@example.com", organization_id=uuid7()),
             there_is_an_access_token_for_user(user_id=super_id),

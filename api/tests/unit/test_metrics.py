@@ -68,9 +68,7 @@ def _make_service(tc_repo) -> IngestService:
 
 
 def _tool_calls_total(tool_name: str, status: str) -> float | None:
-    return REGISTRY.get_sample_value(
-        "agentfarm_tool_calls_total", {"tool_name": tool_name, "status": status}
-    )
+    return REGISTRY.get_sample_value("agentfarm_tool_calls_total", {"tool_name": tool_name, "status": status})
 
 
 def _mock_tc_repo(completed: ToolCall | None) -> MagicMock:
@@ -109,9 +107,7 @@ def test_tool_call_counter_increments_on_error_result():
             service.process(agent, _result_batch())
 
         with then("the error counter increments with the tool name label"):
-            assert_that(
-                _tool_calls_total("unit-error-tool", "error"), equal_to(before + 1.0)
-            )
+            assert_that(_tool_calls_total("unit-error-tool", "error"), equal_to(before + 1.0))
 
 
 def test_tool_call_counter_increments_on_success_result():
@@ -231,15 +227,11 @@ def test_refresh_openrouter_credits_sets_key_limit_remaining(mock_config, mock_g
 
         with then("the key's remaining credit limit and scrape_ok are set"):
             assert_that(
-                PROBE_REGISTRY.get_sample_value(
-                    "agentfarm_openrouter_credits_remaining"
-                ),
+                PROBE_REGISTRY.get_sample_value("agentfarm_openrouter_credits_remaining"),
                 equal_to(75.0),
             )
             assert_that(
-                PROBE_REGISTRY.get_sample_value(
-                    "agentfarm_openrouter_credits_scrape_ok"
-                ),
+                PROBE_REGISTRY.get_sample_value("agentfarm_openrouter_credits_scrape_ok"),
                 equal_to(1.0),
             )
 
@@ -258,24 +250,18 @@ def test_refresh_openrouter_credits_unlimited_key_reads_infinite(mock_config, mo
 
         with then("the gauge reads +Inf and the poll counts as healthy"):
             assert_that(
-                PROBE_REGISTRY.get_sample_value(
-                    "agentfarm_openrouter_credits_remaining"
-                ),
+                PROBE_REGISTRY.get_sample_value("agentfarm_openrouter_credits_remaining"),
                 equal_to(float("inf")),
             )
             assert_that(
-                PROBE_REGISTRY.get_sample_value(
-                    "agentfarm_openrouter_credits_scrape_ok"
-                ),
+                PROBE_REGISTRY.get_sample_value("agentfarm_openrouter_credits_scrape_ok"),
                 equal_to(1.0),
             )
 
 
 @patch("api.core.metrics.httpx.get")
 @patch("api.core.metrics.get_config")
-def test_refresh_openrouter_credits_polls_key_endpoint_with_inference_key(
-    mock_config, mock_get
-):
+def test_refresh_openrouter_credits_polls_key_endpoint_with_inference_key(mock_config, mock_get):
     with given():
         mock_config.return_value = _config(api_key="sk-inference")
         response = MagicMock(status_code=200)
@@ -307,9 +293,7 @@ def test_refresh_openrouter_credits_scrape_not_ok_without_key(mock_config, mock_
 
         with then("scrape_ok is 0 and no request is made"):
             assert_that(
-                PROBE_REGISTRY.get_sample_value(
-                    "agentfarm_openrouter_credits_scrape_ok"
-                ),
+                PROBE_REGISTRY.get_sample_value("agentfarm_openrouter_credits_scrape_ok"),
                 equal_to(0.0),
             )
             mock_get.assert_not_called()
@@ -327,9 +311,7 @@ def test_refresh_openrouter_credits_scrape_not_ok_on_http_error(mock_config, moc
 
         with then("scrape_ok is 0 and nothing raises"):
             assert_that(
-                PROBE_REGISTRY.get_sample_value(
-                    "agentfarm_openrouter_credits_scrape_ok"
-                ),
+                PROBE_REGISTRY.get_sample_value("agentfarm_openrouter_credits_scrape_ok"),
                 equal_to(0.0),
             )
 

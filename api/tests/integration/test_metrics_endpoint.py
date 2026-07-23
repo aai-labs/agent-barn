@@ -151,9 +151,7 @@ def test_ingest_metrics_counts_tool_call_errors():
             response = context.ingest_client.get("/metrics")
 
         with then("the tool-call error counter is exposed with the tool label"):
-            assert_that(
-                ingest_response.status_code, equal_to(status.HTTP_204_NO_CONTENT)
-            )
+            assert_that(ingest_response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
             assert_that(response.status_code, equal_to(200))
             body = response.text
             line = next(

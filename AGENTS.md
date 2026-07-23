@@ -23,7 +23,7 @@ Follow pointers in `docs/INDEX.md` before changing agent lifecycle, tenancy, tem
 
 ## Guardrails
 
-- **Always** — Follow `MUST` rules in the routed guideline; preserve tenant isolation; use repository `make` targets when available; keep the diff scoped.
+- **Always** — Follow `MUST` rules in the routed guideline; preserve tenant isolation; enforce Agent Access/Permission checks per `docs/features/rbac/IMPLEMENTATION-BRIEF.md` for any change that lets a user access, list, or mutate an Agent or a subordinate resource (conversations, tool calls, activity, logs, costs, Secrets, Skills, config); use repository `make` targets when available; keep the diff scoped.
 - **Clarify** — Resolve ambiguous authorization, lifecycle, ownership, or schema behavior before implementation.
 - **Never** — Put business workflows in routes, SQL in services, ordinary UI calls outside `ui/src/shared/api`, reuse an immutable `appVersion`, or invent rationale for an ADR.
 
@@ -38,6 +38,7 @@ Review agents MUST treat the routed documentation as review input, not optional 
 3. Check both implementation correctness and documentation synchronization. A changed invariant, boundary, state model, or operational contract requires the authoritative document to change in the same diff.
 4. Cite the relevant documentation path and rule for each documentation-based finding.
 5. Treat documented behavior as the current contract, not an immutable one. When a change intentionally revises that contract, verify that code, tests, and docs move together instead of demanding the old behavior.
+6. For any diff touching an Agent or subordinate resource, check for authorization gaps against `docs/features/rbac/IMPLEMENTATION-BRIEF.md` even when the diff isn't framed as an RBAC change — a repository query missing an accessible-Agent join, a service trusting a client-supplied role, or a new endpoint bypassing the shared visibility pattern are common, easy-to-miss regressions.
 
 For a PR belonging to an active multi-PR epic, reviewers MUST also verify that `docs/features/<epic-slug>/CHANGELOG.md` records the delivered slice and resulting current state.
 

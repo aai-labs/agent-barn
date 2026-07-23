@@ -18,14 +18,14 @@ Starting an agent is an API-orchestrated deployment flow:
 8. Build ConfigMap, Secret, PVC, Service, and Deployment resources.
 9. Apply resources through the Kubernetes client and mark the agent running.
 
-A failed Slack credential check or Kubernetes start can place the agent in `ERROR`; successful start clears the prior error.
+A failed Slack or Telegram credential check or Kubernetes start can place the agent in `ERROR`; successful start clears the prior error.
 
 ## Runtime/platform matrix
 
-| Runtime  | Slack | Teams | Runtime configuration                        |
-| -------- | ----: | ----: | -------------------------------------------- |
-| Hermes   |   Yes |    No | Hermes config and Hermes deployment builders |
-| OpenClaw |   Yes |   Yes | OpenClaw overlay and deployment builders     |
+| Runtime  | Slack | Teams | Telegram | Runtime configuration                        |
+| -------- | ----: | ----: | -------: | -------------------------------------------- |
+| Hermes   |   Yes |    No |      Yes | Hermes config and Hermes deployment builders |
+| OpenClaw |   Yes |   Yes |      Yes | OpenClaw overlay and deployment builders     |
 
 Runtime is persisted as `agent_type`; platform is persisted separately. Both runtimes receive rendered template files, skills, integrations, model/LiteLLM settings, and ingest credentials, but their filesystem and configuration shapes differ.
 
@@ -57,6 +57,7 @@ Kubernetes `stream()` and `portforward()` temporarily monkey-patch `ApiClient.re
 | Hermes builders                 | `../../api/domains/agents/builders/hermes.py`, `../../hermes-base/`                         |
 | OpenClaw builders               | `../../api/domains/agents/builders/openclaw.py`, `../../openclaw-base/`                     |
 | Skill and integration artifacts | `../../api/domains/agents/aai_cli_artifacts.py`, `../../api/domains/agents/aai_cli_skills/` |
+| Telegram client                 | `../../api/infrastructure/telegram/`                                                  |
 | Kubernetes client               | `../../api/infrastructure/kubernetes/`                                                |
 | Charts and release ordering     | `../../helm/`, `../../helmfile.yaml.gotmpl`                                                 |
 | Deployment workflow             | `../../.github/workflows/deploy.yml`                                                  |

@@ -10,14 +10,7 @@ from pathlib import Path
 import pytest
 from hamcrest import assert_that, contains_string, equal_to
 
-_SCRIPT = (
-    Path(__file__).resolve().parents[2]
-    / "domains"
-    / "agents"
-    / "scripts"
-    / "hermes"
-    / "healthz-server.py"
-)
+_SCRIPT = Path(__file__).resolve().parents[2] / "domains" / "agents" / "scripts" / "hermes" / "healthz-server.py"
 
 
 def _free_port() -> int:

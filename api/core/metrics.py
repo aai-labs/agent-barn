@@ -132,8 +132,7 @@ def refresh_openrouter_credits() -> None:
         now = time.monotonic()
         if (
             _openrouter_polled_at is not None
-            and now - _openrouter_polled_at
-            < config.openrouter_credits_cache_ttl_seconds
+            and now - _openrouter_polled_at < config.openrouter_credits_cache_ttl_seconds
         ):
             return
         _openrouter_polled_at = now
@@ -146,9 +145,7 @@ def refresh_openrouter_credits() -> None:
         )
         response.raise_for_status()
         limit_remaining = response.json()["data"]["limit_remaining"]
-        OPENROUTER_CREDITS.set(
-            float("inf") if limit_remaining is None else float(limit_remaining)
-        )
+        OPENROUTER_CREDITS.set(float("inf") if limit_remaining is None else float(limit_remaining))
         OPENROUTER_SCRAPE_OK.set(1)
     except Exception:
         logger.warning("Failed to poll OpenRouter credits", exc_info=True)

@@ -28,25 +28,18 @@ def validate_config_access_token(token: str) -> None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
-                "That looks like an app-level token (xapp-). Slack app creation "
-                "requires a configuration access token."
+                "That looks like an app-level token (xapp-). Slack app creation requires a configuration access token."
             ),
         )
     if token.startswith("xoxb-"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                "That looks like a bot token (xoxb-). Slack app creation "
-                "requires a configuration access token."
-            ),
+            detail=("That looks like a bot token (xoxb-). Slack app creation requires a configuration access token."),
         )
     if token.startswith("xoxp-"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                "That looks like a user token (xoxp-). Slack app creation "
-                "requires a configuration access token."
-            ),
+            detail=("That looks like a user token (xoxp-). Slack app creation requires a configuration access token."),
         )
 
     manifest = {
@@ -136,16 +129,12 @@ def rotate_refresh_token(refresh_token: str) -> tuple[str, str]:
 def update_slack_app_name(access_token: str, app_id: str, new_name: str) -> bool:
     """Best-effort rename of a Slack app's display name. Returns True on success, never raises."""
     try:
-        export_body = _post_form(
-            access_token, "apps.manifest.export", {"app_id": app_id}
-        )
+        export_body = _post_form(access_token, "apps.manifest.export", {"app_id": app_id})
         if not export_body.get("ok"):
             return False
         manifest = export_body.get("manifest", {})
         manifest.setdefault("display_information", {})["name"] = new_name
-        manifest.setdefault("features", {}).setdefault("bot_user", {})[
-            "display_name"
-        ] = new_name
+        manifest.setdefault("features", {}).setdefault("bot_user", {})["display_name"] = new_name
         update_body = _post_form(
             access_token,
             "apps.manifest.update",
@@ -174,10 +163,7 @@ def create_slack_app(access_token: str, manifest: dict) -> str:
         if error == "invalid_auth":
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    "Slack configuration token is invalid or expired. Please update "
-                    "it in your account settings."
-                ),
+                detail=("Slack configuration token is invalid or expired. Please update it in your account settings."),
             )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

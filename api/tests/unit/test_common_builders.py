@@ -47,9 +47,7 @@ def test_service_selector_stays_on_app_label_only():
 
 
 def test_build_service_carries_org_name_slug_label():
-    service = build_service(
-        _AGENT_ID, _ORG_ID, _NS, org_name="Secure Capital Solutions!"
-    )
+    service = build_service(_AGENT_ID, _ORG_ID, _NS, org_name="Secure Capital Solutions!")
     assert_that(
         service.metadata.labels["org-name"],
         equal_to("secure-capital-solutions"),
@@ -83,9 +81,7 @@ def test_build_service_agent_name_falls_back_to_agent_id():
 
 
 def test_build_service_org_name_slug_fits_k8s_label_limits():
-    service = build_service(
-        _AGENT_ID, _ORG_ID, _NS, org_name="Org " + "x" * 100 + " Ltd"
-    )
+    service = build_service(_AGENT_ID, _ORG_ID, _NS, org_name="Org " + "x" * 100 + " Ltd")
     slug = service.metadata.labels["org-name"]
     assert_that(len(slug) <= 63, equal_to(True))
     assert_that(slug.endswith("-"), equal_to(False))

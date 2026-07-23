@@ -25,18 +25,14 @@ def test_aai_cli_provider_skills_has_expected_entries():
 
 def test_each_provider_skill_has_required_providers():
     for skill_def in AAI_CLI_PROVIDER_SKILLS:
-        assert skill_def["required_providers"], (
-            f"No required_providers for {skill_def['name']}"
-        )
+        assert skill_def["required_providers"], f"No required_providers for {skill_def['name']}"
 
 
 def test_each_provider_skill_has_non_empty_files():
     for skill_def in AAI_CLI_PROVIDER_SKILLS:
         assert skill_def["files"], f"No files for {skill_def['name']}"
         for f in skill_def["files"]:
-            assert f["skill_content"].strip(), (
-                f"Empty content in {f['skill_file_path']} for {skill_def['name']}"
-            )
+            assert f["skill_content"].strip(), f"Empty content in {f['skill_file_path']} for {skill_def['name']}"
 
 
 def test_build_zip_produces_valid_zip():
@@ -65,16 +61,10 @@ def test_build_skills_manifest_from_zips_returns_sorted_path_content():
     assert paths == sorted(paths), "Manifest entries should be sorted by path"
 
     for entry in manifest:
-        assert set(entry.keys()) == {"path", "content"}, (
-            "Each manifest entry must have only 'path' and 'content'"
-        )
+        assert set(entry.keys()) == {"path", "content"}, "Each manifest entry must have only 'path' and 'content'"
 
     expected = {
-        f["skill_file_path"]: f["skill_content"]
-        for skill_def in AAI_CLI_PROVIDER_SKILLS
-        for f in skill_def["files"]
+        f["skill_file_path"]: f["skill_content"] for skill_def in AAI_CLI_PROVIDER_SKILLS for f in skill_def["files"]
     }
     for entry in manifest:
-        assert entry["content"] == expected[entry["path"]], (
-            f"Content mismatch for {entry['path']}"
-        )
+        assert entry["content"] == expected[entry["path"]], f"Content mismatch for {entry['path']}"

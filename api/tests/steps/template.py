@@ -62,9 +62,7 @@ def there_is_a_template_skill():
         from api.domains.agents.models import AgentTemplateSkill
         from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
-        delegate: PostgresRepositoryDelegate = context.injector.get(
-            PostgresRepositoryDelegate
-        )
+        delegate: PostgresRepositoryDelegate = context.injector.get(PostgresRepositoryDelegate)
         with Session(delegate.engine) as session:
             session.add(
                 AgentTemplateSkill(

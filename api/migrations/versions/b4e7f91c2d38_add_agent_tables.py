@@ -17,9 +17,7 @@ down_revision: Union[str, None] = "8f3c2a7d9b10"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-agent_status_enum = postgresql.ENUM(
-    "STOPPED", "RUNNING", "ERROR", name="agentstatus", create_type=False
-)
+agent_status_enum = postgresql.ENUM("STOPPED", "RUNNING", "ERROR", name="agentstatus", create_type=False)
 
 
 def upgrade() -> None:
@@ -40,14 +38,10 @@ def upgrade() -> None:
         sa.Column("boot_md", sa.Text(), nullable=False),
         sa.Column("bootstrap_md", sa.Text(), nullable=False),
         sa.Column("heartbeat_md", sa.Text(), nullable=False),
-        sa.ForeignKeyConstraint(
-            ["organization_id"], ["organization.id"], ondelete="CASCADE"
-        ),
+        sa.ForeignKeyConstraint(["organization_id"], ["organization.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index(
-        "ix_agent_template_organization_id", "agent_template", ["organization_id"]
-    )
+    op.create_index("ix_agent_template_organization_id", "agent_template", ["organization_id"])
 
     op.create_table(
         "agent",
@@ -67,17 +61,11 @@ def upgrade() -> None:
         sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("template_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("template_version", sa.Integer(), nullable=False),
-        sa.ForeignKeyConstraint(
-            ["organization_id"], ["organization.id"], ondelete="CASCADE"
-        ),
-        sa.ForeignKeyConstraint(
-            ["template_id"], ["agent_template.id"], ondelete="RESTRICT"
-        ),
+        sa.ForeignKeyConstraint(["organization_id"], ["organization.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["template_id"], ["agent_template.id"], ondelete="RESTRICT"),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index(
-        "ix_agent_organization_deleted", "agent", ["organization_id", "deleted_at"]
-    )
+    op.create_index("ix_agent_organization_deleted", "agent", ["organization_id", "deleted_at"])
     op.create_index("ix_agent_status", "agent", ["status"])
 
 

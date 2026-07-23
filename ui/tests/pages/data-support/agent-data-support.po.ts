@@ -5,6 +5,17 @@ export const MOCK_TEMPLATE_ID = "44444444-4444-4444-8444-444444444444";
 export const MOCK_TEMPLATE_SLUG = "maya-3f9a2c1b";
 export const MOCK_ORG_ID = "22222222-2222-4222-8222-222222222222";
 
+export const mockAgentAllowedActions = [
+  "agent.read",
+  "agent.update",
+  "agent.delete",
+  "agent.lifecycle.manage",
+  "agent.access.manage",
+  "agent.secret.manage",
+  "activity.read",
+  "cost.read",
+];
+
 export const mockAgent = {
   id: MOCK_AGENT_ID,
   name: "Maya",
@@ -25,6 +36,7 @@ export const mockAgent = {
   secrets: [],
   skills: [],
   webhook_url: null,
+  allowed_actions: mockAgentAllowedActions,
   created_at: "2026-03-14T00:00:00Z",
   updated_at: "2026-05-14T09:14:00Z",
 };

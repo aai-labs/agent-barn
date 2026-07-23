@@ -5,7 +5,7 @@ from typing import Annotated
 
 from fastapi import FastAPI, HTTPException, Response, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi_injector import attach_injector, Injected
+from fastapi_injector import Injected, attach_injector
 from injector import Injector
 from prometheus_client import REGISTRY
 from sqlmodel import Session, select
@@ -26,26 +26,27 @@ from api.domains.agents.routes import agents_router
 from api.domains.agents.slack_routes import slack_router
 from api.domains.agents.webhook_routes import webhook_router
 from api.domains.auth.routes import auth_router
+from api.domains.auth.utils import set_default_org_id
 from api.domains.conversations.routes import conversations_router
 from api.domains.costs.routes import costs_router
 from api.domains.integrations.google_oauth.routes import integrations_router
 from api.domains.organizations.routes import org_router
+from api.domains.organizations.service import OrganizationService
+from api.domains.rbac.seeder import RbacSeeder
+from api.domains.skills.repository import SkillRepository
 from api.domains.skills.routes import skills_router
 from api.domains.skills.skill_seeder import seed_aai_cli_skills
 from api.domains.templates.routes import templates_router
 from api.domains.templates.service import TemplateService
 from api.domains.tool_calls.routes import tool_calls_router
-from api.domains.users.organization_users.routes import member_router
-from api.domains.users.routes import users_router
-from api.domains.users.service import UserService
-from api.domains.organizations.service import OrganizationService
-from api.domains.skills.repository import SkillRepository
-from api.domains.auth.utils import set_default_org_id
 from api.domains.users.organization_users.models import (
     OrganizationRole,
     OrganizationUser,
 )
 from api.domains.users.organization_users.repository import OrganizationUserRepository
+from api.domains.users.organization_users.routes import member_router
+from api.domains.users.routes import users_router
+from api.domains.users.service import UserService
 from api.infrastructure.email.logging_utils import (
     log_email_delivery_disabled_warning,
 )
@@ -64,6 +65,7 @@ async def lifespan(_: FastAPI):
     user_service = injector.get(UserService)
 
     try:
+        injector.get(RbacSeeder).seed()
         superuser = user_service.ensure_default_superuser()
 
         org_service = injector.get(OrganizationService)
@@ -76,9 +78,7 @@ async def lifespan(_: FastAPI):
         template_service.seed_predefined_templates(default_org.id)
 
         org_user_repo = injector.get(OrganizationUserRepository)
-        if not org_user_repo.get_by_user_id_and_organization_id(
-            superuser.id, default_org.id
-        ):
+        if not org_user_repo.get_by_user_id_and_organization_id(superuser.id, default_org.id):
             org_user_repo.save(
                 OrganizationUser(
                     user_id=superuser.id,
