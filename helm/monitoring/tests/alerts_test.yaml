@@ -1,0 +1,298 @@
+# promtool unit tests for templates/prometheusrule.yaml.
+# Run via `make check-monitoring` — rules.yaml is rendered from the chart
+# first (thresholds come from values.yaml: 5xx 0.05, tool calls 0.25, $5).
+# exp_annotations are asserted verbatim, so these also cover the
+# {{ $labels }} / {{ $value }} templating in summaries.
+rule_files:
+  - generated/rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # --- APIDown: fires only after 2m of failed scrapes ---
+  - interval: 1m
+    input_series:
+      - series: 'up{job="agentfarm-api", endpoint="http"}'
+        values: "1x3 0x10"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: APIDown
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: APIDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: agentfarm-api
+              endpoint: http
+            exp_annotations:
+              summary: The agent-farm API is not responding to scrapes.
+              description: Prometheus cannot scrape the main API process on :8000.
+
+  # --- APIAbsent: fires when the target does not exist at all ---
+  - interval: 1m
+    input_series:
+      - series: 'up{job="litellm"}'
+        values: "1x10"
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: APIAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: agentfarm-api
+              endpoint: http
+            exp_annotations:
+              summary: The agent-farm API target has disappeared entirely.
+              description: No scrape target exists for the API — the Service or ServiceMonitor is gone.
+
+  # --- IngestAPIDown ---
+  - interval: 1m
+    input_series:
+      - series: 'up{job="agentfarm-api", endpoint="ingest"}'
+        values: "1x2 0x12"
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: IngestAPIDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: agentfarm-api
+              endpoint: ingest
+            exp_annotations:
+              summary: The ingest API process is not responding to scrapes.
+              description: Agent telemetry (messages, tool calls) is not being recorded while this fires.
+
+  # --- DatabaseDown: min() across replicas — one failing pod is enough,
+  # and the alert carries no pod/instance labels (redeploy-stable) ---
+  - interval: 1m
+    input_series:
+      - series: 'agentfarm_database_up{pod="api-a"}'
+        values: "1x30"
+      - series: 'agentfarm_database_up{pod="api-b"}'
+        values: "1x5 0x25"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: DatabaseDown
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: DatabaseDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: The API cannot reach Postgres.
+              description: The database probe on the API /metrics endpoint is failing.
+
+  # --- HighAPI5xxRate: 33% errors at healthy traffic fires ---
+  - interval: 1m
+    input_series:
+      - series: 'http_requests_total{job="agentfarm-api", status="2xx"}'
+        values: "0+12x30"
+      - series: 'http_requests_total{job="agentfarm-api", status="5xx"}'
+        values: "0+6x30"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: HighAPI5xxRate
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: More than 5% of API requests are failing with 5xx.
+              description: Sustained server-error ratio over the last 5 minutes with non-trivial traffic.
+
+  # --- HighAPI5xxRate guard: 100% errors below the 0.1 req/s traffic
+  # floor must NOT fire ---
+  - interval: 1m
+    input_series:
+      - series: 'http_requests_total{job="agentfarm-api", status="5xx"}'
+        values: "0+3x30"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: HighAPI5xxRate
+        exp_alerts: []
+
+  # --- HighToolCallErrorRate: 50% errors at healthy call rate fires ---
+  - interval: 1m
+    input_series:
+      - series: 'agentfarm_tool_calls_total{status="error"}'
+        values: "0+3x40"
+      - series: 'agentfarm_tool_calls_total{status="success"}'
+        values: "0+3x40"
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: HighToolCallErrorRate
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: More than 25% of agent tool calls are failing.
+              description: Error ratio of ingested tool-call results over the last 15 minutes.
+
+  # --- HighToolCallErrorRate guard: all-error trickle below the call-rate
+  # floor must NOT fire ---
+  - interval: 1m
+    input_series:
+      - series: 'agentfarm_tool_calls_total{status="error"}'
+        values: "0+0.3x40"
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: HighToolCallErrorRate
+        exp_alerts: []
+
+  # --- AgentTargetDown: per-agent labels survive into the alert ---
+  - interval: 1m
+    input_series:
+      - series: 'up{job="agent", app="agent-abc", org_name="acme"}'
+        values: "1x3 0x15"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: AgentTargetDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: agent
+              app: agent-abc
+              org_name: acme
+            exp_annotations:
+              summary: Agent agent-abc (org acme) is not responding to scrapes.
+              description: The healthz sidecar of agent-abc in org acme is unreachable.
+
+  # --- AgentUnhealthy: fires only for agents that were connected before ---
+  - interval: 1m
+    input_series:
+      - series: 'agent_healthz_ok{job="agent", app="agent-abc", org_name="acme"}'
+        values: "1x5 0x26"
+      - series: 'agent_healthz_ever_connected{job="agent", app="agent-abc", org_name="acme"}'
+        values: "1x31"
+    alert_rule_test:
+      - eval_time: 18m
+        alertname: AgentUnhealthy
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: agent
+              app: agent-abc
+              org_name: acme
+            exp_annotations:
+              summary: Agent agent-abc (org acme) lost its runtime connection.
+              description: The agent runtime of agent-abc was connected before and is now unhealthy.
+
+  # --- AgentUnhealthy gate: a fresh agent that never connected must NOT
+  # page while it boots ---
+  - interval: 1m
+    input_series:
+      - series: 'agent_healthz_ok{job="agent", app="agent-new", org_name="acme"}'
+        values: "0x30"
+      - series: 'agent_healthz_ever_connected{job="agent", app="agent-new", org_name="acme"}'
+        values: "0x30"
+    alert_rule_test:
+      - eval_time: 18m
+        alertname: AgentUnhealthy
+        exp_alerts: []
+
+  # --- AgentSlackTokensInvalid ---
+  - interval: 1m
+    input_series:
+      - series: 'agent_slack_tokens_ok{job="agent", app="agent-abc", org_name="acme"}'
+        values: "0x15"
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: AgentSlackTokensInvalid
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: agent
+              app: agent-abc
+              org_name: acme
+            exp_annotations:
+              summary: Agent agent-abc (org acme) has invalid Slack tokens.
+              description: Slack token validation is failing for agent-abc; the agent cannot serve its workspace.
+
+  # --- AgentsInErrorState: max() — a fresh replica's default-0 gauge must
+  # not mask the real count, and no pod labels leak into the alert ---
+  - interval: 1m
+    input_series:
+      - series: 'agentfarm_agents_in_error{pod="api-old"}'
+        values: "2x10"
+      - series: 'agentfarm_agents_in_error{pod="api-new"}'
+        values: "0x10"
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: AgentsInErrorState
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: 2 agent(s) are in ERROR state.
+              description: The control plane has marked agents as ERROR (see the agents table / UI for last_error).
+
+  # --- LiteLLMDown: failing scrapes ---
+  - interval: 1m
+    input_series:
+      - series: 'up{job="litellm"}'
+        values: "1x2 0x10"
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: LiteLLMDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: litellm
+            exp_annotations:
+              summary: LiteLLM is not responding to scrapes.
+              description: The LiteLLM proxy is unreachable — agents cannot make LLM calls.
+
+  # --- LiteLLMDown: absent target is the same incident ---
+  - interval: 1m
+    input_series:
+      - series: 'up{job="agentfarm-api", endpoint="http"}'
+        values: "1x10"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: LiteLLMDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: litellm
+            exp_annotations:
+              summary: LiteLLM is not responding to scrapes.
+              description: The LiteLLM proxy is unreachable — agents cannot make LLM calls.
+
+  # --- OpenRouterCreditsLow: below $5 with a healthy probe fires ---
+  - interval: 1m
+    input_series:
+      - series: 'agentfarm_openrouter_credits_remaining{pod="api-a"}'
+        values: "3x40"
+      - series: 'agentfarm_openrouter_credits_scrape_ok{pod="api-a"}'
+        values: "1x40"
+    alert_rule_test:
+      - eval_time: 17m
+        alertname: OpenRouterCreditsLow
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: OpenRouter key credits below $5.
+              description: The API key's remaining credit limit is 3.00 USD — raise the key limit or top up before requests start failing.
+
+  # --- Probe-failure gate: a dead probe (gauges at default 0) must raise
+  # CreditsUnknown, never a false CreditsLow ---
+  - interval: 1m
+    input_series:
+      - series: 'agentfarm_openrouter_credits_remaining{pod="api-a"}'
+        values: "0x40"
+      - series: 'agentfarm_openrouter_credits_scrape_ok{pod="api-a"}'
+        values: "0x40"
+    alert_rule_test:
+      - eval_time: 17m
+        alertname: OpenRouterCreditsLow
+        exp_alerts: []
+      - eval_time: 32m
+        alertname: OpenRouterCreditsUnknown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: OpenRouter credits cannot be polled.
+              description: The credits probe is failing — OPENROUTER_API_KEY missing/invalid on the API or the OpenRouter API is unreachable.

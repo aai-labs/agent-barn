@@ -134,3 +134,4 @@ helm/monitoring/charts/
 helm/**/*.tgz
 
 .dex/
+helm/monitoring/tests/generated/
