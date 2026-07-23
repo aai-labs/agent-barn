@@ -4,11 +4,11 @@ from uuid import uuid7
 from sqlalchemy import text, create_engine
 from hamcrest import assert_that, equal_to
 
-from api.core.config import Config
+from api.core.config import get_config
 
 
 def test_backfill_allowed_models_migration():
-    engine = create_engine(str(Config().db_connection_url))
+    engine = create_engine(str(get_config().db_connection_url))
 
     # We will use alembic CLI via subprocess since it's reliable
     api_dir = os.path.abspath(
