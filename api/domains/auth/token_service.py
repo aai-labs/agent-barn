@@ -80,10 +80,7 @@ class SlackConfigTokenService:
         if not record:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    "No Slack configuration token found. Save one in your account "
-                    "settings first."
-                ),
+                detail=("No Slack configuration token found. Save one in your account settings first."),
             )
 
         key = self.config.agent_token_encryption_key
@@ -93,10 +90,7 @@ class SlackConfigTokenService:
             except Exception as exc:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=(
-                        "Stored refresh token is corrupted. Please re-save your "
-                        "configuration token."
-                    ),
+                    detail=("Stored refresh token is corrupted. Please re-save your configuration token."),
                 ) from exc
 
             new_access_token, new_refresh_token = rotate_refresh_token(refresh_token)
@@ -112,10 +106,7 @@ class SlackConfigTokenService:
         except Exception as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    "Stored access token is corrupted. Please re-save your "
-                    "configuration token."
-                ),
+                detail=("Stored access token is corrupted. Please re-save your configuration token."),
             ) from exc
 
     def delete_config_token(self, user_id: UUID) -> None:

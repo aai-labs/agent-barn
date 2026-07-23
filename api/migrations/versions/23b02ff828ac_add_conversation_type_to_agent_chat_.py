@@ -24,9 +24,7 @@ def upgrade() -> None:
         "agent_chat_message",
         sa.Column(
             "conversation_type",
-            postgresql.ENUM(
-                "CHANNEL", "DM", name="conversationtype", create_type=False
-            ),
+            postgresql.ENUM("CHANNEL", "DM", name="conversationtype", create_type=False),
             server_default="CHANNEL",
             nullable=False,
         ),

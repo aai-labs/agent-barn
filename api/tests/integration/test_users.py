@@ -67,12 +67,8 @@ def test_super_admin_can_create_user():
             assert_that(payload, has_key("id"))
 
         with then("they are a member of the chosen org with the chosen role"):
-            org_user_repo: OrganizationUserRepository = context.injector.get(
-                OrganizationUserRepository
-            )
-            membership = org_user_repo.get_by_user_id_and_organization_id(
-                UUID(payload["id"]), org_id
-            )
+            org_user_repo: OrganizationUserRepository = context.injector.get(OrganizationUserRepository)
+            membership = org_user_repo.get_by_user_id_and_organization_id(UUID(payload["id"]), org_id)
             assert_that(membership, not_none())
             assert_that(membership.role, equal_to(OrganizationRole.ADMIN))
 
@@ -99,9 +95,7 @@ def test_create_user_with_owner_role_returns_400():
             create_test_client(),
             database_repo_is_ready(),
             database_is_clean(),
-            there_is_a_user(
-                id=super_id, email="super-own@example.com", is_superuser=True
-            ),
+            there_is_a_user(id=super_id, email="super-own@example.com", is_superuser=True),
             there_is_a_default_organization(id=org_id),
             there_is_an_access_token_for_user(user_id=super_id),
         ]
@@ -128,9 +122,7 @@ def test_create_user_with_unknown_org_returns_404():
             create_test_client(),
             database_repo_is_ready(),
             database_is_clean(),
-            there_is_a_user(
-                id=super_id, email="super-noorg@example.com", is_superuser=True
-            ),
+            there_is_a_user(id=super_id, email="super-noorg@example.com", is_superuser=True),
             there_is_an_access_token_for_user(user_id=super_id),
         ]
     ) as context:
@@ -331,9 +323,7 @@ def test_super_admin_can_delete_another_user():
                 },
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
             )
-            assert_that(
-                login_response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED)
-            )
+            assert_that(login_response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
 
 
 def test_super_admin_can_reset_user_password():

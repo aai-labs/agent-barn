@@ -57,9 +57,7 @@ class SlackClient:
             content=json.dumps(payload).encode(),
         )
 
-    def _iter_pages(
-        self, method: str, params: dict, items_key: str
-    ) -> Iterator[list[dict]]:
+    def _iter_pages(self, method: str, params: dict, items_key: str) -> Iterator[list[dict]]:
         """Yields each page's items_key list, walking the cursor to the end.
 
         Raises SlackFetchError on a request failure or a non-ok Slack response so
@@ -89,14 +87,10 @@ class SlackClient:
 
     def validate_app_token(self) -> tuple[bool, str]:
         """Validates the app-level token via apps.connections.open. Returns (ok, error_message)."""
-        return self._validate(
-            self._app_token, "apps.connections.open", APP_TOKEN_ERRORS, "app"
-        )
+        return self._validate(self._app_token, "apps.connections.open", APP_TOKEN_ERRORS, "app")
 
     @staticmethod
-    def _validate(
-        token: str | None, method: str, error_map: dict[str, str], label: str
-    ) -> tuple[bool, str]:
+    def _validate(token: str | None, method: str, error_map: dict[str, str], label: str) -> tuple[bool, str]:
         if not token:
             return False, error_map["not_authed"]
         try:
@@ -139,9 +133,7 @@ class SlackClient:
         try:
             body = self._post("conversations.join", {"channel": channel_id.strip()})
         except Exception as e:
-            logger.warning(
-                "conversations.join request failed for %s: %s", channel_id, e
-            )
+            logger.warning("conversations.join request failed for %s: %s", channel_id, e)
             return False
 
         if body.get("ok"):
@@ -237,9 +229,7 @@ class SlackClient:
         if not search:
             return channels
         q = search.lower()
-        return [
-            ch for ch in channels if q in ch["id"].lower() or q in ch["name"].lower()
-        ]
+        return [ch for ch in channels if q in ch["id"].lower() or q in ch["name"].lower()]
 
     def list_users(
         self,

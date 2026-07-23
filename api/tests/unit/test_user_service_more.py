@@ -36,9 +36,7 @@ def build_user_service() -> tuple[
     organization_repository = Mock(spec=OrganizationRepository)
     refresh_token_repository = Mock(spec=RefreshTokenRepository)
     config = Config(
-        db_connection_url=cast(
-            PostgresDsn, "postgresql://postgres:postgres@localhost:5432/test"
-        ),
+        db_connection_url=cast(PostgresDsn, "postgresql://postgres:postgres@localhost:5432/test"),
         secret_signing_key="x" * 32,
         super_user_credentials="admin@example.com:StrongPass123",
         super_user_full_name="Super User",
@@ -47,12 +45,8 @@ def build_user_service() -> tuple[
     )
     service = UserService(
         user_repository=cast(UserRepository, user_repository),
-        organization_user_service=cast(
-            OrganizationUserService, organization_user_service
-        ),
-        organization_user_repository=cast(
-            OrganizationUserRepository, organization_user_repository
-        ),
+        organization_user_service=cast(OrganizationUserService, organization_user_service),
+        organization_user_repository=cast(OrganizationUserRepository, organization_user_repository),
         organization_repository=cast(OrganizationRepository, organization_repository),
         refresh_token_repository=cast(RefreshTokenRepository, refresh_token_repository),
         config=config,
@@ -115,9 +109,7 @@ def test_create_superuser_sets_superuser_and_no_verified_timestamp():
     service, user_repository, _, _, _ = build_user_service()
     user_repository.save.side_effect = lambda user: user
 
-    user = service.create_superuser(
-        email="admin2@example.com", password="StrongPass123"
-    )
+    user = service.create_superuser(email="admin2@example.com", password="StrongPass123")
 
     assert_that(user.is_superuser, equal_to(True))
     assert user.email_verified_at is None

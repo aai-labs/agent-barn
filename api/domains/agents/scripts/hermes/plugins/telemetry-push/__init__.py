@@ -43,9 +43,12 @@ def _buffer_push(event):
         _buffer.append(event)
 
 
+_PLATFORM = os.environ.get("AGENT_PLATFORM", "slack")
+
+
 def _build_session_key(chat_type, chat_id):
     prefix = "dm" if chat_type == "dm" else "group"
-    return f"agent:main:slack:{prefix}:{chat_id}"
+    return f"agent:main:{_PLATFORM}:{prefix}:{chat_id}"
 
 
 def _now_iso():

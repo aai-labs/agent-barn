@@ -37,6 +37,11 @@ _INBOUND_TEAMS_RE = re.compile(
     r"Teams message in (.+?) from (\S+): (.+)",
     re.DOTALL,
 )
+_INBOUND_TELEGRAM_RE = re.compile(
+    r"\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC)\] "
+    r"Telegram message in (.+?) from (\S+): (.+)",
+    re.DOTALL,
+)
 _MENTION_RE = re.compile(r"<@(U\w+)>")
 _TS_FMT = "%Y-%m-%d %H:%M:%S UTC"
 
@@ -44,6 +49,9 @@ _SESSION_PREFIXES = (
     "agent:main:slack:channel:",
     "agent:main:msteams:channel:",
     "agent:main:msteams:group:",
+    "agent:main:telegram:channel:",
+    "agent:main:telegram:group:",
+    "agent:main:telegram:dm:",
 )
 
 
@@ -105,10 +113,7 @@ def _accumulate_thread_links(
         except json.JSONDecodeError:
             continue
 
-        if (
-            line.get("type") == "custom_message"
-            and line.get("customType") == "openclaw.runtime-context"
-        ):
+        if line.get("type") == "custom_message" and line.get("customType") == "openclaw.runtime-context":
             meta = _runtime_context_meta(line.get("content", ""))
             if meta:
                 message_id = meta.get("message_id")
@@ -180,6 +185,7 @@ def _parse_jsonl(
     jsonl_text: str,
     user_map: dict[str, str] | None = None,
     channel_map: dict[str, str] | None = None,
+    conversation_type: ConversationType = ConversationType.CHANNEL,
 ) -> list[AgentChatMessage]:
     messages: list[AgentChatMessage] = []
 
@@ -198,13 +204,14 @@ def _parse_jsonl(
             continue
 
         # --- INBOUND ---
-        if (
-            line_type == "custom_message"
-            and line.get("customType") == "openclaw.runtime-context"
-        ):
+        if line_type == "custom_message" and line.get("customType") == "openclaw.runtime-context":
             content_raw = line.get("content", "")
             first_line = content_raw.split("\n")[0]
-            m = _INBOUND_RE.search(first_line) or _INBOUND_TEAMS_RE.search(first_line)
+            m = (
+                _INBOUND_RE.search(first_line)
+                or _INBOUND_TEAMS_RE.search(first_line)
+                or _INBOUND_TELEGRAM_RE.search(first_line)
+            )
             if not m:
                 continue
             ts_str, _raw_channel, sender_id, text = (
@@ -228,7 +235,7 @@ def _parse_jsonl(
                     channel_id=channel_id,
                     thread_id=thread_id,
                     direction=MessageDirection.INBOUND,
-                    conversation_type=ConversationType.CHANNEL,
+                    conversation_type=conversation_type,
                     sender_id=sender_id,
                     sender_name=resolved_sender,
                     channel_name=resolved_channel,
@@ -267,7 +274,7 @@ def _parse_jsonl(
                     channel_id=channel_id,
                     thread_id=thread_id,
                     direction=MessageDirection.OUTBOUND,
-                    conversation_type=ConversationType.CHANNEL,
+                    conversation_type=conversation_type,
                     sender_id=None,
                     sender_name=None,
                     content=_resolve_mentions(text, user_map or {}),
@@ -300,18 +307,11 @@ def _parse_dm_jsonl(
             continue
 
         line_type = line.get("type", "")
-        if (
-            line_type == "custom_message"
-            and line.get("customType") == "openclaw.runtime-context"
-        ):
+        if line_type == "custom_message" and line.get("customType") == "openclaw.runtime-context":
             custom_messages.append(line)
         elif line_type == "message":
             msg = line.get("message", {})
-            if (
-                isinstance(msg, dict)
-                and msg.get("role") == "assistant"
-                and line.get("id")
-            ):
+            if isinstance(msg, dict) and msg.get("role") == "assistant" and line.get("id"):
                 outbound_lines.append(line)
 
     messages: list[AgentChatMessage] = []
@@ -381,11 +381,7 @@ def _parse_dm_jsonl(
             continue
         # Find first text block — DM thread responses may lead with a thinking block.
         block = next(
-            (
-                b
-                for b in content_blocks
-                if isinstance(b, dict) and b.get("type") == "text"
-            ),
+            (b for b in content_blocks if isinstance(b, dict) and b.get("type") == "text"),
             None,
         )
         if block is None:
@@ -451,9 +447,7 @@ def parse_sessions(
             continue
 
         origin = session_data.get("origin") or {}
-        channel_id = (
-            origin.get("nativeChannelId") or session_data.get("groupId") or ""
-        ).upper()
+        channel_id = (origin.get("nativeChannelId") or session_data.get("groupId") or "").upper()
         if not channel_id:
             continue
         thread_id: str | None = origin.get("threadId") or None
@@ -464,6 +458,8 @@ def parse_sessions(
             logger.warning("Failed to read JSONL for session %s: %s", session_uuid, e)
             continue
 
+        ctype = ConversationType.DM if ":dm:" in session_key else ConversationType.CHANNEL
+
         messages = _parse_jsonl(
             agent_id,
             session_key,
@@ -472,6 +468,7 @@ def parse_sessions(
             jsonl_text,
             user_map,
             channel_map,
+            conversation_type=ctype,
         )
         all_messages.extend(messages)
         _accumulate_thread_links(jsonl_text, thread_id, root_of, link)
@@ -482,9 +479,9 @@ def parse_sessions(
     dm_session_data = sessions.get("agent:main:main")
     if dm_session_data:
         origin = dm_session_data.get("origin") or {}
-        if (
-            dm_session_data.get("chatType") == "direct"
-            and origin.get("provider") == "slack"
+        if dm_session_data.get("chatType") == "direct" and origin.get("provider") in (
+            "slack",
+            "telegram",
         ):
             dm_conversation_id = (origin.get("nativeChannelId") or "").upper() or None
             session_uuid = dm_session_data.get("sessionId")
@@ -493,9 +490,7 @@ def parse_sessions(
                 try:
                     jsonl_text = get_jsonl(session_uuid)
                 except Exception as e:
-                    logger.warning(
-                        "Failed to read DM JSONL for session %s: %s", session_uuid, e
-                    )
+                    logger.warning("Failed to read DM JSONL for session %s: %s", session_uuid, e)
                     jsonl_text = ""
                 if jsonl_text:
                     dm_messages = _parse_dm_jsonl(

@@ -18,11 +18,20 @@ logger.addHandler(logging.StreamHandler())
 
 ROOT_ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
 load_dotenv(ROOT_ENV_PATH, override=False)
+
+
+def _set_default(key: str, value: str) -> None:
+    # .env may define these keys with an empty value (e.g. email disabled locally),
+    # which `os.environ.setdefault` would treat as "already set" and never override.
+    if not os.environ.get(key):
+        os.environ[key] = value
+
+
 os.environ["ENVIRONMENT"] = "test"
-os.environ.setdefault("SECRET_SIGNING_KEY", "test-secret-key")
-os.environ.setdefault("SUPER_USER_CREDENTIALS", "admin@example.com:StrongPass123")
-os.environ.setdefault("EMAIL_SERVER_CREDENTIAL", "noreply@example.com:test-password")
-os.environ.setdefault("EMAIL_SMTP_SERVER", "localhost")
+_set_default("SECRET_SIGNING_KEY", "test-secret-key")
+_set_default("SUPER_USER_CREDENTIALS", "admin@example.com:StrongPass123")
+_set_default("EMAIL_SERVER_CREDENTIAL", "noreply@example.com:test-password")
+_set_default("EMAIL_SMTP_SERVER", "localhost")
 
 alembic_dir = Path(__file__).resolve().parents[1]
 alembic_ini_path = alembic_dir / "alembic.ini"
