@@ -158,9 +158,7 @@ def test_member_list_respects_limit_and_defaults_to_unbounded():
             ),
         ]
     ) as context:
-        limited = context.client.get(
-            _members_url(), params={"limit": 1}, headers=_auth(context)
-        )
+        limited = context.client.get(_members_url(), params={"limit": 1}, headers=_auth(context))
         unbounded = context.client.get(_members_url(), headers=_auth(context))
 
         assert_that(limited.status_code, equal_to(status.HTTP_200_OK))
