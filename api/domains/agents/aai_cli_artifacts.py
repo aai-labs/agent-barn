@@ -212,13 +212,21 @@ _PROFILE_BUILDERS: dict[SecretProvider, Callable[..., str]] = {
 }
 
 
+_TOOL_CONTEXT_PROVIDERS = {
+    SecretProvider.GITHUB,
+    SecretProvider.JIRA,
+    SecretProvider.CONFLUENCE,
+    SecretProvider.BITBUCKET,
+}
+
+
 def build_tool_context_md(decrypted: Mapping[SecretProvider, SecretContent]) -> str:
     """Render a markdown section listing each configured integration's key metadata.
 
     Injected into tools_md at start_agent time so the agent knows what is already
     set up and doesn't ask the user for credentials that are already configured.
     """
-    if not decrypted:
+    if not decrypted or not (decrypted.keys() & _TOOL_CONTEXT_PROVIDERS):
         return ""
 
     lines: list[str] = [

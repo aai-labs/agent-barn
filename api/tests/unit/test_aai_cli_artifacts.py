@@ -11,6 +11,7 @@ from api.domains.agents.aai_cli_artifacts import (
 from typing import cast
 
 from api.domains.agents.models import (
+    FirecrawlContent,
     GmailContent,
     SecretProvider,
     ZohoMailContent,
@@ -281,8 +282,14 @@ def test_tool_context_md_lists_bitbucket_profile():
 
 def test_tool_context_md_omits_non_aai_cli_providers():
     md = build_tool_context_md({SecretProvider.GMAIL: _GMAIL})
-    # Gmail is not listed as a named profile in the context block
-    assert "gmail-work" not in md
+    assert md == ""
+
+
+def test_tool_context_md_empty_when_only_firecrawl():
+    md = build_tool_context_md(
+        {SecretProvider.FIRECRAWL: FirecrawlContent(api_key="fc-x")}
+    )
+    assert md == ""
 
 
 def test_tool_context_md_never_leaks_tokens():

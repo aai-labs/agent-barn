@@ -3191,3 +3191,48 @@ def test_start_agent_per_agent_firecrawl_overrides_base_url():
                 fc_cfg["webSearch"]["baseUrl"],
                 equal_to("https://api.firecrawl.dev"),
             )
+
+
+_GIVEN_WITHOUT_FIRECRAWL = [
+    set_env_variable(
+        {
+            "AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY,
+            "LITELLM_BASE_URL": "http://litellm:4000",
+            "LITELLM_SECRET_NAME": "litellm",
+            "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
+            "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
+            "API_EXTERNAL_URL": "https://api.test.com",
+            "SKIP_SLACK_TOKEN_VALIDATION": "true",
+            "AGENT_FIRECRAWL_BASE_URL": "",
+            "AGENT_FIRECRAWL_API_KEY": "",
+        }
+    ),
+    prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
+    prepare_api_server(),
+    create_test_client(),
+    database_repo_is_ready(),
+    database_is_clean(),
+    there_is_an_organization_with_user_and_access_token(),
+    use_org_for_auth(),
+    there_is_a_template(),
+]
+
+
+def test_start_openclaw_agent_without_firecrawl():
+    with given([*_GIVEN_WITHOUT_FIRECRAWL, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+
+        with when("I start an agent without any firecrawl env vars"):
+            response = client.post(
+                f"{_BASE}/{context.agent.id}/start", headers=_auth(context)
+            )
+
+        with then("the overlay has no firecrawl and the secret has no firecrawl key"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            overlay = json.loads(config_map.data["openclaw-config-overlay.json"])
+            assert "firecrawl" not in overlay["plugins"]["allow"]
+            assert_that(overlay["plugins"]["entries"], is_not(has_key("firecrawl")))
+            secret = k8s.create_secret.call_args.args[1]
+            assert_that(secret.string_data, is_not(has_key("FIRECRAWL_API_KEY")))

@@ -1,6 +1,5 @@
 import json
 from pathlib import Path
-from typing import Any, cast
 from uuid import UUID
 
 from kubernetes import client
@@ -26,8 +25,6 @@ def build_openclaw_config_overlay(
     slack_group_policy: str = "open",
     slack_dm_policy: str = "open",
     approval_mode: str = "auto",
-    firecrawl_base_url: str = "",
-    firecrawl_api_key: str = "",
 ) -> dict:
     provider, _, model_name = model.partition("/")
 
@@ -128,30 +125,6 @@ def build_openclaw_config_overlay(
         },
         "gateway": {"auth": {"mode": "none"}},
     }
-    if firecrawl_base_url and firecrawl_api_key:
-        overlay["plugins"]["allow"].append("firecrawl")
-        entries = cast(dict[str, Any], overlay["plugins"]["entries"])
-        entries["firecrawl"] = {
-            "enabled": True,
-            "config": {
-                "webSearch": {
-                    "apiKey": "${FIRECRAWL_API_KEY}",
-                    "baseUrl": firecrawl_base_url,
-                },
-                "webFetch": {
-                    "apiKey": "${FIRECRAWL_API_KEY}",
-                    "baseUrl": firecrawl_base_url,
-                    "onlyMainContent": True,
-                    "maxAgeMs": 172800000,
-                    "timeoutSeconds": 60,
-                },
-            },
-        }
-        tools = cast(dict[str, Any], overlay["tools"])
-        tools["web"] = {
-            "fetch": {"provider": "firecrawl"},
-            "search": {"enabled": True, "provider": "firecrawl"},
-        }
     return overlay
 
 
@@ -159,8 +132,6 @@ def build_openclaw_config_overlay_teams(
     model: str,
     litellm_base_url: str,
     approval_mode: str = "auto",
-    firecrawl_base_url: str = "",
-    firecrawl_api_key: str = "",
 ) -> dict:
     provider, _, model_name = model.partition("/")
 
@@ -229,30 +200,6 @@ def build_openclaw_config_overlay_teams(
         },
         "gateway": {"auth": {"mode": "none"}},
     }
-    if firecrawl_base_url and firecrawl_api_key:
-        overlay["plugins"]["allow"].append("firecrawl")
-        entries = cast(dict[str, Any], overlay["plugins"]["entries"])
-        entries["firecrawl"] = {
-            "enabled": True,
-            "config": {
-                "webSearch": {
-                    "apiKey": "${FIRECRAWL_API_KEY}",
-                    "baseUrl": firecrawl_base_url,
-                },
-                "webFetch": {
-                    "apiKey": "${FIRECRAWL_API_KEY}",
-                    "baseUrl": firecrawl_base_url,
-                    "onlyMainContent": True,
-                    "maxAgeMs": 172800000,
-                    "timeoutSeconds": 60,
-                },
-            },
-        }
-        tools = cast(dict[str, Any], overlay["tools"])
-        tools["web"] = {
-            "fetch": {"provider": "firecrawl"},
-            "search": {"enabled": True, "provider": "firecrawl"},
-        }
     return overlay
 
 
@@ -315,7 +262,6 @@ def build_secret_slack(
     slack_app_token: str,
     litellm_api_key: str,
     litellm_base_url: str,
-    firecrawl_api_key: str = "",
 ) -> client.V1Secret:
     string_data = {
         "SLACK_BOT_TOKEN": slack_bot_token,
@@ -323,8 +269,6 @@ def build_secret_slack(
         "LITELLM_API_KEY": litellm_api_key,
         "LITELLM_BASE_URL": litellm_base_url,
     }
-    if firecrawl_api_key:
-        string_data["FIRECRAWL_API_KEY"] = firecrawl_api_key
     return client.V1Secret(
         metadata=client.V1ObjectMeta(
             name=_resource_name(agent_id),
@@ -344,7 +288,6 @@ def build_secret_teams(
     msteams_tenant_id: str,
     litellm_api_key: str,
     litellm_base_url: str,
-    firecrawl_api_key: str = "",
 ) -> client.V1Secret:
     string_data = {
         "MSTEAMS_APP_ID": msteams_app_id,
@@ -353,8 +296,6 @@ def build_secret_teams(
         "LITELLM_API_KEY": litellm_api_key,
         "LITELLM_BASE_URL": litellm_base_url,
     }
-    if firecrawl_api_key:
-        string_data["FIRECRAWL_API_KEY"] = firecrawl_api_key
     return client.V1Secret(
         metadata=client.V1ObjectMeta(
             name=_resource_name(agent_id),

@@ -37,8 +37,6 @@ def build_hermes_config(
     group_policy: str = "allowlist",
     verbose_mode: bool = True,
     approval_mode: str = "auto",
-    firecrawl_base_url: str = "",
-    firecrawl_api_key: str = "",
 ) -> dict:
     _, sep, model_name = model.partition("/")
     if not sep:
@@ -105,9 +103,6 @@ def build_hermes_config(
             "mode": _HERMES_APPROVAL_MODE.get(approval_mode, "smart"),
         },
     }
-    if firecrawl_base_url and firecrawl_api_key:
-        config["web"] = {"backend": "firecrawl"}
-        config["browser"] = {"cloud_provider": "firecrawl"}
     return config
 
 
@@ -176,8 +171,6 @@ def build_secret_hermes_slack(
     channel_ids: list[str],
     dm_user_ids: list[str],
     dm_policy: str = "off",
-    firecrawl_api_key: str = "",
-    firecrawl_base_url: str = "",
 ) -> client.V1Secret:
     # Only an explicit allowlist seeds SLACK_DM_ALLOWED_USERS. "off" denies every
     # DM (empty allowlist behind the deny plugin); "open" drops the deny plugin,
@@ -201,10 +194,6 @@ def build_secret_hermes_slack(
         "SLACK_CHANNEL_IDS": ",".join(channel_ids),
         "SLACK_DM_ALLOWED_USERS": ",".join(allowed_dm_users),
     }
-    if firecrawl_api_key and firecrawl_base_url:
-        string_data["FIRECRAWL_API_KEY"] = firecrawl_api_key
-        string_data["FIRECRAWL_API_URL"] = firecrawl_base_url
-        string_data["FIRECRAWL_BROWSER_TTL"] = "600"
     return client.V1Secret(
         metadata=client.V1ObjectMeta(
             name=_resource_name(agent_id),
