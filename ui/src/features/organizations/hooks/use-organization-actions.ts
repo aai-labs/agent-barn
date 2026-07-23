@@ -3,6 +3,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/shared/api";
+import { toastError } from "@/shared/toast";
 
 import {
   type CreateOrganizationFormData,
@@ -67,8 +68,7 @@ export function useUpdateOrganization() {
       });
     },
     onError: (error: Error) => {
-      const message = error?.message || "Failed to save changes. Please try again.";
-      alert(`Save failed: ${message}`);
+      toastError(error, "Failed to save changes. Please try again.");
     },
   });
 }

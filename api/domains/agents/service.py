@@ -872,6 +872,16 @@ class AgentService:
         )
         effective_model = agent.model or self.config.agent_default_model
 
+        # Re-check the allowlist at start time, not just create/update: the org's
+        # allowlist can change after the agent was created, and a model that was
+        # valid then may no longer be permitted now.
+        organization = self.organization_repository.get(org_id)
+        if not organization or not is_model_allowed(effective_model, organization.allowed_models):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Model '{effective_model}' is no longer in the organization's allowed model list",
+            )
+
         overlay: dict | None = None
         hermes_cfg: dict | None = None
 

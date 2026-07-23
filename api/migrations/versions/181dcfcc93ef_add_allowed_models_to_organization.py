@@ -193,9 +193,17 @@ def upgrade() -> None:
 
     config = get_config()
     raw_allowlist = config.agent_model_allowlist
-    allowed = [m.strip() for m in raw_allowlist.split(",")] if raw_allowlist else []
+    # Old semantics: an empty/unset allowlist meant "allow everything". The new
+    # per-org allowlist treats empty as "block everything", so an empty config
+    # must backfill to ["*"] rather than [] or every existing org loses access
+    # to all models.
+    allowed = [m.strip() for m in raw_allowlist.split(",") if m.strip()] if raw_allowlist else ["*"]
 
-    op.execute(f"UPDATE organization SET allowed_models = '{json.dumps(allowed)}'::jsonb")
+    op.execute(
+        sa.text("UPDATE organization SET allowed_models = CAST(:models AS jsonb)").bindparams(
+            sa.bindparam("models", value=json.dumps(allowed))
+        )
+    )
     # ------------------------------
     op.alter_column(
         "tool_call",

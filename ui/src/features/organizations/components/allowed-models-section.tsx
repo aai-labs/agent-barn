@@ -4,6 +4,7 @@ import { useState, useMemo, useEffect } from "react";
 import { Loader2, Search, X } from "lucide-react";
 
 import { useModels } from "@/features/agents/hooks/use-models";
+import { ModelOption } from "@/features/agents/schemas";
 import { useUpdateOrganization } from "../hooks/use-organization-actions";
 import { Organization } from "../schemas";
 
@@ -17,10 +18,33 @@ const getPrefixedModels = (dbModels: string[] | undefined, catalog: { value: str
       // also models like "litellm/gpt-5-mini")
       const withPrefix = `litellm/openrouter/${m}`;
       if (catalogValues.has(withPrefix)) return withPrefix;
-      // Unknown / truly orphaned value — discard
+      // Unknown / truly orphaned value — discard here, callers must handle
+      // preserving it separately (see getOrphanedModels).
       return null;
     })
     .filter((m): m is string => m !== null);
+};
+
+// Entries from the org's stored allowlist that don't resolve to any current
+// catalog entry (bare or prefixed) — e.g. a model OpenRouter has since
+// removed. Kept separate so they can be preserved on save instead of being
+// silently dropped.
+const getOrphanedModels = (dbModels: string[] | undefined, catalog: { value: string }[]) => {
+  const catalogValues = new Set(catalog.map((c) => c.value));
+  return (dbModels || []).filter((m) => !catalogValues.has(m) && !catalogValues.has(`litellm/openrouter/${m}`));
+};
+
+// The catalog-recognized baseline used for both initial selection and the
+// dirty check: the org's matched models plus the default model, which is
+// always force-selected. Keeping this in one place prevents the two from
+// drifting apart (that drift was the isDirty false-positive-on-load bug).
+const getEffectiveModels = (dbModels: string[] | undefined, catalog: ModelOption[]) => {
+  const matched = getPrefixedModels(dbModels, catalog);
+  const def = catalog.find((m) => m.isDefault);
+  if (def && !matched.includes(def.value)) {
+    matched.push(def.value);
+  }
+  return matched;
 };
 
 export function AllowedModelsSection({
@@ -30,26 +54,20 @@ export function AllowedModelsSection({
 }) {
   const { models, isLoading } = useModels({ catalog: true });
   const updateOrg = useUpdateOrganization();
-  
-  const [selectedModels, setSelectedModels] = useState<string[]>(() => {
-    const initial = getPrefixedModels(organization.allowedModels, models);
-    const def = models.find((m) => m.isDefault);
-    if (def && !initial.includes(def.value)) {
-      return [...initial, def.value];
-    }
-    return initial;
-  });
+
+  const [selectedModels, setSelectedModels] = useState<string[]>(() =>
+    getEffectiveModels(organization.allowedModels, models),
+  );
+  const [orphanedModels, setOrphanedModels] = useState<string[]>(() =>
+    getOrphanedModels(organization.allowedModels, models),
+  );
   const [searchQuery, setSearchQuery] = useState("");
 
   useEffect(() => {
     if (!isLoading) {
-      const dbModels = getPrefixedModels(organization.allowedModels, models);
-      const def = models.find((m) => m.isDefault);
-      if (def && !dbModels.includes(def.value)) {
-        dbModels.push(def.value);
-      }
       // eslint-disable-next-line react-hooks/set-state-in-effect
-      setSelectedModels(dbModels);
+      setSelectedModels(getEffectiveModels(organization.allowedModels, models));
+      setOrphanedModels(getOrphanedModels(organization.allowedModels, models));
     }
   }, [organization.allowedModels, models, isLoading]);
 
@@ -71,10 +89,13 @@ export function AllowedModelsSection({
     );
   };
 
+  const removeOrphanedModel = (value: string) => {
+    setOrphanedModels((prev) => prev.filter((m) => m !== value));
+  };
+
   const handleSave = () => {
-    const cleaned = selectedModels.map((m) =>
-      m.replace("litellm/openrouter/", "")
-    );
+    const cleanedSelected = selectedModels.map((m) => m.replace("litellm/openrouter/", ""));
+    const cleaned = [...new Set([...cleanedSelected, ...orphanedModels])];
     updateOrg.mutate({
       organizationId: organization.id,
       data: { allowedModels: cleaned },
@@ -83,7 +104,9 @@ export function AllowedModelsSection({
 
   const isDirty =
     JSON.stringify([...selectedModels].sort()) !==
-    JSON.stringify([...getPrefixedModels(organization.allowedModels, models)].sort());
+      JSON.stringify([...getEffectiveModels(organization.allowedModels, models)].sort()) ||
+    JSON.stringify([...orphanedModels].sort()) !==
+      JSON.stringify([...getOrphanedModels(organization.allowedModels, models)].sort());
 
   return (
     <div className="pt-6">
@@ -119,7 +142,7 @@ export function AllowedModelsSection({
           </div>
         ) : (
           <>
-            {selectedModels.length > 0 && (
+            {(selectedModels.length > 0 || orphanedModels.length > 0) && (
               <div className="flex flex-wrap gap-2 mb-4">
                 {selectedModels.map((value) => {
                   const model = models.find((m) => m.value === value);
@@ -143,6 +166,25 @@ export function AllowedModelsSection({
                     </div>
                   );
                 })}
+                {orphanedModels.map((value) => (
+                  <div
+                    key={`orphan-${value}`}
+                    title="This model was previously allowed but is no longer in the OpenRouter catalog. It will stay in the allowlist unless removed."
+                    className="flex items-center gap-1.5 px-2.5 py-1 text-[13px] bg-amber-50 border border-amber-200 rounded-md"
+                  >
+                    <span className="text-amber-800">{value}</span>
+                    <span className="text-[11px] text-amber-600 font-normal bg-amber-100 px-1.5 py-0.5 rounded border border-amber-200">
+                      Not in catalog
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => removeOrphanedModel(value)}
+                      className="text-amber-500 hover:text-amber-800"
+                    >
+                      <X width={14} height={14} />
+                    </button>
+                  </div>
+                ))}
               </div>
             )}
             <div className="relative mb-3">

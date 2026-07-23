@@ -15,6 +15,7 @@ from starlette.testclient import TestClient
 
 from api.domains.agents.models import AgentStatus
 from api.domains.agents.repository import AgentRepository
+from api.domains.organizations.repository import OrganizationRepository
 from api.domains.templates.repository import TemplateRepository
 from api.infrastructure.kubernetes.client import KubernetesClient
 from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
@@ -104,6 +105,23 @@ def test_create_slack_agent_returns_201_stopped():
             assert_that(body["status"], equal_to(AgentStatus.STOPPED.value))
             assert_that(body, is_not(has_key("slack_bot_token")))
             assert_that(body, is_not(has_key("slack_app_token")))
+
+
+def test_create_agent_rejects_model_not_in_org_allowlist():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        org_repo: OrganizationRepository = context.injector.get(OrganizationRepository)
+        org = org_repo.get(context.organization.id)
+        org.allowed_models = []
+        org_repo.save(org)
+
+        with when("I create an agent with a model while the org allowlist is empty"):
+            payload = {**_VALID_CREATE, "model": "litellm/openrouter/openai/gpt-4o"}
+            response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("it returns 400"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], contains_string("not in the allowed model list"))
 
 
 def test_create_agent_missing_template_slug_returns_422():
@@ -725,6 +743,28 @@ def test_start_already_running_returns_409():
 
         with then("it returns 409"):
             assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+
+
+def test_start_agent_rejects_model_removed_from_allowlist():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(model="litellm/openrouter/openai/gpt-4o"),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        org_repo: OrganizationRepository = context.injector.get(OrganizationRepository)
+        org = org_repo.get(context.organization.id)
+        # Allowlist changed after the agent was created: gpt-4o is no longer permitted.
+        org.allowed_models = ["anthropic/*"]
+        org_repo.save(org)
+
+        with when("I start the agent"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("it returns 400"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], contains_string("allowed model list"))
 
 
 def test_start_agent_no_auth_returns_401():

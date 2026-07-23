@@ -1,3 +1,4 @@
+import logging
 from dataclasses import dataclass
 from uuid import UUID
 import fnmatch
@@ -29,6 +30,8 @@ from api.domains.users.organization_users.models import (
 from api.domains.users.organization_users.service import OrganizationUserService
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
+logger = logging.getLogger(__name__)
+
 
 @inject
 @singleton
@@ -58,16 +61,18 @@ class OrganizationService:
             return
         try:
             catalog = self.agent_service.openrouter.list_models()
-        except Exception:
-            # If the OpenRouter catalog is unavailable (e.g. no API key locally),
-            # skip validation so admins can still configure the allowlist.
+        except Exception as e:
+            # If the OpenRouter catalog is unavailable (e.g. no API key locally, a
+            # transient outage), skip validation so admins can still configure the
+            # allowlist — but log it so a silently-skipped validation is debuggable.
+            logger.warning("OpenRouter catalog unavailable, skipping model allowlist validation: %s", e)
             return
         if not catalog:
             return
+        catalog_ids_lower = [m["id"].lower() for m in catalog]
         for pattern in allowed_models:
             # Strip any litellm gateway prefix so patterns match the bare OpenRouter slug.
             bare = pattern.strip().lower().removeprefix("litellm/openrouter/")
-            catalog_ids_lower = [m["id"].lower() for m in catalog]
             if not any(fnmatch.fnmatch(cid, bare) for cid in catalog_ids_lower):
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -123,7 +128,9 @@ class OrganizationService:
         existing = self.organization_repository.find_default()
         if existing:
             return existing
-        org = Organization(name="default", is_default=True)
+        config = get_config()
+        default_model = config.agent_default_model.removeprefix("litellm/openrouter/")
+        org = Organization(name="default", is_default=True, allowed_models=[default_model])
         return self.organization_repository.save(org)
 
     def get_paginated_organizations(
