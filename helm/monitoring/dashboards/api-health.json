@@ -83,12 +83,12 @@
     {
       "id": 4,
       "type": "stat",
-      "title": "Pod restarts (1h)",
+      "title": "API pod restarts (1h)",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 5, "w": 6, "x": 18, "y": 0 },
       "targets": [
         {
-          "expr": "sum(increase(kube_pod_container_status_restarts_total{namespace=\"agent-farm\"}[1h]))",
+          "expr": "sum(increase(kube_pod_container_status_restarts_total{namespace=\"agent-farm\", pod=~\"agentfarm-api-.*\"}[1h]))",
           "refId": "A"
         }
       ],
@@ -132,12 +132,12 @@
     {
       "id": 7,
       "type": "timeseries",
-      "title": "Restarts by pod",
+      "title": "API restarts by pod",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 8, "w": 24, "x": 0, "y": 14 },
       "targets": [
         {
-          "expr": "sum by (pod) (increase(kube_pod_container_status_restarts_total{namespace=\"agent-farm\"}[1h]))",
+          "expr": "sum by (pod) (increase(kube_pod_container_status_restarts_total{namespace=\"agent-farm\", pod=~\"agentfarm-api-.*\"}[1h]))",
           "legendFormat": "{{pod}}",
           "refId": "A"
         }

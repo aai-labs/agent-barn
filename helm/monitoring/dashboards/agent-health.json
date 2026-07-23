@@ -321,6 +321,33 @@
         },
         "overrides": []
       }
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Container restarts by agent (1h)",
+      "description": "Complements pod generations: a crash-looping container restarts inside the same pod, so it shows here but not there.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 22
+      },
+      "targets": [
+        {
+          "expr": "sum by (agent_name) (increase(kube_pod_container_status_restarts_total{namespace=\"agent-farm\", pod=~\"agent-.*\"}[1h]) * on (pod) group_left (label_app) kube_pod_labels{namespace=\"agent-farm\", label_app=~\"agent-.*\"} * on (label_app) group_left (agent_name) group by (label_app, agent_name) (label_replace(up{job=\"agent\", org_name=~\"$org\"}, \"label_app\", \"$1\", \"app\", \"(.*)\")))",
+          "legendFormat": "{{agent_name}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      }
     }
   ]
 }
