@@ -47,6 +47,17 @@ export const AgentAssignedSkillSchema = z.object({
   updatedAt: z.string(),
 });
 
+export const AgentPermissionKeySchema = z.enum([
+  "agent.read",
+  "agent.update",
+  "agent.delete",
+  "agent.lifecycle.manage",
+  "agent.access.manage",
+  "agent.secret.manage",
+  "activity.read",
+  "cost.read",
+]);
+
 export const AgentSchema = z.object({
   id: z.string().uuid(),
   name: z.string(),
@@ -64,6 +75,7 @@ export const AgentSchema = z.object({
   secrets: z.array(AgentSecretReadSchema).optional(),
   skills: z.array(AgentAssignedSkillSchema).default([]),
   webhookUrl: z.string().nullable().optional(),
+  allowedActions: z.array(AgentPermissionKeySchema).default([]),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -209,6 +221,7 @@ export const AgentLogHistoryReadSchema = z.object({
 
 
 export type CommandApprovalMode = "manual" | "auto" | "off";
+export type AgentPermissionKey = z.infer<typeof AgentPermissionKeySchema>;
 export type Agent = z.infer<typeof AgentSchema>;
 export type AgentAssignedSkill = z.infer<typeof AgentAssignedSkillSchema>;
 export type AgentSlackConfig = z.infer<typeof AgentSlackConfigSchema>;

@@ -156,9 +156,7 @@ def parse_hermes_export(
         msg_id = msg.get("id")
         dedup_id = f"hermes:{session_id}:{msg_id}"
 
-        direction = (
-            MessageDirection.INBOUND if role == "user" else MessageDirection.OUTBOUND
-        )
+        direction = MessageDirection.INBOUND if role == "user" else MessageDirection.OUTBOUND
         out.append(
             AgentChatMessage(
                 agent_id=agent_id,
@@ -169,9 +167,7 @@ def parse_hermes_export(
                 direction=direction,
                 conversation_type=ctype,
                 sender_id=sender_id if role == "user" else None,
-                sender_name=(user_map or {}).get(sender_id or "", sender_name)
-                if role == "user"
-                else None,
+                sender_name=(user_map or {}).get(sender_id or "", sender_name) if role == "user" else None,
                 channel_name=display_name,
                 content=content,
                 occurred_at=occurred_at,
@@ -216,9 +212,7 @@ def parse_hermes_export_tool_calls(
                     continue
                 raw_args = fn.get("arguments") or "{}"
                 try:
-                    arguments = (
-                        json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-                    )
+                    arguments = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
                 except json.JSONDecodeError:
                     arguments = {"_raw": raw_args}
                 tool_calls.append(
@@ -236,11 +230,7 @@ def parse_hermes_export_tool_calls(
             if not tc_id:
                 continue
             content = msg.get("content")
-            result = (
-                [{"type": "text", "text": content}]
-                if isinstance(content, str)
-                else None
-            )
+            result = [{"type": "text", "text": content}] if isinstance(content, str) else None
             tool_results.append(
                 ParsedToolResult(
                     external_id=tc_id,

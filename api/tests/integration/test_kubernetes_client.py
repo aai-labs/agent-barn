@@ -80,9 +80,7 @@ def _deployment(name, run_id):
             selector=V1LabelSelector(match_labels={"app": name}),
             template=V1PodTemplateSpec(
                 metadata=V1ObjectMeta(labels={"app": name}),
-                spec=V1PodSpec(
-                    containers=[V1Container(name="app", image="nginx:alpine")]
-                ),
+                spec=V1PodSpec(containers=[V1Container(name="app", image="nginx:alpine")]),
             ),
         ),
     )

@@ -24,9 +24,7 @@ class ParsedToolResult:
     completed_at: datetime.datetime
 
 
-def parse_jsonl(
-    raw: str, session_id: str
-) -> tuple[list[ParsedToolCall], list[ParsedToolResult]]:
+def parse_jsonl(raw: str, session_id: str) -> tuple[list[ParsedToolCall], list[ParsedToolResult]]:
     """Parse openclaw JSONL transcript text into tool call and result records."""
     tool_calls: list[ParsedToolCall] = []
     tool_results: list[ParsedToolResult] = []

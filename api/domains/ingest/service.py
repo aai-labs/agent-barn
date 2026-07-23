@@ -36,9 +36,7 @@ class IngestService:
             raise PermissionError("agent has no ingest key")
 
         config = get_config()
-        stored_key = decrypt_token(
-            agent.ingest_key_encrypted, config.agent_token_encryption_key
-        )
+        stored_key = decrypt_token(agent.ingest_key_encrypted, config.agent_token_encryption_key)
 
         if not secrets.compare_digest(stored_key, provided_key):
             raise PermissionError("invalid ingest key")
@@ -58,9 +56,7 @@ class IngestService:
                 unresolved.add(event.sender_id)
             if not event.channel_name and event.channel_id:
                 unresolved.add(event.channel_id)
-        user_map, channel_map = self._platform_maps(
-            agent, unresolved_ids=list(unresolved)
-        )
+        user_map, channel_map = self._platform_maps(agent, unresolved_ids=list(unresolved))
 
         messages = []
         for event in batch.messages:
@@ -141,21 +137,14 @@ class IngestService:
             slack = SlackClient(bot_token)
             users = slack.list_users(include_bots=True, include_deleted=True)
             channels = slack.list_channels()
-            user_map = {
-                u["id"]: u["display_name"] or u["real_name"] or u["name"] or u["id"]
-                for u in users
-            }
-            channel_map = {
-                c["id"]: c["name"] for c in channels if c["id"] and c["name"]
-            }
+            user_map = {u["id"]: u["display_name"] or u["real_name"] or u["name"] or u["id"] for u in users}
+            channel_map = {c["id"]: c["name"] for c in channels if c["id"] and c["name"]}
             return user_map, channel_map
         except Exception as e:
             logger.warning("Failed to fetch Slack maps for agent %s: %s", agent.id, e)
             return {}, {}
 
-    def _telegram_maps(
-        self, agent: Agent, unresolved_ids: list[str]
-    ) -> tuple[dict[str, str], dict[str, str]]:
+    def _telegram_maps(self, agent: Agent, unresolved_ids: list[str]) -> tuple[dict[str, str], dict[str, str]]:
         if not unresolved_ids:
             return {}, {}
         config = get_config()

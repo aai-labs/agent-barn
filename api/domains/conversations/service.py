@@ -2,23 +2,25 @@ import logging
 from dataclasses import dataclass
 from uuid import UUID
 
-from fastapi import HTTPException, status
 from injector import inject, singleton
 
 from api.core.config import Config
-from api.domains.agents.models import AgentPlatform
+from api.domains.agents.authorization import AgentAuthorization
+from api.domains.agents.models import Agent, AgentPlatform
 from api.domains.agents.repository import AgentRepository
+from api.domains.auth.models import CurrentUserContext
 from api.domains.conversations.models import (
     AgentChatMessage,
     ConversationChannelRead,
     ConversationMessageRead,
+    ConversationsCursor,
+    ConversationsFilter,
     ConversationThreadRead,
     ConversationThreadsPage,
     ConversationType,
-    ConversationsCursor,
-    ConversationsFilter,
 )
 from api.domains.conversations.repository import ConversationRepository
+from api.domains.rbac.catalog import PermissionKey
 from api.infrastructure.crypto import decrypt_token
 from api.infrastructure.slack.client import SlackClient
 from api.infrastructure.telegram.client import get_chat_display_name
@@ -32,35 +34,29 @@ logger = logging.getLogger(__name__)
 class ConversationService:
     repository: ConversationRepository
     agent_repository: AgentRepository
+    agent_authorization: AgentAuthorization
     config: Config
 
-    def list_channels(
-        self, agent_id: UUID, org_id: UUID
-    ) -> list[ConversationChannelRead]:
-        agent = self.agent_repository.get_active(agent_id, org_id)
-        if not agent:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Agent {agent_id} not found",
-            )
-
-        db_channels = self.repository.distinct_channels(agent_id)
+    def list_channels(self, agent_id: UUID, context: CurrentUserContext) -> list[ConversationChannelRead]:
+        agent = self.agent_authorization.require_visible(context, agent_id)
+        activity_scope = self.agent_authorization.require_action_for_visible(
+            context, agent, PermissionKey.ACTIVITY_READ
+        )
+        db_channels = self.repository.distinct_channels(agent_id, activity_scope)
         merged: dict[str, tuple[str | None, ConversationType]] = {
             cid: (name, ctype) for cid, name, ctype in db_channels
         }
 
-        self._resolve_channel_names(agent_id, merged)
+        self._resolve_channel_names(agent, merged)
 
         return [
-            ConversationChannelRead(
-                channel_id=cid, channel_name=name, conversation_type=ctype
-            )
+            ConversationChannelRead(channel_id=cid, channel_name=name, conversation_type=ctype)
             for cid, (name, ctype) in sorted(merged.items())
         ]
 
     def _resolve_channel_names(
         self,
-        agent_id: UUID,
+        agent: Agent,
         merged: dict[str, tuple[str | None, ConversationType]],
     ) -> None:
         unresolved_channels = [
@@ -75,9 +71,7 @@ class ConversationService:
         ]
         if not unresolved_channels and not unresolved_dms:
             return
-        user_map, channel_map, dm_map = self._platform_maps(
-            agent_id, unresolved_ids=unresolved_channels + unresolved_dms
-        )
+        _, channel_map, dm_map = self._platform_maps(agent, unresolved_ids=unresolved_channels + unresolved_dms)
         for cid in unresolved_channels:
             resolved = channel_map.get(cid)
             if resolved:
@@ -89,18 +83,17 @@ class ConversationService:
 
     def _platform_maps(
         self,
-        agent_id: UUID,
+        agent: Agent,
         unresolved_ids: list[str] | None = None,
     ) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
-        agent = self.agent_repository.get_by_id(agent_id)
-        if not (agent and self.config.agent_token_encryption_key):
+        if not self.config.agent_token_encryption_key:
             return {}, {}, {}
         if agent.platform == AgentPlatform.TEAMS:
             return {}, {}, {}
         if agent.platform == AgentPlatform.TELEGRAM:
-            return self._telegram_maps(agent_id, unresolved_ids or [])
+            return self._telegram_maps(agent.id, unresolved_ids or [])
         try:
-            slack_config = self.agent_repository.get_slack_config(agent_id)
+            slack_config = self.agent_repository.get_slack_config(agent.id)
             if not slack_config:
                 return {}, {}, {}
             bot_token = decrypt_token(
@@ -110,23 +103,16 @@ class ConversationService:
             slack = SlackClient(bot_token)
             users = slack.list_users(include_bots=True, include_deleted=True)
             channels = slack.list_channels()
-            user_map = {
-                u["id"]: u["display_name"] or u["real_name"] or u["name"] or u["id"]
-                for u in users
-            }
-            channel_map = {
-                c["id"]: c["name"] for c in channels if c["id"] and c["name"]
-            }
+            user_map = {u["id"]: u["display_name"] or u["real_name"] or u["name"] or u["id"] for u in users}
+            channel_map = {c["id"]: c["name"] for c in channels if c["id"] and c["name"]}
             try:
                 dm_channels = slack.list_dm_channels()
-                dm_map: dict[str, str] = {
-                    dm["id"]: user_map.get(dm["user"], dm["user"]) for dm in dm_channels
-                }
+                dm_map: dict[str, str] = {dm["id"]: user_map.get(dm["user"], dm["user"]) for dm in dm_channels}
             except Exception:
                 dm_map = {}
             return user_map, channel_map, dm_map
         except Exception as e:
-            logger.warning("Failed to fetch Slack maps for agent %s: %s", agent_id, e)
+            logger.warning("Failed to fetch Slack maps for agent %s: %s", agent.id, e)
             return {}, {}, {}
 
     def _telegram_maps(
@@ -154,27 +140,23 @@ class ConversationService:
     def list_threads(
         self,
         agent_id: UUID,
-        org_id: UUID,
+        context: CurrentUserContext,
         channel_id: str,
         filter: ConversationsFilter,
         cursor: ConversationsCursor,
         page_size: int,
     ) -> ConversationThreadsPage:
-        agent = self.agent_repository.get_active(agent_id, org_id)
-        if not agent:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Agent {agent_id} not found",
-            )
-
+        agent = self.agent_authorization.require_visible(context, agent_id)
+        activity_scope = self.agent_authorization.require_action_for_visible(
+            context, agent, PermissionKey.ACTIVITY_READ
+        )
         messages = self.repository.find_all_channel_messages(
             agent_id=agent_id,
             channel_id=channel_id.upper(),
             filter=filter,
+            authorization_scope=activity_scope,
         )
-        threads, has_more, next_cursor = _group_into_threads(
-            messages, cursor, page_size
-        )
+        threads, has_more, next_cursor = _group_into_threads(messages, cursor, page_size)
         return ConversationThreadsPage(
             threads=threads,
             has_more=has_more,
@@ -221,9 +203,7 @@ def _group_into_threads(
             for nm in null_msgs:
                 if nm.id in used_null_ids:
                     continue
-                if nm.occurred_at > root.occurred_at and (
-                    first_reply_ts is None or nm.occurred_at <= first_reply_ts
-                ):
+                if nm.occurred_at > root.occurred_at and (first_reply_ts is None or nm.occurred_at <= first_reply_ts):
                     extra_null_replies.append(nm)
                     used_null_ids.add(nm.id)
 
@@ -249,8 +229,7 @@ def _group_into_threads(
             raw_threads = [
                 t
                 for t in raw_threads
-                if t[0].occurred_at < before_ts
-                or (t[0].occurred_at == before_ts and t[0].id < before_id)
+                if t[0].occurred_at < before_ts or (t[0].occurred_at == before_ts and t[0].id < before_id)
             ]
         else:
             raw_threads = [t for t in raw_threads if t[0].occurred_at < before_ts]

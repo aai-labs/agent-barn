@@ -46,9 +46,7 @@ def upgrade() -> None:
         sa.Column("app_token_encrypted", sa.Text(), nullable=False),
         sa.Column("channel_ids", sa.JSON(), nullable=False, server_default="[]"),
         sa.Column("dm_user_ids", sa.JSON(), nullable=False, server_default="[]"),
-        sa.Column(
-            "group_policy", sa.String(), nullable=False, server_default="allowlist"
-        ),
+        sa.Column("group_policy", sa.String(), nullable=False, server_default="allowlist"),
         sa.Column("dm_policy", sa.String(), nullable=False, server_default="off"),
         sa.ForeignKeyConstraint(["agent_id"], ["agent.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
@@ -104,15 +102,11 @@ def downgrade() -> None:
     # Re-add Slack columns to agent
     op.add_column(
         "agent",
-        sa.Column(
-            "slack_bot_token_encrypted", sa.Text(), nullable=False, server_default=""
-        ),
+        sa.Column("slack_bot_token_encrypted", sa.Text(), nullable=False, server_default=""),
     )
     op.add_column(
         "agent",
-        sa.Column(
-            "slack_app_token_encrypted", sa.Text(), nullable=False, server_default=""
-        ),
+        sa.Column("slack_app_token_encrypted", sa.Text(), nullable=False, server_default=""),
     )
     op.add_column(
         "agent",
@@ -124,9 +118,7 @@ def downgrade() -> None:
     )
     op.add_column(
         "agent",
-        sa.Column(
-            "slack_group_policy", sa.String(), nullable=True, server_default="allowlist"
-        ),
+        sa.Column("slack_group_policy", sa.String(), nullable=True, server_default="allowlist"),
     )
     op.add_column(
         "agent",

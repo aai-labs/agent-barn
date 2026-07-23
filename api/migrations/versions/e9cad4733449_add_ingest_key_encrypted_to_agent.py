@@ -20,9 +20,7 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "agent", sa.Column("ingest_key_encrypted", sa.String(), nullable=True)
-    )
+    op.add_column("agent", sa.Column("ingest_key_encrypted", sa.String(), nullable=True))
 
 
 def downgrade() -> None:

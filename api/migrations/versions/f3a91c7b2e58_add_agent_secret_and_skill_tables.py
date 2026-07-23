@@ -30,9 +30,7 @@ def upgrade() -> None:
         sa.Column("content", sa.Text(), nullable=False),
         sa.ForeignKeyConstraint(["agent_id"], ["agent.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint(
-            "agent_id", "provider", name="uq_agent_secret_agent_provider"
-        ),
+        sa.UniqueConstraint("agent_id", "provider", name="uq_agent_secret_agent_provider"),
         sa.CheckConstraint(
             "provider IN ('github', 'jira', 'confluence', 'bitbucket', "
             "'gmail', 'google_calendar', 'zoho_mail', 'zoho_calendar')",
@@ -51,9 +49,7 @@ def upgrade() -> None:
         sa.Column("skill_content", sa.Text(), nullable=False),
         sa.ForeignKeyConstraint(["agent_id"], ["agent.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint(
-            "agent_id", "skill_file_path", name="uq_agent_skill_agent_file_path"
-        ),
+        sa.UniqueConstraint("agent_id", "skill_file_path", name="uq_agent_skill_agent_file_path"),
         sa.CheckConstraint(
             "source IN ('aai_cli', 'custom')",
             name="ck_agent_skill_source",

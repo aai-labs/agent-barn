@@ -45,9 +45,7 @@ class Config(BaseSettings):
     agent_image_pull_secret: str = ""
     agent_default_model: str = "litellm/openrouter/z-ai/glm-5.2"
     api_external_url: str = ""
-    ingest_base_url: str = (
-        "http://agentfarm-api.agent-farm.svc.cluster.local:8001/ingest/v1"
-    )
+    ingest_base_url: str = "http://agentfarm-api.agent-farm.svc.cluster.local:8001/ingest/v1"
     skip_slack_token_validation: bool = False
     skip_telegram_token_validation: bool = False
     slack_directory_cache_ttl_seconds: int = 600
@@ -73,10 +71,7 @@ class Config(BaseSettings):
 
     @property
     def is_email_delivery_enabled(self) -> bool:
-        return bool(
-            (self.email_server_credential or "").strip()
-            and (self.email_smtp_server or "").strip()
-        )
+        return bool((self.email_server_credential or "").strip() and (self.email_smtp_server or "").strip())
 
 
 @lru_cache

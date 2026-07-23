@@ -68,6 +68,17 @@ Prefer `204` over ad hoc success objects such as `{"status": "ok"}`.
 
 Before changing tenant ownership, authorization, or cross-domain relationships, follow the relevant route in `../INDEX.md`.
 
+## Authorization enforcement
+
+Any code that lets a user access, list, or mutate an Agent or a subordinate resource (conversations, tool calls, activity, logs, costs, Secrets, Skills, configuration) MUST enforce the permission-backed RBAC model in `../features/rbac/IMPLEMENTATION-BRIEF.md`, not just tenant isolation:
+
+- Visibility MUST be enforced in the repository query (accessible-Agent join), never by fetching then filtering in the service.
+- Mutations MUST check the actor's effective Permission through Organization authority or Agent Access, resolved fresh per request; never trust a cached role name or a client-supplied flag.
+- New subordinate-resource endpoints MUST reuse the existing accessible-Agent query pattern rather than writing an independent visibility check.
+- Use `404` for absent/inaccessible resources and `403` for visible-but-unauthorized operations, per the brief's HTTP semantics.
+
+This applies even when the change looks unrelated to RBAC on its surface (e.g. a new activity or cost endpoint) — new resource surfaces are a common place for authorization gaps to slip in silently.
+
 ## API feature workflow
 
 1. Update domain and API models.
@@ -94,7 +105,7 @@ Review in this order:
 
 1. Correctness and regressions.
 2. Data-contract and schema safety.
-3. Tenant isolation, authentication, and authorization.
+3. Tenant isolation, authentication, and authorization, including Agent Access/Permission enforcement per `../features/rbac/IMPLEMENTATION-BRIEF.md` for any Agent or subordinate-resource surface, even when the diff is not framed as an RBAC change.
 4. Transaction and external-system failure behavior.
 5. Test coverage gaps.
 6. Maintainability and style.

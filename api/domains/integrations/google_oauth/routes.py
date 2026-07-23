@@ -70,16 +70,12 @@ def _encode_state(config: Config) -> str:
         "nonce": uuid.uuid4().hex,
         "exp": int(time.time()) + _STATE_TTL_SECONDS,
     }
-    return jwt.encode(
-        payload, config.secret_signing_key, algorithm=JWT_ENCODING_ALGORITHM
-    )
+    return jwt.encode(payload, config.secret_signing_key, algorithm=JWT_ENCODING_ALGORITHM)
 
 
 def _state_is_valid(state: str, config: Config) -> bool:
     try:
-        payload = jwt.decode(
-            state, config.secret_signing_key, algorithms=[JWT_ENCODING_ALGORITHM]
-        )
+        payload = jwt.decode(state, config.secret_signing_key, algorithms=[JWT_ENCODING_ALGORITHM])
     except InvalidTokenError:
         return False
     return payload.get("typ") == _STATE_TYPE
@@ -114,12 +110,7 @@ def _post_message_html(
     # early and inject arbitrary markup/script into the page. Escape "<", ">", "&" as unicode
     # escapes so the JSON stays inert HTML text while still parsing as the same JS value.
     def _script_safe(value: object) -> str:
-        return (
-            json.dumps(value)
-            .replace("<", "\\u003c")
-            .replace(">", "\\u003e")
-            .replace("&", "\\u0026")
-        )
+        return json.dumps(value).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
 
     html = f"""<!doctype html>
 <html lang="en">
@@ -158,9 +149,7 @@ def google_authorize_url(
     resolved_client_id = client_id or config.google_cloud_client_id
     # For the app-owned client, also require its secret to be configured so we fail
     # before opening consent. A custom client carries its own secret to /token.
-    if not resolved_client_id or (
-        not client_id and not config.google_cloud_client_secret
-    ):
+    if not resolved_client_id or (not client_id and not config.google_cloud_client_secret):
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Google OAuth is not configured on this server.",
@@ -191,17 +180,11 @@ def google_callback(
     never has to transit this unauthenticated redirect.
     """
     if error:
-        return _post_message_html(
-            config, error=f"Google authorization was denied or failed ({error})."
-        )
+        return _post_message_html(config, error=f"Google authorization was denied or failed ({error}).")
     if not state or not _state_is_valid(state, config):
-        return _post_message_html(
-            config, error="Invalid or expired authorization state. Please try again."
-        )
+        return _post_message_html(config, error="Invalid or expired authorization state. Please try again.")
     if not code:
-        return _post_message_html(
-            config, error="Missing authorization code from Google."
-        )
+        return _post_message_html(config, error="Missing authorization code from Google.")
     return _post_message_html(config, code=code)
 
 

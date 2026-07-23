@@ -11,9 +11,7 @@ _REQUIRED_SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
 
 def validate_gmail(content: GmailContent) -> IntegrationValidationResult:
     if not content.client_id or not content.client_secret:
-        return IntegrationValidationResult(
-            valid=False, error="Google OAuth is not configured on this server."
-        )
+        return IntegrationValidationResult(valid=False, error="Google OAuth is not configured on this server.")
 
     try:
         resp = httpx.post(
@@ -27,9 +25,7 @@ def validate_gmail(content: GmailContent) -> IntegrationValidationResult:
             timeout=_TIMEOUT,
         )
     except Exception as exc:
-        return IntegrationValidationResult(
-            valid=False, error=f"Could not reach Google: {exc}"
-        )
+        return IntegrationValidationResult(valid=False, error=f"Could not reach Google: {exc}")
 
     if resp.status_code != 200:
         try:
@@ -39,30 +35,21 @@ def validate_gmail(content: GmailContent) -> IntegrationValidationResult:
         if error_code == "invalid_grant":
             return IntegrationValidationResult(
                 valid=False,
-                error=(
-                    "Refresh token is invalid, expired, or revoked. "
-                    "Reconnect via Authenticate with Google."
-                ),
+                error=("Refresh token is invalid, expired, or revoked. Reconnect via Authenticate with Google."),
             )
-        return IntegrationValidationResult(
-            valid=False, error=f"Google returned unexpected status {resp.status_code}"
-        )
+        return IntegrationValidationResult(valid=False, error=f"Google returned unexpected status {resp.status_code}")
 
     token_data = resp.json()
     access_token = token_data.get("access_token")
     if not access_token:
-        return IntegrationValidationResult(
-            valid=False, error="Google did not return an access token"
-        )
+        return IntegrationValidationResult(valid=False, error="Google did not return an access token")
 
     missing: list[str] = []
     granted_scope = token_data.get("scope", "")
     if granted_scope and _REQUIRED_SCOPE not in granted_scope.split():
         missing.append("gmail.readonly (read-only Gmail access)")
 
-    return IntegrationValidationResult(
-        valid=True, identity=_fetch_identity(access_token), missing_scopes=missing
-    )
+    return IntegrationValidationResult(valid=True, identity=_fetch_identity(access_token), missing_scopes=missing)
 
 
 def _fetch_identity(access_token: str) -> str | None:

@@ -11,9 +11,7 @@ class CredentialsException(HTTPException):
 
 
 class ForbiddenException(HTTPException):
-    def __init__(
-        self, detail: str = "You do not have permission to access this resource."
-    ):
+    def __init__(self, detail: str = "You do not have permission to access this resource."):
         super().__init__(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=detail,

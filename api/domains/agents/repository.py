@@ -3,11 +3,13 @@ from datetime import datetime
 from uuid import UUID
 
 from injector import inject, singleton
-from sqlalchemy import func
+from sqlalchemy import exists, func
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
 from api.domains.agents.models import (
     Agent,
+    AgentAccess,
     AgentFilter,
     AgentLogSnapshot,
     AgentSecret,
@@ -17,8 +19,38 @@ from api.domains.agents.models import (
     AgentTelegramConfig,
     SecretProvider,
 )
+from api.domains.rbac.catalog import (
+    AGENT_OWNER_ROLE_ID,
+    PERMISSION_ID_BY_KEY,
+    PermissionKey,
+)
+from api.domains.rbac.models import AgentAccessRolePermission, Permission
+from api.domains.rbac.policy import AuthorizationScope
+from api.domains.users.organization_users.models import OrganizationUser
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.infrastructure.shared.models import Pagination
+
+
+def agent_scope_predicates(authorization_scope: AuthorizationScope, *, include_deleted: bool = False):
+    """SQL predicates for implicit Organization or explicit Agent visibility."""
+    predicates = [
+        col(Agent.organization_id) == authorization_scope.organization_id,
+    ]
+    if not include_deleted:
+        predicates.append(col(Agent.deleted_at).is_(None))
+    if authorization_scope.membership_id is not None:
+        if authorization_scope.permission is None:
+            raise ValueError("Explicit Agent visibility requires a Permission")
+        predicates.append(
+            exists().where(
+                col(AgentAccess.agent_id) == col(Agent.id),
+                col(AgentAccess.organization_id) == authorization_scope.organization_id,
+                col(AgentAccess.membership_id) == authorization_scope.membership_id,
+                col(AgentAccessRolePermission.role_id) == col(AgentAccess.access_role_id),
+                col(AgentAccessRolePermission.permission_id) == PERMISSION_ID_BY_KEY[authorization_scope.permission],
+            )
+        )
+    return tuple(predicates)
 
 
 @inject
@@ -29,20 +61,25 @@ class AgentRepository:
 
     def get_by_id(self, agent_id: UUID) -> Agent | None:
         with Session(self.delegate.engine) as session:
-            query = (
-                select(Agent)
-                .where(col(Agent.id) == agent_id)
-                .where(col(Agent.deleted_at).is_(None))
+            query = select(Agent).where(col(Agent.id) == agent_id).where(col(Agent.deleted_at).is_(None))
+            return session.exec(query).first()
+
+    def get_active_in_scope(self, agent_id: UUID, authorization_scope: AuthorizationScope) -> Agent | None:
+        with Session(self.delegate.engine) as session:
+            query = select(Agent).where(
+                col(Agent.id) == agent_id,
+                *agent_scope_predicates(authorization_scope),
             )
             return session.exec(query).first()
 
-    def get_active(self, agent_id: UUID, org_id: UUID) -> Agent | None:
+    def get_deleted_in_scope(self, agent_id: UUID, authorization_scope: AuthorizationScope) -> Agent | None:
+        if not authorization_scope.has_organization_visibility:
+            return None
         with Session(self.delegate.engine) as session:
-            query = (
-                select(Agent)
-                .where(col(Agent.id) == agent_id)
-                .where(col(Agent.organization_id) == org_id)
-                .where(col(Agent.deleted_at).is_(None))
+            query = select(Agent).where(
+                col(Agent.id) == agent_id,
+                col(Agent.deleted_at).is_not(None),
+                *agent_scope_predicates(authorization_scope, include_deleted=True),
             )
             return session.exec(query).first()
 
@@ -56,52 +93,193 @@ class AgentRepository:
             )
             return session.scalar(count_query) or 0
 
-    def get_deleted(self, agent_id: UUID, org_id: UUID) -> Agent | None:
-        with Session(self.delegate.engine) as session:
-            query = (
-                select(Agent)
-                .where(col(Agent.id) == agent_id)
-                .where(col(Agent.organization_id) == org_id)
-                .where(col(Agent.deleted_at).is_not(None))
-            )
-            return session.exec(query).first()
-
     def find_all_active(
         self,
-        org_id: UUID,
+        authorization_scope: AuthorizationScope,
         agent_filter: AgentFilter,
         pagination: Pagination,
     ) -> tuple[list[Agent], int]:
         with Session(self.delegate.engine) as session:
-            query = (
-                select(Agent)
-                .where(col(Agent.organization_id) == org_id)
-                .where(col(Agent.deleted_at).is_(None))
-            )
+            visibility = agent_scope_predicates(authorization_scope)
+            query = select(Agent).where(*visibility)
+            count_query = select(func.count()).select_from(Agent).where(*visibility)
 
             if agent_filter.status is not None:
-                query = query.where(col(Agent.status) == agent_filter.status)
+                status_filter = col(Agent.status) == agent_filter.status
+                query = query.where(status_filter)
+                count_query = count_query.where(status_filter)
 
-            query = query.order_by(col(Agent.created_at).asc())
-
-            count_query = (
-                select(func.count())
-                .select_from(Agent)
-                .where(col(Agent.organization_id) == org_id)
-                .where(col(Agent.deleted_at).is_(None))
-            )
-            if agent_filter.status is not None:
-                count_query = count_query.where(
-                    col(Agent.status) == agent_filter.status
-                )
             total = session.scalar(count_query) or 0
+            query = (
+                query.order_by(col(Agent.created_at).asc())
+                .offset((pagination.page - 1) * pagination.size)
+                .limit(pagination.size)
+            )
+            return list(session.exec(query).all()), total
 
-            query = query.offset((pagination.page - 1) * pagination.size).limit(
-                pagination.size
+    def find_agent_permissions(
+        self,
+        membership_id: UUID,
+        organization_id: UUID,
+        agent_ids: list[UUID],
+    ) -> dict[UUID, set[PermissionKey]]:
+        if not agent_ids:
+            return {}
+        with Session(self.delegate.engine) as session:
+            rows = session.exec(
+                select(AgentAccess.agent_id, Permission.key)
+                .join(
+                    AgentAccessRolePermission,
+                    col(AgentAccessRolePermission.role_id) == col(AgentAccess.access_role_id),
+                )
+                .join(
+                    Permission,
+                    col(Permission.id) == col(AgentAccessRolePermission.permission_id),
+                )
+                .where(
+                    col(AgentAccess.membership_id) == membership_id,
+                    col(AgentAccess.organization_id) == organization_id,
+                    col(AgentAccess.agent_id).in_(agent_ids),
+                )
+            ).all()
+        permissions: dict[UUID, set[PermissionKey]] = {}
+        for agent_id, key in rows:
+            permissions.setdefault(agent_id, set()).add(PermissionKey(key))
+        return permissions
+
+    def create_with_creator_access(self, agent: Agent, membership_id: UUID | None) -> Agent:
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            session.add(agent)
+            session.flush()
+            if membership_id is not None:
+                session.add(
+                    AgentAccess(
+                        organization_id=agent.organization_id,
+                        membership_id=membership_id,
+                        agent_id=agent.id,
+                        access_role_id=AGENT_OWNER_ROLE_ID,
+                    )
+                )
+            session.commit()
+            session.refresh(agent)
+            return agent
+
+    def find_access_assignments(self, agent_id: UUID, organization_id: UUID) -> list[AgentAccess]:
+        with Session(self.delegate.engine) as session:
+            return list(
+                session.exec(
+                    select(AgentAccess).where(
+                        col(AgentAccess.agent_id) == agent_id,
+                        col(AgentAccess.organization_id) == organization_id,
+                    )
+                ).all()
             )
 
-            agents = list(session.exec(query).all())
-            return agents, total
+    def find_access_membership_ids(self, agent_id: UUID, organization_id: UUID) -> set[UUID]:
+        return {access.membership_id for access in self.find_access_assignments(agent_id, organization_id)}
+
+    def grant_access(
+        self,
+        agent_id: UUID,
+        membership_id: UUID,
+        organization_id: UUID,
+        access_role_id: UUID,
+    ) -> tuple[AgentAccess, bool] | None:
+        """Idempotently add one same-Organization Agent Access relationship.
+
+        ``None`` means the active Agent or Membership disappeared after service
+        validation. Row locks keep deletion/soft-deletion from racing the insert.
+        """
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            agent_exists = session.exec(
+                select(Agent.id)
+                .where(
+                    col(Agent.id) == agent_id,
+                    col(Agent.organization_id) == organization_id,
+                    col(Agent.deleted_at).is_(None),
+                )
+                .with_for_update()
+            ).first()
+            membership_exists = session.exec(
+                select(OrganizationUser.id)
+                .where(
+                    col(OrganizationUser.id) == membership_id,
+                    col(OrganizationUser.organization_id) == organization_id,
+                )
+                .with_for_update()
+            ).first()
+            if agent_exists is None or membership_exists is None:
+                return None
+
+            query = select(AgentAccess).where(
+                col(AgentAccess.agent_id) == agent_id,
+                col(AgentAccess.membership_id) == membership_id,
+                col(AgentAccess.organization_id) == organization_id,
+            )
+            existing = session.exec(query).first()
+            if existing is not None:
+                return existing, False
+
+            access = AgentAccess(
+                organization_id=organization_id,
+                membership_id=membership_id,
+                agent_id=agent_id,
+                access_role_id=access_role_id,
+            )
+            session.add(access)
+            try:
+                session.commit()
+            except IntegrityError:
+                # A concurrent identical grant is still an idempotent success. Other
+                # constraint failures remain errors after checking the unique pair.
+                session.rollback()
+                existing = session.exec(query).first()
+                if existing is not None:
+                    return existing, False
+                raise
+            session.refresh(access)
+            return access, True
+
+    def change_access_role(
+        self,
+        agent_id: UUID,
+        membership_id: UUID,
+        organization_id: UUID,
+        access_role_id: UUID,
+    ) -> AgentAccess | None:
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            access = session.exec(
+                select(AgentAccess)
+                .where(
+                    col(AgentAccess.agent_id) == agent_id,
+                    col(AgentAccess.membership_id) == membership_id,
+                    col(AgentAccess.organization_id) == organization_id,
+                )
+                .with_for_update()
+            ).first()
+            if access is None:
+                return None
+            access.access_role_id = access_role_id
+            session.add(access)
+            session.commit()
+            return access
+
+    def revoke_access(self, agent_id: UUID, membership_id: UUID, organization_id: UUID) -> bool:
+        with Session(self.delegate.engine) as session:
+            access = session.exec(
+                select(AgentAccess)
+                .where(
+                    col(AgentAccess.agent_id) == agent_id,
+                    col(AgentAccess.membership_id) == membership_id,
+                    col(AgentAccess.organization_id) == organization_id,
+                )
+                .with_for_update()
+            ).first()
+            if access is None:
+                return False
+            session.delete(access)
+            session.commit()
+            return True
 
     def find_all_active_for_org(self, org_id: UUID) -> list[Agent]:
         with Session(self.delegate.engine) as session:
@@ -116,83 +294,61 @@ class AgentRepository:
     def find_all_for_org(self, org_id: UUID) -> list[Agent]:
         """Return all agents for an org — both live and deleted."""
         with Session(self.delegate.engine) as session:
-            query = (
-                select(Agent)
-                .where(col(Agent.organization_id) == org_id)
-                .order_by(col(Agent.created_at).asc())
-            )
+            query = select(Agent).where(col(Agent.organization_id) == org_id).order_by(col(Agent.created_at).asc())
             return list(session.exec(query).all())
 
     # --- Slack config ---
 
     def get_slack_config(self, agent_id: UUID) -> AgentSlackConfig | None:
         with Session(self.delegate.engine) as session:
-            query = select(AgentSlackConfig).where(
-                col(AgentSlackConfig.agent_id) == agent_id
-            )
+            query = select(AgentSlackConfig).where(col(AgentSlackConfig.agent_id) == agent_id)
             return session.exec(query).first()
 
     def save_slack_config(self, config: AgentSlackConfig) -> AgentSlackConfig:
         self.delegate.save(config)
         return config
 
-    def get_slack_configs_for_agents(
-        self, agent_ids: list[UUID]
-    ) -> dict[UUID, AgentSlackConfig]:
+    def get_slack_configs_for_agents(self, agent_ids: list[UUID]) -> dict[UUID, AgentSlackConfig]:
         if not agent_ids:
             return {}
         with Session(self.delegate.engine) as session:
-            query = select(AgentSlackConfig).where(
-                col(AgentSlackConfig.agent_id).in_(agent_ids)
-            )
+            query = select(AgentSlackConfig).where(col(AgentSlackConfig.agent_id).in_(agent_ids))
             return {c.agent_id: c for c in session.exec(query).all()}
 
     # --- Teams config ---
 
     def get_teams_config(self, agent_id: UUID) -> AgentTeamsConfig | None:
         with Session(self.delegate.engine) as session:
-            query = select(AgentTeamsConfig).where(
-                col(AgentTeamsConfig.agent_id) == agent_id
-            )
+            query = select(AgentTeamsConfig).where(col(AgentTeamsConfig.agent_id) == agent_id)
             return session.exec(query).first()
 
     def save_teams_config(self, config: AgentTeamsConfig) -> AgentTeamsConfig:
         self.delegate.save(config)
         return config
 
-    def get_teams_configs_for_agents(
-        self, agent_ids: list[UUID]
-    ) -> dict[UUID, AgentTeamsConfig]:
+    def get_teams_configs_for_agents(self, agent_ids: list[UUID]) -> dict[UUID, AgentTeamsConfig]:
         if not agent_ids:
             return {}
         with Session(self.delegate.engine) as session:
-            query = select(AgentTeamsConfig).where(
-                col(AgentTeamsConfig.agent_id).in_(agent_ids)
-            )
+            query = select(AgentTeamsConfig).where(col(AgentTeamsConfig.agent_id).in_(agent_ids))
             return {c.agent_id: c for c in session.exec(query).all()}
 
     # --- Telegram config ---
 
     def get_telegram_config(self, agent_id: UUID) -> AgentTelegramConfig | None:
         with Session(self.delegate.engine) as session:
-            query = select(AgentTelegramConfig).where(
-                col(AgentTelegramConfig.agent_id) == agent_id
-            )
+            query = select(AgentTelegramConfig).where(col(AgentTelegramConfig.agent_id) == agent_id)
             return session.exec(query).first()
 
     def save_telegram_config(self, config: AgentTelegramConfig) -> AgentTelegramConfig:
         self.delegate.save(config)
         return config
 
-    def get_telegram_configs_for_agents(
-        self, agent_ids: list[UUID]
-    ) -> dict[UUID, AgentTelegramConfig]:
+    def get_telegram_configs_for_agents(self, agent_ids: list[UUID]) -> dict[UUID, AgentTelegramConfig]:
         if not agent_ids:
             return {}
         with Session(self.delegate.engine) as session:
-            query = select(AgentTelegramConfig).where(
-                col(AgentTelegramConfig.agent_id).in_(agent_ids)
-            )
+            query = select(AgentTelegramConfig).where(col(AgentTelegramConfig.agent_id).in_(agent_ids))
             return {c.agent_id: c for c in session.exec(query).all()}
 
     # --- Integration secrets ---
@@ -201,9 +357,7 @@ class AgentRepository:
         self.delegate.save(secret)
         return secret
 
-    def get_secret(
-        self, agent_id: UUID, provider: SecretProvider
-    ) -> AgentSecret | None:
+    def get_secret(self, agent_id: UUID, provider: SecretProvider) -> AgentSecret | None:
         with Session(self.delegate.engine) as session:
             query = (
                 select(AgentSecret)
@@ -217,9 +371,7 @@ class AgentRepository:
             query = select(AgentSecret).where(col(AgentSecret.agent_id) == agent_id)
             return list(session.exec(query).all())
 
-    def get_secrets_for_agents(
-        self, agent_ids: list[UUID]
-    ) -> dict[UUID, list[AgentSecret]]:
+    def get_secrets_for_agents(self, agent_ids: list[UUID]) -> dict[UUID, list[AgentSecret]]:
         if not agent_ids:
             return {}
         with Session(self.delegate.engine) as session:
@@ -289,9 +441,7 @@ class AgentRepository:
             )
             return session.exec(query).first()
 
-    def get_snapshot_by_id(
-        self, agent_id: UUID, snapshot_id: UUID
-    ) -> AgentLogSnapshot | None:
+    def get_snapshot_by_id(self, agent_id: UUID, snapshot_id: UUID) -> AgentLogSnapshot | None:
         with Session(self.delegate.engine) as session:
             query = select(AgentLogSnapshot).where(
                 col(AgentLogSnapshot.agent_id) == agent_id,
@@ -299,9 +449,7 @@ class AgentRepository:
             )
             return session.exec(query).first()
 
-    def get_previous_snapshot(
-        self, agent_id: UUID, before: datetime
-    ) -> AgentLogSnapshot | None:
+    def get_previous_snapshot(self, agent_id: UUID, before: datetime) -> AgentLogSnapshot | None:
         with Session(self.delegate.engine) as session:
             query = (
                 select(AgentLogSnapshot)

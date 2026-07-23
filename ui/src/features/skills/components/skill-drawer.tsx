@@ -20,6 +20,7 @@ type DrawerMode =
 
 interface SkillDrawerProps {
   mode: DrawerMode;
+  canManage: boolean;
   onClose: () => void;
 }
 
@@ -38,12 +39,12 @@ export function SkillSourceBadge({ source }: { source: string }) {
   );
 }
 
-export function SkillDrawer({ mode, onClose }: SkillDrawerProps) {
+export function SkillDrawer({ mode, canManage, onClose }: SkillDrawerProps) {
   const isCreate = mode.kind === "create";
   const skill = mode.kind === "view" ? mode.skill : null;
   const isCustom = skill?.source === "custom";
 
-  const [editing, setEditing] = useState(isCreate);
+  const [editing, setEditing] = useState(isCreate && canManage);
   const [confirming, setConfirming] = useState(false);
 
   const [name, setName] = useState(skill?.name ?? "");
@@ -68,6 +69,7 @@ export function SkillDrawer({ mode, onClose }: SkillDrawerProps) {
   }
 
   function handleStartEdit() {
+    if (!canManage) return;
     setEditing(true);
   }
 
@@ -354,7 +356,7 @@ export function SkillDrawer({ mode, onClose }: SkillDrawerProps) {
                 </div>
               )}
             </div>
-          ) : isCustom ? (
+          ) : isCustom && canManage ? (
             <>
               <button
                 className="af-btn af-btn-ghost af-btn-sm"
