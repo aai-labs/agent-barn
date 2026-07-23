@@ -422,11 +422,11 @@ class AgentService:
             agent,
             slack_config,
             teams_config,
+            telegram_config,
             secrets,
             skills,
             required_ids,
             allowed_actions,
-            telegram_config,
         )
 
     def _get_bot_display_name(
@@ -624,11 +624,11 @@ class AgentService:
             agent,
             slack_config,
             teams_config,
+            telegram_config,
             secrets,
             skills_to_assign,
             required_ids,
             allowed_actions,
-            telegram_config,
         )
 
     def get_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
