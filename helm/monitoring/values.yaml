@@ -36,6 +36,10 @@ kube-prometheus-stack:
 
   prometheus:
     prometheusSpec:
+      # Single replica everywhere (also pinned for Grafana and Alertmanager):
+      # lean single-cluster setup, and it keeps upstream default changes from
+      # silently scaling the stack on a dependency bump.
+      replicas: 1
       retention: 15d
       # Pick up every ServiceMonitor/PrometheusRule in the namespace instead
       # of only those carrying the Helm release label.
@@ -62,6 +66,7 @@ kube-prometheus-stack:
 
   alertmanager:
     alertmanagerSpec:
+      replicas: 1
       retention: 120h
     # Rendered into a Secret by the chart; slack_api_url is injected by
     # helmfile from SLACK_ALERTS_WEBHOOK_URL and must never be committed.
@@ -97,6 +102,7 @@ kube-prometheus-stack:
                 {{ end }}
 
   grafana:
+    replicas: 1
     # adminPassword is injected by helmfile from GRAFANA_ADMIN_PASSWORD.
     adminPassword: ""
     defaultDashboardsEnabled: false
