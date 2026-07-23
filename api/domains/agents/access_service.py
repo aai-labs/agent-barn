@@ -40,9 +40,7 @@ class AgentAccessService:
         organization_id = context.require_current_user_organization().organization_id
         return [
             self._role_to_read(role, permissions)
-            for role, permissions in self.rbac_repository.list_agent_access_roles(
-                organization_id
-            )
+            for role, permissions in self.rbac_repository.list_agent_access_roles(organization_id)
         ]
 
     def get_access_settings(
@@ -129,20 +127,14 @@ class AgentAccessService:
     def _assigned_members_for_agent(self, agent: Agent) -> list[AgentAccessMemberRead]:
         assignments = {
             access.membership_id: access
-            for access in self.repository.find_access_assignments(
-                agent.id, agent.organization_id
-            )
+            for access in self.repository.find_access_assignments(agent.id, agent.organization_id)
         }
         roles = {
             role.id: self._role_to_read(role, permissions)
-            for role, permissions in self.rbac_repository.list_agent_access_roles(
-                agent.organization_id
-            )
+            for role, permissions in self.rbac_repository.list_agent_access_roles(agent.organization_id)
         }
         result = []
-        for membership, user in self.membership_repository.get_members_with_users(
-            agent.organization_id
-        ):
+        for membership, user in self.membership_repository.get_members_with_users(agent.organization_id):
             access = assignments.get(membership.id)
             if access is None:
                 continue
@@ -162,9 +154,7 @@ class AgentAccessService:
             detail="You don't have permission to manage access to this Agent.",
         )
 
-    def _require_access_role(
-        self, role_id: UUID, organization_id: UUID
-    ) -> tuple[AgentAccessRole, AgentAccessRoleRead]:
+    def _require_access_role(self, role_id: UUID, organization_id: UUID) -> tuple[AgentAccessRole, AgentAccessRoleRead]:
         role = self.rbac_repository.get_agent_access_role(role_id, organization_id)
         if role is None:
             raise HTTPException(
@@ -174,9 +164,7 @@ class AgentAccessService:
         permissions = self.rbac_repository.get_agent_access_role_permissions(role.id)
         return role, self._role_to_read(role, permissions)
 
-    def _require_accepted_member(
-        self, user_id: UUID, organization_id: UUID
-    ) -> tuple[OrganizationUser, User]:
+    def _require_accepted_member(self, user_id: UUID, organization_id: UUID) -> tuple[OrganizationUser, User]:
         membership, user = self._require_target_member(user_id, organization_id)
         if membership.role != OrganizationRole.MEMBER:
             raise HTTPException(
@@ -190,12 +178,8 @@ class AgentAccessService:
             )
         return membership, user
 
-    def _require_target_member(
-        self, user_id: UUID, organization_id: UUID
-    ) -> tuple[OrganizationUser, User]:
-        result = self.membership_repository.get_member_with_user(
-            user_id, organization_id
-        )
+    def _require_target_member(self, user_id: UUID, organization_id: UUID) -> tuple[OrganizationUser, User]:
+        result = self.membership_repository.get_member_with_user(user_id, organization_id)
         if result is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -204,9 +188,7 @@ class AgentAccessService:
         return result
 
     @staticmethod
-    def _role_to_read(
-        role: AgentAccessRole, permissions: set[PermissionKey]
-    ) -> AgentAccessRoleRead:
+    def _role_to_read(role: AgentAccessRole, permissions: set[PermissionKey]) -> AgentAccessRoleRead:
         return AgentAccessRoleRead(
             id=role.id,
             name=role.name,
@@ -215,9 +197,7 @@ class AgentAccessService:
         )
 
     @staticmethod
-    def _to_candidate(
-        agent: Agent, membership: OrganizationUser, user: User
-    ) -> AgentAccessCandidateRead:
+    def _to_candidate(agent: Agent, membership: OrganizationUser, user: User) -> AgentAccessCandidateRead:
         return AgentAccessCandidateRead(
             user_id=user.id,
             email=str(user.email),

@@ -81,11 +81,7 @@ def test_organization_role_permission_matrix_is_exact():
         },
     }
     actual = {
-        role: {
-            permission
-            for permission in PermissionKey
-            if organization_role_allows(role, permission)
-        }
+        role: {permission for permission in PermissionKey if organization_role_allows(role, permission)}
         for role in OrganizationRole
     }
 
@@ -137,9 +133,7 @@ def test_resolve_denies_missing_permission_by_default():
     policy = PermissionPolicy()
 
     assert_that(
-        policy.resolve(
-            context, membership.organization_id, PermissionKey.MEMBERSHIP_READ
-        ),
+        policy.resolve(context, membership.organization_id, PermissionKey.MEMBERSHIP_READ),
         none(),
     )
     assert_that(
@@ -185,9 +179,7 @@ def test_resolve_rejects_target_outside_active_organization():
     context, _ = _context()
     policy = PermissionPolicy()
 
-    assert_that(
-        policy.resolve(context, uuid7(), PermissionKey.ORGANIZATION_READ), none()
-    )
+    assert_that(policy.resolve(context, uuid7(), PermissionKey.ORGANIZATION_READ), none())
 
 
 def test_resolve_requires_active_organization_context_even_for_superuser():
@@ -195,9 +187,7 @@ def test_resolve_requires_active_organization_context_even_for_superuser():
     context = CurrentUserContext(user=_user(is_superuser=True))
 
     assert_that(
-        calling(policy.resolve).with_args(
-            context, uuid7(), PermissionKey.ORGANIZATION_READ
-        ),
+        calling(policy.resolve).with_args(context, uuid7(), PermissionKey.ORGANIZATION_READ),
         raises(ForbiddenException, matching=has_properties(status_code=403)),
     )
 

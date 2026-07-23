@@ -19,9 +19,7 @@ from api.domains.users.organization_users.service import OrganizationUserService
 member_router = APIRouter(prefix="/organizations", tags=["organization-members"])
 
 
-@member_router.get(
-    "/{organization_id}/members", response_model=list[OrganizationMemberRead]
-)
+@member_router.get("/{organization_id}/members", response_model=list[OrganizationMemberRead])
 def list_members(
     organization_id: UUID,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
@@ -46,9 +44,7 @@ def add_member(
     return MemberInviteResult(member=member, invite_link=invite_link)
 
 
-@member_router.patch(
-    "/{organization_id}/members/{user_id}", response_model=OrganizationMemberRead
-)
+@member_router.patch("/{organization_id}/members/{user_id}", response_model=OrganizationMemberRead)
 def change_member_role(
     organization_id: UUID,
     user_id: UUID,

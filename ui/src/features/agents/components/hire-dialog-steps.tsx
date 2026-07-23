@@ -39,8 +39,7 @@ export type WizardStep =
   | "config-token"
   | "bot-builder"
   | "slack-tokens"
-  | "teams-bot-builder"
-  | "teams-credentials"
+  | "telegram-token"
   | "details"
   | "skills";
 
@@ -721,12 +720,91 @@ export function SlackTokensStep({
   );
 }
 
+export function TelegramTokenStep({
+  token,
+  onTokenChange,
+  showToken,
+  onToggleToken,
+  error,
+}: {
+  token: string;
+  onTokenChange: (v: string) => void;
+  showToken: boolean;
+  onToggleToken: () => void;
+  error: string | null;
+}) {
+  return (
+    <form autoComplete="off" className="flex flex-col gap-5" onSubmit={(e) => e.preventDefault()}>
+      <div
+        className="flex flex-col gap-3.5 p-4 rounded-2xl"
+        style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
+      >
+        <div>
+          <div className="font-semibold text-[0.844rem] mb-0.5" style={{ color: "var(--ink)" }}>
+            Telegram bot token
+          </div>
+          <div className="text-[0.781rem]" style={{ color: "var(--ink-3)" }}>
+            The token stays encrypted in the key vault. The agent only sees fake placeholders.
+          </div>
+        </div>
+
+        <FormField label="Bot token" hint="From @BotFather — looks like 123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11">
+          <TokenInput
+            value={token}
+            onChange={onTokenChange}
+            visible={showToken}
+            onToggle={onToggleToken}
+            placeholder="123456:ABC-DEF…"
+          />
+        </FormField>
+
+        {error && (
+          <div className="text-[0.8125rem]" style={{ color: "var(--err)" }}>
+            {error}
+          </div>
+        )}
+      </div>
+
+      <div
+        className="flex flex-col gap-3 rounded-2xl p-4"
+        style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
+      >
+        <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
+          How to get a bot token
+        </div>
+        <NextStep n={1} label="Open @BotFather in Telegram">
+          Search for <b>@BotFather</b> in Telegram, or open{" "}
+          <a
+            href="https://t.me/botfather"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline"
+            style={{ color: "var(--ink-2)" }}
+          >
+            t.me/botfather ↗
+          </a>
+        </NextStep>
+        <NextStep n={2} label="Create a new bot">
+          Send <b>/newbot</b>, choose a display name and a username (must end in &quot;bot&quot;).
+        </NextStep>
+        <NextStep n={3} label="Copy the token">
+          BotFather will send a message containing your bot token. Paste it above.
+        </NextStep>
+        <NextStep n={4} label="Enable group messaging (optional)">
+          To receive all messages in groups (not just @mentions), disable Group Privacy:
+          open <b>@BotFather</b> → <b>/mybots</b> → select your bot → <b>Bot Settings</b> → <b>Group Privacy</b> → <b>Turn off</b>.
+        </NextStep>
+      </div>
+    </form>
+  );
+}
+
 export function PlatformChoiceStep({
   platform,
   onChange,
 }: {
-  platform: "slack" | "teams";
-  onChange: (v: "slack" | "teams") => void;
+  platform: "slack" | "telegram";
+  onChange: (v: "slack" | "telegram") => void;
 }) {
   return (
     <div className="flex flex-col gap-3">
@@ -737,10 +815,10 @@ export function PlatformChoiceStep({
         description="Connect via Socket Mode with a bot and app-level token. Recommended."
       />
       <ChoiceCard
-        selected={platform === "teams"}
-        onClick={() => onChange("teams")}
-        title="Microsoft Teams"
-        description="Connect via Azure Bot Framework with a webhook endpoint."
+        selected={platform === "telegram"}
+        onClick={() => onChange("telegram")}
+        title="Telegram"
+        description="Connect with a bot token from @BotFather. One token, one step."
       />
     </div>
   );
@@ -759,13 +837,13 @@ export function AgentTypeStep({
         selected={agentType === "hermes"}
         onClick={() => onChange("hermes")}
         title="Hermes"
-        description="Slack-only. Fast, lightweight, plugin-based. Recommended."
+        description="Slack and Telegram. Fast, lightweight, plugin-based. Recommended."
       />
       <ChoiceCard
         selected={agentType === "openclaw"}
         onClick={() => onChange("openclaw")}
         title="OpenClaw"
-        description="Slack and Microsoft Teams. Full platform support."
+        description="Slack and Telegram. Full platform support with multi-channel routing."
       />
     </div>
   );
@@ -1076,12 +1154,16 @@ export function DetailsStep({
   onSlackDmPolicyChange,
   slackVerboseMode,
   onSlackVerboseModeChange,
+  telegramGroupPolicy,
+  onTelegramGroupPolicyChange,
+  telegramDmPolicy,
+  onTelegramDmPolicyChange,
   approvalMode,
   onApprovalModeChange,
   onChangeTemplate,
 }: {
   template: AgentTemplateRead;
-  platform: "slack" | "teams";
+  platform: "slack" | "telegram";
   agentType: "openclaw" | "hermes";
   name: string;
   onNameChange: (v: string) => void;
@@ -1093,6 +1175,10 @@ export function DetailsStep({
   onSlackDmPolicyChange: (v: string) => void;
   slackVerboseMode: boolean;
   onSlackVerboseModeChange: (v: boolean) => void;
+  telegramGroupPolicy: string;
+  onTelegramGroupPolicyChange: (v: string) => void;
+  telegramDmPolicy: string;
+  onTelegramDmPolicyChange: (v: string) => void;
   approvalMode: string;
   onApprovalModeChange: (v: string) => void;
   onChangeTemplate: () => void;
@@ -1185,6 +1271,33 @@ export function DetailsStep({
               </select>
             </FormField>
           )}
+        </>
+      )}
+
+      {platform === "telegram" && (
+        <>
+          <FormField label="Group access" hint="You can add specific groups after hiring">
+            <select
+              className="af-input"
+              value={telegramGroupPolicy}
+              onChange={(e) => onTelegramGroupPolicyChange(e.target.value)}
+            >
+              <option value="open">Open — respond in any group</option>
+              <option value="allowlist">Allowlist — only allowed groups</option>
+            </select>
+          </FormField>
+
+          <FormField label="Direct messages">
+            <select
+              className="af-input"
+              value={telegramDmPolicy}
+              onChange={(e) => onTelegramDmPolicyChange(e.target.value)}
+            >
+              <option value="open">Open — anyone can DM</option>
+              <option value="allowlist">Allowlist — only allowed users</option>
+              <option value="off">Off — ignore direct messages</option>
+            </select>
+          </FormField>
         </>
       )}
 

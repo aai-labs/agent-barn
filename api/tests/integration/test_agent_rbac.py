@@ -169,19 +169,13 @@ def test_creator_keeps_assigned_agent_after_owner_is_demoted_to_member():
     with given(_GIVEN) as context:
         created = context.client.post(_BASE, json=_CREATE, headers=_auth(context))
         assert_that(created.status_code, equal_to(status.HTTP_201_CREATED))
-        membership_repository: OrganizationUserRepository = context.injector.get(
-            OrganizationUserRepository
-        )
-        membership = membership_repository.get_by_user_id_and_organization_id(
-            context.user.id, context.organization.id
-        )
+        membership_repository: OrganizationUserRepository = context.injector.get(OrganizationUserRepository)
+        membership = membership_repository.get_by_user_id_and_organization_id(context.user.id, context.organization.id)
         assert membership is not None
         membership.role = OrganizationRole.MEMBER
         membership_repository.save(membership)
 
-        response = context.client.get(
-            f"{_BASE}/{created.json()['id']}", headers=_auth(context)
-        )
+        response = context.client.get(f"{_BASE}/{created.json()['id']}", headers=_auth(context))
 
         assert_that(response.status_code, equal_to(status.HTTP_200_OK))
         assert_that(
@@ -218,15 +212,9 @@ def test_assigned_list_count_detail_and_recipient_actions_are_scoped():
         there_is_agent_access(agent_id=context.assigned_one.id)(context)
         there_is_agent_access(agent_id=context.assigned_two.id)(context)
 
-        page_one = context.client.get(
-            _BASE, params={"page": 1, "page_size": 1}, headers=_auth(context)
-        )
-        page_two = context.client.get(
-            _BASE, params={"page": 2, "page_size": 1}, headers=_auth(context)
-        )
-        hidden = context.client.get(
-            f"{_BASE}/{context.hidden.id}", headers=_auth(context)
-        )
+        page_one = context.client.get(_BASE, params={"page": 1, "page_size": 1}, headers=_auth(context))
+        page_two = context.client.get(_BASE, params={"page": 2, "page_size": 1}, headers=_auth(context))
+        hidden = context.client.get(f"{_BASE}/{context.hidden.id}", headers=_auth(context))
 
         assert_that(page_one.status_code, equal_to(status.HTTP_200_OK))
         assert_that(page_two.status_code, equal_to(status.HTTP_200_OK))
@@ -257,9 +245,7 @@ def test_visible_agent_without_update_permission_returns_403():
             )
         )
 
-        visible = context.client.get(
-            f"{_BASE}/{context.agent.id}", headers=_auth(context)
-        )
+        visible = context.client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context))
         forbidden = context.client.patch(
             f"{_BASE}/{context.agent.id}",
             json={"name": "Forbidden"},
@@ -303,9 +289,7 @@ def test_access_revocation_is_observed_on_next_request():
     with given([*_GIVEN, there_is_an_agent(), _switch_to_member()]) as context:
         there_is_agent_access()(context)
         repository: AgentRepository = context.injector.get(AgentRepository)
-        first = context.client.get(
-            f"{_BASE}/{context.agent.id}", headers=_auth(context)
-        )
+        first = context.client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context))
         with Session(repository.delegate.engine) as session:
             access = session.exec(
                 select(AgentAccess).where(
@@ -315,9 +299,7 @@ def test_access_revocation_is_observed_on_next_request():
             ).one()
             session.delete(access)
             session.commit()
-        second = context.client.get(
-            f"{_BASE}/{context.agent.id}", headers=_auth(context)
-        )
+        second = context.client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context))
 
         assert_that(first.status_code, equal_to(status.HTTP_200_OK))
         assert_that(second.status_code, equal_to(status.HTTP_404_NOT_FOUND))
@@ -363,14 +345,7 @@ def test_locked_agent_access_roles_are_listed_with_exact_permissions():
         )
         assert_that(
             set(roles["OWNER"]["permissions"]),
-            equal_to(
-                {
-                    permission.value
-                    for permission in SYSTEM_AGENT_ACCESS_ROLE_GRANTS[
-                        AGENT_OWNER_ROLE_ID
-                    ]
-                }
-            ),
+            equal_to({permission.value for permission in SYSTEM_AGENT_ACCESS_ROLE_GRANTS[AGENT_OWNER_ROLE_ID]}),
         )
 
 
@@ -648,17 +623,13 @@ def test_removed_membership_cascades_agent_access():
             },
             headers=_auth(context),
         )
-        membership_repository: OrganizationUserRepository = context.injector.get(
-            OrganizationUserRepository
-        )
+        membership_repository: OrganizationUserRepository = context.injector.get(OrganizationUserRepository)
         membership_repository.delete(target_membership)
         repository: AgentRepository = context.injector.get(AgentRepository)
 
         assert_that(granted.status_code, equal_to(status.HTTP_200_OK))
         assert_that(
-            repository.find_access_membership_ids(
-                context.agent.id, context.organization.id
-            ),
+            repository.find_access_membership_ids(context.agent.id, context.organization.id),
             is_not(has_item(target_membership.id)),
         )
 

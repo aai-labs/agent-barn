@@ -30,7 +30,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index(
-        "ix_password_reset_token_token_hash", table_name="password_reset_token"
-    )
+    op.drop_index("ix_password_reset_token_token_hash", table_name="password_reset_token")
     op.alter_column("password_reset_token", "token_hash", new_column_name="jti")

@@ -228,6 +228,41 @@ def test_process_messages_keeps_provided_names(mock_maps):
             assert_that(messages[0].channel_name, equal_to("bob-dm"))
 
 
+@patch.object(
+    IngestService,
+    "_platform_maps",
+    return_value=({"42": "Alice"}, {"42": "Alice"}),
+)
+def test_process_messages_resolves_telegram_names(mock_maps):
+    with given():
+        conv_repo = MagicMock()
+        service = _make_service(conv_repo=conv_repo)
+        agent = _make_agent()
+        agent.platform = AgentPlatform.TELEGRAM
+        now = datetime.now(timezone.utc)
+        batch = IngestBatchRequest(
+            messages=[
+                IngestMessageEvent(
+                    msg_id="tg-msg-1",
+                    session_key="agent:main:telegram:dm:42",
+                    channel_id="42",
+                    direction=MessageDirection.INBOUND,
+                    conversation_type=ConversationType.DM,
+                    sender_id="42",
+                    content="hello from telegram",
+                    occurred_at=now,
+                )
+            ]
+        )
+
+        with when("I process the batch"):
+            service.process(agent, batch)
+
+        with then("names are resolved from telegram maps"):
+            messages = conv_repo.upsert_messages.call_args[0][0]
+            assert_that(messages[0].sender_name, equal_to("Alice"))
+
+
 def test_process_tool_calls_calls_upsert_pending():
     with given():
         tc_repo = MagicMock()

@@ -6,6 +6,7 @@ const PORT = 8081;
 const CACHE_TTL_MS = 10_000;
 const TOKEN_POLL_MS = 5 * 60 * 1000; // 5 minutes
 
+const AGENT_PLATFORM = process.env.AGENT_PLATFORM || 'slack';
 const SKIP_VALIDATION = ['1', 'true', 'yes'].includes(
   (process.env.SKIP_SLACK_TOKEN_VALIDATION || '').toLowerCase()
 );
@@ -33,8 +34,37 @@ function slackPost(path, token) {
   });
 }
 
+function telegramGetMe(token) {
+  return new Promise((resolve) => {
+    const req = https.request(
+      { hostname: 'api.telegram.org', path: `/bot${token}/getMe`, method: 'GET' },
+      (res) => {
+        let raw = '';
+        res.on('data', (c) => raw += c);
+        res.on('end', () => {
+          try { resolve(JSON.parse(raw)); } catch { resolve({ ok: false, description: 'parse_error' }); }
+        });
+      }
+    );
+    req.on('error', (e) => resolve({ ok: false, description: e.message }));
+    req.setTimeout(15_000, () => { req.destroy(); resolve({ ok: false, description: 'timeout' }); });
+    req.end();
+  });
+}
+
 async function validateTokens() {
   if (SKIP_VALIDATION) {
+    tokenCache = { ok: true };
+    return;
+  }
+
+  if (AGENT_PLATFORM === 'telegram') {
+    const telegramToken = process.env.TELEGRAM_BOT_TOKEN || '';
+    const result = await telegramGetMe(telegramToken);
+    if (!result.ok) {
+      tokenCache = { ok: false, reason: `Invalid Telegram bot token: ${result.description || 'unknown_error'}` };
+      return;
+    }
     tokenCache = { ok: true };
     return;
   }
@@ -73,9 +103,11 @@ function refresh() {
       for (const ch of order) {
         const channel = d.channels[ch];
         if (channel?.healthState !== 'healthy') {
+          if (AGENT_PLATFORM === 'telegram' && !channel?.lastError) {
+            continue;
+          }
           const everConnected = typeof channel?.lastConnectedAt === 'number';
-          const hasError = channel?.lastError != null;
-          cache = { ok: false, everConnected: everConnected || hasError, reason: channel?.lastError || 'channel ' + ch + ' not connected' };
+          cache = { ok: false, everConnected, reason: channel?.lastError || 'channel ' + ch + ' not connected' };
           return;
         }
       }

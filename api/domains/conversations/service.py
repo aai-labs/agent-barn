@@ -13,16 +13,17 @@ from api.domains.conversations.models import (
     AgentChatMessage,
     ConversationChannelRead,
     ConversationMessageRead,
+    ConversationsCursor,
+    ConversationsFilter,
     ConversationThreadRead,
     ConversationThreadsPage,
     ConversationType,
-    ConversationsCursor,
-    ConversationsFilter,
 )
 from api.domains.conversations.repository import ConversationRepository
 from api.domains.rbac.catalog import PermissionKey
 from api.infrastructure.crypto import decrypt_token
 from api.infrastructure.slack.client import SlackClient
+from api.infrastructure.telegram.client import get_chat_display_name
 
 logger = logging.getLogger(__name__)
 
@@ -36,9 +37,7 @@ class ConversationService:
     agent_authorization: AgentAuthorization
     config: Config
 
-    def list_channels(
-        self, agent_id: UUID, context: CurrentUserContext
-    ) -> list[ConversationChannelRead]:
+    def list_channels(self, agent_id: UUID, context: CurrentUserContext) -> list[ConversationChannelRead]:
         agent = self.agent_authorization.require_visible(context, agent_id)
         activity_scope = self.agent_authorization.require_action_for_visible(
             context, agent, PermissionKey.ACTIVITY_READ
@@ -51,9 +50,7 @@ class ConversationService:
         self._resolve_channel_names(agent, merged)
 
         return [
-            ConversationChannelRead(
-                channel_id=cid, channel_name=name, conversation_type=ctype
-            )
+            ConversationChannelRead(channel_id=cid, channel_name=name, conversation_type=ctype)
             for cid, (name, ctype) in sorted(merged.items())
         ]
 
@@ -74,7 +71,7 @@ class ConversationService:
         ]
         if not unresolved_channels and not unresolved_dms:
             return
-        user_map, channel_map, dm_map = self._platform_maps(agent)
+        _, channel_map, dm_map = self._platform_maps(agent, unresolved_ids=unresolved_channels + unresolved_dms)
         for cid in unresolved_channels:
             resolved = channel_map.get(cid)
             if resolved:
@@ -85,12 +82,16 @@ class ConversationService:
                 merged[cid] = (resolved, merged[cid][1])
 
     def _platform_maps(
-        self, agent: Agent
+        self,
+        agent: Agent,
+        unresolved_ids: list[str] | None = None,
     ) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
         if not self.config.agent_token_encryption_key:
             return {}, {}, {}
         if agent.platform == AgentPlatform.TEAMS:
             return {}, {}, {}
+        if agent.platform == AgentPlatform.TELEGRAM:
+            return self._telegram_maps(agent.id, unresolved_ids or [])
         try:
             slack_config = self.agent_repository.get_slack_config(agent.id)
             if not slack_config:
@@ -102,24 +103,39 @@ class ConversationService:
             slack = SlackClient(bot_token)
             users = slack.list_users(include_bots=True, include_deleted=True)
             channels = slack.list_channels()
-            user_map = {
-                u["id"]: u["display_name"] or u["real_name"] or u["name"] or u["id"]
-                for u in users
-            }
-            channel_map = {
-                c["id"]: c["name"] for c in channels if c["id"] and c["name"]
-            }
+            user_map = {u["id"]: u["display_name"] or u["real_name"] or u["name"] or u["id"] for u in users}
+            channel_map = {c["id"]: c["name"] for c in channels if c["id"] and c["name"]}
             try:
                 dm_channels = slack.list_dm_channels()
-                dm_map: dict[str, str] = {
-                    dm["id"]: user_map.get(dm["user"], dm["user"]) for dm in dm_channels
-                }
+                dm_map: dict[str, str] = {dm["id"]: user_map.get(dm["user"], dm["user"]) for dm in dm_channels}
             except Exception:
                 dm_map = {}
             return user_map, channel_map, dm_map
         except Exception as e:
             logger.warning("Failed to fetch Slack maps for agent %s: %s", agent.id, e)
             return {}, {}, {}
+
+    def _telegram_maps(
+        self, agent_id: UUID, unresolved_ids: list[str]
+    ) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
+        if not unresolved_ids:
+            return {}, {}, {}
+        telegram_config = self.agent_repository.get_telegram_config(agent_id)
+        if not telegram_config:
+            return {}, {}, {}
+        bot_token = decrypt_token(
+            telegram_config.bot_token_encrypted,
+            self.config.agent_token_encryption_key,
+        )
+        resolved: dict[str, str] = {}
+        for chat_id in unresolved_ids:
+            raw_id = chat_id
+            if raw_id.upper().startswith("TELEGRAM:"):
+                raw_id = raw_id[len("TELEGRAM:") :]
+            name = get_chat_display_name(bot_token, raw_id)
+            if name:
+                resolved[chat_id] = name
+        return {}, resolved, resolved
 
     def list_threads(
         self,
@@ -140,9 +156,7 @@ class ConversationService:
             filter=filter,
             authorization_scope=activity_scope,
         )
-        threads, has_more, next_cursor = _group_into_threads(
-            messages, cursor, page_size
-        )
+        threads, has_more, next_cursor = _group_into_threads(messages, cursor, page_size)
         return ConversationThreadsPage(
             threads=threads,
             has_more=has_more,
@@ -189,9 +203,7 @@ def _group_into_threads(
             for nm in null_msgs:
                 if nm.id in used_null_ids:
                     continue
-                if nm.occurred_at > root.occurred_at and (
-                    first_reply_ts is None or nm.occurred_at <= first_reply_ts
-                ):
+                if nm.occurred_at > root.occurred_at and (first_reply_ts is None or nm.occurred_at <= first_reply_ts):
                     extra_null_replies.append(nm)
                     used_null_ids.add(nm.id)
 
@@ -217,8 +229,7 @@ def _group_into_threads(
             raw_threads = [
                 t
                 for t in raw_threads
-                if t[0].occurred_at < before_ts
-                or (t[0].occurred_at == before_ts and t[0].id < before_id)
+                if t[0].occurred_at < before_ts or (t[0].occurred_at == before_ts and t[0].id < before_id)
             ]
         else:
             raw_threads = [t for t in raw_threads if t[0].occurred_at < before_ts]

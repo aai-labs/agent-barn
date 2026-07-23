@@ -133,9 +133,7 @@ class PostgresRepositoryDelegate:
             )
             query = self._apply_ordering(query, model, order_by)
             if pagination:
-                query = query.offset((pagination.page - 1) * pagination.size).limit(
-                    pagination.size
-                )
+                query = query.offset((pagination.page - 1) * pagination.size).limit(pagination.size)
 
             total_query = select(func.count()).select_from(model)
             total_query = self._apply_filters_and_search(
@@ -165,17 +163,13 @@ class PostgresRepositoryDelegate:
         order_by: list[tuple[str, Literal["asc", "desc"]]] | None = None,
     ) -> PaginatedItems[M]:
         with Session(self.engine) as session:
-            count_query = query.with_only_columns(
-                func.count(), maintain_column_froms=True
-            ).order_by(None)
+            count_query = query.with_only_columns(func.count(), maintain_column_froms=True).order_by(None)
             total = session.scalar(count_query)
 
             query = self._apply_ordering(query, model, order_by)
 
             if pagination:
-                query = query.offset((pagination.page - 1) * pagination.size).limit(
-                    pagination.size
-                )
+                query = query.offset((pagination.page - 1) * pagination.size).limit(pagination.size)
 
             result = session.exec(query)
             items = list(result)
@@ -225,9 +219,7 @@ class PostgresRepositoryDelegate:
 
     def count_by_query(self, query) -> int:
         with Session(self.engine) as session:
-            total_query = query.with_only_columns(
-                func.count(), maintain_column_froms=True
-            ).order_by(None)
+            total_query = query.with_only_columns(func.count(), maintain_column_froms=True).order_by(None)
             total = session.scalar(total_query)
             return total
 

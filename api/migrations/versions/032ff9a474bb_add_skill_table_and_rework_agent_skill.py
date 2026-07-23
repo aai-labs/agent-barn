@@ -31,25 +31,17 @@ def upgrade() -> None:
         sa.Column("required_providers", sa.JSON(), server_default="[]", nullable=False),
         sa.Column("zip_content", sa.LargeBinary(), nullable=False),
         sa.Column("tools_pointer", sa.Text(), nullable=True),
-        sa.ForeignKeyConstraint(
-            ["organization_id"], ["organization.id"], ondelete="CASCADE"
-        ),
+        sa.ForeignKeyConstraint(["organization_id"], ["organization.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint(
-            "organization_id", "name", name="uq_skill_organization_name"
-        ),
+        sa.UniqueConstraint("organization_id", "name", name="uq_skill_organization_name"),
     )
-    op.create_index(
-        "ix_skill_organization_id", "skill", ["organization_id"], unique=False
-    )
+    op.create_index("ix_skill_organization_id", "skill", ["organization_id"], unique=False)
 
     op.execute("DELETE FROM agent_skill")
     op.add_column("agent_skill", sa.Column("skill_id", sa.Uuid(), nullable=False))
     op.drop_constraint("uq_agent_skill_agent_file_path", "agent_skill", type_="unique")
     op.drop_constraint("ck_agent_skill_source", "agent_skill", type_="check")
-    op.create_unique_constraint(
-        "uq_agent_skill_agent_skill", "agent_skill", ["agent_id", "skill_id"]
-    )
+    op.create_unique_constraint("uq_agent_skill_agent_skill", "agent_skill", ["agent_id", "skill_id"])
     op.create_foreign_key(
         "fk_agent_skill_skill_id",
         "agent_skill",
@@ -75,9 +67,7 @@ def downgrade() -> None:
     )
     op.add_column(
         "agent_skill",
-        sa.Column(
-            "skill_name", sa.VARCHAR(length=255), nullable=False, server_default=""
-        ),
+        sa.Column("skill_name", sa.VARCHAR(length=255), nullable=False, server_default=""),
     )
     op.add_column(
         "agent_skill",
@@ -92,12 +82,8 @@ def downgrade() -> None:
         "agent_skill",
         sa.Column("skill_content", sa.TEXT(), nullable=False, server_default=""),
     )
-    op.create_unique_constraint(
-        "uq_agent_skill_agent_file_path", "agent_skill", ["agent_id", "skill_file_path"]
-    )
-    op.create_check_constraint(
-        "ck_agent_skill_source", "agent_skill", "source IN ('aai_cli', 'custom')"
-    )
+    op.create_unique_constraint("uq_agent_skill_agent_file_path", "agent_skill", ["agent_id", "skill_file_path"])
+    op.create_check_constraint("ck_agent_skill_source", "agent_skill", "source IN ('aai_cli', 'custom')")
 
     op.drop_index("ix_skill_organization_id", table_name="skill")
     op.drop_table("skill")

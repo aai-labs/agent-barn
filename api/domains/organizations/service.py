@@ -39,9 +39,7 @@ class OrganizationService:
     template_service: TemplateService
     permission_policy: PermissionPolicy
 
-    def get_organization(
-        self, organization_id: UUID, context: CurrentUserContext
-    ) -> OrganizationRead:
+    def get_organization(self, organization_id: UUID, context: CurrentUserContext) -> OrganizationRead:
         # Any member (or a superuser) may view the org; non-members are refused before
         # the fetch so a 403-vs-404 difference can't confirm an org's existence.
         self._ensure_can_view_organization(organization_id, context)
@@ -53,24 +51,16 @@ class OrganizationService:
             )
         return organization
 
-    def create_organization(
-        self, data: OrganizationCreate, actor: CurrentUserContext
-    ) -> OrganizationCreateResult:
+    def create_organization(self, data: OrganizationCreate, actor: CurrentUserContext) -> OrganizationCreateResult:
         actor.require_superuser(detail="Only a superuser can create organizations")
 
         # Org, owner-invite (user + token) and the OWNER membership all commit together,
         # so a failed step can't leave an org with no owner. The invite email is sent
         # only after commit.
-        organization = Organization(
-            name=data.name, description=data.description, is_default=False
-        )
-        with Session(
-            self.organization_repository.delegate.engine, expire_on_commit=False
-        ) as session:
+        organization = Organization(name=data.name, description=data.description, is_default=False)
+        with Session(self.organization_repository.delegate.engine, expire_on_commit=False) as session:
             self.organization_repository.save_with_session(organization, session)
-            prepared = self.auth_service.prepare_invite(
-                session, email=str(data.owner_email), full_name=data.owner_name
-            )
+            prepared = self.auth_service.prepare_invite(session, email=str(data.owner_email), full_name=data.owner_name)
             self.user_organization_service.add_membership_with_session(
                 OrganizationUser(
                     user_id=prepared.user.id,
@@ -92,9 +82,7 @@ class OrganizationService:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to load organization",
             )
-        return OrganizationCreateResult(
-            organization=organization_read, invite_link=prepared.invite_link
-        )
+        return OrganizationCreateResult(organization=organization_read, invite_link=prepared.invite_link)
 
     def ensure_default_organization(self) -> Organization:
         existing = self.organization_repository.find_default()
@@ -203,9 +191,6 @@ class OrganizationService:
         if active_agents > 0:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    "Delete this organization's agents before deleting it "
-                    f"({active_agents} still active)."
-                ),
+                detail=(f"Delete this organization's agents before deleting it ({active_agents} still active)."),
             )
         self.organization_repository.delete(organization.id)

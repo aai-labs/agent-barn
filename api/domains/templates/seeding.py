@@ -21,10 +21,7 @@ PREDEFINED_CONTENT_FIELDS: tuple[str, ...] = (
 
 def predefined_content_differs(existing: AgentTemplate, desired: AgentTemplate) -> bool:
     """True if any owned content field differs between the two templates."""
-    return any(
-        getattr(existing, field) != getattr(desired, field)
-        for field in PREDEFINED_CONTENT_FIELDS
-    )
+    return any(getattr(existing, field) != getattr(desired, field) for field in PREDEFINED_CONTENT_FIELDS)
 
 
 def copy_predefined_content(existing: AgentTemplate, desired: AgentTemplate) -> None:

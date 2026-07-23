@@ -24,18 +24,12 @@ def test_temporary_missing_permission_is_restored_after_normal_exit():
     with given(
         [
             *_GIVEN,
-            role_lacks_permission(
-                OrganizationRole.ADMIN, PermissionKey.TEMPLATE_MANAGE
-            ),
+            role_lacks_permission(OrganizationRole.ADMIN, PermissionKey.TEMPLATE_MANAGE),
         ]
     ):
-        assert not rbac_policy.organization_role_allows(
-            OrganizationRole.ADMIN, PermissionKey.TEMPLATE_MANAGE
-        )
+        assert not rbac_policy.organization_role_allows(OrganizationRole.ADMIN, PermissionKey.TEMPLATE_MANAGE)
 
-    assert rbac_policy.organization_role_allows(
-        OrganizationRole.ADMIN, PermissionKey.TEMPLATE_MANAGE
-    )
+    assert rbac_policy.organization_role_allows(OrganizationRole.ADMIN, PermissionKey.TEMPLATE_MANAGE)
 
 
 def test_temporary_missing_permission_is_restored_after_exception():
@@ -43,16 +37,10 @@ def test_temporary_missing_permission_is_restored_after_exception():
         with given(
             [
                 *_GIVEN,
-                role_lacks_permission(
-                    OrganizationRole.ADMIN, PermissionKey.SKILL_MANAGE
-                ),
+                role_lacks_permission(OrganizationRole.ADMIN, PermissionKey.SKILL_MANAGE),
             ]
         ):
-            assert not rbac_policy.organization_role_allows(
-                OrganizationRole.ADMIN, PermissionKey.SKILL_MANAGE
-            )
+            assert not rbac_policy.organization_role_allows(OrganizationRole.ADMIN, PermissionKey.SKILL_MANAGE)
             raise RuntimeError("exercise cleanup")
 
-    assert rbac_policy.organization_role_allows(
-        OrganizationRole.ADMIN, PermissionKey.SKILL_MANAGE
-    )
+    assert rbac_policy.organization_role_allows(OrganizationRole.ADMIN, PermissionKey.SKILL_MANAGE)

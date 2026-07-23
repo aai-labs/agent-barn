@@ -115,9 +115,7 @@ def upgrade() -> None:
             "(id = 'c7da77aa-bf9c-5626-8bad-5e0ca5159b5d'::uuid AND name = 'VIEWER')",
             name="ck_agent_access_roles_fixed_system_identity",
         ),
-        sa.ForeignKeyConstraint(
-            ["organization_id"], ["organization.id"], ondelete="CASCADE"
-        ),
+        sa.ForeignKeyConstraint(["organization_id"], ["organization.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint(
             "id",
@@ -144,12 +142,8 @@ def upgrade() -> None:
         "agent_access_role_permissions",
         sa.Column("role_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("permission_id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.ForeignKeyConstraint(
-            ["permission_id"], ["permissions.id"], ondelete="CASCADE"
-        ),
-        sa.ForeignKeyConstraint(
-            ["role_id"], ["agent_access_roles.id"], ondelete="CASCADE"
-        ),
+        sa.ForeignKeyConstraint(["permission_id"], ["permissions.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["role_id"], ["agent_access_roles.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("role_id", "permission_id"),
     )
 
@@ -250,9 +244,7 @@ def upgrade() -> None:
         sa.Column("membership_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("agent_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("access_role_id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.ForeignKeyConstraint(
-            ["organization_id"], ["organization.id"], ondelete="CASCADE"
-        ),
+        sa.ForeignKeyConstraint(["organization_id"], ["organization.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(
             ["membership_id", "organization_id"],
             ["user_organization.id", "user_organization.organization_id"],
@@ -437,13 +429,9 @@ def downgrade() -> None:
     op.execute("DROP FUNCTION validate_agent_access_role_scope()")
     op.execute("DROP TRIGGER trg_permission_catalogue_immutability ON permissions")
     op.execute("DROP FUNCTION enforce_permission_catalogue_immutability()")
-    op.execute(
-        "DROP TRIGGER trg_system_agent_role_grant_immutability ON agent_access_role_permissions"
-    )
+    op.execute("DROP TRIGGER trg_system_agent_role_grant_immutability ON agent_access_role_permissions")
     op.execute("DROP FUNCTION enforce_system_agent_role_grant_immutability()")
-    op.execute(
-        "DROP TRIGGER trg_agent_access_role_scope_immutability ON agent_access_roles"
-    )
+    op.execute("DROP TRIGGER trg_agent_access_role_scope_immutability ON agent_access_roles")
     op.execute("DROP FUNCTION enforce_agent_access_role_scope_immutability()")
 
     op.drop_index("ix_agent_access_role", table_name="agent_access")

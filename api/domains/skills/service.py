@@ -63,10 +63,7 @@ class SkillService:
                         detail="Zip uncompressed content exceeds 200 MB limit",
                     )
 
-                if (
-                    total_compressed > 0
-                    and total_uncompressed / total_compressed > _MAX_COMPRESSION_RATIO
-                ):
+                if total_compressed > 0 and total_uncompressed / total_compressed > _MAX_COMPRESSION_RATIO:
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail="Zip compression ratio is suspiciously high (possible zip bomb)",
@@ -113,9 +110,7 @@ class SkillService:
 
     def _get_or_404(self, skill_id: UUID, org_id: UUID) -> Skill:
         skill = self.repository.get_by_id(skill_id)
-        if skill is None or (
-            skill.organization_id is not None and skill.organization_id != org_id
-        ):
+        if skill is None or (skill.organization_id is not None and skill.organization_id != org_id):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Skill {skill_id} not found",
@@ -124,9 +119,7 @@ class SkillService:
 
     def create_skill(self, data: SkillCreate, context: CurrentUserContext) -> SkillRead:
         org_id = self._org_id(context)
-        self.permission_policy.require_organization(
-            context, org_id, PermissionKey.SKILL_MANAGE
-        )
+        self.permission_policy.require_organization(context, org_id, PermissionKey.SKILL_MANAGE)
         self._validate_zip(data.zip_content)
         skill = Skill(
             organization_id=org_id,
@@ -139,14 +132,10 @@ class SkillService:
         self.repository.save(skill)
         return SkillRead.model_validate(skill)
 
-    def update_skill(
-        self, skill_id: UUID, data: SkillUpdate, context: CurrentUserContext
-    ) -> SkillRead:
+    def update_skill(self, skill_id: UUID, data: SkillUpdate, context: CurrentUserContext) -> SkillRead:
         org_id = self._org_id(context)
         skill = self._get_or_404(skill_id, org_id)
-        self.permission_policy.require_organization(
-            context, org_id, PermissionKey.SKILL_MANAGE
-        )
+        self.permission_policy.require_organization(context, org_id, PermissionKey.SKILL_MANAGE)
         if skill.source == SkillSource.AAI_CLI:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -158,9 +147,7 @@ class SkillService:
             skill.zip_content = updated["zip_content"]
         if "name" in updated:
             skill.name = updated["name"]
-            skill.tools_pointer = (
-                f'You can use "{skill.name}" skill in the ./skills folder'
-            )
+            skill.tools_pointer = f'You can use "{skill.name}" skill in the ./skills folder'
         if "required_providers" in updated:
             skill.required_providers = updated["required_providers"]
         self.repository.save(skill)
@@ -169,9 +156,7 @@ class SkillService:
     def delete_skill(self, skill_id: UUID, context: CurrentUserContext) -> None:
         org_id = self._org_id(context)
         skill = self._get_or_404(skill_id, org_id)
-        self.permission_policy.require_organization(
-            context, org_id, PermissionKey.SKILL_MANAGE
-        )
+        self.permission_policy.require_organization(context, org_id, PermissionKey.SKILL_MANAGE)
         if skill.source == SkillSource.AAI_CLI:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -182,9 +167,7 @@ class SkillService:
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Skill is currently assigned to one or more agents",
             )
-        blocking_templates = self.repository.get_latest_template_slugs_requiring_skill(
-            skill_id, org_id
-        )
+        blocking_templates = self.repository.get_latest_template_slugs_requiring_skill(skill_id, org_id)
         if blocking_templates:
             slugs = ", ".join(blocking_templates)
             raise HTTPException(
@@ -197,9 +180,7 @@ class SkillService:
     def get_skill(self, skill_id: UUID, context: CurrentUserContext) -> SkillRead:
         org_id = self._org_id(context)
         skill = self._get_or_404(skill_id, org_id)
-        self.permission_policy.require_organization(
-            context, org_id, PermissionKey.SKILL_READ
-        )
+        self.permission_policy.require_organization(context, org_id, PermissionKey.SKILL_READ)
         return SkillRead.model_validate(skill)
 
     def list_skills(
@@ -209,12 +190,8 @@ class SkillService:
         context: CurrentUserContext,
     ) -> PaginatedItems[SkillRead]:
         org_id = self._org_id(context)
-        self.permission_policy.require_organization(
-            context, org_id, PermissionKey.SKILL_READ
-        )
-        skills, total = self.repository.find_all_for_org(
-            org_id, skill_filter, pagination
-        )
+        self.permission_policy.require_organization(context, org_id, PermissionKey.SKILL_READ)
+        skills, total = self.repository.find_all_for_org(org_id, skill_filter, pagination)
         return PaginatedItems(
             page=pagination.page,
             page_size=pagination.size,

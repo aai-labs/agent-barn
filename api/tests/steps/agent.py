@@ -13,6 +13,7 @@ from api.domains.agents.models import (
     AgentSlackConfig,
     AgentStatus,
     AgentTeamsConfig,
+    AgentTelegramConfig,
     AgentType,
 )
 from api.domains.agents.repository import AgentRepository
@@ -40,6 +41,7 @@ TEST_SLACK_APP_TOKEN = "xapp-1-test-app-token"
 TEST_TEAMS_APP_ID = "test-teams-app-id"
 TEST_TEAMS_APP_PASSWORD = "test-teams-app-password"
 TEST_TEAMS_TENANT_ID = "test-tenant-id"
+TEST_TELEGRAM_BOT_TOKEN = "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
 FAKE_LITELLM_KEY = "sk-fake-litellm-key-for-tests"
 
 
@@ -77,9 +79,7 @@ def there_is_an_agent(
     def step(context):
         org_id = organization_id or context.organization.id
         repository: AgentRepository = context.injector.get(AgentRepository)
-        template_repository: TemplateRepository = context.injector.get(
-            TemplateRepository
-        )
+        template_repository: TemplateRepository = context.injector.get(TemplateRepository)
 
         template = AgentTemplate(
             organization_id=org_id,
@@ -122,24 +122,25 @@ def there_is_an_agent(
         if platform == AgentPlatform.SLACK:
             slack_config = AgentSlackConfig(
                 agent_id=agent.id,
-                bot_token_encrypted=encrypt_token(
-                    TEST_SLACK_BOT_TOKEN, TEST_ENCRYPTION_KEY
-                ),
-                app_token_encrypted=encrypt_token(
-                    TEST_SLACK_APP_TOKEN, TEST_ENCRYPTION_KEY
-                ),
+                bot_token_encrypted=encrypt_token(TEST_SLACK_BOT_TOKEN, TEST_ENCRYPTION_KEY),
+                app_token_encrypted=encrypt_token(TEST_SLACK_APP_TOKEN, TEST_ENCRYPTION_KEY),
             )
             repository.save_slack_config(slack_config)
         elif platform == AgentPlatform.TEAMS:
             teams_config = AgentTeamsConfig(
                 agent_id=agent.id,
                 app_id_encrypted=encrypt_token(TEST_TEAMS_APP_ID, TEST_ENCRYPTION_KEY),
-                app_password_encrypted=encrypt_token(
-                    TEST_TEAMS_APP_PASSWORD, TEST_ENCRYPTION_KEY
-                ),
+                app_password_encrypted=encrypt_token(TEST_TEAMS_APP_PASSWORD, TEST_ENCRYPTION_KEY),
                 tenant_id=TEST_TEAMS_TENANT_ID,
             )
             repository.save_teams_config(teams_config)
+        elif platform == AgentPlatform.TELEGRAM:
+            telegram_config = AgentTelegramConfig(
+                agent_id=agent.id,
+                bot_token_encrypted=encrypt_token(TEST_TELEGRAM_BOT_TOKEN, TEST_ENCRYPTION_KEY),
+                bot_username="test_bot",
+            )
+            repository.save_telegram_config(telegram_config)
 
         context.agent = agent
 
@@ -182,9 +183,7 @@ def skill_is_assigned_to_agent():
         from api.domains.agents.repository import AgentRepository
 
         repo: AgentRepository = context.injector.get(AgentRepository)
-        repo.save_skills(
-            [AgentSkill(agent_id=context.agent.id, skill_id=context.skill.id)]
-        )
+        repo.save_skills([AgentSkill(agent_id=context.agent.id, skill_id=context.skill.id)])
 
     return step
 

@@ -26,9 +26,7 @@ from api.infrastructure.integration_validators.result import IntegrationValidati
 _REQUEST = httpx.Request("GET", "https://example.com")
 
 
-def _resp(
-    body: dict | list, *, status: int = 200, headers: dict | None = None
-) -> httpx.Response:
+def _resp(body: dict | list, *, status: int = 200, headers: dict | None = None) -> httpx.Response:
     return httpx.Response(status, json=body, headers=headers or {}, request=_REQUEST)
 
 
@@ -37,15 +35,9 @@ def _connect_error() -> httpx.ConnectError:
 
 
 _GH = GithubContent(token="ghp_test", owner="acme", repos=["backend"], org="acme-org")
-_JIRA = JiraContent(
-    site_url="https://acme.atlassian.net", email="alice@acme.com", api_token="jira-tok"
-)
-_CONFLUENCE = ConfluenceContent(
-    site_url="https://acme.atlassian.net", email="alice@acme.com", api_token="conf-tok"
-)
-_BB = BitbucketContent(
-    workspace="acme", repos=["backend"], email="alice@acme.com", api_token="bb-tok"
-)
+_JIRA = JiraContent(site_url="https://acme.atlassian.net", email="alice@acme.com", api_token="jira-tok")
+_CONFLUENCE = ConfluenceContent(site_url="https://acme.atlassian.net", email="alice@acme.com", api_token="conf-tok")
+_BB = BitbucketContent(workspace="acme", repos=["backend"], email="alice@acme.com", api_token="bb-tok")
 _GMAIL = GmailContent(
     client_id="client-id.apps.googleusercontent.com",
     client_secret="client-secret",
@@ -80,9 +72,7 @@ _GH_MOD = "api.infrastructure.integration_validators.github.httpx.get"
 
 
 def test_github_classic_pat_all_scopes_present():
-    user_resp = _resp(
-        {"login": "alice"}, headers={"X-OAuth-Scopes": "repo, read:user, read:org"}
-    )
+    user_resp = _resp({"login": "alice"}, headers={"X-OAuth-Scopes": "repo, read:user, read:org"})
     with patch(_GH_MOD, return_value=user_resp):
         result = validate_github(_GH)
 
@@ -93,9 +83,7 @@ def test_github_classic_pat_all_scopes_present():
 
 
 def test_github_classic_pat_missing_repo_scope():
-    user_resp = _resp(
-        {"login": "alice"}, headers={"X-OAuth-Scopes": "read:user, read:org"}
-    )
+    user_resp = _resp({"login": "alice"}, headers={"X-OAuth-Scopes": "read:user, read:org"})
     with patch(_GH_MOD, return_value=user_resp):
         result = validate_github(_GH)
 
@@ -123,9 +111,7 @@ def test_github_classic_pat_missing_read_org_scope():
 
 def test_github_classic_pat_broad_user_scope_covers_read_user():
     """'user' scope is a superset of read:user — should not warn."""
-    user_resp = _resp(
-        {"login": "alice"}, headers={"X-OAuth-Scopes": "repo, user, read:org"}
-    )
+    user_resp = _resp({"login": "alice"}, headers={"X-OAuth-Scopes": "repo, user, read:org"})
     with patch(_GH_MOD, return_value=user_resp):
         result = validate_github(_GH)
 
@@ -216,9 +202,7 @@ def test_github_fine_grained_empty_repos_skips_repo_probe():
 
 def test_github_fine_grained_multiple_repos_aggregates_missing_scopes():
     """Two configured repos: one denied (403), one missing (404) — both surface, valid stays True."""
-    multi_repo = GithubContent(
-        token="ghp_fine", owner="acme", repos=["backend", "frontend"], org="acme"
-    )
+    multi_repo = GithubContent(token="ghp_fine", owner="acme", repos=["backend", "frontend"], org="acme")
     user_resp = _resp({"login": "alice"})
     repo1_resp = _resp(
         {"message": "forbidden"},
@@ -490,9 +474,7 @@ def test_bitbucket_identity_includes_nickname():
 
 def test_bitbucket_no_workspace_skips_repo_check():
     """If workspace is empty, skip the repo read scope probe."""
-    no_workspace = BitbucketContent(
-        workspace="", repos=["be"], email="a@b.com", api_token="t"
-    )
+    no_workspace = BitbucketContent(workspace="", repos=["be"], email="a@b.com", api_token="t")
     user_resp = _resp(_BB_USER_BODY)
 
     with patch(_BB_MOD, side_effect=[user_resp]) as mock_get:
@@ -505,9 +487,7 @@ def test_bitbucket_no_workspace_skips_repo_check():
 
 _BB_SCOPED_401 = {
     "type": "error",
-    "error": {
-        "message": "Token is invalid, expired, or not supported for this endpoint."
-    },
+    "error": {"message": "Token is invalid, expired, or not supported for this endpoint."},
 }
 
 
@@ -561,9 +541,7 @@ def test_bitbucket_repo_scoped_token_valid():
     repo_ok = _resp({"full_name": "acme/backend"})
     pr_ok = _resp({"values": []})
 
-    with patch(
-        _BB_MOD, side_effect=[bearer_fail, _BASIC_401, workspace_403, repo_ok, pr_ok]
-    ):
+    with patch(_BB_MOD, side_effect=[bearer_fail, _BASIC_401, workspace_403, repo_ok, pr_ok]):
         result = validate_bitbucket(_BB)
 
     assert result.valid is True
@@ -572,9 +550,7 @@ def test_bitbucket_repo_scoped_token_valid():
 
 def test_bitbucket_scoped_token_no_workspace_returns_error():
     """Scoped token with no workspace configured cannot be validated."""
-    no_workspace = BitbucketContent(
-        workspace="", repos=["be"], email="a@b.com", api_token="t"
-    )
+    no_workspace = BitbucketContent(workspace="", repos=["be"], email="a@b.com", api_token="t")
     bearer_fail = _resp(_BB_SCOPED_401, status=401)
 
     with patch(_BB_MOD, side_effect=[bearer_fail]):
@@ -587,9 +563,7 @@ def test_bitbucket_scoped_token_no_workspace_returns_error():
 def test_bitbucket_scoped_token_no_repos_skips_repo_probe():
     """Scoped token, workspace listing denied, zero repos configured — nothing left to
     fall back to, so treat as missing the read scope rather than probing anything."""
-    no_repos = BitbucketContent(
-        workspace="acme", repos=[], email="a@b.com", api_token="t"
-    )
+    no_repos = BitbucketContent(workspace="acme", repos=[], email="a@b.com", api_token="t")
     bearer_fail = _resp(_BB_SCOPED_401, status=401)
     workspace_403 = _resp({"type": "error"}, status=403)
 
@@ -603,9 +577,7 @@ def test_bitbucket_scoped_token_no_repos_skips_repo_probe():
 def test_bitbucket_scoped_token_multiple_repos_partial_failure_still_valid():
     """One of two configured repos succeeds — token is valid; the failing repo shows
     up as a missing scope instead of failing validation outright."""
-    multi_repo = BitbucketContent(
-        workspace="acme", repos=["backend", "frontend"], email="a@b.com", api_token="t"
-    )
+    multi_repo = BitbucketContent(workspace="acme", repos=["backend", "frontend"], email="a@b.com", api_token="t")
     bearer_fail = _resp(_BB_SCOPED_401, status=401)
     workspace_403 = _resp({"type": "error"}, status=403)
     repo1_ok = _resp({"full_name": "acme/backend"})
@@ -631,9 +603,7 @@ def test_bitbucket_scoped_token_multiple_repos_partial_failure_still_valid():
 
 def test_bitbucket_scoped_token_all_repos_fail_returns_invalid():
     """All configured repos fail the probe — no proof of access at all, so invalid."""
-    multi_repo = BitbucketContent(
-        workspace="acme", repos=["backend", "frontend"], email="a@b.com", api_token="t"
-    )
+    multi_repo = BitbucketContent(workspace="acme", repos=["backend", "frontend"], email="a@b.com", api_token="t")
     bearer_fail = _resp(_BB_SCOPED_401, status=401)
     workspace_403 = _resp({"type": "error"}, status=403)
     repo1_403 = _resp({"type": "error"}, status=403)
@@ -715,9 +685,7 @@ def test_gmail_missing_client_credentials_returns_error():
 
 def test_gmail_invalid_grant_reports_reconnect_hint():
     """Google's canonical error for a revoked/expired refresh token is invalid_grant."""
-    with patch(
-        _GMAIL_TOKEN_MOD, return_value=_resp({"error": "invalid_grant"}, status=400)
-    ):
+    with patch(_GMAIL_TOKEN_MOD, return_value=_resp({"error": "invalid_grant"}, status=400)):
         result = validate_gmail(_GMAIL)
 
     assert result.valid is False
@@ -751,9 +719,7 @@ def test_gmail_missing_access_token_in_response():
 
 
 def test_gmail_missing_readonly_scope_warns():
-    token_resp = _resp(
-        {**_GMAIL_TOKEN_OK, "scope": "https://www.googleapis.com/auth/gmail.send"}
-    )
+    token_resp = _resp({**_GMAIL_TOKEN_OK, "scope": "https://www.googleapis.com/auth/gmail.send"})
     profile_resp = _resp({"emailAddress": "alice@gmail.com"})
 
     with (
