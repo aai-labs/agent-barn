@@ -281,12 +281,17 @@ export type AgentAccessMemberRead = z.infer<typeof AgentAccessMemberReadSchema>;
 export type AgentGeneralAccessRead = z.infer<typeof AgentGeneralAccessReadSchema>;
 export type AgentAccessSettingsRead = z.infer<typeof AgentAccessSettingsReadSchema>;
 
-export type AgentAccessSettingsAssignmentUpdate = {
-  userId: string;
-  accessRoleId: string;
-};
+export const AgentAccessSettingsAssignmentUpdateSchema = z.object({
+  userId: z.string().uuid(),
+  accessRoleId: z.string().uuid(),
+});
 
-export type AgentAccessSettingsUpdate = {
-  generalAccessRoleId: string | null;
-  assignments: AgentAccessSettingsAssignmentUpdate[];
-};
+export const AgentAccessSettingsUpdateSchema = z.object({
+  generalAccessRoleId: z.string().uuid().nullable(),
+  assignments: z.array(AgentAccessSettingsAssignmentUpdateSchema),
+});
+
+export type AgentAccessSettingsAssignmentUpdate = z.infer<
+  typeof AgentAccessSettingsAssignmentUpdateSchema
+>;
+export type AgentAccessSettingsUpdate = z.infer<typeof AgentAccessSettingsUpdateSchema>;

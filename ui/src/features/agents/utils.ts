@@ -1,6 +1,6 @@
 import { createQueryKeyStructure } from "@/shared/query-keys";
 
-import type { Agent, AgentPermissionKey } from "./schemas";
+import type { Agent, AgentAccessSettingsRead, AgentPermissionKey } from "./schemas";
 
 export const AGENTS_PAGE_SIZE = 50;
 export const TEMPLATES_PAGE_SIZE = 50;
@@ -77,4 +77,27 @@ export function formatModelName(model: string): string {
   return model.startsWith(MODEL_DISPLAY_PREFIX)
     ? model.slice(MODEL_DISPLAY_PREFIX.length)
     : model;
+}
+
+export type ShareDraftRow = {
+  userId: string;
+  roleId: string;
+};
+
+export type ShareDraftGeneralAccess = { all: boolean; roleId: string | null };
+
+export function isShareDraftDirty(
+  settings: AgentAccessSettingsRead | undefined,
+  rows: ShareDraftRow[],
+  draftGeneral: ShareDraftGeneralAccess,
+): boolean {
+  if (!settings) return false;
+  const generalRoleId = settings.generalAccess.role?.id ?? null;
+  if (draftGeneral.all !== !!settings.generalAccess.role) return true;
+  if (draftGeneral.all && draftGeneral.roleId !== generalRoleId) return true;
+  if (rows.length !== settings.assignments.length) return true;
+  return rows.some((row) => {
+    const original = settings.assignments.find((a) => a.userId === row.userId);
+    return !original || original.accessRole.id !== row.roleId;
+  });
 }

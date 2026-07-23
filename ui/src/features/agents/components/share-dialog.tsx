@@ -19,6 +19,7 @@ import type { OrganizationMember } from "@/features/organizations/schemas";
 import { useAgentShareRoles } from "../hooks/use-agent-share-roles";
 import { useAgentShareSettings } from "../hooks/use-agent-share-settings";
 import { defaultRoleId } from "../permissions";
+import { isShareDraftDirty } from "../utils";
 import { ShareAddMember } from "./share-add-member";
 import { ShareMemberRow } from "./share-member-row";
 import { ShareRoleHelp } from "./share-role-help";
@@ -95,15 +96,7 @@ export function ShareDialog({
     initializedRef.current = true;
   }, [open, isLoading, loadError, settings]);
 
-  const isDirty =
-    !!settings &&
-    (draftGeneral.all !== !!settings.generalAccess.role ||
-      (draftGeneral.all && draftGeneral.roleId !== (settings.generalAccess.role?.id ?? null)) ||
-      rows.length !== settings.assignments.length ||
-      rows.some((row) => {
-        const original = settings.assignments.find((a) => a.userId === row.userId);
-        return !original || original.accessRole.id !== row.roleId;
-      }));
+  const isDirty = isShareDraftDirty(settings, rows, draftGeneral);
 
   function onGeneralAccessModeChange(mode: "restricted" | "all") {
     setDraftGeneral(
