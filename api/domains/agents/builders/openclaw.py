@@ -17,6 +17,71 @@ TELEMETRY_PUSH_PACKAGE_JSON: str = (_TELEMETRY_PUSH / "package.json").read_text(
 TELEMETRY_PUSH_PLUGIN_JSON: str = (_TELEMETRY_PUSH / "openclaw.plugin.json").read_text()
 
 
+def _openclaw_config_core(
+    model: str,
+    litellm_base_url: str,
+    binding_channel: str,
+    channels: dict,
+) -> dict:
+    provider, _, model_name = model.partition("/")
+    return {
+        "models": {
+            "providers": {
+                provider: {
+                    "baseUrl": litellm_base_url,
+                    "models": [{"id": model_name, "name": model_name}],
+                }
+            }
+        },
+        "agents": {
+            "defaults": {
+                "model": {
+                    "primary": model,
+                },
+                "memorySearch": {
+                    "provider": "none",
+                },
+            }
+        },
+        "channels": channels,
+        "bindings": [
+            {"type": "route", "agentId": "main", "match": {"channel": binding_channel}}
+        ],
+        "tools": {
+            "profile": "full",
+            "exec": {"mode": "full"},
+        },
+        "memory": {"backend": "builtin"},
+        "plugins": {
+            "allow": ["memory-core", "active-memory", "telemetry-push"],
+            "load": {"paths": ["/home/node/.openclaw/local-plugins/telemetry-push"]},
+            "slots": {"memory": "memory-core"},
+            "entries": {
+                "memory-core": {"enabled": True},
+                "active-memory": {
+                    "enabled": True,
+                    "config": {
+                        "agents": ["main"],
+                        "allowedChatTypes": ["direct", "group", "channel"],
+                        "modelFallbackPolicy": "default-remote",
+                        "queryMode": "recent",
+                        "promptStyle": "balanced",
+                        "timeoutMs": 15000,
+                        "maxSummaryChars": 220,
+                        "persistTranscripts": False,
+                        "logging": True,
+                    },
+                },
+                "telemetry-push": {
+                    "enabled": True,
+                    "hooks": {"allowConversationAccess": True},
+                },
+            },
+        },
+        "gateway": {"auth": {"mode": "none"}},
+    }
+
+
 def build_openclaw_config_overlay(
     model: str,
     litellm_base_url: str,
@@ -26,8 +91,6 @@ def build_openclaw_config_overlay(
     slack_dm_policy: str = "open",
     approval_mode: str = "auto",
 ) -> dict:
-    provider, _, model_name = model.partition("/")
-
     channel_ids = slack_channel_ids or []
     dm_user_ids = slack_dm_user_ids or []
 
@@ -49,26 +112,11 @@ def build_openclaw_config_overlay(
         for channel_id in channel_ids
     }
 
-    return {
-        "models": {
-            "providers": {
-                provider: {
-                    "baseUrl": litellm_base_url,
-                    "models": [{"id": model_name, "name": model_name}],
-                }
-            }
-        },
-        "agents": {
-            "defaults": {
-                "model": {
-                    "primary": model,
-                },
-                "memorySearch": {
-                    "provider": "none",
-                },
-            }
-        },
-        "channels": {
+    return _openclaw_config_core(
+        model,
+        litellm_base_url,
+        binding_channel="slack",
+        channels={
             "slack": {
                 "enabled": True,
                 "mode": "socket",
@@ -89,42 +137,7 @@ def build_openclaw_config_overlay(
                 "channels": channels_config,
             }
         },
-        "bindings": [
-            {"type": "route", "agentId": "main", "match": {"channel": "slack"}}
-        ],
-        "tools": {
-            "profile": "full",
-            "exec": {"mode": "full"},
-        },
-        "memory": {"backend": "builtin"},
-        "plugins": {
-            "allow": ["memory-core", "active-memory", "telemetry-push"],
-            "load": {"paths": ["/home/node/.openclaw/local-plugins/telemetry-push"]},
-            "slots": {"memory": "memory-core"},
-            "entries": {
-                "memory-core": {"enabled": True},
-                "active-memory": {
-                    "enabled": True,
-                    "config": {
-                        "agents": ["main"],
-                        "allowedChatTypes": ["direct", "group", "channel"],
-                        "modelFallbackPolicy": "default-remote",
-                        "queryMode": "recent",
-                        "promptStyle": "balanced",
-                        "timeoutMs": 15000,
-                        "maxSummaryChars": 220,
-                        "persistTranscripts": False,
-                        "logging": True,
-                    },
-                },
-                "telemetry-push": {
-                    "enabled": True,
-                    "hooks": {"allowConversationAccess": True},
-                },
-            },
-        },
-        "gateway": {"auth": {"mode": "none"}},
-    }
+    )
 
 
 def build_openclaw_config_overlay_teams(
@@ -132,28 +145,11 @@ def build_openclaw_config_overlay_teams(
     litellm_base_url: str,
     approval_mode: str = "auto",
 ) -> dict:
-    provider, _, model_name = model.partition("/")
-
-    return {
-        "models": {
-            "providers": {
-                provider: {
-                    "baseUrl": litellm_base_url,
-                    "models": [{"id": model_name, "name": model_name}],
-                }
-            }
-        },
-        "agents": {
-            "defaults": {
-                "model": {
-                    "primary": model,
-                },
-                "memorySearch": {
-                    "provider": "none",
-                },
-            }
-        },
-        "channels": {
+    return _openclaw_config_core(
+        model,
+        litellm_base_url,
+        binding_channel="msteams",
+        channels={
             "msteams": {
                 "enabled": True,
                 "dmPolicy": "open",
@@ -163,42 +159,46 @@ def build_openclaw_config_overlay_teams(
                 "webhook": {"port": 3978, "path": "/api/messages"},
             }
         },
-        "bindings": [
-            {"type": "route", "agentId": "main", "match": {"channel": "msteams"}}
-        ],
-        "tools": {
-            "profile": "full",
-            "exec": {"mode": "full"},
+    )
+
+
+def build_openclaw_config_overlay_telegram(
+    model: str,
+    litellm_base_url: str,
+    dm_policy: str = "off",
+    group_policy: str = "allowlist",
+    allowed_user_ids: list[str] | None = None,
+    allowed_chat_ids: list[str] | None = None,
+    approval_mode: str = "auto",
+) -> dict:
+    if dm_policy == "off":
+        openclaw_dm_policy = "allowlist"
+        allow_from: list[str] = []
+    elif dm_policy == "open":
+        openclaw_dm_policy = "open"
+        allow_from = ["*"]
+    else:
+        openclaw_dm_policy = "allowlist"
+        allow_from = list(allowed_user_ids or [])
+
+    return _openclaw_config_core(
+        model,
+        litellm_base_url,
+        binding_channel="telegram",
+        channels={
+            "telegram": {
+                "enabled": True,
+                "groupPolicy": group_policy,
+                "dmPolicy": openclaw_dm_policy,
+                "allowFrom": allow_from,
+                **(
+                    {"groups": {cid: {} for cid in (allowed_chat_ids or [])}}
+                    if group_policy == "allowlist"
+                    else {}
+                ),
+            }
         },
-        "memory": {"backend": "builtin"},
-        "plugins": {
-            "allow": ["memory-core", "active-memory", "telemetry-push"],
-            "load": {"paths": ["/home/node/.openclaw/local-plugins/telemetry-push"]},
-            "slots": {"memory": "memory-core"},
-            "entries": {
-                "memory-core": {"enabled": True},
-                "active-memory": {
-                    "enabled": True,
-                    "config": {
-                        "agents": ["main"],
-                        "allowedChatTypes": ["direct", "group", "channel"],
-                        "modelFallbackPolicy": "default-remote",
-                        "queryMode": "recent",
-                        "promptStyle": "balanced",
-                        "timeoutMs": 15000,
-                        "maxSummaryChars": 220,
-                        "persistTranscripts": False,
-                        "logging": True,
-                    },
-                },
-                "telemetry-push": {
-                    "enabled": True,
-                    "hooks": {"allowConversationAccess": True},
-                },
-            },
-        },
-        "gateway": {"auth": {"mode": "none"}},
-    }
+    )
 
 
 def build_config_map(
@@ -272,6 +272,30 @@ def build_secret_slack(
             "SLACK_APP_TOKEN": slack_app_token,
             "LITELLM_API_KEY": litellm_api_key,
             "LITELLM_BASE_URL": litellm_base_url,
+            "AGENT_PLATFORM": "slack",
+        },
+    )
+
+
+def build_secret_telegram(
+    agent_id: UUID,
+    org_id: UUID,
+    namespace: str,
+    telegram_bot_token: str,
+    litellm_api_key: str,
+    litellm_base_url: str,
+) -> client.V1Secret:
+    return client.V1Secret(
+        metadata=client.V1ObjectMeta(
+            name=_resource_name(agent_id),
+            namespace=namespace,
+            labels=_labels(agent_id, org_id),
+        ),
+        string_data={
+            "TELEGRAM_BOT_TOKEN": telegram_bot_token,
+            "LITELLM_API_KEY": litellm_api_key,
+            "LITELLM_BASE_URL": litellm_base_url,
+            "AGENT_PLATFORM": "telegram",
         },
     )
 

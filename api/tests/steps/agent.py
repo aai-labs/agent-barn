@@ -13,6 +13,7 @@ from api.domains.agents.models import (
     AgentSlackConfig,
     AgentStatus,
     AgentTeamsConfig,
+    AgentTelegramConfig,
     AgentType,
 )
 from api.domains.agents.repository import AgentRepository
@@ -40,6 +41,7 @@ TEST_SLACK_APP_TOKEN = "xapp-1-test-app-token"
 TEST_TEAMS_APP_ID = "test-teams-app-id"
 TEST_TEAMS_APP_PASSWORD = "test-teams-app-password"
 TEST_TEAMS_TENANT_ID = "test-tenant-id"
+TEST_TELEGRAM_BOT_TOKEN = "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
 FAKE_LITELLM_KEY = "sk-fake-litellm-key-for-tests"
 
 
@@ -140,6 +142,15 @@ def there_is_an_agent(
                 tenant_id=TEST_TEAMS_TENANT_ID,
             )
             repository.save_teams_config(teams_config)
+        elif platform == AgentPlatform.TELEGRAM:
+            telegram_config = AgentTelegramConfig(
+                agent_id=agent.id,
+                bot_token_encrypted=encrypt_token(
+                    TEST_TELEGRAM_BOT_TOKEN, TEST_ENCRYPTION_KEY
+                ),
+                bot_username="test_bot",
+            )
+            repository.save_telegram_config(telegram_config)
 
         context.agent = agent
 

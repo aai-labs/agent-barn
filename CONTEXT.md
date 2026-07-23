@@ -1,6 +1,6 @@
 # Agent Farm
 
-Agent Farm manages organization-owned AI agents that operate in Slack or Microsoft Teams through a selected runtime and a versioned configuration.
+Agent Farm manages organization-owned AI agents that operate in Slack, Microsoft Teams, or Telegram through a selected runtime and a versioned configuration.
 
 ## Language
 
@@ -41,7 +41,7 @@ The implementation that executes an agent. Agent Farm currently supports Hermes 
 _Avoid_: platform
 
 **Platform**:
-The chat system through which an agent interacts with people. Agent Farm currently supports Slack and Microsoft Teams.
+The chat system through which an agent interacts with people. Agent Farm currently supports Slack, Microsoft Teams, and Telegram.
 _Avoid_: runtime
 
 **Template**:

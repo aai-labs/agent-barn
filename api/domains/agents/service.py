@@ -26,13 +26,17 @@ from api.domains.agents.builders import (
     build_deployment,
     build_hermes_config,
     build_hermes_config_map,
+    build_hermes_config_telegram,
     build_hermes_deployment,
     build_openclaw_config_overlay,
     build_openclaw_config_overlay_teams,
+    build_openclaw_config_overlay_telegram,
     build_pvc,
     build_secret_hermes_slack,
+    build_secret_hermes_telegram,
     build_secret_slack,
     build_secret_teams,
+    build_secret_telegram,
     build_service,
 )
 from api.domains.agents.error_messages import friendly_k8s_error, friendly_pod_reason
@@ -57,6 +61,8 @@ from api.domains.agents.models import (
     AgentStatus,
     AgentTeamsConfig,
     AgentTeamsConfigRead,
+    AgentTelegramConfig,
+    AgentTelegramConfigRead,
     AgentType,
     AgentUpdate,
     GmailContent,
@@ -91,6 +97,9 @@ from api.infrastructure.shared.models import PaginatedItems, Pagination
 from api.infrastructure.slack.client import (
     SlackClient,
     SlackFetchError,
+)
+from api.infrastructure.telegram.client import (
+    validate_bot_token as validate_telegram_bot_token,
 )
 from api.infrastructure.slack.config_token import update_slack_app_name
 
@@ -128,7 +137,16 @@ _CREDENTIAL_FIELDS = frozenset(
         "teams_app_id",
         "teams_app_password",
         "secrets",
-        "removed_secret_providers",
+        "removed_secret_providers",    }
+    )
+
+_TELEGRAM_CONFIG_FIELDS = frozenset(
+    {
+        "telegram_bot_token",
+        "telegram_allowed_user_ids",
+        "telegram_allowed_chat_ids",
+        "telegram_group_policy",
+        "telegram_dm_policy",
     }
 )
 
@@ -319,6 +337,7 @@ class AgentService:
         agent: Agent,
         slack_config: AgentSlackConfig | None = None,
         teams_config: AgentTeamsConfig | None = None,
+        telegram_config: AgentTelegramConfig | None = None,
         secrets: list[AgentSecret] | None = None,
         skills: list[Skill] | None = None,
         required_skill_ids: set[UUID] | None = None,
@@ -333,6 +352,11 @@ class AgentService:
             )
         teams_config_read = (
             AgentTeamsConfigRead.model_validate(teams_config) if teams_config else None
+        )
+        telegram_config_read = (
+            AgentTelegramConfigRead.model_validate(telegram_config)
+            if telegram_config
+            else None
         )
         secrets_read = [
             AgentSecretRead.model_validate(secret) for secret in (secrets or [])
@@ -362,6 +386,7 @@ class AgentService:
             approval_mode=agent.approval_mode,
             slack_config=slack_config_read,
             teams_config=teams_config_read,
+            telegram_config=telegram_config_read,
             secrets=secrets_read,
             skills=skills_read,
             webhook_url=webhook_url,
@@ -373,10 +398,13 @@ class AgentService:
     def _get_agent_read(self, agent: Agent, context: CurrentUserContext) -> AgentRead:
         slack_config = None
         teams_config = None
+        telegram_config = None
         if agent.platform == AgentPlatform.SLACK:
             slack_config = self.repository.get_slack_config(agent.id)
         elif agent.platform == AgentPlatform.TEAMS:
             teams_config = self.repository.get_teams_config(agent.id)
+        elif agent.platform == AgentPlatform.TELEGRAM:
+            telegram_config = self.repository.get_telegram_config(agent.id)
         secrets = self.repository.get_secrets_for_agent(agent.id)
         skills = [
             s for _, s in self.skill_repository.get_agent_skills_with_details(agent.id)
@@ -398,6 +426,7 @@ class AgentService:
             skills,
             required_ids,
             allowed_actions,
+            telegram_config,
         )
 
     def _get_bot_display_name(
@@ -435,6 +464,16 @@ class AgentService:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST, detail=reason
                 )
+
+        telegram_bot_username: str | None = None
+        if data.platform == AgentPlatform.TELEGRAM:
+            assert data.telegram_bot_token is not None
+            ok, reason, bot_info = validate_telegram_bot_token(data.telegram_bot_token)
+            if not ok:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST, detail=reason
+                )
+            telegram_bot_username = bot_info.get("username", "")
 
         # Pin to the requested version, or the lineage's latest if unspecified.
         if data.template_version is not None:
@@ -501,6 +540,7 @@ class AgentService:
 
         slack_config = None
         teams_config = None
+        telegram_config = None
 
         if data.platform == AgentPlatform.SLACK:
             slack_config = AgentSlackConfig(
@@ -537,6 +577,20 @@ class AgentService:
                 tenant_id=data.teams_tenant_id,
             )
             self.repository.save_teams_config(teams_config)
+        elif data.platform == AgentPlatform.TELEGRAM:
+            telegram_config = AgentTelegramConfig(
+                agent_id=agent.id,
+                bot_token_encrypted=encrypt_token(
+                    cast(str, data.telegram_bot_token),
+                    self.config.agent_token_encryption_key,
+                ),
+                bot_username=telegram_bot_username or "",
+                allowed_user_ids=data.telegram_allowed_user_ids,
+                allowed_chat_ids=data.telegram_allowed_chat_ids,
+                group_policy=data.telegram_group_policy,
+                dm_policy=data.telegram_dm_policy,
+            )
+            self.repository.save_telegram_config(telegram_config)
 
         # Integration secrets are platform-independent. Persist them before any
         # Teams auto-start so they exist if/when the pod is later built.
@@ -574,6 +628,7 @@ class AgentService:
             skills_to_assign,
             required_ids,
             allowed_actions,
+            telegram_config,
         )
 
     def get_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
@@ -613,6 +668,7 @@ class AgentService:
         agent_ids = [a.id for a in agents]
         slack_configs = self.repository.get_slack_configs_for_agents(agent_ids)
         teams_configs = self.repository.get_teams_configs_for_agents(agent_ids)
+        telegram_configs = self.repository.get_telegram_configs_for_agents(agent_ids)
         secrets_by_agent = self.repository.get_secrets_for_agents(agent_ids)
         skills_by_agent = self.skill_repository.get_skills_for_agents(agent_ids)
 
@@ -634,6 +690,7 @@ class AgentService:
                 agent,
                 slack_configs.get(agent.id),
                 teams_configs.get(agent.id),
+                telegram_configs.get(agent.id),
                 secrets_by_agent.get(agent.id, []),
                 skills_by_agent.get(agent.id, []),
                 _required_ids(agent),
@@ -668,20 +725,26 @@ class AgentService:
                 detail=f"Agent {agent_id} must be stopped before updating",
             )
 
-        if agent.platform == AgentPlatform.TEAMS and (
-            _SLACK_CONFIG_FIELDS & updated.keys()
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Cannot set Slack fields on a Teams agent",
-            )
-        if agent.platform == AgentPlatform.SLACK and (
-            _TEAMS_CONFIG_FIELDS & updated.keys()
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Cannot set Teams fields on a Slack agent",
-            )
+        other_platform_fields = {
+            AgentPlatform.SLACK: [
+                (_TEAMS_CONFIG_FIELDS, "Teams"),
+                (_TELEGRAM_CONFIG_FIELDS, "Telegram"),
+            ],
+            AgentPlatform.TEAMS: [
+                (_SLACK_CONFIG_FIELDS, "Slack"),
+                (_TELEGRAM_CONFIG_FIELDS, "Telegram"),
+            ],
+            AgentPlatform.TELEGRAM: [
+                (_SLACK_CONFIG_FIELDS, "Slack"),
+                (_TEAMS_CONFIG_FIELDS, "Teams"),
+            ],
+        }
+        for fields, label in other_platform_fields.get(agent.platform, []):
+            if fields & updated.keys():
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"Cannot set {label} fields on a {agent.platform.title()} agent",
+                )
 
         # Re-pin the agent to a different template (slug, version). The model
         # validator guarantees both keys appear together.
@@ -816,6 +879,40 @@ class AgentService:
                 if "teams_tenant_id" in updated:
                     teams_config.tenant_id = updated["teams_tenant_id"]
                 self.repository.save_teams_config(teams_config)
+
+        # Telegram config updates
+        if agent.platform == AgentPlatform.TELEGRAM and (
+            _TELEGRAM_CONFIG_FIELDS & updated.keys()
+        ):
+            if "telegram_bot_token" in updated:
+                ok, reason, bot_info = validate_telegram_bot_token(
+                    updated["telegram_bot_token"]
+                )
+                if not ok:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST, detail=reason
+                    )
+            telegram_config = self.repository.get_telegram_config(agent.id)
+            if telegram_config:
+                if "telegram_bot_token" in updated:
+                    telegram_config.bot_token_encrypted = encrypt_token(
+                        updated["telegram_bot_token"],
+                        self.config.agent_token_encryption_key,
+                    )
+                    telegram_config.bot_username = bot_info.get("username", "")
+                if "telegram_allowed_user_ids" in updated:
+                    telegram_config.allowed_user_ids = updated[
+                        "telegram_allowed_user_ids"
+                    ]
+                if "telegram_allowed_chat_ids" in updated:
+                    telegram_config.allowed_chat_ids = updated[
+                        "telegram_allowed_chat_ids"
+                    ]
+                if "telegram_group_policy" in updated:
+                    telegram_config.group_policy = updated["telegram_group_policy"]
+                if "telegram_dm_policy" in updated:
+                    telegram_config.dm_policy = updated["telegram_dm_policy"]
+                self.repository.save_telegram_config(telegram_config)
 
         # Validate skills accessibility and secret coverage
         if data.skill_ids or data.removed_secret_providers:
@@ -1012,6 +1109,80 @@ class AgentService:
                 self.config.openclaw_image,
                 self.config.agent_image_pull_secret,
             )
+        elif agent.platform == AgentPlatform.TELEGRAM:
+            telegram_config = self.repository.get_telegram_config(agent.id)
+            if not telegram_config:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Telegram config missing for agent {agent_id}",
+                )
+            bot_token = decrypt_token(
+                telegram_config.bot_token_encrypted,
+                self.config.agent_token_encryption_key,
+            )
+            ok, reason, _ = validate_telegram_bot_token(bot_token)
+            if not ok:
+                agent.last_error = reason
+                agent.status = AgentStatus.ERROR
+                self.repository.save(agent)
+                return self._get_agent_read(agent)
+
+            service = build_service(agent.id, org_id, ns)
+
+            if agent.agent_type == AgentType.HERMES:
+                api_server_key = secrets.token_urlsafe(32)
+                hermes_cfg = build_hermes_config_telegram(
+                    effective_model,
+                    self.config.agent_litellm_base_url,
+                    dm_policy=str(telegram_config.dm_policy),
+                    group_policy=str(telegram_config.group_policy),
+                    approval_mode=str(agent.approval_mode),
+                )
+                secret = build_secret_hermes_telegram(
+                    agent_id=agent.id,
+                    org_id=org_id,
+                    namespace=ns,
+                    agent_name=agent.name,
+                    telegram_bot_token=bot_token,
+                    litellm_api_key=litellm_key,
+                    litellm_base_url=self.config.agent_litellm_base_url,
+                    api_server_key=api_server_key,
+                    dm_policy=str(telegram_config.dm_policy),
+                    allowed_user_ids=telegram_config.allowed_user_ids,
+                    allowed_chat_ids=telegram_config.allowed_chat_ids,
+                )
+                deployment = build_hermes_deployment(
+                    agent.id,
+                    org_id,
+                    ns,
+                    self.config.hermes_image,
+                    self.config.agent_image_pull_secret,
+                )
+            else:
+                overlay = build_openclaw_config_overlay_telegram(
+                    effective_model,
+                    self.config.agent_litellm_base_url,
+                    dm_policy=str(telegram_config.dm_policy),
+                    group_policy=str(telegram_config.group_policy),
+                    allowed_user_ids=telegram_config.allowed_user_ids,
+                    allowed_chat_ids=telegram_config.allowed_chat_ids,
+                    approval_mode=str(agent.approval_mode),
+                )
+                secret = build_secret_telegram(
+                    agent_id=agent.id,
+                    org_id=org_id,
+                    namespace=ns,
+                    telegram_bot_token=bot_token,
+                    litellm_api_key=litellm_key,
+                    litellm_base_url=self.config.agent_litellm_base_url,
+                )
+                deployment = build_deployment(
+                    agent.id,
+                    org_id,
+                    ns,
+                    self.config.openclaw_image,
+                    self.config.agent_image_pull_secret,
+                )
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -1103,6 +1274,7 @@ class AgentService:
                 aai_cli_config_toml=aai_config_toml,
                 aai_cli_setup_sh=aai_setup_sh,
                 skills_json=skills_json,
+                platform=str(agent.platform),
             )
         else:
             config_map = build_config_map(

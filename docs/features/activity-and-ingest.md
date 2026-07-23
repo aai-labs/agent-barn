@@ -18,7 +18,7 @@ The separately served Ingest API receives authenticated runtime telemetry. It pe
 - Duplicate message and pending tool-call identities are handled idempotently. Tool results update any matching row regardless of its current status; a result arriving before its pending event is currently dropped.
 - Product API conversation and tool-call reads require `activity.read` and are scoped through an accessible, organization-owned, non-deleted Agent. Assigned Members cannot bypass Agent Access through activity endpoints.
 - Runtime Ingest writes use Agent identity plus ingest-key authentication rather than a human Membership or Agent Access check.
-- Slack channel and sender names may be enriched best-effort; Teams activity has no equivalent directory enrichment in this domain.
+- Slack channel and sender names may be enriched best-effort; Telegram chat names are cached with a 10-minute TTL. Teams activity has no equivalent directory enrichment in this domain.
 
 ## Data flow
 
