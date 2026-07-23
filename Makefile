@@ -1,7 +1,7 @@
 COMPOSE := docker compose -f compose.yml
 
 .PHONY: \
-	dev-api dev-ui migrate rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api fix-api test check fix \
+	dev-api dev-ui migrate rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations fix-api test check fix \
 	up down restart logs build clean db-up db-down db-logs db-restart
 
 # Non-docker commands
@@ -42,6 +42,15 @@ coverage:
 
 check-api:
 	cd api && uv run ruff check . && uv run ruff format --check . && uv run ty check .
+
+check-migrations:
+	@cd api && heads=$$(uv run python -m alembic heads); \
+	count=$$(printf '%s\n' "$$heads" | grep -c .); \
+	if [ "$$count" -ne 1 ]; then \
+		echo "Expected exactly one alembic head, found $$count:"; \
+		printf '%s\n' "$$heads"; \
+		exit 1; \
+	fi
 
 fix-api:
 	cd api && uv run ruff check --fix && uv run ruff format .
