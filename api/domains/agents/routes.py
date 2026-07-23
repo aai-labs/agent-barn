@@ -81,9 +81,7 @@ def list_agent_access(
     return service.list_assigned_members(agent_id, context)
 
 
-@agents_router.get(
-    "/{agent_id}/access/eligible", response_model=list[AgentAccessCandidateRead]
-)
+@agents_router.get("/{agent_id}/access/eligible", response_model=list[AgentAccessCandidateRead])
 def list_eligible_agent_access(
     agent_id: UUID,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
@@ -105,9 +103,7 @@ def grant_agent_access(
     return result
 
 
-@agents_router.patch(
-    "/{agent_id}/access/{user_id}", response_model=AgentAccessMemberRead
-)
+@agents_router.patch("/{agent_id}/access/{user_id}", response_model=AgentAccessMemberRead)
 def change_agent_access_role(
     agent_id: UUID,
     user_id: UUID,
@@ -118,9 +114,7 @@ def change_agent_access_role(
     return service.change_access_role(agent_id, user_id, data, context)
 
 
-@agents_router.delete(
-    "/{agent_id}/access/{user_id}", status_code=status.HTTP_204_NO_CONTENT
-)
+@agents_router.delete("/{agent_id}/access/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
 def revoke_agent_access(
     agent_id: UUID,
     user_id: UUID,

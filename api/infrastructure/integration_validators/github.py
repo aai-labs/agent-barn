@@ -13,22 +13,14 @@ def validate_github(content: GithubContent) -> IntegrationValidationResult:
         "X-GitHub-Api-Version": "2022-11-28",
     }
     try:
-        resp = httpx.get(
-            "https://api.github.com/user", headers=headers, timeout=_TIMEOUT
-        )
+        resp = httpx.get("https://api.github.com/user", headers=headers, timeout=_TIMEOUT)
     except Exception as exc:
-        return IntegrationValidationResult(
-            valid=False, error=f"Could not reach GitHub: {exc}"
-        )
+        return IntegrationValidationResult(valid=False, error=f"Could not reach GitHub: {exc}")
 
     if resp.status_code == 401:
-        return IntegrationValidationResult(
-            valid=False, error="Token is invalid or expired"
-        )
+        return IntegrationValidationResult(valid=False, error="Token is invalid or expired")
     if resp.status_code != 200:
-        return IntegrationValidationResult(
-            valid=False, error=f"GitHub returned unexpected status {resp.status_code}"
-        )
+        return IntegrationValidationResult(valid=False, error=f"GitHub returned unexpected status {resp.status_code}")
 
     identity = resp.json().get("login", "")
     scopes_header = resp.headers.get("X-OAuth-Scopes", "")
@@ -48,14 +40,10 @@ def validate_github(content: GithubContent) -> IntegrationValidationResult:
         # Fine-grained PAT — probe the configured repo directly.
         missing = _check_fine_grained_repo_access(content, headers)
 
-    return IntegrationValidationResult(
-        valid=True, identity=identity, missing_scopes=missing
-    )
+    return IntegrationValidationResult(valid=True, identity=identity, missing_scopes=missing)
 
 
-def _check_fine_grained_repo_access(
-    content: GithubContent, headers: dict[str, str]
-) -> list[str]:
+def _check_fine_grained_repo_access(content: GithubContent, headers: dict[str, str]) -> list[str]:
     if not content.owner or not content.repos:
         return []
     missing: list[str] = []
@@ -64,9 +52,7 @@ def _check_fine_grained_repo_access(
     return missing
 
 
-def _check_single_repo_access(
-    owner: str, repo: str, headers: dict[str, str]
-) -> list[str]:
+def _check_single_repo_access(owner: str, repo: str, headers: dict[str, str]) -> list[str]:
     missing: list[str] = []
 
     # Check repository contents access.
@@ -81,10 +67,7 @@ def _check_single_repo_access(
             detail = "contents=read" if not accepted else accepted
             missing.append(f"{owner}/{repo}: Repository access — needs: {detail}")
         elif resp.status_code == 404:
-            missing.append(
-                f"{owner}/{repo}: Repository contents read access "
-                "(or repository does not exist)"
-            )
+            missing.append(f"{owner}/{repo}: Repository contents read access (or repository does not exist)")
     except Exception:
         pass
 
@@ -96,10 +79,7 @@ def _check_single_repo_access(
             timeout=_TIMEOUT,
         )
         if pr_resp.status_code == 403:
-            missing.append(
-                f"{owner}/{repo}: Pull requests: Read + Write — needed to list PRs "
-                "and post review comments"
-            )
+            missing.append(f"{owner}/{repo}: Pull requests: Read + Write — needed to list PRs and post review comments")
     except Exception:
         pass
 

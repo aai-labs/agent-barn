@@ -18,6 +18,8 @@ logger.addHandler(logging.StreamHandler())
 
 ROOT_ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
 load_dotenv(ROOT_ENV_PATH, override=False)
+
+
 def _set_default(key: str, value: str) -> None:
     # .env may define these keys with an empty value (e.g. email disabled locally),
     # which `os.environ.setdefault` would treat as "already set" and never override.

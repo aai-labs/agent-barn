@@ -28,9 +28,7 @@ def upgrade() -> None:
     )
     op.add_column(
         "agent",
-        sa.Column(
-            "slack_group_policy", sa.String(), nullable=True, server_default="open"
-        ),
+        sa.Column("slack_group_policy", sa.String(), nullable=True, server_default="open"),
     )
     op.add_column(
         "agent",

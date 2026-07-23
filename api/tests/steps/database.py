@@ -38,9 +38,7 @@ def database_repo_is_ready():
                 PasswordResetTokenRepository,
             ]
 
-            context.repos = CompositeCloseable(
-                [context.injector.get(repo_type) for repo_type in repo_types]
-            )
+            context.repos = CompositeCloseable([context.injector.get(repo_type) for repo_type in repo_types])
             context.postgres_delegate = context.injector.get(PostgresRepositoryDelegate)
 
         def close_db():

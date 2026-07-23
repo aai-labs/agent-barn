@@ -51,9 +51,7 @@ class CostService:
         start = end - datetime.timedelta(days=days)
         return start.isoformat(), end.isoformat()
 
-    def _build_agent_cost_read_from_info(
-        self, agent: Agent, details: dict
-    ) -> AgentCostRead:
+    def _build_agent_cost_read_from_info(self, agent: Agent, details: dict) -> AgentCostRead:
         spend = float(details.get("spend", 0.0))
         prompt_tokens = int(details.get("total_input_tokens", 0) or 0)
         completion_tokens = int(details.get("total_output_tokens", 0) or 0)
@@ -75,11 +73,7 @@ class CostService:
             mapped_status = "deleted"
         else:
             status_map = {"RUNNING": "active", "STOPPED": "stopped", "ERROR": "error"}
-            mapped_status = (
-                status_map.get(agent.status.value, "unknown")
-                if hasattr(agent, "status")
-                else "unknown"
-            )
+            mapped_status = status_map.get(agent.status.value, "unknown") if hasattr(agent, "status") else "unknown"
         return AgentCostRead(
             agent_id=agent.id,
             agent_name=agent.name,
@@ -128,9 +122,7 @@ class CostService:
                 key_hash = hashlib.sha256(key.encode()).hexdigest()
                 details = global_spend.get(key_hash, {})
             except Exception as exc:
-                logger.warning(
-                    "Failed to fetch spend details for agent %s: %s", agent.id, exc
-                )
+                logger.warning("Failed to fetch spend details for agent %s: %s", agent.id, exc)
                 details = {}
 
             spend = float(details.get("spend", 0.0))
@@ -159,12 +151,8 @@ class CostService:
                 if len(date_str) == 10:
                     daily_costs[date_str] = daily_costs.get(date_str, 0.0) + row_spend
 
-        time_series = [
-            CostTimeSeriesPoint(date=d, cost=c) for d, c in sorted(daily_costs.items())
-        ]
-        by_model_list = [
-            CostByModelRead(model=m, total_cost=c) for m, c in by_model.items()
-        ]
+        time_series = [CostTimeSeriesPoint(date=d, cost=c) for d, c in sorted(daily_costs.items())]
+        by_model_list = [CostByModelRead(model=m, total_cost=c) for m, c in by_model.items()]
 
         return OrgCostSummaryRead(
             totalCost=total_cost,
@@ -173,13 +161,9 @@ class CostService:
             timeSeries=time_series,
         )
 
-    def get_agent_cost(
-        self, agent_id: UUID, context: CurrentUserContext
-    ) -> AgentCostRead:
+    def get_agent_cost(self, agent_id: UUID, context: CurrentUserContext) -> AgentCostRead:
         try:
-            agent = self.agent_authorization.require_action(
-                context, agent_id, PermissionKey.COST_READ
-            )
+            agent = self.agent_authorization.require_action(context, agent_id, PermissionKey.COST_READ)
         except HTTPException as exc:
             if exc.status_code != status.HTTP_404_NOT_FOUND:
                 raise

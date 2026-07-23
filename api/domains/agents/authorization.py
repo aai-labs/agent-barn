@@ -100,16 +100,13 @@ class AgentAuthorization:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
         return action_scope
 
-    def allowed_actions(
-        self, context: CurrentUserContext, agents: list[Agent]
-    ) -> dict[UUID, list[PermissionKey]]:
+    def allowed_actions(self, context: CurrentUserContext, agents: list[Agent]) -> dict[UUID, list[PermissionKey]]:
         if not agents:
             return {}
         membership = context.require_current_user_organization()
         if context.user.is_superuser or membership.role in IMPLICIT_AGENT_OWNER_ROLES:
             permissions_by_agent = {
-                agent.id: set(SYSTEM_AGENT_ACCESS_ROLE_GRANTS[AGENT_OWNER_ROLE_ID])
-                for agent in agents
+                agent.id: set(SYSTEM_AGENT_ACCESS_ROLE_GRANTS[AGENT_OWNER_ROLE_ID]) for agent in agents
             }
         else:
             permissions_by_agent = self.repository.find_agent_permissions(

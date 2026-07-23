@@ -21,20 +21,12 @@ HERMES_HEALTHZ_PY: str = (_SCRIPTS / "healthz-server.py").read_text()
 HERMES_START_SH: str = (_SCRIPTS / "start.sh").read_text()
 SLACK_DENY_DMS_PLUGIN_YAML: str = (_DENY_DMS / "plugin.yaml").read_text()
 SLACK_DENY_DMS_PLUGIN_INIT: str = (_DENY_DMS / "__init__.py").read_text()
-SLACK_CHANNEL_ALLOWLIST_PLUGIN_YAML: str = (
-    _CHANNEL_ALLOWLIST / "plugin.yaml"
-).read_text()
-SLACK_CHANNEL_ALLOWLIST_PLUGIN_INIT: str = (
-    _CHANNEL_ALLOWLIST / "__init__.py"
-).read_text()
+SLACK_CHANNEL_ALLOWLIST_PLUGIN_YAML: str = (_CHANNEL_ALLOWLIST / "plugin.yaml").read_text()
+SLACK_CHANNEL_ALLOWLIST_PLUGIN_INIT: str = (_CHANNEL_ALLOWLIST / "__init__.py").read_text()
 TELEGRAM_DENY_DMS_PLUGIN_YAML: str = (_TG_DENY_DMS / "plugin.yaml").read_text()
 TELEGRAM_DENY_DMS_PLUGIN_INIT: str = (_TG_DENY_DMS / "__init__.py").read_text()
-TELEGRAM_CHANNEL_ALLOWLIST_PLUGIN_YAML: str = (
-    _TG_CHANNEL_ALLOWLIST / "plugin.yaml"
-).read_text()
-TELEGRAM_CHANNEL_ALLOWLIST_PLUGIN_INIT: str = (
-    _TG_CHANNEL_ALLOWLIST / "__init__.py"
-).read_text()
+TELEGRAM_CHANNEL_ALLOWLIST_PLUGIN_YAML: str = (_TG_CHANNEL_ALLOWLIST / "plugin.yaml").read_text()
+TELEGRAM_CHANNEL_ALLOWLIST_PLUGIN_INIT: str = (_TG_CHANNEL_ALLOWLIST / "__init__.py").read_text()
 TELEMETRY_PUSH_PLUGIN_YAML: str = (_TELEMETRY_PUSH / "plugin.yaml").read_text()
 TELEMETRY_PUSH_PLUGIN_INIT: str = (_TELEMETRY_PUSH / "__init__.py").read_text()
 
@@ -176,9 +168,7 @@ def build_hermes_config_map(
         "AGENTS.md": agents_md,
         "BOOT.md": boot_md,
         "HEARTBEAT.md": heartbeat_md,
-        "hermes-config.yaml": yaml.dump(
-            hermes_config, default_flow_style=False, sort_keys=False
-        ),
+        "hermes-config.yaml": yaml.dump(hermes_config, default_flow_style=False, sort_keys=False),
         "telemetry-push-plugin.yaml": TELEMETRY_PUSH_PLUGIN_YAML,
         "telemetry-push-init.py": TELEMETRY_PUSH_PLUGIN_INIT,
         "healthz-server.py": HERMES_HEALTHZ_PY,
@@ -187,19 +177,13 @@ def build_hermes_config_map(
     if platform == "slack":
         data["slack-deny-dms-plugin.yaml"] = SLACK_DENY_DMS_PLUGIN_YAML
         data["slack-deny-dms-init.py"] = SLACK_DENY_DMS_PLUGIN_INIT
-        data["slack-channel-allowlist-plugin.yaml"] = (
-            SLACK_CHANNEL_ALLOWLIST_PLUGIN_YAML
-        )
+        data["slack-channel-allowlist-plugin.yaml"] = SLACK_CHANNEL_ALLOWLIST_PLUGIN_YAML
         data["slack-channel-allowlist-init.py"] = SLACK_CHANNEL_ALLOWLIST_PLUGIN_INIT
     elif platform == "telegram":
         data["telegram-deny-dms-plugin.yaml"] = TELEGRAM_DENY_DMS_PLUGIN_YAML
         data["telegram-deny-dms-init.py"] = TELEGRAM_DENY_DMS_PLUGIN_INIT
-        data["telegram-channel-allowlist-plugin.yaml"] = (
-            TELEGRAM_CHANNEL_ALLOWLIST_PLUGIN_YAML
-        )
-        data["telegram-channel-allowlist-init.py"] = (
-            TELEGRAM_CHANNEL_ALLOWLIST_PLUGIN_INIT
-        )
+        data["telegram-channel-allowlist-plugin.yaml"] = TELEGRAM_CHANNEL_ALLOWLIST_PLUGIN_YAML
+        data["telegram-channel-allowlist-init.py"] = TELEGRAM_CHANNEL_ALLOWLIST_PLUGIN_INIT
     if aai_cli_config_toml is not None:
         data["aai-cli-config.toml"] = aai_cli_config_toml
     if aai_cli_setup_sh is not None:
@@ -254,9 +238,7 @@ def build_secret_hermes_slack(
             "API_SERVER_MODEL_NAME": agent_name,
             "GATEWAY_ALLOW_ALL_USERS": "true",
             "SLACK_ALLOW_ALL_USERS": "true",
-            "SLACK_HOME_CHANNEL": channel_ids[0]
-            if channel_ids
-            else _NO_SLACK_HOME_CHANNEL,
+            "SLACK_HOME_CHANNEL": channel_ids[0] if channel_ids else _NO_SLACK_HOME_CHANNEL,
             "SLACK_CHANNEL_IDS": ",".join(channel_ids),
             "SLACK_DM_ALLOWED_USERS": ",".join(allowed_dm_users),
             "AGENT_PLATFORM": "slack",
@@ -295,12 +277,8 @@ def build_secret_hermes_telegram(
             "API_SERVER_KEY": api_server_key,
             "API_SERVER_MODEL_NAME": agent_name,
             "GATEWAY_ALLOW_ALL_USERS": "true",
-            "TELEGRAM_HOME_CHANNEL": allowed_chat_ids[0]
-            if allowed_chat_ids
-            else _NO_TELEGRAM_HOME_CHANNEL,
-            "TELEGRAM_HOME_CHANNEL_NAME": allowed_chat_ids[0]
-            if allowed_chat_ids
-            else _NO_TELEGRAM_HOME_CHANNEL_NAME,
+            "TELEGRAM_HOME_CHANNEL": allowed_chat_ids[0] if allowed_chat_ids else _NO_TELEGRAM_HOME_CHANNEL,
+            "TELEGRAM_HOME_CHANNEL_NAME": allowed_chat_ids[0] if allowed_chat_ids else _NO_TELEGRAM_HOME_CHANNEL_NAME,
             "TELEGRAM_CHANNEL_IDS": ",".join(allowed_chat_ids or []),
             "TELEGRAM_DM_ALLOWED_USERS": ",".join(allowed_dm_users or []),
             "AGENT_PLATFORM": "telegram",
@@ -331,9 +309,7 @@ def build_hermes_deployment(
                 metadata=client.V1ObjectMeta(labels=labels),
                 spec=client.V1PodSpec(
                     image_pull_secrets=(
-                        [client.V1LocalObjectReference(name=image_pull_secret)]
-                        if image_pull_secret
-                        else None
+                        [client.V1LocalObjectReference(name=image_pull_secret)] if image_pull_secret else None
                     ),
                     containers=[
                         client.V1Container(
@@ -356,18 +332,10 @@ def build_hermes_deployment(
                                 # agent's shell is anchored in the wrong place and
                                 # relative writes miss the persistent /workspace.
                                 # ocbw sets both alongside terminal.cwd — mirror it.
-                                client.V1EnvVar(
-                                    name="TERMINAL_CWD", value="/workspace"
-                                ),
-                                client.V1EnvVar(
-                                    name="MESSAGING_CWD", value="/workspace"
-                                ),
+                                client.V1EnvVar(name="TERMINAL_CWD", value="/workspace"),
+                                client.V1EnvVar(name="MESSAGING_CWD", value="/workspace"),
                             ],
-                            env_from=[
-                                client.V1EnvFromSource(
-                                    secret_ref=client.V1SecretEnvSource(name=name)
-                                )
-                            ],
+                            env_from=[client.V1EnvFromSource(secret_ref=client.V1SecretEnvSource(name=name))],
                             volume_mounts=[
                                 client.V1VolumeMount(
                                     name="config",
@@ -398,9 +366,7 @@ def build_hermes_deployment(
                         ),
                         client.V1Volume(
                             name="data",
-                            persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(
-                                claim_name=name
-                            ),
+                            persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(claim_name=name),
                         ),
                     ],
                 ),

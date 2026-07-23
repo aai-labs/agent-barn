@@ -30,9 +30,7 @@ def test_create_email_escapes_user_supplied_name():
             receiver_name=None,
             attributes=[
                 EmailTemplateAttribute(name="user_name", value=malicious),
-                EmailTemplateAttribute(
-                    name="set_password_link", value="https://app/set"
-                ),
+                EmailTemplateAttribute(name="set_password_link", value="https://app/set"),
             ],
         )
     )

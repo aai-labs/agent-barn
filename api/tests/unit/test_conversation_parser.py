@@ -336,10 +336,7 @@ def test_dm_parse_inbound_messages():
     )
 
     inbound = [
-        m
-        for m in messages
-        if m.direction == MessageDirection.INBOUND
-        and m.conversation_type == ConversationType.DM
+        m for m in messages if m.direction == MessageDirection.INBOUND and m.conversation_type == ConversationType.DM
     ]
     assert len(inbound) == 2
     assert inbound[0].content == "Hello! Are you there?"
@@ -358,10 +355,7 @@ def test_dm_parse_outbound_message():
     )
 
     outbound = [
-        m
-        for m in messages
-        if m.direction == MessageDirection.OUTBOUND
-        and m.conversation_type == ConversationType.DM
+        m for m in messages if m.direction == MessageDirection.OUTBOUND and m.conversation_type == ConversationType.DM
     ]
     assert len(outbound) == 1
     assert outbound[0].content == "Hey Sam, I'm here!"
@@ -377,19 +371,10 @@ def test_dm_inbound_msg_ids_are_stable():
     )
 
     inbound = [
-        m
-        for m in messages
-        if m.direction == MessageDirection.INBOUND
-        and m.conversation_type == ConversationType.DM
+        m for m in messages if m.direction == MessageDirection.INBOUND and m.conversation_type == ConversationType.DM
     ]
-    assert (
-        inbound[0].openclaw_msg_id
-        == f"dm:{_DM_NATIVE_CHANNEL_ID}:2026-05-25 08:11:30 UTC"
-    )
-    assert (
-        inbound[1].openclaw_msg_id
-        == f"dm:{_DM_NATIVE_CHANNEL_ID}:2026-05-25 08:20:45 UTC"
-    )
+    assert inbound[0].openclaw_msg_id == f"dm:{_DM_NATIVE_CHANNEL_ID}:2026-05-25 08:11:30 UTC"
+    assert inbound[1].openclaw_msg_id == f"dm:{_DM_NATIVE_CHANNEL_ID}:2026-05-25 08:20:45 UTC"
 
 
 def test_dm_session_does_not_affect_channel_messages():
@@ -399,9 +384,7 @@ def test_dm_session_does_not_affect_channel_messages():
         _make_get_jsonl({"aaaa-bbbb": _CHANNEL_JSONL, "dddd-eeee": _DM_JSONL}),
     )
 
-    channel_msgs = [
-        m for m in messages if m.conversation_type == ConversationType.CHANNEL
-    ]
+    channel_msgs = [m for m in messages if m.conversation_type == ConversationType.CHANNEL]
     dm_msgs = [m for m in messages if m.conversation_type == ConversationType.DM]
     assert len(channel_msgs) == 2  # 1 inbound + 1 outbound from channel
     assert len(dm_msgs) == 3  # 2 inbound + 1 outbound from DM
@@ -677,9 +660,7 @@ _FRAG_ROOT_JSONL = "\n".join(
     [
         _frag_inbound(_ROOT, "2026-05-28 07:03:41 UTC", "hey aria"),
         _frag_delivery("d-hey", "2026-05-28T07:04:09.237Z", "Hey Samuel!"),
-        _frag_inbound(
-            "1779951866.292209", "2026-05-28 07:04:28 UTC", "let's talk sth fun"
-        ),
+        _frag_inbound("1779951866.292209", "2026-05-28 07:04:28 UTC", "let's talk sth fun"),
         _frag_delivery("d-love", "2026-05-28T07:04:54.355Z", "Love that"),
         # poke posted with threadId == the "let's talk" inbound message id
         _frag_toolcall("call-poke", "1779951866.292209", "(poke) Any pick?"),
@@ -692,12 +673,8 @@ _FRAG_ROOT_JSONL = "\n".join(
         _frag_toolresult("call-bump", "1779951969.812249"),
     ]
 )
-_FRAG_POKE_JSONL = _frag_delivery(
-    "d-poke", "2026-05-28T07:05:02.601Z", "(poke) Any pick?"
-)
-_FRAG_BUMP_JSONL = _frag_delivery(
-    "d-bump", "2026-05-28T07:06:10.202Z", "If anyone else"
-)
+_FRAG_POKE_JSONL = _frag_delivery("d-poke", "2026-05-28T07:05:02.601Z", "(poke) Any pick?")
+_FRAG_BUMP_JSONL = _frag_delivery("d-bump", "2026-05-28T07:06:10.202Z", "If anyone else")
 
 
 def test_fragmented_thread_collapses_to_single_root():
@@ -715,9 +692,7 @@ def test_fragmented_thread_collapses_to_single_root():
 
     assert messages, "expected parsed messages"
     thread_ids = {m.thread_id for m in messages}
-    assert thread_ids == {_ROOT}, (
-        f"all messages should resolve to the root thread, got {thread_ids}"
-    )
+    assert thread_ids == {_ROOT}, f"all messages should resolve to the root thread, got {thread_ids}"
 
 
 def test_distinct_real_threads_are_not_merged():
@@ -731,9 +706,7 @@ def test_distinct_real_threads_are_not_merged():
         "groupId": "c0b4za29s0j",
         "origin": {"nativeChannelId": _FRAG_CHANNEL, "threadId": other_root},
     }
-    other_jsonl = _frag_inbound(
-        other_root, "2026-05-28 09:00:00 UTC", "new topic", root=other_root
-    )
+    other_jsonl = _frag_inbound(other_root, "2026-05-28 09:00:00 UTC", "new topic", root=other_root)
 
     messages = parse_sessions(
         _AGENT_ID,
@@ -749,9 +722,7 @@ def test_distinct_real_threads_are_not_merged():
     )
 
     thread_ids = {m.thread_id for m in messages}
-    assert thread_ids == {_ROOT, other_root}, (
-        f"distinct threads must remain separate, got {thread_ids}"
-    )
+    assert thread_ids == {_ROOT, other_root}, f"distinct threads must remain separate, got {thread_ids}"
 
 
 def test_handles_both_slack_and_teams_sessions():
@@ -785,18 +756,14 @@ def test_handles_both_slack_and_teams_sessions():
 
 def test_hermes_distinct_conversations_telegram_dm():
     convos = hermes_distinct_conversations(_HERMES_TELEGRAM_SESSIONS_JSON)
-    dm_convos = [
-        (cid, ct, name) for cid, ct, name in convos if ct == ConversationType.DM
-    ]
+    dm_convos = [(cid, ct, name) for cid, ct, name in convos if ct == ConversationType.DM]
     assert len(dm_convos) == 1
     assert dm_convos[0][0] == "123456"
 
 
 def test_hermes_distinct_conversations_telegram_group():
     convos = hermes_distinct_conversations(_HERMES_TELEGRAM_SESSIONS_JSON)
-    group_convos = [
-        (cid, ct, name) for cid, ct, name in convos if ct == ConversationType.CHANNEL
-    ]
+    group_convos = [(cid, ct, name) for cid, ct, name in convos if ct == ConversationType.CHANNEL]
     assert len(group_convos) == 1
     assert group_convos[0][0] == "789012"
 
@@ -815,9 +782,7 @@ def test_openclaw_parser_telegram_session_prefix():
     messages = parse_sessions(
         _AGENT_ID,
         _TELEGRAM_SESSIONS_JSON,
-        _make_get_jsonl(
-            {"tgtg-uuid": "\n".join([_TELEGRAM_INBOUND_LINE, _TELEGRAM_OUTBOUND_LINE])}
-        ),
+        _make_get_jsonl({"tgtg-uuid": "\n".join([_TELEGRAM_INBOUND_LINE, _TELEGRAM_OUTBOUND_LINE])}),
     )
 
     outbound = [m for m in messages if m.direction == MessageDirection.OUTBOUND]
@@ -830,13 +795,7 @@ def test_openclaw_parser_telegram_dm_session_prefix():
     messages = parse_sessions(
         _AGENT_ID,
         _TELEGRAM_DM_SESSIONS_JSON,
-        _make_get_jsonl(
-            {
-                "tg-dm-uuid": "\n".join(
-                    [_TELEGRAM_DM_INBOUND_LINE, _TELEGRAM_DM_OUTBOUND_LINE]
-                )
-            }
-        ),
+        _make_get_jsonl({"tg-dm-uuid": "\n".join([_TELEGRAM_DM_INBOUND_LINE, _TELEGRAM_DM_OUTBOUND_LINE])}),
     )
 
     assert len(messages) == 2

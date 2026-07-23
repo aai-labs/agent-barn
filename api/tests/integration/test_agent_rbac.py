@@ -168,19 +168,13 @@ def test_creator_keeps_assigned_agent_after_owner_is_demoted_to_member():
     with given(_GIVEN) as context:
         created = context.client.post(_BASE, json=_CREATE, headers=_auth(context))
         assert_that(created.status_code, equal_to(status.HTTP_201_CREATED))
-        membership_repository: OrganizationUserRepository = context.injector.get(
-            OrganizationUserRepository
-        )
-        membership = membership_repository.get_by_user_id_and_organization_id(
-            context.user.id, context.organization.id
-        )
+        membership_repository: OrganizationUserRepository = context.injector.get(OrganizationUserRepository)
+        membership = membership_repository.get_by_user_id_and_organization_id(context.user.id, context.organization.id)
         assert membership is not None
         membership.role = OrganizationRole.MEMBER
         membership_repository.save(membership)
 
-        response = context.client.get(
-            f"{_BASE}/{created.json()['id']}", headers=_auth(context)
-        )
+        response = context.client.get(f"{_BASE}/{created.json()['id']}", headers=_auth(context))
 
         assert_that(response.status_code, equal_to(status.HTTP_200_OK))
         assert_that(
@@ -217,15 +211,9 @@ def test_assigned_list_count_detail_and_recipient_actions_are_scoped():
         there_is_agent_access(agent_id=context.assigned_one.id)(context)
         there_is_agent_access(agent_id=context.assigned_two.id)(context)
 
-        page_one = context.client.get(
-            _BASE, params={"page": 1, "page_size": 1}, headers=_auth(context)
-        )
-        page_two = context.client.get(
-            _BASE, params={"page": 2, "page_size": 1}, headers=_auth(context)
-        )
-        hidden = context.client.get(
-            f"{_BASE}/{context.hidden.id}", headers=_auth(context)
-        )
+        page_one = context.client.get(_BASE, params={"page": 1, "page_size": 1}, headers=_auth(context))
+        page_two = context.client.get(_BASE, params={"page": 2, "page_size": 1}, headers=_auth(context))
+        hidden = context.client.get(f"{_BASE}/{context.hidden.id}", headers=_auth(context))
 
         assert_that(page_one.status_code, equal_to(status.HTTP_200_OK))
         assert_that(page_two.status_code, equal_to(status.HTTP_200_OK))
@@ -256,9 +244,7 @@ def test_visible_agent_without_update_permission_returns_403():
             )
         )
 
-        visible = context.client.get(
-            f"{_BASE}/{context.agent.id}", headers=_auth(context)
-        )
+        visible = context.client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context))
         forbidden = context.client.patch(
             f"{_BASE}/{context.agent.id}",
             json={"name": "Forbidden"},
@@ -302,9 +288,7 @@ def test_access_revocation_is_observed_on_next_request():
     with given([*_GIVEN, there_is_an_agent(), _switch_to_member()]) as context:
         there_is_agent_access()(context)
         repository: AgentRepository = context.injector.get(AgentRepository)
-        first = context.client.get(
-            f"{_BASE}/{context.agent.id}", headers=_auth(context)
-        )
+        first = context.client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context))
         with Session(repository.delegate.engine) as session:
             access = session.exec(
                 select(AgentAccess).where(
@@ -314,9 +298,7 @@ def test_access_revocation_is_observed_on_next_request():
             ).one()
             session.delete(access)
             session.commit()
-        second = context.client.get(
-            f"{_BASE}/{context.agent.id}", headers=_auth(context)
-        )
+        second = context.client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context))
 
         assert_that(first.status_code, equal_to(status.HTTP_200_OK))
         assert_that(second.status_code, equal_to(status.HTTP_404_NOT_FOUND))
@@ -362,14 +344,7 @@ def test_locked_agent_access_roles_are_listed_with_exact_permissions():
         )
         assert_that(
             set(roles["OWNER"]["permissions"]),
-            equal_to(
-                {
-                    permission.value
-                    for permission in SYSTEM_AGENT_ACCESS_ROLE_GRANTS[
-                        AGENT_OWNER_ROLE_ID
-                    ]
-                }
-            ),
+            equal_to({permission.value for permission in SYSTEM_AGENT_ACCESS_ROLE_GRANTS[AGENT_OWNER_ROLE_ID]}),
         )
 
 
@@ -381,9 +356,7 @@ def test_owner_lists_grants_idempotently_and_revokes_agent_access():
         agent_id = created.json()["id"]
         target, _ = _add_member(context)
 
-        eligible = context.client.get(
-            f"{_BASE}/{agent_id}/access/eligible", headers=_auth(context)
-        )
+        eligible = context.client.get(f"{_BASE}/{agent_id}/access/eligible", headers=_auth(context))
         first_grant = context.client.post(
             f"{_BASE}/{agent_id}/access",
             json={
@@ -408,14 +381,10 @@ def test_owner_lists_grants_idempotently_and_revokes_agent_access():
             },
             headers=_auth(context),
         )
-        assigned = context.client.get(
-            f"{_BASE}/{agent_id}/access", headers=_auth(context)
-        )
+        assigned = context.client.get(f"{_BASE}/{agent_id}/access", headers=_auth(context))
 
         assert_that(eligible.status_code, equal_to(status.HTTP_200_OK))
-        assert_that(
-            [item["user_id"] for item in eligible.json()], has_item(str(target.id))
-        )
+        assert_that([item["user_id"] for item in eligible.json()], has_item(str(target.id)))
         assert_that(first_grant.status_code, equal_to(status.HTTP_201_CREATED))
         assert_that(second_grant.status_code, equal_to(status.HTTP_200_OK))
         assert_that(conflicting_grant.status_code, equal_to(status.HTTP_409_CONFLICT))
@@ -425,18 +394,14 @@ def test_owner_lists_grants_idempotently_and_revokes_agent_access():
             [item["user_id"] for item in assigned.json()],
             contains_inanyorder(str(owner_id), str(target.id)),
         )
-        assigned_roles = {
-            item["user_id"]: item["access_role"]["name"] for item in assigned.json()
-        }
+        assigned_roles = {item["user_id"]: item["access_role"]["name"] for item in assigned.json()}
         assert_that(assigned_roles[str(owner_id)], equal_to("OWNER"))
         assert_that(assigned_roles[str(target.id)], equal_to("VIEWER"))
 
         there_is_an_access_token_for_user(target.id)(context)
         visible = context.client.get(f"{_BASE}/{agent_id}", headers=_auth(context))
         there_is_an_access_token_for_user(owner_id)(context)
-        revoked = context.client.delete(
-            f"{_BASE}/{agent_id}/access/{target.id}", headers=_auth(context)
-        )
+        revoked = context.client.delete(f"{_BASE}/{agent_id}/access/{target.id}", headers=_auth(context))
         there_is_an_access_token_for_user(target.id)(context)
         hidden = context.client.get(f"{_BASE}/{agent_id}", headers=_auth(context))
 
@@ -507,9 +472,7 @@ def test_concurrent_duplicate_grants_create_one_access_row():
         assert_that(len(access_ids), equal_to(1))
         assert_that(created_values, equal_to([False, True]))
         assert_that(
-            repository.find_access_membership_ids(
-                context.agent.id, context.organization.id
-            ),
+            repository.find_access_membership_ids(context.agent.id, context.organization.id),
             has_item(membership.id),
         )
 
@@ -550,9 +513,7 @@ def test_explicit_owner_can_share_onward_while_editor_cannot():
             headers=_auth(context),
         )
         there_is_an_access_token_for_user(editor_recipient.id)(context)
-        forbidden = context.client.get(
-            f"{_BASE}/{agent_id}/access", headers=_auth(context)
-        )
+        forbidden = context.client.get(f"{_BASE}/{agent_id}/access", headers=_auth(context))
 
         assert_that(owner_grant.status_code, equal_to(status.HTTP_201_CREATED))
         assert_that(editor_grant.status_code, equal_to(status.HTTP_201_CREATED))
@@ -565,9 +526,7 @@ def test_unassigned_member_cannot_discover_agent_access_management():
         unrelated, _ = _add_member(context)
         there_is_an_access_token_for_user(unrelated.id)(context)
 
-        response = context.client.get(
-            f"{_BASE}/{context.agent.id}/access", headers=_auth(context)
-        )
+        response = context.client.get(f"{_BASE}/{context.agent.id}/access", headers=_auth(context))
 
         assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
@@ -609,9 +568,7 @@ def test_explicit_owner_can_revoke_creator_assignment():
             headers=_auth(context),
         )
         there_is_an_access_token_for_user(other_owner.id)(context)
-        revoked = context.client.delete(
-            f"{_BASE}/{agent_id}/access/{creator_id}", headers=_auth(context)
-        )
+        revoked = context.client.delete(f"{_BASE}/{agent_id}/access/{creator_id}", headers=_auth(context))
         there_is_an_access_token_for_user(creator_id)(context)
         hidden = context.client.get(f"{_BASE}/{agent_id}", headers=_auth(context))
 
@@ -687,17 +644,13 @@ def test_removed_membership_cascades_agent_access():
             },
             headers=_auth(context),
         )
-        membership_repository: OrganizationUserRepository = context.injector.get(
-            OrganizationUserRepository
-        )
+        membership_repository: OrganizationUserRepository = context.injector.get(OrganizationUserRepository)
         membership_repository.delete(target_membership)
         repository: AgentRepository = context.injector.get(AgentRepository)
 
         assert_that(granted.status_code, equal_to(status.HTTP_201_CREATED))
         assert_that(
-            repository.find_access_membership_ids(
-                context.agent.id, context.organization.id
-            ),
+            repository.find_access_membership_ids(context.agent.id, context.organization.id),
             is_not(has_item(target_membership.id)),
         )
 

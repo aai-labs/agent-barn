@@ -20,16 +20,12 @@ def test_build_openclaw_config_overlay_exec_mode_is_full():
 
 
 def test_build_openclaw_config_overlay_exec_mode_ignores_approval_mode():
-    overlay = build_openclaw_config_overlay(
-        "litellm/gpt-4o", "http://litellm:4000", approval_mode="manual"
-    )
+    overlay = build_openclaw_config_overlay("litellm/gpt-4o", "http://litellm:4000", approval_mode="manual")
     assert_that(overlay["tools"]["exec"]["mode"], equal_to("full"))
 
 
 def test_build_openclaw_config_overlay_teams_exec_mode_is_full():
-    overlay = build_openclaw_config_overlay_teams(
-        "litellm/gpt-4o", "http://litellm:4000"
-    )
+    overlay = build_openclaw_config_overlay_teams("litellm/gpt-4o", "http://litellm:4000")
     assert_that(overlay["tools"]["exec"]["mode"], equal_to("full"))
 
 
@@ -39,9 +35,7 @@ def test_build_openclaw_config_overlay_gateway_auth_is_none():
 
 
 def test_build_openclaw_config_overlay_teams_gateway_auth_is_none():
-    overlay = build_openclaw_config_overlay_teams(
-        "litellm/gpt-4o", "http://litellm:4000"
-    )
+    overlay = build_openclaw_config_overlay_teams("litellm/gpt-4o", "http://litellm:4000")
     assert_that(overlay["gateway"]["auth"]["mode"], equal_to("none"))
 
 
@@ -70,31 +64,23 @@ _NS = "agent-farm"
 
 
 def test_build_openclaw_config_overlay_telegram_has_telegram_channel():
-    overlay = build_openclaw_config_overlay_telegram(
-        "litellm/gpt-4o", "http://litellm:4000"
-    )
+    overlay = build_openclaw_config_overlay_telegram("litellm/gpt-4o", "http://litellm:4000")
     assert_that(overlay["channels"]["telegram"]["enabled"], equal_to(True))
 
 
 def test_build_openclaw_config_overlay_telegram_no_slack_channel():
-    overlay = build_openclaw_config_overlay_telegram(
-        "litellm/gpt-4o", "http://litellm:4000"
-    )
+    overlay = build_openclaw_config_overlay_telegram("litellm/gpt-4o", "http://litellm:4000")
     assert_that(overlay["channels"], is_not(has_key("slack")))
 
 
 def test_build_openclaw_config_overlay_telegram_dm_off():
-    overlay = build_openclaw_config_overlay_telegram(
-        "litellm/gpt-4o", "http://litellm:4000", dm_policy="off"
-    )
+    overlay = build_openclaw_config_overlay_telegram("litellm/gpt-4o", "http://litellm:4000", dm_policy="off")
     assert_that(overlay["channels"]["telegram"]["dmPolicy"], equal_to("allowlist"))
     assert_that(overlay["channels"]["telegram"]["allowFrom"], equal_to([]))
 
 
 def test_build_openclaw_config_overlay_telegram_dm_open():
-    overlay = build_openclaw_config_overlay_telegram(
-        "litellm/gpt-4o", "http://litellm:4000", dm_policy="open"
-    )
+    overlay = build_openclaw_config_overlay_telegram("litellm/gpt-4o", "http://litellm:4000", dm_policy="open")
     assert_that(overlay["channels"]["telegram"]["dmPolicy"], equal_to("open"))
     assert_that(overlay["channels"]["telegram"]["allowFrom"], equal_to(["*"]))
 
@@ -111,38 +97,28 @@ def test_build_openclaw_config_overlay_telegram_dm_allowlist():
 
 
 def test_build_openclaw_config_overlay_telegram_gateway_auth_none():
-    overlay = build_openclaw_config_overlay_telegram(
-        "litellm/gpt-4o", "http://litellm:4000"
-    )
+    overlay = build_openclaw_config_overlay_telegram("litellm/gpt-4o", "http://litellm:4000")
     assert_that(overlay["gateway"]["auth"]["mode"], equal_to("none"))
 
 
 def test_build_openclaw_config_overlay_telegram_exec_mode_full():
-    overlay = build_openclaw_config_overlay_telegram(
-        "litellm/gpt-4o", "http://litellm:4000"
-    )
+    overlay = build_openclaw_config_overlay_telegram("litellm/gpt-4o", "http://litellm:4000")
     assert_that(overlay["tools"]["exec"]["mode"], equal_to("full"))
 
 
 def test_build_openclaw_config_overlay_telegram_binding_routes_to_telegram():
-    overlay = build_openclaw_config_overlay_telegram(
-        "litellm/gpt-4o", "http://litellm:4000"
-    )
+    overlay = build_openclaw_config_overlay_telegram("litellm/gpt-4o", "http://litellm:4000")
     assert_that(len(overlay["bindings"]), equal_to(1))
     assert_that(overlay["bindings"][0]["match"]["channel"], equal_to("telegram"))
 
 
 def test_build_openclaw_config_overlay_telegram_group_policy_open():
-    overlay = build_openclaw_config_overlay_telegram(
-        "litellm/gpt-4o", "http://litellm:4000", group_policy="open"
-    )
+    overlay = build_openclaw_config_overlay_telegram("litellm/gpt-4o", "http://litellm:4000", group_policy="open")
     assert_that(overlay["channels"]["telegram"]["groupPolicy"], equal_to("open"))
 
 
 def test_build_openclaw_config_overlay_telegram_group_policy_allowlist():
-    overlay = build_openclaw_config_overlay_telegram(
-        "litellm/gpt-4o", "http://litellm:4000", group_policy="allowlist"
-    )
+    overlay = build_openclaw_config_overlay_telegram("litellm/gpt-4o", "http://litellm:4000", group_policy="allowlist")
     assert_that(overlay["channels"]["telegram"]["groupPolicy"], equal_to("allowlist"))
 
 
@@ -160,16 +136,12 @@ def test_build_openclaw_config_overlay_telegram_allowed_chat_ids():
 
 
 def test_build_openclaw_config_overlay_telegram_allowed_chat_ids_empty_when_none():
-    overlay = build_openclaw_config_overlay_telegram(
-        "litellm/gpt-4o", "http://litellm:4000", group_policy="allowlist"
-    )
+    overlay = build_openclaw_config_overlay_telegram("litellm/gpt-4o", "http://litellm:4000", group_policy="allowlist")
     assert_that(overlay["channels"]["telegram"]["groups"], equal_to({}))
 
 
 def test_build_openclaw_config_overlay_telegram_no_allowed_chats_when_open():
-    overlay = build_openclaw_config_overlay_telegram(
-        "litellm/gpt-4o", "http://litellm:4000", group_policy="open"
-    )
+    overlay = build_openclaw_config_overlay_telegram("litellm/gpt-4o", "http://litellm:4000", group_policy="open")
     assert_that("groups" in overlay["channels"]["telegram"], equal_to(False))
 
 

@@ -11,9 +11,7 @@ _URL = "https://slack.com/api/users.list"
 _REQUEST = httpx.Request("GET", _URL)
 
 
-def _resp(
-    body: dict, *, status: int = 200, headers: dict | None = None
-) -> httpx.Response:
+def _resp(body: dict, *, status: int = 200, headers: dict | None = None) -> httpx.Response:
     return httpx.Response(status, json=body, headers=headers, request=_REQUEST)
 
 
@@ -92,15 +90,9 @@ def test_uses_configured_timeout():
 
 
 def test_retry_after_seconds_clamps_and_defaults():
-    assert (
-        transport._retry_after_seconds(None) == transport._DEFAULT_RETRY_AFTER_SECONDS
-    )
-    assert (
-        transport._retry_after_seconds("not-a-number")
-        == transport._DEFAULT_RETRY_AFTER_SECONDS
-    )
+    assert transport._retry_after_seconds(None) == transport._DEFAULT_RETRY_AFTER_SECONDS
+    assert transport._retry_after_seconds("not-a-number") == transport._DEFAULT_RETRY_AFTER_SECONDS
     assert transport._retry_after_seconds("0") == 1  # clamped up to the floor
     assert (
-        transport._retry_after_seconds("9999")
-        == transport._RATE_LIMIT_MAX_WAIT_SECONDS  # clamped down to the ceiling
+        transport._retry_after_seconds("9999") == transport._RATE_LIMIT_MAX_WAIT_SECONDS  # clamped down to the ceiling
     )

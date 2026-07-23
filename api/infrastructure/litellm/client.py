@@ -23,13 +23,9 @@ class LiteLLMClient:
     config: Config
 
     def _master_key(self) -> str:
-        secret = self.k8s.get_secret(
-            self.config.litellm_secret_name, self.config.k8s_namespace
-        )
+        secret = self.k8s.get_secret(self.config.litellm_secret_name, self.config.k8s_namespace)
         if not secret or not secret.data:
-            raise LiteLLMError(
-                f"Secret '{self.config.litellm_secret_name}' not found or empty"
-            )
+            raise LiteLLMError(f"Secret '{self.config.litellm_secret_name}' not found or empty")
         raw = secret.data.get("LITELLM_MASTER_KEY", "")
         if not raw:
             raise LiteLLMError("LITELLM_MASTER_KEY not found in litellm secret")
@@ -142,16 +138,10 @@ class LiteLLMClient:
                 if entry.get("token") == key_hash:
                     return {
                         "spend": float(entry.get("spend", 0.0)),
-                        "total_input_tokens": int(
-                            entry.get("total_input_tokens", 0) or 0
-                        ),
-                        "total_output_tokens": int(
-                            entry.get("total_output_tokens", 0) or 0
-                        ),
+                        "total_input_tokens": int(entry.get("total_input_tokens", 0) or 0),
+                        "total_output_tokens": int(entry.get("total_output_tokens", 0) or 0),
                     }
-            logger.warning(
-                "LiteLLM /spend/keys: no entry matched key hash %s...", key_hash[:8]
-            )
+            logger.warning("LiteLLM /spend/keys: no entry matched key hash %s...", key_hash[:8])
         except Exception as exc:
             logger.warning("Failed to fetch /spend/keys for token counts: %s", exc)
 
@@ -163,9 +153,7 @@ class LiteLLMClient:
             "total_output_tokens": 0,
         }
 
-    def get_spend_logs(
-        self, key: str, start_date: str, end_date: str, limit: int = 10
-    ) -> list[dict]:
+    def get_spend_logs(self, key: str, start_date: str, end_date: str, limit: int = 10) -> list[dict]:
         """Return per-request spend log rows for the given key and date range."""
         master_key = self._master_key()
         try:
@@ -187,9 +175,7 @@ class LiteLLMClient:
         except Exception as exc:
             raise LiteLLMError(f"Failed to fetch spend logs: {exc}") from exc
 
-    def get_global_spend_report(
-        self, start_date: str, end_date: str
-    ) -> dict[str, dict]:
+    def get_global_spend_report(self, start_date: str, end_date: str) -> dict[str, dict]:
         """
         Fetch aggregated spend+token data per API key hash using /user/daily/activity/aggregated.
         Returns: {
@@ -232,22 +218,12 @@ class LiteLLMClient:
                         }
                     day_spend = float(metrics.get("spend") or 0.0)
                     aggregated[key_hash]["spend"] += day_spend
-                    aggregated[key_hash]["total_input_tokens"] += int(
-                        metrics.get("prompt_tokens") or 0
-                    )
-                    aggregated[key_hash]["total_output_tokens"] += int(
-                        metrics.get("completion_tokens") or 0
-                    )
-                    aggregated[key_hash]["total_tokens"] += int(
-                        metrics.get("total_tokens") or 0
-                    )
+                    aggregated[key_hash]["total_input_tokens"] += int(metrics.get("prompt_tokens") or 0)
+                    aggregated[key_hash]["total_output_tokens"] += int(metrics.get("completion_tokens") or 0)
+                    aggregated[key_hash]["total_tokens"] += int(metrics.get("total_tokens") or 0)
                     if date_str:
-                        existing = aggregated[key_hash]["daily_spend"].get(
-                            date_str, 0.0
-                        )
-                        aggregated[key_hash]["daily_spend"][date_str] = (
-                            existing + day_spend
-                        )
+                        existing = aggregated[key_hash]["daily_spend"].get(date_str, 0.0)
+                        aggregated[key_hash]["daily_spend"][date_str] = existing + day_spend
 
                     # Per-model breakdown for this key  <-- THIS BLOCK WAS MISSING
                     models_in_day = day.get("breakdown", {}).get("models", {})
@@ -262,15 +238,13 @@ class LiteLLMClient:
                                 "prompt_tokens": 0,
                                 "completion_tokens": 0,
                             }
-                        aggregated[key_hash]["models"][model_name]["spend"] += float(
-                            m_metrics.get("spend") or 0.0
+                        aggregated[key_hash]["models"][model_name]["spend"] += float(m_metrics.get("spend") or 0.0)
+                        aggregated[key_hash]["models"][model_name]["prompt_tokens"] += int(
+                            m_metrics.get("prompt_tokens") or 0
                         )
-                        aggregated[key_hash]["models"][model_name]["prompt_tokens"] += (
-                            int(m_metrics.get("prompt_tokens") or 0)
+                        aggregated[key_hash]["models"][model_name]["completion_tokens"] += int(
+                            m_metrics.get("completion_tokens") or 0
                         )
-                        aggregated[key_hash]["models"][model_name][
-                            "completion_tokens"
-                        ] += int(m_metrics.get("completion_tokens") or 0)
 
             return aggregated
         except Exception as exc:

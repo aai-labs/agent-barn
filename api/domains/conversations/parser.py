@@ -113,10 +113,7 @@ def _accumulate_thread_links(
         except json.JSONDecodeError:
             continue
 
-        if (
-            line.get("type") == "custom_message"
-            and line.get("customType") == "openclaw.runtime-context"
-        ):
+        if line.get("type") == "custom_message" and line.get("customType") == "openclaw.runtime-context":
             meta = _runtime_context_meta(line.get("content", ""))
             if meta:
                 message_id = meta.get("message_id")
@@ -207,10 +204,7 @@ def _parse_jsonl(
             continue
 
         # --- INBOUND ---
-        if (
-            line_type == "custom_message"
-            and line.get("customType") == "openclaw.runtime-context"
-        ):
+        if line_type == "custom_message" and line.get("customType") == "openclaw.runtime-context":
             content_raw = line.get("content", "")
             first_line = content_raw.split("\n")[0]
             m = (
@@ -313,18 +307,11 @@ def _parse_dm_jsonl(
             continue
 
         line_type = line.get("type", "")
-        if (
-            line_type == "custom_message"
-            and line.get("customType") == "openclaw.runtime-context"
-        ):
+        if line_type == "custom_message" and line.get("customType") == "openclaw.runtime-context":
             custom_messages.append(line)
         elif line_type == "message":
             msg = line.get("message", {})
-            if (
-                isinstance(msg, dict)
-                and msg.get("role") == "assistant"
-                and line.get("id")
-            ):
+            if isinstance(msg, dict) and msg.get("role") == "assistant" and line.get("id"):
                 outbound_lines.append(line)
 
     messages: list[AgentChatMessage] = []
@@ -394,11 +381,7 @@ def _parse_dm_jsonl(
             continue
         # Find first text block — DM thread responses may lead with a thinking block.
         block = next(
-            (
-                b
-                for b in content_blocks
-                if isinstance(b, dict) and b.get("type") == "text"
-            ),
+            (b for b in content_blocks if isinstance(b, dict) and b.get("type") == "text"),
             None,
         )
         if block is None:
@@ -464,9 +447,7 @@ def parse_sessions(
             continue
 
         origin = session_data.get("origin") or {}
-        channel_id = (
-            origin.get("nativeChannelId") or session_data.get("groupId") or ""
-        ).upper()
+        channel_id = (origin.get("nativeChannelId") or session_data.get("groupId") or "").upper()
         if not channel_id:
             continue
         thread_id: str | None = origin.get("threadId") or None
@@ -477,9 +458,7 @@ def parse_sessions(
             logger.warning("Failed to read JSONL for session %s: %s", session_uuid, e)
             continue
 
-        ctype = (
-            ConversationType.DM if ":dm:" in session_key else ConversationType.CHANNEL
-        )
+        ctype = ConversationType.DM if ":dm:" in session_key else ConversationType.CHANNEL
 
         messages = _parse_jsonl(
             agent_id,
@@ -511,9 +490,7 @@ def parse_sessions(
                 try:
                     jsonl_text = get_jsonl(session_uuid)
                 except Exception as e:
-                    logger.warning(
-                        "Failed to read DM JSONL for session %s: %s", session_uuid, e
-                    )
+                    logger.warning("Failed to read DM JSONL for session %s: %s", session_uuid, e)
                     jsonl_text = ""
                 if jsonl_text:
                     dm_messages = _parse_dm_jsonl(

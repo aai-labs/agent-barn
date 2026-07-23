@@ -291,21 +291,14 @@ def test_fresh_upgrade_seeds_exact_system_catalogues(fresh_database):
             "agent_access_roles": dict(
                 (name, role_id)
                 for role_id, name in connection.execute(
-                    text(
-                        "SELECT id, name FROM agent_access_roles "
-                        "WHERE is_system ORDER BY name"
-                    )
+                    text("SELECT id, name FROM agent_access_roles WHERE is_system ORDER BY name")
                 ).all()
             ),
             "permissions": dict(
                 (key, permission_id)
-                for permission_id, key in connection.execute(
-                    text("SELECT id, key FROM permissions ORDER BY key")
-                ).all()
+                for permission_id, key in connection.execute(text("SELECT id, key FROM permissions ORDER BY key")).all()
             ),
-            "agent_grants": connection.execute(
-                text("SELECT count(*) FROM agent_access_role_permissions")
-            ).scalar_one(),
+            "agent_grants": connection.execute(text("SELECT count(*) FROM agent_access_role_permissions")).scalar_one(),
             "organization_role_enum_count": connection.execute(
                 text("SELECT count(*) FROM pg_type WHERE typname = 'organizationrole'")
             ).scalar_one(),
@@ -325,12 +318,8 @@ def test_fresh_upgrade_seeds_exact_system_catalogues(fresh_database):
                     "OWNER": AGENT_OWNER_ROLE_ID,
                     "VIEWER": AGENT_VIEWER_ROLE_ID,
                 },
-                "permissions": {
-                    permission.key.value: permission.id for permission in PERMISSIONS
-                },
-                "agent_grants": sum(
-                    len(grants) for grants in SYSTEM_AGENT_ACCESS_ROLE_GRANTS.values()
-                ),
+                "permissions": {permission.key.value: permission.id for permission in PERMISSIONS},
+                "agent_grants": sum(len(grants) for grants in SYSTEM_AGENT_ACCESS_ROLE_GRANTS.values()),
                 "organization_role_enum_count": 1,
                 "scope_enum_count": 0,
             }
@@ -342,9 +331,7 @@ def test_policy_and_repository_resolve_separate_role_permissions(fresh_database)
     repository = _repository_for(fresh_database.url)
 
     assert organization_role_allows(OrganizationRole.MEMBER, PermissionKey.AGENT_CREATE)
-    assert not organization_role_allows(
-        OrganizationRole.MEMBER, PermissionKey.AGENT_READ
-    )
+    assert not organization_role_allows(OrganizationRole.MEMBER, PermissionKey.AGENT_READ)
     assert_that(
         repository.get_agent_access_role_permissions(AGENT_VIEWER_ROLE_ID),
         equal_to(
@@ -364,13 +351,9 @@ def test_rbac_seeder_is_idempotent(fresh_database):
 
     with fresh_database.engine.connect() as connection:
         counts = (
-            connection.execute(
-                text("SELECT count(*) FROM agent_access_roles")
-            ).scalar_one(),
+            connection.execute(text("SELECT count(*) FROM agent_access_roles")).scalar_one(),
             connection.execute(text("SELECT count(*) FROM permissions")).scalar_one(),
-            connection.execute(
-                text("SELECT count(*) FROM agent_access_role_permissions")
-            ).scalar_one(),
+            connection.execute(text("SELECT count(*) FROM agent_access_role_permissions")).scalar_one(),
         )
 
     assert_that(
@@ -388,18 +371,14 @@ def test_rbac_seeder_is_idempotent(fresh_database):
 def test_system_agent_access_role_grants_reject_mutation(fresh_database):
     mutations = (
         (
-            "INSERT INTO agent_access_role_permissions (role_id, permission_id) "
-            "VALUES (:role_id, :permission_id)",
+            "INSERT INTO agent_access_role_permissions (role_id, permission_id) VALUES (:role_id, :permission_id)",
             {
                 "role_id": AGENT_VIEWER_ROLE_ID,
-                "permission_id": PERMISSION_ID_BY_KEY[
-                    PermissionKey.ORGANIZATION_DELETE
-                ],
+                "permission_id": PERMISSION_ID_BY_KEY[PermissionKey.ORGANIZATION_DELETE],
             },
         ),
         (
-            "DELETE FROM agent_access_role_permissions "
-            "WHERE role_id = :role_id AND permission_id = :permission_id",
+            "DELETE FROM agent_access_role_permissions WHERE role_id = :role_id AND permission_id = :permission_id",
             {
                 "role_id": AGENT_VIEWER_ROLE_ID,
                 "permission_id": PERMISSION_ID_BY_KEY[PermissionKey.AGENT_READ],
@@ -440,23 +419,18 @@ def test_custom_agent_access_role_grants_remain_mutable(legacy_database):
 
     _execute(
         legacy_database.engine,
-        "INSERT INTO agent_access_role_permissions (role_id, permission_id) "
-        "VALUES (:role_id, :permission_id)",
+        "INSERT INTO agent_access_role_permissions (role_id, permission_id) VALUES (:role_id, :permission_id)",
         parameters,
     )
     _execute(
         legacy_database.engine,
-        "DELETE FROM agent_access_role_permissions "
-        "WHERE role_id = :role_id AND permission_id = :permission_id",
+        "DELETE FROM agent_access_role_permissions WHERE role_id = :role_id AND permission_id = :permission_id",
         parameters,
     )
 
     with legacy_database.engine.connect() as connection:
         count = connection.execute(
-            text(
-                "SELECT count(*) FROM agent_access_role_permissions "
-                "WHERE role_id = :role_id"
-            ),
+            text("SELECT count(*) FROM agent_access_role_permissions WHERE role_id = :role_id"),
             {"role_id": custom_role_id},
         ).scalar_one()
     assert_that(count, equal_to(0))
@@ -466,8 +440,7 @@ def test_permission_catalogue_rejects_mutation(fresh_database):
     permission = PERMISSIONS[0]
     mutations = (
         (
-            "INSERT INTO permissions (id, created_at, updated_at, key) "
-            "VALUES (:id, now(), now(), :key)",
+            "INSERT INTO permissions (id, created_at, updated_at, key) VALUES (:id, now(), now(), :key)",
             {"id": uuid7(), "key": "unexpected.permission"},
         ),
         (
@@ -493,11 +466,7 @@ def test_permission_catalogue_rejects_mutation(fresh_database):
 
 def test_upgrade_preserves_membership_roles(legacy_database):
     with legacy_database.engine.connect() as connection:
-        actual = dict(
-            connection.execute(
-                text("SELECT id, role::text FROM user_organization")
-            ).all()
-        )
+        actual = dict(connection.execute(text("SELECT id, role::text FROM user_organization")).all())
 
     assert_that(
         actual,
@@ -518,10 +487,7 @@ def test_upgrade_backfills_only_accepted_members_with_editor_excluding_deleted_a
     with legacy_database.engine.connect() as connection:
         actual = set(
             connection.execute(
-                text(
-                    "SELECT membership_id, agent_id, organization_id, access_role_id "
-                    "FROM agent_access"
-                )
+                text("SELECT membership_id, agent_id, organization_id, access_role_id FROM agent_access")
             ).all()
         )
 
@@ -548,11 +514,7 @@ def test_upgrade_leaves_creator_unknown_when_legacy_schema_has_no_provenance(
         is_not(has_item("created_by_user_id")),
     )
     with legacy_database.engine.connect() as connection:
-        creators = (
-            connection.execute(text("SELECT created_by_user_id FROM agent"))
-            .scalars()
-            .all()
-        )
+        creators = connection.execute(text("SELECT created_by_user_id FROM agent")).scalars().all()
 
     assert_that(creators, equal_to([None, None, None]))
 
@@ -676,8 +638,7 @@ def test_custom_agent_access_role_scope_is_immutable(legacy_database):
     assert_that(
         calling(_execute).with_args(
             legacy_database.engine,
-            "UPDATE agent_access_roles SET organization_id = :org_id "
-            "WHERE id = :role_id",
+            "UPDATE agent_access_roles SET organization_id = :org_id WHERE id = :role_id",
             {"org_id": legacy_database.org_a, "role_id": custom_role_id},
         ),
         raises(IntegrityError),
@@ -688,8 +649,7 @@ def test_membership_enforces_one_owner_per_organization(legacy_database):
     assert_that(
         calling(_execute).with_args(
             legacy_database.engine,
-            "UPDATE user_organization "
-            "SET role = CAST(:role AS organizationrole) WHERE id = :membership_id",
+            "UPDATE user_organization SET role = CAST(:role AS organizationrole) WHERE id = :membership_id",
             {
                 "role": OrganizationRole.OWNER.value,
                 "membership_id": legacy_database.member_membership,
@@ -703,11 +663,7 @@ def test_downgrade_preserves_organization_role_enum(legacy_database):
     command.downgrade(legacy_database.config, PRE_RBAC_REVISION)
     with legacy_database.engine.connect() as connection:
         actual = {
-            "roles": dict(
-                connection.execute(
-                    text("SELECT id, role::text FROM user_organization")
-                ).all()
-            ),
+            "roles": dict(connection.execute(text("SELECT id, role::text FROM user_organization")).all()),
             "enum_labels": connection.execute(
                 text(
                     """

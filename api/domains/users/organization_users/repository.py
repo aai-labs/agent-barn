@@ -23,12 +23,8 @@ from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 class OrganizationUserRepository:
     delegate: PostgresRepositoryDelegate
 
-    def get_by_user_id_and_organization_id(
-        self, user_id: UUID, organization_id: UUID
-    ) -> OrganizationUser | None:
-        return self.delegate.find_one(
-            OrganizationUser, user_id=user_id, organization_id=organization_id
-        )
+    def get_by_user_id_and_organization_id(self, user_id: UUID, organization_id: UUID) -> OrganizationUser | None:
+        return self.delegate.find_one(OrganizationUser, user_id=user_id, organization_id=organization_id)
 
     def get_by_user_id(self, user_id: UUID) -> list[OrganizationUser]:
         return self.delegate.find_all(OrganizationUser, user_id=user_id)
@@ -46,9 +42,7 @@ class OrganizationUserRepository:
                 raise UserAlreadyPartOfOrganizationException(user_id, organization_id)
             raise
 
-    def save_with_session(
-        self, user_organization: OrganizationUser, session: Session
-    ) -> OrganizationUser:
+    def save_with_session(self, user_organization: OrganizationUser, session: Session) -> OrganizationUser:
         user_id = user_organization.user_id
         organization_id = user_organization.organization_id
         try:
@@ -68,9 +62,7 @@ class OrganizationUserRepository:
             return True
         return self.delegate.delete_many(organization_users)
 
-    def get_member_with_user(
-        self, user_id: UUID, organization_id: UUID
-    ) -> tuple[OrganizationUser, User] | None:
+    def get_member_with_user(self, user_id: UUID, organization_id: UUID) -> tuple[OrganizationUser, User] | None:
         with Session(self.delegate.engine) as session:
             query = (
                 select(OrganizationUser, User)
@@ -82,9 +74,7 @@ class OrganizationUserRepository:
             )
             return session.exec(query).first()
 
-    def get_members_with_users(
-        self, organization_id: UUID
-    ) -> list[tuple[OrganizationUser, User]]:
+    def get_members_with_users(self, organization_id: UUID) -> list[tuple[OrganizationUser, User]]:
         with Session(self.delegate.engine) as session:
             query = (
                 select(OrganizationUser, User)
@@ -97,9 +87,7 @@ class OrganizationUserRepository:
     def delete(self, membership: OrganizationUser) -> bool:
         return self.delegate.delete(membership)
 
-    def transfer_ownership(
-        self, organization_id: UUID, current_owner_id: UUID, new_owner_id: UUID
-    ) -> None:
+    def transfer_ownership(self, organization_id: UUID, current_owner_id: UUID, new_owner_id: UUID) -> None:
         """Atomically demote the current owner to ADMIN and promote the new owner to
         OWNER. The demote must be flushed before the promote so the one-owner-per-org
         partial unique index is never violated mid-transaction."""

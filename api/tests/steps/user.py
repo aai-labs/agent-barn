@@ -43,12 +43,8 @@ def there_is_a_user(
 ):
     def step(context):
         user_repository: UserRepository = context.injector.get(UserRepository)
-        organization_repository: OrganizationRepository = context.injector.get(
-            OrganizationRepository
-        )
-        organization_user_repository: OrganizationUserRepository = context.injector.get(
-            OrganizationUserRepository
-        )
+        organization_repository: OrganizationRepository = context.injector.get(OrganizationRepository)
+        organization_user_repository: OrganizationUserRepository = context.injector.get(OrganizationUserRepository)
 
         existing = user_repository.get_by_email(email)
         if existing is not None:
@@ -60,9 +56,7 @@ def there_is_a_user(
                 hashed_password=hash_text(password),
                 full_name=name,
                 is_superuser=is_superuser,
-                email_verified_at=datetime.now(timezone.utc)
-                if email_verified
-                else None,
+                email_verified_at=datetime.now(timezone.utc) if email_verified else None,
             )
             user_repository.save(user)
 
@@ -84,11 +78,7 @@ def there_is_a_user(
         user_organization_map: dict[UUID, OrganizationUser] = {}
         if org_id is not None:
             org_role = role or OrganizationRole.OWNER
-            organization_user = (
-                organization_user_repository.get_by_user_id_and_organization_id(
-                    user.id, org_id
-                )
-            )
+            organization_user = organization_user_repository.get_by_user_id_and_organization_id(user.id, org_id)
             if organization_user is None:
                 organization_user = OrganizationUser(
                     id=organization_user_id or uuid7(),

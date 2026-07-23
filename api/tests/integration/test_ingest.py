@@ -120,22 +120,16 @@ def _tool_call_payload(external_id="tc-1"):
 
 
 def test_ingest_no_auth_returns_422():
-    with given(
-        [*_GIVEN, there_is_an_agent(), _set_ingest_key(), _create_ingest_client()]
-    ) as context:
+    with given([*_GIVEN, there_is_an_agent(), _set_ingest_key(), _create_ingest_client()]) as context:
         with when("I post without authorization header"):
             response = context.ingest_client.post(_url(context), json={"messages": []})
 
         with then("it returns 422"):
-            assert_that(
-                response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY)
-            )
+            assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
 
 
 def test_ingest_wrong_key_returns_401():
-    with given(
-        [*_GIVEN, there_is_an_agent(), _set_ingest_key(), _create_ingest_client()]
-    ) as context:
+    with given([*_GIVEN, there_is_an_agent(), _set_ingest_key(), _create_ingest_client()]) as context:
         with when("I post with a wrong key"):
             response = context.ingest_client.post(
                 _url(context),
@@ -151,9 +145,7 @@ def test_ingest_wrong_key_returns_401():
 
 
 def test_ingest_messages_returns_204_and_persists():
-    with given(
-        [*_GIVEN, there_is_an_agent(), _set_ingest_key(), _create_ingest_client()]
-    ) as context:
+    with given([*_GIVEN, there_is_an_agent(), _set_ingest_key(), _create_ingest_client()]) as context:
         with when("I post a message event"):
             response = context.ingest_client.post(
                 _url(context),
@@ -163,9 +155,7 @@ def test_ingest_messages_returns_204_and_persists():
 
         with then("it returns 204 and the message is in the DB"):
             assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
-            conv_repo: ConversationRepository = context.injector.get(
-                ConversationRepository
-            )
+            conv_repo: ConversationRepository = context.injector.get(ConversationRepository)
             channels = conv_repo.distinct_channels(
                 context.agent.id,
                 AuthorizationScope(organization_id=context.organization.id),
@@ -174,31 +164,21 @@ def test_ingest_messages_returns_204_and_persists():
 
 
 def test_ingest_duplicate_messages_are_idempotent():
-    with given(
-        [*_GIVEN, there_is_an_agent(), _set_ingest_key(), _create_ingest_client()]
-    ) as context:
+    with given([*_GIVEN, there_is_an_agent(), _set_ingest_key(), _create_ingest_client()]) as context:
         payload = _message_payload(msg_id="dup-1")
 
         with when("I post the same message twice"):
-            context.ingest_client.post(
-                _url(context), json=payload, headers=_auth(context)
-            )
-            response = context.ingest_client.post(
-                _url(context), json=payload, headers=_auth(context)
-            )
+            context.ingest_client.post(_url(context), json=payload, headers=_auth(context))
+            response = context.ingest_client.post(_url(context), json=payload, headers=_auth(context))
 
         with then("both return 204 and only one row exists"):
             assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
-            conv_repo: ConversationRepository = context.injector.get(
-                ConversationRepository
-            )
+            conv_repo: ConversationRepository = context.injector.get(ConversationRepository)
             messages = conv_repo.find_all_channel_messages(
                 agent_id=context.agent.id,
                 channel_id="D123",
                 filter=ConversationsFilter(),
-                authorization_scope=AuthorizationScope(
-                    organization_id=context.organization.id
-                ),
+                authorization_scope=AuthorizationScope(organization_id=context.organization.id),
             )
             assert_that(messages, has_length(1))
 
@@ -207,9 +187,7 @@ def test_ingest_duplicate_messages_are_idempotent():
 
 
 def test_ingest_tool_calls_returns_204_and_persists():
-    with given(
-        [*_GIVEN, there_is_an_agent(), _set_ingest_key(), _create_ingest_client()]
-    ) as context:
+    with given([*_GIVEN, there_is_an_agent(), _set_ingest_key(), _create_ingest_client()]) as context:
         with when("I post a tool call + result"):
             response = context.ingest_client.post(
                 _url(context),
@@ -238,9 +216,7 @@ def test_ingest_tool_calls_returns_204_and_persists():
 
 
 def test_ingest_empty_batch_returns_204():
-    with given(
-        [*_GIVEN, there_is_an_agent(), _set_ingest_key(), _create_ingest_client()]
-    ) as context:
+    with given([*_GIVEN, there_is_an_agent(), _set_ingest_key(), _create_ingest_client()]) as context:
         with when("I post an empty batch"):
             response = context.ingest_client.post(
                 _url(context),

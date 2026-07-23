@@ -53,9 +53,7 @@ class TemplateService:
         return context.require_current_user_organization().organization_id
 
     def _validate_skill_ids(self, skill_ids: list[UUID], org_id: UUID) -> None:
-        accessible = {
-            s.id for s in self.skill_repository.find_accessible_for_org(org_id)
-        }
+        accessible = {s.id for s in self.skill_repository.find_accessible_for_org(org_id)}
         for skill_id in skill_ids:
             if skill_id not in accessible:
                 raise HTTPException(
@@ -65,9 +63,7 @@ class TemplateService:
 
     def _with_required_skills(self, read: TemplateRead) -> TemplateRead:
         skills = self.repository.get_required_skills(read.id)
-        return read.model_copy(
-            update={"required_skills": [SkillRead.model_validate(s) for s in skills]}
-        )
+        return read.model_copy(update={"required_skills": [SkillRead.model_validate(s) for s in skills]})
 
     def _get_latest_or_404(self, org_id: UUID, slug: str) -> AgentTemplate:
         template = self.repository.get_latest_template(org_id, slug)
@@ -85,25 +81,15 @@ class TemplateService:
         context: CurrentUserContext,
     ) -> PaginatedItems[TemplateRead]:
         org_id = self._org_id(context)
-        self.permission_policy.require_organization(
-            context, org_id, PermissionKey.TEMPLATE_READ
-        )
-        templates, total = self.repository.find_latest_templates(
-            org_id, template_filter, pagination
-        )
+        self.permission_policy.require_organization(context, org_id, PermissionKey.TEMPLATE_READ)
+        templates, total = self.repository.find_latest_templates(org_id, template_filter, pagination)
         template_ids = [t.id for t in templates]
-        skills_by_template = self.repository.get_required_skills_for_templates(
-            template_ids
-        )
+        skills_by_template = self.repository.get_required_skills_for_templates(template_ids)
         items = []
         for t in templates:
             read = TemplateRead.model_validate(t)
             skills = skills_by_template.get(t.id, [])
-            read = read.model_copy(
-                update={
-                    "required_skills": [SkillRead.model_validate(s) for s in skills]
-                }
-            )
+            read = read.model_copy(update={"required_skills": [SkillRead.model_validate(s) for s in skills]})
             items.append(read)
         return PaginatedItems(
             page=pagination.page,
@@ -115,15 +101,11 @@ class TemplateService:
     def get_template(self, slug: str, context: CurrentUserContext) -> TemplateRead:
         org_id = self._org_id(context)
         template = self._get_latest_or_404(org_id, slug)
-        self.permission_policy.require_organization(
-            context, org_id, PermissionKey.TEMPLATE_READ
-        )
+        self.permission_policy.require_organization(context, org_id, PermissionKey.TEMPLATE_READ)
         read = TemplateRead.model_validate(template)
         return self._with_required_skills(read)
 
-    def list_template_versions(
-        self, slug: str, context: CurrentUserContext
-    ) -> list[TemplateRead]:
+    def list_template_versions(self, slug: str, context: CurrentUserContext) -> list[TemplateRead]:
         org_id = self._org_id(context)
         versions = self.repository.find_versions(org_id, slug)
         if not versions:
@@ -131,32 +113,20 @@ class TemplateService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Template {slug} not found",
             )
-        self.permission_policy.require_organization(
-            context, org_id, PermissionKey.TEMPLATE_READ
-        )
+        self.permission_policy.require_organization(context, org_id, PermissionKey.TEMPLATE_READ)
         template_ids = [v.id for v in versions]
-        skills_by_template = self.repository.get_required_skills_for_templates(
-            template_ids
-        )
+        skills_by_template = self.repository.get_required_skills_for_templates(template_ids)
         result = []
         for v in versions:
             read = TemplateRead.model_validate(v)
             skills = skills_by_template.get(v.id, [])
-            read = read.model_copy(
-                update={
-                    "required_skills": [SkillRead.model_validate(s) for s in skills]
-                }
-            )
+            read = read.model_copy(update={"required_skills": [SkillRead.model_validate(s) for s in skills]})
             result.append(read)
         return result
 
-    def create_template(
-        self, data: TemplateCreate, context: CurrentUserContext
-    ) -> TemplateRead:
+    def create_template(self, data: TemplateCreate, context: CurrentUserContext) -> TemplateRead:
         org_id = self._org_id(context)
-        self.permission_policy.require_organization(
-            context, org_id, PermissionKey.TEMPLATE_MANAGE
-        )
+        self.permission_policy.require_organization(context, org_id, PermissionKey.TEMPLATE_MANAGE)
         slug = slugify(data.template_name)
         if not slug:
             raise HTTPException(
@@ -191,14 +161,10 @@ class TemplateService:
             self.repository.save_template_skills(template.id, data.required_skill_ids)
         return self._with_required_skills(TemplateRead.model_validate(template))
 
-    def update_template(
-        self, slug: str, data: TemplateUpdate, context: CurrentUserContext
-    ) -> TemplateRead:
+    def update_template(self, slug: str, data: TemplateUpdate, context: CurrentUserContext) -> TemplateRead:
         org_id = self._org_id(context)
         old = self._get_latest_or_404(org_id, slug)
-        self.permission_policy.require_organization(
-            context, org_id, PermissionKey.TEMPLATE_MANAGE
-        )
+        self.permission_policy.require_organization(context, org_id, PermissionKey.TEMPLATE_MANAGE)
         updated = data.model_dump(exclude_unset=True)
         # Every update publishes a new immutable version of the lineage; the
         # slug never changes and agent pins are left untouched.
@@ -237,18 +203,12 @@ class TemplateService:
         template on every start) pick up the change. A lineage the user has edited
         (version > 1) is left untouched so customizations are never clobbered.
         """
-        for predefined, template in zip(
-            PREDEFINED_TEMPLATES, build_predefined_templates(org_id)
-        ):
-            existing = self.repository.get_latest_template(
-                org_id, template.template_slug
-            )
+        for predefined, template in zip(PREDEFINED_TEMPLATES, build_predefined_templates(org_id)):
+            existing = self.repository.get_latest_template(org_id, template.template_slug)
             if existing is None:
                 self.repository.save_template(template)
                 existing = template
-                logger.warning(
-                    "Seeded predefined template: %s v1", template.template_slug
-                )
+                logger.warning("Seeded predefined template: %s v1", template.template_slug)
             elif (
                 existing.version == 1
                 and existing.template_source == TemplateSource.PRE_DEFINED
@@ -261,10 +221,7 @@ class TemplateService:
                     template.template_slug,
                 )
 
-            if (
-                existing.version == 1
-                and existing.template_source == TemplateSource.PRE_DEFINED
-            ):
+            if existing.version == 1 and existing.template_source == TemplateSource.PRE_DEFINED:
                 desired_ids = [
                     skill.id
                     for name in predefined.required_skill_names

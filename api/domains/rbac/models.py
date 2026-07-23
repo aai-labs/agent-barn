@@ -17,8 +17,7 @@ class AgentAccessRole(BaseModel, table=True):
     __tablename__: str = "agent_access_roles"
     __table_args__ = (
         sa.CheckConstraint(
-            "(is_system AND organization_id IS NULL) OR "
-            "(NOT is_system AND organization_id IS NOT NULL)",
+            "(is_system AND organization_id IS NULL) OR (NOT is_system AND organization_id IS NOT NULL)",
             name="ck_agent_access_roles_system_scope",
         ),
         sa.CheckConstraint(

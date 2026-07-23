@@ -44,9 +44,7 @@ def _openclaw_config_core(
             }
         },
         "channels": channels,
-        "bindings": [
-            {"type": "route", "agentId": "main", "match": {"channel": binding_channel}}
-        ],
+        "bindings": [{"type": "route", "agentId": "main", "match": {"channel": binding_channel}}],
         "tools": {
             "profile": "full",
             "exec": {"mode": "full"},
@@ -107,10 +105,7 @@ def build_openclaw_config_overlay(
         allow_from = dm_user_ids
         direct_reply_mode = "all"
 
-    channels_config: dict = {
-        channel_id: {"enabled": True, "requireMention": True}
-        for channel_id in channel_ids
-    }
+    channels_config: dict = {channel_id: {"enabled": True, "requireMention": True} for channel_id in channel_ids}
 
     return _openclaw_config_core(
         model,
@@ -191,11 +186,7 @@ def build_openclaw_config_overlay_telegram(
                 "groupPolicy": group_policy,
                 "dmPolicy": openclaw_dm_policy,
                 "allowFrom": allow_from,
-                **(
-                    {"groups": {cid: {} for cid in (allowed_chat_ids or [])}}
-                    if group_policy == "allowlist"
-                    else {}
-                ),
+                **({"groups": {cid: {} for cid in (allowed_chat_ids or [])}} if group_policy == "allowlist" else {}),
             }
         },
     )
@@ -349,9 +340,7 @@ def build_deployment(
                 metadata=client.V1ObjectMeta(labels=labels),
                 spec=client.V1PodSpec(
                     image_pull_secrets=(
-                        [client.V1LocalObjectReference(name=image_pull_secret)]
-                        if image_pull_secret
-                        else None
+                        [client.V1LocalObjectReference(name=image_pull_secret)] if image_pull_secret else None
                     ),
                     init_containers=[
                         client.V1Container(
@@ -383,11 +372,7 @@ def build_deployment(
                                 period_seconds=15,
                                 failure_threshold=6,
                             ),
-                            env_from=[
-                                client.V1EnvFromSource(
-                                    secret_ref=client.V1SecretEnvSource(name=name)
-                                )
-                            ],
+                            env_from=[client.V1EnvFromSource(secret_ref=client.V1SecretEnvSource(name=name))],
                             volume_mounts=[
                                 client.V1VolumeMount(
                                     name="config",
@@ -407,9 +392,7 @@ def build_deployment(
                         ),
                         client.V1Volume(
                             name="data",
-                            persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(
-                                claim_name=name
-                            ),
+                            persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(claim_name=name),
                         ),
                     ],
                 ),

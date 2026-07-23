@@ -223,16 +223,12 @@ def test_open_group_policy_drops_channel_allowlist_plugin():
 
 
 def test_allowlist_group_policy_keeps_channel_allowlist_plugin():
-    cfg = build_hermes_config(
-        "litellm/qwen3", "http://x:4000", group_policy="allowlist"
-    )
+    cfg = build_hermes_config("litellm/qwen3", "http://x:4000", group_policy="allowlist")
     assert_that("slack-channel-allowlist" in cfg["plugins"]["enabled"], equal_to(True))
 
 
 def test_open_group_and_dm_policy_drops_both_gating_plugins():
-    cfg = build_hermes_config(
-        "litellm/qwen3", "http://x:4000", dm_policy="open", group_policy="open"
-    )
+    cfg = build_hermes_config("litellm/qwen3", "http://x:4000", dm_policy="open", group_policy="open")
     enabled = cfg["plugins"]["enabled"]
     assert_that("slack-deny-dms" in enabled, equal_to(False))
     assert_that("slack-channel-allowlist" in enabled, equal_to(False))
@@ -330,9 +326,7 @@ def test_build_hermes_deployment_workspace_is_pvc_backed():
     # per-agent PVC, not an ephemeral emptyDir — mirroring ocbw's persistent
     # ./agents/<name>/workspace bind-mount and OpenClaw's PVC-nested workspace.
     dep = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:latest")
-    mounts = {
-        m.mount_path: m for m in dep.spec.template.spec.containers[0].volume_mounts
-    }
+    mounts = {m.mount_path: m for m in dep.spec.template.spec.containers[0].volume_mounts}
     workspace = mounts["/workspace"]
     assert_that(workspace.name, equal_to("data"))
     assert_that(workspace.sub_path, equal_to("workspace"))
@@ -340,9 +334,7 @@ def test_build_hermes_deployment_workspace_is_pvc_backed():
 
 def test_build_hermes_deployment_opt_data_stays_on_pvc_root():
     dep = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:latest")
-    mounts = {
-        m.mount_path: m for m in dep.spec.template.spec.containers[0].volume_mounts
-    }
+    mounts = {m.mount_path: m for m in dep.spec.template.spec.containers[0].volume_mounts}
     data = mounts["/opt/data"]
     assert_that(data.name, equal_to("data"))
     assert_that(data.sub_path, equal_to(None))
@@ -429,23 +421,17 @@ def test_start_sh_includes_skills_json_reconstruction():
 
 
 def test_build_hermes_config_approval_mode_auto_maps_to_smart():
-    cfg = build_hermes_config(
-        "litellm/qwen3", "http://litellm:4000", approval_mode="auto"
-    )
+    cfg = build_hermes_config("litellm/qwen3", "http://litellm:4000", approval_mode="auto")
     assert_that(cfg["approvals"]["mode"], equal_to("smart"))
 
 
 def test_build_hermes_config_approval_mode_off():
-    cfg = build_hermes_config(
-        "litellm/qwen3", "http://litellm:4000", approval_mode="off"
-    )
+    cfg = build_hermes_config("litellm/qwen3", "http://litellm:4000", approval_mode="off")
     assert_that(cfg["approvals"]["mode"], equal_to("off"))
 
 
 def test_build_hermes_config_approval_mode_manual():
-    cfg = build_hermes_config(
-        "litellm/qwen3", "http://litellm:4000", approval_mode="manual"
-    )
+    cfg = build_hermes_config("litellm/qwen3", "http://litellm:4000", approval_mode="manual")
     assert_that(cfg["approvals"]["mode"], equal_to("manual"))
 
 
@@ -476,46 +462,32 @@ def test_build_hermes_config_telegram_has_telegram_platform():
 
 
 def test_build_hermes_config_telegram_dm_off_enables_deny_plugin():
-    cfg = build_hermes_config_telegram(
-        "litellm/qwen3", "http://litellm:4000", dm_policy="off"
-    )
+    cfg = build_hermes_config_telegram("litellm/qwen3", "http://litellm:4000", dm_policy="off")
     assert_that("telegram-deny-dms" in cfg["plugins"]["enabled"], equal_to(True))
     assert_that(cfg, is_not(has_key("allow_from")))
 
 
 def test_build_hermes_config_telegram_dm_open_drops_deny_plugin():
-    cfg = build_hermes_config_telegram(
-        "litellm/qwen3", "http://litellm:4000", dm_policy="open"
-    )
+    cfg = build_hermes_config_telegram("litellm/qwen3", "http://litellm:4000", dm_policy="open")
     assert_that("telegram-deny-dms" in cfg["plugins"]["enabled"], equal_to(False))
     assert_that(cfg, is_not(has_key("allow_from")))
 
 
 def test_build_hermes_config_telegram_dm_allowlist_enables_deny_plugin():
-    cfg = build_hermes_config_telegram(
-        "litellm/qwen3", "http://litellm:4000", dm_policy="allowlist"
-    )
+    cfg = build_hermes_config_telegram("litellm/qwen3", "http://litellm:4000", dm_policy="allowlist")
     assert_that("telegram-deny-dms" in cfg["plugins"]["enabled"], equal_to(True))
 
 
 def test_build_hermes_config_telegram_group_open_drops_channel_plugin():
-    cfg = build_hermes_config_telegram(
-        "litellm/qwen3", "http://litellm:4000", group_policy="open"
-    )
-    assert_that(
-        "telegram-channel-allowlist" in cfg["plugins"]["enabled"], equal_to(False)
-    )
+    cfg = build_hermes_config_telegram("litellm/qwen3", "http://litellm:4000", group_policy="open")
+    assert_that("telegram-channel-allowlist" in cfg["plugins"]["enabled"], equal_to(False))
     assert_that(cfg, is_not(has_key("guest_mode")))
     assert_that(cfg, is_not(has_key("group_allowed_chats")))
 
 
 def test_build_hermes_config_telegram_group_allowlist_enables_channel_plugin():
-    cfg = build_hermes_config_telegram(
-        "litellm/qwen3", "http://litellm:4000", group_policy="allowlist"
-    )
-    assert_that(
-        "telegram-channel-allowlist" in cfg["plugins"]["enabled"], equal_to(True)
-    )
+    cfg = build_hermes_config_telegram("litellm/qwen3", "http://litellm:4000", group_policy="allowlist")
+    assert_that("telegram-channel-allowlist" in cfg["plugins"]["enabled"], equal_to(True))
     assert_that(cfg, is_not(has_key("guest_mode")))
     assert_that(cfg, is_not(has_key("group_allowed_chats")))
 
@@ -531,9 +503,7 @@ def test_build_hermes_config_telegram_open_both_only_telemetry():
 
 
 def test_build_hermes_config_telegram_approval_mode():
-    cfg = build_hermes_config_telegram(
-        "litellm/qwen3", "http://litellm:4000", approval_mode="manual"
-    )
+    cfg = build_hermes_config_telegram("litellm/qwen3", "http://litellm:4000", approval_mode="manual")
     assert_that(cfg["approvals"]["mode"], equal_to("manual"))
 
 
@@ -559,9 +529,7 @@ def test_build_secret_hermes_telegram_contains_required_keys():
     assert_that(data["AGENT_PLATFORM"], equal_to("telegram"))
     assert_that(data["API_SERVER_ENABLED"], equal_to("true"))
     assert_that(data["TELEGRAM_HOME_CHANNEL"], equal_to("0000000000"))
-    assert_that(
-        data["TELEGRAM_HOME_CHANNEL_NAME"], equal_to("No Telegram Home Channel")
-    )
+    assert_that(data["TELEGRAM_HOME_CHANNEL_NAME"], equal_to("No Telegram Home Channel"))
     assert_that(data, has_key("TELEGRAM_CHANNEL_IDS"))
     assert_that(data, has_key("TELEGRAM_DM_ALLOWED_USERS"))
 
@@ -733,9 +701,7 @@ def test_hermes_start_sh_conditional_slack_plugins():
 
 
 def test_hermes_start_sh_conditional_telegram_plugins():
-    assert_that(
-        HERMES_START_SH, contains_string("if [ -f /app/config/telegram-deny-dms")
-    )
+    assert_that(HERMES_START_SH, contains_string("if [ -f /app/config/telegram-deny-dms"))
     assert_that(
         HERMES_START_SH,
         contains_string("if [ -f /app/config/telegram-channel-allowlist"),

@@ -28,12 +28,8 @@ class OrganizationUser(BaseModel, table=True):
             name="uq_user_organization_id_organization",
         ),
     )
-    user_id: UUID | None = Field(
-        foreign_key="user.id", nullable=True, ondelete="SET NULL"
-    )
-    organization_id: UUID = Field(
-        foreign_key="organization.id", nullable=False, ondelete="CASCADE"
-    )
+    user_id: UUID | None = Field(foreign_key="user.id", nullable=True, ondelete="SET NULL")
+    organization_id: UUID = Field(foreign_key="organization.id", nullable=False, ondelete="CASCADE")
     role: OrganizationRole = Field(
         default=OrganizationRole.MEMBER,
         sa_column=Column(Enum(OrganizationRole), nullable=False),

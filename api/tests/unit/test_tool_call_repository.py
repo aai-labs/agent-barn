@@ -328,16 +328,10 @@ def test_filter_by_status():
         org_id = context.organization.id
         agent_id = context.agent.id
 
-        _seed_pending(
-            repository, organization_id=org_id, agent_id=agent_id, external_id="c1"
-        )
-        _seed_pending(
-            repository, organization_id=org_id, agent_id=agent_id, external_id="c2"
-        )
+        _seed_pending(repository, organization_id=org_id, agent_id=agent_id, external_id="c1")
+        _seed_pending(repository, organization_id=org_id, agent_id=agent_id, external_id="c2")
         _complete(repository, agent_id=agent_id, external_id="c2", is_error=False)
-        _seed_pending(
-            repository, organization_id=org_id, agent_id=agent_id, external_id="c3"
-        )
+        _seed_pending(repository, organization_id=org_id, agent_id=agent_id, external_id="c3")
         _complete(repository, agent_id=agent_id, external_id="c3", is_error=True)
 
         with when("I filter by status=SUCCESS"):
@@ -450,9 +444,7 @@ def test_pagination_returns_correct_page_and_total():
                 organization_id=org_id,
                 agent_id=agent_id,
                 external_id=f"c{i}",
-                occurred_at=datetime.datetime(
-                    2026, 5, 1 + i, tzinfo=datetime.timezone.utc
-                ),
+                occurred_at=datetime.datetime(2026, 5, 1 + i, tzinfo=datetime.timezone.utc),
             )
 
         with when("I request page 1, size 2"):
@@ -533,12 +525,8 @@ def test_find_by_agent_is_scoped_to_agent():
         there_is_an_agent(name="B")(context)
         agent_b_id = context.agent.id
 
-        _seed_pending(
-            repository, organization_id=org_id, agent_id=agent_a_id, external_id="for_a"
-        )
-        _seed_pending(
-            repository, organization_id=org_id, agent_id=agent_b_id, external_id="for_b"
-        )
+        _seed_pending(repository, organization_id=org_id, agent_id=agent_a_id, external_id="for_a")
+        _seed_pending(repository, organization_id=org_id, agent_id=agent_b_id, external_id="for_b")
 
         with when("I list for agent A"):
             page_a = _find_by_agent(

@@ -38,9 +38,7 @@ def upgrade() -> None:
         sa.Column("bot_username", sa.String(length=255), nullable=False),
         sa.Column("allowed_user_ids", sa.JSON(), nullable=False, server_default="[]"),
         sa.Column("allowed_chat_ids", sa.JSON(), nullable=False, server_default="[]"),
-        sa.Column(
-            "group_policy", sa.String(), nullable=False, server_default="allowlist"
-        ),
+        sa.Column("group_policy", sa.String(), nullable=False, server_default="allowlist"),
         sa.Column("dm_policy", sa.String(), nullable=False, server_default="off"),
         sa.ForeignKeyConstraint(["agent_id"], ["agent.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),

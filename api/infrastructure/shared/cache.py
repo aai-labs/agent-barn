@@ -53,9 +53,7 @@ def cached(key: str, fetch: Callable[[], T], *, ttl: float) -> T:
             with _cache_lock:
                 stale = _cache.get(key)
             if stale is not None:
-                logger.warning(
-                    "Cache refresh failed for %s (%s); serving stale entry", key, exc
-                )
+                logger.warning("Cache refresh failed for %s (%s); serving stale entry", key, exc)
                 return stale[1]
             raise
         with _cache_lock:

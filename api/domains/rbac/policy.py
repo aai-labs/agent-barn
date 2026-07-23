@@ -36,9 +36,7 @@ class PermissionPolicy:
         membership = context.require_current_user_organization()
         if membership.organization_id != organization_id:
             return None
-        if context.user.is_superuser or organization_role_allows(
-            membership.role, permission
-        ):
+        if context.user.is_superuser or organization_role_allows(membership.role, permission):
             return AuthorizationScope(organization_id=organization_id)
         return None
 

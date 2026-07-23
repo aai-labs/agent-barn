@@ -115,15 +115,12 @@ class ConversationRepository:
             if filter.to_date is not None:
                 filters.append(col(AgentChatMessage.occurred_at) < filter.to_date)
             if cursor.before_occurred_at is not None:
-                tiebreaker = (
-                    col(AgentChatMessage.occurred_at) < cursor.before_occurred_at
-                )
+                tiebreaker = col(AgentChatMessage.occurred_at) < cursor.before_occurred_at
                 if cursor.before_id is not None:
                     tiebreaker = or_(
                         col(AgentChatMessage.occurred_at) < cursor.before_occurred_at,
                         and_(
-                            col(AgentChatMessage.occurred_at)
-                            == cursor.before_occurred_at,
+                            col(AgentChatMessage.occurred_at) == cursor.before_occurred_at,
                             col(AgentChatMessage.id) < cursor.before_id,
                         ),
                     )
@@ -148,11 +145,7 @@ class ConversationRepository:
 
             oldest = msgs_desc[-1]
             next_cursor: ConversationsCursor | None = (
-                ConversationsCursor(
-                    before_occurred_at=oldest.occurred_at, before_id=oldest.id
-                )
-                if has_more
-                else None
+                ConversationsCursor(before_occurred_at=oldest.occurred_at, before_id=oldest.id) if has_more else None
             )
             msgs_desc.reverse()
             return msgs_desc, next_cursor

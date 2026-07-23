@@ -35,11 +35,7 @@ def friendly_k8s_error(exc: Exception) -> str:
             parsed = json.loads(body) if isinstance(body, (str, bytes)) else body
             msg = parsed.get("message") or parsed.get("reason") or ""
             if msg:
-                friendly = (
-                    _K8S_STATUS_MESSAGES.get(status_code)
-                    if isinstance(status_code, int)
-                    else None
-                )
+                friendly = _K8S_STATUS_MESSAGES.get(status_code) if isinstance(status_code, int) else None
                 return f"{friendly} ({msg})" if friendly else msg
         except Exception:
             pass

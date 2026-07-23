@@ -52,15 +52,11 @@ class EmailClient:
             )
 
         if ":" not in credential:
-            raise RuntimeError(
-                "Invalid EMAIL_SERVER_CREDENTIAL format. Expected '<email>:<password>'."
-            )
+            raise RuntimeError("Invalid EMAIL_SERVER_CREDENTIAL format. Expected '<email>:<password>'.")
 
         acc_email, acc_password = credential.split(":", 1)
         if not acc_email or not acc_password:
-            raise RuntimeError(
-                "Invalid EMAIL_SERVER_CREDENTIAL value. Email and password are both required."
-            )
+            raise RuntimeError("Invalid EMAIL_SERVER_CREDENTIAL value. Email and password are both required.")
 
         # The visible "From" address may differ from the SMTP login (e.g. sending as
         # no-reply@agentbarn.dev while authenticating with an admin-provided account).
@@ -102,11 +98,7 @@ class EmailClient:
             email.to_email,
             email.subject,
             f"All SMTP strategies failed for {email.to_email}",
-            exc_info=(
-                (type(last_exception), last_exception, last_exception.__traceback__)
-                if last_exception
-                else None
-            ),
+            exc_info=((type(last_exception), last_exception, last_exception.__traceback__) if last_exception else None),
         )
         raise exc
 

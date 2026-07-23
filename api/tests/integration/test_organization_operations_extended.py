@@ -173,9 +173,7 @@ def test_owner_without_organization_read_cannot_view_their_organization():
                 role=OrganizationRole.OWNER,
             ),
             there_is_an_access_token_for_user(user_id=owner_id),
-            role_lacks_permission(
-                OrganizationRole.OWNER, PermissionKey.ORGANIZATION_READ
-            ),
+            role_lacks_permission(OrganizationRole.OWNER, PermissionKey.ORGANIZATION_READ),
         ]
     ) as context:
         response = context.client.get(
@@ -280,9 +278,7 @@ def test_owner_without_organization_update_cannot_update_organization():
                 role=OrganizationRole.OWNER,
             ),
             there_is_an_access_token_for_user(user_id=owner_id),
-            role_lacks_permission(
-                OrganizationRole.OWNER, PermissionKey.ORGANIZATION_UPDATE
-            ),
+            role_lacks_permission(OrganizationRole.OWNER, PermissionKey.ORGANIZATION_UPDATE),
         ]
     ) as context:
         response = context.client.patch(
@@ -479,9 +475,7 @@ def test_superuser_can_delete_any_organization():
             create_test_client(),
             database_repo_is_ready(),
             database_is_clean(),
-            there_is_a_user(
-                id=super_id, email="super-admin@example.com", is_superuser=True
-            ),
+            there_is_a_user(id=super_id, email="super-admin@example.com", is_superuser=True),
             there_is_a_user(
                 email="owner-admin-delete@example.com",
                 organization_id=org_id,
@@ -722,9 +716,7 @@ def test_default_organization_cannot_be_deleted():
             create_test_client(),
             database_repo_is_ready(),
             database_is_clean(),
-            there_is_a_user(
-                id=super_id, email="super-defdel@example.com", is_superuser=True
-            ),
+            there_is_a_user(id=super_id, email="super-defdel@example.com", is_superuser=True),
             there_is_a_default_organization(id=default_org),
             there_is_an_access_token_for_user(user_id=super_id),
         ]

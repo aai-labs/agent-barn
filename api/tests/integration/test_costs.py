@@ -147,9 +147,7 @@ def test_unassigned_member_cannot_view_agent_cost():
     member_id = uuid7()
     with given([*_GIVEN, _there_is_a_member_actor(member_id)]) as context:
         agent_id = str(context.agent.id)
-        response = context.client.get(
-            f"{_BASE}/agents/{agent_id}", headers=_auth(context)
-        )
+        response = context.client.get(f"{_BASE}/agents/{agent_id}", headers=_auth(context))
         assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
@@ -176,12 +174,8 @@ def test_superuser_can_view_costs_summary():
             database_repo_is_ready(),
             database_is_clean(),
             # Created before the org exists in context, so the superuser stays a non-member.
-            there_is_a_user(
-                id=super_id, email="super-costs@example.com", is_superuser=True
-            ),
-            there_is_an_organization_with_user_and_access_token(
-                id=org_id, email="owner-super-costs@example.com"
-            ),
+            there_is_a_user(id=super_id, email="super-costs@example.com", is_superuser=True),
+            there_is_an_organization_with_user_and_access_token(id=org_id, email="owner-super-costs@example.com"),
             use_org_for_auth(),
             there_is_an_access_token_for_user(user_id=super_id),
         ]

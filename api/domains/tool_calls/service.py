@@ -29,6 +29,4 @@ class ToolCallService:
         activity_scope = self.agent_authorization.require_action_for_visible(
             context, agent, PermissionKey.ACTIVITY_READ
         )
-        return self.repository.find_by_agent(
-            agent_id, tool_call_filter, pagination, activity_scope
-        )
+        return self.repository.find_by_agent(agent_id, tool_call_filter, pagination, activity_scope)
