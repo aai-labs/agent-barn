@@ -79,6 +79,18 @@ def _agent_names(response) -> list[str]:
     return [item["name"] for item in response.json()["items"]]
 
 
+def _there_is_an_assigned_agent(org_id: UUID, name: str):
+    def step(context):
+        there_is_an_agent(
+            organization_id=org_id,
+            name=name,
+            created_by_user_id=context.user.id,
+            creator_membership_id=context.organization_user.id,
+        )(context)
+
+    return step
+
+
 def test_member_lists_agents_scoped_to_header_org():
     with given(
         [
@@ -91,7 +103,7 @@ def test_member_lists_agents_scoped_to_header_org():
             ),
             there_is_an_access_token_for_user(),
             _there_is_a_bare_org(ORG_B, "Org B"),
-            there_is_an_agent(organization_id=ORG_A, name="Agent A"),
+            _there_is_an_assigned_agent(ORG_A, "Agent A"),
             there_is_an_agent(organization_id=ORG_B, name="Agent B"),
         ]
     ) as context:

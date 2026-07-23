@@ -28,12 +28,8 @@ class ToolCall(BaseModel, table=True):
         UniqueConstraint("agent_id", "external_id", name="uq_tool_call_agent_external"),
     )
 
-    organization_id: UUID = SqlField(
-        foreign_key="organization.id", nullable=False, ondelete="CASCADE"
-    )
-    agent_id: UUID = SqlField(
-        foreign_key="agent.id", nullable=False, ondelete="CASCADE"
-    )
+    organization_id: UUID = SqlField(foreign_key="organization.id", nullable=False, ondelete="CASCADE")
+    agent_id: UUID = SqlField(foreign_key="agent.id", nullable=False, ondelete="CASCADE")
     session_id: str = SqlField(nullable=False)
     external_id: str = SqlField(nullable=False)
     tool_name: str = SqlField(nullable=False)

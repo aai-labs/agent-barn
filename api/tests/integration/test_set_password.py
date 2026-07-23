@@ -36,9 +36,7 @@ def _there_is_a_pending_invite(email: str = "invitee@example.com"):
     def step(context):
         there_is_a_user(email=email, email_verified=False)(context)
         auth_service: AuthService = context.injector.get(AuthService)
-        context.invite_token = auth_service.generate_password_reset_token(
-            context.user.id
-        )
+        context.invite_token = auth_service.generate_password_reset_token(context.user.id)
 
     return step
 

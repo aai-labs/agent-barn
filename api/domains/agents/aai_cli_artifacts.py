@@ -60,10 +60,7 @@ CONFIG_PATH = f"{SECRETS_DIR}/config.toml"
 
 
 def _header(secrets_dir: str) -> str:
-    return (
-        f'secrets_file = "{secrets_dir}/aai-secrets.enc.json"\n'
-        f'key_file = "{secrets_dir}/key"\n'
-    )
+    return f'secrets_file = "{secrets_dir}/aai-secrets.enc.json"\nkey_file = "{secrets_dir}/key"\n'
 
 
 def env_var_for(secret_name: str) -> str:
@@ -76,9 +73,7 @@ def _q(value: str) -> str:
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def _profile_repo_pairs(
-    base_name: str, repos: list[str]
-) -> list[tuple[str, str | None]]:
+def _profile_repo_pairs(base_name: str, repos: list[str]) -> list[tuple[str, str | None]]:
     """Map a list of repo names to (profile_name, repo) pairs.
 
     [] -> [(base_name, None)] (profile with no `repo =` line — aai-cli falls back to
@@ -86,10 +81,7 @@ def _profile_repo_pairs(
     """
     if not repos:
         return [(base_name, None)]
-    return [
-        (base_name if i == 0 else f"{base_name}-{i + 1}", repo)
-        for i, repo in enumerate(repos)
-    ]
+    return [(base_name if i == 0 else f"{base_name}-{i + 1}", repo) for i, repo in enumerate(repos)]
 
 
 # --- per-provider profile blocks (rendered from the decrypted content model) ---
@@ -97,9 +89,7 @@ def _profile_repo_pairs(
 
 def _github_block(c: GithubContent) -> str:
     blocks = []
-    for name, repo in _profile_repo_pairs(
-        PROFILE_SLUGS[SecretProvider.GITHUB], c.repos
-    ):
+    for name, repo in _profile_repo_pairs(PROFILE_SLUGS[SecretProvider.GITHUB], c.repos):
         lines = [
             f"[profiles.{name}]\n",
             'provider = "github"\n',
@@ -136,9 +126,7 @@ def _confluence_block(c: ConfluenceContent) -> str:
 
 def _bitbucket_block(c: BitbucketContent) -> str:
     blocks = []
-    for name, repo in _profile_repo_pairs(
-        PROFILE_SLUGS[SecretProvider.BITBUCKET], c.repos
-    ):
+    for name, repo in _profile_repo_pairs(PROFILE_SLUGS[SecretProvider.BITBUCKET], c.repos):
         lines = [
             f"[profiles.{name}]\n",
             'auth_type = "basic_api_token"\n',
@@ -235,8 +223,7 @@ def build_tool_context_md(decrypted: Mapping[SecretProvider, SecretContent]) -> 
             base = PROFILE_SLUGS[SecretProvider.GITHUB]
             if content.repos:
                 pairs = "; ".join(
-                    f"`{name}`: {content.owner}/{repo}"
-                    for name, repo in _profile_repo_pairs(base, content.repos)
+                    f"`{name}`: {content.owner}/{repo}" for name, repo in _profile_repo_pairs(base, content.repos)
                 )
                 lines.append(f"- **GitHub**: {pairs}")
             else:
@@ -249,15 +236,12 @@ def build_tool_context_md(decrypted: Mapping[SecretProvider, SecretContent]) -> 
             lines.append(f"- **Jira** (`{slug}`): {content.site_url} ({content.email})")
         elif isinstance(content, ConfluenceContent):
             slug = PROFILE_SLUGS[SecretProvider.CONFLUENCE]
-            lines.append(
-                f"- **Confluence** (`{slug}`): {content.site_url} ({content.email})"
-            )
+            lines.append(f"- **Confluence** (`{slug}`): {content.site_url} ({content.email})")
         elif isinstance(content, BitbucketContent):
             base = PROFILE_SLUGS[SecretProvider.BITBUCKET]
             if content.repos:
                 pairs = "; ".join(
-                    f"`{name}`: {content.workspace}/{repo}"
-                    for name, repo in _profile_repo_pairs(base, content.repos)
+                    f"`{name}`: {content.workspace}/{repo}" for name, repo in _profile_repo_pairs(base, content.repos)
                 )
                 lines.append(f"- **Bitbucket**: {pairs} ({content.email})")
             else:
@@ -281,9 +265,7 @@ _INTEGRATION_LABELS: dict[SecretProvider, str] = {
 }
 
 
-def _repo_scoped_profile_line(
-    label: str, base: str, scope: str, scope_kind: str, repos: list[str]
-) -> str:
+def _repo_scoped_profile_line(label: str, base: str, scope: str, scope_kind: str, repos: list[str]) -> str:
     """Render the agents_md line for a repo-scoped provider (GitHub/Bitbucket).
 
     With repos configured, each --profile slug is mapped to the ``scope/repo`` it
@@ -294,10 +276,7 @@ def _repo_scoped_profile_line(
     reflects whatever org/workspace the operator set up — nothing is hardcoded.
     """
     if repos:
-        segments = ", ".join(
-            f"`--profile {name}` → {scope}/{repo}"
-            for name, repo in _profile_repo_pairs(base, repos)
-        )
+        segments = ", ".join(f"`--profile {name}` → {scope}/{repo}" for name, repo in _profile_repo_pairs(base, repos))
         return f"- **{label}**: {segments}"
     return (
         f"- **{label}**: `--profile {base}` ({scope_kind} `{scope}` already set on the "
@@ -339,17 +318,9 @@ def build_integrations_policy_md(
             continue
         base = PROFILE_SLUGS[provider]
         if isinstance(content, GithubContent):
-            lines.append(
-                _repo_scoped_profile_line(
-                    "GitHub", base, content.owner, "owner", content.repos
-                )
-            )
+            lines.append(_repo_scoped_profile_line("GitHub", base, content.owner, "owner", content.repos))
         elif isinstance(content, BitbucketContent):
-            lines.append(
-                _repo_scoped_profile_line(
-                    "Bitbucket", base, content.workspace, "workspace", content.repos
-                )
-            )
+            lines.append(_repo_scoped_profile_line("Bitbucket", base, content.workspace, "workspace", content.repos))
         else:
             lines.append(f"- **{_INTEGRATION_LABELS[provider]}**: `--profile {base}`")
     return "\n".join(lines) + "\n"
@@ -397,10 +368,7 @@ def build_setup_sh(
             continue
         for secret_name, _ in provider_secrets_map.get(provider.value, []):
             env = env_var_for(secret_name)
-            lines.append(
-                f"printf '%s' \"${env}\" | "
-                f"aai-cli --config {config_path} secrets set {secret_name}"
-            )
+            lines.append(f"printf '%s' \"${env}\" | aai-cli --config {config_path} secrets set {secret_name}")
     return "\n".join(lines) + "\n"
 
 

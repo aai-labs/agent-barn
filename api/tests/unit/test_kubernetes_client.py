@@ -108,13 +108,9 @@ def test_create_deployment_returns_created_resource():
 
 def test_create_deployment_returns_existing_on_conflict():
     existing = V1Deployment(metadata=V1ObjectMeta(name="dep"))
-    api = _FakeAppsApi(
-        resource=existing, raises_on={"create": ApiException(status=409)}
-    )
+    api = _FakeAppsApi(resource=existing, raises_on={"create": ApiException(status=409)})
     k8s = _make_client(apps_api=api)
-    result = k8s.create_deployment(
-        "agent-farm", V1Deployment(metadata=V1ObjectMeta(name="dep"))
-    )
+    result = k8s.create_deployment("agent-farm", V1Deployment(metadata=V1ObjectMeta(name="dep")))
     assert_that(result, equal_to(existing))
 
 
@@ -122,9 +118,7 @@ def test_create_deployment_propagates_non_conflict_errors():
     api = _FakeAppsApi(raises_on={"create": ApiException(status=500)})
     k8s = _make_client(apps_api=api)
     assert_that(
-        calling(k8s.create_deployment).with_args(
-            "agent-farm", V1Deployment(metadata=V1ObjectMeta(name="dep"))
-        ),
+        calling(k8s.create_deployment).with_args("agent-farm", V1Deployment(metadata=V1ObjectMeta(name="dep"))),
         raises(ApiException),
     )
 
@@ -167,9 +161,7 @@ def test_incluster_apiserver_none_off_cluster(monkeypatch):
 
 def test_incluster_apiserver_requires_token_file(monkeypatch, tmp_path):
     monkeypatch.setenv("KUBERNETES_SERVICE_HOST", "10.0.0.1")
-    monkeypatch.setattr(
-        k8s_client_module, "_SERVICE_ACCOUNT_TOKEN_PATH", str(tmp_path / "missing")
-    )
+    monkeypatch.setattr(k8s_client_module, "_SERVICE_ACCOUNT_TOKEN_PATH", str(tmp_path / "missing"))
     assert_that(KubernetesClient._incluster_apiserver(), none())
 
 
@@ -179,22 +171,14 @@ def test_incluster_apiserver_builds_url(monkeypatch, tmp_path):
     monkeypatch.setenv("KUBERNETES_SERVICE_HOST", "10.0.0.1")
     monkeypatch.setenv("KUBERNETES_SERVICE_PORT_HTTPS", "443")
     monkeypatch.setattr(k8s_client_module, "_SERVICE_ACCOUNT_TOKEN_PATH", str(token))
-    assert_that(
-        KubernetesClient._incluster_apiserver(), equal_to("https://10.0.0.1:443")
-    )
+    assert_that(KubernetesClient._incluster_apiserver(), equal_to("https://10.0.0.1:443"))
 
 
 def test_resolve_kubeconfig_unchanged_off_cluster(monkeypatch, tmp_path):
     monkeypatch.delenv("KUBERNETES_SERVICE_HOST", raising=False)
     kubeconfig = tmp_path / "kubeconfig"
-    kubeconfig.write_text(
-        yaml.safe_dump(
-            {"clusters": [{"cluster": {"server": "https://127.0.0.1:6443"}}]}
-        )
-    )
-    assert_that(
-        KubernetesClient._resolve_kubeconfig(str(kubeconfig)), equal_to(str(kubeconfig))
-    )
+    kubeconfig.write_text(yaml.safe_dump({"clusters": [{"cluster": {"server": "https://127.0.0.1:6443"}}]}))
+    assert_that(KubernetesClient._resolve_kubeconfig(str(kubeconfig)), equal_to(str(kubeconfig)))
 
 
 def test_resolve_kubeconfig_rewrites_server_in_cluster(monkeypatch, tmp_path):
@@ -205,13 +189,7 @@ def test_resolve_kubeconfig_rewrites_server_in_cluster(monkeypatch, tmp_path):
     monkeypatch.setattr(k8s_client_module, "_SERVICE_ACCOUNT_TOKEN_PATH", str(token))
     kubeconfig = tmp_path / "kubeconfig"
     kubeconfig.write_text(
-        yaml.safe_dump(
-            {
-                "clusters": [
-                    {"name": "k3s", "cluster": {"server": "https://127.0.0.1:6443"}}
-                ]
-            }
-        )
+        yaml.safe_dump({"clusters": [{"name": "k3s", "cluster": {"server": "https://127.0.0.1:6443"}}]})
     )
 
     out = KubernetesClient._resolve_kubeconfig(str(kubeconfig))
@@ -219,9 +197,7 @@ def test_resolve_kubeconfig_rewrites_server_in_cluster(monkeypatch, tmp_path):
     assert out != str(kubeconfig)
     with open(out) as f:
         patched = yaml.safe_load(f)
-    assert_that(
-        patched["clusters"][0]["cluster"]["server"], equal_to("https://10.0.0.1:443")
-    )
+    assert_that(patched["clusters"][0]["cluster"]["server"], equal_to("https://10.0.0.1:443"))
 
 
 # --- read_pod_logs ---

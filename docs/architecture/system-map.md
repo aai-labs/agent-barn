@@ -32,12 +32,12 @@ Organization
     └── LiteLLM key ── Costs
 ```
 
-The Agent domain is the central orchestration boundary. It coordinates templates, skills, encrypted credentials, runtime builders, Kubernetes resources, Slack checks, LiteLLM keys, and ingest credentials. This cross-domain orchestration belongs in services rather than routes or repositories.
+The Agent domain is the central orchestration boundary. It coordinates templates, skills, encrypted credentials, runtime builders, Kubernetes resources, Slack/Telegram checks, LiteLLM keys, and ingest credentials. This cross-domain orchestration belongs in services rather than routes or repositories.
 
 ## Dependency direction
 
 - API requests flow through routes → services → repositories → PostgreSQL delegate.
-- Services may also call infrastructure adapters such as Kubernetes, Slack, LiteLLM, OpenRouter, email, and crypto.
+- Services may also call infrastructure adapters such as Kubernetes, Slack, Telegram, LiteLLM, OpenRouter, email, and crypto.
 - UI routes compose feature components; feature hooks use the shared API client and centralized query-key patterns.
 - Agent startup renders a pinned template, combines skills and integration context, builds runtime resources, and applies them through the Kubernetes client.
 - Runtime telemetry flows back through Ingest into conversation and tool-call persistence.
@@ -48,7 +48,7 @@ The Agent domain is the central orchestration boundary. It coordinates templates
 - Organization is the tenant-scoping axis for user-visible data.
 - API DTOs and database models remain distinct types even when they share a domain `models.py` file.
 - Agent runtime configuration is assembled from the agent's pinned template version, explicit skill assignments, eligible integration skills, and encrypted credentials at start time.
-- Runtime and platform are separate concepts: Hermes/OpenClaw are runtimes; Slack/Teams are platforms.
+- Runtime and platform are separate concepts: Hermes/OpenClaw are runtimes; Slack/Teams/Telegram are platforms.
 - Schema changes are represented by Alembic migrations and exercised against PostgreSQL in API integration tests.
 - API and UI deployment versions are independent; `../../AGENTS.md` owns the release-version rules.
 

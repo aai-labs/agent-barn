@@ -25,13 +25,9 @@ class User(BaseModel, table=True):
     email: EmailStr = Field()
     full_name: str | None = None
     hashed_password: str
-    is_superuser: bool = Field(
-        default=False, sa_column_kwargs={"server_default": "false"}
-    )
+    is_superuser: bool = Field(default=False, sa_column_kwargs={"server_default": "false"})
     security_stamp: str = Field(default_factory=lambda: uuid7().hex)
-    email_verified_at: datetime | None = Field(
-        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
-    )
+    email_verified_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
 
 
 class UserCreate(PydanticBaseModel):

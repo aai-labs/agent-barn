@@ -51,10 +51,12 @@ function deriveSlug(name: string): string {
 export function TemplateDrawer({
   mode,
   slug,
+  canManage,
   onClose,
 }: {
   mode: "view" | "create";
   slug?: string;
+  canManage: boolean;
   onClose: () => void;
 }) {
   const { versions, isLoading, refetch } = useTemplateVersions(
@@ -63,7 +65,7 @@ export function TemplateDrawer({
   const createTemplate = useCreateTemplate();
   const updateTemplate = useUpdateTemplate();
 
-  const [editing, setEditing] = useState(mode === "create");
+  const [editing, setEditing] = useState(mode === "create" && canManage);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [files, setFiles] = useState<TemplateFiles>(EMPTY_FILES);
@@ -91,6 +93,7 @@ export function TemplateDrawer({
   const pending = createTemplate.isPending || updateTemplate.isPending;
 
   function handleStartEdit() {
+    if (!canManage) return;
     if (current) {
       setFiles(filesFrom(current));
       setDescription(current.description ?? "");
@@ -442,13 +445,19 @@ export function TemplateDrawer({
                   Saved as v{savedVersion}
                 </span>
               )}
-              <button
-                className="af-btn af-btn-primary"
-                disabled={!current}
-                onClick={handleStartEdit}
-              >
-                Edit template
-              </button>
+              {canManage ? (
+                <button
+                  className="af-btn af-btn-primary"
+                  disabled={!current}
+                  onClick={handleStartEdit}
+                >
+                  Edit template
+                </button>
+              ) : (
+                <button className="af-btn af-btn-ghost" onClick={onClose}>
+                  Close
+                </button>
+              )}
             </>
           )}
         </footer>

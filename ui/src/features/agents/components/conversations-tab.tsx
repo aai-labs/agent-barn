@@ -60,7 +60,7 @@ export function ConversationsTab({ agent }: ConversationsTabProps) {
           No conversations yet
         </div>
         <div className="text-[0.844rem]" style={{ color: "var(--ink-3)" }}>
-          Messages will appear here once the agent starts receiving Slack messages.
+          Messages will appear here once the agent starts receiving messages.
         </div>
       </div>
     );

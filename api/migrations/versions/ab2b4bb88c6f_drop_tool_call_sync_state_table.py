@@ -11,7 +11,7 @@ from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa
 import sqlalchemy.dialects.postgresql
-
+from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision: str = "ab2b4bb88c6f"
@@ -27,8 +27,8 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.create_table(
         "tool_call_sync_state",
-        sa.Column("id", sa.dialects.postgresql.UUID(), nullable=False),
-        sa.Column("agent_id", sa.dialects.postgresql.UUID(), nullable=False),
+        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("agent_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("session_file_path", sa.String(), nullable=False),
         sa.Column("last_byte_offset", sa.Integer(), nullable=False),
         sa.Column("last_synced_at", sa.DateTime(timezone=True), nullable=False),

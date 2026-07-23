@@ -16,9 +16,7 @@ class Organization(BaseModel, table=True):
 
     name: str = Field(nullable=False, min_length=3, max_length=255)
     description: str | None = Field(default=None, nullable=True)
-    is_default: bool = Field(
-        default=False, nullable=False, sa_column_kwargs={"server_default": "false"}
-    )
+    is_default: bool = Field(default=False, nullable=False, sa_column_kwargs={"server_default": "false"})
     allowed_models: list[str] = Field(
         default_factory=list, sa_column=sa.Column(JSONB, server_default="[]")
     )

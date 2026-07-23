@@ -18,6 +18,16 @@ from api.domains.users.organization_users.repository import OrganizationUserRepo
 from api.domains.users.organization_users.service import OrganizationUserService
 
 
+def test_organization_user_persists_fixed_role_directly():
+    membership = OrganizationUser(
+        user_id=uuid7(),
+        organization_id=uuid7(),
+        role=OrganizationRole.OWNER,
+    )
+
+    assert_that(membership.role, equal_to(OrganizationRole.OWNER))
+
+
 def test_organization_user_service_raises_404_when_membership_missing():
     repository = Mock()
     repository.get_by_user_id_and_organization_id.return_value = None
@@ -26,21 +36,18 @@ def test_organization_user_service_raises_404_when_membership_missing():
         organization_repository=Mock(),
         auth_service=Mock(),
         user_repository=Mock(),
+        permission_policy=Mock(),
     )
 
     assert_that(
-        calling(service.find_by_user_id_and_organization_id).with_args(
-            uuid7(), uuid7()
-        ),
+        calling(service.find_by_user_id_and_organization_id).with_args(uuid7(), uuid7()),
         raises(HTTPException),
     )
 
 
 def test_organization_user_service_maps_conflict_to_409():
     repository = Mock()
-    repository.save.side_effect = UserAlreadyPartOfOrganizationException(
-        uuid7(), uuid7()
-    )
+    repository.save.side_effect = UserAlreadyPartOfOrganizationException(uuid7(), uuid7())
     organization_repository = Mock()
     organization_repository.get.return_value = Organization(name="Org")
     service = OrganizationUserService(
@@ -48,9 +55,12 @@ def test_organization_user_service_maps_conflict_to_409():
         organization_repository=organization_repository,
         auth_service=Mock(),
         user_repository=Mock(),
+        permission_policy=Mock(),
     )
     org_user = OrganizationUser(
-        user_id=uuid7(), organization_id=uuid7(), role=OrganizationRole.MEMBER
+        user_id=uuid7(),
+        organization_id=uuid7(),
+        role=OrganizationRole.MEMBER,
     )
 
     try:
@@ -62,12 +72,12 @@ def test_organization_user_service_maps_conflict_to_409():
 
 def test_organization_user_repository_maps_duplicate_member_constraint():
     delegate = Mock()
-    delegate.save.side_effect = IntegrityError(
-        "stmt", "params", Exception("uq_user_organization")
-    )
+    delegate.save.side_effect = IntegrityError("stmt", "params", Exception("uq_user_organization"))
     repository = OrganizationUserRepository(delegate=delegate)
     org_user = OrganizationUser(
-        user_id=uuid7(), organization_id=uuid7(), role=OrganizationRole.MEMBER
+        user_id=uuid7(),
+        organization_id=uuid7(),
+        role=OrganizationRole.MEMBER,
     )
 
     assert_that(
@@ -78,12 +88,12 @@ def test_organization_user_repository_maps_duplicate_member_constraint():
 
 def test_organization_user_repository_maps_one_owner_constraint():
     delegate = Mock()
-    delegate.save.side_effect = IntegrityError(
-        "stmt", "params", Exception("uq_user_organization_one_owner_per_org")
-    )
+    delegate.save.side_effect = IntegrityError("stmt", "params", Exception("uq_user_organization_one_owner_per_org"))
     repository = OrganizationUserRepository(delegate=delegate)
     org_user = OrganizationUser(
-        user_id=uuid7(), organization_id=uuid7(), role=OrganizationRole.OWNER
+        user_id=uuid7(),
+        organization_id=uuid7(),
+        role=OrganizationRole.OWNER,
     )
 
     assert_that(

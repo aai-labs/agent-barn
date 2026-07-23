@@ -1,0 +1,8 @@
+line-length = 120
+
+[format]
+quote-style = "double"
+
+[lint]
+extend-select = ["I"]
+ignore = ["I001", "I002"]  # Ignore specific import sorting issues
