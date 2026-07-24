@@ -124,9 +124,7 @@ class AgentAccessService:
             if access is None:
                 continue
             # Owners/Admins have implicit full access and are never offered explicit
-            # grants (see ShareAddMember), so a leftover row for one (e.g. from an
-            # agent created before this was enforced) shouldn't be surfaced — it
-            # can't be round-tripped through Save without failing validation.
+            # grants (see ShareAddMember)
             if membership.role != OrganizationRole.MEMBER:
                 continue
             role = roles.get(access.access_role_id)
