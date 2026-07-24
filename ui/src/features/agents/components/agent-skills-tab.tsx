@@ -12,6 +12,7 @@ import { SkillSourceBadge } from "@/features/skills/components/skill-drawer";
 import type { Skill } from "@/features/skills/schemas";
 
 import {
+  coerceBooleanFields,
   expandGithubContent,
   getIntegrationProvider,
   hasIncompleteIntegration,
@@ -150,7 +151,7 @@ export function AgentSkillsTab({ agent, isRunning }: AgentSkillsTabProps) {
           ? {
               secrets: newSecretDrafts.map((d) => ({
                 provider: d.provider,
-                content: d.provider === "github" ? expandGithubContent(d.content) : d.content,
+                content: coerceBooleanFields(d.provider === "github" ? expandGithubContent(d.content) : d.content),
               })),
             }
           : {}),

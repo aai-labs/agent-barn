@@ -13,6 +13,7 @@ import { FormField, GoogleAuthButton, TokenInput } from "./hire-dialog-primitive
 import { IntegrationsStep, RepoListField, TemplateSourceBadge, VersionSelect } from "./hire-dialog-steps";
 import { ModelSelect } from "./model-select";
 import {
+  coerceBooleanFields,
   expandGithubContent,
   getIntegrationProvider,
   hasIncompleteIntegration,
@@ -349,7 +350,7 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
           ? {
               secrets: effectiveRepinSecretDrafts.map((d) => ({
                 provider: d.provider,
-                content: d.provider === "github" ? expandGithubContent(d.content) : d.content,
+                content: coerceBooleanFields(d.provider === "github" ? expandGithubContent(d.content) : d.content),
               })),
             }
           : {}),
@@ -411,7 +412,7 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
         agentId: agent.id,
         secrets: secretDrafts.map((d) => ({
           provider: d.provider,
-          content: d.provider === "github" ? expandGithubContent(d.content) : d.content,
+          content: coerceBooleanFields(d.provider === "github" ? expandGithubContent(d.content) : d.content),
         })),
         removedSecretProviders: removedProviders.filter(
           (p) => !draftProviders.has(p),

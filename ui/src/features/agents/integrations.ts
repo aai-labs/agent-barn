@@ -155,6 +155,24 @@ export function expandGithubContent(
   return { ...content, owner, org: owner, repos };
 }
 
+// Field keys backed by a real `bool` on the API content model, even though the
+// "radio" control can only emit the strings "true"/"false" (see IntegrationField.type).
+// The axios request interceptor decamelizes keys but leaves values untouched, so this
+// is the one place these get converted back to real booleans before submission.
+const BOOLEAN_FIELD_KEYS = new Set(["useScopedToken"]);
+
+export function coerceBooleanFields(
+  content: Record<string, string | string[]>,
+): Record<string, string | string[] | boolean> {
+  const coerced: Record<string, string | string[] | boolean> = { ...content };
+  for (const key of BOOLEAN_FIELD_KEYS) {
+    if (key in coerced) {
+      coerced[key] = coerced[key] === "true";
+    }
+  }
+  return coerced;
+}
+
 // True if the OAuth-based provider hasn't captured its refresh token yet.
 export function isOAuthConnected(draft: IntegrationDraft): boolean {
   const token = draft.content.refreshToken;
