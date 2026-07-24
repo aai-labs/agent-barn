@@ -221,6 +221,12 @@ class Agent(BaseModel, table=True):
         ondelete="SET NULL",
         index=True,
     )
+    general_access_role_id: UUID | None = SqlField(
+        default=None,
+        foreign_key="agent_access_roles.id",
+        nullable=True,
+        ondelete="RESTRICT",
+    )
     name: str = SqlField(nullable=False, max_length=255)
     litellm_key_encrypted: str = SqlField(nullable=False, default="")
     status: AgentStatus = SqlField(
@@ -580,15 +586,6 @@ class AgentAccessRoleRead(PydanticBaseModel):
     is_locked: bool
 
 
-class AgentAccessGrantRequest(PydanticBaseModel):
-    user_id: UUID
-    access_role_id: UUID
-
-
-class AgentAccessUpdate(PydanticBaseModel):
-    access_role_id: UUID
-
-
 class AgentAccessCandidateRead(PydanticBaseModel):
     user_id: UUID
     email: str
@@ -600,6 +597,25 @@ class AgentAccessCandidateRead(PydanticBaseModel):
 
 class AgentAccessMemberRead(AgentAccessCandidateRead):
     access_role: AgentAccessRoleRead
+
+
+class AgentGeneralAccessRead(PydanticBaseModel):
+    role: AgentAccessRoleRead | None
+
+
+class AgentAccessSettingsAssignmentUpdate(PydanticBaseModel):
+    user_id: UUID
+    access_role_id: UUID
+
+
+class AgentAccessSettingsUpdate(PydanticBaseModel):
+    general_access_role_id: UUID | None = None
+    assignments: list[AgentAccessSettingsAssignmentUpdate] = Field(default_factory=list)
+
+
+class AgentAccessSettingsRead(PydanticBaseModel):
+    general_access: AgentGeneralAccessRead
+    assignments: list[AgentAccessMemberRead]
 
 
 class AgentAssignedSkillRead(PydanticBaseModel):

@@ -7,11 +7,9 @@ from fastapi_injector import Injected
 
 from api.domains.agents.access_service import AgentAccessService
 from api.domains.agents.models import (
-    AgentAccessCandidateRead,
-    AgentAccessGrantRequest,
-    AgentAccessMemberRead,
     AgentAccessRoleRead,
-    AgentAccessUpdate,
+    AgentAccessSettingsRead,
+    AgentAccessSettingsUpdate,
     AgentCreate,
     AgentFilter,
     AgentHealthRead,
@@ -64,65 +62,31 @@ def list_models(
     return service.list_models(context)
 
 
-@agents_router.get("/access-roles", response_model=list[AgentAccessRoleRead])
-def list_agent_access_roles(
+@agents_router.get("/share-roles", response_model=list[AgentAccessRoleRead])
+def list_agent_share_roles(
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[AgentAccessService, Injected(AgentAccessService)],
 ):
     return service.list_roles(context)
 
 
-@agents_router.get("/{agent_id}/access", response_model=list[AgentAccessMemberRead])
-def list_agent_access(
+@agents_router.get("/{agent_id}/share", response_model=AgentAccessSettingsRead)
+def get_agent_share_settings(
     agent_id: UUID,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[AgentAccessService, Injected(AgentAccessService)],
 ):
-    return service.list_assigned_members(agent_id, context)
+    return service.get_access_settings(agent_id, context)
 
 
-@agents_router.get("/{agent_id}/access/eligible", response_model=list[AgentAccessCandidateRead])
-def list_eligible_agent_access(
+@agents_router.put("/{agent_id}/share", response_model=AgentAccessSettingsRead)
+def replace_agent_share_settings(
     agent_id: UUID,
+    data: AgentAccessSettingsUpdate,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[AgentAccessService, Injected(AgentAccessService)],
 ):
-    return service.list_eligible_members(agent_id, context)
-
-
-@agents_router.post("/{agent_id}/access", response_model=AgentAccessMemberRead)
-def grant_agent_access(
-    agent_id: UUID,
-    data: AgentAccessGrantRequest,
-    response: Response,
-    context: Annotated[CurrentUserContext, Depends(get_current_user())],
-    service: Annotated[AgentAccessService, Injected(AgentAccessService)],
-):
-    result, created = service.grant_access(agent_id, data, context)
-    response.status_code = status.HTTP_201_CREATED if created else status.HTTP_200_OK
-    return result
-
-
-@agents_router.patch("/{agent_id}/access/{user_id}", response_model=AgentAccessMemberRead)
-def change_agent_access_role(
-    agent_id: UUID,
-    user_id: UUID,
-    data: AgentAccessUpdate,
-    context: Annotated[CurrentUserContext, Depends(get_current_user())],
-    service: Annotated[AgentAccessService, Injected(AgentAccessService)],
-):
-    return service.change_access_role(agent_id, user_id, data, context)
-
-
-@agents_router.delete("/{agent_id}/access/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
-def revoke_agent_access(
-    agent_id: UUID,
-    user_id: UUID,
-    context: Annotated[CurrentUserContext, Depends(get_current_user())],
-    service: Annotated[AgentAccessService, Injected(AgentAccessService)],
-):
-    service.revoke_access(agent_id, user_id, context)
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    return service.replace_access_settings(agent_id, data, context)
 
 
 @agents_router.get("/{agent_id}/logs/stream")

@@ -3,8 +3,7 @@ from datetime import datetime
 from uuid import UUID
 
 from injector import inject, singleton
-from sqlalchemy import exists, func
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import exists, func, or_
 from sqlmodel import Session, col, select
 
 from api.domains.agents.models import (
@@ -24,7 +23,11 @@ from api.domains.rbac.catalog import (
     PERMISSION_ID_BY_KEY,
     PermissionKey,
 )
-from api.domains.rbac.models import AgentAccessRolePermission, Permission
+from api.domains.rbac.models import (
+    AgentAccessRole,
+    AgentAccessRolePermission,
+    Permission,
+)
 from api.domains.rbac.policy import AuthorizationScope
 from api.domains.users.organization_users.models import OrganizationUser
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
@@ -41,15 +44,21 @@ def agent_scope_predicates(authorization_scope: AuthorizationScope, *, include_d
     if authorization_scope.membership_id is not None:
         if authorization_scope.permission is None:
             raise ValueError("Explicit Agent visibility requires a Permission")
-        predicates.append(
-            exists().where(
-                col(AgentAccess.agent_id) == col(Agent.id),
-                col(AgentAccess.organization_id) == authorization_scope.organization_id,
-                col(AgentAccess.membership_id) == authorization_scope.membership_id,
-                col(AgentAccessRolePermission.role_id) == col(AgentAccess.access_role_id),
+        direct_access = exists().where(
+            col(AgentAccess.agent_id) == col(Agent.id),
+            col(AgentAccess.organization_id) == authorization_scope.organization_id,
+            col(AgentAccess.membership_id) == authorization_scope.membership_id,
+            col(AgentAccessRolePermission.role_id) == col(AgentAccess.access_role_id),
+            col(AgentAccessRolePermission.permission_id) == PERMISSION_ID_BY_KEY[authorization_scope.permission],
+        )
+        if authorization_scope.include_general_access:
+            general_access = exists().where(
+                col(AgentAccessRolePermission.role_id) == col(Agent.general_access_role_id),
                 col(AgentAccessRolePermission.permission_id) == PERMISSION_ID_BY_KEY[authorization_scope.permission],
             )
-        )
+            predicates.append(or_(direct_access, general_access))
+        else:
+            predicates.append(direct_access)
     return tuple(predicates)
 
 
@@ -122,11 +131,13 @@ class AgentRepository:
         membership_id: UUID,
         organization_id: UUID,
         agent_ids: list[UUID],
+        *,
+        include_general_access: bool = True,
     ) -> dict[UUID, set[PermissionKey]]:
         if not agent_ids:
             return {}
         with Session(self.delegate.engine) as session:
-            rows = session.exec(
+            direct_rows = session.exec(
                 select(AgentAccess.agent_id, Permission.key)
                 .join(
                     AgentAccessRolePermission,
@@ -142,10 +153,121 @@ class AgentRepository:
                     col(AgentAccess.agent_id).in_(agent_ids),
                 )
             ).all()
+            general_rows = []
+            if include_general_access:
+                general_rows = session.exec(
+                    select(Agent.id, Permission.key)
+                    .join(
+                        AgentAccessRolePermission,
+                        col(AgentAccessRolePermission.role_id) == col(Agent.general_access_role_id),
+                    )
+                    .join(
+                        Permission,
+                        col(Permission.id) == col(AgentAccessRolePermission.permission_id),
+                    )
+                    .where(
+                        col(Agent.organization_id) == organization_id,
+                        col(Agent.id).in_(agent_ids),
+                        col(Agent.deleted_at).is_(None),
+                        col(Agent.general_access_role_id).is_not(None),
+                    )
+                ).all()
         permissions: dict[UUID, set[PermissionKey]] = {}
-        for agent_id, key in rows:
+        for agent_id, key in [*direct_rows, *general_rows]:
             permissions.setdefault(agent_id, set()).add(PermissionKey(key))
         return permissions
+
+    def replace_access_settings(
+        self,
+        agent_id: UUID,
+        organization_id: UUID,
+        *,
+        general_access_role_id: UUID | None,
+        assignment_roles: dict[UUID, UUID],
+    ) -> bool:
+        """Replace General Access and explicit assignments atomically."""
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            agent = session.exec(
+                select(Agent)
+                .where(
+                    col(Agent.id) == agent_id,
+                    col(Agent.organization_id) == organization_id,
+                    col(Agent.deleted_at).is_(None),
+                )
+                .with_for_update()
+            ).first()
+            if agent is None:
+                return False
+
+            desired_role_ids = set(assignment_roles.values())
+            if general_access_role_id is not None:
+                desired_role_ids.add(general_access_role_id)
+            if desired_role_ids:
+                existing_role_ids = set(
+                    session.exec(
+                        select(AgentAccessRole.id)
+                        .where(
+                            col(AgentAccessRole.id).in_(desired_role_ids),
+                            or_(
+                                col(AgentAccessRole.is_system).is_(True),
+                                col(AgentAccessRole.organization_id) == organization_id,
+                            ),
+                        )
+                        .with_for_update()
+                    ).all()
+                )
+                if existing_role_ids != desired_role_ids:
+                    return False
+
+            if assignment_roles:
+                existing_membership_ids = set(
+                    session.exec(
+                        select(OrganizationUser.id)
+                        .where(
+                            col(OrganizationUser.id).in_(set(assignment_roles)),
+                            col(OrganizationUser.organization_id) == organization_id,
+                        )
+                        .with_for_update()
+                    ).all()
+                )
+                if existing_membership_ids != set(assignment_roles):
+                    return False
+
+            agent.general_access_role_id = general_access_role_id
+            session.add(agent)
+
+            existing_access = session.exec(
+                select(AgentAccess)
+                .where(
+                    col(AgentAccess.agent_id) == agent_id,
+                    col(AgentAccess.organization_id) == organization_id,
+                )
+                .with_for_update()
+            ).all()
+            existing_by_membership = {access.membership_id: access for access in existing_access}
+            desired_membership_ids = set(assignment_roles)
+
+            for membership_id, access in existing_by_membership.items():
+                if membership_id not in desired_membership_ids:
+                    session.delete(access)
+
+            for membership_id, access_role_id in assignment_roles.items():
+                access = existing_by_membership.get(membership_id)
+                if access is None:
+                    session.add(
+                        AgentAccess(
+                            organization_id=organization_id,
+                            membership_id=membership_id,
+                            agent_id=agent_id,
+                            access_role_id=access_role_id,
+                        )
+                    )
+                else:
+                    access.access_role_id = access_role_id
+                    session.add(access)
+
+            session.commit()
+            return True
 
     def create_with_creator_access(self, agent: Agent, membership_id: UUID | None) -> Agent:
         with Session(self.delegate.engine, expire_on_commit=False) as session:
@@ -177,109 +299,6 @@ class AgentRepository:
 
     def find_access_membership_ids(self, agent_id: UUID, organization_id: UUID) -> set[UUID]:
         return {access.membership_id for access in self.find_access_assignments(agent_id, organization_id)}
-
-    def grant_access(
-        self,
-        agent_id: UUID,
-        membership_id: UUID,
-        organization_id: UUID,
-        access_role_id: UUID,
-    ) -> tuple[AgentAccess, bool] | None:
-        """Idempotently add one same-Organization Agent Access relationship.
-
-        ``None`` means the active Agent or Membership disappeared after service
-        validation. Row locks keep deletion/soft-deletion from racing the insert.
-        """
-        with Session(self.delegate.engine, expire_on_commit=False) as session:
-            agent_exists = session.exec(
-                select(Agent.id)
-                .where(
-                    col(Agent.id) == agent_id,
-                    col(Agent.organization_id) == organization_id,
-                    col(Agent.deleted_at).is_(None),
-                )
-                .with_for_update()
-            ).first()
-            membership_exists = session.exec(
-                select(OrganizationUser.id)
-                .where(
-                    col(OrganizationUser.id) == membership_id,
-                    col(OrganizationUser.organization_id) == organization_id,
-                )
-                .with_for_update()
-            ).first()
-            if agent_exists is None or membership_exists is None:
-                return None
-
-            query = select(AgentAccess).where(
-                col(AgentAccess.agent_id) == agent_id,
-                col(AgentAccess.membership_id) == membership_id,
-                col(AgentAccess.organization_id) == organization_id,
-            )
-            existing = session.exec(query).first()
-            if existing is not None:
-                return existing, False
-
-            access = AgentAccess(
-                organization_id=organization_id,
-                membership_id=membership_id,
-                agent_id=agent_id,
-                access_role_id=access_role_id,
-            )
-            session.add(access)
-            try:
-                session.commit()
-            except IntegrityError:
-                # A concurrent identical grant is still an idempotent success. Other
-                # constraint failures remain errors after checking the unique pair.
-                session.rollback()
-                existing = session.exec(query).first()
-                if existing is not None:
-                    return existing, False
-                raise
-            session.refresh(access)
-            return access, True
-
-    def change_access_role(
-        self,
-        agent_id: UUID,
-        membership_id: UUID,
-        organization_id: UUID,
-        access_role_id: UUID,
-    ) -> AgentAccess | None:
-        with Session(self.delegate.engine, expire_on_commit=False) as session:
-            access = session.exec(
-                select(AgentAccess)
-                .where(
-                    col(AgentAccess.agent_id) == agent_id,
-                    col(AgentAccess.membership_id) == membership_id,
-                    col(AgentAccess.organization_id) == organization_id,
-                )
-                .with_for_update()
-            ).first()
-            if access is None:
-                return None
-            access.access_role_id = access_role_id
-            session.add(access)
-            session.commit()
-            return access
-
-    def revoke_access(self, agent_id: UUID, membership_id: UUID, organization_id: UUID) -> bool:
-        with Session(self.delegate.engine) as session:
-            access = session.exec(
-                select(AgentAccess)
-                .where(
-                    col(AgentAccess.agent_id) == agent_id,
-                    col(AgentAccess.membership_id) == membership_id,
-                    col(AgentAccess.organization_id) == organization_id,
-                )
-                .with_for_update()
-            ).first()
-            if access is None:
-                return False
-            session.delete(access)
-            session.commit()
-            return True
 
     def find_all_active_for_org(self, org_id: UUID) -> list[Agent]:
         with Session(self.delegate.engine) as session:

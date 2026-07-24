@@ -1,7 +1,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, Query, Response, status
 from fastapi_injector import Injected
 
 from api.domains.auth.models import CurrentUserContext
@@ -24,8 +24,9 @@ def list_members(
     organization_id: UUID,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[OrganizationUserService, Injected(OrganizationUserService)],
+    search: Annotated[str | None, Query()] = None,
 ):
-    return service.list_members(context, organization_id)
+    return service.list_members(context, organization_id, search=search)
 
 
 @member_router.post(

@@ -9,6 +9,7 @@ from uuid import uuid7
 from fastapi import status
 from hamcrest import (
     assert_that,
+    contains_inanyorder,
     contains_string,
     equal_to,
     has_length,
@@ -97,6 +98,45 @@ def test_owner_lists_members():
                 by_email = {m["email"]: m for m in response.json()}
                 assert_that(by_email["owner@example.com"]["role"], equal_to("OWNER"))
                 assert_that(by_email["member@example.com"]["role"], equal_to("MEMBER"))
+
+
+def test_member_search_filters_by_name_and_email():
+    with given(
+        [
+            *_GIVEN,
+            _there_is_an_owner(),
+            there_is_a_user(
+                name="Ada Lovelace",
+                email="ada@example.com",
+                organization_id=ORG,
+                role=OrganizationRole.MEMBER,
+            ),
+            there_is_a_user(
+                name="Grace Hopper",
+                email="grace@example.com",
+                organization_id=ORG,
+                role=OrganizationRole.MEMBER,
+            ),
+        ]
+    ) as context:
+        by_name = context.client.get(_members_url(), params={"search": "ada"}, headers=_auth(context))
+        by_email = context.client.get(_members_url(), params={"search": "GRACE@EXAMPLE"}, headers=_auth(context))
+        no_match = context.client.get(_members_url(), params={"search": "nonexistent"}, headers=_auth(context))
+        unfiltered = context.client.get(_members_url(), headers=_auth(context))
+
+        assert_that(by_name.status_code, equal_to(status.HTTP_200_OK))
+        assert_that([item["full_name"] for item in by_name.json()], equal_to(["Ada Lovelace"]))
+        assert_that(by_email.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(
+            [item["full_name"] for item in by_email.json()],
+            equal_to(["Grace Hopper"]),
+        )
+        assert_that(no_match.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(no_match.json(), equal_to([]))
+        assert_that(
+            [item["full_name"] for item in unfiltered.json()],
+            contains_inanyorder("Test User", "Ada Lovelace", "Grace Hopper"),
+        )
 
 
 def test_superuser_without_membership_read_grant_can_list_members():
