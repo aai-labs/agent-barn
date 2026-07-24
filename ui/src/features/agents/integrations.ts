@@ -7,12 +7,14 @@
 // (smtp/imap host+port, folders, …) are NOT inputs here — the backend fills them
 // as schema defaults.
 
-export type IntegrationFieldType = "text" | "secret" | "repo-list";
+export type IntegrationFieldType = "text" | "secret" | "repo-list" | "radio";
 
 export interface IntegrationField {
   key: string;
   label: string;
   type: IntegrationFieldType;
+  options?: { label: string; value: string }[];
+  dependsOn?: { key: string; value: string };
   required: boolean;
   placeholder?: string;
   hint?: string;
@@ -51,8 +53,18 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
     scopeNote: "API token inherits your Atlassian account's project permissions — account needs Browse Projects and Add Comments on the target project",
     fields: [
       { key: "siteUrl", label: "Site URL", type: "text", required: true, placeholder: "https://your-domain.atlassian.net" },
+      {
+        key: "useScopedToken",
+        label: "Authentication Type",
+        type: "radio",
+        required: true,
+        options: [
+          { label: "Non-scoped token", value: "false" },
+          { label: "Scoped token", value: "true" }
+        ]
+      },
       { key: "email", label: "Email", type: "text", required: true, placeholder: "you@example.com" },
-      { key: "apiToken", label: "API token", type: "secret", required: true, hint: "Use a classic (unscoped) API token. Scoped tokens won't work — they only authenticate via Atlassian's api.atlassian.com gateway, not your site URL." },
+      { key: "apiToken", label: "API token", type: "secret", required: true },
     ],
   },
   {
@@ -61,8 +73,18 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
     scopeNote: "API token inherits your Atlassian account's space permissions — account needs Space View and Add Page Comments on the target space",
     fields: [
       { key: "siteUrl", label: "Site URL", type: "text", required: true, placeholder: "https://your-domain.atlassian.net" },
+      {
+        key: "useScopedToken",
+        label: "Authentication Type",
+        type: "radio",
+        required: true,
+        options: [
+          { label: "Non-scoped token", value: "false" },
+          { label: "Scoped token", value: "true" }
+        ]
+      },
       { key: "email", label: "Email", type: "text", required: true, placeholder: "you@example.com" },
-      { key: "apiToken", label: "API token", type: "secret", required: true, hint: "Use a classic (unscoped) API token. Scoped tokens won't work — they only authenticate via Atlassian's api.atlassian.com gateway, not your site URL." },
+      { key: "apiToken", label: "API token", type: "secret", required: true },
     ],
   },
   {
@@ -133,6 +155,24 @@ export function expandGithubContent(
   return { ...content, owner, org: owner, repos };
 }
 
+// Field keys backed by a real `bool` on the API content model, even though the
+// "radio" control can only emit the strings "true"/"false" (see IntegrationField.type).
+// The axios request interceptor decamelizes keys but leaves values untouched, so this
+// is the one place these get converted back to real booleans before submission.
+const BOOLEAN_FIELD_KEYS = new Set(["useScopedToken"]);
+
+export function coerceBooleanFields(
+  content: Record<string, string | string[]>,
+): Record<string, string | string[] | boolean> {
+  const coerced: Record<string, string | string[] | boolean> = { ...content };
+  for (const key of BOOLEAN_FIELD_KEYS) {
+    if (key in coerced) {
+      coerced[key] = coerced[key] === "true";
+    }
+  }
+  return coerced;
+}
+
 // True if the OAuth-based provider hasn't captured its refresh token yet.
 export function isOAuthConnected(draft: IntegrationDraft): boolean {
   const token = draft.content.refreshToken;
@@ -148,6 +188,15 @@ export function hasIncompleteIntegration(integrations: IntegrationDraft[]): bool
     if (provider.authMethod === "google_oauth") return !isOAuthConnected(draft);
     return provider.fields.some((f) => {
       if (!f.required) return false;
+      
+      // If the field depends on another field, check if the condition is met
+      if (f.dependsOn) {
+        const dependentValue = draft.content[f.dependsOn.key];
+        if (dependentValue !== f.dependsOn.value) {
+            return false; // Skip validation since this field is not active
+        }
+      }
+
       const value = draft.content[f.key];
       return typeof value !== "string" || value.trim().length === 0;
     });

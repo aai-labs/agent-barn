@@ -65,7 +65,9 @@ from api.domains.agents.models import (
     AgentTelegramConfigRead,
     AgentType,
     AgentUpdate,
+    ConfluenceContent,
     GmailContent,
+    JiraContent,
     PairRequest,
     SecretProvider,
     decrypt_content,
@@ -89,6 +91,9 @@ from api.infrastructure.integration_validators import (
     validate_github,
     validate_gmail,
     validate_jira,
+)
+from api.infrastructure.integration_validators.atlassian_utils import (
+    get_atlassian_cloud_id,
 )
 from api.infrastructure.kubernetes.client import KubernetesClient
 from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
@@ -167,6 +172,28 @@ _VALIDATORS: dict[SecretProvider, Any] = {
 
 def _allowlist_patterns(allowlist: str) -> list[str]:
     return [p.strip().lower() for p in allowlist.split(",") if p.strip()]
+
+
+def _enrich_atlassian_content(content: Any) -> Any:
+    """For Atlassian integrations using scoped API tokens, fetch and store the cloud_id.
+
+    Scoped tokens still use Basic Auth, but must be sent to the API Gateway URL
+    (https://api.atlassian.com/ex/jira/<cloud_id>) instead of the site URL directly.
+    Best-effort: if the lookup fails, the content is returned unchanged.
+    """
+    if isinstance(content, JiraContent) and content.use_scoped_token and not content.cloud_id:
+        cloud_id, cloud_err = get_atlassian_cloud_id(content.site_url)
+        if cloud_id:
+            return content.model_copy(update={"cloud_id": cloud_id})
+        else:
+            logger.warning(f"Failed to fetch Jira cloud_id for {content.site_url}: {cloud_err}")
+    elif isinstance(content, ConfluenceContent) and content.use_scoped_token and not content.cloud_id:
+        cloud_id, cloud_err = get_atlassian_cloud_id(content.site_url)
+        if cloud_id:
+            return content.model_copy(update={"cloud_id": cloud_id})
+        else:
+            logger.warning(f"Failed to fetch Confluence cloud_id for {content.site_url}: {cloud_err}")
+    return content
 
 
 def filter_models_by_allowlist(catalog: list[dict], allowlist: str) -> list[dict]:
@@ -538,7 +565,7 @@ class AgentService:
         # Teams auto-start so they exist if/when the pod is later built.
         secrets: list[AgentSecret] = []
         for item in data.secrets:
-            content = validate_content(item.provider, item.content)
+            content = _enrich_atlassian_content(validate_content(item.provider, item.content))
             saved = self.repository.save_secret(
                 AgentSecret(
                     agent_id=agent.id,
@@ -812,7 +839,10 @@ class AgentService:
             upserts: list[tuple[AgentSecretCreate, str]] = [
                 (
                     item,
-                    encrypt_content(validate_content(item.provider, item.content), key),
+                    encrypt_content(
+                        _enrich_atlassian_content(validate_content(item.provider, item.content)),
+                        key,
+                    ),
                 )
                 for item in data.secrets or []
             ]

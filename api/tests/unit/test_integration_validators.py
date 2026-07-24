@@ -36,7 +36,19 @@ def _connect_error() -> httpx.ConnectError:
 
 _GH = GithubContent(token="ghp_test", owner="acme", repos=["backend"], org="acme-org")
 _JIRA = JiraContent(site_url="https://acme.atlassian.net", email="alice@acme.com", api_token="jira-tok")
+_JIRA_SCOPED = JiraContent(
+    site_url="https://acme.atlassian.net",
+    email="svc-account@acme.com",
+    api_token="scoped-tok",
+    use_scoped_token=True,
+)
 _CONFLUENCE = ConfluenceContent(site_url="https://acme.atlassian.net", email="alice@acme.com", api_token="conf-tok")
+_CONFLUENCE_SCOPED = ConfluenceContent(
+    site_url="https://acme.atlassian.net",
+    email="svc-account@acme.com",
+    api_token="scoped-tok",
+    use_scoped_token=True,
+)
 _BB = BitbucketContent(workspace="acme", repos=["backend"], email="alice@acme.com", api_token="bb-tok")
 _GMAIL = GmailContent(
     client_id="client-id.apps.googleusercontent.com",
@@ -290,6 +302,49 @@ def test_jira_network_error_returns_error():
     assert "jira" in result.error.lower()
 
 
+_JIRA_CLOUD_ID_MOD = "api.infrastructure.integration_validators.jira.get_atlassian_cloud_id"
+
+
+def test_jira_scoped_token_valid_returns_identity():
+    """Scoped token: cloud_id resolved, Basic Auth call via gateway succeeds — valid."""
+    body = {
+        "displayName": "Service Bot",
+        "emailAddress": "svc-account@acme.com",
+        "active": True,
+    }
+    with (
+        patch(_JIRA_CLOUD_ID_MOD, return_value=("cloud-abc", None)),
+        patch(_JIRA_MOD, return_value=_resp(body)),
+    ):
+        result = validate_jira(_JIRA_SCOPED)
+
+    assert result.valid is True
+    assert "Service Bot" in (result.identity or "")
+    assert "svc-account@acme.com" in (result.identity or "")
+    assert result.error is None
+
+
+def test_jira_scoped_token_cloud_id_fetch_fails_hard_fails():
+    """Scoped token: cloud_id resolution fails — validation must hard fail immediately."""
+    with patch(_JIRA_CLOUD_ID_MOD, return_value=(None, "Network error fetching cloud ID")):
+        result = validate_jira(_JIRA_SCOPED)
+
+    assert result.valid is False
+    assert result.error is not None
+
+
+def test_jira_scoped_token_401_returns_error():
+    """Scoped token: cloud_id OK but gateway call returns 401 — invalid token."""
+    with (
+        patch(_JIRA_CLOUD_ID_MOD, return_value=("cloud-abc", None)),
+        patch(_JIRA_MOD, return_value=_resp({}, status=401)),
+    ):
+        result = validate_jira(_JIRA_SCOPED)
+
+    assert result.valid is False
+    assert "invalid" in (result.error or "").lower() or "token" in (result.error or "").lower()
+
+
 # ── Confluence ────────────────────────────────────────────────────────────────
 
 _CONF_MOD = "api.infrastructure.integration_validators.confluence.httpx.get"
@@ -348,6 +403,45 @@ def test_confluence_network_error_returns_error():
     assert result.valid is False
     assert result.error is not None
     assert "confluence" in result.error.lower()
+
+
+_CONF_CLOUD_ID_MOD = "api.infrastructure.integration_validators.confluence.get_atlassian_cloud_id"
+
+
+def test_confluence_scoped_token_valid_returns_identity():
+    """Scoped token: cloud_id resolved, Basic Auth call to the v2 gateway succeeds — valid with space count."""
+    spaces = {"results": [{"key": "TEAM"}, {"key": "DOCS"}, {"key": "ENG"}]}
+    with (
+        patch(_CONF_CLOUD_ID_MOD, return_value=("cloud-abc", None)),
+        patch(_CONF_MOD, return_value=_resp(spaces)),
+    ):
+        result = validate_confluence(_CONFLUENCE_SCOPED)
+
+    assert result.valid is True
+    assert "acme.atlassian.net" in (result.identity or "")
+    assert "3" in (result.identity or "")
+    assert result.error is None
+
+
+def test_confluence_scoped_token_cloud_id_fetch_fails_hard_fails():
+    """Scoped token: cloud_id resolution fails — validation must hard fail immediately."""
+    with patch(_CONF_CLOUD_ID_MOD, return_value=(None, "Network error fetching cloud ID")):
+        result = validate_confluence(_CONFLUENCE_SCOPED)
+
+    assert result.valid is False
+    assert result.error is not None
+
+
+def test_confluence_scoped_token_401_returns_error():
+    """Scoped token: cloud_id OK but gateway call returns 401 — invalid token."""
+    with (
+        patch(_CONF_CLOUD_ID_MOD, return_value=("cloud-abc", None)),
+        patch(_CONF_MOD, return_value=_resp({}, status=401)),
+    ):
+        result = validate_confluence(_CONFLUENCE_SCOPED)
+
+    assert result.valid is False
+    assert "invalid" in (result.error or "").lower() or "token" in (result.error or "").lower()
 
 
 # ── Bitbucket ─────────────────────────────────────────────────────────────────
