@@ -76,7 +76,7 @@ from api.domains.agents.repository import AgentRepository
 from api.domains.agents.runtime_policy import build_chat_commands_policy_md
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.token_service import SlackConfigTokenService
-from api.domains.rbac.catalog import OrganizationRole, PermissionKey
+from api.domains.rbac.catalog import PermissionKey
 from api.domains.skills.models import Skill
 from api.domains.skills.repository import SkillRepository
 from api.domains.templates.models import TemplateRead
@@ -472,16 +472,16 @@ class AgentService:
                     detail="Required template skills must be included in skill_ids",
                 )
 
-        # Owners/Admins already have implicit full access to every Agent (see
-        # ShareAddMember, which refuses to grant them explicit access too), so an
-        # explicit AgentAccess row is only meaningful — and only ever offered for
-        # editing in the Share dialog — for creators who are plain Members.
+        # The creator always gets an explicit Owner AgentAccess row, even if they
+        # currently have implicit full access as an Org Owner/Admin: it's what keeps
+        # them able to manage the Agent if they're later demoted to Member (see
+        # test_creator_keeps_assigned_agent_after_owner_is_demoted_to_member). This row
+        # is hidden from the Share dialog and preserved across saves — see
+        # AgentAccessService._assigned_members_for_agent / replace_access_settings.
         persisted_membership = context.user_organization_map.get(org_id)
         creator_membership_id = (
             persisted_membership.id
-            if persisted_membership is not None
-            and persisted_membership.user_id == context.user.id
-            and persisted_membership.role == OrganizationRole.MEMBER
+            if persisted_membership is not None and persisted_membership.user_id == context.user.id
             else None
         )
         self.repository.create_with_creator_access(agent, creator_membership_id)

@@ -74,6 +74,13 @@ class AgentAccessService:
             assignment_roles[membership.id] = role.id
             assignments.append(self._to_assignment(agent, membership, user, role_read))
 
+        # Non-Member assignees (the creator's system-managed row, or anyone else whose
+        # org role since changed) are hidden from the Share dialog — see
+        # _assigned_members_for_agent — so the client never resubmits them. Without
+        # this they'd be silently deleted by the full-replace below, since it treats
+        # "not present in assignment_roles" as "remove access".
+        self._preserve_hidden_assignments(agent, assignment_roles)
+
         if not self.repository.replace_access_settings(
             agent.id,
             agent.organization_id,
@@ -132,6 +139,21 @@ class AgentAccessService:
                 continue
             result.append(self._to_assignment(agent, membership, user, role))
         return result
+
+    def _preserve_hidden_assignments(self, agent: Agent, assignment_roles: dict[UUID, UUID]) -> None:
+        existing = self.repository.find_access_assignments(agent.id, agent.organization_id)
+        if not existing:
+            return
+        memberships = {
+            membership.id: membership
+            for membership, _ in self.membership_repository.get_members_with_users(agent.organization_id)
+        }
+        for access in existing:
+            if access.membership_id in assignment_roles:
+                continue
+            membership = memberships.get(access.membership_id)
+            if membership is not None and membership.role != OrganizationRole.MEMBER:
+                assignment_roles[access.membership_id] = access.access_role_id
 
     def _require_manage_access(self, context: CurrentUserContext, agent_id: UUID) -> Agent:
         return self.authorization.require_action(

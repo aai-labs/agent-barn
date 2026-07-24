@@ -44,10 +44,16 @@ export function ShareMemberRow({
         {initialsOf(member)}
       </div>
       <div className="min-w-0 flex-1">
-        <div className="font-medium text-[13.5px] truncate" style={{ color: "var(--ink)" }}>
+        <div
+          className="font-medium text-[13.5px] truncate"
+          style={{ color: "var(--ink)" }}
+        >
           {member.fullName || member.email}
           {member.isCreator && (
-            <span className="ml-1.5 text-[11.5px] font-normal" style={{ color: "var(--ink-4)" }}>
+            <span
+              className="ml-1.5 text-[11.5px] font-normal"
+              style={{ color: "var(--ink-4)" }}
+            >
               (creator)
             </span>
           )}
@@ -63,7 +69,7 @@ export function ShareMemberRow({
         onRemove={onRemove}
         disabled={disabled}
         ariaLabel={`Access role for ${member.email}`}
-        className="w-32 flex-shrink-0"
+        className="w-32 shrink-0"
       />
     </div>
   );

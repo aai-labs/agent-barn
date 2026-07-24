@@ -593,10 +593,12 @@ def test_access_settings_rolls_back_when_snapshot_is_invalid():
 
 
 def test_owner_created_agent_share_settings_round_trip_without_creator_row():
-    # Regression for the Shareing: agent creators who are Org Owners/Admins
+    # Regression for the Share dialog 400: agent creators who are Org Owners/Admins
     # already have implicit full access (see ShareAddMember, which refuses to grant
-    # them explicit access too), so unlike a Member creator they must not get an
-    # AgentAccess row that GET returns and the dialog then fails to PUT back.
+    # them explicit access too), so their system-managed creator row must be hidden
+    # from GET and never round-tripped back through PUT — but must also survive the
+    # save (not be deleted just because the client never resubmitted it), so the
+    # creator keeps access if later demoted to Member.
     with given(_GIVEN[:-1]) as context:  # drop the shared there_is_an_agent(); create via the real API instead
         client = context.client
         create_response = client.post(
@@ -626,10 +628,23 @@ def test_owner_created_agent_share_settings_round_trip_without_creator_row():
             headers=_auth(context),
         )
 
+        # Demote the creator and confirm their hidden row survived the round-trip.
+        membership_repository: OrganizationUserRepository = context.injector.get(OrganizationUserRepository)
+        membership = membership_repository.get_by_user_id_and_organization_id(context.user.id, context.organization.id)
+        assert membership is not None
+        membership.role = OrganizationRole.MEMBER
+        membership_repository.save(membership)
+        detail_after_demotion = client.get(f"{_BASE}/{agent_id}", headers=_auth(context))
+
         assert_that(create_response.status_code, equal_to(status.HTTP_201_CREATED))
         assert_that(read_response.status_code, equal_to(status.HTTP_200_OK))
         assert_that(read_response.json()["assignments"], equal_to([]))
         assert_that(round_trip.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(detail_after_demotion.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(
+            detail_after_demotion.json()["allowed_actions"],
+            has_item(PermissionKey.AGENT_ACCESS_MANAGE.value),
+        )
 
 
 def test_access_settings_rejects_duplicate_assignment_users():
