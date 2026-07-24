@@ -88,8 +88,8 @@ spec:
           labels:
             severity: warning
           annotations:
-            summary: Agent {{`{{ $labels.app }}`}} (org {{`{{ $labels.org_name }}`}}) is not responding to scrapes.
-            description: The healthz sidecar of {{`{{ $labels.app }}`}} in org {{`{{ $labels.org_name }}`}} is unreachable.
+            summary: Agent {{`{{ $labels.agent_name }}`}} (org {{`{{ $labels.org_name }}`}}) is not responding to scrapes.
+            description: The healthz server of agent {{`{{ $labels.agent_name }}`}} ({{`{{ $labels.app }}`}}) in org {{`{{ $labels.org_name }}`}} is unreachable.
 
         - alert: AgentUnhealthy
           expr: agent_healthz_ok{job="agent"} == 0 and agent_healthz_ever_connected{job="agent"} == 1
@@ -97,8 +97,8 @@ spec:
           labels:
             severity: warning
           annotations:
-            summary: Agent {{`{{ $labels.app }}`}} (org {{`{{ $labels.org_name }}`}}) lost its runtime connection.
-            description: The agent runtime of {{`{{ $labels.app }}`}} was connected before and is now unhealthy.
+            summary: Agent {{`{{ $labels.agent_name }}`}} (org {{`{{ $labels.org_name }}`}}) lost its runtime connection.
+            description: The runtime of agent {{`{{ $labels.agent_name }}`}} ({{`{{ $labels.app }}`}}) in org {{`{{ $labels.org_name }}`}} was connected before and is now unhealthy.
 
         - alert: AgentSlackTokensInvalid
           expr: agent_slack_tokens_ok{job="agent"} == 0
@@ -106,8 +106,8 @@ spec:
           labels:
             severity: warning
           annotations:
-            summary: Agent {{`{{ $labels.app }}`}} (org {{`{{ $labels.org_name }}`}}) has invalid Slack tokens.
-            description: Slack token validation is failing for {{`{{ $labels.app }}`}}; the agent cannot serve its workspace.
+            summary: Agent {{`{{ $labels.agent_name }}`}} (org {{`{{ $labels.org_name }}`}}) has invalid Slack tokens.
+            description: Slack token validation is failing for agent {{`{{ $labels.agent_name }}`}} ({{`{{ $labels.app }}`}}) in org {{`{{ $labels.org_name }}`}}; the agent cannot serve its workspace.
 
         - alert: AgentsInErrorState
           # max() drops pod/instance labels: stable identity across API

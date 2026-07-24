@@ -140,10 +140,11 @@ tests:
         alertname: HighToolCallErrorRate
         exp_alerts: []
 
-  # --- AgentTargetDown: per-agent labels survive into the alert ---
+  # --- AgentTargetDown: per-agent labels survive into the alert, and the
+  # Slack summary carries name + org + id ---
   - interval: 1m
     input_series:
-      - series: 'up{job="agent", app="agent-abc", org_name="acme"}'
+      - series: 'up{job="agent", app="agent-abc", agent_name="abby", org_name="acme"}'
         values: "1x3 0x15"
     alert_rule_test:
       - eval_time: 10m
@@ -153,17 +154,18 @@ tests:
               severity: warning
               job: agent
               app: agent-abc
+              agent_name: abby
               org_name: acme
             exp_annotations:
-              summary: Agent agent-abc (org acme) is not responding to scrapes.
-              description: The healthz sidecar of agent-abc in org acme is unreachable.
+              summary: Agent abby (org acme) is not responding to scrapes.
+              description: The healthz server of agent abby (agent-abc) in org acme is unreachable.
 
   # --- AgentUnhealthy: fires only for agents that were connected before ---
   - interval: 1m
     input_series:
-      - series: 'agent_healthz_ok{job="agent", app="agent-abc", org_name="acme"}'
+      - series: 'agent_healthz_ok{job="agent", app="agent-abc", agent_name="abby", org_name="acme"}'
         values: "1x5 0x26"
-      - series: 'agent_healthz_ever_connected{job="agent", app="agent-abc", org_name="acme"}'
+      - series: 'agent_healthz_ever_connected{job="agent", app="agent-abc", agent_name="abby", org_name="acme"}'
         values: "1x31"
     alert_rule_test:
       - eval_time: 18m
@@ -173,10 +175,11 @@ tests:
               severity: warning
               job: agent
               app: agent-abc
+              agent_name: abby
               org_name: acme
             exp_annotations:
-              summary: Agent agent-abc (org acme) lost its runtime connection.
-              description: The agent runtime of agent-abc was connected before and is now unhealthy.
+              summary: Agent abby (org acme) lost its runtime connection.
+              description: The runtime of agent abby (agent-abc) in org acme was connected before and is now unhealthy.
 
   # --- AgentUnhealthy gate: a fresh agent that never connected must NOT
   # page while it boots ---
@@ -194,7 +197,7 @@ tests:
   # --- AgentSlackTokensInvalid ---
   - interval: 1m
     input_series:
-      - series: 'agent_slack_tokens_ok{job="agent", app="agent-abc", org_name="acme"}'
+      - series: 'agent_slack_tokens_ok{job="agent", app="agent-abc", agent_name="abby", org_name="acme"}'
         values: "0x15"
     alert_rule_test:
       - eval_time: 12m
@@ -204,10 +207,11 @@ tests:
               severity: warning
               job: agent
               app: agent-abc
+              agent_name: abby
               org_name: acme
             exp_annotations:
-              summary: Agent agent-abc (org acme) has invalid Slack tokens.
-              description: Slack token validation is failing for agent-abc; the agent cannot serve its workspace.
+              summary: Agent abby (org acme) has invalid Slack tokens.
+              description: Slack token validation is failing for agent abby (agent-abc) in org acme; the agent cannot serve its workspace.
 
   # --- AgentsInErrorState: max() — a fresh replica's default-0 gauge must
   # not mask the real count, and no pod labels leak into the alert ---
