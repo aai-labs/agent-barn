@@ -139,6 +139,33 @@ def test_member_search_filters_by_name_and_email():
         )
 
 
+def test_member_list_respects_limit_and_defaults_to_unbounded():
+    with given(
+        [
+            *_GIVEN,
+            _there_is_an_owner(),
+            there_is_a_user(
+                name="Ada Lovelace",
+                email="ada@example.com",
+                organization_id=ORG,
+                role=OrganizationRole.MEMBER,
+            ),
+            there_is_a_user(
+                name="Grace Hopper",
+                email="grace@example.com",
+                organization_id=ORG,
+                role=OrganizationRole.MEMBER,
+            ),
+        ]
+    ) as context:
+        limited = context.client.get(_members_url(), params={"limit": 1}, headers=_auth(context))
+        unbounded = context.client.get(_members_url(), headers=_auth(context))
+
+        assert_that(limited.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(limited.json(), has_length(1))
+        assert_that(unbounded.json(), has_length(3))
+
+
 def test_superuser_without_membership_read_grant_can_list_members():
     super_id = uuid7()
     with given(

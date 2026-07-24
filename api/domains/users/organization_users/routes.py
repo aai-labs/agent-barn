@@ -25,8 +25,9 @@ def list_members(
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[OrganizationUserService, Injected(OrganizationUserService)],
     search: Annotated[str | None, Query()] = None,
+    limit: Annotated[int | None, Query(ge=1, le=200)] = None,
 ):
-    return service.list_members(context, organization_id, search=search)
+    return service.list_members(context, organization_id, search=search, limit=limit)
 
 
 @member_router.post(

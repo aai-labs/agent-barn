@@ -5,6 +5,81 @@ export const MOCK_TEMPLATE_ID = "44444444-4444-4444-8444-444444444444";
 export const MOCK_TEMPLATE_SLUG = "maya-3f9a2c1b";
 export const MOCK_ORG_ID = "22222222-2222-4222-8222-222222222222";
 
+export const MOCK_VIEWER_ROLE_ID = "77777777-0000-4000-8000-000000000001";
+export const MOCK_EDITOR_ROLE_ID = "77777777-0000-4000-8000-000000000002";
+export const MOCK_OWNER_ROLE_ID = "77777777-0000-4000-8000-000000000003";
+export const MOCK_MEMBER_USER_ID = "88888888-8888-4888-8888-888888888888";
+export const MOCK_ELIGIBLE_USER_ID = "99999999-9999-4999-8999-999999999999";
+
+export const mockAccessRoles = [
+  {
+    id: MOCK_VIEWER_ROLE_ID,
+    name: "VIEWER",
+    permissions: ["agent.read", "activity.read", "cost.read"],
+    is_locked: true,
+  },
+  {
+    id: MOCK_EDITOR_ROLE_ID,
+    name: "EDITOR",
+    permissions: [
+      "agent.read",
+      "activity.read",
+      "cost.read",
+      "agent.update",
+      "agent.lifecycle.manage",
+      "agent.secret.manage",
+    ],
+    is_locked: true,
+  },
+  {
+    id: MOCK_OWNER_ROLE_ID,
+    name: "OWNER",
+    permissions: [
+      "agent.read",
+      "activity.read",
+      "cost.read",
+      "agent.update",
+      "agent.lifecycle.manage",
+      "agent.secret.manage",
+      "agent.delete",
+      "agent.access.manage",
+    ],
+    is_locked: true,
+  },
+];
+
+export const mockAssignedMember = {
+  user_id: MOCK_MEMBER_USER_ID,
+  email: "member@example.com",
+  full_name: "Ada Lovelace",
+  organization_role: "MEMBER",
+  is_pending: false,
+  is_creator: false,
+  access_role: mockAccessRoles[0],
+};
+
+export const mockEligibleCandidate = {
+  user_id: MOCK_ELIGIBLE_USER_ID,
+  email: "grace@example.com",
+  full_name: "Grace Hopper",
+  organization_role: "MEMBER",
+  is_pending: false,
+  is_creator: false,
+};
+
+export const mockGeneralAccessRestricted = { role: null };
+export const mockGeneralAccessAll = { role: mockAccessRoles[0] };
+
+export const mockShareSettingsRestricted = {
+  general_access: mockGeneralAccessRestricted,
+  assignments: [mockAssignedMember],
+};
+
+export const mockShareSettingsAll = {
+  general_access: mockGeneralAccessAll,
+  assignments: [mockAssignedMember],
+};
+
 export const mockAgentAllowedActions = [
   "agent.read",
   "agent.update",
@@ -233,6 +308,151 @@ export class AgentDataSupport {
         });
       },
     );
+  }
+
+  async interceptGetAgentHealthRequest({
+    agentId = MOCK_AGENT_ID,
+    status = 200,
+    body,
+  }: {
+    agentId?: string;
+    status?: number;
+    body?: unknown;
+  } = {}) {
+    await this.page.route(`**/api/v1/agents/${agentId}/healthz`, async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status,
+        contentType: "application/json",
+        body: JSON.stringify(body ?? { status: "ok" }),
+      });
+    });
+  }
+
+  async interceptGetConversationChannelsRequest({
+    agentId = MOCK_AGENT_ID,
+    status = 200,
+    detail = "Unable to load conversation channels",
+    body,
+  }: {
+    agentId?: string;
+    status?: number;
+    detail?: string;
+    body?: unknown;
+  } = {}) {
+    await this.page.route(
+      `**/api/v1/agents/${agentId}/conversations/channels`,
+      async (route) => {
+        if (route.request().method() !== "GET") {
+          await route.fallback();
+          return;
+        }
+        await route.fulfill({
+          status,
+          contentType: "application/json",
+          body: JSON.stringify(status >= 400 ? { detail } : (body ?? [])),
+        });
+      },
+    );
+  }
+
+  async interceptGetModelsRequest({
+    status = 200,
+    detail = "Unable to load models",
+    body,
+  }: {
+    status?: number;
+    detail?: string;
+    body?: unknown;
+  } = {}) {
+    await this.page.route("**/api/v1/agents/models", async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status,
+        contentType: "application/json",
+        body: JSON.stringify(status >= 400 ? { detail } : (body ?? [])),
+      });
+    });
+  }
+
+  async interceptGetShareRolesRequest({
+    status = 200,
+    detail = "Unable to load share roles",
+    body,
+  }: {
+    status?: number;
+    detail?: string;
+    body?: unknown;
+  } = {}) {
+    await this.page.route("**/api/v1/agents/share-roles", async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status,
+        contentType: "application/json",
+        body: JSON.stringify(status >= 400 ? { detail } : (body ?? mockAccessRoles)),
+      });
+    });
+  }
+
+  async interceptGetAgentShareRequest({
+    agentId = MOCK_AGENT_ID,
+    status = 200,
+    detail = "Unable to load sharing settings",
+    body,
+  }: {
+    agentId?: string;
+    status?: number;
+    detail?: string;
+    body?: unknown;
+  } = {}) {
+    await this.page.route(`**/api/v1/agents/${agentId}/share`, async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status,
+        contentType: "application/json",
+        body: JSON.stringify(
+          status >= 400 ? { detail } : (body ?? mockShareSettingsRestricted),
+        ),
+      });
+    });
+  }
+
+  async interceptPutAgentShareRequest({
+    agentId = MOCK_AGENT_ID,
+    status = 200,
+    detail = "Unable to save sharing settings",
+    body,
+  }: {
+    agentId?: string;
+    status?: number;
+    detail?: string;
+    body?: unknown;
+  } = {}) {
+    await this.page.route(`**/api/v1/agents/${agentId}/share`, async (route) => {
+      if (route.request().method() !== "PUT") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status,
+        contentType: "application/json",
+        body: JSON.stringify(
+          status >= 400 ? { detail } : (body ?? mockShareSettingsRestricted),
+        ),
+      });
+    });
   }
 
   async interceptCreateAgentRequest({
