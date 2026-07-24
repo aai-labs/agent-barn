@@ -720,6 +720,29 @@ def test_start_agent_sets_status_running():
             )
 
 
+def test_start_telegram_agent_labels_service_with_org_and_agent_name():
+    # Regression: the telegram start path once built its Service without the
+    # monitoring identity labels because org_name was threaded in from the
+    # route on the other platforms' paths only. Resolution now lives in the
+    # service, so every platform labels agents consistently.
+    with given([*_GIVEN, there_is_an_agent(platform=AgentPlatform.TELEGRAM)]) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+
+        with when("I start a telegram agent"):
+            with patch(
+                "api.domains.agents.service.validate_telegram_bot_token",
+                return_value=(True, "", {"username": "test_bot"}),
+            ):
+                response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("its Service carries the monitoring identity labels"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            service = k8s.create_service.call_args.args[1]
+            assert_that(service.metadata.labels["org-name"], equal_to("test-organization"))
+            assert_that(service.metadata.labels["agent-name"], equal_to("test-agent"))
+
+
 def test_start_already_running_returns_409():
     with given(
         [

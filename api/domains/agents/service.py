@@ -76,6 +76,7 @@ from api.domains.agents.repository import AgentRepository
 from api.domains.agents.runtime_policy import build_chat_commands_policy_md
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.token_service import SlackConfigTokenService
+from api.domains.organizations.lookup import OrganizationLookupService
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.skills.models import Skill
 from api.domains.skills.repository import SkillRepository
@@ -204,12 +205,13 @@ class AgentService:
     config: Config
     skill_repository: SkillRepository
     slack_token_service: SlackConfigTokenService
+    organization_lookup: OrganizationLookupService
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
 
     def count_agents_in_error(self) -> int:
-        return self.repository.count_active_by_status(AgentStatus.ERROR)
+        return self.repository.count_agents_in_error()
 
     def _ensure_model_allowed(self, model: str | None) -> None:
         """Rejects models outside the allowlist. litellm is cluster-internal, so
@@ -411,7 +413,7 @@ class AgentService:
         except Exception:
             return cached[0] if cached else None
 
-    def create_agent(self, data: AgentCreate, context: CurrentUserContext, org_name: str = "") -> AgentRead:
+    def create_agent(self, data: AgentCreate, context: CurrentUserContext) -> AgentRead:
         org_id = self._org_id(context)
         self.authorization.require_collection_scope(context, PermissionKey.AGENT_CREATE)
         self._ensure_model_allowed(data.model)
@@ -559,7 +561,7 @@ class AgentService:
             self.repository.save_skills([AgentSkill(agent_id=agent.id, skill_id=s.id) for s in skills_to_assign])
 
         if data.platform == AgentPlatform.TEAMS:
-            return self.start_agent(agent.id, context, org_name=org_name)
+            return self.start_agent(agent.id, context)
         allowed_actions = self.authorization.allowed_actions(context, [agent])[agent.id]
         return self._build_agent_read(
             agent,
@@ -846,8 +848,11 @@ class AgentService:
         self.repository.save(agent)
         return self._get_agent_read(agent, context)
 
-    def start_agent(self, agent_id: UUID, context: CurrentUserContext, org_name: str = "") -> AgentRead:
+    def start_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
         org_id = self._org_id(context)
+        # Stamped as Service labels for monitoring; resolved here (not in the
+        # route) so every start path labels agents consistently.
+        org_name = self.organization_lookup.get_name(org_id)
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_LIFECYCLE_MANAGE)
 
         if agent.status == AgentStatus.RUNNING:
@@ -1008,7 +1013,7 @@ class AgentService:
                 self.repository.save(agent)
                 return self._get_agent_read(agent, context)
 
-            service = build_service(agent.id, org_id, ns)
+            service = build_service(agent.id, org_id, ns, org_name=org_name, agent_name=agent.name)
 
             if agent.agent_type == AgentType.HERMES:
                 api_server_key = secrets.token_urlsafe(32)
