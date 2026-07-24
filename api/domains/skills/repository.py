@@ -29,11 +29,7 @@ class SkillRepository:
     def get_by_name_global(self, name: str) -> Skill | None:
         """Find a global (org_id=None) skill by name — used for seeder dedup."""
         with Session(self.delegate.engine) as session:
-            query = (
-                select(Skill)
-                .where(col(Skill.name) == name)
-                .where(col(Skill.organization_id).is_(None))
-            )
+            query = select(Skill).where(col(Skill.name) == name).where(col(Skill.organization_id).is_(None))
             return session.exec(query).first()
 
     def find_accessible_for_org(self, org_id: UUID) -> list[Skill]:
@@ -98,9 +94,7 @@ class SkillRepository:
             )
             return session.exec(query).first() is not None
 
-    def get_latest_template_slugs_requiring_skill(
-        self, skill_id: UUID, org_id: UUID
-    ) -> list[str]:
+    def get_latest_template_slugs_requiring_skill(self, skill_id: UUID, org_id: UUID) -> list[str]:
         """Return template slugs whose *latest* version lists this skill as required."""
         with Session(self.delegate.engine) as session:
             latest = (
@@ -150,9 +144,7 @@ class SkillRepository:
             session.exec(stmt)  # type: ignore[call-overload]
             session.commit()
 
-    def get_agent_skills_with_details(
-        self, agent_id: UUID
-    ) -> list[tuple[AgentSkill, Skill]]:
+    def get_agent_skills_with_details(self, agent_id: UUID) -> list[tuple[AgentSkill, Skill]]:
         with Session(self.delegate.engine) as session:
             query = (
                 select(AgentSkill, Skill)

@@ -117,17 +117,13 @@ def test_github_content_defaults_repos_to_empty_list():
 
 
 def test_github_content_accepts_multiple_repos():
-    content = validate_content(
-        SecretProvider.GITHUB, {**_GITHUB_BASE, "repos": ["repo-a", "repo-b"]}
-    )
+    content = validate_content(SecretProvider.GITHUB, {**_GITHUB_BASE, "repos": ["repo-a", "repo-b"]})
     assert isinstance(content, GithubContent)
     assert content.repos == ["repo-a", "repo-b"]
 
 
 def test_github_content_legacy_repo_field_upgrades_to_repos_list():
-    content = validate_content(
-        SecretProvider.GITHUB, {**_GITHUB_BASE, "repo": "legacy-repo"}
-    )
+    content = validate_content(SecretProvider.GITHUB, {**_GITHUB_BASE, "repo": "legacy-repo"})
     assert isinstance(content, GithubContent)
     assert content.repos == ["legacy-repo"]
 
@@ -145,17 +141,13 @@ def test_bitbucket_content_defaults_repos_to_empty_list():
 
 
 def test_bitbucket_content_accepts_multiple_repos():
-    content = validate_content(
-        SecretProvider.BITBUCKET, {**_BITBUCKET_BASE, "repos": ["repo-a", "repo-b"]}
-    )
+    content = validate_content(SecretProvider.BITBUCKET, {**_BITBUCKET_BASE, "repos": ["repo-a", "repo-b"]})
     assert isinstance(content, BitbucketContent)
     assert content.repos == ["repo-a", "repo-b"]
 
 
 def test_bitbucket_content_legacy_repo_field_upgrades_to_repos_list():
-    content = validate_content(
-        SecretProvider.BITBUCKET, {**_BITBUCKET_BASE, "repo": "legacy-repo"}
-    )
+    content = validate_content(SecretProvider.BITBUCKET, {**_BITBUCKET_BASE, "repo": "legacy-repo"})
     assert isinstance(content, BitbucketContent)
     assert content.repos == ["legacy-repo"]
 
@@ -163,9 +155,7 @@ def test_bitbucket_content_legacy_repo_field_upgrades_to_repos_list():
 def test_decrypt_content_upgrades_legacy_github_blob():
     """Old encrypted blobs shaped {"repo": "x"} must decrypt transparently into repos: [x]."""
     legacy_blob = encrypt_token(
-        json.dumps(
-            {"token": "t", "owner": "acme", "repo": "legacy-repo", "org": "acme"}
-        ),
+        json.dumps({"token": "t", "owner": "acme", "repo": "legacy-repo", "org": "acme"}),
         _KEY,
     )
     content = decrypt_content(SecretProvider.GITHUB, legacy_blob, _KEY)

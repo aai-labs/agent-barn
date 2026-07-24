@@ -23,36 +23,26 @@ class AgentChatMessage(BaseModel, table=True):
     __tablename__: str = "agent_chat_message"
 
     __table_args__ = (
-        sa.UniqueConstraint(
-            "agent_id", "openclaw_msg_id", name="uq_agent_chat_message_agent_msg"
-        ),
+        sa.UniqueConstraint("agent_id", "openclaw_msg_id", name="uq_agent_chat_message_agent_msg"),
         sa.Index("ix_agent_chat_message_agent_channel", "agent_id", "channel_id"),
         sa.Index("ix_agent_chat_message_agent_session", "agent_id", "session_key"),
     )
 
-    agent_id: UUID = SqlField(
-        foreign_key="agent.id", nullable=False, ondelete="CASCADE"
-    )
+    agent_id: UUID = SqlField(foreign_key="agent.id", nullable=False, ondelete="CASCADE")
     openclaw_msg_id: str = SqlField(nullable=False)
     session_key: str = SqlField(nullable=False)
     channel_id: str = SqlField(nullable=False)
     thread_id: str | None = SqlField(default=None, nullable=True)
-    direction: MessageDirection = SqlField(
-        sa_column=Column(Enum(MessageDirection), nullable=False)
-    )
+    direction: MessageDirection = SqlField(sa_column=Column(Enum(MessageDirection), nullable=False))
     conversation_type: ConversationType = SqlField(
         default=ConversationType.CHANNEL,
-        sa_column=Column(
-            Enum(ConversationType), nullable=False, server_default="CHANNEL"
-        ),
+        sa_column=Column(Enum(ConversationType), nullable=False, server_default="CHANNEL"),
     )
     sender_id: str | None = SqlField(default=None, nullable=True)
     sender_name: str | None = SqlField(default=None, nullable=True)
     channel_name: str | None = SqlField(default=None, nullable=True)
     content: str = SqlField(nullable=False)
-    occurred_at: datetime = SqlField(
-        sa_column=Column(sa.DateTime(timezone=True), nullable=False)
-    )
+    occurred_at: datetime = SqlField(sa_column=Column(sa.DateTime(timezone=True), nullable=False))
 
 
 class ConversationMessageRead(PydanticBaseModel):

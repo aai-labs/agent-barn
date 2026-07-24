@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import type { Agent, IntegrationValidationResult, AgentAssignedSkill } from "../schemas";
+import { canAgent } from "../utils";
 import { useAgentTemplate } from "../hooks/use-agent-template";
 import { useUpdateAgent } from "../hooks/use-update-agent";
 import { useDeleteAgent } from "../hooks/use-delete-agent";
@@ -30,19 +31,40 @@ interface ConfigDrawerProps {
   onClose: () => void;
 }
 
-function getTabs(platform: "slack" | "teams"): [string, string, boolean][] {
-  return [
-    ["personality", "Template", true],
-    ["secrets", "Keys", true],
-    ...(platform === "slack" ? [["channels", "Channels", true] as [string, string, boolean]] : []),
-    ...(platform === "teams" ? [["endpoint", "Endpoint", true] as [string, string, boolean]] : []),
-    ["skills", "Skills", true],
-    ["k8s", "Infrastructure", false],
-    ["danger", "Danger zone", true],
-  ];
+export type TabKey = "personality" | "channels" | "endpoint" | "skills" | "secrets" | "k8s" | "danger";
+
+export function canOpenConfigTab(agent: Agent, tab: TabKey): boolean {
+  if (tab === "secrets") return canAgent(agent, "agent.secret.manage");
+  if (tab === "danger") return canAgent(agent, "agent.delete");
+  if (tab === "k8s") return false;
+  return canAgent(agent, "agent.update");
 }
 
-export type TabKey = "personality" | "channels" | "endpoint" | "skills" | "secrets" | "k8s" | "danger";
+export function defaultConfigTab(agent: Agent): TabKey | null {
+  if (canAgent(agent, "agent.update")) return "personality";
+  if (canAgent(agent, "agent.secret.manage")) return "secrets";
+  if (canAgent(agent, "agent.delete")) return "danger";
+  return null;
+}
+
+function getTabs(agent: Agent): [TabKey, string, boolean][] {
+  return [
+    ["personality", "Template", canOpenConfigTab(agent, "personality")],
+    ["secrets", "Keys", canOpenConfigTab(agent, "secrets")],
+    ...(agent.platform === "slack"
+      ? [["channels", "Channels", canOpenConfigTab(agent, "channels")] as [TabKey, string, boolean]]
+      : []),
+    ...(agent.platform === "telegram"
+      ? [["channels", "Chats", canOpenConfigTab(agent, "channels")] as [TabKey, string, boolean]]
+      : []),
+    ...(agent.platform === "teams"
+      ? [["endpoint", "Endpoint", canOpenConfigTab(agent, "endpoint")] as [TabKey, string, boolean]]
+      : []),
+    ["skills", "Skills", canOpenConfigTab(agent, "skills")],
+    ["k8s", "Infrastructure", false],
+    ["danger", "Danger zone", canOpenConfigTab(agent, "danger")],
+  ];
+}
 
 export const DRAWER_TAB_KEYS: TabKey[] = [
   "personality",
@@ -53,6 +75,108 @@ export const DRAWER_TAB_KEYS: TabKey[] = [
   "k8s",
   "danger",
 ];
+
+function TelegramChatsTab({ agent, isRunning }: { agent: Agent; isRunning: boolean }) {
+  const updateAgent = useUpdateAgent();
+  const tc = agent.telegramConfig;
+  const [groupPolicy, setGroupPolicy] = useState(tc?.groupPolicy ?? "allowlist");
+  const [dmPolicy, setDmPolicy] = useState(tc?.dmPolicy ?? "off");
+  const [allowedUserIds, setAllowedUserIds] = useState((tc?.allowedUserIds ?? []).join(", "));
+  const [allowedChatIds, setAllowedChatIds] = useState((tc?.allowedChatIds ?? []).join(", "));
+  const [saved, setSaved] = useState(false);
+
+  async function handleSave() {
+    try {
+      await updateAgent.mutateAsync({
+        agentId: agent.id,
+        telegramGroupPolicy: groupPolicy,
+        telegramDmPolicy: dmPolicy,
+        telegramAllowedUserIds: allowedUserIds.split(",").map((s) => s.trim()).filter(Boolean),
+        telegramAllowedChatIds: allowedChatIds.split(",").map((s) => s.trim()).filter(Boolean),
+      });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch {
+      // error displayed via updateAgent.error
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-5">
+      <Hint>Configure which Telegram chats and users {agent.name} can interact with.</Hint>
+
+      <div className="flex flex-col gap-1.5">
+        <label className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>Group chats</label>
+        <select
+          className="af-input"
+          value={groupPolicy}
+          onChange={(e) => setGroupPolicy(e.target.value as "open" | "allowlist")}
+          disabled={isRunning}
+        >
+          <option value="allowlist">Allowlist — only allowed group chats</option>
+          <option value="open">Open — respond in any group chat</option>
+        </select>
+      </div>
+
+      {groupPolicy === "allowlist" && (
+        <div className="flex flex-col gap-1.5">
+          <label className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>Allowed chat IDs</label>
+          <input
+            className="af-input font-mono text-[0.8125rem]"
+            value={allowedChatIds}
+            onChange={(e) => setAllowedChatIds(e.target.value)}
+            placeholder="Comma-separated Telegram chat IDs"
+            disabled={isRunning}
+          />
+          <span className="text-xs" style={{ color: "var(--ink-4)" }}>Numeric chat IDs (group chats are typically negative numbers)</span>
+        </div>
+      )}
+
+      <div className="flex flex-col gap-1.5">
+        <label className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>Direct messages</label>
+        <select
+          className="af-input"
+          value={dmPolicy}
+          onChange={(e) => setDmPolicy(e.target.value as "off" | "open" | "allowlist")}
+          disabled={isRunning}
+        >
+          <option value="off">Off — ignore direct messages</option>
+          <option value="allowlist">Allowlist — only allowed users</option>
+          <option value="open">Open — anyone can DM</option>
+        </select>
+      </div>
+
+      {dmPolicy === "allowlist" && (
+        <div className="flex flex-col gap-1.5">
+          <label className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>Allowed user IDs</label>
+          <input
+            className="af-input font-mono text-[0.8125rem]"
+            value={allowedUserIds}
+            onChange={(e) => setAllowedUserIds(e.target.value)}
+            placeholder="Comma-separated Telegram user IDs"
+            disabled={isRunning}
+          />
+          <span className="text-xs" style={{ color: "var(--ink-4)" }}>Numeric user IDs — users can find theirs via @userinfobot</span>
+        </div>
+      )}
+
+      <div className="flex gap-2 items-center">
+        <button
+          className="af-btn af-btn-sm"
+          disabled={isRunning || updateAgent.isPending}
+          onClick={() => { void handleSave(); }}
+        >
+          {updateAgent.isPending ? "Saving…" : saved ? "Saved!" : "Save"}
+        </button>
+        {updateAgent.error && (
+          <span className="text-xs" style={{ color: "var(--err)" }}>
+            {updateAgent.error instanceof Error ? updateAgent.error.message : "Save failed"}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
 
 export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigDrawerProps) {
   const router = useRouter();
@@ -81,6 +205,8 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
   const [teamsAppPassword, setTeamsAppPassword] = useState("");
   const [showTeamsAppPassword, setShowTeamsAppPassword] = useState(false);
   const [teamsTenantId, setTeamsTenantId] = useState("");
+  const [telegramBotToken, setTelegramBotToken] = useState("");
+  const [showTelegramBotToken, setShowTelegramBotToken] = useState(false);
   const [savedTokens, setSavedTokens] = useState(false);
   const [secretDrafts, setSecretDrafts] = useState<IntegrationDraft[]>([]);
   const [removedProviders, setRemovedProviders] = useState<string[]>([]);
@@ -90,13 +216,15 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
   const [repinSecretDrafts, setRepinSecretDrafts] = useState<IntegrationDraft[]>([]);
   const [repinVisible, setRepinVisible] = useState<Record<string, boolean>>({});
 
-  const tabs = getTabs(agent.platform);
+  const tabs = getTabs(agent);
   // Clamp the URL-provided tab to one that's actually reachable for this agent
   // (e.g. a deep-linked ?configTab=channels on a Teams agent falls back).
   const enabledKeys = tabs
     .filter(([, , enabled]) => enabled)
     .map(([k]) => k as TabKey);
-  const tab: TabKey = enabledKeys.includes(activeTab) ? activeTab : "personality";
+  const tab: TabKey = enabledKeys.includes(activeTab)
+    ? activeTab
+    : (enabledKeys[0] ?? "personality");
 
   const configuredSecrets = agent.secrets ?? [];
   const validateIntegration = useValidateIntegration();
@@ -248,6 +376,11 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
           ...(teamsAppId.trim() ? { teamsAppId } : {}),
           ...(teamsAppPassword.trim() ? { teamsAppPassword } : {}),
           ...(teamsTenantId.trim() ? { teamsTenantId } : {}),
+        });
+      } else if (agent.platform === "telegram") {
+        await updateAgent.mutateAsync({
+          agentId: agent.id,
+          ...(telegramBotToken.trim() ? { telegramBotToken } : {}),
         });
       } else {
         await updateAgent.mutateAsync({
@@ -689,11 +822,14 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
             </div>
           )}
 
-          {tab === "channels" && (
+          {tab === "channels" && agent.platform === "slack" && (
             <div>
               <Hint>Configure which Slack channels and users {agent.name} can interact with.</Hint>
               <SlackConfigPanel agent={agent} />
             </div>
+          )}
+          {tab === "channels" && agent.platform === "telegram" && (
+            <TelegramChatsTab agent={agent} isRunning={isRunning} />
           )}
 
           {tab === "skills" && (
@@ -801,6 +937,47 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                   onClick={() => { void handleSaveTokens(); }}
                 >
                   {pendingSection === "tokens" ? "Saving…" : savedTokens ? "Saved!" : "Save credentials"}
+                </button>
+                {updateAgent.error && errorSection === "tokens" && (
+                  <span className="text-xs" style={{ color: "var(--err)" }}>
+                    {updateAgent.error instanceof Error ? updateAgent.error.message : "Save failed"}
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+
+          {tab === "secrets" && agent.platform === "telegram" && (
+            <div className="flex flex-col gap-4">
+              <Hint>
+                Token is write-only — leave the field blank to keep the existing value.
+              </Hint>
+              {agent.telegramConfig?.botUsername && (
+                <div className="text-[0.844rem]" style={{ color: "var(--ink-3)" }}>
+                  Telegram bot: <span className="font-mono" style={{ color: "var(--ink-2)" }}>@{agent.telegramConfig.botUsername}</span>
+                </div>
+              )}
+              <div className="flex flex-col gap-3.5">
+                <div className="flex flex-col gap-1.5">
+                  <label className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>Bot token</label>
+                  <TokenInput
+                    value={telegramBotToken}
+                    onChange={setTelegramBotToken}
+                    visible={showTelegramBotToken}
+                    onToggle={() => setShowTelegramBotToken((v) => !v)}
+                    placeholder="123456:ABC-DEF… (leave blank to keep existing)"
+                    disabled={isRunning}
+                  />
+                  <span className="text-xs" style={{ color: "var(--ink-4)" }}>From @BotFather · validated via getMe on save</span>
+                </div>
+              </div>
+              <div className="flex gap-2 items-center">
+                <button
+                  className="af-btn af-btn-sm"
+                  disabled={isRunning || pendingSection === "tokens" || !telegramBotToken.trim()}
+                  onClick={() => { void handleSaveTokens(); }}
+                >
+                  {pendingSection === "tokens" ? "Saving…" : savedTokens ? "Saved!" : "Save token"}
                 </button>
                 {updateAgent.error && errorSection === "tokens" && (
                   <span className="text-xs" style={{ color: "var(--err)" }}>

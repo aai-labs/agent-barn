@@ -27,6 +27,4 @@ def test_api_health_is_ok():
 
             with then("it should return OK"):
                 assert_that(response.status_code, equal_to(200))
-                assert_that(
-                    response.json(), equal_to({"status": "ok", "db": "connected"})
-                )
+                assert_that(response.json(), equal_to({"status": "ok", "db": "connected"}))

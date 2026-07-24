@@ -21,6 +21,7 @@ jobs:
         working-directory: api
         run: uv sync --frozen
       - run: make check-api
+      - run: make check-migrations
 
   test:
     name: Test

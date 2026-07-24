@@ -12,49 +12,39 @@ _TIMEOUT = 10
 def validate_confluence(content: ConfluenceContent) -> IntegrationValidationResult:
     base = content.site_url.rstrip("/")
 
-    # If scoped token is selected, we MUST route through the api.atlassian.com gateway.
-    # Direct site URL does not accept OAuth scoped tokens on Atlassian Cloud.
+    # Scoped API tokens are still Basic Auth — they just must be sent to the
+    # api.atlassian.com gateway (keyed by cloud ID) instead of the site directly.
+    # They also only work against the v2 REST API: the legacy v1 endpoint we use
+    # for identity (/wiki/rest/api/user/current) isn't in Atlassian's scoped-token
+    # allowlist and 401s even with valid credentials, so scoped tokens fall back to
+    # a v2 endpoint and report space count instead of a display name.
     if content.use_scoped_token:
         cloud_id, cloud_err = get_atlassian_cloud_id(base)
         if not cloud_id:
-            return IntegrationValidationResult(
-                valid=False, error=cloud_err or "Could not resolve Atlassian Cloud ID."
-            )
+            return IntegrationValidationResult(valid=False, error=cloud_err or "Could not resolve Atlassian Cloud ID.")
         gateway_base = f"https://api.atlassian.com/ex/confluence/{cloud_id}"
-        auth = None
-        headers = {"Authorization": f"Bearer {content.api_token}"}
         endpoint = f"{gateway_base}/wiki/api/v2/spaces"
-        is_bearer = True
     else:
-        auth = (content.email, content.api_token)
-        headers = None
         endpoint = f"{base}/wiki/rest/api/user/current"
-        is_bearer = False
 
     try:
-        resp = httpx.get(endpoint, auth=auth, headers=headers, timeout=_TIMEOUT)
+        resp = httpx.get(endpoint, auth=(content.email, content.api_token), timeout=_TIMEOUT)
     except Exception as exc:
-        return IntegrationValidationResult(
-            valid=False, error=f"Could not reach Confluence: {exc}"
-        )
+        return IntegrationValidationResult(valid=False, error=f"Could not reach Confluence: {exc}")
 
     if resp.status_code == 401:
-        return IntegrationValidationResult(
-            valid=False,
-            error="Invalid API token" if is_bearer else "Invalid email or API token",
-        )
+        return IntegrationValidationResult(valid=False, error="Invalid email or API token")
     if resp.status_code == 403:
-        return IntegrationValidationResult(
-            valid=False, error="Account does not have Confluence product access"
-        )
+        return IntegrationValidationResult(valid=False, error="Account does not have Confluence product access")
     if resp.status_code != 200:
         return IntegrationValidationResult(
             valid=False,
             error=f"Confluence returned unexpected status {resp.status_code}",
         )
 
-    if is_bearer:
-        # /space returns paginated results — any 200 means the token is valid
+    if content.use_scoped_token:
+        # /v2/spaces returns paginated results — any 200 means the token is valid.
+        # v2 has no "current user" endpoint, so we can't surface a display name.
         data = resp.json()
         count = len(data.get("results", [])) if isinstance(data, dict) else "?"
         site_label = base.replace("https://", "").replace("http://", "")
@@ -65,9 +55,7 @@ def validate_confluence(content: ConfluenceContent) -> IntegrationValidationResu
 
     data = resp.json()
     if data.get("type") == "anonymous":
-        return IntegrationValidationResult(
-            valid=False, error="Authentication was not accepted"
-        )
+        return IntegrationValidationResult(valid=False, error="Authentication was not accepted")
     display_name = data.get("displayName", "")
     email = data.get("email", content.email or "")
     identity = f"{display_name} ({email})" if email else display_name

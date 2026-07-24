@@ -53,17 +53,17 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
     scopeNote: "API token inherits your Atlassian account's project permissions — account needs Browse Projects and Add Comments on the target project",
     fields: [
       { key: "siteUrl", label: "Site URL", type: "text", required: true, placeholder: "https://your-domain.atlassian.net" },
-      { 
-        key: "useScopedToken", 
-        label: "Authentication Type", 
-        type: "radio", 
-        required: true, 
+      {
+        key: "useScopedToken",
+        label: "Authentication Type",
+        type: "radio",
+        required: true,
         options: [
-          { label: "Non-scoped token (Basic Auth)", value: "false" },
-          { label: "Scoped token (OAuth Bearer)", value: "true" }
-        ] 
+          { label: "Non-scoped token", value: "false" },
+          { label: "Scoped token", value: "true" }
+        ]
       },
-      { key: "email", label: "Email", type: "text", required: true, placeholder: "you@example.com", dependsOn: { key: "useScopedToken", value: "false" } },
+      { key: "email", label: "Email", type: "text", required: true, placeholder: "you@example.com" },
       { key: "apiToken", label: "API token", type: "secret", required: true },
     ],
   },
@@ -73,17 +73,17 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
     scopeNote: "API token inherits your Atlassian account's space permissions — account needs Space View and Add Page Comments on the target space",
     fields: [
       { key: "siteUrl", label: "Site URL", type: "text", required: true, placeholder: "https://your-domain.atlassian.net" },
-      { 
-        key: "useScopedToken", 
-        label: "Authentication Type", 
-        type: "radio", 
-        required: true, 
+      {
+        key: "useScopedToken",
+        label: "Authentication Type",
+        type: "radio",
+        required: true,
         options: [
-          { label: "Non-scoped token (Basic Auth)", value: "false" },
-          { label: "Scoped token (OAuth Bearer)", value: "true" }
-        ] 
+          { label: "Non-scoped token", value: "false" },
+          { label: "Scoped token", value: "true" }
+        ]
       },
-      { key: "email", label: "Email", type: "text", required: true, placeholder: "you@example.com", dependsOn: { key: "useScopedToken", value: "false" } },
+      { key: "email", label: "Email", type: "text", required: true, placeholder: "you@example.com" },
       { key: "apiToken", label: "API token", type: "secret", required: true },
     ],
   },
