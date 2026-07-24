@@ -206,7 +206,13 @@ class AgentRepository:
                 existing_role_ids = set(
                     session.exec(
                         select(AgentAccessRole.id)
-                        .where(col(AgentAccessRole.id).in_(desired_role_ids))
+                        .where(
+                            col(AgentAccessRole.id).in_(desired_role_ids),
+                            or_(
+                                col(AgentAccessRole.is_system).is_(True),
+                                col(AgentAccessRole.organization_id) == organization_id,
+                            ),
+                        )
                         .with_for_update()
                     ).all()
                 )
