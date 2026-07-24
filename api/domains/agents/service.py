@@ -76,7 +76,7 @@ from api.domains.agents.repository import AgentRepository
 from api.domains.agents.runtime_policy import build_chat_commands_policy_md
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.token_service import SlackConfigTokenService
-from api.domains.rbac.catalog import PermissionKey
+from api.domains.rbac.catalog import OrganizationRole, PermissionKey
 from api.domains.skills.models import Skill
 from api.domains.skills.repository import SkillRepository
 from api.domains.templates.models import TemplateRead
@@ -98,10 +98,10 @@ from api.infrastructure.slack.client import (
     SlackClient,
     SlackFetchError,
 )
+from api.infrastructure.slack.config_token import update_slack_app_name
 from api.infrastructure.telegram.client import (
     validate_bot_token as validate_telegram_bot_token,
 )
-from api.infrastructure.slack.config_token import update_slack_app_name
 
 logger = logging.getLogger(__name__)
 
@@ -472,10 +472,16 @@ class AgentService:
                     detail="Required template skills must be included in skill_ids",
                 )
 
+        # Owners/Admins already have implicit full access to every Agent (see
+        # ShareAddMember, which refuses to grant them explicit access too), so an
+        # explicit AgentAccess row is only meaningful — and only ever offered for
+        # editing in the Share dialog — for creators who are plain Members.
         persisted_membership = context.user_organization_map.get(org_id)
         creator_membership_id = (
             persisted_membership.id
-            if persisted_membership is not None and persisted_membership.user_id == context.user.id
+            if persisted_membership is not None
+            and persisted_membership.user_id == context.user.id
+            and persisted_membership.role == OrganizationRole.MEMBER
             else None
         )
         self.repository.create_with_creator_access(agent, creator_membership_id)
