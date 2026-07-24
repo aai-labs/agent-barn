@@ -30,12 +30,14 @@ from api.domains.agents.service import AgentService
 from api.tests.steps.agent import (
     FAKE_LITELLM_KEY,
     TEST_ENCRYPTION_KEY,
+    TEST_SLACK_BOT_TOKEN,
     MockK8sModule,
     MockLiteLLMModule,
     skill_is_assigned_to_agent,
     there_is_an_agent,
     there_is_a_skill,
     there_is_a_skill_for_another_org,
+    there_is_an_agent_in_another_org,
     use_org_for_auth,
 )
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
@@ -2876,3 +2878,147 @@ def test_list_agents_marks_required_skills():
             assert_that(len(agents), equal_to(1))
             jira = next(s for s in agents[0]["skills"] if s["id"] == skill_id)
             assert_that(jira["required"], equal_to(True))
+
+
+# --- Bot token uniqueness ---
+
+
+def test_create_agent_duplicate_bot_token_returns_409():
+    with given([*_GIVEN, there_is_an_agent(bot_token=TEST_SLACK_BOT_TOKEN)]) as context:
+        client: TestClient = context.client
+        payload = {**_VALID_CREATE, "slack_bot_token": TEST_SLACK_BOT_TOKEN}
+
+        with when("I create a second agent with the same bot token"):
+            response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("it returns 409 with a message about the conflict"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+            assert_that(response.json()["detail"], contains_string("already in use"))
+
+
+def test_create_agent_different_bot_token_succeeds():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I create a second agent with a different bot token"):
+            response = client.post(_BASE, json=_VALID_CREATE, headers=_auth(context))
+
+        with then("it returns 201"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+
+
+def test_update_agent_duplicate_bot_token_returns_409():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I create two agents with different tokens"):
+            client.post(_BASE, json=_VALID_CREATE, headers=_auth(context))
+            agent_b = client.post(
+                _BASE,
+                json={
+                    **_VALID_CREATE,
+                    "name": "Agent B",
+                    "slack_bot_token": "xoxb-other-token",
+                    "slack_app_token": "xapp-1-other-token",
+                },
+                headers=_auth(context),
+            ).json()
+
+        with when("I update agent B to use agent A's bot token"):
+            response = client.patch(
+                f"{_BASE}/{agent_b['id']}",
+                json={"slack_bot_token": _VALID_CREATE["slack_bot_token"]},
+                headers=_auth(context),
+            )
+
+        with then("it returns 409"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+            assert_that(response.json()["detail"], contains_string("already in use"))
+
+
+def test_update_agent_same_token_no_conflict():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I create an agent"):
+            agent = client.post(_BASE, json=_VALID_CREATE, headers=_auth(context)).json()
+
+        with when("I update it with the same bot token plus a name change"):
+            response = client.patch(
+                f"{_BASE}/{agent['id']}",
+                json={
+                    "name": "Renamed",
+                    "slack_bot_token": _VALID_CREATE["slack_bot_token"],
+                },
+                headers=_auth(context),
+            )
+
+        with then("it returns 200"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+
+
+def test_create_agent_reuses_token_of_deleted_agent():
+    with given([*_GIVEN, there_is_an_agent(deleted=True, bot_token=TEST_SLACK_BOT_TOKEN)]) as context:
+        client: TestClient = context.client
+        payload = {**_VALID_CREATE, "slack_bot_token": TEST_SLACK_BOT_TOKEN}
+
+        with when("I create a new agent with the deleted agent's bot token"):
+            response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("it returns 201 because deleted agents release their tokens"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+
+
+def test_delete_agent_frees_bot_token_for_reuse():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        payload = {**_VALID_CREATE, "slack_bot_token": "xoxb-reusable-token"}
+
+        with when("I create an agent then delete it"):
+            agent = client.post(_BASE, json=payload, headers=_auth(context)).json()
+            delete_resp = client.delete(f"{_BASE}/{agent['id']}", headers=_auth(context))
+
+        with then("deletion succeeds"):
+            assert_that(delete_resp.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+
+        with when("I create a new agent with the same bot token"):
+            response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("it returns 201"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+
+
+def test_create_agent_duplicate_bot_token_cross_org_hides_name():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent_in_another_org(name="Secret Agent", bot_token=TEST_SLACK_BOT_TOKEN),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("I create an agent using a bot token owned by another org's agent"):
+            payload = {**_VALID_CREATE, "slack_bot_token": TEST_SLACK_BOT_TOKEN}
+            response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("it returns 409 without revealing the other org's agent name"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+            detail = response.json()["detail"]
+            assert_that(detail, contains_string("another agent"))
+            assert_that(detail, is_not(contains_string("Secret Agent")))
+
+
+def test_create_agent_duplicate_token_does_not_leave_orphan():
+    with given([*_GIVEN, there_is_an_agent(bot_token=TEST_SLACK_BOT_TOKEN)]) as context:
+        client: TestClient = context.client
+
+        with when("I try to create an agent with a duplicate bot token"):
+            payload = {**_VALID_CREATE, "slack_bot_token": TEST_SLACK_BOT_TOKEN}
+            response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("it returns 409"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+
+        with then("no orphaned agent row is left behind"):
+            agents = client.get(_BASE, headers=_auth(context)).json()["items"]
+            assert_that(len(agents), equal_to(1))

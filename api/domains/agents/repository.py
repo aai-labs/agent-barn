@@ -4,8 +4,10 @@ from uuid import UUID
 
 from injector import inject, singleton
 from sqlalchemy import exists, func, or_
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
+from api.domains.agents.exceptions import BotTokenConflictHTTPException
 from api.domains.agents.models import (
     Agent,
     AgentAccess,
@@ -324,8 +326,27 @@ class AgentRepository:
             return session.exec(query).first()
 
     def save_slack_config(self, config: AgentSlackConfig) -> AgentSlackConfig:
-        self.delegate.save(config)
+        try:
+            self.delegate.save(config)
+        except IntegrityError as e:
+            if "ix_agent_slack_config_bot_token_hash" in str(e).lower():
+                raise BotTokenConflictHTTPException("another agent")
+            raise
         return config
+
+    def find_active_agent_by_bot_token_hash(
+        self, bot_token_hash: str, exclude_agent_id: UUID | None = None
+    ) -> Agent | None:
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(Agent)
+                .join(AgentSlackConfig, col(AgentSlackConfig.agent_id) == col(Agent.id))
+                .where(col(AgentSlackConfig.bot_token_hash) == bot_token_hash)
+                .where(col(Agent.deleted_at).is_(None))
+            )
+            if exclude_agent_id is not None:
+                query = query.where(col(Agent.id) != exclude_agent_id)
+            return session.exec(query).first()
 
     def get_slack_configs_for_agents(self, agent_ids: list[UUID]) -> dict[UUID, AgentSlackConfig]:
         if not agent_ids:
@@ -505,3 +526,6 @@ class AgentRepository:
     def save(self, agent: Agent) -> Agent:
         self.delegate.save(agent)
         return agent
+
+    def hard_delete(self, agent_id: UUID) -> None:
+        self.delegate.delete_one(Agent, agent_id)

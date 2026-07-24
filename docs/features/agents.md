@@ -21,6 +21,7 @@ An Agent is the central operational aggregate. It connects organization tenancy,
 - Runtime and platform are separate. Hermes supports Slack and Telegram; OpenClaw supports Slack, Teams, and Telegram.
 - Persisted lifecycle states are `STOPPED`, `RUNNING`, and `ERROR`.
 - Slack agents require bot and app tokens. Teams agents require app ID, app password, and tenant ID. Telegram agents require a bot token.
+- Each active Slack agent must use a distinct bot token (enforced globally); creating or updating with a duplicate returns 409. Deleting an agent releases its token for reuse.
 - Platform is not changed through agent update. Runtime/platform compatibility is schema-validated.
 - Running agents reject configuration updates.
 - Template-required skills are validated as explicit assignments during agent create, update, and repin, and cannot be removed while currently required.
@@ -45,7 +46,7 @@ Starting an already running agent and stopping an agent that is not running are 
 
 ### Create
 
-Creation requires `agent.create`, resolves the requested template version or the latest version, validates required skills and provider credentials, and atomically persists the Agent with creator provenance and explicit Agent Owner access before platform configuration. It then persists encrypted platform/integration configuration, assigns skills, and creates a per-agent LiteLLM key when configured. New Agents default Agent General Access to Restricted, so no other Member receives access automatically. Teams and Telegram creation continues into start; Slack creation remains stopped.
+Creation requires `agent.create`, resolves the requested template version or the latest version, validates required skills and provider credentials, and atomically persists the Agent with creator provenance and explicit Agent Owner access before platform configuration. It then persists encrypted platform/integration configuration, assigns skills, and creates a per-agent LiteLLM key when configured. Bot token uniqueness is validated across all active agents before persisting Slack credentials. New Agents default Agent General Access to Restricted, so no other Member receives access automatically. Teams and Telegram creation continues into start; Slack creation remains stopped.
 
 ### Update
 
@@ -57,7 +58,7 @@ Start renders the pinned template, decrypts credentials, selects Hermes/OpenClaw
 
 ### Stop and delete
 
-Stop snapshots logs before removing active runtime resources and marking the agent stopped. Delete removes resources, soft-deletes the row, and preserves the record for history and cost attribution.
+Stop snapshots logs before removing active runtime resources and marking the agent stopped. Delete removes resources, soft-deletes the row, and preserves the record for history and cost attribution. Deletion also clears the Slack bot token hash, releasing the token for reuse by another agent.
 
 ### Manage access
 
