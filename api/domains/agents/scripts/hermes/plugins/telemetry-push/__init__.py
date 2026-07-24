@@ -92,7 +92,7 @@ def _flush():
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req) as resp:
+        with urllib.request.urlopen(req):
             pass
     except Exception as e:
         logger.warning("telemetry-push flush failed: %s", e)
