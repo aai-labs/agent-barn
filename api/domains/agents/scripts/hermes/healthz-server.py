@@ -95,6 +95,48 @@ threading.Thread(target=_poll, daemon=True).start()
 threading.Thread(target=_poll_tokens, daemon=True).start()
 
 
+def _snapshot() -> tuple:
+    """One consistent read of both caches; handlers stay lock-free."""
+    with _lock:
+        return (
+            _cache["ok"],
+            _cache["ever_connected"],
+            _cache["reason"],
+            _token_cache["ok"],
+            _token_cache["reason"],
+        )
+
+
+def _metrics_text(ok, ever, tok_ok) -> str:
+    # Token gauge stays 1 while unknown/starting; 0 only on a definite
+    # failure, so a slow first validation never trips an alert.
+    lines = [
+        "# HELP agent_healthz_ok 1 if the agent runtime is reachable, 0 otherwise",
+        "# TYPE agent_healthz_ok gauge",
+        f"agent_healthz_ok {1 if ok else 0}",
+        "# HELP agent_healthz_ever_connected 1 once the runtime has connected at least once",
+        "# TYPE agent_healthz_ever_connected gauge",
+        f"agent_healthz_ever_connected {1 if ever else 0}",
+        "# HELP agent_slack_tokens_ok 0 if Slack token validation definitely failed, 1 otherwise",
+        "# TYPE agent_slack_tokens_ok gauge",
+        f"agent_slack_tokens_ok {0 if tok_ok is False else 1}",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _healthz_result(ok, ever, reason, tok_ok, tok_reason) -> tuple[int, dict]:
+    # Token failures surface immediately as errors
+    if tok_ok is False:
+        return 500, {"status": "error", "reason": tok_reason}
+    if ok is None or tok_ok is None:
+        return 503, {"status": "starting"}
+    if ok:
+        return 200, {"status": "ok"}
+    if ever:
+        return 500, {"status": "error", "reason": reason}
+    return 503, {"status": "starting", "reason": reason}
+
+
 class _Handler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: object) -> None:
         pass
@@ -103,45 +145,11 @@ class _Handler(BaseHTTPRequestHandler):
         if self.path == "/ready":
             self._send(200, {"ready": True})
         elif self.path == "/metrics":
-            with _lock:
-                ok = _cache["ok"]
-                ever = _cache["ever_connected"]
-                tok_ok = _token_cache["ok"]
-            # Token gauge stays 1 while unknown/starting; 0 only on a definite
-            # failure, so a slow first validation never trips an alert.
-            lines = [
-                "# HELP agent_healthz_ok 1 if the agent runtime is reachable, 0 otherwise",
-                "# TYPE agent_healthz_ok gauge",
-                f"agent_healthz_ok {1 if ok else 0}",
-                "# HELP agent_healthz_ever_connected 1 once the runtime has connected at least once",
-                "# TYPE agent_healthz_ever_connected gauge",
-                f"agent_healthz_ever_connected {1 if ever else 0}",
-                "# HELP agent_slack_tokens_ok 0 if Slack token validation definitely failed, 1 otherwise",
-                "# TYPE agent_slack_tokens_ok gauge",
-                f"agent_slack_tokens_ok {0 if tok_ok is False else 1}",
-            ]
-            self._send_text(200, "\n".join(lines) + "\n")
+            ok, ever, _, tok_ok, _ = _snapshot()
+            self._send_text(200, _metrics_text(ok, ever, tok_ok))
         elif self.path == "/healthz":
-            with _lock:
-                ok = _cache["ok"]
-                ever = _cache["ever_connected"]
-                reason = _cache["reason"]
-                tok_ok = _token_cache["ok"]
-                tok_reason = _token_cache["reason"]
-
-            # Token failures surface immediately as errors
-            if tok_ok is False:
-                self._send(500, {"status": "error", "reason": tok_reason})
-                return
-
-            if ok is None or tok_ok is None:
-                self._send(503, {"status": "starting"})
-            elif ok:
-                self._send(200, {"status": "ok"})
-            elif ever:
-                self._send(500, {"status": "error", "reason": reason})
-            else:
-                self._send(503, {"status": "starting", "reason": reason})
+            code, body = _healthz_result(*_snapshot())
+            self._send(code, body)
         else:
             self.send_response(404)
             self.end_headers()

@@ -10,13 +10,15 @@ mkdir -p "$GEN"
 
 PROMTOOL_IMAGE="${PROMTOOL_IMAGE:-prom/prometheus:v3.5.0}"
 
+# --no-project --with pyyaml: the extractor only needs PyYAML, so don't
+# force a full api dependency sync (matters on fresh CI runners).
 helm template helm/monitoring \
   --show-only templates/prometheusrule.yaml \
   --set kube-prometheus-stack.grafana.adminPassword=unused \
-  | (cd api && uv run python ../helm/monitoring/tests/extract.py rules) \
+  | uv run --no-project --with pyyaml python helm/monitoring/tests/extract.py rules \
   > "$GEN/rules.yaml"
 
-(cd api && uv run python ../helm/monitoring/tests/extract.py dashboards ../helm/monitoring/dashboards) \
+uv run --no-project --with pyyaml python helm/monitoring/tests/extract.py dashboards helm/monitoring/dashboards \
   > "$GEN/dashboard-rules.yaml"
 
 docker run --rm -v "$PWD/helm/monitoring/tests:/tests:ro" \

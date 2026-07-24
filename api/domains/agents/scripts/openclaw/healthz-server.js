@@ -124,67 +124,55 @@ setInterval(validateTokens, TOKEN_POLL_MS);
 refresh();
 setInterval(refresh, CACHE_TTL_MS);
 
+function metricsText() {
+  const ok = cache?.ok ? 1 : 0;
+  const ever = (cache?.ok || cache?.everConnected) ? 1 : 0;
+  // Token gauge stays 1 while unknown/starting; 0 only on a definite
+  // failure, so a slow first validation never trips an alert.
+  const tokensOk = (tokenCache && !tokenCache.ok) ? 0 : 1;
+  const lines = [
+    '# HELP agent_healthz_ok 1 if the agent runtime is reachable, 0 otherwise',
+    '# TYPE agent_healthz_ok gauge',
+    `agent_healthz_ok ${ok}`,
+    '# HELP agent_healthz_ever_connected 1 once the runtime has connected at least once',
+    '# TYPE agent_healthz_ever_connected gauge',
+    `agent_healthz_ever_connected ${ever}`,
+    '# HELP agent_slack_tokens_ok 0 if Slack token validation definitely failed, 1 otherwise',
+    '# TYPE agent_slack_tokens_ok gauge',
+    `agent_slack_tokens_ok ${tokensOk}`,
+  ];
+  return lines.join('\n') + '\n';
+}
+
+function healthzResult() {
+  // Token failure surfaces immediately as an error
+  if (tokenCache && !tokenCache.ok) return [500, { status: 'error', reason: tokenCache.reason }];
+  if (!cache || !tokenCache) return [503, { status: 'starting' }];
+  if (cache.ok) return [200, { status: 'ok' }];
+  if (cache.everConnected) return [500, { status: 'error', reason: cache.reason }];
+  return [503, { status: 'starting', reason: cache.reason }];
+}
+
+function sendJson(res, code, body) {
+  res.writeHead(code, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(body));
+}
+
 const server = http.createServer((req, res) => {
   if (req.method !== 'GET') { res.writeHead(404); res.end(); return; }
 
   if (req.url === '/ready') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ ready: true }));
-    return;
-  }
-
-  if (req.url === '/metrics') {
-    const ok = cache?.ok ? 1 : 0;
-    const ever = (cache?.ok || cache?.everConnected) ? 1 : 0;
-    // Token gauge stays 1 while unknown/starting; 0 only on a definite
-    // failure, so a slow first validation never trips an alert.
-    const tokensOk = (tokenCache && !tokenCache.ok) ? 0 : 1;
-    const lines = [
-      '# HELP agent_healthz_ok 1 if the agent runtime is reachable, 0 otherwise',
-      '# TYPE agent_healthz_ok gauge',
-      `agent_healthz_ok ${ok}`,
-      '# HELP agent_healthz_ever_connected 1 once the runtime has connected at least once',
-      '# TYPE agent_healthz_ever_connected gauge',
-      `agent_healthz_ever_connected ${ever}`,
-      '# HELP agent_slack_tokens_ok 0 if Slack token validation definitely failed, 1 otherwise',
-      '# TYPE agent_slack_tokens_ok gauge',
-      `agent_slack_tokens_ok ${tokensOk}`,
-    ];
+    sendJson(res, 200, { ready: true });
+  } else if (req.url === '/metrics') {
     res.writeHead(200, { 'Content-Type': 'text/plain; version=0.0.4; charset=utf-8' });
-    res.end(lines.join('\n') + '\n');
-    return;
+    res.end(metricsText());
+  } else if (req.url === '/healthz') {
+    const [code, body] = healthzResult();
+    sendJson(res, code, body);
+  } else {
+    res.writeHead(404);
+    res.end();
   }
-
-  if (req.url === '/healthz') {
-    // Token failure surfaces immediately as an error
-    if (tokenCache && !tokenCache.ok) {
-      res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ status: 'error', reason: tokenCache.reason }));
-      return;
-    }
-
-    if (!cache || !tokenCache) {
-      res.writeHead(503, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ status: 'starting' }));
-      return;
-    }
-    if (cache.ok) {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ status: 'ok' }));
-      return;
-    }
-    if (cache.everConnected) {
-      res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ status: 'error', reason: cache.reason }));
-      return;
-    }
-    res.writeHead(503, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: 'starting', reason: cache.reason }));
-    return;
-  }
-
-  res.writeHead(404);
-  res.end();
 });
 
 process.on('SIGTERM', () => server.close(() => process.exit(0)));
