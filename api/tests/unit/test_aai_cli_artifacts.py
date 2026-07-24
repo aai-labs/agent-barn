@@ -109,6 +109,57 @@ def test_config_toml_emits_only_present_store_profiles():
     assert "ghp_tok" not in toml
 
 
+def test_config_toml_jira_scoped_token_uses_gateway_url():
+    jira_scoped = validate_content(
+        SecretProvider.JIRA,
+        {
+            "site_url": "https://x.atlassian.net",
+            "email": "svc-account@x.com",
+            "api_token": "jira_scoped_tok",
+            "use_scoped_token": True,
+            "cloud_id": "cloud-abc",
+        },
+    )
+    toml = build_config_toml({SecretProvider.JIRA: jira_scoped})
+    assert "[profiles.jira-work]" in toml
+    assert 'auth_type = "basic_api_token"' in toml
+    assert 'site_url = "https://api.atlassian.com/ex/jira/cloud-abc"' in toml
+    assert 'email = "svc-account@x.com"' in toml
+
+
+def test_config_toml_jira_scoped_token_missing_cloud_id_skips_profile():
+    jira_scoped_no_cloud_id = validate_content(
+        SecretProvider.JIRA,
+        {
+            "site_url": "https://x.atlassian.net",
+            "email": "svc-account@x.com",
+            "api_token": "jira_scoped_tok",
+            "use_scoped_token": True,
+        },
+    )
+    toml = build_config_toml({SecretProvider.JIRA: jira_scoped_no_cloud_id})
+    assert "[profiles.jira-work]" not in toml
+    assert "cloud_id missing" in toml
+
+
+def test_config_toml_confluence_scoped_token_uses_gateway_url():
+    confluence_scoped = validate_content(
+        SecretProvider.CONFLUENCE,
+        {
+            "site_url": "https://x.atlassian.net",
+            "email": "svc-account@x.com",
+            "api_token": "conf_scoped_tok",
+            "use_scoped_token": True,
+            "cloud_id": "cloud-abc",
+        },
+    )
+    toml = build_config_toml({SecretProvider.CONFLUENCE: confluence_scoped})
+    assert "[profiles.confluence-work]" in toml
+    assert 'auth_type = "basic_api_token"' in toml
+    assert 'site_url = "https://api.atlassian.com/ex/confluence/cloud-abc"' in toml
+    assert 'email = "svc-account@x.com"' in toml
+
+
 def test_config_toml_gmail_uses_secret_store():
     toml = build_config_toml({SecretProvider.GMAIL: _GMAIL})
     assert "[profiles.gmail-work]" in toml

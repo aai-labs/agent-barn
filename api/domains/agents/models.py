@@ -117,14 +117,22 @@ class GithubContent(_RepoListCompat):
 
 class JiraContent(SecretContent):
     site_url: str
+    use_scoped_token: bool = False
     email: str
     api_token: str
+    # Populated at save time for scoped tokens: the API Gateway URL (site_url
+    # doesn't accept scoped tokens directly) needs the resolved cloud ID.
+    cloud_id: str = ""
 
 
 class ConfluenceContent(SecretContent):
     site_url: str
+    use_scoped_token: bool = False
     email: str
     api_token: str
+    # Populated at save time for scoped tokens: the API Gateway URL (site_url
+    # doesn't accept scoped tokens directly) needs the resolved cloud ID.
+    cloud_id: str = ""
 
 
 class BitbucketContent(_RepoListCompat):

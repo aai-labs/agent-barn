@@ -17,6 +17,7 @@ import {
 import { SlackConfigPanel } from "./slack-config-panel";
 import { TelegramConfigPanel } from "./telegram-config-panel";
 import {
+  coerceBooleanFields,
   hasIncompleteIntegration,
   expandGithubContent,
   type IntegrationDraft,
@@ -266,7 +267,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
         ],
         secrets: skillCredentials.map((c) => ({
           provider: c.provider,
-          content: c.provider === "github" ? expandGithubContent(c.content) : c.content,
+          content: coerceBooleanFields(c.provider === "github" ? expandGithubContent(c.content) : c.content),
         })),
         approvalMode,
         ...(platform === "telegram"

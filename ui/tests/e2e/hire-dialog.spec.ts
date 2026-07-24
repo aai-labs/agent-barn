@@ -481,6 +481,9 @@ test.describe("Hire Dialog — Skills step", () => {
 
     await expect(page.getByText("Required credentials", { exact: true })).toBeVisible();
     await expect(page.getByPlaceholder(/atlassian\.net/)).toBeVisible();
+    await expect(page.getByText("Authentication Type")).toBeVisible();
+
+    // Email field is always visible — scoped and non-scoped tokens both use Basic Auth
     await expect(page.getByPlaceholder("you@example.com")).toBeVisible();
   });
 
