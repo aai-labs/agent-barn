@@ -19,7 +19,7 @@ from alembic import op
 from cryptography.fernet import Fernet
 
 revision: str = "a7b8c9d0e1f2"
-down_revision: Union[str, None] = "d3f9a1c7b2e5"
+down_revision: Union[str, None] = "dbec52536f66"
 branch_labels: Union[str, None] = None
 depends_on: Union[str, None] = None
 
