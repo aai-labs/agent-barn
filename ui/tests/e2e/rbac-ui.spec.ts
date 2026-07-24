@@ -62,6 +62,8 @@ test.describe("RBAC-aware Agent controls", () => {
       },
     });
     await data.agents.interceptGetAgentTemplateRequest();
+    await data.agents.interceptGetAgentHealthRequest();
+    await data.agents.interceptGetConversationChannelsRequest();
 
     await rbac.gotoAgent(MOCK_AGENT_ID);
 
@@ -92,6 +94,9 @@ test.describe("RBAC-aware Agent controls", () => {
       },
     });
     await data.agents.interceptGetAgentTemplateRequest();
+    await data.agents.interceptGetAgentHealthRequest();
+    await data.agents.interceptGetConversationChannelsRequest();
+    await data.agents.interceptGetTemplatesRequest();
 
     await rbac.gotoAgent(MOCK_AGENT_ID);
 
@@ -127,6 +132,9 @@ test.describe("RBAC-aware Agent controls", () => {
       },
     });
     await data.agents.interceptGetAgentTemplateRequest();
+    await data.agents.interceptGetAgentHealthRequest();
+    await data.agents.interceptGetConversationChannelsRequest();
+    await data.agents.interceptGetTemplatesRequest();
 
     await page.goto(
       `/dashboard/${TEST_ORG_ID}/agents/${MOCK_AGENT_ID}?configTab=danger`,
@@ -144,6 +152,8 @@ test.describe("RBAC-aware Agent controls", () => {
     await data.users.interceptGetOrganizationsRequest();
     await data.agents.interceptGetAgentRequest({ body: mockAgent });
     await data.agents.interceptGetAgentTemplateRequest();
+    await data.agents.interceptGetAgentHealthRequest();
+    await data.agents.interceptGetConversationChannelsRequest();
 
     await rbac.gotoAgent(MOCK_AGENT_ID);
 

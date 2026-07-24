@@ -310,6 +310,77 @@ export class AgentDataSupport {
     );
   }
 
+  async interceptGetAgentHealthRequest({
+    agentId = MOCK_AGENT_ID,
+    status = 200,
+    body,
+  }: {
+    agentId?: string;
+    status?: number;
+    body?: unknown;
+  } = {}) {
+    await this.page.route(`**/api/v1/agents/${agentId}/healthz`, async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status,
+        contentType: "application/json",
+        body: JSON.stringify(body ?? { status: "ok" }),
+      });
+    });
+  }
+
+  async interceptGetConversationChannelsRequest({
+    agentId = MOCK_AGENT_ID,
+    status = 200,
+    detail = "Unable to load conversation channels",
+    body,
+  }: {
+    agentId?: string;
+    status?: number;
+    detail?: string;
+    body?: unknown;
+  } = {}) {
+    await this.page.route(
+      `**/api/v1/agents/${agentId}/conversations/channels`,
+      async (route) => {
+        if (route.request().method() !== "GET") {
+          await route.fallback();
+          return;
+        }
+        await route.fulfill({
+          status,
+          contentType: "application/json",
+          body: JSON.stringify(status >= 400 ? { detail } : (body ?? [])),
+        });
+      },
+    );
+  }
+
+  async interceptGetModelsRequest({
+    status = 200,
+    detail = "Unable to load models",
+    body,
+  }: {
+    status?: number;
+    detail?: string;
+    body?: unknown;
+  } = {}) {
+    await this.page.route("**/api/v1/agents/models", async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status,
+        contentType: "application/json",
+        body: JSON.stringify(status >= 400 ? { detail } : (body ?? [])),
+      });
+    });
+  }
+
   async interceptGetShareRolesRequest({
     status = 200,
     detail = "Unable to load share roles",

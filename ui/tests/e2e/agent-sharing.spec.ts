@@ -55,6 +55,8 @@ test.describe("Agent sharing", () => {
     await data.agents.interceptGetAgentTemplateRequest();
     await data.agents.interceptGetShareRolesRequest();
     await data.agents.interceptGetAgentShareRequest();
+    await data.agents.interceptGetAgentHealthRequest();
+    await data.agents.interceptGetConversationChannelsRequest();
     await data.organizations.interceptGetMembers({ members: [] });
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
