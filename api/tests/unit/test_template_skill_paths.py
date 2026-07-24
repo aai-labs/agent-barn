@@ -14,9 +14,7 @@ from api.domains.templates.predefined import PREDEFINED_TEMPLATES
 
 # Mounted path = ./skills/<skill_file_path>. See init-openclaw.js skill reconstruction.
 VALID_SKILL_PATHS = {
-    f"./skills/{f['skill_file_path']}"
-    for skill_def in AAI_CLI_PROVIDER_SKILLS
-    for f in skill_def["files"]
+    f"./skills/{f['skill_file_path']}" for skill_def in AAI_CLI_PROVIDER_SKILLS for f in skill_def["files"]
 }
 
 _PATH_RE = re.compile(r"\./skills/aai-cli/[^\s`)]+\.md")

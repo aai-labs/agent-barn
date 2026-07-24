@@ -10,9 +10,10 @@ Authentication establishes a user and membership context; Organization is the te
 
 ## Authorization invariants
 
-- Organization roles are `OWNER`, `ADMIN`, and `MEMBER`.
+- Organization Roles are the fixed `OWNER`, `ADMIN`, and `MEMBER` enum values persisted directly on Membership; current APIs expose those stable names.
 - A user has at most one membership per organization, and the database permits at most one owner membership per organization. Normal creation and transfer flows establish an owner, but global user deletion can leave an organization without one.
-- Owner and admin are organization managers. Organization deletion, ownership transfer, and sensitive admin changes require owner or superuser authority.
+- Ordinary Organization and Membership capabilities resolve the Membership's current Organization Role through the immutable code-owned Permission mapping. Organization deletion, ownership transfer, and sensitive Admin changes remain protected Organization Owner/superuser governance invariants.
+- Organization Roles do not grant per-Agent operations to Members. Organization Owner/Admin have implicit Agent Owner authority; Organization Members receive Agent authority through explicit Agent Access Roles.
 - `X-Organization-Id` selects the active organization; an absent header falls back to the process default organization.
 - Normal users require membership in the selected organization. Superusers can target organizations without persisted membership through explicit context behavior.
 - Cross-organization resource access is intentionally hidden with 404 for tenant-owned entities; known but unauthorized organization administration uses 403.
@@ -29,7 +30,7 @@ Self-registration is disabled. Accounts enter through superuser provisioning or 
 
 ## Organization and membership flows
 
-Superusers create organizations and establish an owner membership. Organization managers can administer ordinary membership; owner-only rules protect ownership and sensitive admin operations. Removing a pending member also revokes outstanding invite/reset links.
+Superusers create organizations and establish an Owner Membership. Membership list, invite, role-update, and removal workflows require their corresponding Permissions; seeded Owner/Admin roles receive them. Owner-only rules protect ownership and sensitive Admin operations. Removing a pending Member also revokes outstanding invite/reset links.
 
 The UI resolves the selected organization from the route, then remembered/default state, and applies the organization header before protected child queries run. Organization switching removes known organization-scoped query caches because those keys are not organization-dimensioned.
 
@@ -43,6 +44,8 @@ The UI resolves the selected organization from the route, then remembered/defaul
 | User administration                   | `../../api/domains/users/service.py`, `../../api/domains/users/routes.py`                                                                                                                                                                                                                                         |
 | Organization policy                   | `../../api/domains/organizations/service.py`                                                                                                                                                                                                                                                                |
 | Membership roles and constraints      | `../../api/domains/users/organization_users/models.py`                                                                                                                                                                                                                                                      |
+| Organization Role and Permission policy | `../../api/domains/rbac/catalog.py`, `../../api/domains/rbac/policy.py`                                                                                                                                                    |
+| Agent Permission and Access Role persistence | `../../api/domains/rbac/models.py`, `../../api/domains/rbac/repository.py`, `../../api/domains/rbac/seeder.py` |
 | Membership workflows                  | `../../api/domains/users/organization_users/service.py`                                                                                                                                                                                                                                                     |
 | UI user gate                          | `../../ui/src/auth/providers/user-context-provider.tsx`                                                                                                                                                                                                                                                     |
 | UI organization context               | `../../ui/src/features/organizations/providers/organization-provider.tsx`                                                                                                                                                                                                                                   |
@@ -51,6 +54,7 @@ The UI resolves the selected organization from the route, then remembered/defaul
 ## Related decisions
 
 - [`2026-07-17-explicit-organization-context.md`](../adr/2026-07-17-explicit-organization-context.md)
+- [`2026-07-21-separate-organization-and-agent-access-roles.md`](../adr/2026-07-21-separate-organization-and-agent-access-roles.md)
 
 ## Change impact
 

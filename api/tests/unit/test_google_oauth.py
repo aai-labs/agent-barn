@@ -36,10 +36,7 @@ def _extract_message(html: str) -> dict:
 
 
 def test_redirect_uri_uses_web_app_url():
-    assert (
-        oauth._redirect_uri(_config())
-        == "http://localhost:3000/api/v1/integrations/google/callback"
-    )
+    assert oauth._redirect_uri(_config()) == "http://localhost:3000/api/v1/integrations/google/callback"
 
 
 def test_state_round_trip_valid():
@@ -54,9 +51,7 @@ def test_state_rejects_wrong_signing_key():
 
 def test_state_rejects_wrong_token_type():
     cfg = _config()
-    forged = jwt.encode(
-        {"typ": "access"}, cfg.secret_signing_key, algorithm=JWT_ENCODING_ALGORITHM
-    )
+    forged = jwt.encode({"typ": "access"}, cfg.secret_signing_key, algorithm=JWT_ENCODING_ALGORITHM)
     assert oauth._state_is_valid(forged, cfg) is False
 
 
@@ -68,9 +63,7 @@ def test_state_rejects_garbage():
 
 
 def test_authorize_url_contains_expected_params():
-    url = oauth.google_authorize_url(_context=_NO_CONTEXT, config=_config())[
-        "authorize_url"
-    ]
+    url = oauth.google_authorize_url(_context=_NO_CONTEXT, config=_config())["authorize_url"]
     assert url.startswith(oauth.GOOGLE_AUTH_ENDPOINT)
     assert "access_type=offline" in url
     assert "prompt=consent" in url
@@ -80,9 +73,7 @@ def test_authorize_url_contains_expected_params():
 
 def test_authorize_url_requires_configured_client():
     with pytest.raises(HTTPException) as exc:
-        oauth.google_authorize_url(
-            _context=_NO_CONTEXT, config=_config(google_cloud_client_id="")
-        )
+        oauth.google_authorize_url(_context=_NO_CONTEXT, config=_config(google_cloud_client_id=""))
     assert exc.value.status_code == 503
 
 
@@ -134,9 +125,7 @@ def test_callback_requires_code():
 
 
 def test_callback_propagates_google_denial():
-    resp = oauth.google_callback(
-        config=_config(), code=None, state=None, error="access_denied"
-    )
+    resp = oauth.google_callback(config=_config(), code=None, state=None, error="access_denied")
     msg = _extract_message(resp.body.decode())
     assert "access_denied" in msg["error"]
 
@@ -159,14 +148,10 @@ def test_token_exchange_success_uses_config_client(monkeypatch):
         assert data["client_id"] == cfg.google_cloud_client_id
         assert data["client_secret"] == cfg.google_cloud_client_secret
         assert data["grant_type"] == "authorization_code"
-        return SimpleNamespace(
-            status_code=200, json=lambda: {"refresh_token": "rt-123"}
-        )
+        return SimpleNamespace(status_code=200, json=lambda: {"refresh_token": "rt-123"})
 
     monkeypatch.setattr(oauth.httpx, "post", fake_post)
-    result = oauth.google_token_exchange(
-        body=_token_request(), _context=_NO_CONTEXT, config=cfg
-    )
+    result = oauth.google_token_exchange(body=_token_request(), _context=_NO_CONTEXT, config=cfg)
     assert result == {"refresh_token": "rt-123"}
 
 
@@ -208,14 +193,10 @@ def test_token_exchange_errors_when_no_refresh_token(monkeypatch):
     monkeypatch.setattr(
         oauth.httpx,
         "post",
-        lambda *a, **k: SimpleNamespace(
-            status_code=200, json=lambda: {"access_token": "at-only"}
-        ),
+        lambda *a, **k: SimpleNamespace(status_code=200, json=lambda: {"access_token": "at-only"}),
     )
     with pytest.raises(HTTPException) as exc:
-        oauth.google_token_exchange(
-            body=_token_request(), _context=_NO_CONTEXT, config=_config()
-        )
+        oauth.google_token_exchange(body=_token_request(), _context=_NO_CONTEXT, config=_config())
     assert exc.value.status_code == 400
 
 
@@ -226,7 +207,5 @@ def test_token_exchange_errors_on_non_200(monkeypatch):
         lambda *a, **k: SimpleNamespace(status_code=400, json=lambda: {}),
     )
     with pytest.raises(HTTPException) as exc:
-        oauth.google_token_exchange(
-            body=_token_request(), _context=_NO_CONTEXT, config=_config()
-        )
+        oauth.google_token_exchange(body=_token_request(), _context=_NO_CONTEXT, config=_config())
     assert exc.value.status_code == 400

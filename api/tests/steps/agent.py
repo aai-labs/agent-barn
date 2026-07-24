@@ -9,15 +9,18 @@ from injector import Module, provider, singleton
 
 from api.domains.agents.models import (
     Agent,
+    AgentAccess,
     AgentPlatform,
     AgentSlackConfig,
     AgentStatus,
     AgentTeamsConfig,
+    AgentTelegramConfig,
     AgentType,
     compute_bot_token_hash,
 )
 from api.domains.agents.repository import AgentRepository
 from api.domains.auth.utils import set_default_org_id
+from api.domains.rbac.catalog import AGENT_EDITOR_ROLE_ID
 from api.domains.templates.defaults import (
     DEFAULT_AGENTS_MD,
     DEFAULT_BOOT_MD,
@@ -40,6 +43,7 @@ TEST_SLACK_APP_TOKEN = "xapp-1-test-app-token"
 TEST_TEAMS_APP_ID = "test-teams-app-id"
 TEST_TEAMS_APP_PASSWORD = "test-teams-app-password"
 TEST_TEAMS_TENANT_ID = "test-tenant-id"
+TEST_TELEGRAM_BOT_TOKEN = "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
 FAKE_LITELLM_KEY = "sk-fake-litellm-key-for-tests"
 
 
@@ -72,13 +76,13 @@ def there_is_an_agent(
     soul_md: str = "# Soul\n\nTest soul.",
     tools_md: str = DEFAULT_TOOLS_MD,
     bot_token: str | None = None,
+    created_by_user_id: UUID | None = None,
+    creator_membership_id: UUID | None = None,
 ):
     def step(context):
         org_id = organization_id or context.organization.id
         repository: AgentRepository = context.injector.get(AgentRepository)
-        template_repository: TemplateRepository = context.injector.get(
-            TemplateRepository
-        )
+        template_repository: TemplateRepository = context.injector.get(TemplateRepository)
 
         template = AgentTemplate(
             organization_id=org_id,
@@ -99,6 +103,7 @@ def there_is_an_agent(
 
         agent = Agent(
             organization_id=org_id,
+            created_by_user_id=created_by_user_id,
             name=name,
             litellm_key_encrypted=encrypt_token(FAKE_LITELLM_KEY, TEST_ENCRYPTION_KEY),
             model=model,
@@ -112,35 +117,58 @@ def there_is_an_agent(
         if deleted:
             agent.deleted_at = datetime.datetime.now(datetime.timezone.utc)
 
-        repository.save(agent)
+        if creator_membership_id is None:
+            repository.save(agent)
+        else:
+            repository.create_with_creator_access(agent, creator_membership_id)
 
         if platform == AgentPlatform.SLACK:
             effective_bot_token = bot_token or f"xoxb-test-{uuid_mod.uuid4()}"
             slack_config = AgentSlackConfig(
                 agent_id=agent.id,
-                bot_token_encrypted=encrypt_token(
-                    effective_bot_token, TEST_ENCRYPTION_KEY
-                ),
-                app_token_encrypted=encrypt_token(
-                    TEST_SLACK_APP_TOKEN, TEST_ENCRYPTION_KEY
-                ),
-                bot_token_hash=None
-                if deleted
-                else compute_bot_token_hash(effective_bot_token),
+                bot_token_encrypted=encrypt_token(effective_bot_token, TEST_ENCRYPTION_KEY),
+                app_token_encrypted=encrypt_token(TEST_SLACK_APP_TOKEN, TEST_ENCRYPTION_KEY),
+                bot_token_hash=None if deleted else compute_bot_token_hash(effective_bot_token),
             )
             repository.save_slack_config(slack_config)
         elif platform == AgentPlatform.TEAMS:
             teams_config = AgentTeamsConfig(
                 agent_id=agent.id,
                 app_id_encrypted=encrypt_token(TEST_TEAMS_APP_ID, TEST_ENCRYPTION_KEY),
-                app_password_encrypted=encrypt_token(
-                    TEST_TEAMS_APP_PASSWORD, TEST_ENCRYPTION_KEY
-                ),
+                app_password_encrypted=encrypt_token(TEST_TEAMS_APP_PASSWORD, TEST_ENCRYPTION_KEY),
                 tenant_id=TEST_TEAMS_TENANT_ID,
             )
             repository.save_teams_config(teams_config)
+        elif platform == AgentPlatform.TELEGRAM:
+            telegram_config = AgentTelegramConfig(
+                agent_id=agent.id,
+                bot_token_encrypted=encrypt_token(TEST_TELEGRAM_BOT_TOKEN, TEST_ENCRYPTION_KEY),
+                bot_username="test_bot",
+            )
+            repository.save_telegram_config(telegram_config)
 
         context.agent = agent
+
+    return step
+
+
+def there_is_agent_access(
+    membership_id: UUID | None = None,
+    agent_id: UUID | None = None,
+    access_role_id: UUID = AGENT_EDITOR_ROLE_ID,
+):
+    def step(context):
+        repository: AgentRepository = context.injector.get(AgentRepository)
+        membership = membership_id or context.organization_user.id
+        target_agent = agent_id or context.agent.id
+        repository.delegate.save(
+            AgentAccess(
+                organization_id=context.organization.id,
+                membership_id=membership,
+                agent_id=target_agent,
+                access_role_id=access_role_id,
+            )
+        )
 
     return step
 
@@ -160,9 +188,7 @@ def skill_is_assigned_to_agent():
         from api.domains.agents.repository import AgentRepository
 
         repo: AgentRepository = context.injector.get(AgentRepository)
-        repo.save_skills(
-            [AgentSkill(agent_id=context.agent.id, skill_id=context.skill.id)]
-        )
+        repo.save_skills([AgentSkill(agent_id=context.agent.id, skill_id=context.skill.id)])
 
     return step
 

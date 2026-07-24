@@ -13,6 +13,14 @@ export const AgentTeamsConfigSchema = z.object({
   tenantId: z.string(),
 });
 
+export const AgentTelegramConfigSchema = z.object({
+  allowedUserIds: z.array(z.string()),
+  allowedChatIds: z.array(z.string()),
+  groupPolicy: z.enum(["open", "allowlist"]),
+  dmPolicy: z.enum(["off", "open", "allowlist"]),
+  botUsername: z.string().nullable().optional(),
+});
+
 export const AgentSecretReadSchema = z.object({
   provider: z.string(),
   secretName: z.string(),
@@ -39,11 +47,22 @@ export const AgentAssignedSkillSchema = z.object({
   updatedAt: z.string(),
 });
 
+export const AgentPermissionKeySchema = z.enum([
+  "agent.read",
+  "agent.update",
+  "agent.delete",
+  "agent.lifecycle.manage",
+  "agent.access.manage",
+  "agent.secret.manage",
+  "activity.read",
+  "cost.read",
+]);
+
 export const AgentSchema = z.object({
   id: z.string().uuid(),
   name: z.string(),
   status: z.enum(["STOPPED", "RUNNING", "ERROR"]),
-  platform: z.enum(["slack", "teams"]),
+  platform: z.enum(["slack", "teams", "telegram"]),
   agentType: z.enum(["openclaw", "hermes"]).default("openclaw"),
   organizationId: z.string().uuid(),
   templateSlug: z.string(),
@@ -52,9 +71,11 @@ export const AgentSchema = z.object({
   approvalMode: z.enum(["manual", "auto", "off"]).default("auto"),
   slackConfig: AgentSlackConfigSchema.nullable().optional(),
   teamsConfig: AgentTeamsConfigSchema.nullable().optional(),
+  telegramConfig: AgentTelegramConfigSchema.nullable().optional(),
   secrets: z.array(AgentSecretReadSchema).optional(),
   skills: z.array(AgentAssignedSkillSchema).default([]),
   webhookUrl: z.string().nullable().optional(),
+  allowedActions: z.array(AgentPermissionKeySchema).default([]),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -200,10 +221,12 @@ export const AgentLogHistoryReadSchema = z.object({
 
 
 export type CommandApprovalMode = "manual" | "auto" | "off";
+export type AgentPermissionKey = z.infer<typeof AgentPermissionKeySchema>;
 export type Agent = z.infer<typeof AgentSchema>;
 export type AgentAssignedSkill = z.infer<typeof AgentAssignedSkillSchema>;
 export type AgentSlackConfig = z.infer<typeof AgentSlackConfigSchema>;
 export type AgentTeamsConfig = z.infer<typeof AgentTeamsConfigSchema>;
+export type AgentTelegramConfig = z.infer<typeof AgentTelegramConfigSchema>;
 export type AgentHealth = z.infer<typeof AgentHealthSchema>;
 export type AgentTemplateRead = z.infer<typeof AgentTemplateReadSchema>;
 export type TemplateSource = AgentTemplateRead["templateSource"];

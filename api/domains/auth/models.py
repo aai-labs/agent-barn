@@ -59,9 +59,7 @@ class RefreshToken(BaseModel, table=True):
 
     token: str = Field()
     user_id: UUID = Field(foreign_key="user.id", nullable=False, ondelete="CASCADE")
-    expires_at: datetime = Field(
-        sa_column=Column(DateTime(timezone=True), nullable=False)
-    )
+    expires_at: datetime = Field(sa_column=Column(DateTime(timezone=True), nullable=False))
     stamp: str
 
 
@@ -73,16 +71,12 @@ class PasswordResetToken(BaseModel, table=True):
     # SHA-256 hex of the opaque token handed to the user; only the hash is stored, so a
     # DB leak alone can't be used to accept an invite or reset a password.
     token_hash: str = Field(index=True)
-    expires_at: datetime = Field(
-        sa_column=Column(DateTime(timezone=True), nullable=False)
-    )
+    expires_at: datetime = Field(sa_column=Column(DateTime(timezone=True), nullable=False))
 
 
 class UserSlackConfigToken(BaseModel, table=True):
     __tablename__: str = "user_slack_config_token"
-    __table_args__ = (
-        UniqueConstraint("user_id", name="uq_user_slack_config_token_user"),
-    )
+    __table_args__ = (UniqueConstraint("user_id", name="uq_user_slack_config_token_user"),)
 
     user_id: UUID = Field(foreign_key="user.id", nullable=False, ondelete="CASCADE")
     access_token_encrypted: str = Field(nullable=False)
@@ -107,9 +101,7 @@ class CurrentUserContext(PydanticBaseModel):
 
     def require_current_user_organization(self) -> OrganizationUser:
         if not self.current_user_organization:
-            raise ForbiddenException(
-                detail="You don't have permission for this organization."
-            )
+            raise ForbiddenException(detail="You don't have permission for this organization.")
         return self.current_user_organization
 
     # --- Authorization helpers ---
@@ -120,9 +112,7 @@ class CurrentUserContext(PydanticBaseModel):
     # against the passed organization_id — never the request's active org — to keep
     # cross-org escalation impossible.
 
-    def has_org_role(
-        self, organization_id: UUID, roles: AbstractSet[OrganizationRole]
-    ) -> bool:
+    def has_org_role(self, organization_id: UUID, roles: AbstractSet[OrganizationRole]) -> bool:
         if self.user.is_superuser:
             return True
         membership = self.user_organization_map.get(organization_id)
@@ -137,8 +127,6 @@ class CurrentUserContext(PydanticBaseModel):
         if not self.has_org_role(organization_id, roles):
             raise ForbiddenException(detail=detail)
 
-    def require_superuser(
-        self, detail: str = "This action requires a superuser."
-    ) -> None:
+    def require_superuser(self, detail: str = "This action requires a superuser.") -> None:
         if not self.user.is_superuser:
             raise ForbiddenException(detail=detail)

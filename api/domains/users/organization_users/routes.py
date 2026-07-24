@@ -1,7 +1,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, Query, Response, status
 from fastapi_injector import Injected
 
 from api.domains.auth.models import CurrentUserContext
@@ -19,15 +19,14 @@ from api.domains.users.organization_users.service import OrganizationUserService
 member_router = APIRouter(prefix="/organizations", tags=["organization-members"])
 
 
-@member_router.get(
-    "/{organization_id}/members", response_model=list[OrganizationMemberRead]
-)
+@member_router.get("/{organization_id}/members", response_model=list[OrganizationMemberRead])
 def list_members(
     organization_id: UUID,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[OrganizationUserService, Injected(OrganizationUserService)],
+    search: Annotated[str | None, Query()] = None,
 ):
-    return service.list_members(context, organization_id)
+    return service.list_members(context, organization_id, search=search)
 
 
 @member_router.post(
@@ -45,9 +44,7 @@ def add_member(
     return MemberInviteResult(member=member, invite_link=invite_link)
 
 
-@member_router.patch(
-    "/{organization_id}/members/{user_id}", response_model=OrganizationMemberRead
-)
+@member_router.patch("/{organization_id}/members/{user_id}", response_model=OrganizationMemberRead)
 def change_member_role(
     organization_id: UUID,
     user_id: UUID,

@@ -17,9 +17,7 @@ def test_i_can_get_organization_read_with_owner_details():
             there_is_an_organization(name="Owner Org"),
         ]
     ) as context:
-        repository: OrganizationRepository = context.injector.get(
-            OrganizationRepository
-        )
+        repository: OrganizationRepository = context.injector.get(OrganizationRepository)
 
         with when("I get organization read model"):
             org_read = repository.get_read(context.organization.id)
@@ -40,9 +38,7 @@ def test_i_can_list_paginated_organizations():
             there_is_an_organization(name="Org Two"),
         ]
     ) as context:
-        repository: OrganizationRepository = context.injector.get(
-            OrganizationRepository
-        )
+        repository: OrganizationRepository = context.injector.get(OrganizationRepository)
 
         with when("I list organizations"):
             result = repository.find_all_paginated_read(OrganizationFilter())

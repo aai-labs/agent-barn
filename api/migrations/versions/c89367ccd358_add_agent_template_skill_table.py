@@ -25,16 +25,12 @@ def upgrade() -> None:
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("template_id", sa.UUID(), nullable=False),
         sa.Column("skill_id", sa.UUID(), nullable=False),
-        sa.ForeignKeyConstraint(
-            ["template_id"], ["agent_template.id"], ondelete="CASCADE"
-        ),
+        sa.ForeignKeyConstraint(["template_id"], ["agent_template.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["skill_id"], ["skill.id"], ondelete="RESTRICT"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("template_id", "skill_id", name="uq_agent_template_skill"),
     )
-    op.create_index(
-        "ix_agent_template_skill_template", "agent_template_skill", ["template_id"]
-    )
+    op.create_index("ix_agent_template_skill_template", "agent_template_skill", ["template_id"])
 
 
 def downgrade() -> None:

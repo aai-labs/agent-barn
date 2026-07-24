@@ -16,18 +16,12 @@ def validate_confluence(content: ConfluenceContent) -> IntegrationValidationResu
             timeout=_TIMEOUT,
         )
     except Exception as exc:
-        return IntegrationValidationResult(
-            valid=False, error=f"Could not reach Confluence: {exc}"
-        )
+        return IntegrationValidationResult(valid=False, error=f"Could not reach Confluence: {exc}")
 
     if resp.status_code == 401:
-        return IntegrationValidationResult(
-            valid=False, error="Invalid email or API token"
-        )
+        return IntegrationValidationResult(valid=False, error="Invalid email or API token")
     if resp.status_code == 403:
-        return IntegrationValidationResult(
-            valid=False, error="Account does not have Confluence product access"
-        )
+        return IntegrationValidationResult(valid=False, error="Account does not have Confluence product access")
     if resp.status_code != 200:
         return IntegrationValidationResult(
             valid=False,
@@ -36,9 +30,7 @@ def validate_confluence(content: ConfluenceContent) -> IntegrationValidationResu
 
     data = resp.json()
     if data.get("type") == "anonymous":
-        return IntegrationValidationResult(
-            valid=False, error="Authentication was not accepted"
-        )
+        return IntegrationValidationResult(valid=False, error="Authentication was not accepted")
 
     display_name = data.get("displayName", "")
     email = data.get("email", content.email)
