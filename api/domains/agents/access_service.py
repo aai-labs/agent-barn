@@ -92,9 +92,8 @@ class AgentAccessService:
     def _require_general_access_role(self, role_id: UUID | None, organization_id: UUID) -> AgentAccessRoleRead | None:
         if role_id is None:
             return None
-        role, role_read = self._require_access_role(role_id, organization_id)
-        permissions = self.rbac_repository.get_agent_access_role_permissions(role.id)
-        if PermissionKey.AGENT_READ not in permissions:
+        _, role_read = self._require_access_role(role_id, organization_id)
+        if PermissionKey.AGENT_READ not in role_read.permissions:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Agent General Access requires an Agent Access Role that grants agent.read",

@@ -28,11 +28,11 @@ Permissions are allow-only and missing capabilities deny by default. Organizatio
 
 ### Organization Roles
 
-| Role | Authority |
-| --- | --- |
-| Organization Owner | Unique recovery authority; all normal Organization operations plus deletion, ownership transfer, and control of Admin Memberships. |
-| Organization Admin | Normal Organization and Membership administration, but no Owner recovery operations or control of other Admins. |
-| Organization Member | May create Agents and use shared Templates and Skills, but cannot administer the Organization or shared definitions. |
+| Role                | Authority                                                                                                                          |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Organization Owner  | Unique recovery authority; all normal Organization operations plus deletion, ownership transfer, and control of Admin Memberships. |
+| Organization Admin  | Normal Organization and Membership administration, but no Owner recovery operations or control of other Admins.                    |
+| Organization Member | May create Agents and use shared Templates and Skills, but cannot administer the Organization or shared definitions.               |
 
 These roles are a closed enum persisted directly on Membership. They cannot be created, edited, renamed, or deleted, and their immutable Permission mapping is defined with the authorization policy in code. Organization Role permissions govern Organization capabilities; they do not grant operations on assigned Agents.
 
@@ -40,11 +40,11 @@ These roles are a closed enum persisted directly on Membership. They cannot be c
 
 Every Organization can use these locked defaults:
 
-| Role | Permissions |
-| --- | --- |
-| Agent Viewer | Read Agent metadata, conversations, tool calls, activity, logs, and Agent-specific costs. |
+| Role         | Permissions                                                                                       |
+| ------------ | ------------------------------------------------------------------------------------------------- |
+| Agent Viewer | Read Agent metadata, conversations, tool calls, activity, logs, and Agent-specific costs.         |
 | Agent Editor | Viewer capabilities plus configuration, lifecycle, Skill assignment, and Agent Secret management. |
-| Agent Owner | Editor capabilities plus Agent deletion and access management. |
+| Agent Owner  | Editor capabilities plus Agent deletion and access management.                                    |
 
 AF-216 adds Organization-defined custom Agent Access Roles using the same Agent Permission catalogue. AF-150 seeds only the locked defaults and implements role-bearing assignments.
 
