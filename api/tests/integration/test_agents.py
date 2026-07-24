@@ -2941,9 +2941,7 @@ def test_update_agent_same_token_no_conflict():
         client: TestClient = context.client
 
         with when("I create an agent"):
-            agent = client.post(
-                _BASE, json=_VALID_CREATE, headers=_auth(context)
-            ).json()
+            agent = client.post(_BASE, json=_VALID_CREATE, headers=_auth(context)).json()
 
         with when("I update it with the same bot token plus a name change"):
             response = client.patch(
@@ -2960,9 +2958,7 @@ def test_update_agent_same_token_no_conflict():
 
 
 def test_create_agent_reuses_token_of_deleted_agent():
-    with given(
-        [*_GIVEN, there_is_an_agent(deleted=True, bot_token=TEST_SLACK_BOT_TOKEN)]
-    ) as context:
+    with given([*_GIVEN, there_is_an_agent(deleted=True, bot_token=TEST_SLACK_BOT_TOKEN)]) as context:
         client: TestClient = context.client
         payload = {**_VALID_CREATE, "slack_bot_token": TEST_SLACK_BOT_TOKEN}
 
@@ -2980,9 +2976,7 @@ def test_delete_agent_frees_bot_token_for_reuse():
 
         with when("I create an agent then delete it"):
             agent = client.post(_BASE, json=payload, headers=_auth(context)).json()
-            delete_resp = client.delete(
-                f"{_BASE}/{agent['id']}", headers=_auth(context)
-            )
+            delete_resp = client.delete(f"{_BASE}/{agent['id']}", headers=_auth(context))
 
         with then("deletion succeeds"):
             assert_that(delete_resp.status_code, equal_to(status.HTTP_204_NO_CONTENT))
@@ -2998,9 +2992,7 @@ def test_create_agent_duplicate_bot_token_cross_org_hides_name():
     with given(
         [
             *_GIVEN,
-            there_is_an_agent_in_another_org(
-                name="Secret Agent", bot_token=TEST_SLACK_BOT_TOKEN
-            ),
+            there_is_an_agent_in_another_org(name="Secret Agent", bot_token=TEST_SLACK_BOT_TOKEN),
         ]
     ) as context:
         client: TestClient = context.client

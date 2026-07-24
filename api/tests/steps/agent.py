@@ -205,9 +205,7 @@ def there_is_an_agent_in_another_org(
         other_org_id = context.organization.id
         context.organization = original_org
 
-        there_is_an_agent(name=name, bot_token=bot_token, organization_id=other_org_id)(
-            context
-        )
+        there_is_an_agent(name=name, bot_token=bot_token, organization_id=other_org_id)(context)
         context.other_org_agent = context.agent
 
     return step

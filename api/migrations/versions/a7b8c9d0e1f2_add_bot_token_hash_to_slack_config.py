@@ -95,9 +95,7 @@ def upgrade() -> None:
 
             seen_hashes[token_hash] = config_id
             conn.execute(
-                sa.text(
-                    "UPDATE agent_slack_config SET bot_token_hash = :hash WHERE id = :id"
-                ),
+                sa.text("UPDATE agent_slack_config SET bot_token_hash = :hash WHERE id = :id"),
                 {"hash": token_hash, "id": config_id},
             )
 

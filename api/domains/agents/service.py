@@ -740,9 +740,7 @@ class AgentService:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=reason)
 
             if "slack_bot_token" in updated:
-                self._ensure_bot_token_unique(
-                    updated["slack_bot_token"], org_id, exclude_agent_id=agent.id
-                )
+                self._ensure_bot_token_unique(updated["slack_bot_token"], org_id, exclude_agent_id=agent.id)
 
             slack_config = self.repository.get_slack_config(agent.id)
             if slack_config:
@@ -751,9 +749,7 @@ class AgentService:
                         updated["slack_bot_token"],
                         self.config.agent_token_encryption_key,
                     )
-                    slack_config.bot_token_hash = compute_bot_token_hash(
-                        updated["slack_bot_token"]
-                    )
+                    slack_config.bot_token_hash = compute_bot_token_hash(updated["slack_bot_token"])
                     _bot_name_cache.pop(str(agent.id), None)
                 if "slack_app_token" in updated:
                     slack_config.app_token_encrypted = encrypt_token(
@@ -1420,15 +1416,9 @@ class AgentService:
         exclude_agent_id: UUID | None = None,
     ) -> None:
         token_hash = compute_bot_token_hash(bot_token)
-        conflicting = self.repository.find_active_agent_by_bot_token_hash(
-            token_hash, exclude_agent_id=exclude_agent_id
-        )
+        conflicting = self.repository.find_active_agent_by_bot_token_hash(token_hash, exclude_agent_id=exclude_agent_id)
         if conflicting:
-            name = (
-                conflicting.name
-                if conflicting.organization_id == org_id
-                else "another agent"
-            )
+            name = conflicting.name if conflicting.organization_id == org_id else "another agent"
             raise BotTokenConflictHTTPException(name)
 
     def _join_public_channels(self, bot_token: str, channel_ids: list[str]) -> None:
