@@ -72,9 +72,45 @@ _Avoid_: credential
 An inbound or outbound chat message ingested from an agent runtime and associated with a channel, direct message, session, and optional thread.
 _Avoid_: conversation
 
+**Telemetry Event**:
+A runtime-originated operational fact received through Ingest and used to maintain product activity records such as Conversation Messages and Tool Calls.
+_Avoid_: domain event, outbox message, audit event
+
 **Tool Call**:
 An ingested record of one external tool execution by an agent, with pending, success, or error status.
 _Avoid_: integration call
+
+**Domain Event**:
+An immutable, typed business fact that occurred within an Organization and may be handled internally by Agent Farm.
+_Avoid_: outbox row, telemetry event, audit log
+
+**Outbox Message**:
+The durable PostgreSQL record of a committed Domain Event that represents publication intent without depending on a broker-specific transport.
+_Avoid_: domain event, queue message, webhook event
+
+**Actor Identity**:
+The typed principal responsible for a Domain Event, such as a Membership, User, System process, or Runtime.
+_Avoid_: user ID, owner, creator
+
+**Subject Identity**:
+The typed resource or entity that a Domain Event is about.
+_Avoid_: agent ID, target, object
+
+**Event Payload**:
+The bounded, secret-safe JSON object carrying event-specific domain data for a Domain Event.
+_Avoid_: serialized model, database row snapshot, metadata
+
+**Event Delivery**:
+A durable, handler-specific delivery state for one Domain Event and one intended Event Handler; retry attempts do not define its identity.
+_Avoid_: retry attempt, outbox message
+
+**Event Handler**:
+A named internal consumer of one or more Domain Events, with a stable identity used for delivery tracking and idempotency.
+_Avoid_: worker, callback, subscriber
+
+**Security Audit Record**:
+A durable compliance artifact that records a security-relevant fact, usually produced as a projection from a Domain Event.
+_Avoid_: domain event, audit event, log line
 
 **Ingest**:
 The separately served, authenticated telemetry path through which agent runtimes report conversation messages and tool-call state to Agent Farm.
@@ -91,7 +127,9 @@ _Avoid_: webhook
 - An **Agent** has one **Agent General Access** setting whose Permissions combine with (never subtract from) explicit Agent Access grants.
 - A **Template Version** may require multiple **Skills**.
 - An **Agent** may have multiple **Skills** and **Agent Secrets**.
-- An Agent runtime sends **Conversation Messages** and **Tool Calls** through **Ingest**.
+- Agent runtimes send **Telemetry Events** through **Ingest**, where they become **Conversation Messages** or **Tool Calls**.
+- A committed **Domain Event** is persisted as one **Outbox Message** and may have many **Event Deliveries**, one per intended handler.
+- A **Security Audit Record** may be produced from a **Domain Event**, but it is not itself the Domain Event.
 
 ## Flagged ambiguities
 
