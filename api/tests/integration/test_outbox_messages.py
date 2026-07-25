@@ -16,9 +16,11 @@ from api.domains.events import (
     DomainEventDefinition,
     DomainEventRegistry,
     DomainEventValidationError,
+    EventDeliveryStatus,
     SubjectIdentity,
     SubjectIdentityType,
 )
+from api.domains.events.models import EventDelivery
 from api.domains.events.repository import OutboxMessageRepository
 from api.domains.organizations.models import Organization
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
@@ -64,6 +66,7 @@ def registry() -> DomainEventRegistry:
             event_name="agent.sampled",
             schema_version=1,
             payload_model=SamplePayload,
+            handler_names=("audit.projection", "activity.projection"),
         )
     )
     return registry
@@ -103,7 +106,7 @@ def test_outbox_message_persists_validated_domain_event(
     event = _event(registry, organization_id)
 
     with when("I persist it as an Outbox Message"):
-        message = repository.create(event)
+        message = repository.create(event, registry)
         found = repository.get_by_event_id(event.event_id)
 
     with then("the durable record preserves the event envelope and payload"):
@@ -173,14 +176,71 @@ def test_duplicate_event_id_is_rejected_without_inserting_second_message(
     organization_id: UUID,
 ):
     event = _event(registry, organization_id)
-    repository.create(event)
+    repository.create(event, registry)
 
     with when("the same event is inserted again"):
         with pytest.raises(IntegrityError):
-            repository.create(event)
+            repository.create(event, registry)
 
     with then("only the original Outbox Message is visible"):
         assert_that(repository.count(), equal_to(1))
+
+
+def test_committed_event_creates_pending_deliveries_for_registered_handlers(
+    repository: OutboxMessageRepository,
+    registry: DomainEventRegistry,
+    organization_id: UUID,
+):
+    event = _event(registry, organization_id)
+
+    with when("I persist an event with two registered handlers"):
+        message = repository.create(event, registry)
+        deliveries = sorted(
+            repository.list_deliveries_for_event(event.event_id), key=lambda delivery: delivery.handler_name
+        )
+
+    with then("one pending Event Delivery exists for each intended Event Handler"):
+        assert_that(
+            [delivery.handler_name for delivery in deliveries], equal_to(["activity.projection", "audit.projection"])
+        )
+        assert_that([delivery.status for delivery in deliveries], equal_to([EventDeliveryStatus.PENDING] * 2))
+        assert_that([delivery.outbox_message_id for delivery in deliveries], equal_to([message.id, message.id]))
+        assert_that([delivery.attempt_count for delivery in deliveries], equal_to([0, 0]))
+
+
+def test_event_delivery_uniqueness_is_event_and_handler_not_retry_attempt(
+    delegate: PostgresRepositoryDelegate,
+    repository: OutboxMessageRepository,
+    registry: DomainEventRegistry,
+    organization_id: UUID,
+):
+    event = _event(registry, organization_id)
+    message = repository.create(event, registry)
+
+    with when("another row is inserted for the same event and handler"):
+        with pytest.raises(IntegrityError):
+            with Session(delegate.engine) as session:
+                session.add(
+                    EventDelivery(
+                        outbox_message_id=message.id,
+                        event_id=event.event_id,
+                        organization_id=organization_id,
+                        handler_name="audit.projection",
+                        attempt_count=99,
+                    )
+                )
+                session.commit()
+
+    with then("the original intended delivery is still the only row for that handler"):
+        deliveries = repository.list_deliveries_for_event(event.event_id)
+        assert_that(len(deliveries), equal_to(2))
+
+
+def test_event_delivery_statuses_are_canonical():
+    assert_that(
+        {status.value for status in EventDeliveryStatus},
+        equal_to({"PENDING", "IN_PROGRESS", "SUCCEEDED", "FAILED", "DEAD_LETTER"}),
+    )
 
 
 def test_outbox_message_rows_are_immutable(
@@ -190,7 +250,7 @@ def test_outbox_message_rows_are_immutable(
     organization_id: UUID,
 ):
     event = _event(registry, organization_id)
-    message = repository.create(event)
+    message = repository.create(event, registry)
 
     with when("a persisted Outbox Message is updated"):
         with pytest.raises(SQLAlchemyError):
