@@ -5,6 +5,7 @@ from api.domains.events.models import (
     ActorIdentityType,
     DomainEventEnvelope,
     EventPayload,
+    OutboxMessage,
     SubjectIdentity,
     SubjectIdentityType,
 )
@@ -23,6 +24,7 @@ __all__ = [
     "DomainEventRegistry",
     "DomainEventValidationError",
     "EventPayload",
+    "OutboxMessage",
     "SubjectIdentity",
     "SubjectIdentityType",
     "UnsupportedDomainEventError",
