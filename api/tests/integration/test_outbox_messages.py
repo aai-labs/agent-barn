@@ -77,6 +77,10 @@ def repository(delegate: PostgresRepositoryDelegate) -> OutboxMessageRepository:
     return OutboxMessageRepository(delegate=delegate)
 
 
+def _organization_exists(delegate: PostgresRepositoryDelegate, organization_id: UUID) -> bool:
+    return delegate.find_by_id(Organization, organization_id) is not None
+
+
 def _event(registry: DomainEventRegistry, organization_id: UUID):
     return registry.build_event(
         event_name="agent.sampled",
@@ -241,6 +245,116 @@ def test_event_delivery_statuses_are_canonical():
         {status.value for status in EventDeliveryStatus},
         equal_to({"PENDING", "IN_PROGRESS", "SUCCEEDED", "FAILED", "DEAD_LETTER"}),
     )
+
+
+def test_session_aware_stage_commits_business_state_message_and_deliveries_atomically(
+    delegate: PostgresRepositoryDelegate,
+    repository: OutboxMessageRepository,
+    registry: DomainEventRegistry,
+):
+    organization = Organization(name="Atomic Commit", description=None)
+    organization_id = organization.id
+    event = _event(registry, organization_id)
+
+    with when("a domain-specific operation writes business state and stages an event in one session"):
+        with Session(delegate.engine) as session:
+            session.add(organization)
+            session.flush()
+            repository.stage(session=session, event=event, registry=registry)
+            session.commit()
+
+    with then("business state, Outbox Message, and Event Deliveries commit together"):
+        assert_that(_organization_exists(delegate, organization_id), equal_to(True))
+        assert_that(repository.get_by_event_id(event.event_id), is_not(none()))
+        deliveries = repository.list_deliveries_for_event(event.event_id)
+        assert_that(len(deliveries), equal_to(2))
+
+
+def test_event_validation_failure_rolls_back_business_mutation(
+    delegate: PostgresRepositoryDelegate,
+    repository: OutboxMessageRepository,
+    registry: DomainEventRegistry,
+):
+    organization = Organization(name="Validation Rollback", description=None)
+    organization_id = organization.id
+
+    with when("a domain-specific operation mutates state before event validation fails"):
+        with Session(delegate.engine) as session:
+            session.add(organization)
+            with pytest.raises(DomainEventValidationError):
+                registry.build_event(
+                    event_name="agent.sampled",
+                    schema_version=1,
+                    occurred_at=datetime.now(UTC),
+                    organization_id=organization_id,
+                    actor=ActorIdentity(type=ActorIdentityType.USER, id=uuid4(), organization_id=organization_id),
+                    subject=SubjectIdentity(
+                        type=SubjectIdentityType.AGENT,
+                        id=uuid4(),
+                        organization_id=organization_id,
+                    ),
+                    correlation_id=uuid4(),
+                    payload={"agent_id": str(uuid4()), "organization_id": str(uuid4())},
+                )
+            session.rollback()
+
+    with then("the business mutation and event state are both absent"):
+        assert_that(_organization_exists(delegate, organization_id), equal_to(False))
+        assert_that(repository.count(), equal_to(0))
+        assert_that(repository.delivery_count(), equal_to(0))
+
+
+def test_outbox_insert_failure_rolls_back_business_mutation(
+    delegate: PostgresRepositoryDelegate,
+    repository: OutboxMessageRepository,
+    registry: DomainEventRegistry,
+    organization_id: UUID,
+):
+    event = _event(registry, organization_id)
+    repository.create(event, registry)
+    business_mutation = Organization(name="Outbox Insert Rollback", description=None)
+    business_mutation_id = business_mutation.id
+
+    with when("a duplicate event_id fails while business state is pending"):
+        with pytest.raises(IntegrityError):
+            with Session(delegate.engine) as session:
+                session.add(business_mutation)
+                repository.stage(session=session, event=event, registry=registry)
+                session.commit()
+
+    with then("the pending business mutation rolls back with the failed event insert"):
+        assert_that(_organization_exists(delegate, business_mutation_id), equal_to(False))
+        assert_that(repository.count(), equal_to(1))
+
+
+def test_duplicate_delivery_constraint_rolls_back_business_mutation(
+    delegate: PostgresRepositoryDelegate,
+    repository: OutboxMessageRepository,
+    registry: DomainEventRegistry,
+    organization_id: UUID,
+):
+    event = _event(registry, organization_id)
+    message = repository.create(event, registry)
+    business_mutation = Organization(name="Delivery Rollback", description=None)
+    business_mutation_id = business_mutation.id
+
+    with when("a duplicate Event Delivery fails while business state is pending"):
+        with pytest.raises(IntegrityError):
+            with Session(delegate.engine) as session:
+                session.add(business_mutation)
+                session.add(
+                    EventDelivery(
+                        outbox_message_id=message.id,
+                        event_id=event.event_id,
+                        organization_id=organization_id,
+                        handler_name="audit.projection",
+                    )
+                )
+                session.commit()
+
+    with then("the pending business mutation rolls back with the failed delivery insert"):
+        assert_that(_organization_exists(delegate, business_mutation_id), equal_to(False))
+        assert_that(len(repository.list_deliveries_for_event(event.event_id)), equal_to(2))
 
 
 def test_outbox_message_rows_are_immutable(

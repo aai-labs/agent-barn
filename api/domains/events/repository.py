@@ -14,16 +14,25 @@ class OutboxMessageRepository:
 
     def create(self, event: DomainEventEnvelope, registry: DomainEventRegistry) -> OutboxMessage:
         with Session(self.delegate.engine) as session:
-            message = self.build_message(event)
-            session.add(message)
-            session.flush()
-            deliveries = self.build_deliveries(
-                message, registry.handler_names_for(event.event_name, event.schema_version)
-            )
-            session.add_all(deliveries)
+            message = self.stage(session=session, event=event, registry=registry)
             session.commit()
             session.refresh(message)
             return message
+
+    def stage(
+        self,
+        *,
+        session: Session,
+        event: DomainEventEnvelope,
+        registry: DomainEventRegistry,
+    ) -> OutboxMessage:
+        message = self.build_message(event)
+        session.add(message)
+        session.flush()
+        deliveries = self.build_deliveries(message, registry.handler_names_for(event.event_name, event.schema_version))
+        session.add_all(deliveries)
+        session.flush()
+        return message
 
     def build_message(self, event: DomainEventEnvelope) -> OutboxMessage:
         return OutboxMessage(
@@ -60,3 +69,6 @@ class OutboxMessageRepository:
 
     def count(self) -> int:
         return self.delegate.count(OutboxMessage)
+
+    def delivery_count(self) -> int:
+        return self.delegate.count(EventDelivery)
