@@ -3,6 +3,9 @@ from uuid import UUID, uuid7
 from fastapi import status
 from hamcrest import assert_that, contains_inanyorder, equal_to, has_item, is_not, none
 
+from api.domains.agents.models import AgentAccess
+from api.domains.agents.repository import AgentRepository
+from api.domains.organizations.models import Organization
 from api.domains.rbac.catalog import (
     AGENT_EDITOR_ROLE_ID,
     AGENT_VIEWER_ROLE_ID,
@@ -10,6 +13,8 @@ from api.domains.rbac.catalog import (
     PermissionKey,
 )
 from api.domains.rbac.models import AgentAccessRole, AgentAccessRolePermission
+from api.domains.users.organization_users.models import OrganizationRole
+from api.domains.users.organization_users.repository import OrganizationUserRepository
 from api.tests.core.givenpy import given
 from api.tests.core.modules import (
     create_test_client,
@@ -30,11 +35,6 @@ from api.tests.steps.organization import (
 )
 from api.tests.steps.template import there_is_a_template
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
-from api.domains.agents.models import AgentAccess
-from api.domains.agents.repository import AgentRepository
-from api.domains.organizations.models import Organization
-from api.domains.users.organization_users.models import OrganizationRole
-from api.domains.users.organization_users.repository import OrganizationUserRepository
 
 _BASE = "/api/v1/agents"
 _GIVEN = [
@@ -589,6 +589,61 @@ def test_access_settings_rolls_back_when_snapshot_is_invalid():
         assert_that(
             [item["user_id"] for item in assigned.json()["assignments"]],
             contains_inanyorder(str(member.id)),
+        )
+
+
+def test_owner_created_agent_share_settings_round_trip_without_creator_row():
+    # Regression for the Share dialog 400: agent creators who are Org Owners/Admins
+    # already have implicit full access (see ShareAddMember, which refuses to grant
+    # them explicit access too), so their system-managed creator row must be hidden
+    # from GET and never round-tripped back through PUT — but must also survive the
+    # save (not be deleted just because the client never resubmitted it), so the
+    # creator keeps access if later demoted to Member.
+    with given(_GIVEN[:-1]) as context:  # drop the shared there_is_an_agent(); create via the real API instead
+        client = context.client
+        create_response = client.post(
+            "/api/v1/agents",
+            json={
+                "name": "Owner Created Agent",
+                "platform": "slack",
+                "slack_bot_token": "xoxb-real-bot-token",
+                "slack_app_token": "xapp-1-real-app-token",
+                "template_slug": "test-template",
+            },
+            headers=_auth(context),
+        )
+        agent_id = UUID(create_response.json()["id"])
+
+        read_response = client.get(_access_settings_url(agent_id), headers=_auth(context))
+        # What the Share dialog actually does on Save: echo back exactly what GET returned.
+        round_trip = client.put(
+            _access_settings_url(agent_id),
+            json={
+                "general_access_role_id": read_response.json()["general_access"]["role"],
+                "assignments": [
+                    {"user_id": item["user_id"], "access_role_id": item["access_role"]["id"]}
+                    for item in read_response.json()["assignments"]
+                ],
+            },
+            headers=_auth(context),
+        )
+
+        # Demote the creator and confirm their hidden row survived the round-trip.
+        membership_repository: OrganizationUserRepository = context.injector.get(OrganizationUserRepository)
+        membership = membership_repository.get_by_user_id_and_organization_id(context.user.id, context.organization.id)
+        assert membership is not None
+        membership.role = OrganizationRole.MEMBER
+        membership_repository.save(membership)
+        detail_after_demotion = client.get(f"{_BASE}/{agent_id}", headers=_auth(context))
+
+        assert_that(create_response.status_code, equal_to(status.HTTP_201_CREATED))
+        assert_that(read_response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(read_response.json()["assignments"], equal_to([]))
+        assert_that(round_trip.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(detail_after_demotion.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(
+            detail_after_demotion.json()["allowed_actions"],
+            has_item(PermissionKey.AGENT_ACCESS_MANAGE.value),
         )
 
 

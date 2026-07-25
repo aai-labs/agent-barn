@@ -105,10 +105,10 @@ from api.infrastructure.slack.client import (
     SlackClient,
     SlackFetchError,
 )
+from api.infrastructure.slack.config_token import update_slack_app_name
 from api.infrastructure.telegram.client import (
     validate_bot_token as validate_telegram_bot_token,
 )
-from api.infrastructure.slack.config_token import update_slack_app_name
 
 logger = logging.getLogger(__name__)
 
@@ -502,6 +502,12 @@ class AgentService:
                     detail="Required template skills must be included in skill_ids",
                 )
 
+        # The creator always gets an explicit Owner AgentAccess row, even if they
+        # currently have implicit full access as an Org Owner/Admin: it's what keeps
+        # them able to manage the Agent if they're later demoted to Member (see
+        # test_creator_keeps_assigned_agent_after_owner_is_demoted_to_member). This row
+        # is hidden from the Share dialog and preserved across saves — see
+        # AgentAccessService._assigned_members_for_agent / replace_access_settings.
         persisted_membership = context.user_organization_map.get(org_id)
         creator_membership_id = (
             persisted_membership.id

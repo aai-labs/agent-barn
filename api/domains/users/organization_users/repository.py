@@ -75,7 +75,11 @@ class OrganizationUserRepository:
             return session.exec(query).first()
 
     def get_members_with_users(
-        self, organization_id: UUID, *, search: str | None = None
+        self,
+        organization_id: UUID,
+        *,
+        search: str | None = None,
+        limit: int | None = None,
     ) -> list[tuple[OrganizationUser, User]]:
         with Session(self.delegate.engine) as session:
             query = (
@@ -87,6 +91,8 @@ class OrganizationUserRepository:
                 pattern = f"%{search}%"
                 query = query.where(col(User.full_name).ilike(pattern) | col(User.email).ilike(pattern))
             query = query.order_by(col(OrganizationUser.created_at).asc())
+            if limit is not None:
+                query = query.limit(limit)
             return list(session.exec(query).all())
 
     def delete(self, membership: OrganizationUser) -> bool:
