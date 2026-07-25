@@ -6,6 +6,7 @@ from injector import inject, singleton
 from sqlmodel import Session
 
 from api.domains.auth.models import CurrentUserContext
+from api.domains.events import ActorIdentity, ActorIdentityType
 from api.domains.auth.service import AuthService
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.rbac.catalog import ORG_OWNER_ONLY_ROLES, PermissionKey
@@ -239,9 +240,25 @@ class OrganizationUserService:
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Only an owner can promote or demote admins",
             )
-        membership.role = data.role
-        self.organization_user_repository.save(membership)
-        return self._to_member_read(membership)
+        changed = self.organization_user_repository.change_role_with_event(
+            organization_id=organization_id,
+            user_id=user_id,
+            new_role=data.role,
+            actor=self._actor_identity(context, organization_id),
+        )
+        if changed is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Member not found in this organization")
+        return self._to_member_read(changed)
+
+    def _actor_identity(self, context: CurrentUserContext, organization_id: UUID) -> ActorIdentity:
+        membership = context.user_organization_map.get(organization_id)
+        if membership is not None:
+            return ActorIdentity(
+                type=ActorIdentityType.MEMBERSHIP,
+                id=membership.id,
+                organization_id=organization_id,
+            )
+        return ActorIdentity(type=ActorIdentityType.USER, id=context.user.id)
 
     def remove_member(self, context: CurrentUserContext, organization_id: UUID, user_id: UUID) -> None:
         self.permission_policy.require_organization(

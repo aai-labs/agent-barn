@@ -1,6 +1,6 @@
 from dataclasses import dataclass
-from datetime import datetime
-from uuid import UUID
+from datetime import UTC, datetime
+from uuid import UUID, uuid4
 
 from injector import inject, singleton
 from sqlalchemy import exists, func, or_
@@ -20,6 +20,14 @@ from api.domains.agents.models import (
     AgentTelegramConfig,
     SecretProvider,
 )
+from api.domains.events import ActorIdentity, ActorIdentityType, SubjectIdentity, SubjectIdentityType
+from api.domains.events.catalog import (
+    AGENT_ACCESS_GRANTED,
+    AGENT_ACCESS_REVOKED,
+    AGENT_GENERAL_ACCESS_CHANGED,
+    EVENT_REGISTRY,
+)
+from api.domains.events.repository import OutboxMessageRepository
 from api.domains.rbac.catalog import (
     AGENT_OWNER_ROLE_ID,
     PERMISSION_ID_BY_KEY,
@@ -69,6 +77,7 @@ def agent_scope_predicates(authorization_scope: AuthorizationScope, *, include_d
 @dataclass
 class AgentRepository:
     delegate: PostgresRepositoryDelegate
+    outbox_repository: OutboxMessageRepository
 
     def get_by_id(self, agent_id: UUID) -> Agent | None:
         with Session(self.delegate.engine) as session:
@@ -186,6 +195,8 @@ class AgentRepository:
         *,
         general_access_role_id: UUID | None,
         assignment_roles: dict[UUID, UUID],
+        actor: ActorIdentity | None = None,
+        correlation_id: UUID | None = None,
     ) -> bool:
         """Replace General Access and explicit assignments atomically."""
         with Session(self.delegate.engine, expire_on_commit=False) as session:
@@ -235,6 +246,7 @@ class AgentRepository:
                 if existing_membership_ids != set(assignment_roles):
                     return False
 
+            previous_general_access_role_id = agent.general_access_role_id
             agent.general_access_role_id = general_access_role_id
             session.add(agent)
 
@@ -248,9 +260,55 @@ class AgentRepository:
             ).all()
             existing_by_membership = {access.membership_id: access for access in existing_access}
             desired_membership_ids = set(assignment_roles)
+            audit_actor = actor or ActorIdentity(type=ActorIdentityType.SYSTEM, id="system")
+            audit_correlation_id = correlation_id or uuid4()
+
+            if previous_general_access_role_id != general_access_role_id:
+                self.outbox_repository.stage(
+                    session=session,
+                    registry=EVENT_REGISTRY,
+                    event=EVENT_REGISTRY.build_event(
+                        event_name=AGENT_GENERAL_ACCESS_CHANGED,
+                        schema_version=1,
+                        occurred_at=datetime.now(UTC),
+                        organization_id=organization_id,
+                        actor=audit_actor,
+                        subject=SubjectIdentity(
+                            type=SubjectIdentityType.AGENT, id=agent_id, organization_id=organization_id
+                        ),
+                        correlation_id=audit_correlation_id,
+                        payload={
+                            "organization_id": organization_id,
+                            "agent_id": agent_id,
+                            "previous_access_role_id": previous_general_access_role_id,
+                            "new_access_role_id": general_access_role_id,
+                        },
+                    ),
+                )
 
             for membership_id, access in existing_by_membership.items():
                 if membership_id not in desired_membership_ids:
+                    self.outbox_repository.stage(
+                        session=session,
+                        registry=EVENT_REGISTRY,
+                        event=EVENT_REGISTRY.build_event(
+                            event_name=AGENT_ACCESS_REVOKED,
+                            schema_version=1,
+                            occurred_at=datetime.now(UTC),
+                            organization_id=organization_id,
+                            actor=audit_actor,
+                            subject=SubjectIdentity(
+                                type=SubjectIdentityType.AGENT, id=agent_id, organization_id=organization_id
+                            ),
+                            correlation_id=audit_correlation_id,
+                            payload={
+                                "organization_id": organization_id,
+                                "agent_id": agent_id,
+                                "membership_id": membership_id,
+                                "previous_access_role_id": access.access_role_id,
+                            },
+                        ),
+                    )
                     session.delete(access)
 
             for membership_id, access_role_id in assignment_roles.items():
@@ -263,6 +321,27 @@ class AgentRepository:
                             agent_id=agent_id,
                             access_role_id=access_role_id,
                         )
+                    )
+                    self.outbox_repository.stage(
+                        session=session,
+                        registry=EVENT_REGISTRY,
+                        event=EVENT_REGISTRY.build_event(
+                            event_name=AGENT_ACCESS_GRANTED,
+                            schema_version=1,
+                            occurred_at=datetime.now(UTC),
+                            organization_id=organization_id,
+                            actor=audit_actor,
+                            subject=SubjectIdentity(
+                                type=SubjectIdentityType.AGENT, id=agent_id, organization_id=organization_id
+                            ),
+                            correlation_id=audit_correlation_id,
+                            payload={
+                                "organization_id": organization_id,
+                                "agent_id": agent_id,
+                                "membership_id": membership_id,
+                                "access_role_id": access_role_id,
+                            },
+                        ),
                     )
                 else:
                     access.access_role_id = access_role_id

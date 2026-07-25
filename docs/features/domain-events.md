@@ -40,6 +40,17 @@ Later worker slices
    └── read committed Event Deliveries from PostgreSQL → transport/handler execution
 ```
 
+## Initial event catalogue
+
+AF-219 ships the first concrete events as RBAC audit inputs and usage examples:
+
+- `organization.role.changed` — emitted when a Membership's Organization Role changes.
+- `agent.access.granted` — emitted when explicit Agent Access is granted to a Membership.
+- `agent.access.revoked` — emitted when explicit Agent Access is removed from a Membership.
+- `agent.general_access.changed` — emitted when an Agent's General Access role changes.
+
+These events are intended for the `security_audit.projection` Event Handler. The Security Audit Record projection is implemented by a later slice; the events themselves are persisted by the business mutation transaction.
+
 ## Boundaries
 
 The event domain owns envelope types, payload validation, event registry, outbox persistence, and delivery persistence. Business domains decide when their own mutations produce Domain Events and should expose domain-specific repository operations for those all-or-nothing writes. Routes must not manage sessions or stage events directly. Services may orchestrate business behavior, but SQL and transaction mechanics stay in repositories.
@@ -51,6 +62,7 @@ This foundation deliberately excludes event sourcing, public webhooks, replay ad
 | Concern | Authoritative source |
 | --- | --- |
 | Domain Event envelope, identities, Outbox Message, Event Delivery models | `../../api/domains/events/models.py` |
+| Event catalogue | `../../api/domains/events/catalog.py` |
 | Event registry and payload validation | `../../api/domains/events/registry.py` |
 | Session-aware outbox staging and persistence reads | `../../api/domains/events/repository.py` |
 | Schema migrations | `../../api/migrations/versions/b4c7e2a19d34_add_outbox_message.py`, `../../api/migrations/versions/c9d8e7f6a5b4_add_event_delivery.py` |

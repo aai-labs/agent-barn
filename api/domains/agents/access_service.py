@@ -16,6 +16,7 @@ from api.domains.agents.models import (
 )
 from api.domains.agents.repository import AgentRepository
 from api.domains.auth.models import CurrentUserContext
+from api.domains.events import ActorIdentity, ActorIdentityType
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.models import AgentAccessRole
 from api.domains.rbac.repository import RbacRepository
@@ -86,6 +87,7 @@ class AgentAccessService:
             agent.organization_id,
             general_access_role_id=data.general_access_role_id,
             assignment_roles=assignment_roles,
+            actor=self._actor_identity(context, agent.organization_id),
         ):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -95,6 +97,16 @@ class AgentAccessService:
             general_access=AgentGeneralAccessRead(role=general_role_read),
             assignments=assignments,
         )
+
+    def _actor_identity(self, context: CurrentUserContext, organization_id: UUID) -> ActorIdentity:
+        membership = context.user_organization_map.get(organization_id)
+        if membership is not None:
+            return ActorIdentity(
+                type=ActorIdentityType.MEMBERSHIP,
+                id=membership.id,
+                organization_id=organization_id,
+            )
+        return ActorIdentity(type=ActorIdentityType.USER, id=context.user.id)
 
     def _require_general_access_role(self, role_id: UUID | None, organization_id: UUID) -> AgentAccessRoleRead | None:
         if role_id is None:

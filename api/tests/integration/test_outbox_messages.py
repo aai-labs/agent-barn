@@ -20,9 +20,13 @@ from api.domains.events import (
     SubjectIdentity,
     SubjectIdentityType,
 )
-from api.domains.events.models import EventDelivery
+from api.domains.events.models import EventDelivery, OutboxMessage
 from api.domains.events.repository import OutboxMessageRepository
 from api.domains.organizations.models import Organization
+from api.domains.rbac.catalog import OrganizationRole
+from api.domains.users.models import User
+from api.domains.users.organization_users.models import OrganizationUser
+from api.domains.users.organization_users.repository import OrganizationUserRepository
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import then, when
 
@@ -41,12 +45,14 @@ def delegate():
     delegate = PostgresRepositoryDelegate(get_config())
     with delegate.engine.begin() as connection:
         connection.execute(text("TRUNCATE event_outbox_message CASCADE"))
+        connection.execute(text('DELETE FROM "user"'))
         connection.execute(text("DELETE FROM organization"))
     try:
         yield delegate
     finally:
         with delegate.engine.begin() as connection:
             connection.execute(text("TRUNCATE event_outbox_message CASCADE"))
+            connection.execute(text('DELETE FROM "user"'))
             connection.execute(text("DELETE FROM organization"))
         delegate.close()
 
@@ -355,6 +361,37 @@ def test_duplicate_delivery_constraint_rolls_back_business_mutation(
     with then("the pending business mutation rolls back with the failed delivery insert"):
         assert_that(_organization_exists(delegate, business_mutation_id), equal_to(False))
         assert_that(len(repository.list_deliveries_for_event(event.event_id)), equal_to(2))
+
+
+def test_role_change_repository_operation_emits_audit_domain_event(
+    delegate: PostgresRepositoryDelegate,
+    repository: OutboxMessageRepository,
+    organization_id: UUID,
+):
+    user = User(email="role-change@example.com", hashed_password="hash")
+    delegate.save(user)
+    membership = OrganizationUser(user_id=user.id, organization_id=organization_id, role=OrganizationRole.MEMBER)
+    delegate.save(membership)
+    org_user_repository = OrganizationUserRepository(delegate=delegate, outbox_repository=repository)
+
+    with when("a role change is committed through the domain-specific repository operation"):
+        changed = org_user_repository.change_role_with_event(
+            organization_id=organization_id,
+            user_id=user.id,
+            new_role=OrganizationRole.ADMIN,
+            actor=ActorIdentity(type=ActorIdentityType.USER, id=user.id, organization_id=organization_id),
+        )
+
+    with then("the role mutation and audit Domain Event rows commit together"):
+        assert changed is not None
+        assert_that(changed.role, equal_to(OrganizationRole.ADMIN))
+        assert_that(repository.count(), equal_to(1))
+        messages = delegate.find_all(OutboxMessage)
+        assert_that(messages[0].event_name, equal_to("organization.role.changed"))
+        assert_that(messages[0].payload["previous_role"], equal_to("MEMBER"))
+        assert_that(messages[0].payload["new_role"], equal_to("ADMIN"))
+        deliveries = repository.list_deliveries_for_event(messages[0].event_id)
+        assert_that([delivery.handler_name for delivery in deliveries], equal_to(["security_audit.projection"]))
 
 
 def test_outbox_message_rows_are_immutable(

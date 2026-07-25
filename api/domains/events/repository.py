@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from uuid import UUID
 
+from injector import inject, singleton
 from sqlmodel import Session, select
 
 from api.domains.events.models import DomainEventEnvelope, EventDelivery, OutboxMessage
@@ -8,6 +9,8 @@ from api.domains.events.registry import DomainEventRegistry
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
 
+@inject
+@singleton
 @dataclass
 class OutboxMessageRepository:
     delegate: PostgresRepositoryDelegate
