@@ -16,7 +16,7 @@ Agent Farm will persist internal Domain Events through a PostgreSQL transactiona
 
 - A Domain Event is the immutable typed business fact; an Outbox Message is its immutable durable PostgreSQL publication-intent record; an Event Delivery is durable mutable delivery state for one event and one named Event Handler, not a retry-attempt log.
 - Event names and schema versions are owned by a typed registry that validates bounded, secret-safe JSON payloads and resolves intended handlers; payload validation combines per-event schemas with recursive sensitive-key and unsupported-value rejection.
-- AF-219 defines the persistence foundation for at-least-once delivery to each intended Event Handler; Event Deliveries have an explicit durable lifecycle from creation (`PENDING`, `IN_PROGRESS`, `SUCCEEDED`, `FAILED`, `DEAD_LETTER`), while later worker slices provide actual Dramatiq execution, retries, and exhausted-delivery handling.
+- AF-219 defines the persistence foundation for at-least-once delivery to each intended Event Handler; Event Deliveries have an explicit durable lifecycle from creation (`PENDING`, `ENQUEUED`, `PROCESSING`, `SUCCEEDED`, `DEAD_LETTERED`), while later worker slices provide actual Dramatiq execution, retries, and exhausted-delivery handling.
 - Event envelopes carry event ID, event name, schema version, occurred-at time, Organization ID, typed Actor Identity, typed Subject Identity, required correlation ID, and optional causation ID.
 - Organization ID is authoritative. Known actor, subject, and validated payload references that belong to a different Organization must be rejected, rolling back the associated business mutation.
 - Security Audit Records are projections from selected Domain Events, not the Domain Events themselves.

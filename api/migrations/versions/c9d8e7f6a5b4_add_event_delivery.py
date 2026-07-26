@@ -19,10 +19,10 @@ depends_on: Union[str, Sequence[str], None] = None
 
 event_delivery_status_enum = postgresql.ENUM(
     "PENDING",
-    "IN_PROGRESS",
+    "ENQUEUED",
+    "PROCESSING",
     "SUCCEEDED",
-    "FAILED",
-    "DEAD_LETTER",
+    "DEAD_LETTERED",
     name="eventdeliverystatus",
     create_type=False,
 )

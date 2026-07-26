@@ -249,7 +249,7 @@ def test_event_delivery_uniqueness_is_event_and_handler_not_retry_attempt(
 def test_event_delivery_statuses_are_canonical():
     assert_that(
         {status.value for status in EventDeliveryStatus},
-        equal_to({"PENDING", "IN_PROGRESS", "SUCCEEDED", "FAILED", "DEAD_LETTER"}),
+        equal_to({"PENDING", "ENQUEUED", "PROCESSING", "SUCCEEDED", "DEAD_LETTERED"}),
     )
 
 

@@ -20,7 +20,12 @@ Agent Farm uses internal Domain Events to record immutable, typed business facts
 - `PostgresRepositoryDelegate` remains the default session-per-operation helper for ordinary persistence and does not accept optional event parameters.
 - `event_outbox_message` rows are immutable after insert. They store transport-neutral event envelope data and do not contain Dramatiq, Redis, Kafka, RabbitMQ, webhook, or worker-specific fields.
 - Event Delivery identity is `(event_id, handler_name)`. Retry attempts do not create additional intended deliveries.
-- Event Deliveries are mutable operational state with lifecycle values `PENDING`, `IN_PROGRESS`, `SUCCEEDED`, `FAILED`, and `DEAD_LETTER`. AF-219 creates `PENDING` rows; later worker slices claim, retry, complete, and dead-letter them.
+- Event Deliveries are mutable operational state with lifecycle values `PENDING`, `ENQUEUED`, `PROCESSING`, `SUCCEEDED`, and `DEAD_LETTERED`. AF-219 creates `PENDING` rows; later worker slices publish, claim, retry, complete, and dead-letter them.
+  - `PENDING`: delivery exists in PostgreSQL and is not known to be queued.
+  - `ENQUEUED`: a Dramatiq message was published or republished for the delivery.
+  - `PROCESSING`: a worker has claimed or reloaded the delivery.
+  - `SUCCEEDED`: the handler completed; duplicate deliveries no-op.
+  - `DEAD_LETTERED`: retries are exhausted or a non-retryable terminal failure occurred.
 - The persistence foundation supports at-least-once delivery to each intended Event Handler. Exactly-once execution and strict global ordering are not promised.
 - Security Audit Records are projections from selected Domain Events. Audit retention and redaction rules do not redefine the internal Domain Event contract.
 - Runtime Ingest remains separate: Telemetry Events from Hermes/OpenClaw become Conversation Messages or Tool Calls and are not automatically written to the Domain Event outbox.

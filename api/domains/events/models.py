@@ -30,10 +30,10 @@ class SubjectIdentityType(str, enum.Enum):
 
 class EventDeliveryStatus(str, enum.Enum):
     PENDING = "PENDING"
-    IN_PROGRESS = "IN_PROGRESS"
+    ENQUEUED = "ENQUEUED"
+    PROCESSING = "PROCESSING"
     SUCCEEDED = "SUCCEEDED"
-    FAILED = "FAILED"
-    DEAD_LETTER = "DEAD_LETTER"
+    DEAD_LETTERED = "DEAD_LETTERED"
 
 
 class ActorIdentity(BaseModel):
