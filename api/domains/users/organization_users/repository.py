@@ -6,7 +6,7 @@ from injector import inject, singleton
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
-from api.domains.events import ActorIdentity, DomainEventEnvelope, SubjectIdentity, SubjectIdentityType
+from api.domains.events import ActorIdentity, DomainEventEnvelope, EventDelivery, SubjectIdentity, SubjectIdentityType
 from api.domains.events.catalog import EVENT_REGISTRY, ORGANIZATION_ROLE_CHANGED
 from api.domains.events.repository import OutboxMessageRepository
 from api.domains.users.models import User
@@ -19,6 +19,12 @@ from api.domains.users.organization_users.models import (
     OrganizationUser,
 )
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
+
+
+@dataclass(frozen=True)
+class RoleChangeWithEventResult:
+    membership: OrganizationUser
+    delivery_ids: list[UUID]
 
 
 @inject
@@ -111,7 +117,7 @@ class OrganizationUserRepository:
         new_role: OrganizationRole,
         actor: ActorIdentity,
         correlation_id: UUID | None = None,
-    ) -> OrganizationUser | None:
+    ) -> RoleChangeWithEventResult | None:
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             membership = session.exec(
                 select(OrganizationUser)
@@ -135,8 +141,9 @@ class OrganizationUserRepository:
                 correlation_id=correlation_id or uuid4(),
             )
             self.outbox_repository.stage(session=session, event=event, registry=EVENT_REGISTRY)
+            delivery_ids = list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
             session.commit()
-            return membership
+            return RoleChangeWithEventResult(membership=membership, delivery_ids=delivery_ids)
 
     @staticmethod
     def build_role_changed_event(

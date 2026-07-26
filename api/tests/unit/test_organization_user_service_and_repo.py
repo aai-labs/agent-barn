@@ -37,6 +37,7 @@ def test_organization_user_service_raises_404_when_membership_missing():
         auth_service=Mock(),
         user_repository=Mock(),
         permission_policy=Mock(),
+        event_delivery_transport=Mock(),
     )
 
     assert_that(
@@ -56,6 +57,7 @@ def test_organization_user_service_maps_conflict_to_409():
         auth_service=Mock(),
         user_repository=Mock(),
         permission_policy=Mock(),
+        event_delivery_transport=Mock(),
     )
     org_user = OrganizationUser(
         user_id=uuid7(),
@@ -68,6 +70,47 @@ def test_organization_user_service_maps_conflict_to_409():
         raise AssertionError("Expected HTTPException")
     except HTTPException as exc:
         assert_that(exc.status_code, equal_to(status.HTTP_409_CONFLICT))
+
+
+def test_organization_user_service_immediate_enqueue_failure_does_not_raise():
+    outbox_repository = Mock()
+    repository = Mock(outbox_repository=outbox_repository)
+    transport = Mock()
+    transport.enqueue.side_effect = RuntimeError("redis unavailable")
+    service = OrganizationUserService(
+        organization_user_repository=repository,
+        organization_repository=Mock(),
+        auth_service=Mock(),
+        user_repository=Mock(),
+        permission_policy=Mock(),
+        event_delivery_transport=transport,
+    )
+    delivery_id = uuid7()
+
+    service._enqueue_event_deliveries([delivery_id])
+
+    transport.enqueue.assert_called_once_with(delivery_id, metadata={"source": "immediate"})
+    outbox_repository.mark_delivery_enqueued.assert_not_called()
+
+
+def test_organization_user_service_marks_delivery_enqueued_after_immediate_publish():
+    outbox_repository = Mock()
+    repository = Mock(outbox_repository=outbox_repository)
+    transport = Mock()
+    service = OrganizationUserService(
+        organization_user_repository=repository,
+        organization_repository=Mock(),
+        auth_service=Mock(),
+        user_repository=Mock(),
+        permission_policy=Mock(),
+        event_delivery_transport=transport,
+    )
+    delivery_id = uuid7()
+
+    service._enqueue_event_deliveries([delivery_id])
+
+    transport.enqueue.assert_called_once_with(delivery_id, metadata={"source": "immediate"})
+    outbox_repository.mark_delivery_enqueued.assert_called_once_with(delivery_id)
 
 
 def test_organization_user_repository_maps_duplicate_member_constraint():
