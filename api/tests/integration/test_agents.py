@@ -15,8 +15,11 @@ from starlette.testclient import TestClient
 
 from api.domains.agents.models import AgentStatus
 from api.domains.agents.repository import AgentRepository
+from api.domains.events.catalog import AGENT_CREATED, AGENT_STARTED, AGENT_STOPPED
+from api.domains.events.models import EventDeliveryStatus, OutboxMessage
 from api.domains.templates.repository import TemplateRepository
 from api.infrastructure.kubernetes.client import KubernetesClient
+from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
@@ -92,6 +95,10 @@ def _auth(context) -> dict:
     return {"Authorization": f"Bearer {context.access_token}"}
 
 
+def _outbox_messages(context) -> list[OutboxMessage]:
+    return context.injector.get(PostgresRepositoryDelegate).find_all(OutboxMessage)
+
+
 def test_create_slack_agent_returns_201_stopped():
     with given(_GIVEN) as context:
         client: TestClient = context.client
@@ -106,6 +113,22 @@ def test_create_slack_agent_returns_201_stopped():
             assert_that(body["status"], equal_to(AgentStatus.STOPPED.value))
             assert_that(body, is_not(has_key("slack_bot_token")))
             assert_that(body, is_not(has_key("slack_app_token")))
+
+
+def test_create_agent_emits_created_domain_event():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I create a Slack agent with valid data"):
+            response = client.post(_BASE, json=_VALID_CREATE, headers=_auth(context))
+
+        with then("an Agent created Domain Event is persisted"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            messages = _outbox_messages(context)
+            created_events = [message for message in messages if message.event_name == AGENT_CREATED]
+            assert_that(len(created_events), equal_to(1))
+            assert_that(created_events[0].payload["agent_name"], equal_to("My Agent"))
+            assert_that(created_events[0].payload["created_by_user_id"], equal_to(str(context.user.id)))
 
 
 def test_create_agent_missing_template_slug_returns_422():
@@ -713,6 +736,27 @@ def test_start_agent_sets_status_running():
             k8s.create_deployment.assert_called_once()
 
 
+def test_start_agent_emits_started_domain_event_and_delivery():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I start the agent"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("an Agent started Domain Event and pending email delivery are persisted"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            messages = _outbox_messages(context)
+            started_events = [message for message in messages if message.event_name == AGENT_STARTED]
+            assert_that(len(started_events), equal_to(1))
+            assert_that(started_events[0].payload["previous_status"], equal_to(AgentStatus.STOPPED.value))
+            assert_that(started_events[0].payload["new_status"], equal_to(AgentStatus.RUNNING.value))
+            deliveries = context.injector.get(AgentRepository).outbox_repository.list_deliveries_for_event(
+                started_events[0].event_id
+            )
+            assert_that(len(deliveries), equal_to(1))
+            assert_that(deliveries[0].status, equal_to(EventDeliveryStatus.PENDING))
+
+
 def test_start_already_running_returns_409():
     with given(
         [
@@ -757,6 +801,32 @@ def test_stop_agent_sets_status_stopped():
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             assert_that(response.json()["status"], equal_to(AgentStatus.STOPPED.value))
             k8s.delete_deployment.assert_called_once()
+
+
+def test_stop_agent_emits_stopped_domain_event_and_delivery():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(status=AgentStatus.RUNNING),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("I stop the agent"):
+            response = client.post(f"{_BASE}/{context.agent.id}/stop", headers=_auth(context))
+
+        with then("an Agent stopped Domain Event and pending email delivery are persisted"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            messages = _outbox_messages(context)
+            stopped_events = [message for message in messages if message.event_name == AGENT_STOPPED]
+            assert_that(len(stopped_events), equal_to(1))
+            assert_that(stopped_events[0].payload["previous_status"], equal_to(AgentStatus.RUNNING.value))
+            assert_that(stopped_events[0].payload["new_status"], equal_to(AgentStatus.STOPPED.value))
+            deliveries = context.injector.get(AgentRepository).outbox_repository.list_deliveries_for_event(
+                stopped_events[0].event_id
+            )
+            assert_that(len(deliveries), equal_to(1))
+            assert_that(deliveries[0].status, equal_to(EventDeliveryStatus.PENDING))
 
 
 def test_stop_non_running_agent_returns_409():

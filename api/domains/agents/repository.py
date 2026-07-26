@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID, uuid4
 
 from injector import inject, singleton
@@ -20,10 +21,11 @@ from api.domains.agents.models import (
     AgentTelegramConfig,
     SecretProvider,
 )
-from api.domains.events import ActorIdentity, ActorIdentityType, SubjectIdentity, SubjectIdentityType
+from api.domains.events import ActorIdentity, ActorIdentityType, EventDelivery, SubjectIdentity, SubjectIdentityType
 from api.domains.events.catalog import (
     AGENT_ACCESS_GRANTED,
     AGENT_ACCESS_REVOKED,
+    AGENT_CREATED,
     AGENT_GENERAL_ACCESS_CHANGED,
     EVENT_REGISTRY,
 )
@@ -39,9 +41,22 @@ from api.domains.rbac.models import (
     Permission,
 )
 from api.domains.rbac.policy import AuthorizationScope
+from api.domains.users.models import User
 from api.domains.users.organization_users.models import OrganizationUser
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.infrastructure.shared.models import Pagination
+
+
+@dataclass(frozen=True)
+class AgentLifecycleEventResult:
+    agent: Agent
+    delivery_ids: list[UUID]
+
+
+@dataclass(frozen=True)
+class AgentLifecycleEmailRecipient:
+    email: str
+    full_name: str | None
 
 
 def agent_scope_predicates(authorization_scope: AuthorizationScope, *, include_deleted: bool = False):
@@ -366,6 +381,139 @@ class AgentRepository:
             session.commit()
             session.refresh(agent)
             return agent
+
+    def record_agent_created_event(
+        self,
+        agent_id: UUID,
+        *,
+        actor: ActorIdentity,
+        correlation_id: UUID | None = None,
+    ) -> list[UUID]:
+        agent = self.get_by_id(agent_id)
+        if agent is None:
+            return []
+        return self._record_agent_event(
+            agent,
+            event_name=AGENT_CREATED,
+            actor=actor,
+            correlation_id=correlation_id,
+            previous_status=None,
+            new_status=None,
+        ).delivery_ids
+
+    def save_with_lifecycle_event(
+        self,
+        agent: Agent,
+        *,
+        event_name: str,
+        actor: ActorIdentity,
+        previous_status: str,
+        new_status: str,
+        correlation_id: UUID | None = None,
+    ) -> AgentLifecycleEventResult:
+        return self._record_agent_event(
+            agent,
+            event_name=event_name,
+            actor=actor,
+            correlation_id=correlation_id,
+            previous_status=previous_status,
+            new_status=new_status,
+        )
+
+    def _record_agent_event(
+        self,
+        agent: Agent,
+        *,
+        event_name: str,
+        actor: ActorIdentity,
+        correlation_id: UUID | None,
+        previous_status: str | None,
+        new_status: str | None,
+    ) -> AgentLifecycleEventResult:
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            persisted = session.exec(
+                select(Agent)
+                .where(
+                    col(Agent.id) == agent.id,
+                    col(Agent.organization_id) == agent.organization_id,
+                    col(Agent.deleted_at).is_(None),
+                )
+                .with_for_update()
+            ).first()
+            if persisted is None:
+                return AgentLifecycleEventResult(agent=agent, delivery_ids=[])
+            persisted.status = agent.status
+            persisted.last_error = agent.last_error
+            persisted.ingest_key_encrypted = agent.ingest_key_encrypted
+            session.add(persisted)
+            session.flush()
+            payload: dict[str, Any] = {
+                "organization_id": persisted.organization_id,
+                "agent_id": persisted.id,
+                "agent_name": persisted.name,
+                "platform": persisted.platform,
+                "runtime": persisted.agent_type,
+            }
+            if event_name == AGENT_CREATED:
+                payload["created_by_user_id"] = persisted.created_by_user_id
+            else:
+                payload["previous_status"] = previous_status
+                payload["new_status"] = new_status
+            event = EVENT_REGISTRY.build_event(
+                event_name=event_name,
+                schema_version=1,
+                occurred_at=datetime.now(UTC),
+                organization_id=persisted.organization_id,
+                actor=actor,
+                subject=SubjectIdentity(
+                    type=SubjectIdentityType.AGENT,
+                    id=persisted.id,
+                    organization_id=persisted.organization_id,
+                ),
+                correlation_id=correlation_id or uuid4(),
+                payload=payload,
+            )
+            self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
+            delivery_ids = list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
+            session.commit()
+            return AgentLifecycleEventResult(agent=persisted, delivery_ids=delivery_ids)
+
+    def find_lifecycle_email_recipients(
+        self, agent_id: UUID, organization_id: UUID
+    ) -> list[AgentLifecycleEmailRecipient]:
+        with Session(self.delegate.engine) as session:
+            agent = session.exec(
+                select(Agent).where(
+                    col(Agent.id) == agent_id,
+                    col(Agent.organization_id) == organization_id,
+                    col(Agent.deleted_at).is_(None),
+                )
+            ).first()
+            if agent is None:
+                return []
+            users: list[User] = []
+            if agent.created_by_user_id is not None:
+                creator = session.get(User, agent.created_by_user_id)
+                if creator is not None:
+                    users.append(creator)
+            owner_users = session.exec(
+                select(User)
+                .join(OrganizationUser, col(OrganizationUser.user_id) == col(User.id))
+                .join(AgentAccess, col(AgentAccess.membership_id) == col(OrganizationUser.id))
+                .where(
+                    col(AgentAccess.agent_id) == agent_id,
+                    col(AgentAccess.organization_id) == organization_id,
+                    col(AgentAccess.access_role_id) == AGENT_OWNER_ROLE_ID,
+                )
+            ).all()
+            users.extend(owner_users)
+        recipients: dict[str, AgentLifecycleEmailRecipient] = {}
+        for user in users:
+            recipients.setdefault(
+                str(user.email).lower(),
+                AgentLifecycleEmailRecipient(email=str(user.email), full_name=user.full_name),
+            )
+        return list(recipients.values())
 
     def find_access_assignments(self, agent_id: UUID, organization_id: UUID) -> list[AgentAccess]:
         with Session(self.delegate.engine) as session:

@@ -1,6 +1,7 @@
 from injector import Module, provider, singleton
 
 from api.core.config import Config, get_config
+from api.domains.agents.event_handlers import AgentLifecycleEmailHandler
 from api.domains.events.constants import EVENT_DELIVERY_PROCESSING_STALE_SECONDS
 from api.domains.events.handlers import EventHandlerRegistry
 from api.domains.events.processor import EventDeliveryProcessor
@@ -30,8 +31,10 @@ class AppModule(Module):
 
     @provider
     @singleton
-    def provide_event_handler_registry(self) -> EventHandlerRegistry:
-        return EventHandlerRegistry()
+    def provide_event_handler_registry(
+        self, agent_lifecycle_email_handler: AgentLifecycleEmailHandler
+    ) -> EventHandlerRegistry:
+        return EventHandlerRegistry([agent_lifecycle_email_handler])
 
     @provider
     @singleton

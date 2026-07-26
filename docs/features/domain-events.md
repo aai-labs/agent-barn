@@ -57,8 +57,11 @@ AF-219 ships the first concrete events as RBAC audit inputs and usage examples:
 - `agent.access.granted` — emitted when explicit Agent Access is granted to a Membership.
 - `agent.access.revoked` — emitted when explicit Agent Access is removed from a Membership.
 - `agent.general_access.changed` — emitted when an Agent's General Access role changes.
+- `agent.created` — emitted after an Agent is successfully created.
+- `agent.started` — emitted after an Agent transitions to `RUNNING`.
+- `agent.stopped` — emitted after an Agent transitions to `STOPPED`.
 
-These events are intended for the `security_audit.projection` Event Handler. The Security Audit Record projection is implemented by a later slice; the events themselves are persisted by the business mutation transaction.
+RBAC events are intended for the `security_audit.projection` Event Handler. Agent start/stop events are intended for the `agent.lifecycle_email.notification` Event Handler, which emails the Agent Creator and users with Agent Owner access, de-duplicated by email. The Security Audit Record projection is implemented by a later slice; the events themselves are persisted by the business mutation transaction.
 
 ## Delivery worker contract
 
@@ -167,7 +170,7 @@ Only mark a delivery `ENQUEUED` after transport publish returns successfully.
 
 ### Add an Event Handler
 
-Handlers are statically registered startup dependencies. A handler declares a stable name, supported event versions, and receives both the business event and delivery context:
+Handlers are statically registered startup dependencies. For example, `agent.lifecycle_email.notification` handles `agent.started` and `agent.stopped` by sending lifecycle email notifications to the Agent Creator and Agent Owners. A handler declares a stable name, supported event versions, and receives both the business event and delivery context:
 
 ```python
 class SecurityAuditProjection:
