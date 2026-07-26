@@ -101,11 +101,15 @@ The bounded, secret-safe JSON object carrying event-specific domain data for a D
 _Avoid_: serialized model, database row snapshot, metadata
 
 **Event Delivery**:
-A durable, handler-specific delivery state for one Domain Event and one intended Event Handler; retry attempts do not define its identity.
-_Avoid_: retry attempt, outbox message
+A durable, handler-specific delivery record for one Domain Event and one intended Event Handler. Its lifecycle is pending, enqueued, processing, succeeded, or dead-lettered; retry attempts do not define its identity.
+_Avoid_: retry attempt, outbox message, failed event
+
+**Dead-lettered Event Delivery**:
+An Event Delivery that reached terminal failure and has no automatic retry remaining.
+_Avoid_: failed event, failed message
 
 **Event Handler**:
-A named internal consumer of one or more Domain Events, with a stable identity used for delivery tracking and idempotency.
+A named internal consumer of one or more Domain Events, with a stable identity used for delivery tracking and idempotency. Event Handler names are durable contracts once Event Deliveries can reference them.
 _Avoid_: worker, callback, subscriber
 
 **Security Audit Record**:

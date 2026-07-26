@@ -1,0 +1,56 @@
+{{- if .Values.worker.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-event-worker
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentfarm-api.labels" . | nindent 4 }}
+    app.kubernetes.io/component: event-worker
+spec:
+  replicas: {{ .Values.worker.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "agentfarm-api.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: event-worker
+  template:
+    metadata:
+      annotations:
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+      labels:
+        {{- include "agentfarm-api.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: event-worker
+    spec:
+      serviceAccountName: {{ .Release.Name }}
+      imagePullSecrets:
+        {{- toYaml .Values.imagePullSecrets | nindent 8 }}
+      containers:
+        - name: event-worker
+          image: "{{ .Values.registryPrefix }}/{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - dramatiq
+            - api.domains.events.worker
+            - --processes
+            - "1"
+            - --threads
+            - "4"
+            - --queues
+            - "event-deliveries"
+          envFrom:
+            - secretRef:
+                name: {{ .Values.secretName }}
+            - secretRef:
+                name: {{ .Values.litellmApiKeySecretName }}
+          readinessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - "from api.core.config import get_config; from api.domains.events.transport import EventDeliveryTransport; EventDeliveryTransport(get_config()).check_ready()"
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 6
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+{{- end }}

@@ -37,6 +37,8 @@ Agent runtimes report messages and tool-call state to the separate Ingest API us
 
 `../../helmfile.yaml.gotmpl` orders PostgreSQL releases, LiteLLM, API, and UI. API deployment mounts Kubernetes access so the service can manage agent resources. An API Helm hook runs Alembic before installation or upgrade, and health probes use `/api/v1/health`.
 
+The API image also runs Domain Event delivery workloads with different commands: a Dramatiq worker deployment processes committed Event Delivery IDs from Redis, and a CronJob runs the one-shot Event Delivery reconciler. Product and Ingest API health probes remain PostgreSQL-only; worker readiness checks Redis connectivity through the delivery transport adapter.
+
 The deploy workflow reads API and UI image tags from each chart's `appVersion`, builds versioned images, and applies Helmfile. `../../AGENTS.md` is authoritative for independent API/UI `appVersion` and chart `version` rules.
 
 ## Kubernetes client constraint
@@ -49,6 +51,7 @@ Kubernetes `stream()` and `portforward()` temporarily monkey-patch `ApiClient.re
 | ------------------------------- | ------------------------------------------------------------------------------- |
 | Runtime orchestration           | `../../api/domains/agents/service.py`                                                 |
 | Ingest process and routing      | `../../api/ingest_app.py`, `../../api/ingest_main.py`, `../../api/start.sh`                       |
+| Domain Event delivery workers   | `../../api/domains/events/worker.py`, `../../api/domains/events/reconciliation.py`, `../../helm/agentfarm-api/templates/event-delivery-worker-deployment.yaml`, `../../helm/agentfarm-api/templates/event-delivery-reconciliation-cronjob.yaml` |
 | Shared Kubernetes builders      | `../../api/domains/agents/builders/common.py`                                         |
 | Hermes builders                 | `../../api/domains/agents/builders/hermes.py`, `../../hermes-base/`                         |
 | OpenClaw builders               | `../../api/domains/agents/builders/openclaw.py`, `../../openclaw-base/`                     |
