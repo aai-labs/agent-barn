@@ -57,6 +57,9 @@ class Config(BaseSettings):
     openrouter_api_key: str = ""
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     openrouter_models_cache_ttl_seconds: int = 3600
+
+    event_delivery_redis_url: str = "redis://localhost:6379/0"
+
     # Comma-separated glob patterns (fnmatch) matched against OpenRouter model
     # ids to limit what the model picker offers, e.g. "z-ai/glm-5.2,openai/gpt-5*".
     # Empty allows the full catalogue.

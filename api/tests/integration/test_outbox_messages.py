@@ -1,4 +1,5 @@
-from datetime import UTC, datetime
+from collections.abc import Sequence
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -16,11 +17,20 @@ from api.domains.events import (
     DomainEventDefinition,
     DomainEventRegistry,
     DomainEventValidationError,
+    EventDeliveryDeadLetterReason,
     EventDeliveryStatus,
     SubjectIdentity,
     SubjectIdentityType,
 )
-from api.domains.events.models import EventDelivery, OutboxMessage
+from api.domains.events.handlers import (
+    EventDeliveryContext,
+    EventHandlerRegistry,
+    RetryableEventHandlerError,
+    SupportedEvent,
+    TerminalEventHandlerError,
+)
+from api.domains.events.models import DomainEventEnvelope, EventDelivery, OutboxMessage
+from api.domains.events.processor import EventDeliveryProcessor
 from api.domains.events.repository import OutboxMessageRepository
 from api.domains.organizations.models import Organization
 from api.domains.rbac.catalog import OrganizationRole
@@ -38,6 +48,20 @@ class SamplePayload(BaseModel):
     organization_id: str
     detail: str = "sample"
     nested: dict[str, Any] = Field(default_factory=dict)
+
+
+class RecordingEventHandler:
+    name = "audit.projection"
+    supported_events: Sequence[SupportedEvent] = (SupportedEvent("agent.sampled", 1),)
+
+    def __init__(self, error: Exception | None = None):
+        self.error = error
+        self.calls: list[tuple[DomainEventEnvelope, EventDeliveryContext]] = []
+
+    def handle(self, event: DomainEventEnvelope, context: EventDeliveryContext) -> None:
+        self.calls.append((event, context))
+        if self.error is not None:
+            raise self.error
 
 
 @pytest.fixture
@@ -253,6 +277,347 @@ def test_event_delivery_statuses_are_canonical():
     )
 
 
+def test_event_delivery_dead_letter_reasons_are_canonical():
+    assert_that(
+        {reason.value for reason in EventDeliveryDeadLetterReason},
+        equal_to(
+            {
+                "RETRY_EXHAUSTED",
+                "TERMINAL_HANDLER_ERROR",
+                "UNKNOWN_HANDLER",
+                "UNSUPPORTED_EVENT",
+                "INVALID_DELIVERY",
+            }
+        ),
+    )
+
+
+def test_mark_delivery_enqueued_records_successful_publish(
+    repository: OutboxMessageRepository,
+    registry: DomainEventRegistry,
+    organization_id: UUID,
+):
+    event = _event(registry, organization_id)
+    repository.create(event, registry)
+    delivery = repository.list_deliveries_for_event(event.event_id)[0]
+    enqueued_at = datetime(2026, 7, 26, 10, 0, tzinfo=UTC)
+
+    with when("transport publish succeeds after commit"):
+        updated = repository.mark_delivery_enqueued(delivery.id, enqueued_at=enqueued_at)
+
+    with then("the delivery is marked as known queued"):
+        assert updated is not None
+        assert_that(updated.status, equal_to(EventDeliveryStatus.ENQUEUED))
+        assert_that(updated.enqueued_at, equal_to(enqueued_at))
+        assert_that(updated.dead_letter_reason, none())
+
+
+def test_claim_delivery_requires_eligible_state_and_increments_attempts(
+    repository: OutboxMessageRepository,
+    registry: DomainEventRegistry,
+    organization_id: UUID,
+):
+    event = _event(registry, organization_id)
+    repository.create(event, registry)
+    delivery = repository.list_deliveries_for_event(event.event_id)[0]
+    repository.mark_delivery_enqueued(delivery.id, enqueued_at=datetime(2026, 7, 26, 10, 0, tzinfo=UTC))
+    claimed_at = datetime(2026, 7, 26, 10, 1, tzinfo=UTC)
+
+    with when("a worker claims an enqueued delivery"):
+        claimed = repository.claim_delivery(delivery.id, claimed_at=claimed_at)
+        duplicate_claim = repository.claim_delivery(delivery.id, claimed_at=claimed_at + timedelta(seconds=1))
+
+    with then("only the first claim can execute the handler"):
+        assert claimed is not None
+        assert_that(claimed.status, equal_to(EventDeliveryStatus.PROCESSING))
+        assert_that(claimed.claimed_at, equal_to(claimed_at))
+        assert_that(claimed.attempt_count, equal_to(1))
+        assert_that(duplicate_claim, none())
+
+
+def test_claim_delivery_can_reclaim_stale_processing(
+    repository: OutboxMessageRepository,
+    registry: DomainEventRegistry,
+    organization_id: UUID,
+):
+    event = _event(registry, organization_id)
+    repository.create(event, registry)
+    delivery = repository.list_deliveries_for_event(event.event_id)[0]
+    first_claimed_at = datetime(2026, 7, 26, 10, 0, tzinfo=UTC)
+    repository.mark_delivery_enqueued(delivery.id, enqueued_at=first_claimed_at)
+    repository.claim_delivery(delivery.id, claimed_at=first_claimed_at)
+
+    with when("the processing claim is stale"):
+        reclaimed = repository.claim_delivery(
+            delivery.id,
+            claimed_at=first_claimed_at + timedelta(minutes=20),
+            processing_stale_before=first_claimed_at + timedelta(minutes=15),
+        )
+
+    with then("another worker can claim a new attempt"):
+        assert reclaimed is not None
+        assert_that(reclaimed.status, equal_to(EventDeliveryStatus.PROCESSING))
+        assert_that(reclaimed.attempt_count, equal_to(2))
+
+
+def test_retryable_failure_is_bounded_and_success_clears_current_error(
+    repository: OutboxMessageRepository,
+    registry: DomainEventRegistry,
+    organization_id: UUID,
+):
+    event = _event(registry, organization_id)
+    repository.create(event, registry)
+    delivery = repository.list_deliveries_for_event(event.event_id)[0]
+    repository.mark_delivery_enqueued(delivery.id)
+    repository.claim_delivery(delivery.id)
+
+    with when("a retryable failure contains sensitive details before a later success"):
+        failed = repository.mark_delivery_retryable_failure(delivery.id, "api_token=super-secret")
+        succeeded = repository.mark_delivery_succeeded(
+            delivery.id, completed_at=datetime(2026, 7, 26, 10, 30, tzinfo=UTC)
+        )
+
+    with then("the unresolved error is redacted and then cleared without clearing attempts"):
+        assert failed is not None
+        assert_that(failed.status, equal_to(EventDeliveryStatus.PROCESSING))
+        assert_that(failed.last_error, equal_to("Event delivery error contained sensitive details and was redacted"))
+        assert succeeded is not None
+        assert_that(succeeded.status, equal_to(EventDeliveryStatus.SUCCEEDED))
+        assert_that(succeeded.last_error, none())
+        assert_that(succeeded.attempt_count, equal_to(1))
+
+
+def test_dead_lettered_delivery_requires_reason_and_preserves_error(
+    delegate: PostgresRepositoryDelegate,
+    repository: OutboxMessageRepository,
+    registry: DomainEventRegistry,
+    organization_id: UUID,
+):
+    event = _event(registry, organization_id)
+    repository.create(event, registry)
+    delivery = repository.list_deliveries_for_event(event.event_id)[0]
+
+    with when("a delivery reaches terminal failure"):
+        dead_lettered = repository.mark_delivery_dead_lettered(
+            delivery.id,
+            reason=EventDeliveryDeadLetterReason.TERMINAL_HANDLER_ERROR,
+            error="handler rejected event",
+            completed_at=datetime(2026, 7, 26, 10, 45, tzinfo=UTC),
+        )
+
+    with then("the state and reason are both durable"):
+        assert dead_lettered is not None
+        assert_that(dead_lettered.status, equal_to(EventDeliveryStatus.DEAD_LETTERED))
+        assert_that(dead_lettered.dead_letter_reason, equal_to(EventDeliveryDeadLetterReason.TERMINAL_HANDLER_ERROR))
+        assert_that(dead_lettered.last_error, equal_to("handler rejected event"))
+        assert_that(dead_lettered.completed_at, equal_to(datetime(2026, 7, 26, 10, 45, tzinfo=UTC)))
+
+    with then("the database rejects dead-lettered rows without a reason"):
+        with pytest.raises(IntegrityError):
+            with Session(delegate.engine) as session:
+                persisted = session.get(EventDelivery, delivery.id)
+                assert persisted is not None
+                persisted.dead_letter_reason = None
+                session.add(persisted)
+                session.commit()
+
+
+def test_reconciliation_candidates_are_delivery_state_and_timestamp_specific(
+    repository: OutboxMessageRepository,
+    registry: DomainEventRegistry,
+    organization_id: UUID,
+):
+    event = _event(registry, organization_id)
+    repository.create(event, registry)
+    pending, enqueued = repository.list_deliveries_for_event(event.event_id)
+    now = datetime.now(UTC)
+    old = now - timedelta(minutes=20)
+    repository.mark_delivery_enqueued(enqueued.id, enqueued_at=old)
+
+    processing_event = _event(registry, organization_id)
+    repository.create(processing_event, registry)
+    processing, succeeded = repository.list_deliveries_for_event(processing_event.event_id)
+    repository.mark_delivery_enqueued(processing.id, enqueued_at=old)
+    repository.claim_delivery(processing.id, claimed_at=old)
+    repository.mark_delivery_enqueued(succeeded.id, enqueued_at=old)
+    repository.claim_delivery(succeeded.id, claimed_at=old)
+    repository.mark_delivery_succeeded(succeeded.id)
+
+    with when("reconciliation scans stale non-terminal deliveries"):
+        candidates = repository.list_reconciliation_candidates(
+            pending_created_before=now + timedelta(seconds=1),
+            enqueued_before=now - timedelta(minutes=5),
+            processing_claimed_before=now - timedelta(minutes=15),
+            limit=10,
+            skip_locked=False,
+        )
+
+    with then("pending, stale enqueued, and stale processing deliveries are selected"):
+        assert_that({candidate.id for candidate in candidates}, equal_to({pending.id, enqueued.id, processing.id}))
+
+
+def test_delivery_processor_executes_supported_handler_and_marks_succeeded(
+    repository: OutboxMessageRepository,
+    registry: DomainEventRegistry,
+    organization_id: UUID,
+):
+    event = _event(registry, organization_id)
+    repository.create(event, registry)
+    delivery = next(
+        delivery
+        for delivery in repository.list_deliveries_for_event(event.event_id)
+        if delivery.handler_name == "audit.projection"
+    )
+    repository.mark_delivery_enqueued(delivery.id)
+    handler = RecordingEventHandler()
+    processor = EventDeliveryProcessor(repository=repository, handlers=EventHandlerRegistry([handler]))
+
+    with when("the generic processor handles an enqueued delivery"):
+        processed = processor.process(delivery.id)
+
+    with then("the handler receives event and delivery context before success is persisted"):
+        assert_that(processed, equal_to(True))
+        persisted = repository.get_delivery(delivery.id)
+        assert persisted is not None
+        assert_that(persisted.status, equal_to(EventDeliveryStatus.SUCCEEDED))
+        assert_that(persisted.last_error, none())
+        assert_that(len(handler.calls), equal_to(1))
+        handled_event, context = handler.calls[0]
+        assert_that(handled_event.event_id, equal_to(event.event_id))
+        assert_that(context.delivery_id, equal_to(delivery.id))
+        assert_that(context.handler_name, equal_to("audit.projection"))
+        assert_that(context.attempt_count, equal_to(1))
+        assert_that(context.correlation_id, equal_to(event.correlation_id))
+
+
+def test_delivery_processor_noops_missing_and_terminal_deliveries(
+    repository: OutboxMessageRepository,
+    registry: DomainEventRegistry,
+    organization_id: UUID,
+):
+    event = _event(registry, organization_id)
+    repository.create(event, registry)
+    delivery = repository.list_deliveries_for_event(event.event_id)[0]
+    repository.mark_delivery_succeeded(delivery.id)
+    handler = RecordingEventHandler()
+    processor = EventDeliveryProcessor(repository=repository, handlers=EventHandlerRegistry([handler]))
+
+    with when("the processor receives a terminal or missing delivery"):
+        terminal_processed = processor.process(delivery.id)
+        missing_processed = processor.process(uuid4())
+
+    with then("it exits without invoking handlers"):
+        assert_that(terminal_processed, equal_to(False))
+        assert_that(missing_processed, equal_to(False))
+        assert_that(handler.calls, equal_to([]))
+
+
+def test_delivery_processor_dead_letters_unknown_handler(
+    repository: OutboxMessageRepository,
+    registry: DomainEventRegistry,
+    organization_id: UUID,
+):
+    event = _event(registry, organization_id)
+    repository.create(event, registry)
+    delivery = next(
+        delivery
+        for delivery in repository.list_deliveries_for_event(event.event_id)
+        if delivery.handler_name == "activity.projection"
+    )
+    repository.mark_delivery_enqueued(delivery.id)
+    processor = EventDeliveryProcessor(repository=repository, handlers=EventHandlerRegistry([RecordingEventHandler()]))
+
+    with when("no registered handler has the delivery's stable name"):
+        processed = processor.process(delivery.id)
+
+    with then("the delivery is dead-lettered as a terminal configuration error"):
+        assert_that(processed, equal_to(False))
+        persisted = repository.get_delivery(delivery.id)
+        assert persisted is not None
+        assert_that(persisted.status, equal_to(EventDeliveryStatus.DEAD_LETTERED))
+        assert_that(persisted.dead_letter_reason, equal_to(EventDeliveryDeadLetterReason.UNKNOWN_HANDLER))
+
+
+def test_delivery_processor_dead_letters_unsupported_event_version(
+    repository: OutboxMessageRepository,
+    registry: DomainEventRegistry,
+    organization_id: UUID,
+):
+    event = _event(registry, organization_id)
+    repository.create(event, registry)
+    delivery = next(
+        delivery
+        for delivery in repository.list_deliveries_for_event(event.event_id)
+        if delivery.handler_name == "audit.projection"
+    )
+    repository.mark_delivery_enqueued(delivery.id)
+
+    class WrongVersionHandler(RecordingEventHandler):
+        supported_events: Sequence[SupportedEvent] = (SupportedEvent("agent.sampled", 2),)
+
+    processor = EventDeliveryProcessor(repository=repository, handlers=EventHandlerRegistry([WrongVersionHandler()]))
+
+    with when("the handler name exists but does not support the event version"):
+        processed = processor.process(delivery.id)
+
+    with then("the delivery is dead-lettered without retry"):
+        assert_that(processed, equal_to(False))
+        persisted = repository.get_delivery(delivery.id)
+        assert persisted is not None
+        assert_that(persisted.status, equal_to(EventDeliveryStatus.DEAD_LETTERED))
+        assert_that(persisted.dead_letter_reason, equal_to(EventDeliveryDeadLetterReason.UNSUPPORTED_EVENT))
+
+
+def test_delivery_processor_classifies_retryable_and_terminal_handler_errors(
+    repository: OutboxMessageRepository,
+    registry: DomainEventRegistry,
+    organization_id: UUID,
+):
+    retry_event = _event(registry, organization_id)
+    repository.create(retry_event, registry)
+    retry_delivery = next(
+        delivery
+        for delivery in repository.list_deliveries_for_event(retry_event.event_id)
+        if delivery.handler_name == "audit.projection"
+    )
+    repository.mark_delivery_enqueued(retry_delivery.id)
+    retry_processor = EventDeliveryProcessor(
+        repository=repository,
+        handlers=EventHandlerRegistry([RecordingEventHandler(error=RetryableEventHandlerError("temporary"))]),
+    )
+
+    terminal_event = _event(registry, organization_id)
+    repository.create(terminal_event, registry)
+    terminal_delivery = next(
+        delivery
+        for delivery in repository.list_deliveries_for_event(terminal_event.event_id)
+        if delivery.handler_name == "audit.projection"
+    )
+    repository.mark_delivery_enqueued(terminal_delivery.id)
+    terminal_processor = EventDeliveryProcessor(
+        repository=repository,
+        handlers=EventHandlerRegistry([RecordingEventHandler(error=TerminalEventHandlerError("terminal"))]),
+    )
+
+    with when("handlers raise typed errors"):
+        with pytest.raises(RetryableEventHandlerError):
+            retry_processor.process(retry_delivery.id)
+        terminal_processed = terminal_processor.process(terminal_delivery.id)
+
+    with then("retryable errors stay processing and terminal errors dead-letter"):
+        retry_persisted = repository.get_delivery(retry_delivery.id)
+        terminal_persisted = repository.get_delivery(terminal_delivery.id)
+        assert retry_persisted is not None
+        assert terminal_persisted is not None
+        assert_that(retry_persisted.status, equal_to(EventDeliveryStatus.PROCESSING))
+        assert_that(retry_persisted.last_error, equal_to("temporary"))
+        assert_that(terminal_processed, equal_to(False))
+        assert_that(terminal_persisted.status, equal_to(EventDeliveryStatus.DEAD_LETTERED))
+        assert_that(
+            terminal_persisted.dead_letter_reason, equal_to(EventDeliveryDeadLetterReason.TERMINAL_HANDLER_ERROR)
+        )
+
+
 def test_session_aware_stage_commits_business_state_message_and_deliveries_atomically(
     delegate: PostgresRepositoryDelegate,
     repository: OutboxMessageRepository,
@@ -384,7 +749,7 @@ def test_role_change_repository_operation_emits_audit_domain_event(
 
     with then("the role mutation and audit Domain Event rows commit together"):
         assert changed is not None
-        assert_that(changed.role, equal_to(OrganizationRole.ADMIN))
+        assert_that(changed.membership.role, equal_to(OrganizationRole.ADMIN))
         assert_that(repository.count(), equal_to(1))
         messages = delegate.find_all(OutboxMessage)
         assert_that(messages[0].event_name, equal_to("organization.role.changed"))
@@ -392,6 +757,7 @@ def test_role_change_repository_operation_emits_audit_domain_event(
         assert_that(messages[0].payload["new_role"], equal_to("ADMIN"))
         deliveries = repository.list_deliveries_for_event(messages[0].event_id)
         assert_that([delivery.handler_name for delivery in deliveries], equal_to(["security_audit.projection"]))
+        assert_that(changed.delivery_ids, equal_to([deliveries[0].id]))
 
 
 def test_outbox_message_rows_are_immutable(

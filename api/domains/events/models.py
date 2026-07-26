@@ -36,6 +36,14 @@ class EventDeliveryStatus(str, enum.Enum):
     DEAD_LETTERED = "DEAD_LETTERED"
 
 
+class EventDeliveryDeadLetterReason(str, enum.Enum):
+    RETRY_EXHAUSTED = "RETRY_EXHAUSTED"
+    TERMINAL_HANDLER_ERROR = "TERMINAL_HANDLER_ERROR"
+    UNKNOWN_HANDLER = "UNKNOWN_HANDLER"
+    UNSUPPORTED_EVENT = "UNSUPPORTED_EVENT"
+    INVALID_DELIVERY = "INVALID_DELIVERY"
+
+
 class ActorIdentity(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -103,6 +111,11 @@ class EventDelivery(DatabaseBaseModel, table=True):
     __tablename__: str = "event_delivery"
     __table_args__ = (
         UniqueConstraint("event_id", "handler_name", name="uq_event_delivery_event_handler"),
+        sa.CheckConstraint(
+            "(status = 'DEAD_LETTERED' AND dead_letter_reason IS NOT NULL) "
+            "OR (status <> 'DEAD_LETTERED' AND dead_letter_reason IS NULL)",
+            name="ck_event_delivery_dead_letter_reason_matches_status",
+        ),
         Index("ix_event_delivery_outbox_message", "outbox_message_id"),
         Index("ix_event_delivery_organization_status", "organization_id", "status"),
     )
@@ -117,5 +130,10 @@ class EventDelivery(DatabaseBaseModel, table=True):
     )
     attempt_count: int = SqlField(default=0, nullable=False, sa_column_kwargs={"server_default": "0"})
     last_error: str | None = SqlField(default=None, nullable=True)
+    dead_letter_reason: EventDeliveryDeadLetterReason | None = SqlField(
+        default=None,
+        sa_column=Column(sa.Enum(EventDeliveryDeadLetterReason), nullable=True),
+    )
+    enqueued_at: datetime | None = SqlField(default=None, nullable=True, sa_type=sa.DateTime(timezone=True))  # type: ignore
     claimed_at: datetime | None = SqlField(default=None, nullable=True, sa_type=sa.DateTime(timezone=True))  # type: ignore
     completed_at: datetime | None = SqlField(default=None, nullable=True, sa_type=sa.DateTime(timezone=True))  # type: ignore

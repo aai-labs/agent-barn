@@ -27,9 +27,20 @@ event_delivery_status_enum = postgresql.ENUM(
     create_type=False,
 )
 
+event_delivery_dead_letter_reason_enum = postgresql.ENUM(
+    "RETRY_EXHAUSTED",
+    "TERMINAL_HANDLER_ERROR",
+    "UNKNOWN_HANDLER",
+    "UNSUPPORTED_EVENT",
+    "INVALID_DELIVERY",
+    name="eventdeliverydeadletterreason",
+    create_type=False,
+)
+
 
 def upgrade() -> None:
     event_delivery_status_enum.create(op.get_bind(), checkfirst=True)
+    event_delivery_dead_letter_reason_enum.create(op.get_bind(), checkfirst=True)
     op.create_table(
         "event_delivery",
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
@@ -42,8 +53,15 @@ def upgrade() -> None:
         sa.Column("status", event_delivery_status_enum, nullable=False),
         sa.Column("attempt_count", sa.Integer(), server_default="0", nullable=False),
         sa.Column("last_error", sa.Text(), nullable=True),
+        sa.Column("dead_letter_reason", event_delivery_dead_letter_reason_enum, nullable=True),
+        sa.Column("enqueued_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("claimed_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
+        sa.CheckConstraint(
+            "(status = 'DEAD_LETTERED' AND dead_letter_reason IS NOT NULL) "
+            "OR (status <> 'DEAD_LETTERED' AND dead_letter_reason IS NULL)",
+            name="ck_event_delivery_dead_letter_reason_matches_status",
+        ),
         sa.ForeignKeyConstraint(["outbox_message_id"], ["event_outbox_message.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["organization_id"], ["organization.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
@@ -57,4 +75,5 @@ def downgrade() -> None:
     op.drop_index("ix_event_delivery_organization_status", table_name="event_delivery")
     op.drop_index("ix_event_delivery_outbox_message", table_name="event_delivery")
     op.drop_table("event_delivery")
+    event_delivery_dead_letter_reason_enum.drop(op.get_bind(), checkfirst=True)
     event_delivery_status_enum.drop(op.get_bind(), checkfirst=True)

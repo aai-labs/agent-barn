@@ -1,12 +1,49 @@
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import Any, cast
 from uuid import UUID
 
+import sqlalchemy as sa
 from injector import inject, singleton
 from sqlmodel import Session, select
 
-from api.domains.events.models import DomainEventEnvelope, EventDelivery, OutboxMessage
+from api.domains.events.models import (
+    DomainEventEnvelope,
+    EventDelivery,
+    EventDeliveryDeadLetterReason,
+    EventDeliveryStatus,
+    OutboxMessage,
+)
 from api.domains.events.registry import DomainEventRegistry
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
+
+MAX_DELIVERY_ERROR_CHARS = 2048
+_SENSITIVE_ERROR_PARTS = frozenset(
+    {
+        "api_key",
+        "apikey",
+        "authorization",
+        "client_secret",
+        "credential",
+        "password",
+        "private_key",
+        "refresh_token",
+        "secret",
+        "token",
+    }
+)
+
+
+def bound_delivery_error(error: BaseException | str | None) -> str | None:
+    if error is None:
+        return None
+    message = str(error)
+    normalized = message.lower().replace("-", "_")
+    if any(part in normalized for part in _SENSITIVE_ERROR_PARTS):
+        return "Event delivery error contained sensitive details and was redacted"
+    if len(message) <= MAX_DELIVERY_ERROR_CHARS:
+        return message
+    return f"{message[: MAX_DELIVERY_ERROR_CHARS - 13]}...[truncated]"
 
 
 @inject
@@ -69,6 +106,160 @@ class OutboxMessageRepository:
     def list_deliveries_for_event(self, event_id: UUID) -> list[EventDelivery]:
         with Session(self.delegate.engine) as session:
             return list(session.exec(select(EventDelivery).where(EventDelivery.event_id == event_id)))
+
+    def get_delivery(self, delivery_id: UUID) -> EventDelivery | None:
+        with Session(self.delegate.engine) as session:
+            return session.get(EventDelivery, delivery_id)
+
+    def mark_delivery_enqueued(self, delivery_id: UUID, *, enqueued_at: datetime | None = None) -> EventDelivery | None:
+        enqueued_at = enqueued_at or datetime.now(UTC)
+        with Session(self.delegate.engine) as session:
+            delivery = session.exec(
+                select(EventDelivery)
+                .where(EventDelivery.id == delivery_id)
+                .where(
+                    cast(Any, EventDelivery.status).not_in(
+                        [EventDeliveryStatus.SUCCEEDED, EventDeliveryStatus.DEAD_LETTERED]
+                    )
+                )
+                .with_for_update()
+            ).one_or_none()
+            if delivery is None:
+                return None
+            delivery.status = EventDeliveryStatus.ENQUEUED
+            delivery.enqueued_at = enqueued_at
+            delivery.dead_letter_reason = None
+            delivery.completed_at = None
+            session.add(delivery)
+            session.commit()
+            session.refresh(delivery)
+            return delivery
+
+    def claim_delivery(
+        self,
+        delivery_id: UUID,
+        *,
+        claimed_at: datetime | None = None,
+        processing_stale_before: datetime | None = None,
+    ) -> EventDelivery | None:
+        claimed_at = claimed_at or datetime.now(UTC)
+        status_column = cast(Any, EventDelivery.status)
+        eligible_conditions = [status_column == EventDeliveryStatus.ENQUEUED]
+        if processing_stale_before is not None:
+            claimed_at_column = cast(Any, EventDelivery.claimed_at)
+            eligible_conditions.append(
+                sa.and_(
+                    status_column == EventDeliveryStatus.PROCESSING,
+                    claimed_at_column.is_not(None),
+                    claimed_at_column <= processing_stale_before,
+                )
+            )
+        with Session(self.delegate.engine) as session:
+            delivery = session.exec(
+                select(EventDelivery)
+                .where(EventDelivery.id == delivery_id)
+                .where(sa.or_(*eligible_conditions))
+                .with_for_update()
+            ).one_or_none()
+            if delivery is None:
+                return None
+            delivery.status = EventDeliveryStatus.PROCESSING
+            delivery.claimed_at = claimed_at
+            delivery.attempt_count += 1
+            delivery.dead_letter_reason = None
+            delivery.completed_at = None
+            session.add(delivery)
+            session.commit()
+            session.refresh(delivery)
+            return delivery
+
+    def mark_delivery_retryable_failure(self, delivery_id: UUID, error: BaseException | str) -> EventDelivery | None:
+        with Session(self.delegate.engine) as session:
+            delivery = session.get(EventDelivery, delivery_id)
+            if delivery is None:
+                return None
+            delivery.status = EventDeliveryStatus.PROCESSING
+            delivery.last_error = bound_delivery_error(error)
+            delivery.dead_letter_reason = None
+            session.add(delivery)
+            session.commit()
+            session.refresh(delivery)
+            return delivery
+
+    def mark_delivery_succeeded(
+        self, delivery_id: UUID, *, completed_at: datetime | None = None
+    ) -> EventDelivery | None:
+        completed_at = completed_at or datetime.now(UTC)
+        with Session(self.delegate.engine) as session:
+            delivery = session.get(EventDelivery, delivery_id)
+            if delivery is None:
+                return None
+            delivery.status = EventDeliveryStatus.SUCCEEDED
+            delivery.last_error = None
+            delivery.dead_letter_reason = None
+            delivery.completed_at = completed_at
+            session.add(delivery)
+            session.commit()
+            session.refresh(delivery)
+            return delivery
+
+    def mark_delivery_dead_lettered(
+        self,
+        delivery_id: UUID,
+        *,
+        reason: EventDeliveryDeadLetterReason,
+        error: BaseException | str,
+        completed_at: datetime | None = None,
+    ) -> EventDelivery | None:
+        completed_at = completed_at or datetime.now(UTC)
+        with Session(self.delegate.engine) as session:
+            delivery = session.get(EventDelivery, delivery_id)
+            if delivery is None:
+                return None
+            delivery.status = EventDeliveryStatus.DEAD_LETTERED
+            delivery.dead_letter_reason = reason
+            delivery.last_error = bound_delivery_error(error)
+            delivery.completed_at = completed_at
+            session.add(delivery)
+            session.commit()
+            session.refresh(delivery)
+            return delivery
+
+    def list_reconciliation_candidates(
+        self,
+        *,
+        pending_created_before: datetime,
+        enqueued_before: datetime,
+        processing_claimed_before: datetime,
+        limit: int,
+        skip_locked: bool = True,
+    ) -> list[EventDelivery]:
+        statement = (
+            select(EventDelivery)
+            .where(
+                sa.or_(
+                    sa.and_(
+                        cast(Any, EventDelivery.status) == EventDeliveryStatus.PENDING,
+                        cast(Any, EventDelivery.created_at) <= pending_created_before,
+                    ),
+                    sa.and_(
+                        cast(Any, EventDelivery.status) == EventDeliveryStatus.ENQUEUED,
+                        cast(Any, EventDelivery.enqueued_at).is_not(None),
+                        cast(Any, EventDelivery.enqueued_at) <= enqueued_before,
+                    ),
+                    sa.and_(
+                        cast(Any, EventDelivery.status) == EventDeliveryStatus.PROCESSING,
+                        cast(Any, EventDelivery.claimed_at).is_not(None),
+                        cast(Any, EventDelivery.claimed_at) <= processing_claimed_before,
+                    ),
+                )
+            )
+            .order_by(cast(Any, EventDelivery.created_at))
+            .limit(limit)
+            .with_for_update(skip_locked=skip_locked)
+        )
+        with Session(self.delegate.engine) as session:
+            return list(session.exec(statement))
 
     def count(self) -> int:
         return self.delegate.count(OutboxMessage)
