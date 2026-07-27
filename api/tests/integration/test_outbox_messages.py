@@ -444,7 +444,7 @@ def test_reconciliation_candidates_are_delivery_state_and_timestamp_specific(
     repository.mark_delivery_succeeded(succeeded.id)
 
     with when("reconciliation scans stale non-terminal deliveries"):
-        candidates = repository.list_reconciliation_candidates(
+        candidates = repository.claim_reconciliation_candidates(
             pending_created_before=now + timedelta(seconds=1),
             enqueued_before=now - timedelta(minutes=5),
             processing_claimed_before=now - timedelta(minutes=15),

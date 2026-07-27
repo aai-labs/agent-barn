@@ -79,10 +79,8 @@ from api.domains.agents.exceptions import BotTokenConflictHTTPException
 from api.domains.agents.repository import AgentRepository
 from api.domains.agents.runtime_policy import build_chat_commands_policy_md
 from api.domains.auth.models import CurrentUserContext
-from api.domains.events import ActorIdentity, ActorIdentityType
+from api.domains.events import EventDeliveryDispatcher, resolve_actor_identity
 from api.domains.events.catalog import AGENT_STARTED, AGENT_STOPPED
-from api.domains.events.repository import bound_delivery_error
-from api.domains.events.transport import EventDeliveryTransport
 from api.domains.auth.token_service import SlackConfigTokenService
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.skills.models import Skill
@@ -237,32 +235,10 @@ class AgentService:
     config: Config
     skill_repository: SkillRepository
     slack_token_service: SlackConfigTokenService
-    event_delivery_transport: EventDeliveryTransport
+    event_delivery_dispatcher: EventDeliveryDispatcher
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
-
-    def _actor_identity(self, context: CurrentUserContext, organization_id: UUID) -> ActorIdentity:
-        membership = context.user_organization_map.get(organization_id)
-        if membership is not None:
-            return ActorIdentity(
-                type=ActorIdentityType.MEMBERSHIP,
-                id=membership.id,
-                organization_id=organization_id,
-            )
-        return ActorIdentity(type=ActorIdentityType.USER, id=context.user.id)
-
-    def _enqueue_event_deliveries(self, delivery_ids: list[UUID]) -> None:
-        for delivery_id in delivery_ids:
-            try:
-                self.event_delivery_transport.enqueue(delivery_id, metadata={"source": "immediate"})
-                self.repository.outbox_repository.mark_delivery_enqueued(delivery_id)
-            except Exception as exc:
-                logger.warning(
-                    "Immediate Event Delivery enqueue failed for %s: %s",
-                    delivery_id,
-                    bound_delivery_error(exc),
-                )
 
     def _ensure_model_allowed(self, model: str | None) -> None:
         """Rejects models outside the allowlist. litellm is cluster-internal, so
@@ -541,7 +517,12 @@ class AgentService:
             if persisted_membership is not None and persisted_membership.user_id == context.user.id
             else None
         )
-        self.repository.create_with_creator_access(agent, creator_membership_id)
+        created = self.repository.create_with_creator_access(
+            agent,
+            creator_membership_id,
+            actor=resolve_actor_identity(context, org_id),
+        )
+        created_delivery_ids = created.delivery_ids
 
         slack_config = None
         teams_config = None
@@ -623,11 +604,7 @@ class AgentService:
         if skills_to_assign:
             self.repository.save_skills([AgentSkill(agent_id=agent.id, skill_id=s.id) for s in skills_to_assign])
 
-        created_delivery_ids = self.repository.record_agent_created_event(
-            agent.id,
-            actor=self._actor_identity(context, org_id),
-        )
-        self._enqueue_event_deliveries(created_delivery_ids)
+        self.event_delivery_dispatcher.enqueue_immediate(created_delivery_ids)
 
         if data.platform == AgentPlatform.TEAMS:
             return self.start_agent(agent.id, context)
@@ -1259,11 +1236,11 @@ class AgentService:
         result = self.repository.save_with_lifecycle_event(
             agent,
             event_name=AGENT_STARTED,
-            actor=self._actor_identity(context, org_id),
+            actor=resolve_actor_identity(context, org_id),
             previous_status=previous_status,
             new_status=AgentStatus.RUNNING.value,
         )
-        self._enqueue_event_deliveries(result.delivery_ids)
+        self.event_delivery_dispatcher.enqueue_immediate(result.delivery_ids)
         return self._get_agent_read(result.agent, context)
 
     def get_agent_logs(
@@ -1396,11 +1373,11 @@ class AgentService:
         result = self.repository.save_with_lifecycle_event(
             agent,
             event_name=AGENT_STOPPED,
-            actor=self._actor_identity(context, agent.organization_id),
+            actor=resolve_actor_identity(context, agent.organization_id),
             previous_status=previous_status,
             new_status=AgentStatus.STOPPED.value,
         )
-        self._enqueue_event_deliveries(result.delivery_ids)
+        self.event_delivery_dispatcher.enqueue_immediate(result.delivery_ids)
         return self._get_agent_read(result.agent, context)
 
     def count_active_agents(self, organization_id: UUID) -> int:

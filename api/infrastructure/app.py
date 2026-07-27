@@ -7,6 +7,7 @@ from api.domains.events.handlers import EventHandlerRegistry
 from api.domains.events.processor import EventDeliveryProcessor
 from api.domains.events.reconciliation import EventDeliveryReconciler
 from api.domains.events.repository import OutboxMessageRepository
+from api.domains.events.security_audit import SecurityAuditProjection
 from api.domains.events.transport import EventDeliveryTransport
 from api.infrastructure.clock import Clock
 from api.infrastructure.kubernetes.client import KubernetesClient
@@ -32,9 +33,11 @@ class AppModule(Module):
     @provider
     @singleton
     def provide_event_handler_registry(
-        self, agent_lifecycle_email_handler: AgentLifecycleEmailHandler
+        self,
+        agent_lifecycle_email_handler: AgentLifecycleEmailHandler,
+        security_audit_projection: SecurityAuditProjection,
     ) -> EventHandlerRegistry:
-        return EventHandlerRegistry([agent_lifecycle_email_handler])
+        return EventHandlerRegistry([agent_lifecycle_email_handler, security_audit_projection])
 
     @provider
     @singleton

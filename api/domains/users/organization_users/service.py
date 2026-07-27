@@ -1,4 +1,3 @@
-import logging
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -8,9 +7,7 @@ from sqlmodel import Session
 
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.service import AuthService
-from api.domains.events import ActorIdentity, ActorIdentityType
-from api.domains.events.repository import bound_delivery_error
-from api.domains.events.transport import EventDeliveryTransport
+from api.domains.events import EventDeliveryDispatcher, resolve_actor_identity
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.rbac.catalog import ORG_OWNER_ONLY_ROLES, PermissionKey
 from api.domains.rbac.policy import PermissionPolicy
@@ -29,8 +26,6 @@ from api.domains.users.organization_users.models import (
 from api.domains.users.organization_users.repository import OrganizationUserRepository
 from api.domains.users.repository import UserRepository
 
-logger = logging.getLogger(__name__)
-
 
 @inject
 @singleton
@@ -41,7 +36,7 @@ class OrganizationUserService:
     auth_service: AuthService
     user_repository: UserRepository
     permission_policy: PermissionPolicy
-    event_delivery_transport: EventDeliveryTransport
+    event_delivery_dispatcher: EventDeliveryDispatcher
 
     def find_by_user_id_and_organization_id(self, user_id: UUID, organization_id: UUID) -> OrganizationUserRead:
         organization_user = self.organization_user_repository.get_by_user_id_and_organization_id(
@@ -250,34 +245,12 @@ class OrganizationUserService:
             organization_id=organization_id,
             user_id=user_id,
             new_role=data.role,
-            actor=self._actor_identity(context, organization_id),
+            actor=resolve_actor_identity(context, organization_id),
         )
         if changed is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Member not found in this organization")
-        self._enqueue_event_deliveries(changed.delivery_ids)
+        self.event_delivery_dispatcher.enqueue_immediate(changed.delivery_ids)
         return self._to_member_read(changed.membership)
-
-    def _enqueue_event_deliveries(self, delivery_ids: list[UUID]) -> None:
-        for delivery_id in delivery_ids:
-            try:
-                self.event_delivery_transport.enqueue(delivery_id, metadata={"source": "immediate"})
-                self.organization_user_repository.outbox_repository.mark_delivery_enqueued(delivery_id)
-            except Exception as exc:
-                logger.warning(
-                    "Immediate Event Delivery enqueue failed for %s: %s",
-                    delivery_id,
-                    bound_delivery_error(exc),
-                )
-
-    def _actor_identity(self, context: CurrentUserContext, organization_id: UUID) -> ActorIdentity:
-        membership = context.user_organization_map.get(organization_id)
-        if membership is not None:
-            return ActorIdentity(
-                type=ActorIdentityType.MEMBERSHIP,
-                id=membership.id,
-                organization_id=organization_id,
-            )
-        return ActorIdentity(type=ActorIdentityType.USER, id=context.user.id)
 
     def remove_member(self, context: CurrentUserContext, organization_id: UUID, user_id: UUID) -> None:
         self.permission_policy.require_organization(

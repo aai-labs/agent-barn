@@ -16,7 +16,7 @@ from api.domains.events.constants import (
     EVENT_DELIVERY_RECONCILIATION_PUBLISH_CONCURRENCY,
 )
 from api.domains.events.models import EventDelivery
-from api.domains.events.repository import bound_delivery_error
+from api.domains.events.repository import PendingDeliveryStats, bound_delivery_error
 from api.domains.events.transport import TransportMetadata
 
 logger = logging.getLogger(__name__)
@@ -30,7 +30,7 @@ class EventDeliveryReconciliationResult:
 
 
 class EventDeliveryReconciliationRepository(Protocol):
-    def list_reconciliation_candidates(
+    def claim_reconciliation_candidates(
         self,
         *,
         pending_created_before: datetime,
@@ -40,7 +40,7 @@ class EventDeliveryReconciliationRepository(Protocol):
         skip_locked: bool = True,
     ) -> list[EventDelivery]: ...
 
-    def mark_delivery_enqueued(self, delivery_id: UUID) -> EventDelivery | None: ...
+    def pending_delivery_stats(self) -> PendingDeliveryStats: ...
 
 
 class EventDeliveryReconciliationTransport(Protocol):
@@ -55,9 +55,11 @@ class EventDeliveryReconciler:
     def run_once(self) -> EventDeliveryReconciliationResult:
         started = time.monotonic()
         candidates = self._load_candidates()
-        if not candidates:
-            return EventDeliveryReconciliationResult()
+        result = self._publish_all(candidates, started) if candidates else EventDeliveryReconciliationResult()
+        self._log_summary(result)
+        return result
 
+    def _publish_all(self, candidates: list[EventDelivery], started: float) -> EventDeliveryReconciliationResult:
         max_runtime = EVENT_DELIVERY_RECONCILIATION_MAX_RUNTIME_SECONDS
         publish_concurrency = EVENT_DELIVERY_RECONCILIATION_PUBLISH_CONCURRENCY
         published = 0
@@ -75,9 +77,21 @@ class EventDeliveryReconciler:
                     failed += 1
         return EventDeliveryReconciliationResult(scanned=len(candidates), published=published, failed=failed)
 
+    def _log_summary(self, result: EventDeliveryReconciliationResult) -> None:
+        stats: PendingDeliveryStats = self.repository.pending_delivery_stats()
+        logger.info(
+            "Event Delivery reconciliation summary: scanned=%s published=%s failed=%s "
+            "pending_count=%s oldest_pending_age_seconds=%s",
+            result.scanned,
+            result.published,
+            result.failed,
+            stats.pending_count,
+            stats.oldest_pending_age_seconds,
+        )
+
     def _load_candidates(self) -> list[EventDelivery]:
         now = datetime.now(UTC)
-        return self.repository.list_reconciliation_candidates(
+        return self.repository.claim_reconciliation_candidates(
             pending_created_before=now - timedelta(seconds=EVENT_DELIVERY_RECONCILIATION_PENDING_GRACE_SECONDS),
             enqueued_before=now - timedelta(seconds=EVENT_DELIVERY_RECONCILIATION_ENQUEUED_STALE_SECONDS),
             processing_claimed_before=now - timedelta(seconds=EVENT_DELIVERY_PROCESSING_STALE_SECONDS),
@@ -88,8 +102,10 @@ class EventDeliveryReconciler:
         if time.monotonic() - started >= max_runtime:
             return False
         try:
+            # The candidate is already claimed (marked ENQUEUED) atomically under the
+            # row's select-for-update lock; a transport failure here just leaves it to
+            # be picked up again once it goes stale, per the reconciliation contract.
             self.transport.enqueue(delivery_id, metadata={"source": "reconciliation"})
-            self.repository.mark_delivery_enqueued(delivery_id)
             return True
         except Exception as exc:
             logger.warning(
@@ -111,13 +127,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Republish stale or unpublished Event Deliveries.")
     parser.parse_args()
     logging.basicConfig(level=logging.INFO)
-    result = build_reconciler().run_once()
-    logger.info(
-        "Event Delivery reconciliation finished: scanned=%s published=%s failed=%s",
-        result.scanned,
-        result.published,
-        result.failed,
-    )
+    build_reconciler().run_once()
 
 
 if __name__ == "__main__":

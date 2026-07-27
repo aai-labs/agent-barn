@@ -1,5 +1,6 @@
 """Internal Domain Event contract and registry."""
 
+from api.domains.events.dispatch import EventDeliveryDispatcher, resolve_actor_identity
 from api.domains.events.handlers import (
     EventDeliveryContext,
     EventHandler,
@@ -37,6 +38,7 @@ __all__ = [
     "EventDelivery",
     "EventDeliveryContext",
     "EventDeliveryDeadLetterReason",
+    "EventDeliveryDispatcher",
     "EventDeliveryStatus",
     "EventHandler",
     "EventHandlerError",
@@ -50,4 +52,5 @@ __all__ = [
     "SupportedEvent",
     "TerminalEventHandlerError",
     "UnsupportedDomainEventError",
+    "resolve_actor_identity",
 ]

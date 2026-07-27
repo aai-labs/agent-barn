@@ -13,6 +13,7 @@ from api.domains.agents.models import (
     Agent,
     AgentAccess,
     AgentFilter,
+    AgentLifecycleEmailReceipt,
     AgentLogSnapshot,
     AgentSecret,
     AgentSkill,
@@ -365,7 +366,14 @@ class AgentRepository:
             session.commit()
             return True
 
-    def create_with_creator_access(self, agent: Agent, membership_id: UUID | None) -> Agent:
+    def create_with_creator_access(
+        self,
+        agent: Agent,
+        membership_id: UUID | None,
+        *,
+        actor: ActorIdentity,
+        correlation_id: UUID | None = None,
+    ) -> AgentLifecycleEventResult:
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             session.add(agent)
             session.flush()
@@ -378,28 +386,32 @@ class AgentRepository:
                         access_role_id=AGENT_OWNER_ROLE_ID,
                     )
                 )
+            event = EVENT_REGISTRY.build_event(
+                event_name=AGENT_CREATED,
+                schema_version=1,
+                occurred_at=datetime.now(UTC),
+                organization_id=agent.organization_id,
+                actor=actor,
+                subject=SubjectIdentity(
+                    type=SubjectIdentityType.AGENT,
+                    id=agent.id,
+                    organization_id=agent.organization_id,
+                ),
+                correlation_id=correlation_id or uuid4(),
+                payload={
+                    "organization_id": agent.organization_id,
+                    "agent_id": agent.id,
+                    "agent_name": agent.name,
+                    "platform": agent.platform,
+                    "runtime": agent.agent_type,
+                    "created_by_user_id": agent.created_by_user_id,
+                },
+            )
+            self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
+            delivery_ids = list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
             session.commit()
             session.refresh(agent)
-            return agent
-
-    def record_agent_created_event(
-        self,
-        agent_id: UUID,
-        *,
-        actor: ActorIdentity,
-        correlation_id: UUID | None = None,
-    ) -> list[UUID]:
-        agent = self.get_by_id(agent_id)
-        if agent is None:
-            return []
-        return self._record_agent_event(
-            agent,
-            event_name=AGENT_CREATED,
-            actor=actor,
-            correlation_id=correlation_id,
-            previous_status=None,
-            new_status=None,
-        ).delivery_ids
+            return AgentLifecycleEventResult(agent=agent, delivery_ids=delivery_ids)
 
     def save_with_lifecycle_event(
         self,
@@ -514,6 +526,26 @@ class AgentRepository:
                 AgentLifecycleEmailRecipient(email=str(user.email), full_name=user.full_name),
             )
         return list(recipients.values())
+
+    def find_notified_lifecycle_email_recipients(self, delivery_id: UUID) -> set[str]:
+        with Session(self.delegate.engine) as session:
+            return set(
+                session.exec(
+                    select(AgentLifecycleEmailReceipt.recipient_email).where(
+                        col(AgentLifecycleEmailReceipt.delivery_id) == delivery_id
+                    )
+                ).all()
+            )
+
+    def record_lifecycle_email_recipient_notified(self, delivery_id: UUID, recipient_email: str) -> None:
+        with Session(self.delegate.engine) as session:
+            session.add(AgentLifecycleEmailReceipt(delivery_id=delivery_id, recipient_email=recipient_email))
+            try:
+                session.commit()
+            except IntegrityError:
+                # Concurrent/duplicate delivery of the same handler execution; the
+                # receipt already exists, which is exactly the idempotency this records.
+                session.rollback()
 
     def find_access_assignments(self, agent_id: UUID, organization_id: UUID) -> list[AgentAccess]:
         with Session(self.delegate.engine) as session:

@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
+from unittest.mock import patch
 from uuid import UUID, uuid4
 
 from api.domains.events.constants import (
@@ -10,15 +11,15 @@ from api.domains.events.constants import (
 )
 from api.domains.events.models import EventDelivery, EventDeliveryStatus
 from api.domains.events.reconciliation import EventDeliveryReconciler
+from api.domains.events.repository import PendingDeliveryStats
 
 
 class FakeRepository:
     def __init__(self, candidates):
         self.candidates = candidates
         self.selection = None
-        self.enqueued: list[UUID] = []
 
-    def list_reconciliation_candidates(
+    def claim_reconciliation_candidates(
         self,
         *,
         pending_created_before,
@@ -36,8 +37,8 @@ class FakeRepository:
         }
         return self.candidates[:limit]
 
-    def mark_delivery_enqueued(self, delivery_id):
-        self.enqueued.append(delivery_id)
+    def pending_delivery_stats(self) -> PendingDeliveryStats:
+        return PendingDeliveryStats(pending_count=len(self.candidates), oldest_pending_age_seconds=None)
 
 
 class FakeTransport:
@@ -97,7 +98,6 @@ def test_reconciler_marks_each_successful_publish_and_continues_after_failures()
     assert result.published == 1
     assert result.failed == 1
     assert transport.published == [(succeeded.id, {"source": "reconciliation"})]
-    assert repository.enqueued == [succeeded.id]
 
 
 def test_reconciler_returns_empty_result_when_no_candidates():
@@ -110,4 +110,14 @@ def test_reconciler_returns_empty_result_when_no_candidates():
     assert result.published == 0
     assert result.failed == 0
     assert transport.published == []
-    assert repository.enqueued == []
+
+
+def test_reconciler_logs_pending_stats_even_with_no_candidates():
+    repository = FakeRepository([])
+    transport = FakeTransport()
+
+    with patch("api.domains.events.reconciliation.logger") as mock_logger:
+        EventDeliveryReconciler(repository=repository, transport=transport).run_once()
+
+    assert mock_logger.info.call_count == 1
+    assert "reconciliation summary" in mock_logger.info.call_args[0][0]

@@ -69,6 +69,12 @@ def event_delivery_retry_exhausted(message: dict[str, Any], metadata: dict[str, 
     error = f"Dramatiq retries exhausted for Event Delivery {delivery_id}"
     if retries is not None:
         error = f"{error} after {retries} retries"
+    logger.warning(
+        "Event Delivery dead-lettered: delivery_id=%s reason=%s retries=%s",
+        delivery_id,
+        EventDeliveryDeadLetterReason.RETRY_EXHAUSTED.value,
+        retries,
+    )
     _repository().mark_delivery_dead_lettered(
         delivery_id,
         reason=EventDeliveryDeadLetterReason.RETRY_EXHAUSTED,

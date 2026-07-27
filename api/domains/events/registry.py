@@ -8,24 +8,10 @@ from uuid import UUID
 from pydantic import BaseModel, ValidationError
 from pydantic_core import PydanticSerializationError
 
+from api.domains.events.constants import SENSITIVE_TOKEN_PARTS
 from api.domains.events.models import ActorIdentity, DomainEventEnvelope, EventPayload, SubjectIdentity
 
 MAX_PAYLOAD_BYTES = 16 * 1024
-
-_SENSITIVE_KEY_PARTS = frozenset(
-    {
-        "api_key",
-        "apikey",
-        "authorization",
-        "client_secret",
-        "credential",
-        "password",
-        "private_key",
-        "refresh_token",
-        "secret",
-        "token",
-    }
-)
 
 
 class DomainEventValidationError(ValueError):
@@ -173,7 +159,7 @@ class DomainEventRegistry:
 
 def _is_sensitive_key(key: str) -> bool:
     normalized = key.lower().replace("-", "_")
-    return any(part in normalized for part in _SENSITIVE_KEY_PARTS)
+    return any(part in normalized for part in SENSITIVE_TOKEN_PARTS)
 
 
 def _walk_dicts(value: Any, *, path: str = "payload"):

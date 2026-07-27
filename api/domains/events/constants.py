@@ -1,3 +1,18 @@
+SENSITIVE_TOKEN_PARTS = frozenset(
+    {
+        "api_key",
+        "apikey",
+        "authorization",
+        "client_secret",
+        "credential",
+        "password",
+        "private_key",
+        "refresh_token",
+        "secret",
+        "token",
+    }
+)
+
 EVENT_DELIVERY_REDIS_NAMESPACE = "agentfarm:events"
 EVENT_DELIVERY_QUEUE_NAME = "event-deliveries"
 EVENT_DELIVERY_MAX_RETRIES = 20

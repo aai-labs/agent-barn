@@ -429,6 +429,26 @@ class AgentLogSnapshot(BaseModel, table=True):
     byte_size: int = SqlField(nullable=False)
 
 
+class AgentLifecycleEmailReceipt(BaseModel, table=True):
+    """Idempotency record: a recipient has already been emailed for an Event Delivery.
+
+    Keyed by (delivery_id, recipient_email) rather than event_id alone because a single
+    delivery attempt can fan out to several recipients, and a retry must only re-notify
+    the recipients that failed last time.
+    """
+
+    __tablename__: str = "agent_lifecycle_email_receipt"
+
+    __table_args__ = (
+        sa.UniqueConstraint(
+            "delivery_id", "recipient_email", name="uq_agent_lifecycle_email_receipt_delivery_recipient"
+        ),
+    )
+
+    delivery_id: UUID = SqlField(foreign_key="event_delivery.id", nullable=False, ondelete="CASCADE")
+    recipient_email: str = SqlField(nullable=False, max_length=320)
+
+
 class AgentTemplateSkill(BaseModel, table=True):
     __tablename__: str = "agent_template_skill"
 

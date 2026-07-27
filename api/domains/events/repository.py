@@ -7,6 +7,7 @@ import sqlalchemy as sa
 from injector import inject, singleton
 from sqlmodel import Session, select
 
+from api.domains.events.constants import SENSITIVE_TOKEN_PARTS
 from api.domains.events.models import (
     DomainEventEnvelope,
     EventDelivery,
@@ -18,20 +19,12 @@ from api.domains.events.registry import DomainEventRegistry
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
 MAX_DELIVERY_ERROR_CHARS = 2048
-_SENSITIVE_ERROR_PARTS = frozenset(
-    {
-        "api_key",
-        "apikey",
-        "authorization",
-        "client_secret",
-        "credential",
-        "password",
-        "private_key",
-        "refresh_token",
-        "secret",
-        "token",
-    }
-)
+
+
+@dataclass(frozen=True)
+class PendingDeliveryStats:
+    pending_count: int
+    oldest_pending_age_seconds: float | None
 
 
 def bound_delivery_error(error: BaseException | str | None) -> str | None:
@@ -39,7 +32,7 @@ def bound_delivery_error(error: BaseException | str | None) -> str | None:
         return None
     message = str(error)
     normalized = message.lower().replace("-", "_")
-    if any(part in normalized for part in _SENSITIVE_ERROR_PARTS):
+    if any(part in normalized for part in SENSITIVE_TOKEN_PARTS):
         return "Event delivery error contained sensitive details and was redacted"
     if len(message) <= MAX_DELIVERY_ERROR_CHARS:
         return message
@@ -225,7 +218,7 @@ class OutboxMessageRepository:
             session.refresh(delivery)
             return delivery
 
-    def list_reconciliation_candidates(
+    def claim_reconciliation_candidates(
         self,
         *,
         pending_created_before: datetime,
@@ -233,7 +226,9 @@ class OutboxMessageRepository:
         processing_claimed_before: datetime,
         limit: int,
         skip_locked: bool = True,
+        claimed_at: datetime | None = None,
     ) -> list[EventDelivery]:
+        claimed_at = claimed_at or datetime.now(UTC)
         statement = (
             select(EventDelivery)
             .where(
@@ -258,11 +253,41 @@ class OutboxMessageRepository:
             .limit(limit)
             .with_for_update(skip_locked=skip_locked)
         )
+        # Claiming (flip to ENQUEUED) happens in the same transaction as the row lock,
+        # so a concurrent reconciliation run's SKIP LOCKED actually excludes these rows
+        # instead of racing a later, separately-committed mark_delivery_enqueued call.
         with Session(self.delegate.engine) as session:
-            return list(session.exec(statement))
+            deliveries = list(session.exec(statement))
+            for delivery in deliveries:
+                delivery.status = EventDeliveryStatus.ENQUEUED
+                delivery.enqueued_at = claimed_at
+                delivery.dead_letter_reason = None
+                delivery.completed_at = None
+                session.add(delivery)
+            session.commit()
+            for delivery in deliveries:
+                session.refresh(delivery)
+            return deliveries
 
     def count(self) -> int:
         return self.delegate.count(OutboxMessage)
 
     def delivery_count(self) -> int:
         return self.delegate.count(EventDelivery)
+
+    def pending_delivery_stats(self) -> PendingDeliveryStats:
+        status_column = cast(Any, EventDelivery.status)
+        with Session(self.delegate.engine) as session:
+            pending_count = session.exec(
+                select(sa.func.count()).select_from(EventDelivery).where(status_column == EventDeliveryStatus.PENDING)
+            ).one()
+            oldest_created_at = session.exec(
+                select(sa.func.min(EventDelivery.created_at)).where(status_column == EventDeliveryStatus.PENDING)
+            ).one()
+        oldest_pending_age_seconds = None
+        if oldest_created_at is not None:
+            oldest_pending_age_seconds = (datetime.now(UTC) - oldest_created_at).total_seconds()
+        return PendingDeliveryStats(
+            pending_count=pending_count,
+            oldest_pending_age_seconds=oldest_pending_age_seconds,
+        )

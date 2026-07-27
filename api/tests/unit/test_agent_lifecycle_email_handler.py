@@ -1,5 +1,5 @@
 from datetime import UTC, datetime
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -19,18 +19,28 @@ from api.domains.events.models import (
 class FakeRepository:
     def __init__(self, recipients):
         self.recipients = recipients
+        self.notified: dict[UUID, set[str]] = {}
 
     def find_lifecycle_email_recipients(self, agent_id, organization_id):
         return self.recipients
 
+    def find_notified_lifecycle_email_recipients(self, delivery_id):
+        return set(self.notified.get(delivery_id, set()))
+
+    def record_lifecycle_email_recipient_notified(self, delivery_id, recipient_email):
+        self.notified.setdefault(delivery_id, set()).add(recipient_email)
+
 
 class FakeEmailService:
-    def __init__(self, result=True):
+    def __init__(self, result=True, failing_emails: set[str] | None = None):
         self.result = result
+        self.failing_emails = failing_emails or set()
         self.sent = []
 
     def send_agent_lifecycle_email(self, **kwargs):
         self.sent.append(kwargs)
+        if kwargs["receiver_email"] in self.failing_emails:
+            return False
         return self.result
 
 
@@ -97,3 +107,28 @@ def test_agent_lifecycle_email_handler_retries_when_email_fails():
 
     with pytest.raises(RetryableEventHandlerError):
         handler.handle(event, _context(event))
+
+
+def test_agent_lifecycle_email_handler_does_not_resend_to_already_notified_recipients_on_retry():
+    event = _event()
+    context = _context(event)
+    repository = FakeRepository(
+        [
+            AgentLifecycleEmailRecipient("owner@example.com", "Owner"),
+            AgentLifecycleEmailRecipient("creator@example.com", "Creator"),
+        ]
+    )
+    email_service = FakeEmailService(failing_emails={"creator@example.com"})
+    handler = AgentLifecycleEmailHandler(repository=repository, email_service=email_service)
+
+    with pytest.raises(RetryableEventHandlerError):
+        handler.handle(event, context)
+
+    assert {call["receiver_email"] for call in email_service.sent} == {"owner@example.com", "creator@example.com"}
+
+    # Retry with the same delivery: the previously-succeeded recipient must not be re-emailed.
+    email_service.sent.clear()
+    email_service.failing_emails = set()
+    handler.handle(event, context)
+
+    assert [call["receiver_email"] for call in email_service.sent] == ["creator@example.com"]
