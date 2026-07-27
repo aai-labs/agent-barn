@@ -9,7 +9,7 @@ import { agentsKey } from "../utils";
 
 export type CreateAgentData = {
   name: string;
-  platform: "slack" | "teams";
+  platform: "slack" | "teams" | "telegram";
   agentType?: "openclaw" | "hermes";
   // Slack (required when platform=slack)
   slackBotToken?: string;
@@ -21,6 +21,10 @@ export type CreateAgentData = {
   teamsAppId?: string;
   teamsAppPassword?: string;
   teamsTenantId?: string;
+  // Telegram (required when platform=telegram)
+  telegramBotToken?: string;
+  telegramGroupPolicy?: "open" | "allowlist";
+  telegramDmPolicy?: "off" | "open" | "allowlist";
   // Template reference — pins to templateVersion if given, else latest.
   templateSlug: string;
   templateVersion?: number;
@@ -28,7 +32,7 @@ export type CreateAgentData = {
   // Skills to assign on creation
   skillIds?: string[];
   // Integration credentials (provider + provider-specific content; name is server-stamped)
-  secrets?: Array<{ provider: string; content: Record<string, string | string[]> }>;
+  secrets?: Array<{ provider: string; content: Record<string, string | string[] | boolean> }>;
   approvalMode?: "manual" | "auto" | "off";
 };
 

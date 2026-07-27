@@ -132,3 +132,4 @@ scripts/
 
 lessons/
 compose.remote.yml
+.dex/

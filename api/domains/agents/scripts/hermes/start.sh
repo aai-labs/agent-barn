@@ -3,7 +3,7 @@ set -e
 
 python3 /app/config/healthz-server.py &
 
-mkdir -p /opt/data/plugins/slack-deny-dms /opt/data/plugins/slack-channel-allowlist /opt/data/plugins/telemetry-push /opt/data/memories /workspace
+mkdir -p /opt/data/plugins/telemetry-push /opt/data/memories /workspace
 
 
 if [ ! -f /opt/data/memories/USER.md ]; then
@@ -18,11 +18,29 @@ cp /app/config/hermes-config.yaml /opt/data/config.yaml
 # values (e.g. old home channel) to survive pod restarts.
 rm -f /opt/data/.env
 
-cp /app/config/slack-deny-dms-plugin.yaml /opt/data/plugins/slack-deny-dms/plugin.yaml
-cp /app/config/slack-deny-dms-init.py /opt/data/plugins/slack-deny-dms/__init__.py
+if [ -f /app/config/slack-deny-dms-plugin.yaml ]; then
+    mkdir -p /opt/data/plugins/slack-deny-dms
+    cp /app/config/slack-deny-dms-plugin.yaml /opt/data/plugins/slack-deny-dms/plugin.yaml
+    cp /app/config/slack-deny-dms-init.py /opt/data/plugins/slack-deny-dms/__init__.py
+fi
 
-cp /app/config/slack-channel-allowlist-plugin.yaml /opt/data/plugins/slack-channel-allowlist/plugin.yaml
-cp /app/config/slack-channel-allowlist-init.py /opt/data/plugins/slack-channel-allowlist/__init__.py
+if [ -f /app/config/slack-channel-allowlist-plugin.yaml ]; then
+    mkdir -p /opt/data/plugins/slack-channel-allowlist
+    cp /app/config/slack-channel-allowlist-plugin.yaml /opt/data/plugins/slack-channel-allowlist/plugin.yaml
+    cp /app/config/slack-channel-allowlist-init.py /opt/data/plugins/slack-channel-allowlist/__init__.py
+fi
+
+if [ -f /app/config/telegram-deny-dms-plugin.yaml ]; then
+    mkdir -p /opt/data/plugins/telegram-deny-dms
+    cp /app/config/telegram-deny-dms-plugin.yaml /opt/data/plugins/telegram-deny-dms/plugin.yaml
+    cp /app/config/telegram-deny-dms-init.py /opt/data/plugins/telegram-deny-dms/__init__.py
+fi
+
+if [ -f /app/config/telegram-channel-allowlist-plugin.yaml ]; then
+    mkdir -p /opt/data/plugins/telegram-channel-allowlist
+    cp /app/config/telegram-channel-allowlist-plugin.yaml /opt/data/plugins/telegram-channel-allowlist/plugin.yaml
+    cp /app/config/telegram-channel-allowlist-init.py /opt/data/plugins/telegram-channel-allowlist/__init__.py
+fi
 
 cp /app/config/telemetry-push-plugin.yaml /opt/data/plugins/telemetry-push/plugin.yaml
 cp /app/config/telemetry-push-init.py /opt/data/plugins/telemetry-push/__init__.py
@@ -34,6 +52,11 @@ done
 if [ -f /app/config/aai-cli-setup.sh ]; then
   sh /app/config/aai-cli-setup.sh || echo "[aai-cli] setup failed; continuing"
 fi
+
+# /workspace persists across restarts (PVC). The personality files above are
+# overwritten from the configmap every boot, but skills are additive — prune
+# them so a skill from a removed integration can't linger from a previous boot.
+rm -rf /workspace/skills
 
 if [ -f /app/config/skills.json ]; then
   python3 - <<'PYEOF'

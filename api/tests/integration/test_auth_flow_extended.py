@@ -65,13 +65,9 @@ def test_refresh_works_with_cookie_and_revokes_previous_token():
                 assert_that(payload["refresh_token"], is_not(equal_to(old_refresh)))
 
         with when("I try to use previous refresh token"):
-            stale_response = client.post(
-                "/api/v1/auth/refresh", json={"refresh_token": old_refresh}
-            )
+            stale_response = client.post("/api/v1/auth/refresh", json={"refresh_token": old_refresh})
             with then("it is rejected"):
-                assert_that(
-                    stale_response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED)
-                )
+                assert_that(stale_response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
 
 
 def test_refresh_requires_token():
@@ -146,13 +142,9 @@ def test_signup_service_seeds_predefined_templates():
             BackgroundTasks(),
         )
 
-        user = context.injector.get(UserRepository).get_by_email(
-            "signup-seed@example.com"
-        )
+        user = context.injector.get(UserRepository).get_by_email("signup-seed@example.com")
         assert_that(user, is_not(none()))
-        memberships = context.injector.get(OrganizationUserRepository).get_by_user_id(
-            user.id
-        )
+        memberships = context.injector.get(OrganizationUserRepository).get_by_user_id(user.id)
         org_id = memberships[0].organization_id
 
         template_repo = context.injector.get(TemplateRepository)
@@ -261,9 +253,7 @@ def test_forgot_and_reset_password_flow():
     ) as context:
         client: TestClient = context.client
 
-        forgot_response = client.post(
-            "/api/v1/auth/forgot-password", json={"email": "reset-flow@example.com"}
-        )
+        forgot_response = client.post("/api/v1/auth/forgot-password", json={"email": "reset-flow@example.com"})
         assert_that(forgot_response.status_code, equal_to(status.HTTP_200_OK))
         assert_that(
             forgot_response.json()["message"],
@@ -306,9 +296,7 @@ def test_forgot_password_for_unknown_user_is_noop():
     ) as context:
         client: TestClient = context.client
 
-        response = client.post(
-            "/api/v1/auth/forgot-password", json={"email": "missing@example.com"}
-        )
+        response = client.post("/api/v1/auth/forgot-password", json={"email": "missing@example.com"})
         assert_that(response.status_code, equal_to(status.HTTP_200_OK))
         assert_that(email_module.emails, has_length(0))
 
@@ -327,9 +315,7 @@ def test_reset_token_is_opaque_not_a_jwt():
         ]
     ) as context:
         client: TestClient = context.client
-        client.post(
-            "/api/v1/auth/forgot-password", json={"email": "opaque@example.com"}
-        )
+        client.post("/api/v1/auth/forgot-password", json={"email": "opaque@example.com"})
         token = _extract_token_from_email(email_module.emails[0].html_part)
         # A JWT has exactly two '.' separators; an opaque token has none.
         assert_that(token.count("."), equal_to(0))
@@ -354,14 +340,10 @@ def test_new_reset_request_invalidates_previous_token():
     ) as context:
         client: TestClient = context.client
 
-        client.post(
-            "/api/v1/auth/forgot-password", json={"email": "rotate@example.com"}
-        )
+        client.post("/api/v1/auth/forgot-password", json={"email": "rotate@example.com"})
         first_token = _extract_token_from_email(email_module.emails[0].html_part)
 
-        client.post(
-            "/api/v1/auth/forgot-password", json={"email": "rotate@example.com"}
-        )
+        client.post("/api/v1/auth/forgot-password", json={"email": "rotate@example.com"})
         second_token = _extract_token_from_email(email_module.emails[1].html_part)
 
         # The superseded first token must no longer work.

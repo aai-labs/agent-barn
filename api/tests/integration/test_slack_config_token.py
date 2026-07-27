@@ -169,6 +169,4 @@ def test_slack_config_token_requires_auth():
             response = client.get(_URL)
 
             with then("it should be 401"):
-                assert_that(
-                    response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED)
-                )
+                assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))

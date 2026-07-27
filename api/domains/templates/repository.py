@@ -19,9 +19,7 @@ from api.infrastructure.shared.models import Pagination
 class TemplateRepository:
     delegate: PostgresRepositoryDelegate
 
-    def get_template_by_slug_and_version(
-        self, org_id: UUID, slug: str, version: int
-    ) -> AgentTemplate | None:
+    def get_template_by_slug_and_version(self, org_id: UUID, slug: str, version: int) -> AgentTemplate | None:
         with Session(self.delegate.engine) as session:
             query = (
                 select(AgentTemplate)
@@ -31,9 +29,7 @@ class TemplateRepository:
             )
             return session.exec(query).first()
 
-    def get_template_or_raise(
-        self, org_id: UUID, slug: str, version: int
-    ) -> AgentTemplate:
+    def get_template_or_raise(self, org_id: UUID, slug: str, version: int) -> AgentTemplate:
         template = self.get_template_by_slug_and_version(org_id, slug, version)
         if template is None:
             raise RuntimeError(f"AgentTemplate {slug} v{version} not found")
@@ -92,9 +88,7 @@ class TemplateRepository:
                     )
                 )
             if template_filter.source is not None:
-                conditions.append(
-                    col(latest_template.template_source) == template_filter.source
-                )
+                conditions.append(col(latest_template.template_source) == template_filter.source)
 
             count_query = select(func.count()).select_from(latest)
             for condition in conditions:
@@ -108,8 +102,7 @@ class TemplateRepository:
                 query.order_by(
                     case(
                         (
-                            col(latest_template.template_source)
-                            == TemplateSource.PRE_DEFINED,
+                            col(latest_template.template_source) == TemplateSource.PRE_DEFINED,
                             0,
                         ),
                         else_=1,
@@ -177,9 +170,7 @@ class TemplateRepository:
     def save_template_skills(self, template_id: UUID, skill_ids: list[UUID]) -> None:
         with Session(self.delegate.engine) as session:
             existing_rows = session.exec(
-                select(AgentTemplateSkill).where(
-                    col(AgentTemplateSkill.template_id) == template_id
-                )
+                select(AgentTemplateSkill).where(col(AgentTemplateSkill.template_id) == template_id)
             ).all()
             existing_ids = {row.skill_id for row in existing_rows}
             target_ids = set(skill_ids)
@@ -187,9 +178,7 @@ class TemplateRepository:
                 if row.skill_id not in target_ids:
                     session.delete(row)
             for skill_id in target_ids - existing_ids:
-                session.add(
-                    AgentTemplateSkill(template_id=template_id, skill_id=skill_id)
-                )
+                session.add(AgentTemplateSkill(template_id=template_id, skill_id=skill_id))
             session.commit()
 
     def get_required_skills(self, template_id: UUID) -> list[Skill]:
@@ -206,20 +195,14 @@ class TemplateRepository:
 
     def get_required_skill_ids(self, template_id: UUID) -> set[UUID]:
         with Session(self.delegate.engine) as session:
-            query = select(AgentTemplateSkill.skill_id).where(
-                col(AgentTemplateSkill.template_id) == template_id
-            )
+            query = select(AgentTemplateSkill.skill_id).where(col(AgentTemplateSkill.template_id) == template_id)
             return set(session.exec(query).all())
 
-    def get_required_skill_ids_for_templates(
-        self, template_ids: list[UUID]
-    ) -> dict[UUID, set[UUID]]:
+    def get_required_skill_ids_for_templates(self, template_ids: list[UUID]) -> dict[UUID, set[UUID]]:
         if not template_ids:
             return {}
         with Session(self.delegate.engine) as session:
-            query = select(AgentTemplateSkill).where(
-                col(AgentTemplateSkill.template_id).in_(template_ids)
-            )
+            query = select(AgentTemplateSkill).where(col(AgentTemplateSkill.template_id).in_(template_ids))
             result: dict[UUID, set[UUID]] = {}
             for row in session.exec(query).all():
                 result.setdefault(row.template_id, set()).add(row.skill_id)
@@ -227,14 +210,10 @@ class TemplateRepository:
 
     def is_skill_required_by_any_template(self, skill_id: UUID) -> bool:
         with Session(self.delegate.engine) as session:
-            query = select(AgentTemplateSkill).where(
-                col(AgentTemplateSkill.skill_id) == skill_id
-            )
+            query = select(AgentTemplateSkill).where(col(AgentTemplateSkill.skill_id) == skill_id)
             return session.exec(query).first() is not None
 
-    def get_required_skills_for_templates(
-        self, template_ids: list[UUID]
-    ) -> dict[UUID, list[Skill]]:
+    def get_required_skills_for_templates(self, template_ids: list[UUID]) -> dict[UUID, list[Skill]]:
         if not template_ids:
             return {}
         with Session(self.delegate.engine) as session:

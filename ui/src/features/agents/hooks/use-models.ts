@@ -11,7 +11,7 @@ import { agentsKey } from "../utils";
 // Shown while the catalogue loads and as a safety net if the fetch fails, so
 // the picker is never empty. Kept in sync with AGENT_DEFAULT_MODEL.
 export const FALLBACK_MODELS: ModelOption[] = [
-  { value: "litellm/openrouter/qwen/qwen3.6-plus", label: "Qwen3.6 Plus", isDefault: true },
+  { value: "litellm/openrouter/z-ai/glm-5.2", label: "GLM 5.2", isDefault: true },
   { value: "litellm/openrouter/openai/gpt-5-mini", label: "GPT-5 mini" },
 ];
 

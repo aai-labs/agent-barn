@@ -81,8 +81,10 @@ function nowISO() {
   return new Date().toISOString();
 }
 
-function convType(conversationId) {
-  return conversationId && conversationId.startsWith("USER:") ? "DM" : "CHANNEL";
+function convType(conversationId, sessionKey) {
+  if (conversationId && conversationId.startsWith("USER:")) return "DM";
+  if (sessionKey && sessionKey.startsWith("agent:main:main")) return "DM";
+  return "CHANNEL";
 }
 
 function extractText(msg) {
@@ -120,7 +122,7 @@ export default {
           channel_id: conversationId,
           thread_id: event.threadId || null,
           direction: "INBOUND",
-          conversation_type: convType(conversationId),
+          conversation_type: convType(conversationId, ctx.sessionKey || ""),
           sender_id: event.senderId || null,
           sender_name: (event.metadata && event.metadata.senderName) || null,
           channel_name: null,
@@ -149,7 +151,7 @@ export default {
             channel_id: conversationId,
             thread_id: lastThreadId,
             direction: "OUTBOUND",
-            conversation_type: convType(conversationId),
+            conversation_type: convType(conversationId, ctx.sessionKey || ""),
             sender_id: null,
             sender_name: null,
             channel_name: null,

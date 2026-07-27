@@ -12,6 +12,7 @@ import { SkillSourceBadge } from "@/features/skills/components/skill-drawer";
 import type { Skill } from "@/features/skills/schemas";
 
 import {
+  coerceBooleanFields,
   expandGithubContent,
   getIntegrationProvider,
   hasIncompleteIntegration,
@@ -150,7 +151,7 @@ export function AgentSkillsTab({ agent, isRunning }: AgentSkillsTabProps) {
           ? {
               secrets: newSecretDrafts.map((d) => ({
                 provider: d.provider,
-                content: d.provider === "github" ? expandGithubContent(d.content) : d.content,
+                content: coerceBooleanFields(d.provider === "github" ? expandGithubContent(d.content) : d.content),
               })),
             }
           : {}),
@@ -321,6 +322,9 @@ export function AgentSkillsTab({ agent, isRunning }: AgentSkillsTabProps) {
                   />
                 )}
                 {providerSpec.fields.map((field) => {
+                  if (field.dependsOn && draft.content[field.dependsOn.key] !== field.dependsOn.value) {
+                    return null;
+                  }
                   const label = field.required
                     ? field.label
                     : `${field.label} (optional)`;
@@ -356,6 +360,28 @@ export function AgentSkillsTab({ agent, isRunning }: AgentSkillsTabProps) {
                           }
                           placeholder={field.placeholder}
                         />
+                      </FormField>
+                    );
+                  }
+                  
+                  if (field.type === "radio") {
+                    return (
+                      <FormField key={field.key} label={label} hint={field.hint}>
+                        <div className="flex flex-col gap-2 mt-1">
+                          {field.options?.map((opt) => (
+                            <label key={opt.value} className="flex items-center gap-2 cursor-pointer">
+                              <input
+                                type="radio"
+                                name={`tab-${providerId}-${field.key}`}
+                                value={opt.value}
+                                checked={value === opt.value}
+                                onChange={(e) => setField(providerId, field.key, e.target.value)}
+                                className="accent-[var(--blue-9)]"
+                              />
+                              <span className="text-[13px]" style={{ color: "var(--ink-1)" }}>{opt.label}</span>
+                            </label>
+                          ))}
+                        </div>
                       </FormField>
                     );
                   }

@@ -30,9 +30,7 @@ class AgentTemplate(BaseModel, table=True):
         ),
     )
 
-    organization_id: UUID = SqlField(
-        foreign_key="organization.id", nullable=False, ondelete="CASCADE"
-    )
+    organization_id: UUID = SqlField(foreign_key="organization.id", nullable=False, ondelete="CASCADE")
     template_slug: str = SqlField(nullable=False, max_length=255)
     template_name: str = SqlField(nullable=False, max_length=255)
     template_source: TemplateSource = SqlField(

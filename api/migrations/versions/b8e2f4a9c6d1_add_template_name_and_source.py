@@ -43,8 +43,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_constraint(
-        "ck_agent_template_template_source", "agent_template", type_="check"
-    )
+    op.drop_constraint("ck_agent_template_template_source", "agent_template", type_="check")
     op.drop_column("agent_template", "template_source")
     op.drop_column("agent_template", "template_name")
