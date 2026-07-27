@@ -1,7 +1,7 @@
 """Add firecrawl to agent_secret provider check constraint.
 
 Revision ID: e4f5a6b7c8d9
-Revises: d3f9a1c7b2e5
+Revises: a7b8c9d0e1f2
 """
 
 from typing import Union
@@ -9,7 +9,7 @@ from typing import Union
 from alembic import op
 
 revision: str = "e4f5a6b7c8d9"
-down_revision: Union[str, None] = "d3f9a1c7b2e5"
+down_revision: Union[str, None] = "a7b8c9d0e1f2"
 branch_labels: Union[str, None] = None
 depends_on: Union[str, None] = None
 

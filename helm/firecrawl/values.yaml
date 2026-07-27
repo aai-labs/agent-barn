@@ -3,6 +3,7 @@ image:
   tag: v2.11.0
   pullPolicy: IfNotPresent
 
+# playwright-service publishes no semver tags; "latest" is the only option.
 playwrightImage:
   repository: ghcr.io/firecrawl/playwright-service
   tag: latest

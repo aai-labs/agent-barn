@@ -1147,10 +1147,10 @@ class AgentService:
             else self.config.agent_firecrawl_base_url
         )
         if fc_api_key and fc_base_url:
+            secret.string_data["FIRECRAWL_API_KEY"] = fc_api_key
             if hermes_cfg is not None:
                 hermes_cfg["web"] = {"backend": "firecrawl"}
                 hermes_cfg["browser"] = {"cloud_provider": "firecrawl"}
-                secret.string_data["FIRECRAWL_API_KEY"] = fc_api_key
                 secret.string_data["FIRECRAWL_API_URL"] = fc_base_url
                 secret.string_data["FIRECRAWL_BROWSER_TTL"] = "600"
             if overlay is not None:
@@ -1175,7 +1175,6 @@ class AgentService:
                     "fetch": {"provider": "firecrawl"},
                     "search": {"enabled": True, "provider": "firecrawl"},
                 }
-                secret.string_data["FIRECRAWL_API_KEY"] = fc_api_key
 
         ingest_key = secrets.token_urlsafe(32)
         secret.string_data.update(
