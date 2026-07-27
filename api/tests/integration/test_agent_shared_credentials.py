@@ -123,8 +123,8 @@ def test_create_agent_rejects_shared_and_manual_same_provider():
             }
             response = client.post(_AGENTS, json=payload, headers=_auth(ctx))
 
-        with then("it returns 422 (duplicate provider)"):
-            assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
+        with then("it returns 400 (duplicate provider)"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
 
 
 # --- Update agent: attach shared credential ---

@@ -526,13 +526,6 @@ class AgentCreate(PydanticBaseModel):
             raise ValueError("Duplicate secret providers are not allowed")
         return self
 
-    @model_validator(mode="after")
-    def validate_no_shared_and_manual_overlap(self) -> "AgentCreate":
-        """Shared credentials are validated for provider overlap in the service
-        (we need DB access to resolve the provider). This validator is a no-op
-        placeholder — the service checks the actual overlap."""
-        return self
-
 
 class AgentUpdate(PydanticBaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)

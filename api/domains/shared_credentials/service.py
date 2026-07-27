@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from typing import Any
 from uuid import UUID
 
 from fastapi import HTTPException, status
@@ -8,7 +7,6 @@ from pydantic import ValidationError
 
 from api.core.config import Config
 from api.domains.agents.models import (
-    SecretProvider,
     decrypt_content,
     encrypt_content,
     validate_content,
@@ -26,19 +24,10 @@ from api.domains.shared_credentials.models import (
 from api.domains.shared_credentials.repository import SharedCredentialRepository
 from api.domains.rbac.catalog import IMPLICIT_AGENT_OWNER_ROLES
 from api.infrastructure.integration_validators import (
-    validate_bitbucket,
-    validate_confluence,
-    validate_github,
-    validate_jira,
+    PROVIDER_VALIDATORS,
+    format_validation_result,
 )
 from api.infrastructure.shared.models import PaginatedItems, Pagination
-
-_VALIDATORS: dict[SecretProvider, Any] = {
-    SecretProvider.GITHUB: validate_github,
-    SecretProvider.JIRA: validate_jira,
-    SecretProvider.CONFLUENCE: validate_confluence,
-    SecretProvider.BITBUCKET: validate_bitbucket,
-}
 
 
 @inject
@@ -172,30 +161,21 @@ class SharedCredentialService:
         org_id = self._org_id(context)
         credential = self._get_or_404(credential_id, org_id)
 
-        validator = _VALIDATORS.get(credential.provider)
+        validator = PROVIDER_VALIDATORS.get(credential.provider)
         if validator is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"No validator available for {credential.provider.value}",
-            )
+            return {
+                "validation_status": "unsupported",
+                "validation_identity": None,
+                "validation_error": "Live validation is not available for this provider",
+                "missing_scopes": [],
+            }
         content = decrypt_content(
             credential.provider,
             credential.content,
             self.config.agent_token_encryption_key,
         )
         result = validator(content)  # type: ignore[arg-type]
-        if result.valid and result.missing_scopes:
-            validation_status = "warning"
-        elif result.valid:
-            validation_status = "valid"
-        else:
-            validation_status = "invalid"
-        return {
-            "validation_status": validation_status,
-            "validation_identity": result.identity,
-            "validation_error": result.error,
-            "missing_scopes": result.missing_scopes,
-        }
+        return format_validation_result(result)
 
     @staticmethod
     def _to_read(credential: SharedCredential, *, agent_count: int) -> SharedCredentialRead:

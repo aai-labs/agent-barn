@@ -6,6 +6,9 @@ import { useDebouncedValue } from "@tanstack/react-pacer";
 import { AppErrorState } from "@/components/app-error-state";
 import { SearchIcon } from "@/components/icons";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { SharedManualToggle } from "@/features/shared-credentials/components/shared-manual-toggle";
+import { useSharedManualSwitch } from "@/features/shared-credentials/hooks/use-shared-manual-switch";
+import { SHARED_CREDENTIAL_PROVIDER_LABELS } from "@/features/shared-credentials/utils";
 import { useSkills } from "@/features/skills/hooks/use-skills";
 import { SKILL_PROVIDER_LABELS } from "@/features/skills/utils";
 import { SkillSourceBadge } from "@/features/skills/components/skill-drawer";
@@ -19,13 +22,10 @@ import {
   isOAuthConnected,
   type IntegrationDraft,
 } from "../integrations";
-import { SharedCredentialPicker } from "@/features/shared-credentials/components/shared-credential-picker";
-import { SHARED_CREDENTIAL_PROVIDER_LABELS } from "@/features/shared-credentials/utils";
-import type { SharedCredentialBrief } from "@/features/shared-credentials/schemas";
-import { FormField, GoogleAuthButton, TokenInput } from "./hire-dialog-primitives";
-import { RepoListField } from "./hire-dialog-steps";
 import { useUpdateAgent } from "../hooks/use-update-agent";
 import type { Agent, AgentAssignedSkill } from "../schemas";
+import { FormField, GoogleAuthButton, TokenInput } from "./hire-dialog-primitives";
+import { RepoListField } from "./hire-dialog-steps";
 
 interface AgentSkillsTabProps {
   agent: Agent;
@@ -125,35 +125,10 @@ export function AgentSkillsTab({ agent, isRunning }: AgentSkillsTabProps) {
     );
   }
 
-  function switchToShared(provider: string) {
-    setNewSecretDrafts((prev) =>
-      prev.map((d) =>
-        d.provider === provider
-          ? { ...d, content: {}, sharedCredentialId: "" }
-          : d,
-      ),
-    );
-  }
-
-  function switchToManual(provider: string) {
-    setNewSecretDrafts((prev) =>
-      prev.map((d) =>
-        d.provider === provider
-          ? { ...d, sharedCredentialId: undefined }
-          : d,
-      ),
-    );
-  }
-
-  function handlePickShared(provider: string, brief: SharedCredentialBrief | null) {
-    setNewSecretDrafts((prev) =>
-      prev.map((d) =>
-        d.provider === provider
-          ? { ...d, sharedCredentialId: brief?.id ?? "" }
-          : d,
-      ),
-    );
-  }
+  const { switchToShared, switchToManual, handlePickShared } = useSharedManualSwitch(
+    newSecretDrafts,
+    setNewSecretDrafts,
+  );
 
   async function handleSave() {
     updateAgent.reset();
@@ -355,41 +330,17 @@ export function AgentSkillsTab({ agent, isRunning }: AgentSkillsTabProps) {
                 </div>
 
                 {isSharedEligible && (
-                  <div className="flex gap-1.5">
-                    <button
-                      type="button"
-                      className="af-btn af-btn-sm"
-                      style={
-                        !useShared
-                          ? { background: "var(--ink)", color: "var(--bg)", borderColor: "var(--ink)" }
-                          : undefined
-                      }
-                      onClick={() => switchToManual(providerId)}
-                    >
-                      Enter credentials
-                    </button>
-                    <button
-                      type="button"
-                      className="af-btn af-btn-sm"
-                      style={
-                        useShared
-                          ? { background: "var(--ink)", color: "var(--bg)", borderColor: "var(--ink)" }
-                          : undefined
-                      }
-                      onClick={() => switchToShared(providerId)}
-                    >
-                      Use shared credential
-                    </button>
-                  </div>
+                  <SharedManualToggle
+                    provider={providerId}
+                    useShared={useShared}
+                    selectedId={draft.sharedCredentialId || undefined}
+                    onSwitchToManual={() => switchToManual(providerId)}
+                    onSwitchToShared={() => switchToShared(providerId)}
+                    onPickShared={(brief) => handlePickShared(providerId, brief)}
+                  />
                 )}
 
-                {useShared ? (
-                  <SharedCredentialPicker
-                    provider={providerId}
-                    value={draft.sharedCredentialId || undefined}
-                    onChange={(brief) => handlePickShared(providerId, brief)}
-                  />
-                ) : (
+                {!useShared && (
                   <>
                     {providerSpec.authMethod === "google_oauth" && (
                       <GoogleAuthButton

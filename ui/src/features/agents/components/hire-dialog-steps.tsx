@@ -12,25 +12,25 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { SharedManualToggle } from "@/features/shared-credentials/components/shared-manual-toggle";
+import { SHARED_CREDENTIAL_PROVIDER_LABELS } from "@/features/shared-credentials/utils";
 import { useSkills } from "@/features/skills/hooks/use-skills";
 import { SKILL_PROVIDER_LABELS } from "@/features/skills/utils";
 import type { Skill } from "@/features/skills/schemas";
 import { SkillSourceBadge } from "@/features/skills/components/skill-drawer";
+
 import {
   INTEGRATION_PROVIDERS,
   getIntegrationProvider,
   isOAuthConnected,
   type IntegrationDraft,
 } from "../integrations";
-import { SharedCredentialPicker } from "@/features/shared-credentials/components/shared-credential-picker";
-import { SHARED_CREDENTIAL_PROVIDER_LABELS } from "@/features/shared-credentials/utils";
-import type { SharedCredentialBrief } from "@/features/shared-credentials/schemas";
 import type { AgentAssignedSkill, AgentTemplateRead } from "../schemas";
 import { useTemplates } from "../hooks/use-templates";
 import { ChoiceCard, FormField, GoogleAuthButton, NextStep, TokenInput } from "./hire-dialog-primitives";
 import { ModelSelect } from "./model-select";
 import { Pagination } from "./pagination";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 const HIRE_DIALOG_PAGE_SIZE = 6;
 
@@ -1616,36 +1616,6 @@ export function SkillsStep({
             const isSharedEligible = !!SHARED_CREDENTIAL_PROVIDER_LABELS[providerId];
             const useShared = draft.sharedCredentialId !== undefined;
 
-            function switchToShared() {
-              onSkillCredentialsChange(
-                skillCredentials.map((c) =>
-                  c.provider === providerId
-                    ? { ...c, content: {}, sharedCredentialId: "" }
-                    : c,
-                ),
-              );
-            }
-
-            function switchToManual() {
-              onSkillCredentialsChange(
-                skillCredentials.map((c) =>
-                  c.provider === providerId
-                    ? { ...c, sharedCredentialId: undefined }
-                    : c,
-                ),
-              );
-            }
-
-            function handlePickShared(brief: SharedCredentialBrief | null) {
-              onSkillCredentialsChange(
-                skillCredentials.map((c) =>
-                  c.provider === providerId
-                    ? { ...c, sharedCredentialId: brief?.id ?? "" }
-                    : c,
-                ),
-              );
-            }
-
             return (
               <div
                 key={providerId}
@@ -1663,41 +1633,35 @@ export function SkillsStep({
                 </div>
 
                 {isSharedEligible && (
-                  <div className="flex gap-1.5">
-                    <button
-                      type="button"
-                      className="af-btn af-btn-sm"
-                      style={
-                        !useShared
-                          ? { background: "var(--ink)", color: "var(--bg)", borderColor: "var(--ink)" }
-                          : undefined
-                      }
-                      onClick={switchToManual}
-                    >
-                      Enter credentials
-                    </button>
-                    <button
-                      type="button"
-                      className="af-btn af-btn-sm"
-                      style={
-                        useShared
-                          ? { background: "var(--ink)", color: "var(--bg)", borderColor: "var(--ink)" }
-                          : undefined
-                      }
-                      onClick={switchToShared}
-                    >
-                      Use shared credential
-                    </button>
-                  </div>
+                  <SharedManualToggle
+                    provider={providerId}
+                    useShared={useShared}
+                    selectedId={draft.sharedCredentialId || undefined}
+                    onSwitchToManual={() =>
+                      onSkillCredentialsChange(
+                        skillCredentials.map((c) =>
+                          c.provider === providerId ? { ...c, sharedCredentialId: undefined } : c,
+                        ),
+                      )
+                    }
+                    onSwitchToShared={() =>
+                      onSkillCredentialsChange(
+                        skillCredentials.map((c) =>
+                          c.provider === providerId ? { ...c, content: {}, sharedCredentialId: "" } : c,
+                        ),
+                      )
+                    }
+                    onPickShared={(brief) =>
+                      onSkillCredentialsChange(
+                        skillCredentials.map((c) =>
+                          c.provider === providerId ? { ...c, sharedCredentialId: brief?.id ?? "" } : c,
+                        ),
+                      )
+                    }
+                  />
                 )}
 
-                {useShared ? (
-                  <SharedCredentialPicker
-                    provider={providerId}
-                    value={draft.sharedCredentialId || undefined}
-                    onChange={handlePickShared}
-                  />
-                ) : (
+                {!useShared && (
                   <>
                     {providerSpec.scopeNote && (
                       <p className="text-[0.75rem] leading-[1.4]" style={{ color: "var(--ink-3)" }}>
@@ -1843,36 +1807,6 @@ export function IntegrationsStep({
         const isSharedEligible = !!SHARED_CREDENTIAL_PROVIDER_LABELS[draft.provider];
         const useShared = draft.sharedCredentialId !== undefined;
 
-        function switchToShared() {
-          onChange(
-            integrations.map((i) =>
-              i.provider === draft.provider
-                ? { ...i, content: {}, sharedCredentialId: "" }
-                : i,
-            ),
-          );
-        }
-
-        function switchToManual() {
-          onChange(
-            integrations.map((i) =>
-              i.provider === draft.provider
-                ? { ...i, sharedCredentialId: undefined }
-                : i,
-            ),
-          );
-        }
-
-        function handlePickShared(brief: SharedCredentialBrief | null) {
-          onChange(
-            integrations.map((i) =>
-              i.provider === draft.provider
-                ? { ...i, sharedCredentialId: brief?.id ?? "" }
-                : i,
-            ),
-          );
-        }
-
         return (
           <div
             key={draft.provider}
@@ -1894,41 +1828,35 @@ export function IntegrationsStep({
             </div>
 
             {isSharedEligible && (
-              <div className="flex gap-1.5">
-                <button
-                  type="button"
-                  className="af-btn af-btn-sm"
-                  style={
-                    !useShared
-                      ? { background: "var(--ink)", color: "var(--bg)", borderColor: "var(--ink)" }
-                      : undefined
-                  }
-                  onClick={switchToManual}
-                >
-                  Enter credentials
-                </button>
-                <button
-                  type="button"
-                  className="af-btn af-btn-sm"
-                  style={
-                    useShared
-                      ? { background: "var(--ink)", color: "var(--bg)", borderColor: "var(--ink)" }
-                      : undefined
-                  }
-                  onClick={switchToShared}
-                >
-                  Use shared credential
-                </button>
-              </div>
+              <SharedManualToggle
+                provider={draft.provider}
+                useShared={useShared}
+                selectedId={draft.sharedCredentialId || undefined}
+                onSwitchToManual={() =>
+                  onChange(
+                    integrations.map((i) =>
+                      i.provider === draft.provider ? { ...i, sharedCredentialId: undefined } : i,
+                    ),
+                  )
+                }
+                onSwitchToShared={() =>
+                  onChange(
+                    integrations.map((i) =>
+                      i.provider === draft.provider ? { ...i, content: {}, sharedCredentialId: "" } : i,
+                    ),
+                  )
+                }
+                onPickShared={(brief) =>
+                  onChange(
+                    integrations.map((i) =>
+                      i.provider === draft.provider ? { ...i, sharedCredentialId: brief?.id ?? "" } : i,
+                    ),
+                  )
+                }
+              />
             )}
 
-            {useShared ? (
-              <SharedCredentialPicker
-                provider={draft.provider}
-                value={draft.sharedCredentialId || undefined}
-                onChange={handlePickShared}
-              />
-            ) : (
+            {!useShared && (
               <>
                 {provider.scopeNote && (
                   <p className="text-[0.75rem] leading-[1.4]" style={{ color: "var(--ink-3)" }}>

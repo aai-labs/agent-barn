@@ -89,11 +89,8 @@ from api.domains.templates.renderer import render_template
 from api.domains.templates.repository import TemplateRepository
 from api.infrastructure.crypto import decrypt_token, encrypt_token
 from api.infrastructure.integration_validators import (
-    validate_bitbucket,
-    validate_confluence,
-    validate_github,
-    validate_gmail,
-    validate_jira,
+    PROVIDER_VALIDATORS,
+    format_validation_result,
 )
 from api.infrastructure.integration_validators.atlassian_utils import (
     get_atlassian_cloud_id,
@@ -163,14 +160,6 @@ _TELEGRAM_CONFIG_FIELDS = frozenset(
 _MAX_LOG_SNAPSHOT_BYTES = 1_048_576  # 1 MB
 
 _OPENROUTER_MODEL_PREFIX = "litellm/openrouter/"
-
-_VALIDATORS: dict[SecretProvider, Any] = {
-    SecretProvider.GITHUB: validate_github,
-    SecretProvider.JIRA: validate_jira,
-    SecretProvider.CONFLUENCE: validate_confluence,
-    SecretProvider.BITBUCKET: validate_bitbucket,
-    SecretProvider.GMAIL: validate_gmail,
-}
 
 
 def _allowlist_patterns(allowlist: str) -> list[str]:
@@ -624,7 +613,7 @@ class AgentService:
             manual_providers = {s.provider for s in secrets}
             if shared_cred.provider in manual_providers:
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Provider {shared_cred.provider} already has a manual credential",
                 )
             saved = self.repository.save_secret(
@@ -934,12 +923,18 @@ class AgentService:
 
         # Shared credential attachments
         if "shared_credentials" in updated:
+            upserted_manual_providers = {item.provider for item, _ in upserts} if "secrets" in updated else set()
             for attach in data.shared_credentials or []:
                 shared_cred = self.shared_credential_repository.get_by_id_and_org(attach.shared_credential_id, org_id)
                 if shared_cred is None:
                     raise HTTPException(
                         status_code=status.HTTP_404_NOT_FOUND,
                         detail=f"Shared credential {attach.shared_credential_id} not found",
+                    )
+                if shared_cred.provider in upserted_manual_providers:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Provider {shared_cred.provider} already has a manual credential",
                     )
                 existing = self.repository.get_secret(agent.id, shared_cred.provider)
                 if existing:
@@ -1637,7 +1632,7 @@ class AgentService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"No {provider.value} credential configured for this agent",
             )
-        validator = _VALIDATORS.get(provider)
+        validator = PROVIDER_VALIDATORS.get(provider)
         if validator is None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -1657,18 +1652,7 @@ class AgentService:
         content = decrypt_content(provider, ciphertext, self.config.agent_token_encryption_key)
         self._backfill_gmail_client_credentials({provider: content})
         result = validator(content)  # type: ignore[arg-type]
-        if result.valid and result.missing_scopes:
-            validation_status = "warning"
-        elif result.valid:
-            validation_status = "valid"
-        else:
-            validation_status = "invalid"
-        return {
-            "validation_status": validation_status,
-            "validation_identity": result.identity,
-            "validation_error": result.error,
-            "missing_scopes": result.missing_scopes,
-        }
+        return format_validation_result(result)
 
     def _try_rename_slack_app(self, agent: Agent, new_name: str, context: CurrentUserContext) -> None:
         """Best-effort: rename the Slack app to match the new agent name. Never raises."""
