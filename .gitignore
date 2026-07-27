@@ -19,6 +19,9 @@ dist/
 .env.test
 .env.deploy
 .env.deploy.staging
+# Per-environment deploy configs hold real secrets; keep only the tracked spec.
+.env.deploy.*
+!.env.deploy.spec
 
 # Log files
 *.log

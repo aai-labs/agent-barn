@@ -65,6 +65,7 @@ from api.domains.agents.models import (
     AgentTelegramConfigRead,
     AgentType,
     AgentUpdate,
+    FirecrawlContent,
     ConfluenceContent,
     GmailContent,
     JiraContent,
@@ -1132,6 +1133,45 @@ class AgentService:
         aai_setup_sh = build_setup_sh(list(store), home_dir=aai_home) if decrypted else None
         if store:
             secret.string_data.update(build_env(store))
+
+        fc_content = decrypted.get(SecretProvider.FIRECRAWL)
+        fc_api_key = (
+            fc_content.api_key if isinstance(fc_content, FirecrawlContent) else self.config.agent_firecrawl_api_key
+        )
+        fc_base_url = (
+            fc_content.base_url
+            if isinstance(fc_content, FirecrawlContent) and fc_content.base_url
+            else self.config.agent_firecrawl_base_url
+        )
+        if fc_api_key and fc_base_url:
+            secret.string_data["FIRECRAWL_API_KEY"] = fc_api_key
+            if hermes_cfg is not None:
+                hermes_cfg["web"] = {"backend": "firecrawl"}
+                hermes_cfg["browser"] = {"cloud_provider": "firecrawl"}
+                secret.string_data["FIRECRAWL_API_URL"] = fc_base_url
+                secret.string_data["FIRECRAWL_BROWSER_TTL"] = "600"
+            if overlay is not None:
+                overlay["plugins"]["allow"].append("firecrawl")
+                overlay["plugins"]["entries"]["firecrawl"] = {
+                    "enabled": True,
+                    "config": {
+                        "webSearch": {
+                            "apiKey": "${FIRECRAWL_API_KEY}",
+                            "baseUrl": fc_base_url,
+                        },
+                        "webFetch": {
+                            "apiKey": "${FIRECRAWL_API_KEY}",
+                            "baseUrl": fc_base_url,
+                            "onlyMainContent": True,
+                            "maxAgeMs": 172800000,
+                            "timeoutSeconds": 60,
+                        },
+                    },
+                }
+                overlay["tools"]["web"] = {
+                    "fetch": {"provider": "firecrawl"},
+                    "search": {"enabled": True, "provider": "firecrawl"},
+                }
 
         ingest_key = secrets.token_urlsafe(32)
         secret.string_data.update(
