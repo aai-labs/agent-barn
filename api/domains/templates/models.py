@@ -72,6 +72,7 @@ class TemplateRead(PydanticBaseModel):
     created_at: datetime
     updated_at: datetime
     required_skills: list[SkillRead] = Field(default_factory=list)
+    in_use: bool = False
 
 
 class TemplateCreate(PydanticBaseModel):

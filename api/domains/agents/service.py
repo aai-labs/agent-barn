@@ -344,6 +344,7 @@ class AgentService:
             if agent.platform == AgentPlatform.TEAMS and self.config.api_external_url
             else None
         )
+        template_slug, template_version = agent.template_pin
         return AgentRead(
             id=agent.id,
             name=agent.name,
@@ -351,8 +352,8 @@ class AgentService:
             platform=agent.platform,
             agent_type=agent.agent_type,
             organization_id=agent.organization_id,
-            template_slug=agent.template_slug,
-            template_version=agent.template_version,
+            template_slug=template_slug,
+            template_version=template_version,
             model=agent.model,
             approval_mode=agent.approval_mode,
             slack_config=slack_config_read,
@@ -376,7 +377,7 @@ class AgentService:
             s for _, s in self.skill_repository.get_agent_skills_with_details(agent.id)
         ]
         template = self.template_repository.get_template_by_slug_and_version(
-            agent.organization_id, agent.template_slug, agent.template_version
+            agent.organization_id, *agent.template_pin
         )
         required_ids = (
             self.template_repository.get_required_skill_ids(template.id)
@@ -558,7 +559,7 @@ class AgentService:
         org_id = self._org_id(context)
         agent = self._get_active_or_404(agent_id, org_id)
         template = self.template_repository.get_template_by_slug_and_version(
-            org_id, agent.template_slug, version
+            org_id, agent.template_pin[0], version
         )
         if not template:
             raise HTTPException(
@@ -584,7 +585,7 @@ class AgentService:
         secrets_by_agent = self.repository.get_secrets_for_agents(agent_ids)
         skills_by_agent = self.skill_repository.get_skills_for_agents(agent_ids)
 
-        slug_versions = list({(a.template_slug, a.template_version) for a in agents})
+        slug_versions = list({a.template_pin for a in agents})
         template_id_map = self.template_repository.get_template_ids_for_slug_versions(
             org_id, slug_versions
         )
@@ -594,7 +595,7 @@ class AgentService:
         )
 
         def _required_ids(agent: Agent) -> set[UUID]:
-            tid = template_id_map.get((agent.template_slug, agent.template_version))
+            tid = template_id_map.get(agent.template_pin)
             return req_ids_by_template.get(tid, set()) if tid else set()
 
         items = [
@@ -681,7 +682,7 @@ class AgentService:
         if effective_template is None:
             effective_template = (
                 self.template_repository.get_template_by_slug_and_version(
-                    org_id, agent.template_slug, agent.template_version
+                    org_id, *agent.template_pin
                 )
             )
         required_ids = (
@@ -835,7 +836,7 @@ class AgentService:
             )
 
         template = self.template_repository.get_template_or_raise(
-            org_id, agent.template_slug, agent.template_version
+            org_id, *agent.template_pin
         )
         # Placeholders are kept raw in storage and rendered at seed time.
         rendered = render_template(template, agent.name)

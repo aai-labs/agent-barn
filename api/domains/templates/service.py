@@ -4,6 +4,7 @@ from uuid import UUID
 
 from fastapi import HTTPException, status
 from injector import inject, singleton
+from sqlalchemy.exc import IntegrityError
 
 from api.domains.auth.models import CurrentUserContext
 from api.domains.skills.models import SkillRead
@@ -89,13 +90,17 @@ class TemplateService:
         skills_by_template = self.repository.get_required_skills_for_templates(
             template_ids
         )
+        used_slugs = self.repository.get_slugs_used_by_live_agents(
+            org_id, [t.template_slug for t in templates]
+        )
         items = []
         for t in templates:
             read = TemplateRead.model_validate(t)
             skills = skills_by_template.get(t.id, [])
             read = read.model_copy(
                 update={
-                    "required_skills": [SkillRead.model_validate(s) for s in skills]
+                    "required_skills": [SkillRead.model_validate(s) for s in skills],
+                    "in_use": t.template_slug in used_slugs,
                 }
             )
             items.append(read)
@@ -109,6 +114,11 @@ class TemplateService:
     def get_template(self, slug: str, context: CurrentUserContext) -> TemplateRead:
         org_id = self._org_id(context)
         read = TemplateRead.model_validate(self._get_latest_or_404(org_id, slug))
+        read = read.model_copy(
+            update={
+                "in_use": self.repository.is_lineage_used_by_live_agent(org_id, slug)
+            }
+        )
         return self._with_required_skills(read)
 
     def list_template_versions(
@@ -208,6 +218,29 @@ class TemplateService:
         self.repository.save_template(new_template)
         self.repository.save_template_skills(new_template.id, resolved_ids)
         return self._with_required_skills(TemplateRead.model_validate(new_template))
+
+    def delete_template(self, slug: str, context: CurrentUserContext) -> None:
+        org_id = self._org_id(context)
+        latest = self._get_latest_or_404(org_id, slug)
+        if latest.template_source == TemplateSource.PRE_DEFINED:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot delete pre-defined templates",
+            )
+        if self.repository.is_lineage_used_by_live_agent(org_id, slug):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Template is being used by one or more agents",
+            )
+        try:
+            self.repository.purge_template_lineage(org_id, slug)
+        except IntegrityError:
+            # An agent was created from this template between the check and
+            # the delete; the RESTRICT FK rejected the purge.
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Template is being used by one or more agents",
+            )
 
     def seed_predefined_templates(self, org_id: UUID) -> None:
         """Insert missing pre-defined templates and refresh stale ones in place.

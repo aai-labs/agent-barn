@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronDownIcon } from "lucide-react";
+import { ChevronDownIcon, Trash2 } from "lucide-react";
 import { PlusIcon } from "@/components/icons";
 import {
   DropdownMenu,
@@ -10,8 +10,14 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { useTemplates } from "../hooks/use-templates";
 import type { AgentTemplateRead, TemplateSource } from "../schemas";
+import { DeleteTemplateDialog } from "./delete-template-dialog";
 import { TemplateSourceBadge } from "./hire-dialog-steps";
 import { TemplateDrawer } from "./template-drawer";
 import { Pagination } from "./pagination";
@@ -28,6 +34,7 @@ export function TemplatesPanel() {
   const [page, setPage] = useState(1);
   const [openTemplate, setOpenTemplate] = useState<AgentTemplateRead | null>(null);
   const [creating, setCreating] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<AgentTemplateRead | null>(null);
 
   const { templates, total, isLoading, error } = useTemplates({
     search: search || undefined,
@@ -129,6 +136,40 @@ export function TemplatesPanel() {
           >
             View
           </button>
+          {t.inUse || t.templateSource === "pre-defined" ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                {/* span wrapper: disabled buttons emit no hover events for the tooltip */}
+                <span onClick={(e) => e.stopPropagation()}>
+                  <button
+                    className="p-1.5 rounded-lg"
+                    style={{ color: "var(--ink-4)", opacity: 0.4, cursor: "not-allowed" }}
+                    disabled
+                    aria-label="Delete template"
+                  >
+                    <Trash2 width={14} height={14} />
+                  </button>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>
+                {t.templateSource === "pre-defined"
+                  ? "Pre-defined templates cannot be deleted"
+                  : "This template is being used by an agent"}
+              </TooltipContent>
+            </Tooltip>
+          ) : (
+            <button
+              className="p-1.5 rounded-lg transition-colors"
+              style={{ color: "var(--ink-4)" }}
+              onClick={(e) => { e.stopPropagation(); setDeleteTarget(t); }}
+              title="Delete template"
+              aria-label="Delete template"
+              onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = "var(--err)"; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = "var(--ink-4)"; }}
+            >
+              <Trash2 width={14} height={14} />
+            </button>
+          )}
         </div>
       ))}
 
@@ -146,6 +187,11 @@ export function TemplatesPanel() {
       {creating && (
         <TemplateDrawer mode="create" onClose={() => setCreating(false)} />
       )}
+      <DeleteTemplateDialog
+        template={deleteTarget}
+        open={deleteTarget !== null}
+        onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}
+      />
     </div>
   );
 }

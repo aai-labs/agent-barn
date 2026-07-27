@@ -76,6 +76,7 @@ export const AgentTemplateReadSchema = z.object({
   bootstrapMd: z.string(),
   heartbeatMd: z.string(),
   requiredSkills: z.array(AgentAssignedSkillSchema).default([]),
+  inUse: z.boolean().default(false),
   createdAt: z.string(),
   updatedAt: z.string(),
 });

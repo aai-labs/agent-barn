@@ -210,8 +210,11 @@ class Agent(BaseModel, table=True):
         nullable=True,
         sa_type=sa.DateTime(timezone=True),  # type: ignore
     )
-    template_slug: str = SqlField(nullable=False, max_length=255)
-    template_version: int = SqlField(nullable=False)
+    # Nullable so deleting a template lineage can detach soft-deleted agents:
+    # with either column NULL the composite FK is not enforced (MATCH SIMPLE).
+    # Live agents always carry a pin — read it through template_pin.
+    template_slug: str | None = SqlField(default=None, nullable=True, max_length=255)
+    template_version: int | None = SqlField(default=None, nullable=True)
     model: str = SqlField(nullable=False, default="")
     platform: AgentPlatform = SqlField(
         default=AgentPlatform.SLACK,
@@ -232,6 +235,12 @@ class Agent(BaseModel, table=True):
         default=CommandApprovalMode.AUTO,
         sa_column=Column(sa.String(10), nullable=False, server_default="auto"),
     )
+
+    @property
+    def template_pin(self) -> tuple[str, int]:
+        if self.template_slug is None or self.template_version is None:
+            raise RuntimeError(f"Agent {self.id} has no template pin")
+        return self.template_slug, self.template_version
 
 
 class AgentSlackConfig(BaseModel, table=True):
