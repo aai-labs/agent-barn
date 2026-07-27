@@ -2880,7 +2880,6 @@ def test_list_agents_marks_required_skills():
             assert_that(jira["required"], equal_to(True))
 
 
-
 _GIVEN_WITH_FIRECRAWL = [
     set_env_variable(
         {
