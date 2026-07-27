@@ -309,6 +309,31 @@ def test_get_template_unknown_slug_returns_404():
             assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
+def test_get_template_reports_in_use():
+    with given([*_GIVEN, there_is_an_agent(name="Pinned")]) as context:
+        client: TestClient = context.client
+        slug = context.agent.template_slug
+
+        with when("I get the template the agent is pinned to"):
+            response = client.get(f"{_BASE}/{slug}", headers=_auth(context))
+
+        with then("it is flagged in_use"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["in_use"], equal_to(True))
+
+
+def test_get_template_reports_not_in_use():
+    with given([*_GIVEN, there_is_a_template(slug="idle", name="Idle")]) as context:
+        client: TestClient = context.client
+
+        with when("I get a template no agent uses"):
+            response = client.get(f"{_BASE}/idle", headers=_auth(context))
+
+        with then("it is flagged not in_use"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["in_use"], equal_to(False))
+
+
 # --- versions ---
 
 
@@ -1153,6 +1178,13 @@ def test_delete_template_requires_auth():
 
         with then("I get 401"):
             assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
+
+
+def test_member_cannot_delete_template():
+    with given([*_GIVEN, there_is_a_template(slug="doomed", name="Doomed"), _there_is_a_member_actor()]) as context:
+        response = context.client.delete(f"{_BASE}/doomed", headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
 def test_delete_predefined_template_returns_403():
