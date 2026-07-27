@@ -41,6 +41,12 @@ spec:
             - secretRef:
                 name: {{ .Values.litellmApiKeySecretName }}
           env:
+            # The namespace this release runs in — the API creates agent
+            # workloads (Deployments/Services/PVCs/Secrets) here. Without it the
+            # app falls back to its hardcoded "agent-farm" default, so a staging
+            # pod would spawn agents into the prod namespace.
+            - name: K8S_NAMESPACE
+              value: {{ .Release.Namespace }}
             - name: K8S_KUBECONFIG_PATH
               value: /etc/kubeconfig/kubeconfig
             - name: OPENCLAW_IMAGE
