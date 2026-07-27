@@ -105,20 +105,36 @@ def _github_block(c: GithubContent) -> str:
 
 
 def _jira_block(c: JiraContent) -> str:
+    site_url = c.site_url
+    if c.use_scoped_token:
+        # Scoped tokens are still Basic Auth, but must go through the API Gateway
+        # (keyed by cloud_id) rather than the site URL directly.
+        # If cloud_id is missing, skip the profile — the user must re-save the integration.
+        if not c.cloud_id:
+            return "# jira-work profile skipped: cloud_id missing\n"
+        site_url = f"https://api.atlassian.com/ex/jira/{c.cloud_id}"
     return (
         f"[profiles.{PROFILE_SLUGS[SecretProvider.JIRA]}]\n"
         'auth_type = "basic_api_token"\n'
-        f"site_url = {_q(c.site_url)}\n"
+        f"site_url = {_q(site_url)}\n"
         f"email = {_q(c.email)}\n"
         'api_token_secret = "jira.api_token"\n'
     )
 
 
 def _confluence_block(c: ConfluenceContent) -> str:
+    site_url = c.site_url
+    if c.use_scoped_token:
+        # Scoped tokens are still Basic Auth, but must go through the API Gateway
+        # (keyed by cloud_id) rather than the site URL directly.
+        # If cloud_id is missing, skip the profile — the user must re-save the integration.
+        if not c.cloud_id:
+            return "# confluence-work profile skipped: cloud_id missing\n"
+        site_url = f"https://api.atlassian.com/ex/confluence/{c.cloud_id}"
     return (
         f"[profiles.{PROFILE_SLUGS[SecretProvider.CONFLUENCE]}]\n"
         'auth_type = "basic_api_token"\n'
-        f"site_url = {_q(c.site_url)}\n"
+        f"site_url = {_q(site_url)}\n"
         f"email = {_q(c.email)}\n"
         'api_token_secret = "confluence.api_token"\n'
     )

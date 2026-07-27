@@ -1,4 +1,5 @@
 import datetime
+import uuid as uuid_mod
 from typing import Any
 from unittest.mock import MagicMock
 from uuid import UUID
@@ -15,6 +16,7 @@ from api.domains.agents.models import (
     AgentTeamsConfig,
     AgentTelegramConfig,
     AgentType,
+    compute_bot_token_hash,
 )
 from api.domains.agents.repository import AgentRepository
 from api.domains.auth.utils import set_default_org_id
@@ -73,6 +75,7 @@ def there_is_an_agent(
     agent_type: AgentType = AgentType.OPENCLAW,
     soul_md: str = "# Soul\n\nTest soul.",
     tools_md: str = DEFAULT_TOOLS_MD,
+    bot_token: str | None = None,
     created_by_user_id: UUID | None = None,
     creator_membership_id: UUID | None = None,
 ):
@@ -120,10 +123,12 @@ def there_is_an_agent(
             repository.create_with_creator_access(agent, creator_membership_id)
 
         if platform == AgentPlatform.SLACK:
+            effective_bot_token = bot_token or f"xoxb-test-{uuid_mod.uuid4()}"
             slack_config = AgentSlackConfig(
                 agent_id=agent.id,
-                bot_token_encrypted=encrypt_token(TEST_SLACK_BOT_TOKEN, TEST_ENCRYPTION_KEY),
+                bot_token_encrypted=encrypt_token(effective_bot_token, TEST_ENCRYPTION_KEY),
                 app_token_encrypted=encrypt_token(TEST_SLACK_APP_TOKEN, TEST_ENCRYPTION_KEY),
+                bot_token_hash=None if deleted else compute_bot_token_hash(effective_bot_token),
             )
             repository.save_slack_config(slack_config)
         elif platform == AgentPlatform.TEAMS:
@@ -184,6 +189,24 @@ def skill_is_assigned_to_agent():
 
         repo: AgentRepository = context.injector.get(AgentRepository)
         repo.save_skills([AgentSkill(agent_id=context.agent.id, skill_id=context.skill.id)])
+
+    return step
+
+
+def there_is_an_agent_in_another_org(
+    name: str = "Other Org Agent",
+    bot_token: str = TEST_SLACK_BOT_TOKEN,
+):
+    def step(context):
+        from api.tests.steps.organization import there_is_an_organization
+
+        original_org = context.organization
+        there_is_an_organization(name="Other Org")(context)
+        other_org_id = context.organization.id
+        context.organization = original_org
+
+        there_is_an_agent(name=name, bot_token=bot_token, organization_id=other_org_id)(context)
+        context.other_org_agent = context.agent
 
     return step
 

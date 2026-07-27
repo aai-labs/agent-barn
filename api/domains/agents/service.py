@@ -66,13 +66,17 @@ from api.domains.agents.models import (
     AgentType,
     AgentUpdate,
     FirecrawlContent,
+    ConfluenceContent,
     GmailContent,
+    JiraContent,
     PairRequest,
     SecretProvider,
     decrypt_content,
+    compute_bot_token_hash,
     encrypt_content,
     validate_content,
 )
+from api.domains.agents.exceptions import BotTokenConflictHTTPException
 from api.domains.agents.repository import AgentRepository
 from api.domains.agents.runtime_policy import build_chat_commands_policy_md
 from api.domains.auth.models import CurrentUserContext
@@ -91,6 +95,9 @@ from api.infrastructure.integration_validators import (
     validate_gmail,
     validate_jira,
 )
+from api.infrastructure.integration_validators.atlassian_utils import (
+    get_atlassian_cloud_id,
+)
 from api.infrastructure.kubernetes.client import KubernetesClient
 from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
 from api.infrastructure.openrouter.client import OpenRouterClient
@@ -99,10 +106,10 @@ from api.infrastructure.slack.client import (
     SlackClient,
     SlackFetchError,
 )
+from api.infrastructure.slack.config_token import update_slack_app_name
 from api.infrastructure.telegram.client import (
     validate_bot_token as validate_telegram_bot_token,
 )
-from api.infrastructure.slack.config_token import update_slack_app_name
 
 logger = logging.getLogger(__name__)
 
@@ -168,6 +175,28 @@ _VALIDATORS: dict[SecretProvider, Any] = {
 
 def _allowlist_patterns(allowlist: str) -> list[str]:
     return [p.strip().lower() for p in allowlist.split(",") if p.strip()]
+
+
+def _enrich_atlassian_content(content: Any) -> Any:
+    """For Atlassian integrations using scoped API tokens, fetch and store the cloud_id.
+
+    Scoped tokens still use Basic Auth, but must be sent to the API Gateway URL
+    (https://api.atlassian.com/ex/jira/<cloud_id>) instead of the site URL directly.
+    Best-effort: if the lookup fails, the content is returned unchanged.
+    """
+    if isinstance(content, JiraContent) and content.use_scoped_token and not content.cloud_id:
+        cloud_id, cloud_err = get_atlassian_cloud_id(content.site_url)
+        if cloud_id:
+            return content.model_copy(update={"cloud_id": cloud_id})
+        else:
+            logger.warning(f"Failed to fetch Jira cloud_id for {content.site_url}: {cloud_err}")
+    elif isinstance(content, ConfluenceContent) and content.use_scoped_token and not content.cloud_id:
+        cloud_id, cloud_err = get_atlassian_cloud_id(content.site_url)
+        if cloud_id:
+            return content.model_copy(update={"cloud_id": cloud_id})
+        else:
+            logger.warning(f"Failed to fetch Confluence cloud_id for {content.site_url}: {cloud_err}")
+    return content
 
 
 def filter_models_by_allowlist(catalog: list[dict], allowlist: str) -> list[dict]:
@@ -420,6 +449,7 @@ class AgentService:
             ok, reason = self._check_slack_tokens(data.slack_bot_token, data.slack_app_token)
             if not ok:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=reason)
+            self._ensure_bot_token_unique(data.slack_bot_token, org_id)
 
         telegram_bot_username: str | None = None
         if data.platform == AgentPlatform.TELEGRAM:
@@ -473,6 +503,12 @@ class AgentService:
                     detail="Required template skills must be included in skill_ids",
                 )
 
+        # The creator always gets an explicit Owner AgentAccess row, even if they
+        # currently have implicit full access as an Org Owner/Admin: it's what keeps
+        # them able to manage the Agent if they're later demoted to Member (see
+        # test_creator_keeps_assigned_agent_after_owner_is_demoted_to_member). This row
+        # is hidden from the Share dialog and preserved across saves — see
+        # AgentAccessService._assigned_members_for_agent / replace_access_settings.
         persisted_membership = context.user_organization_map.get(org_id)
         creator_membership_id = (
             persisted_membership.id
@@ -496,13 +532,18 @@ class AgentService:
                     cast(str, data.slack_app_token),
                     self.config.agent_token_encryption_key,
                 ),
+                bot_token_hash=compute_bot_token_hash(cast(str, data.slack_bot_token)),
                 channel_ids=data.slack_channel_ids,
                 dm_user_ids=data.slack_dm_user_ids,
                 group_policy=data.slack_group_policy,
                 dm_policy=data.slack_dm_policy,
                 verbose_mode=data.slack_verbose_mode,
             )
-            self.repository.save_slack_config(slack_config)
+            try:
+                self.repository.save_slack_config(slack_config)
+            except BotTokenConflictHTTPException:
+                self.repository.hard_delete(agent.id)
+                raise
         elif data.platform == AgentPlatform.TEAMS:
             assert data.teams_app_id is not None
             assert data.teams_app_password is not None
@@ -539,7 +580,7 @@ class AgentService:
         # Teams auto-start so they exist if/when the pod is later built.
         secrets: list[AgentSecret] = []
         for item in data.secrets:
-            content = validate_content(item.provider, item.content)
+            content = _enrich_atlassian_content(validate_content(item.provider, item.content))
             saved = self.repository.save_secret(
                 AgentSecret(
                     agent_id=agent.id,
@@ -732,6 +773,9 @@ class AgentService:
             if not ok:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=reason)
 
+            if "slack_bot_token" in updated:
+                self._ensure_bot_token_unique(updated["slack_bot_token"], org_id, exclude_agent_id=agent.id)
+
             slack_config = self.repository.get_slack_config(agent.id)
             if slack_config:
                 if "slack_bot_token" in updated:
@@ -739,6 +783,7 @@ class AgentService:
                         updated["slack_bot_token"],
                         self.config.agent_token_encryption_key,
                     )
+                    slack_config.bot_token_hash = compute_bot_token_hash(updated["slack_bot_token"])
                     _bot_name_cache.pop(str(agent.id), None)
                 if "slack_app_token" in updated:
                     slack_config.app_token_encrypted = encrypt_token(
@@ -813,7 +858,10 @@ class AgentService:
             upserts: list[tuple[AgentSecretCreate, str]] = [
                 (
                     item,
-                    encrypt_content(validate_content(item.provider, item.content), key),
+                    encrypt_content(
+                        _enrich_atlassian_content(validate_content(item.provider, item.content)),
+                        key,
+                    ),
                 )
                 for item in data.secrets or []
             ]
@@ -1363,6 +1411,11 @@ class AgentService:
         self.k8s.delete_secret(name, ns)
         self.k8s.delete_config_map(name, ns)
 
+        slack_config = self.repository.get_slack_config(agent.id)
+        if slack_config:
+            slack_config.bot_token_hash = None
+            self.repository.save_slack_config(slack_config)
+
         agent.deleted_at = dt.datetime.now(dt.timezone.utc)
         self.repository.save(agent)
 
@@ -1432,6 +1485,18 @@ class AgentService:
             if not ok:
                 return ok, reason
         return True, ""
+
+    def _ensure_bot_token_unique(
+        self,
+        bot_token: str,
+        org_id: UUID,
+        exclude_agent_id: UUID | None = None,
+    ) -> None:
+        token_hash = compute_bot_token_hash(bot_token)
+        conflicting = self.repository.find_active_agent_by_bot_token_hash(token_hash, exclude_agent_id=exclude_agent_id)
+        if conflicting:
+            name = conflicting.name if conflicting.organization_id == org_id else "another agent"
+            raise BotTokenConflictHTTPException(name)
 
     def _join_public_channels(self, bot_token: str, channel_ids: list[str]) -> None:
         client = SlackClient(bot_token)

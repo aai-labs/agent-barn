@@ -30,6 +30,7 @@ from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 PRE_RBAC_REVISION = "d3f9a1c7b2e5"
 RBAC_REVISION = "a6f2c9d18e47"
 ALEMBIC_INI = Path(__file__).resolve().parents[2] / "alembic.ini"
+GENERAL_ACCESS_COLUMN = "general_access_role_id"
 
 
 @pytest.fixture
@@ -517,6 +518,92 @@ def test_upgrade_leaves_creator_unknown_when_legacy_schema_has_no_provenance(
         creators = connection.execute(text("SELECT created_by_user_id FROM agent")).scalars().all()
 
     assert_that(creators, equal_to([None, None, None]))
+
+
+def test_fresh_upgrade_adds_nullable_general_access_role_column(fresh_database):
+    with fresh_database.engine.connect() as connection:
+        column = connection.execute(
+            text(
+                "SELECT is_nullable, column_default "
+                "FROM information_schema.columns "
+                "WHERE table_schema = 'public' AND table_name = 'agent' "
+                "AND column_name = :column"
+            ),
+            {"column": GENERAL_ACCESS_COLUMN},
+        ).one_or_none()
+
+    assert_that(column, equal_to(("YES", None)))
+
+
+def test_upgrade_leaves_existing_agents_restricted(legacy_database):
+    command.upgrade(legacy_database.config, "heads")
+    with legacy_database.engine.connect() as connection:
+        general_access_roles = (
+            connection.execute(
+                text(f"SELECT {GENERAL_ACCESS_COLUMN} FROM agent")  # noqa: S608
+            )
+            .scalars()
+            .all()
+        )
+
+    assert_that(general_access_roles, equal_to([None, None, None]))
+
+
+def test_general_access_role_rejects_referenced_role_deletion(legacy_database):
+    command.upgrade(legacy_database.config, "heads")
+    custom_role_id = _insert_custom_agent_access_role(
+        legacy_database,
+        legacy_database.org_a,
+    )
+    _execute(
+        legacy_database.engine,
+        f"UPDATE agent SET {GENERAL_ACCESS_COLUMN} = :role_id WHERE id = :agent_id",
+        {"role_id": custom_role_id, "agent_id": legacy_database.agent_a},
+    )
+
+    assert_that(
+        calling(_execute).with_args(
+            legacy_database.engine,
+            "DELETE FROM agent_access_roles WHERE id = :role_id",
+            {"role_id": custom_role_id},
+        ),
+        raises(IntegrityError),
+    )
+
+
+def test_general_access_rejects_custom_role_from_another_organization(
+    legacy_database,
+):
+    command.upgrade(legacy_database.config, "heads")
+    custom_role_id = _insert_custom_agent_access_role(
+        legacy_database,
+        legacy_database.org_b,
+    )
+
+    assert_that(
+        calling(_execute).with_args(
+            legacy_database.engine,
+            f"UPDATE agent SET {GENERAL_ACCESS_COLUMN} = :role_id WHERE id = :agent_id",
+            {"role_id": custom_role_id, "agent_id": legacy_database.agent_a},
+        ),
+        raises(IntegrityError),
+    )
+
+
+def test_downgrade_to_rbac_revision_removes_general_access_column(legacy_database):
+    command.upgrade(legacy_database.config, "heads")
+    command.downgrade(legacy_database.config, RBAC_REVISION)
+    with legacy_database.engine.connect() as connection:
+        column = connection.execute(
+            text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = 'public' AND table_name = 'agent' "
+                "AND column_name = :column"
+            ),
+            {"column": GENERAL_ACCESS_COLUMN},
+        ).one_or_none()
+
+    assert_that(column, none())
 
 
 def test_deleting_creator_sets_agent_provenance_to_null(legacy_database):

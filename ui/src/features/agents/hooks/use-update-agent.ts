@@ -32,7 +32,7 @@ export type UpdateAgentData = {
   skillIds?: string[];
   removedSkillIds?: string[];
   // Integration credentials: upsert (add/replace) + explicit removal.
-  secrets?: Array<{ provider: string; content: Record<string, string | string[]> }>;
+  secrets?: Array<{ provider: string; content: Record<string, string | string[] | boolean> }>;
   removedSecretProviders?: string[];
   approvalMode?: "manual" | "auto" | "off";
 };
