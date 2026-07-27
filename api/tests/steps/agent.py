@@ -216,9 +216,7 @@ def there_is_a_shared_credential(
         validated = validate_content(sp, raw)
         encrypted = encrypt_content(validated, TEST_ENCRYPTION_KEY)
 
-        repo: SharedCredentialRepository = context.injector.get(
-            SharedCredentialRepository
-        )
+        repo: SharedCredentialRepository = context.injector.get(SharedCredentialRepository)
         cred = SharedCredential(
             organization_id=context.organization.id,
             provider=SecretProvider(provider),

@@ -30,14 +30,10 @@ def upgrade() -> None:
         sa.Column("name", sa.String(length=255), nullable=False),
         sa.Column("content", sa.Text(), nullable=False),
         sa.Column("created_by", postgresql.UUID(as_uuid=True), nullable=True),
-        sa.ForeignKeyConstraint(
-            ["organization_id"], ["organization.id"], ondelete="CASCADE"
-        ),
+        sa.ForeignKeyConstraint(["organization_id"], ["organization.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["created_by"], ["user.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint(
-            "organization_id", "name", name="uq_shared_credential_org_name"
-        ),
+        sa.UniqueConstraint("organization_id", "name", name="uq_shared_credential_org_name"),
     )
     op.create_index(
         "ix_shared_credential_organization_id",
@@ -76,15 +72,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_constraint(
-        "ck_agent_secret_content_xor_shared", "agent_secret", type_="check"
-    )
+    op.drop_constraint("ck_agent_secret_content_xor_shared", "agent_secret", type_="check")
     op.alter_column("agent_secret", "content", existing_type=sa.Text(), nullable=False)
-    op.drop_constraint(
-        "fk_agent_secret_shared_credential", "agent_secret", type_="foreignkey"
-    )
+    op.drop_constraint("fk_agent_secret_shared_credential", "agent_secret", type_="foreignkey")
     op.drop_column("agent_secret", "shared_credential_id")
-    op.drop_index(
-        "ix_shared_credential_organization_id", table_name="shared_credential"
-    )
+    op.drop_index("ix_shared_credential_organization_id", table_name="shared_credential")
     op.drop_table("shared_credential")

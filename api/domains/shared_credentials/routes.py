@@ -18,14 +18,10 @@ from api.domains.shared_credentials.service import SharedCredentialService
 from api.domains.users.organization_users.models import ORG_MANAGER_ROLES
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
-shared_credentials_router = APIRouter(
-    prefix="/shared-credentials", tags=["shared-credentials"]
-)
+shared_credentials_router = APIRouter(prefix="/shared-credentials", tags=["shared-credentials"])
 
 
-@shared_credentials_router.post(
-    "", response_model=SharedCredentialRead, status_code=status.HTTP_201_CREATED
-)
+@shared_credentials_router.post("", response_model=SharedCredentialRead, status_code=status.HTTP_201_CREATED)
 def create_shared_credential(
     data: SharedCredentialCreate,
     context: Annotated[
@@ -41,9 +37,7 @@ def create_shared_credential(
 def list_shared_credentials(
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[SharedCredentialService, Injected(SharedCredentialService)],
-    cred_filter: Annotated[
-        SharedCredentialFilter, Depends(get_shared_credential_filter)
-    ],
+    cred_filter: Annotated[SharedCredentialFilter, Depends(get_shared_credential_filter)],
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1)] = 15,
 ):
@@ -71,9 +65,7 @@ def get_shared_credential(
     return service.get_shared_credential(credential_id, context)
 
 
-@shared_credentials_router.patch(
-    "/{credential_id}", response_model=SharedCredentialRead
-)
+@shared_credentials_router.patch("/{credential_id}", response_model=SharedCredentialRead)
 def update_shared_credential(
     credential_id: UUID,
     data: SharedCredentialUpdate,
@@ -86,9 +78,7 @@ def update_shared_credential(
     return service.update_shared_credential(credential_id, data, context)
 
 
-@shared_credentials_router.delete(
-    "/{credential_id}", status_code=status.HTTP_204_NO_CONTENT
-)
+@shared_credentials_router.delete("/{credential_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_shared_credential(
     credential_id: UUID,
     context: Annotated[

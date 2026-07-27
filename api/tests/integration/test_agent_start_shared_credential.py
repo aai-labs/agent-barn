@@ -61,15 +61,11 @@ def test_start_agent_with_shared_credential_sets_status_running():
             client.patch(
                 f"{_AGENTS}/{ctx.agent.id}",
                 json={
-                    "shared_credentials": [
-                        {"shared_credential_id": str(ctx.shared_credential.id)}
-                    ],
+                    "shared_credentials": [{"shared_credential_id": str(ctx.shared_credential.id)}],
                 },
                 headers=_auth(ctx),
             )
-            response = client.post(
-                f"{_AGENTS}/{ctx.agent.id}/start", headers=_auth(ctx)
-            )
+            response = client.post(f"{_AGENTS}/{ctx.agent.id}/start", headers=_auth(ctx))
 
         with then("the agent starts and the jira profile is injected"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))

@@ -53,9 +53,7 @@ class SharedCredentialService:
 
     def _require_manager(self, context: CurrentUserContext) -> UUID:
         org_id = self._org_id(context)
-        context.require_org_role(
-            org_id, ORG_MANAGER_ROLES, detail="Admin access required"
-        )
+        context.require_org_role(org_id, ORG_MANAGER_ROLES, detail="Admin access required")
         return org_id
 
     def _get_or_404(self, credential_id: UUID, org_id: UUID) -> SharedCredential:
@@ -117,17 +115,13 @@ class SharedCredentialService:
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                     detail=e.errors(),
                 )
-            credential.content = encrypt_content(
-                validated, self.config.agent_token_encryption_key
-            )
+            credential.content = encrypt_content(validated, self.config.agent_token_encryption_key)
 
         self.repository.save(credential)
         agent_count = self.repository.count_agent_references(credential.id)
         return self._to_read(credential, agent_count=agent_count)
 
-    def delete_shared_credential(
-        self, credential_id: UUID, context: CurrentUserContext
-    ) -> None:
+    def delete_shared_credential(self, credential_id: UUID, context: CurrentUserContext) -> None:
         org_id = self._require_manager(context)
         credential = self._get_or_404(credential_id, org_id)
 
@@ -144,9 +138,7 @@ class SharedCredentialService:
             )
         self.repository.delete(credential)
 
-    def get_shared_credential(
-        self, credential_id: UUID, context: CurrentUserContext
-    ) -> SharedCredentialRead:
+    def get_shared_credential(self, credential_id: UUID, context: CurrentUserContext) -> SharedCredentialRead:
         org_id = self._org_id(context)
         credential = self._get_or_404(credential_id, org_id)
         agent_count = self.repository.count_agent_references(credential.id)
@@ -159,9 +151,7 @@ class SharedCredentialService:
         context: CurrentUserContext,
     ) -> PaginatedItems[SharedCredentialRead]:
         org_id = self._org_id(context)
-        credentials, total = self.repository.find_all_for_org(
-            org_id, cred_filter, pagination
-        )
+        credentials, total = self.repository.find_all_for_org(org_id, cred_filter, pagination)
         reads = []
         for cred in credentials:
             agent_count = self.repository.count_agent_references(cred.id)
@@ -173,16 +163,12 @@ class SharedCredentialService:
             items=reads,
         )
 
-    def list_shared_credential_briefs(
-        self, context: CurrentUserContext
-    ) -> list[SharedCredentialBrief]:
+    def list_shared_credential_briefs(self, context: CurrentUserContext) -> list[SharedCredentialBrief]:
         org_id = self._org_id(context)
         credentials = self.repository.find_all_briefs_for_org(org_id)
         return [SharedCredentialBrief.model_validate(c) for c in credentials]
 
-    def validate_shared_credential(
-        self, credential_id: UUID, context: CurrentUserContext
-    ) -> dict:
+    def validate_shared_credential(self, credential_id: UUID, context: CurrentUserContext) -> dict:
         org_id = self._org_id(context)
         credential = self._get_or_404(credential_id, org_id)
 
@@ -212,9 +198,7 @@ class SharedCredentialService:
         }
 
     @staticmethod
-    def _to_read(
-        credential: SharedCredential, *, agent_count: int
-    ) -> SharedCredentialRead:
+    def _to_read(credential: SharedCredential, *, agent_count: int) -> SharedCredentialRead:
         return SharedCredentialRead(
             id=credential.id,
             organization_id=credential.organization_id,

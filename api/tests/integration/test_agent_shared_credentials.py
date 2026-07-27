@@ -79,9 +79,7 @@ def test_create_agent_with_shared_credential():
         with when("I create an agent with a shared credential"):
             payload = {
                 **_VALID_CREATE,
-                "shared_credentials": [
-                    {"shared_credential_id": str(ctx.shared_credential.id)}
-                ],
+                "shared_credentials": [{"shared_credential_id": str(ctx.shared_credential.id)}],
             }
             response = client.post(_AGENTS, json=payload, headers=_auth(ctx))
 
@@ -120,17 +118,13 @@ def test_create_agent_rejects_shared_and_manual_same_provider():
         with when("I create an agent with both shared and manual jira"):
             payload = {
                 **_VALID_CREATE,
-                "shared_credentials": [
-                    {"shared_credential_id": str(ctx.shared_credential.id)}
-                ],
+                "shared_credentials": [{"shared_credential_id": str(ctx.shared_credential.id)}],
                 "secrets": [{"provider": "jira", "content": _JIRA_CONTENT}],
             }
             response = client.post(_AGENTS, json=payload, headers=_auth(ctx))
 
         with then("it returns 422 (duplicate provider)"):
-            assert_that(
-                response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY)
-            )
+            assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
 
 
 # --- Update agent: attach shared credential ---
@@ -144,9 +138,7 @@ def test_update_agent_attach_shared_credential():
             response = client.patch(
                 f"{_AGENTS}/{ctx.agent.id}",
                 json={
-                    "shared_credentials": [
-                        {"shared_credential_id": str(ctx.shared_credential.id)}
-                    ],
+                    "shared_credentials": [{"shared_credential_id": str(ctx.shared_credential.id)}],
                 },
                 headers=_auth(ctx),
             )
@@ -174,9 +166,7 @@ def test_update_agent_detach_shared_credential():
             client.patch(
                 f"{_AGENTS}/{ctx.agent.id}",
                 json={
-                    "shared_credentials": [
-                        {"shared_credential_id": str(ctx.shared_credential.id)}
-                    ],
+                    "shared_credentials": [{"shared_credential_id": str(ctx.shared_credential.id)}],
                 },
                 headers=_auth(ctx),
             )

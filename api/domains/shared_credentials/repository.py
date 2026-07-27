@@ -35,9 +35,7 @@ class SharedCredentialRepository:
             raise
         return credential
 
-    def get_by_id_and_org(
-        self, credential_id: UUID, org_id: UUID
-    ) -> SharedCredential | None:
+    def get_by_id_and_org(self, credential_id: UUID, org_id: UUID) -> SharedCredential | None:
         with Session(self.delegate.engine) as session:
             query = (
                 select(SharedCredential)
@@ -55,13 +53,9 @@ class SharedCredentialRepository:
         with Session(self.delegate.engine) as session:
             conditions = [col(SharedCredential.organization_id) == org_id]
             if cred_filter.search:
-                conditions.append(
-                    col(SharedCredential.name).ilike(f"%{cred_filter.search}%")
-                )
+                conditions.append(col(SharedCredential.name).ilike(f"%{cred_filter.search}%"))
             if cred_filter.provider is not None:
-                conditions.append(
-                    col(SharedCredential.provider) == cred_filter.provider
-                )
+                conditions.append(col(SharedCredential.provider) == cred_filter.provider)
 
             count_query = select(func.count()).select_from(SharedCredential)
             for condition in conditions:
@@ -116,9 +110,7 @@ class SharedCredentialRepository:
                 session.commit()
             return len(rows)
 
-    def get_by_ids_and_org(
-        self, ids: list[UUID], org_id: UUID
-    ) -> list[SharedCredential]:
+    def get_by_ids_and_org(self, ids: list[UUID], org_id: UUID) -> list[SharedCredential]:
         if not ids:
             return []
         with Session(self.delegate.engine) as session:

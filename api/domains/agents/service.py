@@ -341,11 +341,7 @@ class AgentService:
                 [sc.shared_credential_id for sc in data.shared_credentials]
             )
             shared_attach_providers = {c.provider for c in shared_creds}
-        remaining_providers = (
-            (current_providers - removed_providers)
-            | upsert_providers
-            | shared_attach_providers
-        )
+        remaining_providers = (current_providers - removed_providers) | upsert_providers | shared_attach_providers
 
         remaining_skills = self.skill_repository.get_many_by_ids(list(remaining_skill_ids))
         for skill in remaining_skills:
@@ -373,11 +369,7 @@ class AgentService:
             slack_config_read.bot_display_name = self._get_bot_display_name(str(agent.id), slack_config)
         teams_config_read = AgentTeamsConfigRead.model_validate(teams_config) if teams_config else None
         telegram_config_read = AgentTelegramConfigRead.model_validate(telegram_config) if telegram_config else None
-        shared_ids = [
-            s.shared_credential_id
-            for s in (secrets or [])
-            if s.shared_credential_id is not None
-        ]
+        shared_ids = [s.shared_credential_id for s in (secrets or []) if s.shared_credential_id is not None]
         shared_creds_by_id = {}
         if shared_ids:
             shared_creds = self.shared_credential_repository.get_many_by_ids(shared_ids)
@@ -385,10 +377,7 @@ class AgentService:
         secrets_read = []
         for secret in secrets or []:
             read = AgentSecretRead.model_validate(secret)
-            if (
-                secret.shared_credential_id
-                and secret.shared_credential_id in shared_creds_by_id
-            ):
+            if secret.shared_credential_id and secret.shared_credential_id in shared_creds_by_id:
                 sc = shared_creds_by_id[secret.shared_credential_id]
                 read.shared_credential_id = sc.id
                 read.shared_credential_name = sc.name
@@ -626,9 +615,7 @@ class AgentService:
 
         # Shared credentials: look up each, verify org ownership, create link rows
         for attach in data.shared_credentials:
-            shared_cred = self.shared_credential_repository.get_by_id_and_org(
-                attach.shared_credential_id, org_id
-            )
+            shared_cred = self.shared_credential_repository.get_by_id_and_org(attach.shared_credential_id, org_id)
             if shared_cred is None:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
@@ -653,9 +640,7 @@ class AgentService:
 
         # Resolve and validate skills before any DB writes.
         shared_providers = {s.provider for s in secrets if s.shared_credential_id}
-        skills_to_assign = self._resolve_skills(
-            data.skill_ids, data.secrets, org_id, extra_providers=shared_providers
-        )
+        skills_to_assign = self._resolve_skills(data.skill_ids, data.secrets, org_id, extra_providers=shared_providers)
 
         if skills_to_assign:
             self.repository.save_skills([AgentSkill(agent_id=agent.id, skill_id=s.id) for s in skills_to_assign])
@@ -950,9 +935,7 @@ class AgentService:
         # Shared credential attachments
         if "shared_credentials" in updated:
             for attach in data.shared_credentials or []:
-                shared_cred = self.shared_credential_repository.get_by_id_and_org(
-                    attach.shared_credential_id, org_id
-                )
+                shared_cred = self.shared_credential_repository.get_by_id_and_org(attach.shared_credential_id, org_id)
                 if shared_cred is None:
                     raise HTTPException(
                         status_code=status.HTTP_404_NOT_FOUND,
@@ -1203,11 +1186,7 @@ class AgentService:
 
         # aai-cli integration secrets — all agent types.
         agent_secrets = self.repository.get_secrets_for_agent(agent.id)
-        shared_ids = [
-            s.shared_credential_id
-            for s in agent_secrets
-            if s.shared_credential_id is not None
-        ]
+        shared_ids = [s.shared_credential_id for s in agent_secrets if s.shared_credential_id is not None]
         shared_by_id = {}
         if shared_ids:
             shared_creds = self.shared_credential_repository.get_many_by_ids(shared_ids)
@@ -1665,9 +1644,7 @@ class AgentService:
                 detail=f"No validator available for {provider.value}",
             )
         if secret.shared_credential_id:
-            shared = self.shared_credential_repository.get_many_by_ids(
-                [secret.shared_credential_id]
-            )
+            shared = self.shared_credential_repository.get_many_by_ids([secret.shared_credential_id])
             if not shared:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,

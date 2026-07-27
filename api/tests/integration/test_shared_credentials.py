@@ -126,9 +126,7 @@ def test_create_shared_credential_rejects_invalid_content():
             )
 
         with then("it returns 422"):
-            assert_that(
-                response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY)
-            )
+            assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
 
 
 def test_create_shared_credential_rejects_duplicate_name():
@@ -237,9 +235,7 @@ def test_list_shared_credentials_search_filter():
                 },
                 headers=_auth(context),
             )
-            response = client.get(
-                _BASE, params={"search": "jira"}, headers=_auth(context)
-            )
+            response = client.get(_BASE, params={"search": "jira"}, headers=_auth(context))
 
         with then("only matching credentials are returned"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
@@ -273,9 +269,7 @@ def test_list_shared_credentials_provider_filter():
                 },
                 headers=_auth(context),
             )
-            response = client.get(
-                _BASE, params={"provider": "github"}, headers=_auth(context)
-            )
+            response = client.get(_BASE, params={"provider": "github"}, headers=_auth(context))
 
         with then("only matching credentials are returned"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))

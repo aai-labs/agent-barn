@@ -27,22 +27,14 @@ class SharedCredential(BaseModel, table=True):
 
     __table_args__ = (
         sa.Index("ix_shared_credential_organization_id", "organization_id"),
-        sa.UniqueConstraint(
-            "organization_id", "name", name="uq_shared_credential_org_name"
-        ),
+        sa.UniqueConstraint("organization_id", "name", name="uq_shared_credential_org_name"),
     )
 
-    organization_id: UUID = SqlField(
-        foreign_key="organization.id", nullable=False, ondelete="CASCADE"
-    )
+    organization_id: UUID = SqlField(foreign_key="organization.id", nullable=False, ondelete="CASCADE")
     provider: SecretProvider = SqlField(sa_column=Column(sa.String(), nullable=False))
     name: str = SqlField(nullable=False, max_length=255)
-    content: str = SqlField(
-        sa_column=Column(sa.Text(), nullable=False)
-    )  # Fernet-encrypted JSON blob
-    created_by: UUID | None = SqlField(
-        default=None, foreign_key="user.id", nullable=True, ondelete="SET NULL"
-    )
+    content: str = SqlField(sa_column=Column(sa.Text(), nullable=False))  # Fernet-encrypted JSON blob
+    created_by: UUID | None = SqlField(default=None, foreign_key="user.id", nullable=True, ondelete="SET NULL")
 
 
 class SharedCredentialCreate(PydanticBaseModel):
