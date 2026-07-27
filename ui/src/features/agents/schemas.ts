@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { OrganizationRoleSchema } from "@/features/organizations/schemas";
+
 export const AgentSlackConfigSchema = z.object({
   channelIds: z.array(z.string()),
   dmUserIds: z.array(z.string()),
@@ -11,6 +13,14 @@ export const AgentSlackConfigSchema = z.object({
 
 export const AgentTeamsConfigSchema = z.object({
   tenantId: z.string(),
+});
+
+export const AgentTelegramConfigSchema = z.object({
+  allowedUserIds: z.array(z.string()),
+  allowedChatIds: z.array(z.string()),
+  groupPolicy: z.enum(["open", "allowlist"]),
+  dmPolicy: z.enum(["off", "open", "allowlist"]),
+  botUsername: z.string().nullable().optional(),
 });
 
 export const AgentSecretReadSchema = z.object({
@@ -41,11 +51,51 @@ export const AgentAssignedSkillSchema = z.object({
   updatedAt: z.string(),
 });
 
+export const AgentPermissionKeySchema = z.enum([
+  "agent.read",
+  "agent.update",
+  "agent.delete",
+  "agent.lifecycle.manage",
+  "agent.access.manage",
+  "agent.secret.manage",
+  "activity.read",
+  "cost.read",
+]);
+
+export const AgentAccessRoleReadSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+  permissions: z.array(AgentPermissionKeySchema),
+  isLocked: z.boolean(),
+});
+
+export const AgentAccessCandidateReadSchema = z.object({
+  userId: z.string().uuid(),
+  email: z.string(),
+  fullName: z.string().nullable(),
+  organizationRole: OrganizationRoleSchema,
+  isPending: z.boolean(),
+  isCreator: z.boolean(),
+});
+
+export const AgentAccessMemberReadSchema = AgentAccessCandidateReadSchema.extend({
+  accessRole: AgentAccessRoleReadSchema,
+});
+
+export const AgentGeneralAccessReadSchema = z.object({
+  role: AgentAccessRoleReadSchema.nullable(),
+});
+
+export const AgentAccessSettingsReadSchema = z.object({
+  generalAccess: AgentGeneralAccessReadSchema,
+  assignments: z.array(AgentAccessMemberReadSchema),
+});
+
 export const AgentSchema = z.object({
   id: z.string().uuid(),
   name: z.string(),
   status: z.enum(["STOPPED", "RUNNING", "ERROR"]),
-  platform: z.enum(["slack", "teams"]),
+  platform: z.enum(["slack", "teams", "telegram"]),
   agentType: z.enum(["openclaw", "hermes"]).default("openclaw"),
   organizationId: z.string().uuid(),
   templateSlug: z.string(),
@@ -54,9 +104,11 @@ export const AgentSchema = z.object({
   approvalMode: z.enum(["manual", "auto", "off"]).default("auto"),
   slackConfig: AgentSlackConfigSchema.nullable().optional(),
   teamsConfig: AgentTeamsConfigSchema.nullable().optional(),
+  telegramConfig: AgentTelegramConfigSchema.nullable().optional(),
   secrets: z.array(AgentSecretReadSchema).optional(),
   skills: z.array(AgentAssignedSkillSchema).default([]),
   webhookUrl: z.string().nullable().optional(),
+  allowedActions: z.array(AgentPermissionKeySchema).default([]),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -202,10 +254,12 @@ export const AgentLogHistoryReadSchema = z.object({
 
 
 export type CommandApprovalMode = "manual" | "auto" | "off";
+export type AgentPermissionKey = z.infer<typeof AgentPermissionKeySchema>;
 export type Agent = z.infer<typeof AgentSchema>;
 export type AgentAssignedSkill = z.infer<typeof AgentAssignedSkillSchema>;
 export type AgentSlackConfig = z.infer<typeof AgentSlackConfigSchema>;
 export type AgentTeamsConfig = z.infer<typeof AgentTeamsConfigSchema>;
+export type AgentTelegramConfig = z.infer<typeof AgentTelegramConfigSchema>;
 export type AgentHealth = z.infer<typeof AgentHealthSchema>;
 export type AgentTemplateRead = z.infer<typeof AgentTemplateReadSchema>;
 export type TemplateSource = AgentTemplateRead["templateSource"];
@@ -224,3 +278,22 @@ export type SlackUser = z.infer<typeof SlackUserSchema>;
 export type ModelOption = z.infer<typeof ModelOptionSchema>;
 export type AgentLogHistoryRead = z.infer<typeof AgentLogHistoryReadSchema>;
 export type AgentLogsRead = z.infer<typeof AgentLogsReadSchema>;
+export type AgentAccessRoleRead = z.infer<typeof AgentAccessRoleReadSchema>;
+export type AgentAccessMemberRead = z.infer<typeof AgentAccessMemberReadSchema>;
+export type AgentGeneralAccessRead = z.infer<typeof AgentGeneralAccessReadSchema>;
+export type AgentAccessSettingsRead = z.infer<typeof AgentAccessSettingsReadSchema>;
+
+export const AgentAccessSettingsAssignmentUpdateSchema = z.object({
+  userId: z.string().uuid(),
+  accessRoleId: z.string().uuid(),
+});
+
+export const AgentAccessSettingsUpdateSchema = z.object({
+  generalAccessRoleId: z.string().uuid().nullable(),
+  assignments: z.array(AgentAccessSettingsAssignmentUpdateSchema),
+});
+
+export type AgentAccessSettingsAssignmentUpdate = z.infer<
+  typeof AgentAccessSettingsAssignmentUpdateSchema
+>;
+export type AgentAccessSettingsUpdate = z.infer<typeof AgentAccessSettingsUpdateSchema>;

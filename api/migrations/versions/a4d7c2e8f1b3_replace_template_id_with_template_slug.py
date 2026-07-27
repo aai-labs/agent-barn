@@ -59,9 +59,7 @@ def upgrade() -> None:
         ["organization_id", "template_slug", "version"],
     )
 
-    op.add_column(
-        "agent", sa.Column("template_slug", sa.String(length=255), nullable=True)
-    )
+    op.add_column("agent", sa.Column("template_slug", sa.String(length=255), nullable=True))
     # Re-sync template_version from the referenced row as well, so the
     # composite FK below cannot fail on historically drifted data.
     op.execute(
@@ -85,9 +83,7 @@ def upgrade() -> None:
     )
 
     op.drop_index("ix_agent_template_agent_version", table_name="agent_template")
-    op.drop_constraint(
-        "fk_agent_template_agent_id", "agent_template", type_="foreignkey"
-    )
+    op.drop_constraint("fk_agent_template_agent_id", "agent_template", type_="foreignkey")
     op.drop_column("agent_template", "agent_id")
     # Dropping the column also drops the unnamed FK (agent_template_id_fkey).
     op.drop_column("agent", "template_id")
@@ -127,16 +123,10 @@ def downgrade() -> None:
         ["id"],
         ondelete="RESTRICT",
     )
-    op.create_foreign_key(
-        "fk_agent_template_agent_id", "agent_template", "agent", ["agent_id"], ["id"]
-    )
-    op.create_index(
-        "ix_agent_template_agent_version", "agent_template", ["agent_id", "version"]
-    )
+    op.create_foreign_key("fk_agent_template_agent_id", "agent_template", "agent", ["agent_id"], ["id"])
+    op.create_index("ix_agent_template_agent_version", "agent_template", ["agent_id", "version"])
 
     op.drop_constraint("fk_agent_template_slug_version", "agent", type_="foreignkey")
     op.drop_column("agent", "template_slug")
-    op.drop_constraint(
-        "uq_agent_template_org_slug_version", "agent_template", type_="unique"
-    )
+    op.drop_constraint("uq_agent_template_org_slug_version", "agent_template", type_="unique")
     op.drop_column("agent_template", "template_slug")

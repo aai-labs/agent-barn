@@ -9,6 +9,7 @@ from fastapi import HTTPException, status
 from injector import inject, singleton
 
 from api.core.config import Config
+from api.domains.agents.authorization import AgentAuthorization
 from api.domains.agents.models import Agent
 from api.domains.agents.repository import AgentRepository
 from api.domains.auth.models import CurrentUserContext
@@ -18,6 +19,8 @@ from api.domains.costs.models import (
     CostTimeSeriesPoint,
     OrgCostSummaryRead,
 )
+from api.domains.rbac.catalog import PermissionKey
+from api.domains.rbac.policy import PermissionPolicy
 from api.infrastructure.crypto import decrypt_token
 from api.infrastructure.litellm.client import LiteLLMClient
 
@@ -32,6 +35,8 @@ _SPEND_LOOKBACK_DAYS = 365
 @dataclass
 class CostService:
     agent_repository: AgentRepository
+    agent_authorization: AgentAuthorization
+    permission_policy: PermissionPolicy
     litellm: LiteLLMClient
     config: Config
 
@@ -46,9 +51,7 @@ class CostService:
         start = end - datetime.timedelta(days=days)
         return start.isoformat(), end.isoformat()
 
-    def _build_agent_cost_read_from_info(
-        self, agent: Agent, details: dict
-    ) -> AgentCostRead:
+    def _build_agent_cost_read_from_info(self, agent: Agent, details: dict) -> AgentCostRead:
         spend = float(details.get("spend", 0.0))
         prompt_tokens = int(details.get("total_input_tokens", 0) or 0)
         completion_tokens = int(details.get("total_output_tokens", 0) or 0)
@@ -70,11 +73,7 @@ class CostService:
             mapped_status = "deleted"
         else:
             status_map = {"RUNNING": "active", "STOPPED": "stopped", "ERROR": "error"}
-            mapped_status = (
-                status_map.get(agent.status.value, "unknown")
-                if hasattr(agent, "status")
-                else "unknown"
-            )
+            mapped_status = status_map.get(agent.status.value, "unknown") if hasattr(agent, "status") else "unknown"
         return AgentCostRead(
             agent_id=agent.id,
             agent_name=agent.name,
@@ -94,6 +93,12 @@ class CostService:
         end_date: str | None = None,
     ) -> OrgCostSummaryRead:
         org_id = self._org_id(context)
+        self.permission_policy.require_organization(
+            context,
+            org_id,
+            PermissionKey.COST_READ,
+            detail="You don't have permission to view organization costs.",
+        )
         if start_date and end_date:
             start_str, end_str = start_date, end_date
         else:
@@ -117,9 +122,7 @@ class CostService:
                 key_hash = hashlib.sha256(key.encode()).hexdigest()
                 details = global_spend.get(key_hash, {})
             except Exception as exc:
-                logger.warning(
-                    "Failed to fetch spend details for agent %s: %s", agent.id, exc
-                )
+                logger.warning("Failed to fetch spend details for agent %s: %s", agent.id, exc)
                 details = {}
 
             spend = float(details.get("spend", 0.0))
@@ -148,12 +151,8 @@ class CostService:
                 if len(date_str) == 10:
                     daily_costs[date_str] = daily_costs.get(date_str, 0.0) + row_spend
 
-        time_series = [
-            CostTimeSeriesPoint(date=d, cost=c) for d, c in sorted(daily_costs.items())
-        ]
-        by_model_list = [
-            CostByModelRead(model=m, total_cost=c) for m, c in by_model.items()
-        ]
+        time_series = [CostTimeSeriesPoint(date=d, cost=c) for d, c in sorted(daily_costs.items())]
+        by_model_list = [CostByModelRead(model=m, total_cost=c) for m, c in by_model.items()]
 
         return OrgCostSummaryRead(
             totalCost=total_cost,
@@ -162,19 +161,21 @@ class CostService:
             timeSeries=time_series,
         )
 
-    def get_agent_cost(
-        self, agent_id: UUID, context: CurrentUserContext
-    ) -> AgentCostRead:
-        org_id = self._org_id(context)
-        # Include deleted agents — their spend is still tracked in LiteLLM.
-        agent = self.agent_repository.get_active(agent_id, org_id)
-        if not agent:
-            agent = self.agent_repository.get_deleted(agent_id, org_id)
-        if not agent:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Agent {agent_id} not found",
+    def get_agent_cost(self, agent_id: UUID, context: CurrentUserContext) -> AgentCostRead:
+        try:
+            agent = self.agent_authorization.require_action(context, agent_id, PermissionKey.COST_READ)
+        except HTTPException as exc:
+            if exc.status_code != status.HTTP_404_NOT_FOUND:
+                raise
+            # Implicit Organization Owner/Admin authority retains historical spend
+            # access after soft deletion. Explicit Agent assignments never do.
+            cost_scope = self.agent_authorization.require_collection_scope(
+                context,
+                PermissionKey.COST_READ,
             )
+            agent = self.agent_repository.get_deleted_in_scope(agent_id, cost_scope)
+            if agent is None:
+                raise
 
         if not agent.litellm_key_encrypted:
             return AgentCostRead(

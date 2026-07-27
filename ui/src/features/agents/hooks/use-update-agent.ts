@@ -21,13 +21,18 @@ export type UpdateAgentData = {
   slackGroupPolicy?: "open" | "allowlist";
   slackDmPolicy?: "off" | "open" | "allowlist";
   slackVerboseMode?: boolean;
+  telegramBotToken?: string;
+  telegramGroupPolicy?: "open" | "allowlist";
+  telegramDmPolicy?: "off" | "open" | "allowlist";
+  telegramAllowedUserIds?: string[];
+  telegramAllowedChatIds?: string[];
   teamsAppId?: string;
   teamsAppPassword?: string;
   teamsTenantId?: string;
   skillIds?: string[];
   removedSkillIds?: string[];
   // Integration credentials: upsert (add/replace) + explicit removal.
-  secrets?: Array<{ provider: string; content: Record<string, string | string[]> }>;
+  secrets?: Array<{ provider: string; content: Record<string, string | string[] | boolean> }>;
   // Shared credentials to attach (by ID)
   sharedCredentials?: Array<{ sharedCredentialId: string }>;
   removedSecretProviders?: string[];

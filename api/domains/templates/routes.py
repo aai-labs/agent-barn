@@ -33,9 +33,7 @@ def list_templates(
     )
 
 
-@templates_router.post(
-    "", response_model=TemplateRead, status_code=status.HTTP_201_CREATED
-)
+@templates_router.post("", response_model=TemplateRead, status_code=status.HTTP_201_CREATED)
 def create_template(
     data: TemplateCreate,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],

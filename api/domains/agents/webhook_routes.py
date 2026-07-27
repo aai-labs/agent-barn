@@ -17,9 +17,7 @@ async def teams_webhook(
 ) -> Response:
     body = await request.body()
     headers = dict(request.headers)
-    status_code, content, resp_headers = service.relay_teams_webhook(
-        agent_id, body, headers
-    )
+    status_code, content, resp_headers = service.relay_teams_webhook(agent_id, body, headers)
     return Response(
         content=content,
         status_code=status_code,

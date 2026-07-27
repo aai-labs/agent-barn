@@ -5,6 +5,7 @@ import {
   type ReactNode,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
 } from "react";
@@ -120,9 +121,16 @@ export function OrganizationProvider({ children }: { children: ReactNode }) {
   // agents/templates/costs still rendered. Removing forces a fresh load instead. Only
   // org-scoped keys are touched (see ORG_SCOPED_QUERY_KEYS); user/session and global-list
   // queries are left intact so the authenticated tree doesn't remount.
+  // useLayoutEffect, not useEffect: the org-scoped route segment below remounts on
+  // switch and its own queries auto-refetch (stale cache, refetchOnMount) from a
+  // passive effect. Passive effects run child-before-parent, so a plain useEffect here
+  // would fire after that stale-cache refetch already started — removeQueries then
+  // cancels it mid-flight, its correct response gets discarded, and nothing re-triggers
+  // a fetch, leaving the old org's data stuck on screen. Layout effects run before any
+  // component's passive effects tree-wide, so this always evicts first.
   const queryClient = useQueryClient();
   const switchedOrgIdRef = useRef<string | null>(activeOrgId);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const previousOrgId = switchedOrgIdRef.current;
     if (previousOrgId === activeOrgId) return;
     switchedOrgIdRef.current = activeOrgId;

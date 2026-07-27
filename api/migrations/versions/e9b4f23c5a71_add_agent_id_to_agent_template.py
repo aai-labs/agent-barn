@@ -41,7 +41,5 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_index("ix_agent_template_agent_version", table_name="agent_template")
-    op.drop_constraint(
-        "fk_agent_template_agent_id", "agent_template", type_="foreignkey"
-    )
+    op.drop_constraint("fk_agent_template_agent_id", "agent_template", type_="foreignkey")
     op.drop_column("agent_template", "agent_id")

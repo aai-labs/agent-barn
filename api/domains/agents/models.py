@@ -1,4 +1,5 @@
 import enum
+import hashlib
 import json
 from datetime import datetime
 from uuid import UUID
@@ -9,6 +10,8 @@ from pydantic import BaseModel as PydanticBaseModel
 from pydantic import ConfigDict, Field, model_validator
 from sqlmodel import Column, Enum, Field as SqlField, Index
 
+from api.domains.rbac.catalog import PermissionKey
+from api.domains.users.organization_users.models import OrganizationRole
 from api.infrastructure.crypto import decrypt_token, encrypt_token
 from api.infrastructure.postgres.models import BaseModel
 
@@ -28,6 +31,7 @@ class CommandApprovalMode(str, enum.Enum):
 class AgentPlatform(str, enum.Enum):
     SLACK = "slack"
     TEAMS = "teams"
+    TELEGRAM = "telegram"
 
 
 class AgentType(str, enum.Enum):
@@ -41,6 +45,17 @@ class SlackGroupPolicy(str, enum.Enum):
 
 
 class SlackDmPolicy(str, enum.Enum):
+    OFF = "off"
+    OPEN = "open"
+    ALLOWLIST = "allowlist"
+
+
+class TelegramGroupPolicy(str, enum.Enum):
+    OPEN = "open"
+    ALLOWLIST = "allowlist"
+
+
+class TelegramDmPolicy(str, enum.Enum):
     OFF = "off"
     OPEN = "open"
     ALLOWLIST = "allowlist"
@@ -102,14 +117,22 @@ class GithubContent(_RepoListCompat):
 
 class JiraContent(SecretContent):
     site_url: str
+    use_scoped_token: bool = False
     email: str
     api_token: str
+    # Populated at save time for scoped tokens: the API Gateway URL (site_url
+    # doesn't accept scoped tokens directly) needs the resolved cloud ID.
+    cloud_id: str = ""
 
 
 class ConfluenceContent(SecretContent):
     site_url: str
+    use_scoped_token: bool = False
     email: str
     api_token: str
+    # Populated at save time for scoped tokens: the API Gateway URL (site_url
+    # doesn't accept scoped tokens directly) needs the resolved cloud ID.
+    cloud_id: str = ""
 
 
 class BitbucketContent(_RepoListCompat):
@@ -171,9 +194,7 @@ def encrypt_content(content: SecretContent, key: str) -> str:
     return encrypt_token(json.dumps(content.model_dump()), key)
 
 
-def decrypt_content(
-    provider: SecretProvider, ciphertext: str, key: str
-) -> SecretContent:
+def decrypt_content(provider: SecretProvider, ciphertext: str, key: str) -> SecretContent:
     """Decrypt the blob and re-validate it against the provider's schema."""
     return validate_content(provider, json.loads(decrypt_token(ciphertext, key)))
 
@@ -184,6 +205,11 @@ class Agent(BaseModel, table=True):
     __table_args__ = (
         Index("ix_agent_organization_deleted", "organization_id", "deleted_at"),
         sa.Index("ix_agent_status", "status"),
+        sa.UniqueConstraint(
+            "id",
+            "organization_id",
+            name="uq_agent_id_organization",
+        ),
         sa.ForeignKeyConstraint(
             ["organization_id", "template_slug", "template_version"],
             [
@@ -196,8 +222,19 @@ class Agent(BaseModel, table=True):
         ),
     )
 
-    organization_id: UUID = SqlField(
-        foreign_key="organization.id", nullable=False, ondelete="CASCADE"
+    organization_id: UUID = SqlField(foreign_key="organization.id", nullable=False, ondelete="CASCADE")
+    created_by_user_id: UUID | None = SqlField(
+        default=None,
+        foreign_key="user.id",
+        nullable=True,
+        ondelete="SET NULL",
+        index=True,
+    )
+    general_access_role_id: UUID | None = SqlField(
+        default=None,
+        foreign_key="agent_access_roles.id",
+        nullable=True,
+        ondelete="RESTRICT",
     )
     name: str = SqlField(nullable=False, max_length=255)
     litellm_key_encrypted: str = SqlField(nullable=False, default="")
@@ -234,14 +271,65 @@ class Agent(BaseModel, table=True):
     )
 
 
+def compute_bot_token_hash(bot_token: str) -> str:
+    return hashlib.sha256(bot_token.encode("utf-8")).hexdigest()
+
+
+class AgentAccess(BaseModel, table=True):
+    __tablename__: str = "agent_access"
+    __table_args__ = (
+        sa.UniqueConstraint(
+            "membership_id",
+            "agent_id",
+            name="uq_agent_access_membership_agent",
+        ),
+        sa.ForeignKeyConstraint(
+            ["membership_id", "organization_id"],
+            ["user_organization.id", "user_organization.organization_id"],
+            name="fk_agent_access_membership_organization",
+            ondelete="CASCADE",
+        ),
+        sa.ForeignKeyConstraint(
+            ["agent_id", "organization_id"],
+            ["agent.id", "agent.organization_id"],
+            name="fk_agent_access_agent_organization",
+            ondelete="CASCADE",
+        ),
+        sa.Index("ix_agent_access_membership", "membership_id"),
+        sa.Index("ix_agent_access_agent", "agent_id"),
+        sa.Index("ix_agent_access_role", "access_role_id"),
+    )
+
+    organization_id: UUID = SqlField(
+        foreign_key="organization.id",
+        nullable=False,
+        ondelete="CASCADE",
+    )
+    membership_id: UUID = SqlField(nullable=False)
+    agent_id: UUID = SqlField(nullable=False)
+    access_role_id: UUID = SqlField(
+        foreign_key="agent_access_roles.id",
+        nullable=False,
+        ondelete="RESTRICT",
+    )
+
+
 class AgentSlackConfig(BaseModel, table=True):
     __tablename__: str = "agent_slack_config"
 
-    agent_id: UUID = SqlField(
-        foreign_key="agent.id", nullable=False, unique=True, ondelete="CASCADE"
+    __table_args__ = (
+        sa.Index(
+            "ix_agent_slack_config_bot_token_hash",
+            "bot_token_hash",
+            unique=True,
+            postgresql_where=sa.text("bot_token_hash IS NOT NULL"),
+        ),
     )
+
+    agent_id: UUID = SqlField(foreign_key="agent.id", nullable=False, unique=True, ondelete="CASCADE")
     bot_token_encrypted: str = SqlField(nullable=False)
     app_token_encrypted: str = SqlField(nullable=False)
+    bot_token_hash: str | None = SqlField(default=None, nullable=True)
     channel_ids: list[str] = SqlField(
         default_factory=list,
         sa_column=Column(sa.JSON(), nullable=False, server_default="[]"),
@@ -267,21 +355,41 @@ class AgentSlackConfig(BaseModel, table=True):
 class AgentTeamsConfig(BaseModel, table=True):
     __tablename__: str = "agent_teams_config"
 
-    agent_id: UUID = SqlField(
-        foreign_key="agent.id", nullable=False, unique=True, ondelete="CASCADE"
-    )
+    agent_id: UUID = SqlField(foreign_key="agent.id", nullable=False, unique=True, ondelete="CASCADE")
     app_id_encrypted: str = SqlField(nullable=False)
     app_password_encrypted: str = SqlField(nullable=False)
     tenant_id: str = SqlField(nullable=False, max_length=255)
+
+
+class AgentTelegramConfig(BaseModel, table=True):
+    __tablename__: str = "agent_telegram_config"
+
+    agent_id: UUID = SqlField(foreign_key="agent.id", nullable=False, unique=True, ondelete="CASCADE")
+    bot_token_encrypted: str = SqlField(nullable=False)
+    bot_username: str = SqlField(nullable=False, max_length=255)
+    allowed_user_ids: list[str] = SqlField(
+        default_factory=list,
+        sa_column=Column(sa.JSON(), nullable=False, server_default="[]"),
+    )
+    allowed_chat_ids: list[str] = SqlField(
+        default_factory=list,
+        sa_column=Column(sa.JSON(), nullable=False, server_default="[]"),
+    )
+    group_policy: TelegramGroupPolicy = SqlField(
+        default=TelegramGroupPolicy.ALLOWLIST,
+        sa_column=Column(sa.String(), nullable=False, server_default="allowlist"),
+    )
+    dm_policy: TelegramDmPolicy = SqlField(
+        default=TelegramDmPolicy.OFF,
+        sa_column=Column(sa.String(), nullable=False, server_default="off"),
+    )
 
 
 class AgentSecret(BaseModel, table=True):
     __tablename__: str = "agent_secret"
 
     __table_args__ = (
-        sa.UniqueConstraint(
-            "agent_id", "provider", name="uq_agent_secret_agent_provider"
-        ),
+        sa.UniqueConstraint("agent_id", "provider", name="uq_agent_secret_agent_provider"),
         sa.CheckConstraint(
             "(shared_credential_id IS NULL AND content IS NOT NULL) OR "
             "(shared_credential_id IS NOT NULL AND content IS NULL)",
@@ -289,11 +397,9 @@ class AgentSecret(BaseModel, table=True):
         ),
     )
 
-    agent_id: UUID = SqlField(
-        foreign_key="agent.id", nullable=False, ondelete="CASCADE"
-    )
+    agent_id: UUID = SqlField(foreign_key="agent.id", nullable=False, ondelete="CASCADE")
     provider: SecretProvider = SqlField(sa_column=Column(sa.String(), nullable=False))
-    secret_name: str = SqlField(nullable=False, max_length=255)
+    secret_name: str = SqlField(nullable=False, max_length=255)  # predefined label
     content: str | None = SqlField(
         sa_column=Column(sa.Text(), nullable=True)
     )  # Fernet-encrypted JSON blob; NULL when shared_credential_id is set
@@ -308,16 +414,10 @@ class AgentSecret(BaseModel, table=True):
 class AgentSkill(BaseModel, table=True):
     __tablename__: str = "agent_skill"
 
-    __table_args__ = (
-        sa.UniqueConstraint("agent_id", "skill_id", name="uq_agent_skill_agent_skill"),
-    )
+    __table_args__ = (sa.UniqueConstraint("agent_id", "skill_id", name="uq_agent_skill_agent_skill"),)
 
-    agent_id: UUID = SqlField(
-        foreign_key="agent.id", nullable=False, ondelete="CASCADE"
-    )
-    skill_id: UUID = SqlField(
-        foreign_key="skill.id", nullable=False, ondelete="CASCADE"
-    )
+    agent_id: UUID = SqlField(foreign_key="agent.id", nullable=False, ondelete="CASCADE")
+    skill_id: UUID = SqlField(foreign_key="skill.id", nullable=False, ondelete="CASCADE")
 
 
 class AgentLogSnapshot(BaseModel, table=True):
@@ -331,9 +431,7 @@ class AgentLogSnapshot(BaseModel, table=True):
         ),
     )
 
-    agent_id: UUID = SqlField(
-        foreign_key="agent.id", nullable=False, ondelete="CASCADE"
-    )
+    agent_id: UUID = SqlField(foreign_key="agent.id", nullable=False, ondelete="CASCADE")
     session_started_at: datetime = SqlField(
         nullable=False,
         sa_type=sa.DateTime(timezone=True),  # type: ignore
@@ -354,12 +452,8 @@ class AgentTemplateSkill(BaseModel, table=True):
         sa.Index("ix_agent_template_skill_template", "template_id"),
     )
 
-    template_id: UUID = SqlField(
-        foreign_key="agent_template.id", nullable=False, ondelete="CASCADE"
-    )
-    skill_id: UUID = SqlField(
-        foreign_key="skill.id", nullable=False, ondelete="RESTRICT"
-    )
+    template_id: UUID = SqlField(foreign_key="agent_template.id", nullable=False, ondelete="CASCADE")
+    skill_id: UUID = SqlField(foreign_key="skill.id", nullable=False, ondelete="RESTRICT")
 
 
 class AgentSecretCreate(PydanticBaseModel):  # no secret_name — backend stamps it
@@ -392,6 +486,12 @@ class AgentCreate(PydanticBaseModel):
     teams_app_id: str | None = Field(default=None, min_length=1)
     teams_app_password: str | None = Field(default=None, min_length=1)
     teams_tenant_id: str | None = Field(default=None, min_length=1)
+    # Telegram credentials (required when platform=telegram)
+    telegram_bot_token: str | None = Field(default=None, min_length=1)
+    telegram_allowed_user_ids: list[str] = Field(default_factory=list)
+    telegram_allowed_chat_ids: list[str] = Field(default_factory=list)
+    telegram_group_policy: TelegramGroupPolicy = TelegramGroupPolicy.ALLOWLIST
+    telegram_dm_policy: TelegramDmPolicy = TelegramDmPolicy.OFF
     # Template reference. The agent pins to template_version if given, else to
     # the lineage's latest version.
     template_slug: str = Field(min_length=1, max_length=255)
@@ -410,19 +510,13 @@ class AgentCreate(PydanticBaseModel):
             raise ValueError("Hermes agents do not support the Teams platform")
         if self.platform == AgentPlatform.SLACK:
             if not self.slack_bot_token or not self.slack_app_token:
-                raise ValueError(
-                    "slack_bot_token and slack_app_token are required for Slack agents"
-                )
+                raise ValueError("slack_bot_token and slack_app_token are required for Slack agents")
         elif self.platform == AgentPlatform.TEAMS:
-            if (
-                not self.teams_app_id
-                or not self.teams_app_password
-                or not self.teams_tenant_id
-            ):
-                raise ValueError(
-                    "teams_app_id, teams_app_password, and teams_tenant_id "
-                    "are required for Teams agents"
-                )
+            if not self.teams_app_id or not self.teams_app_password or not self.teams_tenant_id:
+                raise ValueError("teams_app_id, teams_app_password, and teams_tenant_id are required for Teams agents")
+        elif self.platform == AgentPlatform.TELEGRAM:
+            if not self.telegram_bot_token:
+                raise ValueError("telegram_bot_token is required for Telegram agents")
         return self
 
     @model_validator(mode="after")
@@ -454,6 +548,12 @@ class AgentUpdate(PydanticBaseModel):
     teams_app_id: str | None = Field(default=None, min_length=1)
     teams_app_password: str | None = Field(default=None, min_length=1)
     teams_tenant_id: str | None = Field(default=None, min_length=1)
+    # Telegram
+    telegram_bot_token: str | None = Field(default=None, min_length=1)
+    telegram_allowed_user_ids: list[str] | None = None
+    telegram_allowed_chat_ids: list[str] | None = None
+    telegram_group_policy: TelegramGroupPolicy | None = None
+    telegram_dm_policy: TelegramDmPolicy | None = None
     # Template re-pin: point the agent at a different (slug, version). Both must
     # be provided together. Per-agent markdown editing is no longer supported —
     # persona changes happen by editing templates in the catalog.
@@ -480,9 +580,7 @@ class AgentUpdate(PydanticBaseModel):
     @model_validator(mode="after")
     def validate_template_repin(self) -> "AgentUpdate":
         if (self.template_slug is None) != (self.template_version is None):
-            raise ValueError(
-                "template_slug and template_version must be provided together"
-            )
+            raise ValueError("template_slug and template_version must be provided together")
         return self
 
     @model_validator(mode="after")
@@ -515,6 +613,16 @@ class AgentTeamsConfigRead(PydanticBaseModel):
     tenant_id: str
 
 
+class AgentTelegramConfigRead(PydanticBaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    allowed_user_ids: list[str]
+    allowed_chat_ids: list[str]
+    group_policy: TelegramGroupPolicy
+    dm_policy: TelegramDmPolicy
+    bot_username: str | None = None
+
+
 class AgentSecretRead(PydanticBaseModel):  # label + provider only — no secret values
     model_config = ConfigDict(from_attributes=True)
 
@@ -522,6 +630,45 @@ class AgentSecretRead(PydanticBaseModel):  # label + provider only — no secret
     secret_name: str
     shared_credential_id: UUID | None = None
     shared_credential_name: str | None = None
+
+
+class AgentAccessRoleRead(PydanticBaseModel):
+    id: UUID
+    name: str
+    permissions: list[PermissionKey]
+    is_locked: bool
+
+
+class AgentAccessCandidateRead(PydanticBaseModel):
+    user_id: UUID
+    email: str
+    full_name: str | None = None
+    organization_role: OrganizationRole
+    is_pending: bool
+    is_creator: bool
+
+
+class AgentAccessMemberRead(AgentAccessCandidateRead):
+    access_role: AgentAccessRoleRead
+
+
+class AgentGeneralAccessRead(PydanticBaseModel):
+    role: AgentAccessRoleRead | None
+
+
+class AgentAccessSettingsAssignmentUpdate(PydanticBaseModel):
+    user_id: UUID
+    access_role_id: UUID
+
+
+class AgentAccessSettingsUpdate(PydanticBaseModel):
+    general_access_role_id: UUID | None = None
+    assignments: list[AgentAccessSettingsAssignmentUpdate] = Field(default_factory=list)
+
+
+class AgentAccessSettingsRead(PydanticBaseModel):
+    general_access: AgentGeneralAccessRead
+    assignments: list[AgentAccessMemberRead]
 
 
 class AgentAssignedSkillRead(PydanticBaseModel):
@@ -551,10 +698,12 @@ class AgentRead(PydanticBaseModel):
     model: str
     slack_config: AgentSlackConfigRead | None = None
     teams_config: AgentTeamsConfigRead | None = None
+    telegram_config: AgentTelegramConfigRead | None = None
     secrets: list[AgentSecretRead] = Field(default_factory=list)
     skills: list[AgentAssignedSkillRead] = Field(default_factory=list)
     approval_mode: CommandApprovalMode
     webhook_url: str | None = None
+    allowed_actions: list[PermissionKey] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 

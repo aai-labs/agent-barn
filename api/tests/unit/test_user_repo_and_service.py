@@ -12,9 +12,7 @@ from api.tests.steps.user import there_are_users
 
 
 def test_i_can_save_new_user():
-    with given(
-        [prepare_injector(), database_repo_is_ready(), database_is_clean()]
-    ) as context:
+    with given([prepare_injector(), database_repo_is_ready(), database_is_clean()]) as context:
         repository: UserRepository = context.injector.get(UserRepository)
 
         with when("I save a user"):
@@ -28,15 +26,11 @@ def test_i_can_save_new_user():
 
 
 def test_i_cannot_save_duplicate_email():
-    with given(
-        [prepare_injector(), database_repo_is_ready(), database_is_clean()]
-    ) as context:
+    with given([prepare_injector(), database_repo_is_ready(), database_is_clean()]) as context:
         repository: UserRepository = context.injector.get(UserRepository)
 
         with when("I save duplicate emails"):
-            repository.save(
-                User(email="dup_user@example.com", hashed_password="hashed_password")
-            )
+            repository.save(User(email="dup_user@example.com", hashed_password="hashed_password"))
 
             with then("it should raise EmailTakenHTTPException"):
                 assert_that(
@@ -68,9 +62,7 @@ def test_find_all_in_organization():
         repository: UserRepository = context.injector.get(UserRepository)
 
         with when("I list users"):
-            users = repository.find_all(
-                UserFilter(), organization_id=context.organization.id
-            )
+            users = repository.find_all(UserFilter(), organization_id=context.organization.id)
 
             with then("organization users should be returned"):
                 assert_that(users, has_length(3))
@@ -94,9 +86,7 @@ def test_find_all_with_user_ids_filter():
     ) as context:
         repository: UserRepository = context.injector.get(UserRepository)
 
-        users = repository.find_all(
-            UserFilter(user_ids=[user_one]), organization_id=None
-        )
+        users = repository.find_all(UserFilter(user_ids=[user_one]), organization_id=None)
         assert_that(users, has_length(1))
         assert_that(users[0].id, equal_to(user_one))
 

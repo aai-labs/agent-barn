@@ -50,6 +50,9 @@ export default defineConfig({
     env: {
       NEXT_PUBLIC_E2E: "true",
       NEXT_PUBLIC_BACKEND_URL: "http://127.0.0.1:8000",
+      // Distinct distDir so this dev server's lock file doesn't collide with a
+      // manually-run `pnpm dev` in the same project directory (see next.config.ts).
+      ...(isCI ? {} : { NEXT_DIST_DIR: ".next-e2e" }),
     },
   },
 });

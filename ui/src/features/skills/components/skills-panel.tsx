@@ -13,6 +13,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Pagination } from "@/features/agents/components/pagination";
+import { useActiveOrgRole } from "@/features/organizations/hooks/use-active-org-role";
 
 import { type Skill, type SkillSource } from "../schemas";
 import { useSkills } from "../hooks/use-skills";
@@ -52,6 +53,7 @@ function ProviderBadge({ provider }: { provider: string }) {
 }
 
 export function SkillsPanel() {
+  const { canManage } = useActiveOrgRole();
   const [search, setSearch] = useState("");
   const [sourceFilter, setSourceFilter] = useState<SkillSource | "">("");
   const [page, setPage] = useState(1);
@@ -118,12 +120,14 @@ export function SkillsPanel() {
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
-        <button
-          className="af-btn af-btn-primary ml-auto"
-          onClick={() => setDrawer({ kind: "create" })}
-        >
-          <PlusIcon /> New skill
-        </button>
+        {canManage && (
+          <button
+            className="af-btn af-btn-primary ml-auto"
+            onClick={() => setDrawer({ kind: "create" })}
+          >
+            <PlusIcon /> New skill
+          </button>
+        )}
       </div>
 
       {isLoading && (
@@ -194,7 +198,9 @@ export function SkillsPanel() {
         <Pagination page={page} totalPages={totalPages} onPageChange={setPage} />
       </div>
 
-      {drawer && <SkillDrawer mode={drawer} onClose={() => setDrawer(null)} />}
+      {drawer && (
+        <SkillDrawer mode={drawer} canManage={canManage} onClose={() => setDrawer(null)} />
+      )}
     </>
   );
 }

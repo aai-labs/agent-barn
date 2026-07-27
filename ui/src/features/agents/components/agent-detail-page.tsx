@@ -1,14 +1,15 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useQueryState, parseAsStringEnum, parseAsString } from "nuqs";
-import { formatModelName } from "../utils";
+import { canAgent, formatModelName } from "../utils";
 import { useAgent } from "../hooks/use-agent";
 import { useAgentHealth } from "../hooks/use-agent-health";
 import { useStartAgent } from "../hooks/use-start-agent";
 import { useStopAgent } from "../hooks/use-stop-agent";
-import { ChevLeftIcon, PauseIcon, PlayIcon, CogIcon } from "@/components/icons";
+import { ChevLeftIcon, PauseIcon, PlayIcon, CogIcon, ShareIcon } from "@/components/icons";
 import { AppErrorState } from "@/components/app-error-state";
 import { toastError } from "@/shared/toast";
 import { AgentAvatar } from "./agent-avatar";
@@ -19,7 +20,13 @@ import { ToolCallsTab } from "./tool-calls-tab";
 import { LogsTab } from "./logs-tab";
 import { WorkTab } from "./work-tab";
 import { AboutTab } from "./about-tab";
-import { ConfigDrawer, DRAWER_TAB_KEYS } from "./config-drawer";
+import { ShareDialog } from "./share-dialog";
+import {
+  canOpenConfigTab,
+  ConfigDrawer,
+  defaultConfigTab,
+  DRAWER_TAB_KEYS,
+} from "./config-drawer";
 
 interface AgentDetailPageProps {
   agentId: string;
@@ -43,7 +50,11 @@ function HeaderSkeleton() {
 
 export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   const { agent, isLoading, error, refetch } = useAgent(agentId);
-  const { health } = useAgentHealth(agentId, agent?.status === "RUNNING" || agent?.status === "ERROR");
+  const canReadActivity = canAgent(agent, "activity.read");
+  const { health } = useAgentHealth(
+    agentId,
+    canReadActivity && (agent?.status === "RUNNING" || agent?.status === "ERROR"),
+  );
   const stopAgent = useStopAgent();
   const startAgent = useStartAgent();
   const [tab, setTab] = useQueryState(
@@ -68,14 +79,26 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   }
 
   const tabs: [Tab, string][] = [
-    ["conversations", "Conversations"],
-    ["tool-calls", "Tool calls"],
-    ["logs", "Logs"],
-    ["work", "Work"],
+    ...(canReadActivity
+      ? ([
+          ["conversations", "Conversations"],
+          ["tool-calls", "Tool calls"],
+          ["logs", "Logs"],
+          ["work", "Work"],
+        ] as [Tab, string][])
+      : []),
     ["about", "About"],
   ];
+  const resolvedTab = tabs.some(([key]) => key === tab) ? tab : tabs[0][0];
 
   const isRunning = agent?.status === "RUNNING";
+  const canManageLifecycle = canAgent(agent, "agent.lifecycle.manage");
+  const canManageAccess = canAgent(agent, "agent.access.manage");
+  const [shareOpen, setShareOpen] = useState(false);
+  const initialConfigTab = agent ? defaultConfigTab(agent) : null;
+  const canConfigure = initialConfigTab !== null;
+  const authorizedConfigTab =
+    agent && configTab && canOpenConfigTab(agent, configTab) ? configTab : null;
 
   const params = useParams();
   const orgId = typeof params?.orgId === "string" ? params.orgId : null;
@@ -133,7 +156,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
                 </div>
               </div>
               <div className="flex gap-2">
-                {isRunning && (
+                {isRunning && canManageLifecycle && (
                   <button
                     className="af-btn"
                     disabled={stopAgent.isPending}
@@ -142,7 +165,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
                     <PauseIcon /> {stopAgent.isPending ? "Pausing…" : "Pause"}
                   </button>
                 )}
-                {!isRunning && (
+                {!isRunning && canManageLifecycle && (
                   <button
                     className="af-btn"
                     disabled={startAgent.isPending}
@@ -151,9 +174,16 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
                     <PlayIcon /> {startAgent.isPending ? "Starting…" : "Start"}
                   </button>
                 )}
-                <button className="af-btn" onClick={() => { void setConfigTab("personality"); }}>
-                  <CogIcon /> Configure
-                </button>
+                {canConfigure && initialConfigTab && (
+                  <button className="af-btn" onClick={() => { void setConfigTab(initialConfigTab); }}>
+                    <CogIcon /> Configure
+                  </button>
+                )}
+                {canManageAccess && (
+                  <button className="af-btn" onClick={() => setShareOpen(true)}>
+                    <ShareIcon /> Share
+                  </button>
+                )}
               </div>
             </div>
 
@@ -174,7 +204,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
                 <button
                   key={k}
                   className="ap-tab"
-                  data-active={tab === k}
+                  data-active={resolvedTab === k}
                   onClick={() => { selectTab(k); }}
                 >
                   {l}
@@ -182,24 +212,42 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
               ))}
             </div>
 
-            {tab === "conversations" && <ConversationsTab agent={agent} />}
-            {tab === "tool-calls" && <ToolCallsTab agent={agent} />}
-            {tab === "logs" && <LogsTab agent={agent} />}
-            {tab === "work" && <WorkTab agent={agent} />}
-            {tab === "about" && <AboutTab agent={agent} onConfigure={() => { void setConfigTab("personality"); }} />}
+            {resolvedTab === "conversations" && <ConversationsTab agent={agent} />}
+            {resolvedTab === "tool-calls" && <ToolCallsTab agent={agent} />}
+            {resolvedTab === "logs" && <LogsTab agent={agent} />}
+            {resolvedTab === "work" && <WorkTab agent={agent} />}
+            {resolvedTab === "about" && (
+              <AboutTab
+                agent={agent}
+                onConfigure={
+                  canConfigure && initialConfigTab
+                    ? () => { void setConfigTab(initialConfigTab); }
+                    : undefined
+                }
+              />
+            )}
           </>
         )}
       </div>
 
-      {configTab !== null && agent && (
+      {authorizedConfigTab && agent && (
         <ConfigDrawer
           agent={agent}
-          activeTab={configTab}
+          activeTab={authorizedConfigTab}
           onTabChange={(t) => { void setConfigTab(t); }}
           onClose={() => { void setConfigTab(null); }}
         />
       )}
 
+      {agent && canManageAccess && (
+        <ShareDialog
+          agentId={agent.id}
+          agentName={agent.name}
+          organizationId={agent.organizationId}
+          open={shareOpen}
+          onOpenChange={setShareOpen}
+        />
+      )}
     </div>
   );
 }

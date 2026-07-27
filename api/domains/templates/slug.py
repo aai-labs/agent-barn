@@ -7,9 +7,7 @@ _MAX_BASE_LENGTH = 64
 
 def slugify(name: str) -> str:
     """Lowercase, replace non-alphanumerics with '-', e.g. 'Scrum Master' -> 'scrum-master'."""
-    return (
-        _NON_SLUG_CHARS.sub("-", name.lower()).strip("-")[:_MAX_BASE_LENGTH].strip("-")
-    )
+    return _NON_SLUG_CHARS.sub("-", name.lower()).strip("-")[:_MAX_BASE_LENGTH].strip("-")
 
 
 def generate_template_slug(name: str) -> str:

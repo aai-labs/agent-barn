@@ -74,9 +74,7 @@ def test_superuser_creates_organization_and_invites_owner():
                 body = response.json()
                 assert_that(body["organization"]["name"], equal_to("Acme Inc"))
                 assert_that(body["organization"]["is_default"], is_(False))
-                assert_that(
-                    body["organization"]["owner_email"], equal_to("owner@acme.com")
-                )
+                assert_that(body["organization"]["owner_email"], equal_to("owner@acme.com"))
                 assert_that(body["invite_link"], not_none())
                 assert_that(
                     body["invite_link"],
@@ -85,9 +83,7 @@ def test_superuser_creates_organization_and_invites_owner():
 
             with then("the owner exists as a pending (unverified) OWNER"):
                 user_repo: UserRepository = context.injector.get(UserRepository)
-                org_repo: OrganizationRepository = context.injector.get(
-                    OrganizationRepository
-                )
+                org_repo: OrganizationRepository = context.injector.get(OrganizationRepository)
                 org_id = response.json()["organization"]["id"]
                 owner = user_repo.get_organization_owner(org_id)
                 assert_that(owner, not_none())
@@ -192,6 +188,4 @@ def test_create_organization_requires_auth():
             )
 
             with then("it is unauthorized"):
-                assert_that(
-                    response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED)
-                )
+                assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))

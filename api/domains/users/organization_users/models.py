@@ -1,4 +1,3 @@
-import enum
 from datetime import datetime
 from uuid import UUID
 
@@ -8,23 +7,8 @@ from pydantic import EmailStr
 from sqlmodel import Column, Enum, Field, Index
 
 from api.domains.organizations.models import OrganizationRead
+from api.domains.rbac.catalog import OrganizationRole
 from api.infrastructure.postgres.models import BaseModel
-
-
-class OrganizationRole(str, enum.Enum):
-    ADMIN = "ADMIN"
-    MEMBER = "MEMBER"
-    OWNER = "OWNER"
-
-
-# Authorization role tiers. Single source of truth so the same policy isn't re-spelled per
-# endpoint (and can't drift): managers (owners + admins) run org/member management and see
-# billing; a few destructive/sensitive actions (delete org, transfer ownership, removing or
-# demoting another admin) are owner-only.
-ORG_MANAGER_ROLES: frozenset[OrganizationRole] = frozenset(
-    {OrganizationRole.OWNER, OrganizationRole.ADMIN}
-)
-ORG_OWNER_ONLY_ROLES: frozenset[OrganizationRole] = frozenset({OrganizationRole.OWNER})
 
 
 class OrganizationUser(BaseModel, table=True):
@@ -38,13 +22,14 @@ class OrganizationUser(BaseModel, table=True):
             postgresql_where=sa.text("role = 'OWNER'"),
         ),
         Index("uq_user_organization", "user_id", "organization_id", unique=True),
+        sa.UniqueConstraint(
+            "id",
+            "organization_id",
+            name="uq_user_organization_id_organization",
+        ),
     )
-    user_id: UUID | None = Field(
-        foreign_key="user.id", nullable=True, ondelete="SET NULL"
-    )
-    organization_id: UUID = Field(
-        foreign_key="organization.id", nullable=False, ondelete="CASCADE"
-    )
+    user_id: UUID | None = Field(foreign_key="user.id", nullable=True, ondelete="SET NULL")
+    organization_id: UUID = Field(foreign_key="organization.id", nullable=False, ondelete="CASCADE")
     role: OrganizationRole = Field(
         default=OrganizationRole.MEMBER,
         sa_column=Column(Enum(OrganizationRole), nullable=False),

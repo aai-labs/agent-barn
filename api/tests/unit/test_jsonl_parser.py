@@ -37,9 +37,7 @@ def test_read_call_fields():
             calls, _ = parse_jsonl(_fixture(), "session-abc")
 
         with then("the read call has the correct fields"):
-            call = next(
-                c for c in calls if c.external_id == "call_ppiEohyny133JGEiW98cIbdA"
-            )
+            call = next(c for c in calls if c.external_id == "call_ppiEohyny133JGEiW98cIbdA")
             assert_that(call.tool_name, equal_to("read"))
             assert_that(
                 call.arguments,
@@ -54,15 +52,11 @@ def test_read_result_fields():
             _, results = parse_jsonl(_fixture(), "session-abc")
 
         with then("the read result has the correct fields"):
-            result = next(
-                r for r in results if r.external_id == "call_ppiEohyny133JGEiW98cIbdA"
-            )
+            result = next(r for r in results if r.external_id == "call_ppiEohyny133JGEiW98cIbdA")
             assert_that(result.is_error, equal_to(False))
             assert_that(
                 result.result,
-                equal_to(
-                    [{"type": "text", "text": "db_host: postgres\ndb_port: 5432\n"}]
-                ),
+                equal_to([{"type": "text", "text": "db_host: postgres\ndb_port: 5432\n"}]),
             )
 
 
@@ -72,9 +66,7 @@ def test_error_result_flagged():
             _, results = parse_jsonl(_fixture(), "session-abc")
 
         with then("the bash error result is flagged"):
-            result = next(
-                r for r in results if r.external_id == "call_7nBvLsAqMc1YpZoGjHwRdUfT"
-            )
+            result = next(r for r in results if r.external_id == "call_7nBvLsAqMc1YpZoGjHwRdUfT")
             assert_that(result.is_error, equal_to(True))
 
 
@@ -86,9 +78,7 @@ def test_pending_call_has_no_result():
         with then("the write call appears in calls but has no matching result"):
             pending_id = "call_3fDwHiKe8NpSrTmYuVqXjLbA"
             assert_that(any(c.external_id == pending_id for c in calls), equal_to(True))
-            assert_that(
-                any(r.external_id == pending_id for r in results), equal_to(False)
-            )
+            assert_that(any(r.external_id == pending_id for r in results), equal_to(False))
 
 
 def test_session_id_applied_to_all_calls():
@@ -97,9 +87,7 @@ def test_session_id_applied_to_all_calls():
             calls, _ = parse_jsonl(_fixture(), "my-session-id")
 
         with then("all calls carry that session ID"):
-            assert_that(
-                all(c.session_id == "my-session-id" for c in calls), equal_to(True)
-            )
+            assert_that(all(c.session_id == "my-session-id" for c in calls), equal_to(True))
 
 
 def test_timestamps_are_utc():
@@ -119,15 +107,9 @@ def test_occurred_at_from_inner_message_timestamp():
         with when("I parse the fixture JSONL"):
             calls, _ = parse_jsonl(_fixture(), "s")
 
-        with then(
-            "occurred_at is derived from the inner message timestamp in milliseconds"
-        ):
-            call = next(
-                c for c in calls if c.external_id == "call_ppiEohyny133JGEiW98cIbdA"
-            )
-            expected = datetime.datetime.fromtimestamp(
-                1748000017.575, tz=datetime.timezone.utc
-            )
+        with then("occurred_at is derived from the inner message timestamp in milliseconds"):
+            call = next(c for c in calls if c.external_id == "call_ppiEohyny133JGEiW98cIbdA")
+            expected = datetime.datetime.fromtimestamp(1748000017.575, tz=datetime.timezone.utc)
             assert_that(call.occurred_at, equal_to(expected))
 
 
@@ -205,9 +187,7 @@ def test_assistant_message_with_text_and_tool_call():
 def test_non_message_type_entry_skipped():
     with given():
         with when("I parse a non-message type entry"):
-            calls, results = parse_jsonl(
-                '{"type":"system","content":"some system event"}\n', "s"
-            )
+            calls, results = parse_jsonl('{"type":"system","content":"some system event"}\n', "s")
 
         with then("nothing is extracted"):
             assert_that(calls, has_length(0))

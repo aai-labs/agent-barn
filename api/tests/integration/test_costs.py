@@ -5,6 +5,7 @@ from fastapi import status
 from hamcrest import assert_that, equal_to, has_length
 from starlette.testclient import TestClient
 
+from api.domains.rbac.catalog import PermissionKey
 from api.domains.users.organization_users.models import OrganizationRole
 from api.infrastructure.litellm.client import LiteLLMClient
 from api.tests.core.givenpy import given, then, when
@@ -26,6 +27,7 @@ from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import (
     there_is_an_organization_with_user_and_access_token,
 )
+from api.tests.steps.rbac import role_lacks_permission
 from api.tests.steps.template import there_is_a_template
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
 
@@ -71,6 +73,68 @@ def _there_is_a_member_actor(member_id):
     return step
 
 
+def test_admin_with_assigned_cost_scope_cannot_view_organization_summary():
+    admin_id = uuid7()
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_user(
+                id=admin_id,
+                email="admin-assigned-costs@example.com",
+                role=OrganizationRole.ADMIN,
+            ),
+            there_is_an_access_token_for_user(user_id=admin_id),
+            role_lacks_permission(
+                OrganizationRole.ADMIN,
+                PermissionKey.COST_READ,
+            ),
+        ]
+    ) as context:
+        response = context.client.get(f"{_BASE}/summary", headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_admin_without_cost_read_cannot_view_organization_summary():
+    admin_id = uuid7()
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_user(
+                id=admin_id,
+                email="admin-no-costs@example.com",
+                role=OrganizationRole.ADMIN,
+            ),
+            there_is_an_access_token_for_user(user_id=admin_id),
+            role_lacks_permission(OrganizationRole.ADMIN, PermissionKey.COST_READ),
+        ]
+    ) as context:
+        response = context.client.get(f"{_BASE}/summary", headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_admin_with_organization_cost_scope_can_view_summary():
+    admin_id = uuid7()
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_user(
+                id=admin_id,
+                email="admin-costs@example.com",
+                role=OrganizationRole.ADMIN,
+            ),
+            there_is_an_access_token_for_user(user_id=admin_id),
+        ]
+    ) as context:
+        litellm: LiteLLMClient = context.injector.get(LiteLLMClient)
+        litellm.get_global_spend_report.return_value = {}
+
+        response = context.client.get(f"{_BASE}/summary", headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+
+
 def test_member_cannot_view_costs_summary():
     """Org spend is sensitive: only owners/admins (and superusers) may view it."""
     member_id = uuid7()
@@ -79,14 +143,12 @@ def test_member_cannot_view_costs_summary():
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
-def test_member_cannot_view_agent_cost():
+def test_unassigned_member_cannot_view_agent_cost():
     member_id = uuid7()
     with given([*_GIVEN, _there_is_a_member_actor(member_id)]) as context:
         agent_id = str(context.agent.id)
-        response = context.client.get(
-            f"{_BASE}/agents/{agent_id}", headers=_auth(context)
-        )
-        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+        response = context.client.get(f"{_BASE}/agents/{agent_id}", headers=_auth(context))
+        assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
 def test_superuser_can_view_costs_summary():
@@ -112,12 +174,8 @@ def test_superuser_can_view_costs_summary():
             database_repo_is_ready(),
             database_is_clean(),
             # Created before the org exists in context, so the superuser stays a non-member.
-            there_is_a_user(
-                id=super_id, email="super-costs@example.com", is_superuser=True
-            ),
-            there_is_an_organization_with_user_and_access_token(
-                id=org_id, email="owner-super-costs@example.com"
-            ),
+            there_is_a_user(id=super_id, email="super-costs@example.com", is_superuser=True),
+            there_is_an_organization_with_user_and_access_token(id=org_id, email="owner-super-costs@example.com"),
             use_org_for_auth(),
             there_is_an_access_token_for_user(user_id=super_id),
         ]

@@ -47,7 +47,8 @@ Integration tests use the real FastAPI app, migrated PostgreSQL, and additive In
 - `given(...)` assembles reusable setup steps.
 - `when(...)` names the action.
 - `then(...)` contains assertions.
-- PyHamcrest is the established assertion style in existing suites.
+- Use PyHamcrest `assert_that` and matchers instead of bare `assert` statements.
+- Each test SHOULD prove one behavior. Split independent assertion clusters into focused tests; grouping closely related fields into one matcher is appropriate when they describe one outcome.
 
 Keep domain setup helpers under the existing test support structure rather than embedding large setup blocks in each test. Unit tests under `../../api/tests/unit/` are appropriate for services, repositories, parsers, builders, and infrastructure adapters when HTTP composition is not the contract under test.
 
