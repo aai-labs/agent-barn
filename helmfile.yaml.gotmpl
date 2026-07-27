@@ -46,7 +46,7 @@ releases:
         value: {{ env "POSTGRES_LITELLM_DB" | required "POSTGRES_LITELLM_DB is required" | quote }}
 
   - name: postgres-firecrawl
-    namespace: agent-farm
+    namespace: {{ env "NAMESPACE" | default "agent-farm" }}
     chart: ./helm/postgres
     labels:
       name: postgres-firecrawl
@@ -81,7 +81,7 @@ releases:
       - {{ env "NAMESPACE" | default "agent-farm" }}/postgres-litellm
 
   - name: firecrawl
-    namespace: agent-farm
+    namespace: {{ env "NAMESPACE" | default "agent-farm" }}
     chart: ./helm/firecrawl
     labels:
       name: firecrawl
