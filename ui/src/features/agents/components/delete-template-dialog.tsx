@@ -19,12 +19,14 @@ interface DeleteTemplateDialogProps {
   template: AgentTemplateRead | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onDeleted?: () => void;
 }
 
 export function DeleteTemplateDialog({
   template,
   open,
   onOpenChange,
+  onDeleted,
 }: DeleteTemplateDialogProps) {
   const deleteTemplate = useDeleteTemplate();
 
@@ -34,6 +36,7 @@ export function DeleteTemplateDialog({
       onSuccess: () => {
         toast.success("Template deleted");
         onOpenChange(false);
+        onDeleted?.();
       },
       onError: (error) => {
         toastError(error, "Failed to delete template");

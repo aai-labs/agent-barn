@@ -124,11 +124,17 @@ class TemplateService:
         self.permission_policy.require_organization(context, org_id, PermissionKey.TEMPLATE_READ)
         template_ids = [v.id for v in versions]
         skills_by_template = self.repository.get_required_skills_for_templates(template_ids)
+        in_use = self.repository.is_lineage_used_by_live_agent(org_id, slug)
         result = []
         for v in versions:
             read = TemplateRead.model_validate(v)
             skills = skills_by_template.get(v.id, [])
-            read = read.model_copy(update={"required_skills": [SkillRead.model_validate(s) for s in skills]})
+            read = read.model_copy(
+                update={
+                    "required_skills": [SkillRead.model_validate(s) for s in skills],
+                    "in_use": in_use,
+                }
+            )
             result.append(read)
         return result
 

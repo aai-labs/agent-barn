@@ -391,6 +391,21 @@ def test_list_template_versions_includes_required_skills():
             assert_that(versions[2]["required_skills"], equal_to([]))
 
 
+def test_list_template_versions_reports_in_use_for_every_version():
+    with given([*_GIVEN, there_is_an_agent(name="Pinned")]) as context:
+        client: TestClient = context.client
+        slug = context.agent.template_slug
+        there_is_a_template(slug=slug, name="Pinned", version=2)(context)
+
+        with when("I list the lineage's versions"):
+            response = client.get(f"{_BASE}/{slug}/versions", headers=_auth(context))
+
+        with then("every version is flagged in_use, even ones the agent isn't pinned to"):
+            versions = {v["version"]: v for v in response.json()}
+            assert_that(versions[1]["in_use"], equal_to(True))
+            assert_that(versions[2]["in_use"], equal_to(True))
+
+
 # --- create ---
 
 

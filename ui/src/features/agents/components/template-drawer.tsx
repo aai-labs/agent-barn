@@ -6,10 +6,16 @@ import { SearchIcon, XIcon } from "@/components/icons";
 import { useSkills } from "@/features/skills/hooks/use-skills";
 import { SkillSourceBadge } from "@/features/skills/components/skill-drawer";
 import { SKILL_PROVIDER_LABELS } from "@/features/skills/utils";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { useTemplateVersions } from "../hooks/use-template-versions";
 import { useCreateTemplate } from "../hooks/use-create-template";
 import { useUpdateTemplate } from "../hooks/use-update-template";
 import type { AgentTemplateRead } from "../schemas";
+import { DeleteTemplateDialog } from "./delete-template-dialog";
 import {
   TEMPLATE_FILE_KEYS,
   TemplateFileKey,
@@ -66,6 +72,7 @@ export function TemplateDrawer({
   const updateTemplate = useUpdateTemplate();
 
   const [editing, setEditing] = useState(mode === "create" && canManage);
+  const [deleting, setDeleting] = useState(false);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [files, setFiles] = useState<TemplateFiles>(EMPTY_FILES);
@@ -424,44 +431,78 @@ export function TemplateDrawer({
         </div>
 
         <footer
-          className="px-6 py-4 flex items-center justify-end gap-2 flex-shrink-0"
+          className="px-6 py-4 flex items-center justify-between gap-2 flex-shrink-0"
           style={{ borderTop: "1px solid var(--line)" }}
         >
-          {editing ? (
-            <>
-              <button className="af-btn af-btn-ghost" onClick={handleCancelEdit}>Cancel</button>
-              <button
-                className="af-btn af-btn-primary"
-                disabled={pending || (mode === "create" && !name.trim())}
-                onClick={() => void handleSave()}
-              >
-                {pending ? "Saving…" : mode === "create" ? "Create template" : "Save"}
-              </button>
-            </>
-          ) : (
-            <>
-              {savedVersion != null && (
-                <span className="text-[13px] mr-auto" style={{ color: "var(--ok)" }}>
-                  Saved as v{savedVersion}
-                </span>
-              )}
-              {canManage ? (
+          <div>
+            {!editing && mode === "view" && canManage && current && (
+              current.inUse || current.templateSource === "pre-defined" ? (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span>
+                      <button className="af-btn af-btn-ghost" disabled>
+                        Delete
+                      </button>
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    {current.templateSource === "pre-defined"
+                      ? "Pre-defined templates cannot be deleted"
+                      : "This template is being used by an agent"}
+                  </TooltipContent>
+                </Tooltip>
+              ) : (
+                <button className="af-btn af-btn-danger" onClick={() => setDeleting(true)}>
+                  Delete
+                </button>
+              )
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            {editing ? (
+              <>
+                <button className="af-btn af-btn-ghost" onClick={handleCancelEdit}>Cancel</button>
                 <button
                   className="af-btn af-btn-primary"
-                  disabled={!current}
-                  onClick={handleStartEdit}
+                  disabled={pending || (mode === "create" && !name.trim())}
+                  onClick={() => void handleSave()}
                 >
-                  Edit template
+                  {pending ? "Saving…" : mode === "create" ? "Create template" : "Save"}
                 </button>
-              ) : (
-                <button className="af-btn af-btn-ghost" onClick={onClose}>
-                  Close
-                </button>
-              )}
-            </>
-          )}
+              </>
+            ) : (
+              <>
+                {savedVersion != null && (
+                  <span className="text-[13px]" style={{ color: "var(--ok)" }}>
+                    Saved as v{savedVersion}
+                  </span>
+                )}
+                {canManage ? (
+                  <button
+                    className="af-btn af-btn-primary"
+                    disabled={!current}
+                    onClick={handleStartEdit}
+                  >
+                    Edit template
+                  </button>
+                ) : (
+                  <button className="af-btn af-btn-ghost" onClick={onClose}>
+                    Close
+                  </button>
+                )}
+              </>
+            )}
+          </div>
         </footer>
       </aside>
+      {current && (
+        <DeleteTemplateDialog
+          template={current}
+          open={deleting}
+          onOpenChange={setDeleting}
+          onDeleted={onClose}
+        />
+      )}
     </div>
   );
 }
