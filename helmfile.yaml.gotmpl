@@ -45,6 +45,25 @@ releases:
       - name: db.name
         value: {{ env "POSTGRES_LITELLM_DB" | required "POSTGRES_LITELLM_DB is required" | quote }}
 
+  - name: postgres-firecrawl
+    namespace: {{ env "NAMESPACE" | default "agent-farm" }}
+    chart: ./helm/postgres
+    labels:
+      name: postgres-firecrawl
+    values:
+      - secretName: postgres-firecrawl
+        storage:
+          size: 2Gi
+    set:
+      - name: storage.storageClass
+        value: {{ env "STORAGE_CLASS" | default "" | quote }}
+      - name: db.user
+        value: {{ env "POSTGRES_FIRECRAWL_USER" | required "POSTGRES_FIRECRAWL_USER is required" | quote }}
+      - name: db.password
+        value: {{ env "POSTGRES_FIRECRAWL_PASSWORD" | required "POSTGRES_FIRECRAWL_PASSWORD is required" | quote }}
+      - name: db.name
+        value: {{ env "POSTGRES_FIRECRAWL_DB" | required "POSTGRES_FIRECRAWL_DB is required" | quote }}
+
   - name: litellm
     namespace: {{ env "NAMESPACE" | default "agent-farm" }}
     chart: ./helm/litellm
@@ -60,6 +79,25 @@ releases:
     needs:
       - {{ env "NAMESPACE" | default "agent-farm" }}/postgres-app
       - {{ env "NAMESPACE" | default "agent-farm" }}/postgres-litellm
+
+  - name: firecrawl
+    namespace: {{ env "NAMESPACE" | default "agent-farm" }}
+    chart: ./helm/firecrawl
+    labels:
+      name: firecrawl
+    set:
+      - name: testApiKey
+        value: {{ env "FIRECRAWL_API_KEY" | required "FIRECRAWL_API_KEY is required" | quote }}
+      - name: bullAuthKey
+        value: {{ env "FIRECRAWL_BULL_AUTH_KEY" | default "" | quote }}
+      - name: postgres.user
+        value: {{ env "POSTGRES_FIRECRAWL_USER" | required "POSTGRES_FIRECRAWL_USER is required" | quote }}
+      - name: postgres.password
+        value: {{ env "POSTGRES_FIRECRAWL_PASSWORD" | required "POSTGRES_FIRECRAWL_PASSWORD is required" | quote }}
+      - name: postgres.db
+        value: {{ env "POSTGRES_FIRECRAWL_DB" | required "POSTGRES_FIRECRAWL_DB is required" | quote }}
+    needs:
+      - {{ env "NAMESPACE" | default "agent-farm" }}/postgres-firecrawl
 
   - name: agentfarm-api
     namespace: {{ env "NAMESPACE" | default "agent-farm" }}
@@ -105,6 +143,8 @@ releases:
         value: {{ env "GOOGLE_CLOUD_CLIENT_ID" | default "" | quote }}
       - name: googleCloudClientSecret
         value: {{ env "GOOGLE_CLOUD_CLIENT_SECRET" | default "" | quote }}
+      - name: agentFirecrawlApiKey
+        value: {{ env "FIRECRAWL_API_KEY" | default "" | quote }}
       - name: apiExternalUrl
         value: {{ printf "https://%s" (env "API_HOST" | required "API_HOST is required" | splitList "," | first | trim) | quote }}
       - name: kubeconfigB64
@@ -126,6 +166,7 @@ releases:
     needs:
       - {{ env "NAMESPACE" | default "agent-farm" }}/postgres-app
       - {{ env "NAMESPACE" | default "agent-farm" }}/litellm
+      - {{ env "NAMESPACE" | default "agent-farm" }}/firecrawl
 
   - name: agentfarm-ui
     namespace: {{ env "NAMESPACE" | default "agent-farm" }}

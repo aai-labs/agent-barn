@@ -87,6 +87,19 @@ INGRESS_CLUSTER_ISSUER=letsencrypt-http01
 # local-path. Set to a network-replicated class for node-loss durability.
 STORAGE_CLASS=local-path
 
+# ── Firecrawl ────────────────────────────────────────────────────────────────
+# API key used by the Firecrawl server (TEST_API_KEY) and agents (FIRECRAWL_API_KEY).
+# Same value serves both sides. Generate with: openssl rand -hex 24
+FIRECRAWL_API_KEY=
+# Optional: random key protecting the BullMQ admin dashboard. Defaults to '@'.
+# Not needed for production since Firecrawl is on ClusterIP (internal only).
+# FIRECRAWL_BULL_AUTH_KEY=
+
+# ── Postgres (Firecrawl DB) ──────────────────────────────────────────────────
+POSTGRES_FIRECRAWL_USER=firecrawl
+POSTGRES_FIRECRAWL_PASSWORD=
+POSTGRES_FIRECRAWL_DB=firecrawl
+
 # ── Model picker (AF-128) ────────────────────────────────────────────────────
 # Comma-separated fnmatch globs limiting OpenRouter models, e.g. z-ai/glm-5.2,openai/gpt-5*
 # Empty offers the full catalogue.

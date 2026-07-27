@@ -42,6 +42,12 @@ googleCloudClientSecret: ""
 litellmBaseUrl: "http://litellm:4000"
 agentLitellmBaseUrl: "http://litellm:4000"
 
+# Firecrawl — self-hosted web scraping service used by both agent runtimes.
+# The base URL points at the firecrawl ClusterIP service; the API key is the
+# platform-level key shared by all agents (users can override per-agent via UI).
+agentFirecrawlBaseUrl: "http://firecrawl:3002"
+agentFirecrawlApiKey: ""
+
 # Comma-separated fnmatch globs limiting which OpenRouter models the picker
 # offers, e.g. "z-ai/glm-5.2,openai/gpt-5*". Empty offers the full catalogue.
 agentModelAllowlist: ""

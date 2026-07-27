@@ -63,6 +63,8 @@ spec:
               value: "{{ .Values.agentImagePullSecret }}"
             - name: AGENT_MODEL_ALLOWLIST
               value: "{{ .Values.agentModelAllowlist }}"
+            - name: AGENT_FIRECRAWL_BASE_URL
+              value: "{{ .Values.agentFirecrawlBaseUrl }}"
             {{- if .Values.agentDefaultModel }}
             - name: AGENT_DEFAULT_MODEL
               value: "{{ .Values.agentDefaultModel }}"
