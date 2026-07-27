@@ -1,7 +1,7 @@
 """add shared credential table and agent_secret reference
 
 Revision ID: c4d5e6f7a8b9
-Revises: b2c3d4e5f6a7
+Revises: a7b8c9d0e1f2
 Create Date: 2026-07-21 00:00:00.000000
 
 """
@@ -13,7 +13,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "c4d5e6f7a8b9"
-down_revision: Union[str, None] = "d3f9a1c7b2e5"
+down_revision: Union[str, None] = "a7b8c9d0e1f2"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
