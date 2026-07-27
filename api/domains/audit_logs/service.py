@@ -100,7 +100,9 @@ class AuditLogService:
     repository: AuditLogRepository
 
     def __post_init__(self) -> None:
-        self._read_seen: dict[tuple[UUID | None, str, UUID | None], float] = {}
+        self._read_seen: dict[
+            tuple[UUID | None, UUID | None, str, UUID | None], float
+        ] = {}
         self._read_lock = threading.Lock()
 
     # --- write path ---
@@ -145,7 +147,7 @@ class AuditLogService:
                 org_id = organization_id
 
             if action_value in READ_ACTIONS and self._is_suppressed_read(
-                actor_id, action_value, target_id
+                actor_id, org_id, action_value, target_id
             ):
                 return
 
@@ -167,9 +169,13 @@ class AuditLogService:
             logger.exception("Failed to write audit log for action %s", action)
 
     def _is_suppressed_read(
-        self, actor_id: UUID | None, action: str, target_id: UUID | None
+        self,
+        actor_id: UUID | None,
+        organization_id: UUID | None,
+        action: str,
+        target_id: UUID | None,
     ) -> bool:
-        key = (actor_id, action, target_id)
+        key = (actor_id, organization_id, action, target_id)
         now = time.monotonic()
         with self._read_lock:
             last = self._read_seen.get(key)

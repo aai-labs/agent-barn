@@ -94,8 +94,7 @@ def login_for_access_token(
     _set_refresh_token_cookie(response, token_pair.refresh_token, config)
     audit_log_service.record(
         action=AuditAction.AUTH_LOGIN,
-        actor_user_id=user.id,
-        actor_email=user.email,
+        context=CurrentUserContext(user=user),
         organization_id=None,
         target_type=TargetType.USER,
         target_id=user.id,
