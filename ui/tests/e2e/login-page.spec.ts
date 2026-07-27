@@ -20,6 +20,7 @@ test.describe("Login Page", () => {
     await dataSupportPage.users.interceptGetUserContextRequest();
     await dataSupportPage.users.interceptGetOrganizationsRequest();
     await dataSupportPage.agents.interceptGetAgentsRequest();
+    await dataSupportPage.agents.interceptGetAgentHealthRequest();
 
     await loginPage.goto();
   });

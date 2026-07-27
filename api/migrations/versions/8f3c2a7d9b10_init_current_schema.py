@@ -18,9 +18,7 @@ down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-organization_role_enum = postgresql.ENUM(
-    "ADMIN", "MEMBER", "OWNER", name="organizationrole", create_type=False
-)
+organization_role_enum = postgresql.ENUM("ADMIN", "MEMBER", "OWNER", name="organizationrole", create_type=False)
 
 
 def upgrade() -> None:
@@ -33,9 +31,7 @@ def upgrade() -> None:
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("name", sa.String(length=255), nullable=False),
         sa.Column("description", sa.String(), nullable=True),
-        sa.Column(
-            "is_default", sa.Boolean(), nullable=False, server_default=sa.text("false")
-        ),
+        sa.Column("is_default", sa.Boolean(), nullable=False, server_default=sa.text("false")),
         sa.CheckConstraint("length(name) >= 3", name="check_name_length_min"),
         sa.CheckConstraint("length(name) <= 255", name="check_name_length_max"),
         sa.PrimaryKeyConstraint("id"),
@@ -71,9 +67,7 @@ def upgrade() -> None:
         sa.Column("user_id", postgresql.UUID(as_uuid=True), nullable=True),
         sa.Column("organization_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("role", organization_role_enum, nullable=False),
-        sa.ForeignKeyConstraint(
-            ["organization_id"], ["organization.id"], ondelete="CASCADE"
-        ),
+        sa.ForeignKeyConstraint(["organization_id"], ["organization.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["user_id"], ["user.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
     )
@@ -126,9 +120,7 @@ def downgrade() -> None:
     op.drop_table("refresh_token")
 
     op.drop_index("uq_user_organization", table_name="user_organization")
-    op.drop_index(
-        "uq_user_organization_one_owner_per_org", table_name="user_organization"
-    )
+    op.drop_index("uq_user_organization_one_owner_per_org", table_name="user_organization")
     op.drop_table("user_organization")
 
     op.drop_index("ix_user_is_superuser", table_name="user")

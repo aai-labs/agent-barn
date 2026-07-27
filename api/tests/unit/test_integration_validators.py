@@ -26,9 +26,7 @@ from api.infrastructure.integration_validators.result import IntegrationValidati
 _REQUEST = httpx.Request("GET", "https://example.com")
 
 
-def _resp(
-    body: dict | list, *, status: int = 200, headers: dict | None = None
-) -> httpx.Response:
+def _resp(body: dict | list, *, status: int = 200, headers: dict | None = None) -> httpx.Response:
     return httpx.Response(status, json=body, headers=headers or {}, request=_REQUEST)
 
 
@@ -37,15 +35,21 @@ def _connect_error() -> httpx.ConnectError:
 
 
 _GH = GithubContent(token="ghp_test", owner="acme", repos=["backend"], org="acme-org")
-_JIRA = JiraContent(
-    site_url="https://acme.atlassian.net", email="alice@acme.com", api_token="jira-tok"
+_JIRA = JiraContent(site_url="https://acme.atlassian.net", email="alice@acme.com", api_token="jira-tok")
+_JIRA_SCOPED = JiraContent(
+    site_url="https://acme.atlassian.net",
+    email="svc-account@acme.com",
+    api_token="scoped-tok",
+    use_scoped_token=True,
 )
-_CONFLUENCE = ConfluenceContent(
-    site_url="https://acme.atlassian.net", email="alice@acme.com", api_token="conf-tok"
+_CONFLUENCE = ConfluenceContent(site_url="https://acme.atlassian.net", email="alice@acme.com", api_token="conf-tok")
+_CONFLUENCE_SCOPED = ConfluenceContent(
+    site_url="https://acme.atlassian.net",
+    email="svc-account@acme.com",
+    api_token="scoped-tok",
+    use_scoped_token=True,
 )
-_BB = BitbucketContent(
-    workspace="acme", repos=["backend"], email="alice@acme.com", api_token="bb-tok"
-)
+_BB = BitbucketContent(workspace="acme", repos=["backend"], email="alice@acme.com", api_token="bb-tok")
 _GMAIL = GmailContent(
     client_id="client-id.apps.googleusercontent.com",
     client_secret="client-secret",
@@ -80,9 +84,7 @@ _GH_MOD = "api.infrastructure.integration_validators.github.httpx.get"
 
 
 def test_github_classic_pat_all_scopes_present():
-    user_resp = _resp(
-        {"login": "alice"}, headers={"X-OAuth-Scopes": "repo, read:user, read:org"}
-    )
+    user_resp = _resp({"login": "alice"}, headers={"X-OAuth-Scopes": "repo, read:user, read:org"})
     with patch(_GH_MOD, return_value=user_resp):
         result = validate_github(_GH)
 
@@ -93,9 +95,7 @@ def test_github_classic_pat_all_scopes_present():
 
 
 def test_github_classic_pat_missing_repo_scope():
-    user_resp = _resp(
-        {"login": "alice"}, headers={"X-OAuth-Scopes": "read:user, read:org"}
-    )
+    user_resp = _resp({"login": "alice"}, headers={"X-OAuth-Scopes": "read:user, read:org"})
     with patch(_GH_MOD, return_value=user_resp):
         result = validate_github(_GH)
 
@@ -123,9 +123,7 @@ def test_github_classic_pat_missing_read_org_scope():
 
 def test_github_classic_pat_broad_user_scope_covers_read_user():
     """'user' scope is a superset of read:user — should not warn."""
-    user_resp = _resp(
-        {"login": "alice"}, headers={"X-OAuth-Scopes": "repo, user, read:org"}
-    )
+    user_resp = _resp({"login": "alice"}, headers={"X-OAuth-Scopes": "repo, user, read:org"})
     with patch(_GH_MOD, return_value=user_resp):
         result = validate_github(_GH)
 
@@ -216,9 +214,7 @@ def test_github_fine_grained_empty_repos_skips_repo_probe():
 
 def test_github_fine_grained_multiple_repos_aggregates_missing_scopes():
     """Two configured repos: one denied (403), one missing (404) — both surface, valid stays True."""
-    multi_repo = GithubContent(
-        token="ghp_fine", owner="acme", repos=["backend", "frontend"], org="acme"
-    )
+    multi_repo = GithubContent(token="ghp_fine", owner="acme", repos=["backend", "frontend"], org="acme")
     user_resp = _resp({"login": "alice"})
     repo1_resp = _resp(
         {"message": "forbidden"},
@@ -306,6 +302,49 @@ def test_jira_network_error_returns_error():
     assert "jira" in result.error.lower()
 
 
+_JIRA_CLOUD_ID_MOD = "api.infrastructure.integration_validators.jira.get_atlassian_cloud_id"
+
+
+def test_jira_scoped_token_valid_returns_identity():
+    """Scoped token: cloud_id resolved, Basic Auth call via gateway succeeds — valid."""
+    body = {
+        "displayName": "Service Bot",
+        "emailAddress": "svc-account@acme.com",
+        "active": True,
+    }
+    with (
+        patch(_JIRA_CLOUD_ID_MOD, return_value=("cloud-abc", None)),
+        patch(_JIRA_MOD, return_value=_resp(body)),
+    ):
+        result = validate_jira(_JIRA_SCOPED)
+
+    assert result.valid is True
+    assert "Service Bot" in (result.identity or "")
+    assert "svc-account@acme.com" in (result.identity or "")
+    assert result.error is None
+
+
+def test_jira_scoped_token_cloud_id_fetch_fails_hard_fails():
+    """Scoped token: cloud_id resolution fails — validation must hard fail immediately."""
+    with patch(_JIRA_CLOUD_ID_MOD, return_value=(None, "Network error fetching cloud ID")):
+        result = validate_jira(_JIRA_SCOPED)
+
+    assert result.valid is False
+    assert result.error is not None
+
+
+def test_jira_scoped_token_401_returns_error():
+    """Scoped token: cloud_id OK but gateway call returns 401 — invalid token."""
+    with (
+        patch(_JIRA_CLOUD_ID_MOD, return_value=("cloud-abc", None)),
+        patch(_JIRA_MOD, return_value=_resp({}, status=401)),
+    ):
+        result = validate_jira(_JIRA_SCOPED)
+
+    assert result.valid is False
+    assert "invalid" in (result.error or "").lower() or "token" in (result.error or "").lower()
+
+
 # ── Confluence ────────────────────────────────────────────────────────────────
 
 _CONF_MOD = "api.infrastructure.integration_validators.confluence.httpx.get"
@@ -364,6 +403,45 @@ def test_confluence_network_error_returns_error():
     assert result.valid is False
     assert result.error is not None
     assert "confluence" in result.error.lower()
+
+
+_CONF_CLOUD_ID_MOD = "api.infrastructure.integration_validators.confluence.get_atlassian_cloud_id"
+
+
+def test_confluence_scoped_token_valid_returns_identity():
+    """Scoped token: cloud_id resolved, Basic Auth call to the v2 gateway succeeds — valid with space count."""
+    spaces = {"results": [{"key": "TEAM"}, {"key": "DOCS"}, {"key": "ENG"}]}
+    with (
+        patch(_CONF_CLOUD_ID_MOD, return_value=("cloud-abc", None)),
+        patch(_CONF_MOD, return_value=_resp(spaces)),
+    ):
+        result = validate_confluence(_CONFLUENCE_SCOPED)
+
+    assert result.valid is True
+    assert "acme.atlassian.net" in (result.identity or "")
+    assert "3" in (result.identity or "")
+    assert result.error is None
+
+
+def test_confluence_scoped_token_cloud_id_fetch_fails_hard_fails():
+    """Scoped token: cloud_id resolution fails — validation must hard fail immediately."""
+    with patch(_CONF_CLOUD_ID_MOD, return_value=(None, "Network error fetching cloud ID")):
+        result = validate_confluence(_CONFLUENCE_SCOPED)
+
+    assert result.valid is False
+    assert result.error is not None
+
+
+def test_confluence_scoped_token_401_returns_error():
+    """Scoped token: cloud_id OK but gateway call returns 401 — invalid token."""
+    with (
+        patch(_CONF_CLOUD_ID_MOD, return_value=("cloud-abc", None)),
+        patch(_CONF_MOD, return_value=_resp({}, status=401)),
+    ):
+        result = validate_confluence(_CONFLUENCE_SCOPED)
+
+    assert result.valid is False
+    assert "invalid" in (result.error or "").lower() or "token" in (result.error or "").lower()
 
 
 # ── Bitbucket ─────────────────────────────────────────────────────────────────
@@ -490,9 +568,7 @@ def test_bitbucket_identity_includes_nickname():
 
 def test_bitbucket_no_workspace_skips_repo_check():
     """If workspace is empty, skip the repo read scope probe."""
-    no_workspace = BitbucketContent(
-        workspace="", repos=["be"], email="a@b.com", api_token="t"
-    )
+    no_workspace = BitbucketContent(workspace="", repos=["be"], email="a@b.com", api_token="t")
     user_resp = _resp(_BB_USER_BODY)
 
     with patch(_BB_MOD, side_effect=[user_resp]) as mock_get:
@@ -505,9 +581,7 @@ def test_bitbucket_no_workspace_skips_repo_check():
 
 _BB_SCOPED_401 = {
     "type": "error",
-    "error": {
-        "message": "Token is invalid, expired, or not supported for this endpoint."
-    },
+    "error": {"message": "Token is invalid, expired, or not supported for this endpoint."},
 }
 
 
@@ -561,9 +635,7 @@ def test_bitbucket_repo_scoped_token_valid():
     repo_ok = _resp({"full_name": "acme/backend"})
     pr_ok = _resp({"values": []})
 
-    with patch(
-        _BB_MOD, side_effect=[bearer_fail, _BASIC_401, workspace_403, repo_ok, pr_ok]
-    ):
+    with patch(_BB_MOD, side_effect=[bearer_fail, _BASIC_401, workspace_403, repo_ok, pr_ok]):
         result = validate_bitbucket(_BB)
 
     assert result.valid is True
@@ -572,9 +644,7 @@ def test_bitbucket_repo_scoped_token_valid():
 
 def test_bitbucket_scoped_token_no_workspace_returns_error():
     """Scoped token with no workspace configured cannot be validated."""
-    no_workspace = BitbucketContent(
-        workspace="", repos=["be"], email="a@b.com", api_token="t"
-    )
+    no_workspace = BitbucketContent(workspace="", repos=["be"], email="a@b.com", api_token="t")
     bearer_fail = _resp(_BB_SCOPED_401, status=401)
 
     with patch(_BB_MOD, side_effect=[bearer_fail]):
@@ -587,9 +657,7 @@ def test_bitbucket_scoped_token_no_workspace_returns_error():
 def test_bitbucket_scoped_token_no_repos_skips_repo_probe():
     """Scoped token, workspace listing denied, zero repos configured — nothing left to
     fall back to, so treat as missing the read scope rather than probing anything."""
-    no_repos = BitbucketContent(
-        workspace="acme", repos=[], email="a@b.com", api_token="t"
-    )
+    no_repos = BitbucketContent(workspace="acme", repos=[], email="a@b.com", api_token="t")
     bearer_fail = _resp(_BB_SCOPED_401, status=401)
     workspace_403 = _resp({"type": "error"}, status=403)
 
@@ -603,9 +671,7 @@ def test_bitbucket_scoped_token_no_repos_skips_repo_probe():
 def test_bitbucket_scoped_token_multiple_repos_partial_failure_still_valid():
     """One of two configured repos succeeds — token is valid; the failing repo shows
     up as a missing scope instead of failing validation outright."""
-    multi_repo = BitbucketContent(
-        workspace="acme", repos=["backend", "frontend"], email="a@b.com", api_token="t"
-    )
+    multi_repo = BitbucketContent(workspace="acme", repos=["backend", "frontend"], email="a@b.com", api_token="t")
     bearer_fail = _resp(_BB_SCOPED_401, status=401)
     workspace_403 = _resp({"type": "error"}, status=403)
     repo1_ok = _resp({"full_name": "acme/backend"})
@@ -631,9 +697,7 @@ def test_bitbucket_scoped_token_multiple_repos_partial_failure_still_valid():
 
 def test_bitbucket_scoped_token_all_repos_fail_returns_invalid():
     """All configured repos fail the probe — no proof of access at all, so invalid."""
-    multi_repo = BitbucketContent(
-        workspace="acme", repos=["backend", "frontend"], email="a@b.com", api_token="t"
-    )
+    multi_repo = BitbucketContent(workspace="acme", repos=["backend", "frontend"], email="a@b.com", api_token="t")
     bearer_fail = _resp(_BB_SCOPED_401, status=401)
     workspace_403 = _resp({"type": "error"}, status=403)
     repo1_403 = _resp({"type": "error"}, status=403)
@@ -715,9 +779,7 @@ def test_gmail_missing_client_credentials_returns_error():
 
 def test_gmail_invalid_grant_reports_reconnect_hint():
     """Google's canonical error for a revoked/expired refresh token is invalid_grant."""
-    with patch(
-        _GMAIL_TOKEN_MOD, return_value=_resp({"error": "invalid_grant"}, status=400)
-    ):
+    with patch(_GMAIL_TOKEN_MOD, return_value=_resp({"error": "invalid_grant"}, status=400)):
         result = validate_gmail(_GMAIL)
 
     assert result.valid is False
@@ -751,9 +813,7 @@ def test_gmail_missing_access_token_in_response():
 
 
 def test_gmail_missing_readonly_scope_warns():
-    token_resp = _resp(
-        {**_GMAIL_TOKEN_OK, "scope": "https://www.googleapis.com/auth/gmail.send"}
-    )
+    token_resp = _resp({**_GMAIL_TOKEN_OK, "scope": "https://www.googleapis.com/auth/gmail.send"})
     profile_resp = _resp({"emailAddress": "alice@gmail.com"})
 
     with (

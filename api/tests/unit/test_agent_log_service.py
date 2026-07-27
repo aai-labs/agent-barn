@@ -57,9 +57,7 @@ def test_get_agent_logs_returns_live_lines_when_running():
         k8s.read_pod_logs.return_value = "hello\nworld"
 
         with when("I get logs for a running agent"):
-            result = service.get_agent_logs(
-                context.agent.id, context.current_user_context
-            )
+            result = service.get_agent_logs(context.agent.id, context.current_user_context)
 
             with then("live lines are returned"):
                 assert_that(result.source, equal_to("live"))
@@ -83,9 +81,7 @@ def test_get_agent_logs_returns_snapshot_lines_when_stopped():
         )
 
         with when("I get logs for a stopped agent"):
-            result = service.get_agent_logs(
-                context.agent.id, context.current_user_context
-            )
+            result = service.get_agent_logs(context.agent.id, context.current_user_context)
 
             with then("snapshot lines are returned"):
                 assert_that(result.source, equal_to("snapshot"))
@@ -97,9 +93,7 @@ def test_get_agent_logs_returns_empty_when_no_snapshot():
         service: AgentService = context.injector.get(AgentService)
 
         with when("I get logs for a stopped agent with no snapshots"):
-            result = service.get_agent_logs(
-                context.agent.id, context.current_user_context
-            )
+            result = service.get_agent_logs(context.agent.id, context.current_user_context)
 
             with then("empty snapshot result is returned"):
                 assert_that(result.source, equal_to("snapshot"))
@@ -178,9 +172,7 @@ def test_get_log_history_returns_all_lines_from_latest_snapshot():
         )
 
         with when("I request log history without snapshot_id"):
-            result = service.get_log_history(
-                context.agent.id, context.current_user_context
-            )
+            result = service.get_log_history(context.agent.id, context.current_user_context)
 
             with then("all lines from the latest snapshot are returned"):
                 assert_that(result.lines, equal_to(["line1", "line2", "line3"]))
@@ -194,9 +186,7 @@ def test_get_log_history_returns_empty_when_no_snapshot():
         k8s.read_pod_logs.return_value = ""
 
         with when("I request log history with no snapshots"):
-            result = service.get_log_history(
-                context.agent.id, context.current_user_context
-            )
+            result = service.get_log_history(context.agent.id, context.current_user_context)
 
             with then("empty result with has_more=False"):
                 assert_that(result.lines, has_length(0))
@@ -233,9 +223,7 @@ def test_get_log_history_has_more_when_older_snapshot_exists():
         )
 
         with when("I request log history (latest snapshot)"):
-            result = service.get_log_history(
-                context.agent.id, context.current_user_context
-            )
+            result = service.get_log_history(context.agent.id, context.current_user_context)
 
             with then("latest snapshot lines returned with has_more=True"):
                 assert_that(result.lines, equal_to(["new1", "new2"]))
@@ -272,9 +260,7 @@ def test_get_log_history_walks_to_older_snapshot_via_next_id():
         )
 
         with when("I request latest, then follow next_snapshot_id"):
-            first = service.get_log_history(
-                context.agent.id, context.current_user_context
-            )
+            first = service.get_log_history(context.agent.id, context.current_user_context)
             second = service.get_log_history(
                 context.agent.id,
                 context.current_user_context,
@@ -306,9 +292,7 @@ def test_get_log_history_no_more_when_single_snapshot():
         )
 
         with when("I request history with only one snapshot"):
-            result = service.get_log_history(
-                context.agent.id, context.current_user_context
-            )
+            result = service.get_log_history(context.agent.id, context.current_user_context)
 
             with then("has_more=False and no next_snapshot_id"):
                 assert_that(result.lines, equal_to(["only", "session"]))
@@ -344,9 +328,7 @@ def test_capture_logs_deletes_old_snapshots_keeping_latest_5():
                 snapshot = repo.get_latest_log_snapshot(context.agent.id)
                 while snapshot is not None:
                     count += 1
-                    snapshot = repo.get_previous_snapshot(
-                        context.agent.id, snapshot.session_ended_at
-                    )
+                    snapshot = repo.get_previous_snapshot(context.agent.id, snapshot.session_ended_at)
                 assert_that(count, equal_to(5))
 
                 latest = repo.get_latest_log_snapshot(context.agent.id)

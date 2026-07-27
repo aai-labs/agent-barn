@@ -43,7 +43,7 @@ litellmBaseUrl: "http://litellm:4000"
 agentLitellmBaseUrl: "http://litellm:4000"
 
 # Comma-separated fnmatch globs limiting which OpenRouter models the picker
-# offers, e.g. "qwen/*,openai/gpt-5*". Empty offers the full catalogue.
+# offers, e.g. "z-ai/glm-5.2,openai/gpt-5*". Empty offers the full catalogue.
 agentModelAllowlist: ""
 
 # Default model preselected in the picker and used at runtime when an agent has

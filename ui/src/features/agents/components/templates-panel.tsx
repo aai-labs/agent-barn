@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { ChevronDownIcon } from "lucide-react";
 import { PlusIcon } from "@/components/icons";
+import { useActiveOrgRole } from "@/features/organizations/hooks/use-active-org-role";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -23,6 +24,7 @@ const SOURCE_FILTERS: Array<{ value: TemplateSource | ""; label: string }> = [
 ];
 
 export function TemplatesPanel() {
+  const { canManage } = useActiveOrgRole();
   const [search, setSearch] = useState("");
   const [source, setSource] = useState<TemplateSource | "">("");
   const [page, setPage] = useState(1);
@@ -85,9 +87,11 @@ export function TemplatesPanel() {
           </DropdownMenuContent>
         </DropdownMenu>
         </div>
-        <button className="af-btn af-btn-primary ml-auto" onClick={() => setCreating(true)}>
-          <PlusIcon /> New template
-        </button>
+        {canManage && (
+          <button className="af-btn af-btn-primary ml-auto" onClick={() => setCreating(true)}>
+            <PlusIcon /> New template
+          </button>
+        )}
       </div>
 
       {isLoading && (
@@ -140,11 +144,12 @@ export function TemplatesPanel() {
         <TemplateDrawer
           mode="view"
           slug={openTemplate.templateSlug}
+          canManage={canManage}
           onClose={() => setOpenTemplate(null)}
         />
       )}
-      {creating && (
-        <TemplateDrawer mode="create" onClose={() => setCreating(false)} />
+      {creating && canManage && (
+        <TemplateDrawer mode="create" canManage onClose={() => setCreating(false)} />
       )}
     </div>
   );

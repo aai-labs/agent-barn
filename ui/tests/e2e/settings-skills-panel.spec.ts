@@ -21,6 +21,7 @@ test.describe("Settings — Skills panel", () => {
     await dataSupportPage.users.interceptGetUserContextRequest();
     await dataSupportPage.users.interceptGetOrganizationsRequest();
     await dataSupportPage.skills.interceptGetSkillsRequest();
+    await dataSupportPage.agents.interceptGetTemplatesRequest();
 
     await page.goto(`/dashboard/${TEST_ORG_ID}/settings`);
     await page.getByRole("button", { name: "Skills" }).click();
@@ -258,6 +259,7 @@ test.describe("Settings — Skills panel (pagination)", () => {
 
   test("pagination controls are hidden when all results fit on one page", async ({ page }) => {
     await dataSupportPage.skills.interceptGetSkillsRequest();
+    await dataSupportPage.agents.interceptGetTemplatesRequest();
 
     await page.goto(`/dashboard/${TEST_ORG_ID}/settings`);
     await page.getByRole("button", { name: "Skills" }).click();

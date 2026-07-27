@@ -17,6 +17,7 @@ test.describe("Dashboard Page", () => {
     await dataSupportPage.users.interceptGetUserContextRequest();
     await dataSupportPage.users.interceptGetOrganizationsRequest();
     await dataSupportPage.agents.interceptGetAgentsRequest();
+    await dataSupportPage.agents.interceptGetAgentHealthRequest();
   });
 
   test("should load dashboard with agent cards", async ({ page }) => {

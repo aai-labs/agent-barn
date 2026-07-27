@@ -88,11 +88,11 @@ INGRESS_CLUSTER_ISSUER=letsencrypt-http01
 STORAGE_CLASS=local-path
 
 # ── Model picker (AF-128) ────────────────────────────────────────────────────
-# Comma-separated fnmatch globs limiting OpenRouter models, e.g. qwen/*,openai/gpt-5*
+# Comma-separated fnmatch globs limiting OpenRouter models, e.g. z-ai/glm-5.2,openai/gpt-5*
 # Empty offers the full catalogue.
 AGENT_MODEL_ALLOWLIST=
 # Default model. Format: litellm/openrouter/<slug>
-# e.g. litellm/openrouter/qwen/qwen3.6-plus. Empty uses the API's built-in default.
+# e.g. litellm/openrouter/z-ai/glm-5.2. Empty uses the API's built-in default.
 AGENT_DEFAULT_MODEL=
 
 # ── Optional ─────────────────────────────────────────────────────────────────

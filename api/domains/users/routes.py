@@ -21,25 +21,19 @@ users_router = APIRouter(prefix="/users", tags=["users"])
 
 @users_router.get("", response_model=PaginatedItems[UserRead])
 def list_users(
-    context: Annotated[
-        CurrentUserContext, Depends(get_current_user(check_superuser=True))
-    ],
+    context: Annotated[CurrentUserContext, Depends(get_current_user(check_superuser=True))],
     filters: Annotated[UserFilter, Depends(get_user_filter)],
     page: int = 1,
     page_size: int = 15,
     user_service: UserService = Injected(UserService),
 ):
-    return user_service.get_paginated_users(
-        filters=filters, context=context, page=page, page_size=page_size
-    )
+    return user_service.get_paginated_users(filters=filters, context=context, page=page, page_size=page_size)
 
 
 @users_router.post("", response_model=UserRead, status_code=status.HTTP_201_CREATED)
 def create_user(
     data: AdminUserCreate,
-    context: Annotated[
-        CurrentUserContext, Depends(get_current_user(check_superuser=True))
-    ],
+    context: Annotated[CurrentUserContext, Depends(get_current_user(check_superuser=True))],
     user_service: UserService = Injected(UserService),
 ):
     user = user_service.create_user(data)
@@ -60,9 +54,7 @@ def reset_user_password(
 @users_router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_user(
     user_id: UUID,
-    context: Annotated[
-        CurrentUserContext, Depends(get_current_user(check_superuser=True))
-    ],
+    context: Annotated[CurrentUserContext, Depends(get_current_user(check_superuser=True))],
     user_service: UserService = Injected(UserService),
 ):
     user_service.delete_user(user_id, context.user.id)

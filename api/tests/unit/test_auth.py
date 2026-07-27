@@ -23,16 +23,12 @@ def test_i_can_save_and_get_refresh_token():
             there_is_a_user(id=user_id),
         ]
     ) as context:
-        repository: RefreshTokenRepository = context.injector.get(
-            RefreshTokenRepository
-        )
+        repository: RefreshTokenRepository = context.injector.get(RefreshTokenRepository)
 
         with when("I save a refresh token"):
             token = "sample_refresh_token"
             expires_at = datetime.now(timezone.utc) + timedelta(days=15)
-            refresh_token = RefreshToken(
-                token=token, user_id=user_id, expires_at=expires_at, stamp="stamp"
-            )
+            refresh_token = RefreshToken(token=token, user_id=user_id, expires_at=expires_at, stamp="stamp")
             repository.save(refresh_token)
 
             with then("it should be retrievable"):
@@ -54,9 +50,7 @@ def test_i_can_create_access_token():
         service: AuthService = context.injector.get(AuthService)
 
         with when("I create an access token"):
-            access_token = service.create_access_token(
-                TokenData(user_id=str(user_id), stamp="stamp")
-            )
+            access_token = service.create_access_token(TokenData(user_id=str(user_id), stamp="stamp"))
 
             with then("token should be generated"):
                 assert_that(access_token, is_not(none()))
@@ -73,18 +67,12 @@ def test_i_cannot_verify_expired_refresh_token():
         ]
     ) as context:
         service: AuthService = context.injector.get(AuthService)
-        repository: RefreshTokenRepository = context.injector.get(
-            RefreshTokenRepository
-        )
+        repository: RefreshTokenRepository = context.injector.get(RefreshTokenRepository)
 
         with when("I verify an expired token"):
             token = "expired_refresh_token"
             expired = datetime.now(timezone.utc) - timedelta(days=1)
-            repository.save(
-                RefreshToken(
-                    token=token, user_id=user_id, expires_at=expired, stamp="stamp"
-                )
-            )
+            repository.save(RefreshToken(token=token, user_id=user_id, expires_at=expired, stamp="stamp"))
 
             with then("it should raise HTTPException"):
                 assert_that(
