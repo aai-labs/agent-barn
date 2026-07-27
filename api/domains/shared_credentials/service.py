@@ -24,7 +24,7 @@ from api.domains.shared_credentials.models import (
     SharedCredentialUpdate,
 )
 from api.domains.shared_credentials.repository import SharedCredentialRepository
-from api.domains.users.organization_users.models import ORG_MANAGER_ROLES
+from api.domains.rbac.catalog import IMPLICIT_AGENT_OWNER_ROLES
 from api.infrastructure.integration_validators import (
     validate_bitbucket,
     validate_confluence,
@@ -53,7 +53,7 @@ class SharedCredentialService:
 
     def _require_manager(self, context: CurrentUserContext) -> UUID:
         org_id = self._org_id(context)
-        context.require_org_role(org_id, ORG_MANAGER_ROLES, detail="Admin access required")
+        context.require_org_role(org_id, IMPLICIT_AGENT_OWNER_ROLES, detail="Admin access required")
         return org_id
 
     def _get_or_404(self, credential_id: UUID, org_id: UUID) -> SharedCredential:

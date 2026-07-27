@@ -15,7 +15,7 @@ from api.domains.shared_credentials.models import (
     get_shared_credential_filter,
 )
 from api.domains.shared_credentials.service import SharedCredentialService
-from api.domains.users.organization_users.models import ORG_MANAGER_ROLES
+from api.domains.rbac.catalog import IMPLICIT_AGENT_OWNER_ROLES
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 shared_credentials_router = APIRouter(prefix="/shared-credentials", tags=["shared-credentials"])
@@ -26,7 +26,7 @@ def create_shared_credential(
     data: SharedCredentialCreate,
     context: Annotated[
         CurrentUserContext,
-        Depends(get_current_user(organization_roles=ORG_MANAGER_ROLES)),
+        Depends(get_current_user(organization_roles=IMPLICIT_AGENT_OWNER_ROLES)),
     ],
     service: Annotated[SharedCredentialService, Injected(SharedCredentialService)],
 ):
@@ -71,7 +71,7 @@ def update_shared_credential(
     data: SharedCredentialUpdate,
     context: Annotated[
         CurrentUserContext,
-        Depends(get_current_user(organization_roles=ORG_MANAGER_ROLES)),
+        Depends(get_current_user(organization_roles=IMPLICIT_AGENT_OWNER_ROLES)),
     ],
     service: Annotated[SharedCredentialService, Injected(SharedCredentialService)],
 ):
@@ -83,7 +83,7 @@ def delete_shared_credential(
     credential_id: UUID,
     context: Annotated[
         CurrentUserContext,
-        Depends(get_current_user(organization_roles=ORG_MANAGER_ROLES)),
+        Depends(get_current_user(organization_roles=IMPLICIT_AGENT_OWNER_ROLES)),
     ],
     service: Annotated[SharedCredentialService, Injected(SharedCredentialService)],
 ):
