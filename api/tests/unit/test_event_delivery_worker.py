@@ -20,26 +20,27 @@ class FakeRepository:
         self.dead_lettered.append((delivery_id, reason, error))
 
 
-def test_event_delivery_actor_invokes_processor_with_delivery_id(monkeypatch):
+def test_process_event_delivery_invokes_processor_with_delivery_id(monkeypatch):
     from api.domains.events import worker
 
     processor = FakeProcessor()
     monkeypatch.setattr(worker, "_processor", lambda: processor)
     delivery_id = uuid4()
 
-    worker.event_delivery_actor.fn(str(delivery_id), {"source": "test"})
+    result = worker.process_event_delivery(delivery_id)
 
+    assert result is True
     assert processor.processed == [delivery_id]
 
 
-def test_retry_exhaustion_actor_marks_delivery_dead_lettered(monkeypatch):
+def test_handle_retry_exhausted_marks_delivery_dead_lettered(monkeypatch):
     from api.domains.events import worker
 
     repository = FakeRepository()
     monkeypatch.setattr(worker, "_repository", lambda: repository)
     delivery_id = uuid4()
 
-    worker.event_delivery_retry_exhausted.fn({"args": [str(delivery_id), {"source": "test"}]}, {"retries": 3})
+    worker.handle_retry_exhausted({"args": [str(delivery_id), {"source": "test"}]}, retries=3)
 
     assert repository.dead_lettered == [
         (
@@ -48,3 +49,14 @@ def test_retry_exhaustion_actor_marks_delivery_dead_lettered(monkeypatch):
             f"Dramatiq retries exhausted for Event Delivery {delivery_id} after 3 retries",
         )
     ]
+
+
+def test_handle_retry_exhausted_without_delivery_id_is_a_noop(monkeypatch):
+    from api.domains.events import worker
+
+    repository = FakeRepository()
+    monkeypatch.setattr(worker, "_repository", lambda: repository)
+
+    worker.handle_retry_exhausted({"args": []}, retries=None)
+
+    assert repository.dead_lettered == []

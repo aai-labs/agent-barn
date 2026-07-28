@@ -28,15 +28,17 @@ spec:
         - name: event-worker
           image: "{{ .Values.registryPrefix }}/{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # No --queues filter: this worker consumes every queue registered by
+          # the domain actor modules api.worker_app imports (currently just
+          # event delivery). Adding a domain there is enough; no flag to keep
+          # in sync across deployments.
           command:
             - dramatiq
-            - api.domains.events.worker
+            - api.worker_app
             - --processes
             - "1"
             - --threads
             - "4"
-            - --queues
-            - "event-deliveries"
           envFrom:
             - secretRef:
                 name: {{ .Values.secretName }}

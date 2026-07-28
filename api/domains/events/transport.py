@@ -3,8 +3,6 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from dramatiq.brokers.redis import RedisBroker
-
 from api.core.config import Config
 from api.domains.events.constants import (
     EVENT_DELIVERY_MAX_BACKOFF_MS,
@@ -12,6 +10,7 @@ from api.domains.events.constants import (
     EVENT_DELIVERY_MIN_BACKOFF_MS,
     EVENT_DELIVERY_REDIS_NAMESPACE,
 )
+from api.infrastructure.dramatiq import build_redis_broker
 
 TransportMetadataValue = str | int | float | bool | None
 TransportMetadata = dict[str, TransportMetadataValue]
@@ -23,11 +22,7 @@ class EventDeliveryTransportError(RuntimeError):
     pass
 
 
-def build_event_delivery_broker(config: Config) -> RedisBroker:
-    return RedisBroker(url=config.event_delivery_redis_url, namespace=EVENT_DELIVERY_REDIS_NAMESPACE)
-
-
-def safe_transport_metadata(metadata: TransportMetadata | None = None) -> TransportMetadata:
+def safe_transport_metadata(metadata: dict[str, Any] | None = None) -> TransportMetadata:
     if metadata is None:
         return {}
     safe: TransportMetadata = {}
@@ -47,8 +42,8 @@ def safe_transport_metadata(metadata: TransportMetadata | None = None) -> Transp
 class EventDeliveryTransport:
     config: Config
 
-    def enqueue(self, delivery_id: UUID, *, metadata: TransportMetadata | None = None) -> None:
-        from api.domains.events.worker import event_delivery_actor
+    def enqueue(self, delivery_id: UUID, *, metadata: dict[str, Any] | None = None) -> None:
+        from api.worker_app import event_delivery_actor
 
         safe_metadata = safe_transport_metadata(metadata)
         event_delivery_actor.send_with_options(
@@ -60,15 +55,5 @@ class EventDeliveryTransport:
         )
 
     def check_ready(self) -> None:
-        broker = build_event_delivery_broker(self.config)
+        broker = build_redis_broker(url=self.config.redis_url, namespace=EVENT_DELIVERY_REDIS_NAMESPACE)
         broker.client.ping()
-
-
-def message_delivery_id(message: dict[str, Any]) -> UUID | None:
-    args = message.get("args")
-    if not isinstance(args, list | tuple) or not args:
-        return None
-    try:
-        return UUID(str(args[0]))
-    except (TypeError, ValueError):
-        return None

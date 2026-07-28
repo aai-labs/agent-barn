@@ -51,7 +51,7 @@ Kubernetes `stream()` and `portforward()` temporarily monkey-patch `ApiClient.re
 | ------------------------------- | ------------------------------------------------------------------------------- |
 | Runtime orchestration           | `../../api/domains/agents/service.py`                                                 |
 | Ingest process and routing      | `../../api/ingest_app.py`, `../../api/ingest_main.py`, `../../api/start.sh`                       |
-| Domain Event delivery workers   | `../../api/domains/events/worker.py`, `../../api/domains/events/reconciliation.py`, `../../helm/agentfarm-api/templates/event-delivery-worker-deployment.yaml`, `../../helm/agentfarm-api/templates/event-delivery-reconciliation-cronjob.yaml` |
+| Domain Event delivery workers   | `../../api/worker_app.py`, `../../api/domains/events/worker.py`, `../../api/domains/events/reconciliation.py`, `../../helm/agentfarm-api/templates/event-delivery-worker-deployment.yaml`, `../../helm/agentfarm-api/templates/event-delivery-reconciliation-cronjob.yaml` |
 | Shared Kubernetes builders      | `../../api/domains/agents/builders/common.py`                                         |
 | Hermes builders                 | `../../api/domains/agents/builders/hermes.py`, `../../hermes-base/`                         |
 | OpenClaw builders               | `../../api/domains/agents/builders/openclaw.py`, `../../openclaw-base/`                     |

@@ -1,8 +1,8 @@
 COMPOSE := docker compose -f compose.yml
 
 .PHONY: \
-	dev-api dev-ui migrate rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations fix-api test check fix \
-	up down restart logs build clean db-up db-down db-logs db-restart
+	dev-api dev-ui dev-worker reconcile migrate rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations fix-api test check fix \
+	up down restart logs build clean db-up db-down db-logs db-restart redis-up redis-down redis-logs worker-logs
 
 # Non-docker commands
 
@@ -11,6 +11,13 @@ dev-api:
 
 dev-ui:
 	cd ui && pnpm dev
+
+dev-worker:
+	cd api && uv run dramatiq api.worker_app --processes 1 --threads 4
+
+# One-shot reconciliation pass; production runs this on a CronJob schedule.
+reconcile:
+	cd api && uv run python -m api.domains.events.reconciliation
 
 migrate:
 	cd api && uv run python -m alembic upgrade head
@@ -87,3 +94,15 @@ db-logs:
 
 db-restart:
 	$(COMPOSE) restart db
+
+redis-up:
+	$(COMPOSE) up -d redis
+
+redis-down:
+	$(COMPOSE) stop redis
+
+redis-logs:
+	$(COMPOSE) logs -f redis
+
+worker-logs:
+	$(COMPOSE) logs -f worker

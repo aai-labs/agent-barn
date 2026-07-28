@@ -214,19 +214,22 @@ Use `../../api/tests/integration/test_outbox_messages.py`, `../../api/tests/unit
 
 ### Run delivery workers locally
 
-The Product API can commit Domain Events without Redis, but low-latency delivery requires Redis and the worker process. Set `EVENT_DELIVERY_REDIS_URL` when Redis is not at the local default:
+The Product API can commit Domain Events without Redis, but low-latency delivery requires Redis and the worker process. `make up` starts Redis and the worker (`worker` service in `../../compose.yml`, a general-purpose background job container — not event-delivery-specific) alongside the API automatically.
+
+Running the API outside Docker (`make dev-api`), start Redis and the worker separately:
 
 ```bash
-EVENT_DELIVERY_REDIS_URL=redis://localhost:6379/0 \
-  uv run dramatiq api.domains.events.worker --processes 1 --threads 4 --queues event-deliveries
+make redis-up
+make dev-worker   # uv run dramatiq api.worker_app --processes 1 --threads 4
 ```
 
 Run the reconciler as a one-shot repair command; infrastructure owns the production schedule:
 
 ```bash
-EVENT_DELIVERY_REDIS_URL=redis://localhost:6379/0 \
-  uv run python -m api.domains.events.reconciliation
+make reconcile    # uv run python -m api.domains.events.reconciliation
 ```
+
+Both `make dev-worker` and `make reconcile` read `REDIS_URL` from the repo-root `.env` (defaults to `redis://localhost:6379/0`, matching `REDIS_PORT`).
 
 ## Boundaries
 
@@ -243,7 +246,7 @@ This foundation deliberately excludes event sourcing, public webhooks, replay ad
 | Event registry and payload validation | `../../api/domains/events/registry.py` |
 | Session-aware outbox staging and persistence reads | `../../api/domains/events/repository.py` |
 | Event Handler registry and delivery processor | `../../api/domains/events/handlers.py`, `../../api/domains/events/processor.py` |
-| Dramatiq transport adapter and worker actors | `../../api/domains/events/transport.py`, `../../api/domains/events/worker.py` |
+| Dramatiq transport adapter and worker actors | `../../api/domains/events/transport.py`, `../../api/domains/events/worker.py`, `../../api/worker_app.py` |
 | Event Delivery reconciler | `../../api/domains/events/reconciliation.py` |
 | Schema migrations | `../../api/migrations/versions/b4c7e2a19d34_add_outbox_message.py`, `../../api/migrations/versions/c9d8e7f6a5b4_add_event_delivery.py` |
 | Unit validation tests | `../../api/tests/unit/test_domain_events.py` |

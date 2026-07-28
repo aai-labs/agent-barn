@@ -4,7 +4,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Protocol
+from typing import Any, Protocol
 from uuid import UUID
 
 from api.domains.events.constants import (
@@ -17,7 +17,6 @@ from api.domains.events.constants import (
 )
 from api.domains.events.models import EventDelivery
 from api.domains.events.repository import PendingDeliveryStats, bound_delivery_error
-from api.domains.events.transport import TransportMetadata
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +43,7 @@ class EventDeliveryReconciliationRepository(Protocol):
 
 
 class EventDeliveryReconciliationTransport(Protocol):
-    def enqueue(self, delivery_id: UUID, *, metadata: TransportMetadata | None = None) -> None: ...
+    def enqueue(self, delivery_id: UUID, *, metadata: dict[str, Any] | None = None) -> None: ...
 
 
 @dataclass
