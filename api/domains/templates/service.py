@@ -64,7 +64,7 @@ class TemplateService:
 
     def _to_read_with_skills(self, template: AgentTemplate | PlatformTemplate) -> TemplateRead:
         skills = self.repository.get_required_skills_for(template)
-        return self.repository._to_read(template, skills)
+        return self.repository.to_read(template, skills)
 
     def _get_latest_or_404(self, org_id: UUID, slug: str) -> AgentTemplate | PlatformTemplate:
         template = self.repository.resolve_latest_template(org_id, slug)

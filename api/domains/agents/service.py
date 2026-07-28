@@ -646,7 +646,7 @@ class AgentService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Template version {version} not found for agent {agent_id}",
             )
-        return self.template_repository._to_read(template, self.template_repository.get_required_skills_for(template))
+        return self.template_repository.to_read(template, self.template_repository.get_required_skills_for(template))
 
     def list_agents(
         self,

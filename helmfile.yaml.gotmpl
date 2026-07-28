@@ -134,8 +134,8 @@ releases:
         value: {{ printf "postgresql://%s:%s@postgres-app:5432/%s" (env "POSTGRES_APP_USER") (env "POSTGRES_APP_PASSWORD") (env "POSTGRES_APP_DB") | quote }}
       - name: secretSigningKey
         value: {{ env "SECRET_SIGNING_KEY" | required "SECRET_SIGNING_KEY is required" | quote }}
-      - name: superUserCredentials
-        value: {{ env "SUPER_USER_CREDENTIALS" | required "SUPER_USER_CREDENTIALS is required" | quote }}
+      - name: platformAdminCredentials
+        value: {{ env "PLATFORM_ADMIN_CREDENTIALS" | required "PLATFORM_ADMIN_CREDENTIALS is required" | quote }}
       - name: agentTokenEncryptionKey
         value: {{ env "AGENT_TOKEN_ENCRYPTION_KEY" | required "AGENT_TOKEN_ENCRYPTION_KEY is required" | quote }}
       - name: environment

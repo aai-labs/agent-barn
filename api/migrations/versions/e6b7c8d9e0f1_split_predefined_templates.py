@@ -260,9 +260,9 @@ def downgrade() -> None:
             """
         )
     )
-    op.alter_column("agent", "template_slug", existing_type=sa.String(length=255), nullable=False)
-    op.alter_column("agent", "template_version", existing_type=sa.Integer(), nullable=False)
-
+    # Left nullable: template_slug/template_version were already nullable before
+    # this migration (soft-deleted agents whose template lineage was deleted have
+    # no pin), so forcing NOT NULL here would break rollback on that data.
     op.drop_constraint("ck_agent_template_pin_state", "agent", type_="check")
     op.drop_constraint("fk_agent_agent_template", "agent", type_="foreignkey")
     op.drop_constraint("fk_agent_platform_template", "agent", type_="foreignkey")
