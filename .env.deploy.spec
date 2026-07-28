@@ -51,7 +51,6 @@ SECRET_SIGNING_KEY=
 AGENT_TOKEN_ENCRYPTION_KEY=
 # Format: email:password
 SUPER_USER_CREDENTIALS=admin@example.com:
-SUPER_USER_FULL_NAME=
 ENVIRONMENT=local
 
 # ── URLs / ingress hosts ─────────────────────────────────────────────────────
