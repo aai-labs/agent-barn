@@ -65,6 +65,12 @@ releases:
         value: "ghcr.io/firecrawl/nuq-postgres"
       - name: image.tag
         value: "latest"
+      - name: "args[0]"
+        value: "postgres"
+      - name: "args[1]"
+        value: "-c"
+      - name: "args[2]"
+        value: "cron.database_name={{ env "POSTGRES_FIRECRAWL_DB" }}"
       - name: storage.storageClass
         value: {{ env "STORAGE_CLASS" | default "" | quote }}
       - name: db.user
