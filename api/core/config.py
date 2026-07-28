@@ -72,6 +72,9 @@ class Config(BaseSettings):
     google_cloud_client_id: str = ""
     google_cloud_client_secret: str = ""
 
+    agent_firecrawl_base_url: str = ""
+    agent_firecrawl_api_key: str = ""
+
     @property
     def is_email_delivery_enabled(self) -> bool:
         return bool((self.email_server_credential or "").strip() and (self.email_smtp_server or "").strip())

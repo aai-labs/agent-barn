@@ -109,4 +109,54 @@ export class AgentDetailPage {
   undoCredentialButton(): Locator {
     return this.page.getByRole("button", { name: "Undo" });
   }
+
+  shareButton(): Locator {
+    return this.page.getByRole("button", { name: /^share$/i });
+  }
+
+  shareDialog(): Locator {
+    return this.page.getByRole("dialog");
+  }
+
+  generalAccessSelect(): Locator {
+    return this.shareDialog().getByLabel("General access", { exact: true });
+  }
+
+  generalAccessRoleSelect(): Locator {
+    return this.shareDialog().getByLabel(/general access role/i);
+  }
+
+  memberRoleSelect(email: string): Locator {
+    return this.shareDialog().getByLabel(`Access role for ${email}`);
+  }
+
+  async removeMember(email: string) {
+    await this.memberRoleSelect(email).selectOption({ label: "Remove access" });
+  }
+
+  shareSearchInput(): Locator {
+    return this.shareDialog().getByPlaceholder(/search members/i);
+  }
+
+  addCandidateButton(email: string): Locator {
+    return this.shareDialog().getByRole("button", { name: `Add ${email}` });
+  }
+
+  saveShareButton(): Locator {
+    return this.shareDialog().getByRole("button", { name: /^save$/i });
+  }
+
+  cancelShareButton(): Locator {
+    return this.shareDialog().getByRole("button", { name: /^cancel$/i });
+  }
+
+  shareHelpButton(): Locator {
+    return this.shareDialog().getByRole("button", {
+      name: /what can each agent access role do/i,
+    });
+  }
+
+  shareHelpDialog(): Locator {
+    return this.page.getByRole("dialog", { name: /agent access roles/i });
+  }
 }

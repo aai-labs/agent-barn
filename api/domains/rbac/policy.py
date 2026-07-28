@@ -15,6 +15,7 @@ class AuthorizationScope:
     organization_id: UUID
     membership_id: UUID | None = None
     permission: PermissionKey | None = None
+    include_general_access: bool = False
 
     @property
     def has_organization_visibility(self) -> bool:

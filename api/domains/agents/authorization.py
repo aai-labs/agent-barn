@@ -49,6 +49,7 @@ class AgentAuthorization:
             organization_id=membership.organization_id,
             membership_id=membership.id,
             permission=permission,
+            include_general_access=context.user.email_verified_at is not None,
         )
 
     def require_collection_scope(
@@ -113,6 +114,7 @@ class AgentAuthorization:
                 membership.id,
                 membership.organization_id,
                 [agent.id for agent in agents],
+                include_general_access=context.user.email_verified_at is not None,
             )
 
         return {

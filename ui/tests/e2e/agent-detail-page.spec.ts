@@ -22,6 +22,10 @@ test.describe("Agent Detail Page", () => {
     await dataSupportPage.users.interceptGetOrganizationsRequest();
     await dataSupportPage.agents.interceptGetAgentRequest();
     await dataSupportPage.agents.interceptGetAgentTemplateRequest();
+    await dataSupportPage.agents.interceptGetAgentHealthRequest();
+    await dataSupportPage.agents.interceptGetConversationChannelsRequest();
+    await dataSupportPage.agents.interceptGetTemplatesRequest();
+    await dataSupportPage.agents.interceptGetModelsRequest();
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
   });
@@ -112,6 +116,8 @@ test.describe("Agent Detail Page — Tool calls tab", () => {
     await dataSupportPage.agents.interceptGetAgentRequest();
     await dataSupportPage.agents.interceptGetAgentTemplateRequest();
     await dataSupportPage.agents.interceptGetToolCallsRequest();
+    await dataSupportPage.agents.interceptGetAgentHealthRequest();
+    await dataSupportPage.agents.interceptGetConversationChannelsRequest();
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
   });
@@ -208,6 +214,8 @@ test.describe("Agent Detail Page — Template tab (re-pin)", () => {
     await dataSupportPage.agents.interceptGetTemplatesRequest();
     await dataSupportPage.agents.interceptGetTemplateVersionsRequest();
     await dataSupportPage.agents.interceptUpdateAgentRequest();
+    await dataSupportPage.agents.interceptGetConversationChannelsRequest();
+    await dataSupportPage.agents.interceptGetModelsRequest();
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();
@@ -326,6 +334,9 @@ test.describe("Agent Detail Page — Channels tab", () => {
     await dataSupportPage.agents.interceptSlackChannelsRequest();
     await dataSupportPage.agents.interceptSlackUsersRequest();
     await dataSupportPage.agents.interceptUpdateAgentRequest();
+    await dataSupportPage.agents.interceptGetConversationChannelsRequest();
+    await dataSupportPage.agents.interceptGetTemplatesRequest();
+    await dataSupportPage.agents.interceptGetModelsRequest();
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();
@@ -370,6 +381,9 @@ test.describe("Agent Detail Page — Skills tab", () => {
     });
     await dataSupportPage.agents.interceptGetAgentTemplateRequest();
     await dataSupportPage.skills.interceptGetSkillsRequest();
+    await dataSupportPage.agents.interceptGetConversationChannelsRequest();
+    await dataSupportPage.agents.interceptGetTemplatesRequest();
+    await dataSupportPage.agents.interceptGetModelsRequest();
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();
@@ -530,6 +544,9 @@ test.describe("Agent Detail Page — Keys tab", () => {
       body: { ...mockAgent, status: "STOPPED" },
     });
     await dataSupportPage.agents.interceptGetAgentTemplateRequest();
+    await dataSupportPage.agents.interceptGetConversationChannelsRequest();
+    await dataSupportPage.agents.interceptGetTemplatesRequest();
+    await dataSupportPage.agents.interceptGetModelsRequest();
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();
@@ -682,6 +699,8 @@ test.describe("Agent Detail Page — Personality tab (approval mode)", () => {
     await dataSupportPage.agents.interceptGetTemplatesRequest();
     await dataSupportPage.agents.interceptGetTemplateVersionsRequest();
     await dataSupportPage.agents.interceptUpdateAgentRequest();
+    await dataSupportPage.agents.interceptGetConversationChannelsRequest();
+    await dataSupportPage.agents.interceptGetModelsRequest();
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();

@@ -62,13 +62,15 @@ test.describe("RBAC-aware Agent controls", () => {
       },
     });
     await data.agents.interceptGetAgentTemplateRequest();
+    await data.agents.interceptGetAgentHealthRequest();
+    await data.agents.interceptGetConversationChannelsRequest();
 
     await rbac.gotoAgent(MOCK_AGENT_ID);
 
     await expect(page.getByRole("heading", { name: "Maya" })).toBeVisible();
     await expect(rbac.agentAction(/pause/i)).toHaveCount(0);
     await expect(rbac.agentAction(/configure/i)).toHaveCount(0);
-    await expect(rbac.agentAction(/^access$/i)).toHaveCount(0);
+    await expect(rbac.agentAction(/^share$/i)).toHaveCount(0);
     await expect(rbac.agentAction("Conversations")).toBeVisible();
   });
 
@@ -92,6 +94,9 @@ test.describe("RBAC-aware Agent controls", () => {
       },
     });
     await data.agents.interceptGetAgentTemplateRequest();
+    await data.agents.interceptGetAgentHealthRequest();
+    await data.agents.interceptGetConversationChannelsRequest();
+    await data.agents.interceptGetTemplatesRequest();
 
     await rbac.gotoAgent(MOCK_AGENT_ID);
 
@@ -101,10 +106,45 @@ test.describe("RBAC-aware Agent controls", () => {
       `/dashboard/${TEST_ORG_ID}/agents/${MOCK_AGENT_ID}?configTab=danger`,
     );
     await expect(page.getByRole("button", { name: "Retire agent" })).toHaveCount(0);
-    await expect(rbac.agentAction(/^access$/i)).toHaveCount(0);
+    await expect(rbac.agentAction(/^share$/i)).toHaveCount(0);
   });
 
-  test("Owner deletion is available without exposing sharing UI", async ({ page }) => {
+  test("Owner deletion is available without exposing sharing UI when agent.access.manage is absent", async ({
+    page,
+  }) => {
+    const data = new DataSupport(page);
+    const rbac = new RbacUiPage(page);
+    await data.auth.interceptRefreshRequest();
+    await data.users.interceptGetUserContextRequest();
+    await data.users.interceptGetOrganizationsRequest();
+    await data.agents.interceptGetAgentRequest({
+      body: {
+        ...mockAgent,
+        allowed_actions: [
+          "agent.read",
+          "agent.update",
+          "agent.delete",
+          "agent.lifecycle.manage",
+          "agent.secret.manage",
+          "activity.read",
+          "cost.read",
+        ],
+      },
+    });
+    await data.agents.interceptGetAgentTemplateRequest();
+    await data.agents.interceptGetAgentHealthRequest();
+    await data.agents.interceptGetConversationChannelsRequest();
+    await data.agents.interceptGetTemplatesRequest();
+
+    await page.goto(
+      `/dashboard/${TEST_ORG_ID}/agents/${MOCK_AGENT_ID}?configTab=danger`,
+    );
+
+    await expect(page.getByRole("button", { name: "Retire agent" })).toBeVisible();
+    await expect(rbac.agentAction(/^share$/i)).toHaveCount(0);
+  });
+
+  test("Share button is shown when agent.access.manage is granted", async ({ page }) => {
     const data = new DataSupport(page);
     const rbac = new RbacUiPage(page);
     await data.auth.interceptRefreshRequest();
@@ -112,13 +152,12 @@ test.describe("RBAC-aware Agent controls", () => {
     await data.users.interceptGetOrganizationsRequest();
     await data.agents.interceptGetAgentRequest({ body: mockAgent });
     await data.agents.interceptGetAgentTemplateRequest();
+    await data.agents.interceptGetAgentHealthRequest();
+    await data.agents.interceptGetConversationChannelsRequest();
 
-    await page.goto(
-      `/dashboard/${TEST_ORG_ID}/agents/${MOCK_AGENT_ID}?configTab=danger`,
-    );
+    await rbac.gotoAgent(MOCK_AGENT_ID);
 
-    await expect(page.getByRole("button", { name: "Retire agent" })).toBeVisible();
-    await expect(rbac.agentAction(/^access$/i)).toHaveCount(0);
+    await expect(rbac.agentAction(/^share$/i)).toBeVisible();
   });
 
   test("inaccessible Agents use normal not-found handling", async ({ page }) => {
@@ -133,7 +172,7 @@ test.describe("RBAC-aware Agent controls", () => {
 
     await expect(page.getByText("We couldn't load this agent")).toBeVisible();
     await expect(rbac.agentAction(/configure/i)).toHaveCount(0);
-    await expect(rbac.agentAction(/^access$/i)).toHaveCount(0);
+    await expect(rbac.agentAction(/^share$/i)).toHaveCount(0);
   });
 });
 

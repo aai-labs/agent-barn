@@ -6,12 +6,20 @@ Related context: [implementation brief](IMPLEMENTATION-BRIEF.md), [current role 
 
 ## Current state
 
-- Delivered: fixed Organization Role enum persistence with code-owned Permission grants; locked Agent Viewer/Editor/Owner persistence and grants; role-bearing Agent Access; legacy Member-to-Editor migration; creator Owner assignment for new Agents; request-time Organization and Agent authorization; Organization/Membership/Template/Skill/cost enforcement; and permission-aware UI without sharing or role-management surfaces.
-- In transition: none for the delivered AF-150 slice; the AF-144 epic remains active.
-- Next: AF-216 adds custom Agent Access Role backend management; AF-217 adds Agent sharing and role-management UI; AF-218 through AF-221 add event/audit infrastructure.
+- Delivered: fixed Organization Role enum persistence with code-owned Permission grants; locked Agent Viewer/Editor/Owner persistence and grants; role-bearing Agent Access; Agent General Access backend support; legacy Member-to-Editor migration; creator Owner assignment for new Agents; request-time Organization and Agent authorization; Organization/Membership/Template/Skill/cost enforcement; and permission-aware UI without sharing or role-management surfaces.
+- In transition: none for the delivered AF-150 and AF-231 backend slices; the AF-144 epic remains active.
+- Next: AF-216 adds custom Agent Access Role backend management; AF-217 adds Agent sharing and role-management UI for explicit Agent Access and Agent General Access; AF-218 through AF-221 add event/audit infrastructure.
 - Blockers: none.
 
 ## Changes
+
+### 2026-07-21 — [AF-231](https://aai-labs.atlassian.net/browse/AF-231) — PR pending — Agent General Access backend
+
+- Delivered: nullable Agent General Access role persistence (`NULL` = Restricted), database role-scope validation and referenced-role deletion protection, access-management endpoints for reading/setting/changing/removing Agent General Access, service validation that selected roles are same-Organization/system roles granting `agent.read`, and request-time union of Agent General Access and explicit Agent Access Permissions.
+- Changed: Agent list/count/detail, effective actions, and subordinate Agent-resource queries now resolve visibility from explicit Agent Access or applicable Agent General Access before ordering and pagination; pending/unverified Memberships receive no Agent General Access; removing either explicit Agent Access or Agent General Access leaves the other source intact.
+- Documented: added the **Agent General Access** glossary term, updated this RBAC implementation brief, and recorded the persistence trade-off in [`../../adr/2026-07-21-additive-agent-general-access.md`](../../adr/2026-07-21-additive-agent-general-access.md).
+- Verified: 5 schema/migration tests, 12 Agent General Access integration tests, and the adjacent 20-test Agent RBAC suite pass; final aggregate checks are tracked separately in the verification task.
+- Follow-up: AF-216 must surface `ON DELETE RESTRICT` role references as conflicts and owns custom-role edit behavior; AF-217 owns the Agent General Access and sharing UI.
 
 ### 2026-07-21 — [AF-150](https://aai-labs.atlassian.net/browse/AF-150) — PR pending — dead-code cleanup
 
