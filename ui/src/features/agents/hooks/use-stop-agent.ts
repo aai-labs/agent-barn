@@ -3,17 +3,19 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/shared/api";
+import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
 
 import { Agent, AgentSchema } from "../schemas";
 import { agentsKey } from "../utils";
 
 export function useStopAgent() {
   const queryClient = useQueryClient();
+  const orgApiBase = useOrganizationApiBase();
 
   return useMutation({
     mutationFn: async (agentId: string) => {
       const response = await api.post<Agent>(
-        `/api/v1/agents/${agentId}/stop`,
+        `${orgApiBase}/agents/${agentId}/stop`,
         undefined,
         { schema: AgentSchema },
       );

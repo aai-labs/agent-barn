@@ -19,6 +19,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Local e2e-test build output (gitignored); linting it after a local
+    // test run drowns lint-ui in thousands of generated-code errors.
+    ".next-e2e/**",
   ]),
 ]);
 

@@ -20,7 +20,6 @@ from api.tests.steps.agent import (
     there_is_an_agent,
 )
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
-from api.tests.steps.organization import there_is_a_default_organization
 from api.tests.steps.rbac import role_lacks_permission
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
 
@@ -43,7 +42,15 @@ _AGENT_GIVEN = [
 ]
 
 
-def test_regular_user_lists_only_their_organizations():
+def _clear_active_org():
+    def step(context):
+        context.organization = None
+        context.organization_user = None
+
+    return step
+
+
+def test_regular_user_context_includes_only_their_organizations():
     org_a = uuid7()
     org_b = uuid7()
     owner_a = uuid7()
@@ -70,16 +77,14 @@ def test_regular_user_lists_only_their_organizations():
         ]
     ) as context:
         client: TestClient = context.client
-        response = client.get(
-            "/api/v1/organizations",
-            headers={"Authorization": f"Bearer {context.access_token}"},
-        )
+        response = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {context.access_token}"})
         assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-        assert_that(len(response.json()["items"]), equal_to(1))
-        assert_that(response.json()["items"][0]["id"], equal_to(str(org_a)))
+        memberships = response.json()["organization_users"]
+        assert_that(len(memberships), equal_to(1))
+        assert_that(memberships[0]["organization_id"], equal_to(str(org_a)))
 
 
-def test_member_lists_their_organization():
+def test_member_context_includes_their_organization():
     """A non-owner MEMBER must still see the org they belong to (not just owners)."""
     org_a = uuid7()
     org_b = uuid7()
@@ -112,13 +117,11 @@ def test_member_lists_their_organization():
         ]
     ) as context:
         client: TestClient = context.client
-        response = client.get(
-            "/api/v1/organizations",
-            headers={"Authorization": f"Bearer {context.access_token}"},
-        )
+        response = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {context.access_token}"})
         assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-        assert_that(len(response.json()["items"]), equal_to(1))
-        assert_that(response.json()["items"][0]["id"], equal_to(str(org_a)))
+        memberships = response.json()["organization_users"]
+        assert_that(len(memberships), equal_to(1))
+        assert_that(memberships[0]["organization_id"], equal_to(str(org_a)))
 
 
 def test_member_can_view_their_organization():
@@ -150,10 +153,7 @@ def test_member_can_view_their_organization():
         client: TestClient = context.client
         response = client.get(
             f"/api/v1/organizations/{org_id}",
-            headers={
-                "Authorization": f"Bearer {context.access_token}",
-                "X-Organization-Id": str(org_id),
-            },
+            headers={"Authorization": f"Bearer {context.access_token}"},
         )
         assert_that(response.status_code, equal_to(status.HTTP_200_OK))
         assert_that(response.json()["id"], equal_to(str(org_id)))
@@ -178,10 +178,7 @@ def test_owner_without_organization_read_cannot_view_their_organization():
     ) as context:
         response = context.client.get(
             f"/api/v1/organizations/{org_id}",
-            headers={
-                "Authorization": f"Bearer {context.access_token}",
-                "X-Organization-Id": str(org_id),
-            },
+            headers={"Authorization": f"Bearer {context.access_token}"},
         )
 
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
@@ -217,15 +214,12 @@ def test_user_cannot_view_another_organization():
         client: TestClient = context.client
         response = client.get(
             f"/api/v1/organizations/{org_b}",
-            headers={
-                "Authorization": f"Bearer {context.access_token}",
-                "X-Organization-Id": str(org_a),
-            },
+            headers={"Authorization": f"Bearer {context.access_token}"},
         )
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
-def test_superuser_can_update_any_organization():
+def test_platform_admin_without_membership_cannot_update_organization_by_url():
     org_id = uuid7()
     super_id = uuid7()
 
@@ -241,11 +235,11 @@ def test_superuser_can_update_any_organization():
                 organization_id=org_id,
                 role=OrganizationRole.OWNER,
             ),
+            _clear_active_org(),
             there_is_a_user(
                 id=super_id,
                 email="super-update@example.com",
-                is_superuser=True,
-                role=OrganizationRole.MEMBER,
+                is_platform_admin=True,
             ),
             there_is_an_access_token_for_user(user_id=super_id),
         ]
@@ -254,14 +248,10 @@ def test_superuser_can_update_any_organization():
 
         response = client.patch(
             f"/api/v1/organizations/{org_id}",
-            json={"name": "Updated By Super Admin"},
-            headers={
-                "Authorization": f"Bearer {context.access_token}",
-                "X-Organization-Id": str(org_id),
-            },
+            json={"name": "Updated By Platform Admin"},
+            headers={"Authorization": f"Bearer {context.access_token}"},
         )
-        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-        assert_that(response.json()["name"], equal_to("Updated By Super Admin"))
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
 def test_owner_without_organization_update_cannot_update_organization():
@@ -284,10 +274,7 @@ def test_owner_without_organization_update_cannot_update_organization():
         response = context.client.patch(
             f"/api/v1/organizations/{org_id}",
             json={"name": "Should Not Work"},
-            headers={
-                "Authorization": f"Bearer {context.access_token}",
-                "X-Organization-Id": str(org_id),
-            },
+            headers={"Authorization": f"Bearer {context.access_token}"},
         )
 
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
@@ -316,10 +303,7 @@ def test_owner_with_assigned_organization_update_cannot_update_organization():
         response = context.client.patch(
             f"/api/v1/organizations/{org_id}",
             json={"name": "Should Not Work"},
-            headers={
-                "Authorization": f"Bearer {context.access_token}",
-                "X-Organization-Id": str(org_id),
-            },
+            headers={"Authorization": f"Bearer {context.access_token}"},
         )
 
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
@@ -362,7 +346,7 @@ def test_member_cannot_update_organization():
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
-def test_superuser_gets_404_for_missing_organization():
+def test_platform_admin_without_membership_gets_403_for_missing_organization_url():
     super_id = uuid7()
     missing_org = uuid7()
 
@@ -373,7 +357,12 @@ def test_superuser_gets_404_for_missing_organization():
             create_test_client(),
             database_repo_is_ready(),
             database_is_clean(),
-            there_is_a_user(id=super_id, email="super@example.com", is_superuser=True),
+            there_is_a_user(
+                id=super_id,
+                email="super@example.com",
+                is_platform_admin=True,
+                organization_id=None,
+            ),
             there_is_an_access_token_for_user(user_id=super_id),
         ]
     ) as context:
@@ -381,12 +370,9 @@ def test_superuser_gets_404_for_missing_organization():
 
         response = client.get(
             f"/api/v1/organizations/{missing_org}",
-            headers={
-                "Authorization": f"Bearer {context.access_token}",
-                "X-Organization-Id": str(missing_org),
-            },
+            headers={"Authorization": f"Bearer {context.access_token}"},
         )
-        assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
 def test_member_cannot_delete_organization():
@@ -425,7 +411,7 @@ def test_member_cannot_delete_organization():
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
-def test_superuser_cannot_delete_outside_explicit_organization_context():
+def test_platform_admin_without_membership_cannot_delete_organization_by_url():
     super_id = uuid7()
     org_a = uuid7()
     org_b = uuid7()
@@ -439,7 +425,8 @@ def test_superuser_cannot_delete_outside_explicit_organization_context():
             there_is_a_user(
                 id=super_id,
                 email="super-delete-context@example.com",
-                is_superuser=True,
+                is_platform_admin=True,
+                organization_id=None,
             ),
             there_is_a_user(
                 email="owner-delete-context-a@example.com",
@@ -456,16 +443,13 @@ def test_superuser_cannot_delete_outside_explicit_organization_context():
     ) as context:
         response = context.client.delete(
             f"/api/v1/organizations/{org_b}",
-            headers={
-                "Authorization": f"Bearer {context.access_token}",
-                "X-Organization-Id": str(org_a),
-            },
+            headers={"Authorization": f"Bearer {context.access_token}"},
         )
 
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
-def test_superuser_can_delete_any_organization():
+def test_platform_admin_without_membership_cannot_delete_organization():
     super_id = uuid7()
     org_id = uuid7()
     with given(
@@ -475,7 +459,12 @@ def test_superuser_can_delete_any_organization():
             create_test_client(),
             database_repo_is_ready(),
             database_is_clean(),
-            there_is_a_user(id=super_id, email="super-admin@example.com", is_superuser=True),
+            there_is_a_user(
+                id=super_id,
+                email="platform-admin@example.com",
+                is_platform_admin=True,
+                organization_id=None,
+            ),
             there_is_a_user(
                 email="owner-admin-delete@example.com",
                 organization_id=org_id,
@@ -488,12 +477,9 @@ def test_superuser_can_delete_any_organization():
 
         response = client.delete(
             f"/api/v1/organizations/{org_id}",
-            headers={
-                "Authorization": f"Bearer {context.access_token}",
-                "X-Organization-Id": str(org_id),
-            },
+            headers={"Authorization": f"Bearer {context.access_token}"},
         )
-        assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
 def test_owner_cannot_delete_another_organization():
@@ -527,10 +513,7 @@ def test_owner_cannot_delete_another_organization():
 
         response = client.delete(
             f"/api/v1/organizations/{org_b}",
-            headers={
-                "Authorization": f"Bearer {context.access_token}",
-                "X-Organization-Id": str(org_a),
-            },
+            headers={"Authorization": f"Bearer {context.access_token}"},
         )
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
@@ -567,16 +550,13 @@ def test_owner_cannot_update_another_organization():
         response = client.patch(
             f"/api/v1/organizations/{org_b}",
             json={"name": "Hijacked"},
-            headers={
-                "Authorization": f"Bearer {context.access_token}",
-                "X-Organization-Id": str(org_a),
-            },
+            headers={"Authorization": f"Bearer {context.access_token}"},
         )
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
 def test_admin_cannot_delete_organization():
-    """Deleting an org is owner/superuser only; an admin is forbidden."""
+    """Deleting an org is owner/platform_admin only; an admin is forbidden."""
     org_id = uuid7()
     admin_id = uuid7()
 
@@ -605,10 +585,7 @@ def test_admin_cannot_delete_organization():
 
         response = client.delete(
             f"/api/v1/organizations/{org_id}",
-            headers={
-                "Authorization": f"Bearer {context.access_token}",
-                "X-Organization-Id": str(org_id),
-            },
+            headers={"Authorization": f"Bearer {context.access_token}"},
         )
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
@@ -637,10 +614,7 @@ def test_owner_can_delete_their_organization():
 
         response = client.delete(
             f"/api/v1/organizations/{org_id}",
-            headers={
-                "Authorization": f"Bearer {context.access_token}",
-                "X-Organization-Id": str(org_id),
-            },
+            headers={"Authorization": f"Bearer {context.access_token}"},
         )
         assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
 
@@ -667,10 +641,7 @@ def test_organization_with_agents_cannot_be_deleted():
 
         response = client.delete(
             f"/api/v1/organizations/{org_id}",
-            headers={
-                "Authorization": f"Bearer {context.access_token}",
-                "X-Organization-Id": str(org_id),
-            },
+            headers={"Authorization": f"Bearer {context.access_token}"},
         )
         assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
 
@@ -697,37 +668,6 @@ def test_organization_with_only_deleted_agents_can_be_deleted():
 
         response = client.delete(
             f"/api/v1/organizations/{org_id}",
-            headers={
-                "Authorization": f"Bearer {context.access_token}",
-                "X-Organization-Id": str(org_id),
-            },
+            headers={"Authorization": f"Bearer {context.access_token}"},
         )
         assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
-
-
-def test_default_organization_cannot_be_deleted():
-    super_id = uuid7()
-    default_org = uuid7()
-
-    with given(
-        [
-            prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
-            prepare_api_server(),
-            create_test_client(),
-            database_repo_is_ready(),
-            database_is_clean(),
-            there_is_a_user(id=super_id, email="super-defdel@example.com", is_superuser=True),
-            there_is_a_default_organization(id=default_org),
-            there_is_an_access_token_for_user(user_id=super_id),
-        ]
-    ) as context:
-        client: TestClient = context.client
-
-        response = client.delete(
-            f"/api/v1/organizations/{default_org}",
-            headers={
-                "Authorization": f"Bearer {context.access_token}",
-                "X-Organization-Id": str(default_org),
-            },
-        )
-        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))

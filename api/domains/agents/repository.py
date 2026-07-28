@@ -18,6 +18,7 @@ from api.domains.agents.models import (
     AgentSecret,
     AgentSkill,
     AgentSlackConfig,
+    AgentStatus,
     AgentTeamsConfig,
     AgentTelegramConfig,
     SecretProvider,
@@ -125,6 +126,20 @@ class AgentRepository:
                 select(func.count())
                 .select_from(Agent)
                 .where(col(Agent.organization_id) == org_id)
+                .where(col(Agent.deleted_at).is_(None))
+            )
+            return session.scalar(count_query) or 0
+
+    def count_agents_in_error(self) -> int:
+        """All-orgs aggregate count for the /metrics probe (agents_in_error
+        gauge). Deliberately unscoped and deliberately narrow: it returns a
+        single number and must never back user-facing data — org-scoped
+        queries go through AuthorizationScope like everything else."""
+        with Session(self.delegate.engine) as session:
+            count_query = (
+                select(func.count())
+                .select_from(Agent)
+                .where(col(Agent.status) == AgentStatus.ERROR)
                 .where(col(Agent.deleted_at).is_(None))
             )
             return session.scalar(count_query) or 0

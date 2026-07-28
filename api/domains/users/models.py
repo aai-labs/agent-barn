@@ -19,13 +19,13 @@ class User(BaseModel, table=True):
     __tablename__: str = "user"
     __table_args__ = (
         Index("ix_user_email", "email", unique=True),
-        Index("ix_user_is_superuser", "is_superuser"),
+        Index("ix_user_is_platform_admin", "is_platform_admin"),
     )
 
     email: EmailStr = Field()
     full_name: str | None = None
     hashed_password: str
-    is_superuser: bool = Field(default=False, sa_column_kwargs={"server_default": "false"})
+    is_platform_admin: bool = Field(default=False, sa_column_kwargs={"server_default": "false"})
     security_stamp: str = Field(default_factory=lambda: uuid7().hex)
     email_verified_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
 
@@ -35,14 +35,14 @@ class UserCreate(PydanticBaseModel):
     full_name: str | None = None
 
 
-class UserCreateSuperAdmin(UserCreate):
-    is_superuser: bool = True
+class UserCreatePlatformAdmin(UserCreate):
+    is_platform_admin: bool = True
 
 
 class UserRead(BaseModel):
     full_name: str | None = None
     email: str
-    is_superuser: bool
+    is_platform_admin: bool
     email_verified_at: datetime | None = None
     organization_users: list[OrganizationUserRead] | None = None
 
@@ -51,7 +51,7 @@ class AdminUserCreate(PydanticBaseModel):
     email: EmailStr
     password: str
     full_name: str | None = None
-    # Superuser-provisioned accounts must land in a chosen org (never a silent default),
+    # Platform-admin provisioned accounts must land in a chosen org (never a silent default),
     # so they're usable immediately.
     organization_id: UUID
     role: OrganizationRole = OrganizationRole.MEMBER

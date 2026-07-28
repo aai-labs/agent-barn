@@ -31,7 +31,7 @@ export function useInfiniteUsers(options: UseInfiniteUsersOptions = {}) {
       }
 
       const response = await api.get<PaginatedUsers>(
-        `/api/v1/users?${params.toString()}`,
+        `/api/v1/platform/users?${params.toString()}`,
         { schema: PaginatedUsersSchema },
       );
       return response.data;

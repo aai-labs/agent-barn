@@ -1,6 +1,6 @@
 """Phase 4a/b (AF-147): org-scoped member management under /organizations/{id}/members.
 
-Owners/admins (and superusers) can list, add, change roles, remove members, resend
+Owners/admins (and platform_admins) can list, add, change roles, remove members, resend
 invites, and transfer ownership; plain members and cross-org actors are forbidden.
 """
 
@@ -45,10 +45,7 @@ _GIVEN = [
 
 
 def _auth(context) -> dict:
-    return {
-        "Authorization": f"Bearer {context.access_token}",
-        "X-Organization-Id": str(ORG),
-    }
+    return {"Authorization": f"Bearer {context.access_token}"}
 
 
 def _members_url(org_id=ORG) -> str:
@@ -172,7 +169,7 @@ def test_member_list_respects_limit_and_defaults_to_unbounded():
         assert_that(unbounded.json(), has_length(3))
 
 
-def test_superuser_without_membership_read_grant_can_list_members():
+def test_platform_admin_without_membership_read_permission_cannot_list_members():
     super_id = uuid7()
     with given(
         [
@@ -183,14 +180,14 @@ def test_superuser_without_membership_read_grant_can_list_members():
                 email="super-members@example.com",
                 organization_id=ORG,
                 role=OrganizationRole.MEMBER,
-                is_superuser=True,
+                is_platform_admin=True,
             ),
             there_is_an_access_token_for_user(user_id=super_id),
         ]
     ) as context:
         response = context.client.get(_members_url(), headers=_auth(context))
 
-        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
 def test_owner_cannot_list_members_in_another_active_organization():

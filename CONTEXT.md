@@ -8,6 +8,30 @@ Agent Farm manages organization-owned AI agents that operate in Slack, Microsoft
 The tenant boundary that owns agents, templates, skills, memberships, and organization-scoped activity.
 _Avoid_: workspace, tenant account
 
+**Platform Administrator**:
+A user with platform-level authority to administer Agent Farm outside any single Organization. A Platform Administrator may also have normal Memberships, but platform authority is separate from Organization Membership authority.
+_Avoid_: superuser, super admin, global role
+
+**Platform Privilege**:
+The platform-level grant that makes a user a Platform Administrator.
+_Avoid_: global Membership, Organization Role, default Organization ownership
+
+**Platform Resource**:
+A global resource owned by Agent Farm itself rather than by an Organization.
+_Avoid_: default Organization resource, shared tenant data
+
+**Platform View**:
+The product mode where a Platform Administrator manages platform-level users, organizations, and operational metadata without an Active Organization.
+_Avoid_: default Organization, admin Organization, global workspace
+
+**Organization View**:
+The product mode where a user, including a Platform Administrator with Memberships, operates through Membership authority inside an Active Organization.
+_Avoid_: tenant view, platform view
+
+**Active Organization**:
+The single Organization currently selected for organization-scoped product behavior. Platform View has no Active Organization.
+_Avoid_: default Organization, primary Organization
+
 **Membership**:
 The relationship between a user and an organization, carrying exactly one organization role.
 _Avoid_: organization user, user organization
@@ -49,7 +73,7 @@ The chat system through which an agent interacts with people. Agent Farm current
 _Avoid_: runtime
 
 **Template**:
-An organization-scoped lineage of versioned Markdown configuration used to create and run agents.
+A versioned Markdown configuration lineage used to create and run agents. Predefined templates are Platform Resources; custom templates belong to one Organization.
 _Avoid_: prompt, preset
 
 **Template Version**:

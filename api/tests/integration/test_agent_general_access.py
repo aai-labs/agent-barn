@@ -37,7 +37,7 @@ from api.tests.steps.organization import (
 from api.tests.steps.template import there_is_a_template
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
 
-_BASE = "/api/v1/agents"
+_BASE = "/api/v1/organizations/{organization_id}/agents"
 _GIVEN = [
     set_env_variable(
         {
@@ -325,13 +325,13 @@ def test_general_access_scopes_subordinate_agent_resources():
             f"{_BASE}/{general_agent.id}/logs",
             f"{_BASE}/{general_agent.id}/conversations/channels",
             f"{_BASE}/{general_agent.id}/tool-calls",
-            f"/api/v1/costs/agents/{general_agent.id}",
+            f"/api/v1/organizations/{{organization_id}}/costs/agents/{general_agent.id}",
         )
         restricted_urls = (
             f"{_BASE}/{restricted_agent.id}/logs",
             f"{_BASE}/{restricted_agent.id}/conversations/channels",
             f"{_BASE}/{restricted_agent.id}/tool-calls",
-            f"/api/v1/costs/agents/{restricted_agent.id}",
+            f"/api/v1/organizations/{{organization_id}}/costs/agents/{restricted_agent.id}",
         )
 
         for url in general_urls:
@@ -620,7 +620,7 @@ def test_owner_created_agent_share_settings_round_trip_without_creator_row():
     with given(_GIVEN[:-1]) as context:  # drop the shared there_is_an_agent(); create via the real API instead
         client = context.client
         create_response = client.post(
-            "/api/v1/agents",
+            _BASE,
             json={
                 "name": "Owner Created Agent",
                 "platform": "slack",

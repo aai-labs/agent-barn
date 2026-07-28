@@ -6,7 +6,6 @@ export const OrganizationSchema = z.object({
   updatedAt: z.string(),
   name: z.string(),
   description: z.string().nullable().optional(),
-  isDefault: z.boolean(),
   ownerEmail: z.string().nullable().optional(),
   ownerName: z.string().nullable().optional(),
 });

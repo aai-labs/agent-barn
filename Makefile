@@ -1,7 +1,7 @@
 COMPOSE := docker compose -f compose.yml
 
 .PHONY: \
-	dev-api dev-ui dev-worker reconcile migrate rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations fix-api test check fix \
+	dev-api dev-ui dev-worker reconcile migrate rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring fix-api test check fix \
 	up down restart logs build clean db-up db-down db-logs db-restart redis-up redis-down redis-logs worker-logs
 
 # Non-docker commands
@@ -58,6 +58,9 @@ check-migrations:
 		printf '%s\n' "$$heads"; \
 		exit 1; \
 	fi
+
+check-monitoring:
+	helm/monitoring/tests/run.sh
 
 fix-api:
 	cd api && uv run ruff check --fix && uv run ruff format .

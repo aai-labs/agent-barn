@@ -1,0 +1,73 @@
+image:
+  repository: ghcr.io/firecrawl/firecrawl
+  tag: "2.11"
+  pullPolicy: IfNotPresent
+
+# playwright-service publishes no semver tags; "latest" is the only option.
+playwrightImage:
+  repository: ghcr.io/firecrawl/playwright-service
+  tag: latest
+  pullPolicy: IfNotPresent
+
+redisImage:
+  repository: redis
+  tag: alpine
+  pullPolicy: IfNotPresent
+
+rabbitmqImage:
+  repository: rabbitmq
+  tag: 3-management
+  pullPolicy: IfNotPresent
+
+secretName: firecrawl
+
+# Server-side API key that Firecrawl validates against (USE_DB_AUTHENTICATION=false).
+# Agents use this same value client-side as FIRECRAWL_API_KEY.
+testApiKey: ""
+
+# Random key for the BullMQ dashboard auth.
+bullAuthKey: ""
+
+# Postgres connection — individual vars (Firecrawl does not use DATABASE_URL).
+postgres:
+  user: ""
+  password: ""
+  db: ""
+  host: "postgres-firecrawl"
+  port: "5432"
+
+service:
+  apiPort: 3002
+  playwrightPort: 3000
+  redisPort: 6379
+  rabbitmqPort: 5672
+
+resources:
+  api:
+    requests:
+      memory: 1Gi
+      cpu: 200m
+    limits:
+      memory: 2Gi
+      cpu: 1000m
+  playwright:
+    requests:
+      memory: 512Mi
+      cpu: 200m
+    limits:
+      memory: 2Gi
+      cpu: 1000m
+  redis:
+    requests:
+      memory: 64Mi
+      cpu: 50m
+    limits:
+      memory: 256Mi
+      cpu: 250m
+  rabbitmq:
+    requests:
+      memory: 128Mi
+      cpu: 100m
+    limits:
+      memory: 512Mi
+      cpu: 500m

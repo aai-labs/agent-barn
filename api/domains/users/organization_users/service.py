@@ -233,7 +233,7 @@ class OrganizationUserService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Cannot change the owner's role; transfer ownership instead",
             )
-        # Promoting to or demoting from ADMIN is reserved for owners/superusers; a plain
+        # Promoting to or demoting from ADMIN is reserved for owners/platform admins; a plain
         # admin can manage members but not other admins (nor mint new ones).
         touches_admin = OrganizationRole.ADMIN in (membership.role, data.role)
         if touches_admin and not context.has_org_role(organization_id, ORG_OWNER_ONLY_ROLES):

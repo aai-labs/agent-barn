@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { z } from "zod";
 
 import { api } from "@/shared/api";
+import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
 
 import { ModelOption, ModelOptionSchema } from "../schemas";
 import { agentsKey } from "../utils";
@@ -16,10 +17,11 @@ export const FALLBACK_MODELS: ModelOption[] = [
 ];
 
 export function useModels() {
+  const orgApiBase = useOrganizationApiBase();
   const query = useQuery({
     queryKey: agentsKey.models(),
     queryFn: async () => {
-      const response = await api.get<ModelOption[]>("/api/v1/agents/models", {
+      const response = await api.get<ModelOption[]>(`${orgApiBase}/agents/models`, {
         schema: z.array(ModelOptionSchema),
       });
       return response.data;

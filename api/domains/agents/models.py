@@ -73,6 +73,7 @@ class SecretProvider(str, enum.Enum):
     GOOGLE_CALENDAR = "google_calendar"
     ZOHO_MAIL = "zoho_mail"
     ZOHO_CALENDAR = "zoho_calendar"
+    FIRECRAWL = "firecrawl"
 
 
 # Predefined display labels — NOT user-entered; the backend stamps these by provider.
@@ -85,6 +86,7 @@ PROVIDER_DISPLAY_NAMES: dict[SecretProvider, str] = {
     SecretProvider.GOOGLE_CALENDAR: "Google Calendar credential",
     SecretProvider.ZOHO_MAIL: "Zoho Mail credential",
     SecretProvider.ZOHO_CALENDAR: "Zoho Calendar credential",
+    SecretProvider.FIRECRAWL: "Firecrawl credential",
 }
 
 
@@ -172,6 +174,11 @@ class ZohoCalendarContent(SecretContent):
     caldav_url: str
 
 
+class FirecrawlContent(SecretContent):
+    api_key: str
+    base_url: str = ""
+
+
 PROVIDER_CONTENT_MODELS: dict[SecretProvider, type[SecretContent]] = {
     SecretProvider.GITHUB: GithubContent,
     SecretProvider.JIRA: JiraContent,
@@ -181,6 +188,7 @@ PROVIDER_CONTENT_MODELS: dict[SecretProvider, type[SecretContent]] = {
     SecretProvider.GOOGLE_CALENDAR: GoogleCalendarContent,
     SecretProvider.ZOHO_MAIL: ZohoMailContent,
     SecretProvider.ZOHO_CALENDAR: ZohoCalendarContent,
+    SecretProvider.FIRECRAWL: FirecrawlContent,
 }
 
 
@@ -210,15 +218,15 @@ class Agent(BaseModel, table=True):
             "organization_id",
             name="uq_agent_id_organization",
         ),
-        sa.ForeignKeyConstraint(
-            ["organization_id", "template_slug", "template_version"],
-            [
-                "agent_template.organization_id",
-                "agent_template.template_slug",
-                "agent_template.version",
-            ],
-            name="fk_agent_template_slug_version",
-            ondelete="RESTRICT",
+        # An active agent pins exactly one template version via one of two
+        # mutually-exclusive FKs: platform_template_id for a global predefined
+        # template, or agent_template_id for an org-scoped custom/fork template.
+        # Soft-deleted agents may be detached when their old template lineage is
+        # purged.
+        sa.CheckConstraint(
+            "((deleted_at IS NOT NULL) AND platform_template_id IS NULL AND agent_template_id IS NULL) "
+            "OR ((platform_template_id IS NULL) <> (agent_template_id IS NULL))",
+            name="ck_agent_template_pin_state",
         ),
     )
 
@@ -247,8 +255,21 @@ class Agent(BaseModel, table=True):
         nullable=True,
         sa_type=sa.DateTime(timezone=True),  # type: ignore
     )
-    template_slug: str = SqlField(nullable=False, max_length=255)
-    template_version: int = SqlField(nullable=False)
+    # Template pin: active agents set exactly one of platform_template_id /
+    # agent_template_id (enforced by ck_agent_template_pin_state). Soft-deleted
+    # agents may be detached by template deletion.
+    platform_template_id: UUID | None = SqlField(
+        default=None,
+        foreign_key="platform_template.id",
+        nullable=True,
+        ondelete="RESTRICT",
+    )
+    agent_template_id: UUID | None = SqlField(
+        default=None,
+        foreign_key="agent_template.id",
+        nullable=True,
+        ondelete="RESTRICT",
+    )
     model: str = SqlField(nullable=False, default="")
     platform: AgentPlatform = SqlField(
         default=AgentPlatform.SLACK,
@@ -458,6 +479,18 @@ class AgentTemplateSkill(BaseModel, table=True):
     )
 
     template_id: UUID = SqlField(foreign_key="agent_template.id", nullable=False, ondelete="CASCADE")
+    skill_id: UUID = SqlField(foreign_key="skill.id", nullable=False, ondelete="RESTRICT")
+
+
+class PlatformTemplateSkill(BaseModel, table=True):
+    __tablename__: str = "platform_template_skill"
+
+    __table_args__ = (
+        sa.UniqueConstraint("template_id", "skill_id", name="uq_platform_template_skill"),
+        sa.Index("ix_platform_template_skill_template", "template_id"),
+    )
+
+    template_id: UUID = SqlField(foreign_key="platform_template.id", nullable=False, ondelete="CASCADE")
     skill_id: UUID = SqlField(foreign_key="skill.id", nullable=False, ondelete="RESTRICT")
 
 
