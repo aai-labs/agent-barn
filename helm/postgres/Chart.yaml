@@ -1,4 +1,4 @@
 apiVersion: v2
 name: postgres
 description: PostgreSQL StatefulSet for agent-farm services
-version: 0.2.0
+version: 0.3.0
