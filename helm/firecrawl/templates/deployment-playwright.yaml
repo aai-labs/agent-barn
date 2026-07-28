@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-playwright
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "firecrawl.labels" . | nindent 4 }}
+    app.kubernetes.io/component: playwright
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "firecrawl.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: playwright
+  template:
+    metadata:
+      labels:
+        {{- include "firecrawl.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: playwright
+    spec:
+      containers:
+        - name: playwright
+          image: "{{ .Values.playwrightImage.repository }}:{{ .Values.playwrightImage.tag }}"
+          imagePullPolicy: {{ .Values.playwrightImage.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            - name: PORT
+              value: "3000"
+          readinessProbe:
+            tcpSocket:
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 12
+          livenessProbe:
+            tcpSocket:
+              port: 3000
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          resources:
+            {{- toYaml .Values.resources.playwright | nindent 12 }}

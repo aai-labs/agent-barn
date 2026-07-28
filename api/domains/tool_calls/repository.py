@@ -119,13 +119,14 @@ class ToolCallRepository:
         result: Any | None,
         is_error: bool,
         completed_at: datetime.datetime,
-    ) -> bool:
-        """Transition a PENDING row to SUCCESS/ERROR. Returns True if a row matched."""
+    ) -> ToolCall | None:
+        """Transition a PENDING row to SUCCESS/ERROR. Returns the row, or None
+        if none matched."""
         target = session.exec(
             select(ToolCall).where(col(ToolCall.agent_id) == agent_id).where(col(ToolCall.external_id) == external_id)
         ).first()
         if target is None:
-            return False
+            return None
 
         target.result = result
         target.status = ToolCallStatus.ERROR if is_error else ToolCallStatus.SUCCESS
@@ -134,7 +135,7 @@ class ToolCallRepository:
             delta = completed_at - target.occurred_at
             target.duration_ms = int(delta.total_seconds() * 1000)
         session.add(target)
-        return True
+        return target
 
     def get_session(self) -> Session:
         return Session(self.delegate.engine)

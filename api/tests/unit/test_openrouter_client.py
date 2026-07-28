@@ -131,10 +131,8 @@ def _service(openrouter, allowlist=None, default_model=""):
     config = MagicMock()
     config.agent_default_model = default_model
 
-    org_repo = MagicMock()
-    org = MagicMock()
-    org.allowed_models = allowlist
-    org_repo.get.return_value = org
+    org_lookup = MagicMock()
+    org_lookup.get_allowed_models.return_value = allowlist
 
     return AgentService(
         repository=MagicMock(),
@@ -146,7 +144,7 @@ def _service(openrouter, allowlist=None, default_model=""):
         openrouter=openrouter,
         config=config,
         slack_token_service=MagicMock(),
-        organization_repository=org_repo,
+        organization_lookup=org_lookup,
     )
 
 

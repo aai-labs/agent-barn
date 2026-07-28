@@ -20,7 +20,7 @@ function org(overrides: Record<string, unknown> = {}) {
   };
 }
 
-const DEFAULT_MEMBERS = [
+export const DEFAULT_MEMBERS = [
   {
     user_id: OWNER_ID,
     email: "owner@example.com",
@@ -172,15 +172,28 @@ export class OrganizationDataSupport {
     status?: number;
     detail?: string;
   } = {}) {
-    await this.page.route("**/api/v1/organizations/*/members", async (route) => {
+    await this.page.route("**/api/v1/organizations/*/members*", async (route) => {
       if (route.request().method() !== "GET") {
         await route.fallback();
         return;
       }
+      const source = members ?? DEFAULT_MEMBERS;
+      const params = new URL(route.request().url()).searchParams;
+      const search = params.get("search")?.toLowerCase();
+      const limit = params.get("limit");
+      let items =
+        search && !members
+          ? (source as typeof DEFAULT_MEMBERS).filter(
+              (m) =>
+                m.full_name?.toLowerCase().includes(search) ||
+                m.email.toLowerCase().includes(search),
+            )
+          : source;
+      if (limit) items = items.slice(0, Number(limit));
       await route.fulfill({
         status,
         contentType: "application/json",
-        body: JSON.stringify(status >= 400 ? { detail } : (members ?? DEFAULT_MEMBERS)),
+        body: JSON.stringify(status >= 400 ? { detail } : items),
       });
     });
   }

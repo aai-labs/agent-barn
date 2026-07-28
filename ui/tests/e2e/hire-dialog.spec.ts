@@ -20,8 +20,10 @@ test.describe("Hire Dialog", () => {
     await dataSupportPage.users.interceptGetUserContextRequest();
     await dataSupportPage.users.interceptGetOrganizationsRequest();
     await dataSupportPage.agents.interceptGetAgentsRequest();
+    await dataSupportPage.agents.interceptGetAgentHealthRequest();
     await dataSupportPage.agents.interceptGetTemplatesRequest();
     await dataSupportPage.agents.interceptGetTemplateVersionsRequest();
+    await dataSupportPage.agents.interceptGetModelsRequest();
     await page.route("**/api/v1/auth/me/slack-config-token", async (route) => {
       if (route.request().method() === "GET") {
         await route.fulfill({
@@ -338,9 +340,22 @@ test.describe("Hire Dialog — Skills step", () => {
     await dataSupportPage.users.interceptGetUserContextRequest();
     await dataSupportPage.users.interceptGetOrganizationsRequest();
     await dataSupportPage.agents.interceptGetAgentsRequest();
+    await dataSupportPage.agents.interceptGetAgentHealthRequest();
     await dataSupportPage.agents.interceptGetTemplatesRequest();
     await dataSupportPage.agents.interceptGetTemplateVersionsRequest();
     await dataSupportPage.skills.interceptGetSkillsRequest();
+    await dataSupportPage.agents.interceptGetModelsRequest();
+    await page.route("**/api/v1/auth/me/slack-config-token", async (route) => {
+      if (route.request().method() === "GET") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ has_token: true, token_preview: "xoxe.****test" }),
+        });
+      } else {
+        await route.fallback();
+      }
+    });
 
     await dashboardPage.goto();
     await page.getByRole("button", { name: /hire agent/i }).click();
@@ -481,6 +496,9 @@ test.describe("Hire Dialog — Skills step", () => {
 
     await expect(page.getByText("Required credentials", { exact: true })).toBeVisible();
     await expect(page.getByPlaceholder(/atlassian\.net/)).toBeVisible();
+    await expect(page.getByText("Authentication Type")).toBeVisible();
+
+    // Email field is always visible — scoped and non-scoped tokens both use Basic Auth
     await expect(page.getByPlaceholder("you@example.com")).toBeVisible();
   });
 

@@ -4,9 +4,9 @@ from uuid import UUID
 from injector import inject, singleton
 from sqlalchemy import case, func, or_
 from sqlalchemy.orm import aliased
-from sqlmodel import Session, col, select
+from sqlmodel import Session, col, delete, select, update
 
-from api.domains.agents.models import AgentTemplateSkill
+from api.domains.agents.models import Agent, AgentTemplateSkill
 from api.domains.skills.models import Skill
 from api.domains.templates.models import AgentTemplate, TemplateFilter, TemplateSource
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
@@ -118,6 +118,54 @@ class TemplateRepository:
     def save_template(self, template: AgentTemplate) -> AgentTemplate:
         self.delegate.save(template)
         return template
+
+    def get_slugs_used_by_live_agents(self, org_id: UUID, slugs: list[str]) -> set[str]:
+        if not slugs:
+            return set()
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(Agent.template_slug)
+                .distinct()
+                .where(col(Agent.organization_id) == org_id)
+                .where(col(Agent.template_slug).in_(slugs))
+                .where(col(Agent.deleted_at).is_(None))
+            )
+            return {slug for slug in session.exec(query).all() if slug is not None}
+
+    def is_lineage_used_by_live_agent(self, org_id: UUID, slug: str) -> bool:
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(Agent)
+                .where(col(Agent.organization_id) == org_id)
+                .where(col(Agent.template_slug) == slug)
+                .where(col(Agent.deleted_at).is_(None))
+            )
+            return session.exec(query).first() is not None
+
+    def purge_template_lineage(self, org_id: UUID, slug: str) -> None:
+        """Delete every version of a lineage, detaching soft-deleted agents first.
+
+        Soft-deleted agents keep their row (and its RESTRICT FK); NULLing their
+        pin lifts the constraint. Both statements share one transaction, so a
+        concurrently created live agent surfaces as IntegrityError on commit.
+        agent_template_skill rows cascade at the DB level.
+        """
+        with Session(self.delegate.engine) as session:
+            detach = (
+                update(Agent)
+                .where(col(Agent.organization_id) == org_id)
+                .where(col(Agent.template_slug) == slug)
+                .where(col(Agent.deleted_at).is_not(None))
+                .values(template_slug=None, template_version=None)
+            )
+            session.exec(detach)  # type: ignore[call-overload]
+            purge = (
+                delete(AgentTemplate)
+                .where(col(AgentTemplate.organization_id) == org_id)
+                .where(col(AgentTemplate.template_slug) == slug)
+            )
+            session.exec(purge)  # type: ignore[call-overload]
+            session.commit()
 
     def save_template_skills(self, template_id: UUID, skill_ids: list[UUID]) -> None:
         with Session(self.delegate.engine) as session:

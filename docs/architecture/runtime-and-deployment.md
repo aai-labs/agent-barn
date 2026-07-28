@@ -35,9 +35,13 @@ Agent runtimes report messages and tool-call state to the separate Ingest API us
 
 ## Service deployment
 
-`../../helmfile.yaml.gotmpl` orders PostgreSQL releases, LiteLLM, API, and UI. API deployment mounts Kubernetes access so the service can manage agent resources. An API Helm hook runs Alembic before installation or upgrade, and health probes use `/api/v1/health`.
+`../../helmfile.yaml.gotmpl` orders PostgreSQL releases, LiteLLM, API, UI, and the monitoring stack. API deployment mounts Kubernetes access so the service can manage agent resources. An API Helm hook runs Alembic before installation or upgrade, and health probes use `/api/v1/health`.
 
 The deploy workflow reads API and UI image tags from each chart's `appVersion`, builds versioned images, and applies Helmfile. `../../AGENTS.md` is authoritative for independent API/UI `appVersion` and chart `version` rules.
+
+## Observability
+
+`../../helm/monitoring/` deploys plain namespace-scoped Prometheus, Grafana, and Alertmanager charts into the release namespace — no operator, no CRDs, and no cluster-scoped RBAC, because the shared cluster only grants this project a namespace (the chart renders no RBAC at all: Prometheus and kube-state-metrics run under the tenant deploy ServiceAccount `<namespace>-user`, which already holds namespaced read; Grafana — the only ingress-exposed pod — runs with no API token mounted). Scrape topology: the API exposes `/metrics` on both processes (main `:8000` with probe gauges for database, agents-in-ERROR, and the OpenRouter key's remaining credit limit (`GET /key` with the inference key; `+Inf` when the key has no limit); ingest `:8001` with the tool-call counter), LiteLLM exposes `/metrics` on `:4000` via its `prometheus` callback, and every agent's healthz server serves `/metrics` on `:8081`, discovered through an own-namespace scrape config selecting the stable `agentfarm.io/component: agent` Service label; the Service's `app`/`agent-name`/`org-name` labels are relabeled onto every scraped series so an agent keeps one identity across all its pod generations. Alerting is declarative: alert rules in the chart values → Alertmanager → Slack `#alerts` webhook (injected from `SLACK_ALERTS_WEBHOOK_URL` into a Secret referenced via `slack_api_url_file`, never committed). Grafana is dashboards-only, provisioned from ConfigMaps in the chart and exposed via traefik ingress at `GRAFANA_HOST`.
 
 ## Kubernetes client constraint
 
@@ -57,6 +61,8 @@ Kubernetes `stream()` and `portforward()` temporarily monkey-patch `ApiClient.re
 | Kubernetes client               | `../../api/infrastructure/kubernetes/`                                                |
 | Charts and release ordering     | `../../helm/`, `../../helmfile.yaml.gotmpl`                                                 |
 | Deployment workflow             | `../../.github/workflows/deploy.yml`                                                  |
+| Monitoring stack                | `../../helm/monitoring/`                                                               |
+| API metrics                     | `../../api/core/metrics.py`                                                            |
 
 ## Change impact
 

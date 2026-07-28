@@ -1,4 +1,5 @@
 import enum
+import hashlib
 import json
 from datetime import datetime
 from uuid import UUID
@@ -72,6 +73,7 @@ class SecretProvider(str, enum.Enum):
     GOOGLE_CALENDAR = "google_calendar"
     ZOHO_MAIL = "zoho_mail"
     ZOHO_CALENDAR = "zoho_calendar"
+    FIRECRAWL = "firecrawl"
 
 
 # Predefined display labels — NOT user-entered; the backend stamps these by provider.
@@ -84,6 +86,7 @@ PROVIDER_DISPLAY_NAMES: dict[SecretProvider, str] = {
     SecretProvider.GOOGLE_CALENDAR: "Google Calendar credential",
     SecretProvider.ZOHO_MAIL: "Zoho Mail credential",
     SecretProvider.ZOHO_CALENDAR: "Zoho Calendar credential",
+    SecretProvider.FIRECRAWL: "Firecrawl credential",
 }
 
 
@@ -116,16 +119,22 @@ class GithubContent(_RepoListCompat):
 
 class JiraContent(SecretContent):
     site_url: str
+    use_scoped_token: bool = False
     email: str
     api_token: str
-    cloud_id: str | None = None
+    # Populated at save time for scoped tokens: the API Gateway URL (site_url
+    # doesn't accept scoped tokens directly) needs the resolved cloud ID.
+    cloud_id: str = ""
 
 
 class ConfluenceContent(SecretContent):
     site_url: str
+    use_scoped_token: bool = False
     email: str
     api_token: str
-    cloud_id: str | None = None
+    # Populated at save time for scoped tokens: the API Gateway URL (site_url
+    # doesn't accept scoped tokens directly) needs the resolved cloud ID.
+    cloud_id: str = ""
 
 
 class BitbucketContent(_RepoListCompat):
@@ -165,6 +174,11 @@ class ZohoCalendarContent(SecretContent):
     caldav_url: str
 
 
+class FirecrawlContent(SecretContent):
+    api_key: str
+    base_url: str = ""
+
+
 PROVIDER_CONTENT_MODELS: dict[SecretProvider, type[SecretContent]] = {
     SecretProvider.GITHUB: GithubContent,
     SecretProvider.JIRA: JiraContent,
@@ -174,6 +188,7 @@ PROVIDER_CONTENT_MODELS: dict[SecretProvider, type[SecretContent]] = {
     SecretProvider.GOOGLE_CALENDAR: GoogleCalendarContent,
     SecretProvider.ZOHO_MAIL: ZohoMailContent,
     SecretProvider.ZOHO_CALENDAR: ZohoCalendarContent,
+    SecretProvider.FIRECRAWL: FirecrawlContent,
 }
 
 
@@ -223,6 +238,12 @@ class Agent(BaseModel, table=True):
         ondelete="SET NULL",
         index=True,
     )
+    general_access_role_id: UUID | None = SqlField(
+        default=None,
+        foreign_key="agent_access_roles.id",
+        nullable=True,
+        ondelete="RESTRICT",
+    )
     name: str = SqlField(nullable=False, max_length=255)
     litellm_key_encrypted: str = SqlField(nullable=False, default="")
     status: AgentStatus = SqlField(
@@ -234,8 +255,11 @@ class Agent(BaseModel, table=True):
         nullable=True,
         sa_type=sa.DateTime(timezone=True),  # type: ignore
     )
-    template_slug: str = SqlField(nullable=False, max_length=255)
-    template_version: int = SqlField(nullable=False)
+    # Nullable so deleting a template lineage can detach soft-deleted agents:
+    # with either column NULL the composite FK is not enforced (MATCH SIMPLE).
+    # Live agents always carry a pin — read it through template_pin.
+    template_slug: str | None = SqlField(default=None, nullable=True, max_length=255)
+    template_version: int | None = SqlField(default=None, nullable=True)
     model: str = SqlField(nullable=False, default="")
     platform: AgentPlatform = SqlField(
         default=AgentPlatform.SLACK,
@@ -256,6 +280,16 @@ class Agent(BaseModel, table=True):
         default=CommandApprovalMode.AUTO,
         sa_column=Column(sa.String(10), nullable=False, server_default="auto"),
     )
+
+    @property
+    def template_pin(self) -> tuple[str, int]:
+        if self.template_slug is None or self.template_version is None:
+            raise RuntimeError(f"Agent {self.id} has no template pin")
+        return self.template_slug, self.template_version
+
+
+def compute_bot_token_hash(bot_token: str) -> str:
+    return hashlib.sha256(bot_token.encode("utf-8")).hexdigest()
 
 
 class AgentAccess(BaseModel, table=True):
@@ -300,9 +334,19 @@ class AgentAccess(BaseModel, table=True):
 class AgentSlackConfig(BaseModel, table=True):
     __tablename__: str = "agent_slack_config"
 
+    __table_args__ = (
+        sa.Index(
+            "ix_agent_slack_config_bot_token_hash",
+            "bot_token_hash",
+            unique=True,
+            postgresql_where=sa.text("bot_token_hash IS NOT NULL"),
+        ),
+    )
+
     agent_id: UUID = SqlField(foreign_key="agent.id", nullable=False, unique=True, ondelete="CASCADE")
     bot_token_encrypted: str = SqlField(nullable=False)
     app_token_encrypted: str = SqlField(nullable=False)
+    bot_token_hash: str | None = SqlField(default=None, nullable=True)
     channel_ids: list[str] = SqlField(
         default_factory=list,
         sa_column=Column(sa.JSON(), nullable=False, server_default="[]"),
@@ -582,15 +626,6 @@ class AgentAccessRoleRead(PydanticBaseModel):
     is_locked: bool
 
 
-class AgentAccessGrantRequest(PydanticBaseModel):
-    user_id: UUID
-    access_role_id: UUID
-
-
-class AgentAccessUpdate(PydanticBaseModel):
-    access_role_id: UUID
-
-
 class AgentAccessCandidateRead(PydanticBaseModel):
     user_id: UUID
     email: str
@@ -602,6 +637,25 @@ class AgentAccessCandidateRead(PydanticBaseModel):
 
 class AgentAccessMemberRead(AgentAccessCandidateRead):
     access_role: AgentAccessRoleRead
+
+
+class AgentGeneralAccessRead(PydanticBaseModel):
+    role: AgentAccessRoleRead | None
+
+
+class AgentAccessSettingsAssignmentUpdate(PydanticBaseModel):
+    user_id: UUID
+    access_role_id: UUID
+
+
+class AgentAccessSettingsUpdate(PydanticBaseModel):
+    general_access_role_id: UUID | None = None
+    assignments: list[AgentAccessSettingsAssignmentUpdate] = Field(default_factory=list)
+
+
+class AgentAccessSettingsRead(PydanticBaseModel):
+    general_access: AgentGeneralAccessRead
+    assignments: list[AgentAccessMemberRead]
 
 
 class AgentAssignedSkillRead(PydanticBaseModel):

@@ -22,7 +22,6 @@ from api.domains.agents.aai_cli_artifacts import (
 from api.domains.agents.runtime_policy import build_chat_commands_policy_md
 from api.domains.agents.aai_cli_skills import build_skills_manifest_from_zips
 from api.domains.agents.authorization import AgentAuthorization
-from api.domains.organizations.repository import OrganizationRepository
 from api.domains.skills.models import Skill
 from api.domains.skills.repository import SkillRepository
 from api.domains.agents.builders import (
@@ -69,16 +68,22 @@ from api.domains.agents.models import (
     AgentTelegramConfigRead,
     AgentType,
     AgentUpdate,
+    FirecrawlContent,
+    ConfluenceContent,
     GmailContent,
+    JiraContent,
     PairRequest,
     SecretProvider,
     decrypt_content,
+    compute_bot_token_hash,
     encrypt_content,
     validate_content,
 )
+from api.domains.agents.exceptions import BotTokenConflictHTTPException
 from api.domains.agents.repository import AgentRepository
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.token_service import SlackConfigTokenService
+from api.domains.organizations.lookup import OrganizationLookupService
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.templates.models import TemplateRead
 from api.domains.templates.renderer import render_template
@@ -91,6 +96,9 @@ from api.infrastructure.integration_validators import (
     validate_gmail,
     validate_jira,
 )
+from api.infrastructure.integration_validators.atlassian_utils import (
+    get_atlassian_cloud_id,
+)
 from api.infrastructure.kubernetes.client import KubernetesClient
 from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
 from api.infrastructure.openrouter.client import OpenRouterClient
@@ -99,10 +107,10 @@ from api.infrastructure.slack.client import (
     SlackClient,
     SlackFetchError,
 )
+from api.infrastructure.slack.config_token import update_slack_app_name
 from api.infrastructure.telegram.client import (
     validate_bot_token as validate_telegram_bot_token,
 )
-from api.infrastructure.slack.config_token import update_slack_app_name
 
 logger = logging.getLogger(__name__)
 
@@ -166,6 +174,28 @@ _VALIDATORS: dict[SecretProvider, Any] = {
 }
 
 
+def _enrich_atlassian_content(content: Any) -> Any:
+    """For Atlassian integrations using scoped API tokens, fetch and store the cloud_id.
+
+    Scoped tokens still use Basic Auth, but must be sent to the API Gateway URL
+    (https://api.atlassian.com/ex/jira/<cloud_id>) instead of the site URL directly.
+    Best-effort: if the lookup fails, the content is returned unchanged.
+    """
+    if isinstance(content, JiraContent) and content.use_scoped_token and not content.cloud_id:
+        cloud_id, cloud_err = get_atlassian_cloud_id(content.site_url)
+        if cloud_id:
+            return content.model_copy(update={"cloud_id": cloud_id})
+        else:
+            logger.warning(f"Failed to fetch Jira cloud_id for {content.site_url}: {cloud_err}")
+    elif isinstance(content, ConfluenceContent) and content.use_scoped_token and not content.cloud_id:
+        cloud_id, cloud_err = get_atlassian_cloud_id(content.site_url)
+        if cloud_id:
+            return content.model_copy(update={"cloud_id": cloud_id})
+        else:
+            logger.warning(f"Failed to fetch Confluence cloud_id for {content.site_url}: {cloud_err}")
+    return content
+
+
 def filter_models_by_allowlist(catalog: list[dict], allowlist: list[str]) -> list[dict]:
     """Keeps catalogue entries whose id matches any glob pattern in the allowlist.
     An empty allowlist blocks everything. Matching is case-insensitive.
@@ -205,10 +235,13 @@ class AgentService:
     config: Config
     skill_repository: SkillRepository
     slack_token_service: SlackConfigTokenService
-    organization_repository: OrganizationRepository
+    organization_lookup: OrganizationLookupService
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
+
+    def count_agents_in_error(self) -> int:
+        return self.repository.count_agents_in_error()
 
     def _ensure_model_allowed(self, model: str | None, org_id: UUID) -> None:
         """Rejects models outside the allowlist. litellm is cluster-internal, so
@@ -216,10 +249,10 @@ class AgentService:
         here is sufficient. An empty/None model defers to the configured default.
         """
         if model:
-            organization = self.organization_repository.get(org_id)
-            if not organization:
+            allowed_models = self.organization_lookup.get_allowed_models(org_id)
+            if allowed_models is None:
                 raise HTTPException(status_code=404, detail="Organization not found")
-            if not is_model_allowed(model, organization.allowed_models):
+            if not is_model_allowed(model, allowed_models):
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Model '{model}' is not in the allowed model list",
@@ -346,6 +379,7 @@ class AgentService:
             if agent.platform == AgentPlatform.TEAMS and self.config.api_external_url
             else None
         )
+        template_slug, template_version = agent.template_pin
         return AgentRead(
             id=agent.id,
             name=agent.name,
@@ -353,8 +387,8 @@ class AgentService:
             platform=agent.platform,
             agent_type=agent.agent_type,
             organization_id=agent.organization_id,
-            template_slug=agent.template_slug,
-            template_version=agent.template_version,
+            template_slug=template_slug,
+            template_version=template_version,
             model=agent.model,
             approval_mode=agent.approval_mode,
             slack_config=slack_config_read,
@@ -380,9 +414,7 @@ class AgentService:
             telegram_config = self.repository.get_telegram_config(agent.id)
         secrets = self.repository.get_secrets_for_agent(agent.id)
         skills = [s for _, s in self.skill_repository.get_agent_skills_with_details(agent.id)]
-        template = self.template_repository.get_template_by_slug_and_version(
-            agent.organization_id, agent.template_slug, agent.template_version
-        )
+        template = self.template_repository.get_template_by_slug_and_version(agent.organization_id, *agent.template_pin)
         required_ids = self.template_repository.get_required_skill_ids(template.id) if template else set()
         allowed_actions = self.authorization.allowed_actions(context, [agent])[agent.id]
         return self._build_agent_read(
@@ -425,6 +457,7 @@ class AgentService:
             ok, reason = self._check_slack_tokens(data.slack_bot_token, data.slack_app_token)
             if not ok:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=reason)
+            self._ensure_bot_token_unique(data.slack_bot_token, org_id)
 
         telegram_bot_username: str | None = None
         if data.platform == AgentPlatform.TELEGRAM:
@@ -478,6 +511,12 @@ class AgentService:
                     detail="Required template skills must be included in skill_ids",
                 )
 
+        # The creator always gets an explicit Owner AgentAccess row, even if they
+        # currently have implicit full access as an Org Owner/Admin: it's what keeps
+        # them able to manage the Agent if they're later demoted to Member (see
+        # test_creator_keeps_assigned_agent_after_owner_is_demoted_to_member). This row
+        # is hidden from the Share dialog and preserved across saves — see
+        # AgentAccessService._assigned_members_for_agent / replace_access_settings.
         persisted_membership = context.user_organization_map.get(org_id)
         creator_membership_id = (
             persisted_membership.id
@@ -501,13 +540,18 @@ class AgentService:
                     cast(str, data.slack_app_token),
                     self.config.agent_token_encryption_key,
                 ),
+                bot_token_hash=compute_bot_token_hash(cast(str, data.slack_bot_token)),
                 channel_ids=data.slack_channel_ids,
                 dm_user_ids=data.slack_dm_user_ids,
                 group_policy=data.slack_group_policy,
                 dm_policy=data.slack_dm_policy,
                 verbose_mode=data.slack_verbose_mode,
             )
-            self.repository.save_slack_config(slack_config)
+            try:
+                self.repository.save_slack_config(slack_config)
+            except BotTokenConflictHTTPException:
+                self.repository.hard_delete(agent.id)
+                raise
         elif data.platform == AgentPlatform.TEAMS:
             assert data.teams_app_id is not None
             assert data.teams_app_password is not None
@@ -544,7 +588,7 @@ class AgentService:
         # Teams auto-start so they exist if/when the pod is later built.
         secrets: list[AgentSecret] = []
         for item in data.secrets:
-            content = validate_content(item.provider, item.content)
+            content = _enrich_atlassian_content(validate_content(item.provider, item.content))
             saved = self.repository.save_secret(
                 AgentSecret(
                     agent_id=agent.id,
@@ -582,7 +626,7 @@ class AgentService:
     def get_agent_template(self, agent_id: UUID, version: int, context: CurrentUserContext) -> TemplateRead:
         org_id = self._org_id(context)
         agent = self.authorization.require_visible(context, agent_id)
-        template = self.template_repository.get_template_by_slug_and_version(org_id, agent.template_slug, version)
+        template = self.template_repository.get_template_by_slug_and_version(org_id, agent.template_pin[0], version)
         if not template:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -608,13 +652,13 @@ class AgentService:
         secrets_by_agent = self.repository.get_secrets_for_agents(agent_ids)
         skills_by_agent = self.skill_repository.get_skills_for_agents(agent_ids)
 
-        slug_versions = list({(a.template_slug, a.template_version) for a in agents})
+        slug_versions = list({a.template_pin for a in agents})
         template_id_map = self.template_repository.get_template_ids_for_slug_versions(org_id, slug_versions)
         template_ids = list(template_id_map.values())
         req_ids_by_template = self.template_repository.get_required_skill_ids_for_templates(template_ids)
 
         def _required_ids(agent: Agent) -> set[UUID]:
-            tid = template_id_map.get((agent.template_slug, agent.template_version))
+            tid = template_id_map.get(agent.template_pin)
             return req_ids_by_template.get(tid, set()) if tid else set()
 
         items = [
@@ -701,9 +745,7 @@ class AgentService:
 
         # Validate skill changes against the effective template's required skills
         if effective_template is None:
-            effective_template = self.template_repository.get_template_by_slug_and_version(
-                org_id, agent.template_slug, agent.template_version
-            )
+            effective_template = self.template_repository.get_template_by_slug_and_version(org_id, *agent.template_pin)
         required_ids = (
             self.template_repository.get_required_skill_ids(effective_template.id) if effective_template else set()
         )
@@ -737,6 +779,9 @@ class AgentService:
             if not ok:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=reason)
 
+            if "slack_bot_token" in updated:
+                self._ensure_bot_token_unique(updated["slack_bot_token"], org_id, exclude_agent_id=agent.id)
+
             slack_config = self.repository.get_slack_config(agent.id)
             if slack_config:
                 if "slack_bot_token" in updated:
@@ -744,6 +789,7 @@ class AgentService:
                         updated["slack_bot_token"],
                         self.config.agent_token_encryption_key,
                     )
+                    slack_config.bot_token_hash = compute_bot_token_hash(updated["slack_bot_token"])
                     _bot_name_cache.pop(str(agent.id), None)
                 if "slack_app_token" in updated:
                     slack_config.app_token_encrypted = encrypt_token(
@@ -818,7 +864,10 @@ class AgentService:
             upserts: list[tuple[AgentSecretCreate, str]] = [
                 (
                     item,
-                    encrypt_content(validate_content(item.provider, item.content), key),
+                    encrypt_content(
+                        _enrich_atlassian_content(validate_content(item.provider, item.content)),
+                        key,
+                    ),
                 )
                 for item in data.secrets or []
             ]
@@ -851,6 +900,9 @@ class AgentService:
 
     def start_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
         org_id = self._org_id(context)
+        # Stamped as Service labels for monitoring; resolved here (not in the
+        # route) so every start path labels agents consistently.
+        org_name = self.organization_lookup.get_name(org_id)
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_LIFECYCLE_MANAGE)
 
         if agent.status == AgentStatus.RUNNING:
@@ -859,7 +911,7 @@ class AgentService:
                 detail=f"Agent {agent_id} is already running",
             )
 
-        template = self.template_repository.get_template_or_raise(org_id, agent.template_slug, agent.template_version)
+        template = self.template_repository.get_template_or_raise(org_id, *agent.template_pin)
         # Placeholders are kept raw in storage and rendered at seed time.
         rendered = render_template(template, agent.name)
         ns = self.config.k8s_namespace
@@ -875,8 +927,8 @@ class AgentService:
         # Re-check the allowlist at start time, not just create/update: the org's
         # allowlist can change after the agent was created, and a model that was
         # valid then may no longer be permitted now.
-        organization = self.organization_repository.get(org_id)
-        if not organization or not is_model_allowed(effective_model, organization.allowed_models):
+        allowed_models = self.organization_lookup.get_allowed_models(org_id)
+        if allowed_models is None or not is_model_allowed(effective_model, allowed_models):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Model '{effective_model}' is no longer in the organization's allowed model list",
@@ -903,7 +955,7 @@ class AgentService:
 
             if slack_config.channel_ids:
                 self._join_public_channels(bot_token, slack_config.channel_ids)
-            service = build_service(agent.id, org_id, ns)
+            service = build_service(agent.id, org_id, ns, org_name=org_name, agent_name=agent.name)
 
             if agent.agent_type == AgentType.HERMES:
                 api_server_key = secrets.token_urlsafe(32)
@@ -989,7 +1041,14 @@ class AgentService:
                 litellm_api_key=litellm_key,
                 litellm_base_url=self.config.agent_litellm_base_url,
             )
-            service = build_service(agent.id, org_id, ns, include_webhook_port=True)
+            service = build_service(
+                agent.id,
+                org_id,
+                ns,
+                include_webhook_port=True,
+                org_name=org_name,
+                agent_name=agent.name,
+            )
             deployment = build_deployment(
                 agent.id,
                 org_id,
@@ -1015,7 +1074,7 @@ class AgentService:
                 self.repository.save(agent)
                 return self._get_agent_read(agent, context)
 
-            service = build_service(agent.id, org_id, ns)
+            service = build_service(agent.id, org_id, ns, org_name=org_name, agent_name=agent.name)
 
             if agent.agent_type == AgentType.HERMES:
                 api_server_key = secrets.token_urlsafe(32)
@@ -1104,6 +1163,45 @@ class AgentService:
         aai_setup_sh = build_setup_sh(list(store), home_dir=aai_home) if decrypted else None
         if store:
             secret.string_data.update(build_env(store))
+
+        fc_content = decrypted.get(SecretProvider.FIRECRAWL)
+        fc_api_key = (
+            fc_content.api_key if isinstance(fc_content, FirecrawlContent) else self.config.agent_firecrawl_api_key
+        )
+        fc_base_url = (
+            fc_content.base_url
+            if isinstance(fc_content, FirecrawlContent) and fc_content.base_url
+            else self.config.agent_firecrawl_base_url
+        )
+        if fc_api_key and fc_base_url:
+            secret.string_data["FIRECRAWL_API_KEY"] = fc_api_key
+            if hermes_cfg is not None:
+                hermes_cfg["web"] = {"backend": "firecrawl"}
+                hermes_cfg["browser"] = {"cloud_provider": "firecrawl"}
+                secret.string_data["FIRECRAWL_API_URL"] = fc_base_url
+                secret.string_data["FIRECRAWL_BROWSER_TTL"] = "600"
+            if overlay is not None:
+                overlay["plugins"]["allow"].append("firecrawl")
+                overlay["plugins"]["entries"]["firecrawl"] = {
+                    "enabled": True,
+                    "config": {
+                        "webSearch": {
+                            "apiKey": "${FIRECRAWL_API_KEY}",
+                            "baseUrl": fc_base_url,
+                        },
+                        "webFetch": {
+                            "apiKey": "${FIRECRAWL_API_KEY}",
+                            "baseUrl": fc_base_url,
+                            "onlyMainContent": True,
+                            "maxAgeMs": 172800000,
+                            "timeoutSeconds": 60,
+                        },
+                    },
+                }
+                overlay["tools"]["web"] = {
+                    "fetch": {"provider": "firecrawl"},
+                    "search": {"enabled": True, "provider": "firecrawl"},
+                }
 
         ingest_key = secrets.token_urlsafe(32)
         secret.string_data.update(
@@ -1339,6 +1437,11 @@ class AgentService:
         self.k8s.delete_secret(name, ns)
         self.k8s.delete_config_map(name, ns)
 
+        slack_config = self.repository.get_slack_config(agent.id)
+        if slack_config:
+            slack_config.bot_token_hash = None
+            self.repository.save_slack_config(slack_config)
+
         agent.deleted_at = dt.datetime.now(dt.timezone.utc)
         self.repository.save(agent)
 
@@ -1409,6 +1512,18 @@ class AgentService:
                 return ok, reason
         return True, ""
 
+    def _ensure_bot_token_unique(
+        self,
+        bot_token: str,
+        org_id: UUID,
+        exclude_agent_id: UUID | None = None,
+    ) -> None:
+        token_hash = compute_bot_token_hash(bot_token)
+        conflicting = self.repository.find_active_agent_by_bot_token_hash(token_hash, exclude_agent_id=exclude_agent_id)
+        if conflicting:
+            name = conflicting.name if conflicting.organization_id == org_id else "another agent"
+            raise BotTokenConflictHTTPException(name)
+
     def _join_public_channels(self, bot_token: str, channel_ids: list[str]) -> None:
         client = SlackClient(bot_token)
         for channel_id in channel_ids:
@@ -1435,10 +1550,10 @@ class AgentService:
             )
             allowed = raw_catalog
         else:
-            organization = self.organization_repository.get(org_id)
-            if not organization:
+            allowed_models = self.organization_lookup.get_allowed_models(org_id)
+            if allowed_models is None:
                 raise HTTPException(status_code=404, detail="Organization not found")
-            allowed = filter_models_by_allowlist(raw_catalog, organization.allowed_models)
+            allowed = filter_models_by_allowlist(raw_catalog, allowed_models)
         options = [
             {
                 "value": f"litellm/openrouter/{model['id']}",

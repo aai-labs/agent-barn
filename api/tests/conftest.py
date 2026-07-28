@@ -48,8 +48,8 @@ def setup_test_database():
         os.environ["DB_CONNECTION_URL"] = connection_url
 
         get_config.cache_clear()
-        logger.info("Upgrading test database to heads")
-        command.upgrade(config, "heads")
+        logger.info("Upgrading test database to head")
+        command.upgrade(config, "head")
         yield
 
 

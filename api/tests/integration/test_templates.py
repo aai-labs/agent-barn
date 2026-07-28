@@ -14,6 +14,7 @@ from starlette.testclient import TestClient
 from api.domains.organizations.models import Organization
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.rbac.catalog import PermissionKey
+from api.domains.rbac.policy import AuthorizationScope
 from api.domains.templates.defaults import DEFAULT_SOUL_MD
 from api.domains.templates.models import TemplateSource
 from api.domains.templates.predefined import PREDEFINED_TEMPLATES
@@ -27,11 +28,13 @@ from api.tests.core.modules import (
     prepare_injector,
     set_env_variable,
 )
+from api.domains.agents.repository import AgentRepository
 from api.tests.steps.agent import (
     TEST_ENCRYPTION_KEY,
     MockK8sModule,
     MockLiteLLMModule,
     there_is_a_skill,
+    there_is_an_agent,
     use_org_for_auth,
 )
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
@@ -306,6 +309,31 @@ def test_get_template_unknown_slug_returns_404():
             assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
+def test_get_template_reports_in_use():
+    with given([*_GIVEN, there_is_an_agent(name="Pinned")]) as context:
+        client: TestClient = context.client
+        slug = context.agent.template_slug
+
+        with when("I get the template the agent is pinned to"):
+            response = client.get(f"{_BASE}/{slug}", headers=_auth(context))
+
+        with then("it is flagged in_use"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["in_use"], equal_to(True))
+
+
+def test_get_template_reports_not_in_use():
+    with given([*_GIVEN, there_is_a_template(slug="idle", name="Idle")]) as context:
+        client: TestClient = context.client
+
+        with when("I get a template no agent uses"):
+            response = client.get(f"{_BASE}/idle", headers=_auth(context))
+
+        with then("it is flagged not in_use"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["in_use"], equal_to(False))
+
+
 # --- versions ---
 
 
@@ -386,6 +414,21 @@ def test_list_template_versions_includes_required_skills():
             assert_that(len(versions[1]["required_skills"]), equal_to(1))
             assert_that(versions[1]["required_skills"][0]["name"], equal_to("Jira"))
             assert_that(versions[2]["required_skills"], equal_to([]))
+
+
+def test_list_template_versions_reports_in_use_for_every_version():
+    with given([*_GIVEN, there_is_an_agent(name="Pinned")]) as context:
+        client: TestClient = context.client
+        slug = context.agent.template_slug
+        there_is_a_template(slug=slug, name="Pinned", version=2)(context)
+
+        with when("I list the lineage's versions"):
+            response = client.get(f"{_BASE}/{slug}/versions", headers=_auth(context))
+
+        with then("every version is flagged in_use, even ones the agent isn't pinned to"):
+            versions = {v["version"]: v for v in response.json()}
+            assert_that(versions[1]["in_use"], equal_to(True))
+            assert_that(versions[2]["in_use"], equal_to(True))
 
 
 # --- create ---
@@ -1050,7 +1093,12 @@ def test_agent_repin_moves_only_that_agent():
             ).json()
             second = client.post(
                 _AGENTS_BASE,
-                json={**create_payload, "name": "Second"},
+                json={
+                    **create_payload,
+                    "name": "Second",
+                    "slack_bot_token": "xoxb-token-2",
+                    "slack_app_token": "xapp-1-token-2",
+                },
                 headers=_auth(context),
             ).json()
             assert_that(first["template_version"], equal_to(2))
@@ -1073,3 +1121,164 @@ def test_agent_repin_moves_only_that_agent():
 
 def test_default_soul_md_is_nonempty():
     assert_that(DEFAULT_SOUL_MD, contains_string("SOUL"))
+
+
+# --- delete ---
+
+
+def test_delete_template_returns_204_and_purges_all_versions():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_template(slug="doomed", name="Doomed", version=1),
+            there_is_a_skill(),
+            there_is_a_template_skill(),
+            there_is_a_template(slug="doomed", name="Doomed", version=2),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+
+        with when("I delete the template"):
+            response = client.delete(f"{_BASE}/doomed", headers=_auth(context))
+
+        with then("every version and its skill links are gone"):
+            assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+            assert_that(
+                client.get(f"{_BASE}/doomed", headers=_auth(context)).status_code,
+                equal_to(status.HTTP_404_NOT_FOUND),
+            )
+            assert_that(
+                client.get(f"{_BASE}/doomed/versions", headers=_auth(context)).status_code,
+                equal_to(status.HTTP_404_NOT_FOUND),
+            )
+            assert_that(
+                repository.is_skill_required_by_any_template(context.skill.id),
+                equal_to(False),
+            )
+
+
+def test_delete_template_unknown_slug_returns_404():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I delete a template that does not exist"):
+            response = client.delete(f"{_BASE}/no-such-slug", headers=_auth(context))
+
+        with then("I get 404"):
+            assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_delete_template_requires_auth():
+    with given([*_GIVEN, there_is_a_template(slug="doomed", name="Doomed")]) as context:
+        client: TestClient = context.client
+
+        with when("I delete without auth"):
+            response = client.delete(f"{_BASE}/doomed")
+
+        with then("I get 401"):
+            assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
+
+
+def test_member_cannot_delete_template():
+    with given([*_GIVEN, there_is_a_template(slug="doomed", name="Doomed"), _there_is_a_member_actor()]) as context:
+        response = context.client.delete(f"{_BASE}/doomed", headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_delete_predefined_template_returns_403():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_template(slug="builtin", name="Builtin", source=TemplateSource.PRE_DEFINED),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("I try to delete a pre-defined template"):
+            response = client.delete(f"{_BASE}/builtin", headers=_auth(context))
+
+        with then("I get 403 and the template survives"):
+            assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+            assert_that(
+                client.get(f"{_BASE}/builtin", headers=_auth(context)).status_code,
+                equal_to(status.HTTP_200_OK),
+            )
+
+
+def test_delete_template_used_by_live_agent_returns_409():
+    with given([*_GIVEN, there_is_an_agent(name="Pinned")]) as context:
+        client: TestClient = context.client
+        slug = context.agent.template_slug
+        # advance the lineage so the agent is pinned to an older version
+        there_is_a_template(slug=slug, name="Pinned", version=2)(context)
+
+        with when("I try to delete the template the agent uses"):
+            response = client.delete(f"{_BASE}/{slug}", headers=_auth(context))
+
+        with then("I get 409 and every version survives"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+            assert_that(response.json()["detail"], contains_string("used"))
+            versions = client.get(f"{_BASE}/{slug}/versions", headers=_auth(context)).json()
+            assert_that(len(versions), equal_to(2))
+
+
+def test_delete_template_referenced_by_soft_deleted_agent_returns_204():
+    with given([*_GIVEN, there_is_an_agent(name="Ghost", deleted=True)]) as context:
+        client: TestClient = context.client
+        slug = context.agent.template_slug
+
+        with when("I delete the template only a soft-deleted agent references"):
+            response = client.delete(f"{_BASE}/{slug}", headers=_auth(context))
+
+        with then("the template is purged and the agent's pin is cleared"):
+            assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+            assert_that(
+                client.get(f"{_BASE}/{slug}", headers=_auth(context)).status_code,
+                equal_to(status.HTTP_404_NOT_FOUND),
+            )
+            agent_repository: AgentRepository = context.injector.get(AgentRepository)
+            ghost = agent_repository.get_deleted_in_scope(
+                context.agent.id,
+                AuthorizationScope(organization_id=context.organization.id),
+            )
+            assert ghost is not None
+            assert_that(ghost.template_slug, none())
+            assert_that(ghost.template_version, none())
+
+
+def test_delete_template_of_another_org_returns_404():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        org_repository: OrganizationRepository = context.injector.get(OrganizationRepository)
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+        other_org = Organization(name="Other Org")
+        org_repository.save(other_org)
+        there_is_a_template(slug="theirs", name="Theirs", organization_id=other_org.id)(context)
+
+        with when("I delete another org's template"):
+            response = client.delete(f"{_BASE}/theirs", headers=_auth(context))
+
+        with then("I get 404 and their template survives"):
+            assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+            assert_that(repository.get_latest_template(other_org.id, "theirs"), is_not(none()))
+
+
+def test_list_templates_reports_in_use():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_template(slug="idle", name="Idle"),
+            there_is_an_agent(name="Busy"),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("I list templates"):
+            response = client.get(_BASE, headers=_auth(context))
+
+        with then("only the agent's template is marked in use"):
+            by_slug = {item["template_slug"]: item for item in response.json()["items"]}
+            assert_that(by_slug[context.agent.template_slug]["in_use"], equal_to(True))
+            assert_that(by_slug["idle"]["in_use"], equal_to(False))
