@@ -9,9 +9,10 @@ dedicated global platform_template table (no organization_id), mirroring the
 built-in skill model with real referential integrity. agent_template becomes
 strictly organization-scoped again (custom templates + org forks of predefined
 templates). Org forks record their origin via forked_from_platform_template_id.
-Agents pin a template version through one of two mutually-exclusive FKs
+Active agents pin a template version through one of two mutually-exclusive FKs
 (platform_template_id / agent_template_id) with a CHECK guard, replacing the
-loose (template_slug, template_version) pin columns.
+loose (template_slug, template_version) pin columns. Soft-deleted agents may
+have no pin after template deletion.
 
 """
 
@@ -171,8 +172,9 @@ def upgrade() -> None:
 
     # 6. Re-pin agents via two mutually-exclusive FKs. The old pin columns
     #    (template_slug, template_version) are replaced by exactly one of
-    #    platform_template_id / agent_template_id, restoring DB-level
-    #    referential integrity.
+    #    platform_template_id / agent_template_id for active agents, restoring
+    #    DB-level referential integrity. Soft-deleted agents that AF-166
+    #    detached while deleting templates remain unpinned.
     op.add_column("agent", sa.Column("platform_template_id", sa.UUID(as_uuid=True), nullable=True))
     op.add_column("agent", sa.Column("agent_template_id", sa.UUID(as_uuid=True), nullable=True))
 
@@ -220,9 +222,10 @@ def upgrade() -> None:
         ondelete="RESTRICT",
     )
     op.create_check_constraint(
-        "ck_agent_exactly_one_template_pin",
+        "ck_agent_template_pin_state",
         "agent",
-        "(platform_template_id IS NULL) <> (agent_template_id IS NULL)",
+        "((deleted_at IS NOT NULL) AND platform_template_id IS NULL AND agent_template_id IS NULL) "
+        "OR ((platform_template_id IS NULL) <> (agent_template_id IS NULL))",
     )
 
     # 7. Drop the legacy loose pin columns.
@@ -260,7 +263,7 @@ def downgrade() -> None:
     op.alter_column("agent", "template_slug", existing_type=sa.String(length=255), nullable=False)
     op.alter_column("agent", "template_version", existing_type=sa.Integer(), nullable=False)
 
-    op.drop_constraint("ck_agent_exactly_one_template_pin", "agent", type_="check")
+    op.drop_constraint("ck_agent_template_pin_state", "agent", type_="check")
     op.drop_constraint("fk_agent_agent_template", "agent", type_="foreignkey")
     op.drop_constraint("fk_agent_platform_template", "agent", type_="foreignkey")
     op.drop_column("agent", "agent_template_id")

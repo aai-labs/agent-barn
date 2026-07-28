@@ -3,7 +3,7 @@ from uuid import UUID
 
 from injector import inject, singleton
 from sqlalchemy import or_
-from sqlmodel import Session, col, select
+from sqlmodel import Session, col, delete, select, update
 
 from api.domains.agents.models import (
     Agent,
@@ -317,6 +317,72 @@ class TemplateRepository:
             for t in page
         ]
         return items, total
+
+    def get_slugs_used_by_live_agents(self, org_id: UUID, slugs: list[str]) -> set[str]:
+        if not slugs:
+            return set()
+        used: set[str] = set()
+        with Session(self.delegate.engine) as session:
+            org_query = (
+                select(AgentTemplate.template_slug)
+                .join(Agent, col(Agent.agent_template_id) == col(AgentTemplate.id))
+                .distinct()
+                .where(col(Agent.organization_id) == org_id)
+                .where(col(Agent.deleted_at).is_(None))
+                .where(col(AgentTemplate.template_slug).in_(slugs))
+            )
+            used.update(session.exec(org_query).all())
+
+            platform_query = (
+                select(PlatformTemplate.template_slug)
+                .join(Agent, col(Agent.platform_template_id) == col(PlatformTemplate.id))
+                .distinct()
+                .where(col(Agent.organization_id) == org_id)
+                .where(col(Agent.deleted_at).is_(None))
+                .where(col(PlatformTemplate.template_slug).in_(slugs))
+            )
+            used.update(session.exec(platform_query).all())
+        return used
+
+    def is_org_lineage_used_by_live_agent(self, org_id: UUID, slug: str) -> bool:
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(Agent.id)
+                .join(AgentTemplate, col(Agent.agent_template_id) == col(AgentTemplate.id))
+                .where(col(Agent.organization_id) == org_id)
+                .where(col(Agent.deleted_at).is_(None))
+                .where(col(AgentTemplate.organization_id) == org_id)
+                .where(col(AgentTemplate.template_slug) == slug)
+                .limit(1)
+            )
+            return session.exec(query).first() is not None
+
+    def purge_org_template_lineage(self, org_id: UUID, slug: str) -> None:
+        """Delete every org-scoped version, detaching soft-deleted agents first.
+
+        Live agents retain their RESTRICT pin and are checked before purge.
+        Soft-deleted agents keep their row for audit/history, but no longer
+        block deleting the template lineage they used to pin.
+        """
+        with Session(self.delegate.engine) as session:
+            template_ids = session.exec(
+                select(AgentTemplate.id)
+                .where(col(AgentTemplate.organization_id) == org_id)
+                .where(col(AgentTemplate.template_slug) == slug)
+            ).all()
+            if not template_ids:
+                return
+            detach = (
+                update(Agent)
+                .where(col(Agent.organization_id) == org_id)
+                .where(col(Agent.deleted_at).is_not(None))
+                .where(col(Agent.agent_template_id).in_(template_ids))
+                .values(agent_template_id=None)
+            )
+            session.exec(detach)  # type: ignore[call-overload]
+            purge = delete(AgentTemplate).where(col(AgentTemplate.id).in_(template_ids))
+            session.exec(purge)  # type: ignore[call-overload]
+            session.commit()
 
     def get_required_skills_for(self, template: AgentTemplate | PlatformTemplate) -> list[Skill]:
         if isinstance(template, PlatformTemplate):

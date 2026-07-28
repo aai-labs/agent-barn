@@ -4,6 +4,7 @@ from uuid import UUID
 
 from fastapi import HTTPException, status
 from injector import inject, singleton
+from sqlalchemy.exc import IntegrityError
 
 from api.domains.auth.models import CurrentUserContext
 from api.domains.rbac.catalog import PermissionKey
@@ -83,18 +84,21 @@ class TemplateService:
         org_id = self._org_id(context)
         self.permission_policy.require_organization(context, org_id, PermissionKey.TEMPLATE_READ)
         items, total = self.repository.find_latest_templates(org_id, template_filter, pagination)
+        used_slugs = self.repository.get_slugs_used_by_live_agents(org_id, [item.template_slug for item in items])
         return PaginatedItems(
             page=pagination.page,
             page_size=pagination.size,
             total=total,
-            items=items,
+            items=[item.model_copy(update={"in_use": item.template_slug in used_slugs}) for item in items],
         )
 
     def get_template(self, slug: str, context: CurrentUserContext) -> TemplateRead:
         org_id = self._org_id(context)
         template = self._get_latest_or_404(org_id, slug)
         self.permission_policy.require_organization(context, org_id, PermissionKey.TEMPLATE_READ)
-        return self._to_read_with_skills(template)
+        read = self._to_read_with_skills(template)
+        in_use = slug in self.repository.get_slugs_used_by_live_agents(org_id, [slug])
+        return read.model_copy(update={"in_use": in_use})
 
     def list_template_versions(self, slug: str, context: CurrentUserContext) -> list[TemplateRead]:
         org_id = self._org_id(context)
@@ -105,7 +109,8 @@ class TemplateService:
                 detail=f"Template {slug} not found",
             )
         self.permission_policy.require_organization(context, org_id, PermissionKey.TEMPLATE_READ)
-        return [self._to_read_with_skills(v) for v in versions]
+        in_use = slug in self.repository.get_slugs_used_by_live_agents(org_id, [slug])
+        return [self._to_read_with_skills(v).model_copy(update={"in_use": in_use}) for v in versions]
 
     def create_template(self, data: TemplateCreate, context: CurrentUserContext) -> TemplateRead:
         org_id = self._org_id(context)
@@ -181,6 +186,33 @@ class TemplateService:
         self.repository.save_template(new_template)
         self.repository.save_org_template_skills(new_template.id, resolved_ids)
         return self._to_read_with_skills(new_template)
+
+    def delete_template(self, slug: str, context: CurrentUserContext) -> None:
+        org_id = self._org_id(context)
+        latest = self._get_latest_or_404(org_id, slug)
+        self.permission_policy.require_organization(context, org_id, PermissionKey.TEMPLATE_MANAGE)
+        if not isinstance(latest, AgentTemplate):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot delete platform templates",
+            )
+        if latest.template_source == TemplateSource.PRE_DEFINED:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot delete pre-defined templates",
+            )
+        if self.repository.is_org_lineage_used_by_live_agent(org_id, slug):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Template is being used by one or more agents",
+            )
+        try:
+            self.repository.purge_org_template_lineage(org_id, slug)
+        except IntegrityError:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Template is being used by one or more agents",
+            ) from None
 
     def seed_predefined_templates(self) -> None:
         """Insert missing global pre-defined templates and refresh stale ones in place.

@@ -210,14 +210,15 @@ class Agent(BaseModel, table=True):
             "organization_id",
             name="uq_agent_id_organization",
         ),
-        # The agent pins exactly one template version via one of two
+        # An active agent pins exactly one template version via one of two
         # mutually-exclusive FKs: platform_template_id for a global predefined
         # template, or agent_template_id for an org-scoped custom/fork template.
-        # The CHECK guard ensures exactly one is set, restoring DB-level
-        # referential integrity for the pin.
+        # Soft-deleted agents may be detached when their old template lineage is
+        # purged.
         sa.CheckConstraint(
-            "(platform_template_id IS NULL) <> (agent_template_id IS NULL)",
-            name="ck_agent_exactly_one_template_pin",
+            "((deleted_at IS NOT NULL) AND platform_template_id IS NULL AND agent_template_id IS NULL) "
+            "OR ((platform_template_id IS NULL) <> (agent_template_id IS NULL))",
+            name="ck_agent_template_pin_state",
         ),
     )
 
@@ -246,10 +247,9 @@ class Agent(BaseModel, table=True):
         nullable=True,
         sa_type=sa.DateTime(timezone=True),  # type: ignore
     )
-    # Template pin: exactly one of platform_template_id / agent_template_id is
-    # set (enforced by ck_agent_exactly_one_template_pin). platform_template_id
-    # pins a global predefined template; agent_template_id pins an org-scoped
-    # custom or fork template.
+    # Template pin: active agents set exactly one of platform_template_id /
+    # agent_template_id (enforced by ck_agent_template_pin_state). Soft-deleted
+    # agents may be detached by template deletion.
     platform_template_id: UUID | None = SqlField(
         default=None,
         foreign_key="platform_template.id",

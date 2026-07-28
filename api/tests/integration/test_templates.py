@@ -11,9 +11,11 @@ from hamcrest import (
 )
 from starlette.testclient import TestClient
 
+from api.domains.agents.repository import AgentRepository
 from api.domains.organizations.models import Organization
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.rbac.catalog import PermissionKey
+from api.domains.rbac.policy import AuthorizationScope
 from api.domains.templates.defaults import DEFAULT_SOUL_MD
 from api.domains.templates.models import TemplateSource
 from api.domains.templates.predefined import PREDEFINED_TEMPLATES
@@ -31,6 +33,7 @@ from api.tests.steps.agent import (
     TEST_ENCRYPTION_KEY,
     MockK8sModule,
     MockLiteLLMModule,
+    there_is_an_agent,
     there_is_a_skill,
     use_org_for_auth,
 )
@@ -820,6 +823,181 @@ def test_update_template_clears_skills():
             body = response.json()
             assert_that(body["version"], equal_to(2))
             assert_that(body["required_skills"], equal_to([]))
+
+
+# --- delete ---
+
+
+def test_get_template_reports_in_use():
+    with given([*_GIVEN, there_is_an_agent(name="Pinned")]) as context:
+        client: TestClient = context.client
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+        template = repository.get_pinned_template(context.agent)
+        assert template is not None
+
+        with when("I get the template the agent is pinned to"):
+            response = client.get(f"{_BASE}/{template.template_slug}", headers=_auth(context))
+
+        with then("it is flagged in_use"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["in_use"], equal_to(True))
+
+
+def test_get_template_reports_not_in_use():
+    with given([*_GIVEN, there_is_a_template(slug="idle", name="Idle")]) as context:
+        client: TestClient = context.client
+
+        with when("I get a template no agent uses"):
+            response = client.get(f"{_BASE}/idle", headers=_auth(context))
+
+        with then("it is flagged not in_use"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["in_use"], equal_to(False))
+
+
+def test_delete_template_returns_204_and_purges_all_org_versions():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Jira"),
+            there_is_a_template(slug="doomed", name="Doomed", version=1),
+            there_is_a_template_skill(),
+            there_is_a_template(slug="doomed", name="Doomed", version=2),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+
+        with when("I delete the template"):
+            response = client.delete(f"{_BASE}/doomed", headers=_auth(context))
+
+        with then("every org-scoped version and its skill links are gone"):
+            assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+            assert_that(repository.find_org_versions(context.organization.id, "doomed"), equal_to([]))
+            assert_that(
+                client.get(f"{_BASE}/doomed", headers=_auth(context)).status_code,
+                equal_to(status.HTTP_404_NOT_FOUND),
+            )
+
+
+def test_delete_template_unknown_slug_returns_404():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I delete a template that does not exist"):
+            response = client.delete(f"{_BASE}/no-such-slug", headers=_auth(context))
+
+        with then("I get 404"):
+            assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_delete_template_requires_auth():
+    with given([*_GIVEN, there_is_a_template(slug="doomed", name="Doomed")]) as context:
+        client: TestClient = context.client
+
+        with when("I delete without auth"):
+            response = client.delete(f"{_BASE}/doomed")
+
+        with then("I get 401"):
+            assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
+
+
+def test_member_cannot_delete_template():
+    with given([*_GIVEN, there_is_a_template(slug="doomed", name="Doomed"), _there_is_a_member_actor()]) as context:
+        response = context.client.delete(f"{_BASE}/doomed", headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_delete_predefined_template_returns_403():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_template(slug="builtin", name="Built In", source=TemplateSource.PRE_DEFINED),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+
+        with when("I try to delete a pre-defined template"):
+            response = client.delete(f"{_BASE}/builtin", headers=_auth(context))
+
+        with then("I get 403 and the template survives"):
+            assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+            assert_that(repository.get_latest_org_template(context.organization.id, "builtin"), is_not(none()))
+
+
+def test_delete_platform_template_returns_403():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        service: TemplateService = context.injector.get(TemplateService)
+
+        with when("I seed and try to delete a global platform template"):
+            service.seed_predefined_templates()
+            response = client.delete(f"{_BASE}/general-purpose", headers=_auth(context))
+
+        with then("I get 403"):
+            assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_delete_template_used_by_live_agent_returns_409():
+    with given([*_GIVEN, there_is_an_agent(name="Pinned")]) as context:
+        client: TestClient = context.client
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+        template = repository.get_pinned_template(context.agent)
+        assert template is not None
+        there_is_a_template(slug=template.template_slug, name="Pinned", version=2)(context)
+
+        with when("I try to delete the template the agent uses"):
+            response = client.delete(f"{_BASE}/{template.template_slug}", headers=_auth(context))
+
+        with then("I get 409 and every version survives"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+            assert_that(len(repository.find_org_versions(context.organization.id, template.template_slug)), equal_to(2))
+
+
+def test_delete_template_referenced_by_soft_deleted_agent_returns_204():
+    with given([*_GIVEN, there_is_an_agent(name="Ghost", deleted=True)]) as context:
+        client: TestClient = context.client
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+        template = repository.get_pinned_template(context.agent)
+        assert template is not None
+
+        with when("I delete the template only a soft-deleted agent references"):
+            response = client.delete(f"{_BASE}/{template.template_slug}", headers=_auth(context))
+
+        with then("the template is purged and the agent's pin is cleared"):
+            assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+            assert_that(
+                client.get(f"{_BASE}/{template.template_slug}", headers=_auth(context)).status_code,
+                equal_to(status.HTTP_404_NOT_FOUND),
+            )
+            agent_repository: AgentRepository = context.injector.get(AgentRepository)
+            ghost = agent_repository.get_deleted_in_scope(
+                context.agent.id,
+                AuthorizationScope(organization_id=context.organization.id),
+            )
+            assert_that(ghost, is_not(none()))
+            assert ghost is not None
+            assert_that(ghost.agent_template_id, none())
+            assert_that(ghost.platform_template_id, none())
+
+
+def test_delete_template_of_another_org_returns_404():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        org_repository: OrganizationRepository = context.injector.get(OrganizationRepository)
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+        other_org = Organization(name="Other Org")
+        org_repository.save(other_org)
+        there_is_a_template(slug="theirs", name="Theirs", organization_id=other_org.id)(context)
+
+        with when("I delete another org's template"):
+            response = client.delete(f"{_BASE}/theirs", headers=_auth(context))
+
+        with then("I get 404 and their template survives"):
+            assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+            assert_that(repository.get_latest_org_template(other_org.id, "theirs"), is_not(none()))
 
 
 # --- seeding ---
