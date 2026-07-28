@@ -28,10 +28,6 @@ from api.infrastructure.shared.models import Pagination
 class TemplateRepository:
     delegate: PostgresRepositoryDelegate
 
-    # ------------------------------------------------------------------ #
-    # Mapping helpers
-    # ------------------------------------------------------------------ #
-
     @staticmethod
     def _to_read(template: AgentTemplate | PlatformTemplate, skills: list[Skill] | None = None) -> TemplateRead:
         from api.domains.skills.models import SkillRead
@@ -79,10 +75,6 @@ class TemplateRepository:
             updated_at=template.updated_at,
             required_skills=[SkillRead.model_validate(s) for s in (skills or [])],
         )
-
-    # ------------------------------------------------------------------ #
-    # Org-scoped templates (custom + forks)
-    # ------------------------------------------------------------------ #
 
     def get_org_template_by_slug_version(self, org_id: UUID, slug: str, version: int) -> AgentTemplate | None:
         with Session(self.delegate.engine) as session:
@@ -171,10 +163,6 @@ class TemplateRepository:
             query = select(AgentTemplateSkill.skill_id).where(col(AgentTemplateSkill.template_id) == template_id)
             return set(session.exec(query).all())
 
-    # ------------------------------------------------------------------ #
-    # Platform templates (global predefined catalogue)
-    # ------------------------------------------------------------------ #
-
     def get_platform_template_by_slug_version(self, slug: str, version: int) -> PlatformTemplate | None:
         with Session(self.delegate.engine) as session:
             query = (
@@ -259,10 +247,6 @@ class TemplateRepository:
             )
             return list(session.exec(query).all())
 
-    # ------------------------------------------------------------------ #
-    # Unified resolution (org first, then platform)
-    # ------------------------------------------------------------------ #
-
     def resolve_template(self, org_id: UUID, slug: str, version: int) -> AgentTemplate | PlatformTemplate | None:
         org_template = self.get_org_template_by_slug_version(org_id, slug, version)
         if org_template is not None:
@@ -334,10 +318,6 @@ class TemplateRepository:
         ]
         return items, total
 
-    # ------------------------------------------------------------------ #
-    # Required skills for a resolved template
-    # ------------------------------------------------------------------ #
-
     def get_required_skills_for(self, template: AgentTemplate | PlatformTemplate) -> list[Skill]:
         if isinstance(template, PlatformTemplate):
             return self.get_platform_required_skills(template.id)
@@ -383,10 +363,6 @@ class TemplateRepository:
             for pts, skill in session.exec(query).all():
                 result.setdefault(pts.template_id, []).append(skill)
             return result
-
-    # ------------------------------------------------------------------ #
-    # Agent pin support
-    # ------------------------------------------------------------------ #
 
     def get_pinned_template(self, agent: Agent) -> AgentTemplate | PlatformTemplate | None:
         if agent.agent_template_id is not None:
