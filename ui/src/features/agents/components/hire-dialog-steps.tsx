@@ -22,8 +22,9 @@ import {
   isOAuthConnected,
   type IntegrationDraft,
 } from "../integrations";
-import type { AgentAssignedSkill, AgentTemplateRead } from "../schemas";
+import type { AgentAssignedSkill, AgentTemplateRead, TemplateRequiredSkill } from "../schemas";
 import { useTemplates } from "../hooks/use-templates";
+import type { RequiredSkillGroup } from "../utils";
 import { ChoiceCard, FormField, GoogleAuthButton, NextStep, TokenInput } from "./hire-dialog-primitives";
 import { ModelSelect } from "./model-select";
 import { Pagination } from "./pagination";
@@ -1420,12 +1421,18 @@ export function SkillsStep({
   onSkillIdsChange,
   onSkillCredentialsChange,
   templateRequiredSkills = [],
+  requiredGroups = [],
+  groupChoices = {},
+  onGroupChoiceChange,
 }: {
   selectedSkillIds: string[];
   skillCredentials: IntegrationDraft[];
   onSkillIdsChange: (ids: string[]) => void;
   onSkillCredentialsChange: (drafts: IntegrationDraft[]) => void;
   templateRequiredSkills?: AgentAssignedSkill[];
+  requiredGroups?: RequiredSkillGroup[];
+  groupChoices?: Record<string, string>;
+  onGroupChoiceChange?: (groupKey: string, skillId: string) => void;
 }) {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
@@ -1440,10 +1447,15 @@ export function SkillsStep({
   const totalPages = Math.max(1, Math.ceil(total / HIRE_DIALOG_PAGE_SIZE));
 
   const requiredSkillIds = new Set(templateRequiredSkills.map((s) => s.id));
+  const groupMemberIds = new Set(requiredGroups.flatMap((g) => g.members.map((m) => m.id)));
   const orderedSkills = [
     ...skills.filter((s) => requiredSkillIds.has(s.id)),
-    ...skills.filter((s) => !requiredSkillIds.has(s.id)),
+    ...skills.filter((s) => !requiredSkillIds.has(s.id) && !groupMemberIds.has(s.id)),
   ];
+
+  const chosenGroupSkills: TemplateRequiredSkill[] = requiredGroups
+    .map((g) => g.members.find((m) => m.id === groupChoices[g.key]))
+    .filter((s): s is TemplateRequiredSkill => !!s);
 
   // Track full Skill objects for selected skills so we can compute requiredProviders
   // across pages. Users can only toggle visible skills, so this stays in sync.
@@ -1451,6 +1463,7 @@ export function SkillsStep({
   const requiredProviderIds: string[] = [
     ...new Set([
       ...templateRequiredSkills.flatMap((s) => s.requiredProviders),
+      ...chosenGroupSkills.flatMap((s) => s.requiredProviders),
       ...selectedSkillObjects.flatMap((s) => s.requiredProviders),
     ]),
   ];
@@ -1458,6 +1471,20 @@ export function SkillsStep({
   function handleSearchChange(value: string) {
     setSearch(value);
     setPage(1);
+  }
+
+  // Rebuilds skillCredentials to hold exactly one draft per currently-required
+  // provider, preserving existing drafts for providers still required and
+  // dropping ones that no longer are (e.g. switching a group's choice from
+  // GitHub to Bitbucket drops the stale GitHub draft).
+  function syncCredentialDrafts(requiredProviders: Set<string>) {
+    const newCreds = skillCredentials.filter((c) => requiredProviders.has(c.provider));
+    for (const p of requiredProviders) {
+      if (!newCreds.find((c) => c.provider === p)) {
+        newCreds.push({ provider: p, content: {} });
+      }
+    }
+    onSkillCredentialsChange(newCreds);
   }
 
   function toggleSkill(skill: Skill) {
@@ -1471,18 +1498,26 @@ export function SkillsStep({
 
     const newRequired = new Set([
       ...templateRequiredSkills.flatMap((s) => s.requiredProviders),
+      ...chosenGroupSkills.flatMap((s) => s.requiredProviders),
       ...newObjects.flatMap((s) => s.requiredProviders),
     ]);
-    const newCreds = skillCredentials.filter((c) => newRequired.has(c.provider));
-    for (const p of newRequired) {
-      if (!newCreds.find((c) => c.provider === p)) {
-        newCreds.push({ provider: p, content: {} });
-      }
-    }
+    syncCredentialDrafts(newRequired);
 
     onSkillIdsChange(newIds);
-    onSkillCredentialsChange(newCreds);
     setSelectedSkillObjects(newObjects);
+  }
+
+  function selectGroupMember(groupKey: string, member: TemplateRequiredSkill) {
+    const newChosen = requiredGroups
+      .map((g) => (g.key === groupKey ? member : g.members.find((m) => m.id === groupChoices[g.key])))
+      .filter((s): s is TemplateRequiredSkill => !!s);
+    const newRequired = new Set([
+      ...templateRequiredSkills.flatMap((s) => s.requiredProviders),
+      ...newChosen.flatMap((s) => s.requiredProviders),
+      ...selectedSkillObjects.flatMap((s) => s.requiredProviders),
+    ]);
+    syncCredentialDrafts(newRequired);
+    onGroupChoiceChange?.(groupKey, member.id);
   }
 
   function setField(providerId: string, key: string, value: string) {
@@ -1510,6 +1545,48 @@ export function SkillsStep({
       <p className="text-[0.8125rem] leading-[1.5]" style={{ color: "var(--ink-3)" }}>
         Choose skills to assign to this agent. Required credentials will appear below as you select skills.
       </p>
+
+      {requiredGroups.map((group) => (
+        <div key={group.key} className="flex flex-col gap-2">
+          <div className="text-[0.8125rem] font-medium" style={{ color: "var(--ink)" }}>
+            Required by template — choose one
+          </div>
+          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+            {group.members.map((member) => {
+              const chosen = groupChoices[group.key] === member.id;
+              return (
+                <div
+                  key={member.id}
+                  role="radio"
+                  aria-checked={chosen}
+                  className="flex flex-col gap-1.5 p-4 rounded-2xl transition-colors min-h-[4.5rem]"
+                  style={{
+                    cursor: "pointer",
+                    border: chosen ? "1.5px solid var(--ink)" : "1.5px solid var(--line)",
+                    background: chosen ? "var(--bg-soft)" : "var(--bg-elev)",
+                  }}
+                  onClick={() => selectGroupMember(group.key, member)}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
+                      {member.name}
+                    </div>
+                    <SkillSourceBadge source={member.source} />
+                  </div>
+                  <div className="text-[0.6875rem]" style={{ color: "var(--ink-3)" }}>
+                    {chosen ? "Selected" : "Required by template"}
+                  </div>
+                  {member.requiredProviders.length > 0 && (
+                    <div className="text-[0.75rem]" style={{ color: "var(--ink-4)" }}>
+                      {member.requiredProviders.map((p) => SKILL_PROVIDER_LABELS[p] ?? p).join(", ")}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
 
       <div
         className="flex items-center gap-2 px-3 py-2 rounded-xl"

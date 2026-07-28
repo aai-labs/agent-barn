@@ -2,8 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import type { Agent, IntegrationValidationResult, AgentAssignedSkill } from "../schemas";
-import { canAgent } from "../utils";
+import type { Agent, IntegrationValidationResult, TemplateRequiredSkill } from "../schemas";
+import { canAgent, splitRequiredSkills } from "../utils";
 import { useAgentTemplate } from "../hooks/use-agent-template";
 import { useUpdateAgent } from "../hooks/use-update-agent";
 import { useDeleteAgent } from "../hooks/use-delete-agent";
@@ -216,6 +216,9 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
   const [pendingSection, setPendingSection] = useState<"tokens" | "secrets" | null>(null);
   const [repinSecretDrafts, setRepinSecretDrafts] = useState<IntegrationDraft[]>([]);
   const [repinVisible, setRepinVisible] = useState<Record<string, boolean>>({});
+  // groupKey -> chosen skill id, for the re-pin target's "at least one of"
+  // required skill groups.
+  const [repinGroupChoices, setRepinGroupChoices] = useState<Record<string, string>>({});
 
   const tabs = getTabs(agent);
   // Clamp the URL-provided tab to one that's actually reachable for this agent
@@ -281,17 +284,43 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
     resolvedRepinVersion === agent.templateVersion;
 
   // Required skills for the currently selected re-pin version.
-  const newTemplateRequiredSkills: AgentAssignedSkill[] =
+  const newTemplateRequiredSkills =
     repinSlug != null && resolvedRepinVersion != null
       ? (repinVersions.find((v) => v.version === resolvedRepinVersion)?.requiredSkills ?? [])
       : [];
+  const { standalone: newStandaloneRequiredSkills, groups: newRequiredGroups } =
+    splitRequiredSkills(newTemplateRequiredSkills);
+
+  // Default each group's choice to a member the agent is already assigned, if
+  // any; otherwise leave it unset so the user must pick explicitly. Re-runs
+  // whenever the re-pin target changes.
+  useEffect(() => {
+    const assignedIds = new Set(agent.skills.map((s) => s.id));
+    setRepinGroupChoices((prev) => {
+      const next: Record<string, string> = {};
+      for (const group of newRequiredGroups) {
+        if (prev[group.key] && group.members.some((m) => m.id === prev[group.key])) {
+          next[group.key] = prev[group.key];
+          continue;
+        }
+        const assigned = group.members.find((m) => assignedIds.has(m.id));
+        if (assigned) next[group.key] = assigned.id;
+      }
+      return next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [repinSlug, resolvedRepinVersion]);
+
+  const chosenGroupSkills: TemplateRequiredSkill[] = newRequiredGroups
+    .map((g) => g.members.find((m) => m.id === repinGroupChoices[g.key]))
+    .filter((s): s is TemplateRequiredSkill => !!s);
 
   const existingSecretProviders = new Set((agent.secrets ?? []).map((s) => s.provider));
 
   // Required providers not already covered by the agent's existing secrets.
   const newRequiredProviderIds = [
     ...new Set(
-      newTemplateRequiredSkills
+      [...newStandaloneRequiredSkills, ...chosenGroupSkills]
         .flatMap((s) => s.requiredProviders)
         .filter((p) => !existingSecretProviders.has(p)),
     ),
@@ -345,7 +374,7 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
         agentId: agent.id,
         templateSlug: repinSlug,
         templateVersion: resolvedRepinVersion,
-        skillIds: newTemplateRequiredSkills.map((s) => s.id),
+        skillIds: [...newStandaloneRequiredSkills, ...chosenGroupSkills].map((s) => s.id),
         ...(effectiveRepinSecretDrafts.length > 0
           ? {
               secrets: effectiveRepinSecretDrafts.map((d) => ({
@@ -359,6 +388,7 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
       setRepinVersion(null);
       setRepinSecretDrafts([]);
       setRepinVisible({});
+      setRepinGroupChoices({});
       setSavedTemplate(true);
       setTimeout(() => setSavedTemplate(false), 2500);
     } catch {
@@ -650,7 +680,7 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                     Required skills
                   </div>
                   <div className="flex flex-col gap-1.5">
-                    {newTemplateRequiredSkills.map((skill) => {
+                    {newStandaloneRequiredSkills.map((skill) => {
                       const missingProviders = skill.requiredProviders.filter(
                         (p) => !existingSecretProviders.has(p),
                       );
@@ -674,6 +704,47 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                       );
                     })}
                   </div>
+
+                  {newRequiredGroups.map((group) => (
+                    <div key={group.key} className="flex flex-col gap-1.5">
+                      <div className="text-[0.75rem] font-medium" style={{ color: "var(--ink-3)" }}>
+                        Choose one:
+                      </div>
+                      {group.members.map((member) => {
+                        const missingProviders = member.requiredProviders.filter(
+                          (p) => !existingSecretProviders.has(p),
+                        );
+                        return (
+                          <label
+                            key={member.id}
+                            className="flex items-center gap-2 px-3.5 py-2.5 rounded-2xl text-[0.8125rem] cursor-pointer"
+                            style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
+                          >
+                            <input
+                              type="radio"
+                              name={`repin-group-${group.key}`}
+                              checked={repinGroupChoices[group.key] === member.id}
+                              onChange={() =>
+                                setRepinGroupChoices((prev) => ({ ...prev, [group.key]: member.id }))
+                              }
+                              disabled={isRunning}
+                              className="accent-[var(--blue-9)]"
+                            />
+                            <span className="font-medium flex-1" style={{ color: "var(--ink)" }}>
+                              {member.name}
+                            </span>
+                            {missingProviders.length > 0 && (
+                              <span style={{ color: "var(--ink-4)" }}>
+                                · needs {missingProviders
+                                  .map((p) => getIntegrationProvider(p)?.label ?? p)
+                                  .join(", ")} credential
+                              </span>
+                            )}
+                          </label>
+                        );
+                      })}
+                    </div>
+                  ))}
 
                   {newRequiredProviderIds.map((providerId) => {
                     const providerSpec = getIntegrationProvider(providerId);
@@ -807,7 +878,8 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                     updateAgent.isPending ||
                     !repinSlug ||
                     repinIsNoop ||
-                    hasIncompleteIntegration(effectiveRepinSecretDrafts)
+                    hasIncompleteIntegration(effectiveRepinSecretDrafts) ||
+                    newRequiredGroups.some((g) => !repinGroupChoices[g.key])
                   }
                   title={isRunning ? "Stop the agent before changing its template" : undefined}
                   onClick={() => { void handleApplyTemplate(); }}

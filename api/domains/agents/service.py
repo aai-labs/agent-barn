@@ -88,6 +88,7 @@ from api.domains.skills.repository import SkillRepository
 from api.domains.templates.models import TemplateRead
 from api.domains.templates.renderer import render_template
 from api.domains.templates.repository import TemplateRepository
+from api.domains.templates.requirements import effective_required_ids, split_requirements
 from api.infrastructure.crypto import decrypt_token, encrypt_token
 from api.infrastructure.integration_validators import (
     validate_bitbucket,
@@ -356,7 +357,7 @@ class AgentService:
         telegram_config: AgentTelegramConfig | None = None,
         secrets: list[AgentSecret] | None = None,
         skills: list[Skill] | None = None,
-        required_skill_ids: set[UUID] | None = None,
+        required_skill_map: dict[UUID, str | None] | None = None,
         allowed_actions: list[PermissionKey] | None = None,
     ) -> AgentRead:
         slack_config_read = AgentSlackConfigRead.model_validate(slack_config) if slack_config else None
@@ -365,7 +366,8 @@ class AgentService:
         teams_config_read = AgentTeamsConfigRead.model_validate(teams_config) if teams_config else None
         telegram_config_read = AgentTelegramConfigRead.model_validate(telegram_config) if telegram_config else None
         secrets_read = [AgentSecretRead.model_validate(secret) for secret in (secrets or [])]
-        req_ids = required_skill_ids or set()
+        assigned_ids = {skill.id for skill in (skills or [])}
+        req_ids = effective_required_ids(required_skill_map or {}, assigned_ids)
         skills_read = [
             AgentAssignedSkillRead.model_validate(skill).model_copy(update={"required": skill.id in req_ids})
             for skill in (skills or [])
@@ -411,7 +413,7 @@ class AgentService:
         secrets = self.repository.get_secrets_for_agent(agent.id)
         skills = [s for _, s in self.skill_repository.get_agent_skills_with_details(agent.id)]
         template = self.template_repository.get_template_by_slug_and_version(agent.organization_id, *agent.template_pin)
-        required_ids = self.template_repository.get_required_skill_ids(template.id) if template else set()
+        required_map = self.template_repository.get_required_skill_map(template.id) if template else {}
         allowed_actions = self.authorization.allowed_actions(context, [agent])[agent.id]
         return self._build_agent_read(
             agent,
@@ -420,7 +422,7 @@ class AgentService:
             telegram_config,
             secrets,
             skills,
-            required_ids,
+            required_map,
             allowed_actions,
         )
 
@@ -497,14 +499,24 @@ class AgentService:
                     detail="LiteLLM key generation failed; cannot create agent.",
                 ) from exc
 
-        # Validate that all template-required skills are present in the request.
-        required_ids = self.template_repository.get_required_skill_ids(template.id)
-        if required_ids:
-            missing = required_ids - set(data.skill_ids)
-            if missing:
+        # Validate that all template-required skills are present in the request:
+        # every standalone-required skill, and at least one member of each
+        # "at least one of" group (e.g. GitHub OR Bitbucket).
+        required_map = self.template_repository.get_required_skill_map(template.id)
+        standalone_ids, required_groups = split_requirements(required_map)
+        selected_skill_ids = set(data.skill_ids)
+        if standalone_ids - selected_skill_ids:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Required template skills must be included in skill_ids",
+            )
+        for group_key in sorted(required_groups):
+            members = required_groups[group_key]
+            if not (members & selected_skill_ids):
+                names = sorted(s.name for s in self.skill_repository.get_many_by_ids(list(members)))
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Required template skills must be included in skill_ids",
+                    detail=f"At least one of these template skills must be included in skill_ids: {', '.join(names)}",
                 )
 
         # The creator always gets an explicit Owner AgentAccess row, even if they
@@ -611,7 +623,7 @@ class AgentService:
             telegram_config,
             secrets,
             skills_to_assign,
-            required_ids,
+            required_map,
             allowed_actions,
         )
 
@@ -651,11 +663,11 @@ class AgentService:
         slug_versions = list({a.template_pin for a in agents})
         template_id_map = self.template_repository.get_template_ids_for_slug_versions(org_id, slug_versions)
         template_ids = list(template_id_map.values())
-        req_ids_by_template = self.template_repository.get_required_skill_ids_for_templates(template_ids)
+        req_maps_by_template = self.template_repository.get_required_skill_maps_for_templates(template_ids)
 
-        def _required_ids(agent: Agent) -> set[UUID]:
+        def _required_map(agent: Agent) -> dict[UUID, str | None]:
             tid = template_id_map.get(agent.template_pin)
-            return req_ids_by_template.get(tid, set()) if tid else set()
+            return req_maps_by_template.get(tid, {}) if tid else {}
 
         items = [
             self._build_agent_read(
@@ -665,7 +677,7 @@ class AgentService:
                 telegram_configs.get(agent.id),
                 secrets_by_agent.get(agent.id, []),
                 skills_by_agent.get(agent.id, []),
-                _required_ids(agent),
+                _required_map(agent),
                 allowed_actions.get(agent.id, []),
             )
             for agent in agents
@@ -742,13 +754,16 @@ class AgentService:
         # Validate skill changes against the effective template's required skills
         if effective_template is None:
             effective_template = self.template_repository.get_template_by_slug_and_version(org_id, *agent.template_pin)
-        required_ids = (
-            self.template_repository.get_required_skill_ids(effective_template.id) if effective_template else set()
+        required_map = (
+            self.template_repository.get_required_skill_map(effective_template.id) if effective_template else {}
         )
-        if required_ids:
+        if required_map:
+            standalone_ids, required_groups = split_requirements(required_map)
+            existing_skill_ids = {s.id for _, s in self.skill_repository.get_agent_skills_with_details(agent.id)}
+            effective_skill_ids = (existing_skill_ids | set(data.skill_ids)) - set(data.removed_skill_ids)
             # Block removal of required skills.
             if data.removed_skill_ids:
-                blocked = required_ids & set(data.removed_skill_ids)
+                blocked = standalone_ids & set(data.removed_skill_ids)
                 if blocked:
                     blocked_skills = self.skill_repository.get_many_by_ids(list(blocked))
                     names = ", ".join(s.name for s in blocked_skills)
@@ -756,15 +771,37 @@ class AgentService:
                         status_code=status.HTTP_409_CONFLICT,
                         detail=f"Cannot remove skills required by the template: {names}",
                     )
+                for group_key in sorted(required_groups):
+                    members = required_groups[group_key]
+                    # Only block if the group had an assigned member before this
+                    # update; this grandfathers agents whose pinned template
+                    # gained the group after they were created (e.g. via an
+                    # in-place predefined-template reseed), and permits swapping
+                    # one member for another in the same request.
+                    if (members & existing_skill_ids) and not (members & effective_skill_ids):
+                        names = sorted(s.name for s in self.skill_repository.get_many_by_ids(list(members)))
+                        raise HTTPException(
+                            status_code=status.HTTP_409_CONFLICT,
+                            detail=("At least one of these template-required skills must remain: " + ", ".join(names)),
+                        )
             # When re-pinning, validate that required skills will be present.
             if "template_slug" in updated:
-                existing_skill_ids = {s.id for _, s in self.skill_repository.get_agent_skills_with_details(agent.id)}
-                effective_skill_ids = (existing_skill_ids | set(data.skill_ids)) - set(data.removed_skill_ids)
-                if required_ids - effective_skill_ids:
+                if standalone_ids - effective_skill_ids:
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail="Required template skills must be included in skill_ids",
                     )
+                for group_key in sorted(required_groups):
+                    members = required_groups[group_key]
+                    if not (members & effective_skill_ids):
+                        names = sorted(s.name for s in self.skill_repository.get_many_by_ids(list(members)))
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail=(
+                                "At least one of these template skills must be included in skill_ids: "
+                                + ", ".join(names)
+                            ),
+                        )
 
         # Slack config updates
         if agent.platform == AgentPlatform.SLACK and (_SLACK_CONFIG_FIELDS & updated.keys()):

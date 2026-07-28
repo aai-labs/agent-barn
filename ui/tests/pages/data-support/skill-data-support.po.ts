@@ -4,6 +4,7 @@ export const MOCK_PLATFORM_SKILL_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 export const MOCK_CUSTOM_SKILL_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 export const MOCK_JIRA_SKILL_ID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 export const MOCK_GMAIL_SKILL_ID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+export const MOCK_BITBUCKET_SKILL_ID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
 
 export const mockPlatformSkill = {
   id: MOCK_PLATFORM_SKILL_ID,
@@ -44,6 +45,17 @@ export const mockGmailSkill = {
   name: "gmail",
   source: "aai_cli",
   requiredProviders: ["gmail"],
+  toolsPointer: null,
+  createdAt: "2026-01-01T00:00:00Z",
+  updatedAt: "2026-01-01T00:00:00Z",
+};
+
+export const mockBitbucketSkill = {
+  id: MOCK_BITBUCKET_SKILL_ID,
+  organizationId: null,
+  name: "bitbucket",
+  source: "aai_cli",
+  requiredProviders: ["bitbucket"],
   toolsPointer: null,
   createdAt: "2026-01-01T00:00:00Z",
   updatedAt: "2026-01-01T00:00:00Z",

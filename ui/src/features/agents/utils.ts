@@ -1,6 +1,11 @@
 import { createQueryKeyStructure } from "@/shared/query-keys";
 
-import type { Agent, AgentAccessSettingsRead, AgentPermissionKey } from "./schemas";
+import type {
+  Agent,
+  AgentAccessSettingsRead,
+  AgentPermissionKey,
+  TemplateRequiredSkill,
+} from "./schemas";
 
 export const AGENTS_PAGE_SIZE = 50;
 export const TEMPLATES_PAGE_SIZE = 50;
@@ -77,6 +82,42 @@ export function formatModelName(model: string): string {
   return model.startsWith(MODEL_DISPLAY_PREFIX)
     ? model.slice(MODEL_DISPLAY_PREFIX.length)
     : model;
+}
+
+export type RequiredSkillGroup = {
+  key: string;
+  members: TemplateRequiredSkill[];
+};
+
+// Splits a template's required skills into standalone (AND-required) skills
+// and "at least one of" groups. A group with only one member behaves exactly
+// like a standalone required skill (there's nothing to choose between), so it
+// gets folded into `standalone` — the hire dialog never has to render a
+// choose-one section for a group of one.
+export function splitRequiredSkills(skills: TemplateRequiredSkill[]): {
+  standalone: TemplateRequiredSkill[];
+  groups: RequiredSkillGroup[];
+} {
+  const byGroup = new Map<string, TemplateRequiredSkill[]>();
+  const standalone: TemplateRequiredSkill[] = [];
+  for (const skill of skills) {
+    if (!skill.groupKey) {
+      standalone.push(skill);
+      continue;
+    }
+    const members = byGroup.get(skill.groupKey) ?? [];
+    members.push(skill);
+    byGroup.set(skill.groupKey, members);
+  }
+  const groups: RequiredSkillGroup[] = [];
+  for (const [key, members] of byGroup) {
+    if (members.length === 1) {
+      standalone.push(members[0]);
+    } else {
+      groups.push({ key, members });
+    }
+  }
+  return { standalone, groups };
 }
 
 export type ShareDraftRow = {

@@ -456,6 +456,10 @@ class AgentTemplateSkill(BaseModel, table=True):
 
     template_id: UUID = SqlField(foreign_key="agent_template.id", nullable=False, ondelete="CASCADE")
     skill_id: UUID = SqlField(foreign_key="skill.id", nullable=False, ondelete="RESTRICT")
+    # Rows on the same template sharing a non-NULL group_key form an "at least
+    # one of" requirement group (e.g. GitHub OR Bitbucket). NULL means the
+    # skill is a standalone AND-required skill, as it always was before groups.
+    group_key: str | None = SqlField(default=None, nullable=True, max_length=100)
 
 
 class AgentSecretCreate(PydanticBaseModel):  # no secret_name — backend stamps it

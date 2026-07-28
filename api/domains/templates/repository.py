@@ -167,45 +167,54 @@ class TemplateRepository:
             session.exec(purge)  # type: ignore[call-overload]
             session.commit()
 
-    def save_template_skills(self, template_id: UUID, skill_ids: list[UUID]) -> None:
+    def save_template_skills(self, template_id: UUID, group_keys_by_skill_id: dict[UUID, str | None]) -> None:
+        """Diff-sync a template's required-skill rows, including each row's
+        group_key (None = standalone AND-required; shared non-None keys form
+        an "at least one of" group)."""
         with Session(self.delegate.engine) as session:
             existing_rows = session.exec(
                 select(AgentTemplateSkill).where(col(AgentTemplateSkill.template_id) == template_id)
             ).all()
-            existing_ids = {row.skill_id for row in existing_rows}
-            target_ids = set(skill_ids)
-            for row in existing_rows:
-                if row.skill_id not in target_ids:
+            existing_by_id = {row.skill_id: row for row in existing_rows}
+            for skill_id, row in existing_by_id.items():
+                if skill_id not in group_keys_by_skill_id:
                     session.delete(row)
-            for skill_id in target_ids - existing_ids:
-                session.add(AgentTemplateSkill(template_id=template_id, skill_id=skill_id))
+                elif row.group_key != group_keys_by_skill_id[skill_id]:
+                    row.group_key = group_keys_by_skill_id[skill_id]
+                    session.add(row)
+            for skill_id, group_key in group_keys_by_skill_id.items():
+                if skill_id not in existing_by_id:
+                    session.add(AgentTemplateSkill(template_id=template_id, skill_id=skill_id, group_key=group_key))
             session.commit()
 
-    def get_required_skills(self, template_id: UUID) -> list[Skill]:
+    def get_required_skills(self, template_id: UUID) -> list[tuple[Skill, str | None]]:
         with Session(self.delegate.engine) as session:
             query = (
-                select(Skill)
+                select(Skill, AgentTemplateSkill.group_key)
                 .join(
                     AgentTemplateSkill,
                     col(AgentTemplateSkill.skill_id) == col(Skill.id),
                 )
                 .where(col(AgentTemplateSkill.template_id) == template_id)
+                .order_by(col(AgentTemplateSkill.group_key).nulls_first(), col(Skill.name))
             )
             return list(session.exec(query).all())
 
-    def get_required_skill_ids(self, template_id: UUID) -> set[UUID]:
+    def get_required_skill_map(self, template_id: UUID) -> dict[UUID, str | None]:
         with Session(self.delegate.engine) as session:
-            query = select(AgentTemplateSkill.skill_id).where(col(AgentTemplateSkill.template_id) == template_id)
-            return set(session.exec(query).all())
+            query = select(AgentTemplateSkill.skill_id, AgentTemplateSkill.group_key).where(
+                col(AgentTemplateSkill.template_id) == template_id
+            )
+            return dict(session.exec(query).all())
 
-    def get_required_skill_ids_for_templates(self, template_ids: list[UUID]) -> dict[UUID, set[UUID]]:
+    def get_required_skill_maps_for_templates(self, template_ids: list[UUID]) -> dict[UUID, dict[UUID, str | None]]:
         if not template_ids:
             return {}
         with Session(self.delegate.engine) as session:
             query = select(AgentTemplateSkill).where(col(AgentTemplateSkill.template_id).in_(template_ids))
-            result: dict[UUID, set[UUID]] = {}
+            result: dict[UUID, dict[UUID, str | None]] = {}
             for row in session.exec(query).all():
-                result.setdefault(row.template_id, set()).add(row.skill_id)
+                result.setdefault(row.template_id, {})[row.skill_id] = row.group_key
             return result
 
     def is_skill_required_by_any_template(self, skill_id: UUID) -> bool:
@@ -213,7 +222,7 @@ class TemplateRepository:
             query = select(AgentTemplateSkill).where(col(AgentTemplateSkill.skill_id) == skill_id)
             return session.exec(query).first() is not None
 
-    def get_required_skills_for_templates(self, template_ids: list[UUID]) -> dict[UUID, list[Skill]]:
+    def get_required_skills_for_templates(self, template_ids: list[UUID]) -> dict[UUID, list[tuple[Skill, str | None]]]:
         if not template_ids:
             return {}
         with Session(self.delegate.engine) as session:
@@ -221,10 +230,11 @@ class TemplateRepository:
                 select(AgentTemplateSkill, Skill)
                 .join(Skill, col(AgentTemplateSkill.skill_id) == col(Skill.id))
                 .where(col(AgentTemplateSkill.template_id).in_(template_ids))
+                .order_by(col(AgentTemplateSkill.group_key).nulls_first(), col(Skill.name))
             )
-            result: dict[UUID, list[Skill]] = {}
+            result: dict[UUID, list[tuple[Skill, str | None]]] = {}
             for ats, skill in session.exec(query).all():
-                result.setdefault(ats.template_id, []).append(skill)
+                result.setdefault(ats.template_id, []).append((skill, ats.group_key))
             return result
 
     def get_template_ids_for_slug_versions(

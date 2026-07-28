@@ -15,6 +15,7 @@ import { useTemplateVersions } from "../hooks/use-template-versions";
 import { useCreateTemplate } from "../hooks/use-create-template";
 import { useUpdateTemplate } from "../hooks/use-update-template";
 import type { AgentTemplateRead } from "../schemas";
+import { splitRequiredSkills } from "../utils";
 import { DeleteTemplateDialog } from "./delete-template-dialog";
 import {
   TEMPLATE_FILE_KEYS,
@@ -85,11 +86,19 @@ export function TemplateDrawer({
 
   const { skills, isLoading: skillsLoading } = useSkills({ search: debouncedSkillSearch || undefined, pageSize: 100 });
   const requiredSkillIds = selectedSkillDetails.map((s) => s.id);
-  const unselectedSkills = skills.filter((s) => !requiredSkillIds.includes(s.id));
 
   // The version currently being displayed/edited (defaults to latest).
   const resolvedVersion = selectedVersion ?? versions[0]?.version ?? null;
   const current = versions.find((v) => v.version === resolvedVersion) ?? versions[0];
+
+  // "At least one of" groups aren't authorable from this editor yet — they're
+  // shown read-only and excluded from the standalone add/remove list so an
+  // edit can't accidentally flatten a group into plain AND-required skills.
+  const { groups: currentRequiredGroups } = splitRequiredSkills(current?.requiredSkills ?? []);
+  const groupedSkillIds = new Set(currentRequiredGroups.flatMap((g) => g.members.map((m) => m.id)));
+  const unselectedSkills = skills.filter(
+    (s) => !requiredSkillIds.includes(s.id) && !groupedSkillIds.has(s.id),
+  );
 
   // In view mode the selected version is displayed directly; local draft state
   // only matters once the user starts editing (snapshotted from `current`).
@@ -104,13 +113,18 @@ export function TemplateDrawer({
     if (current) {
       setFiles(filesFrom(current));
       setDescription(current.description ?? "");
+      // Grouped skills are excluded here — they aren't editable from this
+      // list, so re-saving with requiredSkillIds only touches standalone
+      // skills; the server inherits the group unchanged (see TemplateUpdate).
       setSelectedSkillDetails(
-        current.requiredSkills.map((s) => ({
-          id: s.id,
-          name: s.name,
-          source: s.source,
-          requiredProviders: s.requiredProviders,
-        })),
+        current.requiredSkills
+          .filter((s) => !s.groupKey)
+          .map((s) => ({
+            id: s.id,
+            name: s.name,
+            source: s.source,
+            requiredProviders: s.requiredProviders,
+          })),
       );
     }
     setSkillSearch("");
@@ -296,6 +310,21 @@ export function TemplateDrawer({
                   <label className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>
                     Required skills
                   </label>
+
+                  {currentRequiredGroups.length > 0 && (
+                    <div className="flex flex-col gap-1">
+                      {currentRequiredGroups.map((group) => (
+                        <div
+                          key={group.key}
+                          className="text-[12.5px] px-3.5 py-2 rounded-2xl"
+                          style={{ border: "1px dashed var(--line-strong)", color: "var(--ink-3)" }}
+                        >
+                          One of: {group.members.map((m) => m.name).join(", ")} — chosen when hiring, not
+                          editable here yet.
+                        </div>
+                      ))}
+                    </div>
+                  )}
 
                   {selectedSkillDetails.length > 0 ? (
                     <div className="flex flex-col gap-2 overflow-y-auto" style={{ maxHeight: "15rem" }}>
