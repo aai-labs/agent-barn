@@ -120,6 +120,27 @@ export function splitRequiredSkills(skills: TemplateRequiredSkill[]): {
   return { standalone, groups };
 }
 
+// Derives a stable, human-legible group_key from member names for a
+// newly-authored OR-group — there's no separate "group label" field, so the
+// key itself is what's persisted and re-displayed as "One of: X, Y" via name
+// lookup. Sorting member slugs before joining makes the key independent of
+// pick order; the length cap plus numeric-suffix dedup keeps it within the
+// backend's 100-char group_key constraint even after a collision.
+export function generateGroupKey(members: { name: string }[], existingKeys: string[]): string {
+  const base = members
+    .map((m) => m.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, ""))
+    .sort()
+    .join("-or-")
+    .slice(0, 90);
+  let key = base;
+  let n = 2;
+  while (existingKeys.includes(key)) {
+    key = `${base}-${n}`;
+    n += 1;
+  }
+  return key;
+}
+
 export type ShareDraftRow = {
   userId: string;
   roleId: string;

@@ -19,8 +19,7 @@ export type CreateTemplateData = {
   bootstrapMd?: string;
   heartbeatMd?: string;
   requiredSkillIds?: string[];
-  // "At least one of" requirement groups (e.g. GitHub OR Bitbucket). Not yet
-  // authorable from the template editor UI, but the API supports it.
+  // "At least one of" requirement groups (e.g. GitHub OR Bitbucket).
   requiredSkillGroups?: { groupKey: string; skillIds: string[] }[];
 };
 
