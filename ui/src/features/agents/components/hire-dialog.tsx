@@ -140,10 +140,10 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   const [createAppError, setCreateAppError] = useState<string | null>(null);
   const [selectedSkillIds, setSelectedSkillIds] = useState<string[]>([]);
   const [skillCredentials, setSkillCredentials] = useState<IntegrationDraft[]>([]);
-  // groupKey -> chosen skill id, for the template's "at least one of" required
-  // skill groups (e.g. GitHub OR Bitbucket). No default choice — the user must
-  // pick explicitly.
-  const [groupChoices, setGroupChoices] = useState<Record<string, string>>({});
+  // groupKey -> chosen skill ids, for the template's "at least one of"
+  // required skill groups (e.g. GitHub OR Bitbucket). No default choice — the
+  // user must pick at least one, but may pick more than one member.
+  const [groupChoices, setGroupChoices] = useState<Record<string, string[]>>({});
   const [provisioning, setProvisioning] = useState(false);
   const [progress, setProgress] = useState(0);
   const [provisionError, setProvisionError] = useState<string | null>(null);
@@ -272,7 +272,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
         ...(resolvedVersion != null ? { templateVersion: resolvedVersion } : {}),
         skillIds: [
           ...standaloneRequiredSkills.map((s) => s.id),
-          ...requiredSkillGroups.map((g) => groupChoices[g.key]).filter((id): id is string => !!id),
+          ...requiredSkillGroups.flatMap((g) => groupChoices[g.key] ?? []),
           ...selectedSkillIds,
         ],
         secrets: skillCredentials.map((c) => ({
@@ -586,7 +586,13 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
             requiredGroups={requiredSkillGroups}
             groupChoices={groupChoices}
             onGroupChoiceChange={(groupKey, skillId) =>
-              setGroupChoices((prev) => ({ ...prev, [groupKey]: skillId }))
+              setGroupChoices((prev) => {
+                const current = prev[groupKey] ?? [];
+                const next = current.includes(skillId)
+                  ? current.filter((id) => id !== skillId)
+                  : [...current, skillId];
+                return { ...prev, [groupKey]: next };
+              })
             }
           />
         )}
@@ -696,7 +702,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
             disabled={
               !name.trim() ||
               hasIncompleteIntegration(skillCredentials) ||
-              requiredSkillGroups.some((g) => !groupChoices[g.key])
+              requiredSkillGroups.some((g) => !groupChoices[g.key]?.length)
             }
             onClick={() => { void startHiring(); }}
           >

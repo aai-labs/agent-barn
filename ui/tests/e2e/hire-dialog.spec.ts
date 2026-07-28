@@ -706,10 +706,10 @@ test.describe("Hire Dialog — Skills step required skill group", () => {
     await page.getByRole("button", { name: /hire agent/i }).click();
   });
 
-  test("renders a choose-one section with both group members", async ({ page }) => {
+  test("renders a choose-at-least-one section with both group members", async ({ page }) => {
     await navigateToSkillsStep(page);
 
-    await expect(page.getByText(/Required by template — choose one/i)).toBeVisible();
+    await expect(page.getByText(/Required by template — choose at least one/i)).toBeVisible();
     await expect(page.getByText("github", { exact: true })).toBeVisible();
     await expect(page.getByText("bitbucket", { exact: true })).toBeVisible();
   });
@@ -733,13 +733,26 @@ test.describe("Hire Dialog — Skills step required skill group", () => {
     await expect(page.getByPlaceholder("owner-or-org")).toBeVisible();
   });
 
-  test("switching the choice to Bitbucket swaps the credential form", async ({ page }) => {
+  test("selecting a second group member adds its credential form alongside the first", async ({ page }) => {
     await navigateToSkillsStep(page);
 
     await page.getByText("github", { exact: true }).click();
     await expect(page.getByPlaceholder(/github_pat_/)).toBeVisible();
 
     await page.getByText("bitbucket", { exact: true }).click();
+
+    // Both hosts chosen — both credential forms render.
+    await expect(page.getByPlaceholder(/github_pat_/)).toBeVisible();
+    await expect(page.getByPlaceholder("workspace id")).toBeVisible();
+  });
+
+  test("clicking a chosen group member again deselects it and removes its credential form", async ({ page }) => {
+    await navigateToSkillsStep(page);
+
+    await page.getByText("github", { exact: true }).click();
+    await expect(page.getByPlaceholder(/github_pat_/)).toBeVisible();
+
+    await page.getByText("github", { exact: true }).click();
 
     await expect(page.getByPlaceholder(/github_pat_/)).not.toBeVisible();
   });

@@ -1431,7 +1431,7 @@ export function SkillsStep({
   onSkillCredentialsChange: (drafts: IntegrationDraft[]) => void;
   templateRequiredSkills?: AgentAssignedSkill[];
   requiredGroups?: RequiredSkillGroup[];
-  groupChoices?: Record<string, string>;
+  groupChoices?: Record<string, string[]>;
   onGroupChoiceChange?: (groupKey: string, skillId: string) => void;
 }) {
   const [search, setSearch] = useState("");
@@ -1453,9 +1453,11 @@ export function SkillsStep({
     ...skills.filter((s) => !requiredSkillIds.has(s.id) && !groupMemberIds.has(s.id)),
   ];
 
-  const chosenGroupSkills: TemplateRequiredSkill[] = requiredGroups
-    .map((g) => g.members.find((m) => m.id === groupChoices[g.key]))
-    .filter((s): s is TemplateRequiredSkill => !!s);
+  const chosenGroupSkills: TemplateRequiredSkill[] = requiredGroups.flatMap((g) =>
+    (groupChoices[g.key] ?? [])
+      .map((id) => g.members.find((m) => m.id === id))
+      .filter((s): s is TemplateRequiredSkill => !!s),
+  );
 
   // Track full Skill objects for selected skills so we can compute requiredProviders
   // across pages. Users can only toggle visible skills, so this stays in sync.
@@ -1507,10 +1509,16 @@ export function SkillsStep({
     setSelectedSkillObjects(newObjects);
   }
 
-  function selectGroupMember(groupKey: string, member: TemplateRequiredSkill) {
-    const newChosen = requiredGroups
-      .map((g) => (g.key === groupKey ? member : g.members.find((m) => m.id === groupChoices[g.key])))
-      .filter((s): s is TemplateRequiredSkill => !!s);
+  function toggleGroupMember(groupKey: string, member: TemplateRequiredSkill) {
+    const current = groupChoices[groupKey] ?? [];
+    const nextIdsForGroup = current.includes(member.id)
+      ? current.filter((id) => id !== member.id)
+      : [...current, member.id];
+    const newChosen = requiredGroups.flatMap((g) =>
+      (g.key === groupKey ? nextIdsForGroup : groupChoices[g.key] ?? [])
+        .map((id) => g.members.find((m) => m.id === id))
+        .filter((s): s is TemplateRequiredSkill => !!s),
+    );
     const newRequired = new Set([
       ...templateRequiredSkills.flatMap((s) => s.requiredProviders),
       ...newChosen.flatMap((s) => s.requiredProviders),
@@ -1549,15 +1557,15 @@ export function SkillsStep({
       {requiredGroups.map((group) => (
         <div key={group.key} className="flex flex-col gap-2">
           <div className="text-[0.8125rem] font-medium" style={{ color: "var(--ink)" }}>
-            Required by template — choose one
+            Required by template — choose at least one
           </div>
           <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
             {group.members.map((member) => {
-              const chosen = groupChoices[group.key] === member.id;
+              const chosen = (groupChoices[group.key] ?? []).includes(member.id);
               return (
                 <div
                   key={member.id}
-                  role="radio"
+                  role="checkbox"
                   aria-checked={chosen}
                   className="flex flex-col gap-1.5 p-4 rounded-2xl transition-colors min-h-[4.5rem]"
                   style={{
@@ -1565,7 +1573,7 @@ export function SkillsStep({
                     border: chosen ? "1.5px solid var(--ink)" : "1.5px solid var(--line)",
                     background: chosen ? "var(--bg-soft)" : "var(--bg-elev)",
                   }}
-                  onClick={() => selectGroupMember(group.key, member)}
+                  onClick={() => toggleGroupMember(group.key, member)}
                 >
                   <div className="flex items-center justify-between gap-2">
                     <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
