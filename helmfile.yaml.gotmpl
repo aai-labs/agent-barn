@@ -61,6 +61,10 @@ releases:
         storage:
           size: 2Gi
     set:
+      - name: image.repository
+        value: "ghcr.io/firecrawl/nuq-postgres"
+      - name: image.tag
+        value: "latest"
       - name: storage.storageClass
         value: {{ env "STORAGE_CLASS" | default "" | quote }}
       - name: db.user
