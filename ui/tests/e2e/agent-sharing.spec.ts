@@ -367,6 +367,7 @@ test.describe("Agent sharing", () => {
           is_default: false,
           owner_email: "owner@example.com",
           owner_name: "Grace Hopper",
+          allowed_models: ["*"],
         },
         {
           id: ORG_B_ID,
@@ -377,6 +378,7 @@ test.describe("Agent sharing", () => {
           is_default: false,
           owner_email: "hank@globex.com",
           owner_name: "Hank Scorpio",
+          allowed_models: ["*"],
         },
       ],
     });
