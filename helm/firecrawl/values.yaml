@@ -1,6 +1,6 @@
 image:
   repository: ghcr.io/firecrawl/firecrawl
-  tag: v2.11.0
+  tag: "2.11"
   pullPolicy: IfNotPresent
 
 # playwright-service publishes no semver tags; "latest" is the only option.
