@@ -4,6 +4,7 @@ from fastapi import status
 from hamcrest import assert_that, equal_to, is_not, none
 from starlette.testclient import TestClient
 
+from api.domains.users.organization_users.models import OrganizationRole
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
     create_test_client,
@@ -13,6 +14,7 @@ from api.tests.core.modules import (
 )
 from api.tests.steps.agent import TEST_ENCRYPTION_KEY
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
+from api.tests.steps.organization import there_is_an_organization
 from api.tests.steps.user import there_is_authenticated_user
 
 _VALIDATE = "api.domains.auth.token_service.validate_config_access_token"
@@ -25,7 +27,8 @@ _GIVEN = [
     create_test_client(),
     database_repo_is_ready(),
     database_is_clean(),
-    there_is_authenticated_user(email="user@example.com"),
+    there_is_an_organization(),
+    there_is_authenticated_user(email="user@example.com", role=OrganizationRole.ADMIN),
 ]
 
 
@@ -139,7 +142,7 @@ def test_create_slack_app_via_api(mock_create, mock_rotate, mock_validate):
 
         with when("I create a slack app"):
             response = client.post(
-                "/api/v1/slack/apps",
+                f"/api/v1/organizations/{context.organization.id}/slack/apps",
                 json={"name": "TestBot", "description": "A test bot"},
                 headers=headers,
             )

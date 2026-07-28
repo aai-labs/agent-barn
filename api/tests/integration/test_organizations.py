@@ -5,7 +5,7 @@
 so the platform_admin can also deliver it manually.
 """
 
-from uuid import uuid7
+from uuid import UUID, uuid7
 
 from fastapi import status
 from hamcrest import (
@@ -18,7 +18,8 @@ from hamcrest import (
 )
 
 from api.domains.organizations.repository import OrganizationRepository
-from api.domains.users.organization_users.models import OrganizationRole
+from api.domains.users.organization_users.models import OrganizationRole, OrganizationUser
+from api.domains.users.organization_users.repository import OrganizationUserRepository
 from api.domains.users.repository import UserRepository
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
@@ -107,6 +108,20 @@ def test_new_organization_sees_global_predefined_templates():
         )
         assert_that(create.status_code, equal_to(status.HTTP_201_CREATED))
         org_id = create.json()["organization"]["id"]
+
+        # Platform admin needs org membership to list its templates.
+        org_uuid = UUID(org_id)
+        repo: OrganizationUserRepository = context.injector.get(OrganizationUserRepository)
+        org_user = OrganizationUser(
+            user_id=context.user.id,
+            organization_id=org_uuid,
+            role=OrganizationRole.ADMIN,
+        )
+        repo.save(org_user)
+        # Update the current_user_context so the auth middleware sees the membership.
+        context.current_user_context.organization_ids.append(org_uuid)
+        context.current_user_context.user_organization_map[org_uuid] = org_user
+        context.current_user_context.current_user_organization = org_user
 
         templates = context.client.get(
             f"/api/v1/organizations/{org_id}/templates",
