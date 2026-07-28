@@ -58,8 +58,7 @@ SECRET_SIGNING_KEY=
 #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 AGENT_TOKEN_ENCRYPTION_KEY=
 # Format: email:password
-SUPER_USER_CREDENTIALS=admin@example.com:
-SUPER_USER_FULL_NAME=
+PLATFORM_ADMIN_CREDENTIALS=admin@example.com:
 ENVIRONMENT=local
 
 # ── URLs / ingress hosts ─────────────────────────────────────────────────────

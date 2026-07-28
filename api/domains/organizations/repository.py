@@ -83,9 +83,6 @@ class OrganizationRepository:
 
         return query
 
-    def find_default(self) -> Organization | None:
-        return self.delegate.find_one(Organization, is_default=True)
-
     def get(self, organization_id: UUID) -> Organization | None:
         return self.delegate.find_by_id(Organization, organization_id)
 

@@ -3,6 +3,7 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 
 import { api } from "@/shared/api";
+import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
 
 import {
   ConversationChannel,
@@ -21,11 +22,12 @@ import { z } from "zod";
 const ChannelsListSchema = z.array(ConversationChannelSchema);
 
 export function useConversationChannels(agentId: string) {
+  const orgApiBase = useOrganizationApiBase();
   const query = useQuery({
     queryKey: agentsKey.conversationChannels(agentId),
     queryFn: async () => {
       const response = await api.get<ConversationChannel[]>(
-        `/api/v1/agents/${agentId}/conversations/channels`,
+        `${orgApiBase}/agents/${agentId}/conversations/channels`,
         { schema: ChannelsListSchema },
       );
       return response.data;
@@ -46,6 +48,7 @@ export function useChannelMessages(
   channelId: string | null,
   filters: ConversationsFiltersKey,
 ) {
+  const orgApiBase = useOrganizationApiBase();
   const query = useInfiniteQuery({
     queryKey: channelId
       ? agentsKey.conversationMessages(agentId, channelId, filters)
@@ -62,7 +65,7 @@ export function useChannelMessages(
         params.set("before_id", pageParam.beforeId);
       }
       const response = await api.get<ConversationThreadsPage>(
-        `/api/v1/agents/${agentId}/conversations/channels/${channelId}/messages?${params.toString()}`,
+        `${orgApiBase}/agents/${agentId}/conversations/channels/${channelId}/messages?${params.toString()}`,
         { schema: ConversationThreadsPageSchema },
       );
       return response.data;

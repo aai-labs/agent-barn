@@ -15,13 +15,13 @@ hermesImage:
 replicaCount: 1
 
 # k8s Secret: DB_CONNECTION_URL, SECRET_SIGNING_KEY,
-# SUPER_USER_CREDENTIALS, ENVIRONMENT, WEB_APP_URL
+# PLATFORM_ADMIN_CREDENTIALS, ENVIRONMENT, WEB_APP_URL
 secretName: agentfarm-api
 
 dbConnectionUrl: ""
 secretSigningKey: ""
-superUserCredentials: ""
-superUserFullName: "Super User"
+platformAdminCredentials: ""
+platformAdminFullName: "Super User"
 agentTokenEncryptionKey: ""
 environment: ""
 webAppUrl: ""

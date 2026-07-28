@@ -3,6 +3,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/shared/api";
+import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
 
 import { SkillSchema, type Skill } from "../schemas";
 import { skillsKey } from "../utils";
@@ -22,10 +23,11 @@ export type SkillUpdatePayload = {
 
 export function useCreateSkill() {
   const queryClient = useQueryClient();
+  const orgApiBase = useOrganizationApiBase();
 
   return useMutation({
     mutationFn: async ({ ...body }: SkillCreatePayload) => {
-      const response = await api.post<Skill>("/api/v1/skills", body, {
+      const response = await api.post<Skill>(`${orgApiBase}/skills`, body, {
         schema: SkillSchema,
       });
       return response.data;
@@ -38,10 +40,11 @@ export function useCreateSkill() {
 
 export function useUpdateSkill() {
   const queryClient = useQueryClient();
+  const orgApiBase = useOrganizationApiBase();
 
   return useMutation({
     mutationFn: async ({ skillId, ...body }: SkillUpdatePayload) => {
-      const response = await api.patch<Skill>(`/api/v1/skills/${skillId}`, body, {
+      const response = await api.patch<Skill>(`${orgApiBase}/skills/${skillId}`, body, {
         schema: SkillSchema,
       });
       return response.data;
@@ -54,10 +57,11 @@ export function useUpdateSkill() {
 
 export function useDeleteSkill() {
   const queryClient = useQueryClient();
+  const orgApiBase = useOrganizationApiBase();
 
   return useMutation({
     mutationFn: async (skillId: string) => {
-      await api.delete(`/api/v1/skills/${skillId}`);
+      await api.delete(`${orgApiBase}/skills/${skillId}`);
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: skillsKey.all });

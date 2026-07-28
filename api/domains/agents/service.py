@@ -85,7 +85,7 @@ from api.domains.organizations.lookup import OrganizationLookupService
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.skills.models import Skill
 from api.domains.skills.repository import SkillRepository
-from api.domains.templates.models import TemplateRead
+from api.domains.templates.models import AgentTemplate, PlatformTemplate, TemplateRead
 from api.domains.templates.renderer import render_template
 from api.domains.templates.repository import TemplateRepository
 from api.infrastructure.crypto import decrypt_token, encrypt_token
@@ -240,6 +240,16 @@ class AgentService:
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
 
+    @staticmethod
+    def _set_pin(agent: Agent, template: AgentTemplate | PlatformTemplate) -> None:
+        """Point an agent at a resolved template via the right mutually-exclusive FK."""
+        if isinstance(template, PlatformTemplate):
+            agent.platform_template_id = template.id
+            agent.agent_template_id = None
+        else:
+            agent.agent_template_id = template.id
+            agent.platform_template_id = None
+
     def count_agents_in_error(self) -> int:
         return self.repository.count_agents_in_error()
 
@@ -358,6 +368,8 @@ class AgentService:
         skills: list[Skill] | None = None,
         required_skill_ids: set[UUID] | None = None,
         allowed_actions: list[PermissionKey] | None = None,
+        template_slug: str = "",
+        template_version: int = 0,
     ) -> AgentRead:
         slack_config_read = AgentSlackConfigRead.model_validate(slack_config) if slack_config else None
         if slack_config_read and slack_config:
@@ -375,7 +387,6 @@ class AgentService:
             if agent.platform == AgentPlatform.TEAMS and self.config.api_external_url
             else None
         )
-        template_slug, template_version = agent.template_pin
         return AgentRead(
             id=agent.id,
             name=agent.name,
@@ -410,8 +421,8 @@ class AgentService:
             telegram_config = self.repository.get_telegram_config(agent.id)
         secrets = self.repository.get_secrets_for_agent(agent.id)
         skills = [s for _, s in self.skill_repository.get_agent_skills_with_details(agent.id)]
-        template = self.template_repository.get_template_by_slug_and_version(agent.organization_id, *agent.template_pin)
-        required_ids = self.template_repository.get_required_skill_ids(template.id) if template else set()
+        template = self.template_repository.get_pinned_template(agent)
+        required_ids = self.template_repository.get_required_skill_ids_for(template) if template else set()
         allowed_actions = self.authorization.allowed_actions(context, [agent])[agent.id]
         return self._build_agent_read(
             agent,
@@ -422,6 +433,8 @@ class AgentService:
             skills,
             required_ids,
             allowed_actions,
+            template_slug=template.template_slug if template else "",
+            template_version=template.version if template else 0,
         )
 
     def _get_bot_display_name(self, agent_id: str, slack_config: AgentSlackConfig) -> str | None:
@@ -465,12 +478,10 @@ class AgentService:
 
         # Pin to the requested version, or the lineage's latest if unspecified.
         if data.template_version is not None:
-            template = self.template_repository.get_template_by_slug_and_version(
-                org_id, data.template_slug, data.template_version
-            )
+            template = self.template_repository.resolve_template(org_id, data.template_slug, data.template_version)
             missing_detail = f"Template {data.template_slug} v{data.template_version} not found"
         else:
-            template = self.template_repository.get_latest_template(org_id, data.template_slug)
+            template = self.template_repository.resolve_latest_template(org_id, data.template_slug)
             missing_detail = f"Template {data.template_slug} not found"
         if template is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=missing_detail)
@@ -482,10 +493,9 @@ class AgentService:
             model=data.model or "",
             platform=data.platform,
             agent_type=data.agent_type,
-            template_slug=template.template_slug,
-            template_version=template.version,
             approval_mode=data.approval_mode,
         )
+        self._set_pin(agent, template)
 
         if self.config.litellm_base_url and self.config.litellm_secret_name:
             try:
@@ -498,7 +508,7 @@ class AgentService:
                 ) from exc
 
         # Validate that all template-required skills are present in the request.
-        required_ids = self.template_repository.get_required_skill_ids(template.id)
+        required_ids = self.template_repository.get_required_skill_ids_for(template)
         if required_ids:
             missing = required_ids - set(data.skill_ids)
             if missing:
@@ -613,6 +623,8 @@ class AgentService:
             skills_to_assign,
             required_ids,
             allowed_actions,
+            template_slug=template.template_slug,
+            template_version=template.version,
         )
 
     def get_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
@@ -622,13 +634,19 @@ class AgentService:
     def get_agent_template(self, agent_id: UUID, version: int, context: CurrentUserContext) -> TemplateRead:
         org_id = self._org_id(context)
         agent = self.authorization.require_visible(context, agent_id)
-        template = self.template_repository.get_template_by_slug_and_version(org_id, agent.template_pin[0], version)
+        pinned = self.template_repository.get_pinned_template(agent)
+        if pinned is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Agent {agent_id} has no pinned template",
+            )
+        template = self.template_repository.resolve_template(org_id, pinned.template_slug, version)
         if not template:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Template version {version} not found for agent {agent_id}",
             )
-        return TemplateRead.model_validate(template)
+        return self.template_repository.to_read(template, self.template_repository.get_required_skills_for(template))
 
     def list_agents(
         self,
@@ -636,7 +654,6 @@ class AgentService:
         pagination: Pagination,
         context: CurrentUserContext,
     ) -> PaginatedItems[AgentRead]:
-        org_id = self._org_id(context)
         read_scope = self.authorization.require_collection_scope(context, PermissionKey.AGENT_READ)
         agents, total = self.repository.find_all_active(read_scope, agent_filter, pagination)
         allowed_actions = self.authorization.allowed_actions(context, agents)
@@ -648,14 +665,8 @@ class AgentService:
         secrets_by_agent = self.repository.get_secrets_for_agents(agent_ids)
         skills_by_agent = self.skill_repository.get_skills_for_agents(agent_ids)
 
-        slug_versions = list({a.template_pin for a in agents})
-        template_id_map = self.template_repository.get_template_ids_for_slug_versions(org_id, slug_versions)
-        template_ids = list(template_id_map.values())
-        req_ids_by_template = self.template_repository.get_required_skill_ids_for_templates(template_ids)
-
-        def _required_ids(agent: Agent) -> set[UUID]:
-            tid = template_id_map.get(agent.template_pin)
-            return req_ids_by_template.get(tid, set()) if tid else set()
+        req_ids_by_agent = self.template_repository.get_required_skill_ids_for_agents(agents)
+        pin_info = self.template_repository.get_pinned_template_info_for_agents(agents)
 
         items = [
             self._build_agent_read(
@@ -665,8 +676,10 @@ class AgentService:
                 telegram_configs.get(agent.id),
                 secrets_by_agent.get(agent.id, []),
                 skills_by_agent.get(agent.id, []),
-                _required_ids(agent),
+                req_ids_by_agent.get(agent.id, set()),
                 allowed_actions.get(agent.id, []),
+                template_slug=pin_info.get(agent.id, ("", 0))[0],
+                template_version=pin_info.get(agent.id, ("", 0))[1],
             )
             for agent in agents
         ]
@@ -716,7 +729,7 @@ class AgentService:
         # validator guarantees both keys appear together.
         effective_template = None
         if "template_slug" in updated:
-            effective_template = self.template_repository.get_template_by_slug_and_version(
+            effective_template = self.template_repository.resolve_template(
                 org_id, updated["template_slug"], updated["template_version"]
             )
             if effective_template is None:
@@ -724,8 +737,7 @@ class AgentService:
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=(f"Template {updated['template_slug']} v{updated['template_version']} not found"),
                 )
-            agent.template_slug = effective_template.template_slug
-            agent.template_version = effective_template.version
+            self._set_pin(agent, effective_template)
 
         if "name" in updated:
             agent.name = updated["name"]
@@ -741,9 +753,9 @@ class AgentService:
 
         # Validate skill changes against the effective template's required skills
         if effective_template is None:
-            effective_template = self.template_repository.get_template_by_slug_and_version(org_id, *agent.template_pin)
+            effective_template = self.template_repository.get_pinned_template(agent)
         required_ids = (
-            self.template_repository.get_required_skill_ids(effective_template.id) if effective_template else set()
+            self.template_repository.get_required_skill_ids_for(effective_template) if effective_template else set()
         )
         if required_ids:
             # Block removal of required skills.
@@ -907,7 +919,12 @@ class AgentService:
                 detail=f"Agent {agent_id} is already running",
             )
 
-        template = self.template_repository.get_template_or_raise(org_id, *agent.template_pin)
+        template = self.template_repository.get_pinned_template(agent)
+        if template is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Agent {agent_id} has no pinned template",
+            )
         # Placeholders are kept raw in storage and rendered at seed time.
         rendered = render_template(template, agent.name)
         ns = self.config.k8s_namespace

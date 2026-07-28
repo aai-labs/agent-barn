@@ -71,7 +71,7 @@ export function DeleteTemplateDialog({
             onClick={handleDelete}
             disabled={deleteTemplate.isPending}
           >
-            {deleteTemplate.isPending ? "Deleting…" : "Delete"}
+            {deleteTemplate.isPending ? "Deleting..." : "Delete"}
           </button>
         </DialogFooter>
       </DialogContent>

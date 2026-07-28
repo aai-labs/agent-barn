@@ -36,7 +36,7 @@ def there_is_a_user(
     password: str = "StrongPass123",
     id: UUID | None = None,
     role: OrganizationRole | None = None,
-    is_superuser: bool = False,
+    is_platform_admin: bool = False,
     organization_id: UUID | None = None,
     organization_user_id: UUID | None = None,
     email_verified: bool = True,
@@ -55,7 +55,7 @@ def there_is_a_user(
                 email=email,
                 hashed_password=hash_text(password),
                 full_name=name,
-                is_superuser=is_superuser,
+                is_platform_admin=is_platform_admin,
                 email_verified_at=datetime.now(timezone.utc) if email_verified else None,
             )
             user_repository.save(user)
@@ -122,7 +122,7 @@ def there_is_authenticated_user(
     id: UUID | None = None,
     email: str = "auth-user@example.com",
     organization_id: UUID | None = None,
-    is_superuser: bool = False,
+    is_platform_admin: bool = False,
     email_verified: bool = True,
 ):
     def step(context):
@@ -131,7 +131,7 @@ def there_is_authenticated_user(
             role=role,
             email=email,
             organization_id=organization_id,
-            is_superuser=is_superuser,
+            is_platform_admin=is_platform_admin,
             email_verified=email_verified,
         )(context)
         there_is_an_access_token_for_user()(context)

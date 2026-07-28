@@ -110,8 +110,8 @@ def legacy_database(isolated_database):
             connection.execute(
                 text(
                     "INSERT INTO organization "
-                    "(id, created_at, updated_at, name, description, is_default) "
-                    "VALUES (:id, :now, :now, :name, NULL, false)"
+                    "(id, created_at, updated_at, name, description) "
+                    "VALUES (:id, :now, :now, :name, NULL)"
                 ),
                 {"id": org_id, "now": now, "name": name},
             )

@@ -3,6 +3,7 @@
 import { useCallback, useRef, useState } from "react";
 
 import { api } from "@/shared/api";
+import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
 
 import type { AgentLogHistoryRead } from "../schemas";
 import { AgentLogHistoryReadSchema } from "../schemas";
@@ -20,6 +21,7 @@ interface UseAgentLogHistoryReturn {
 }
 
 export function useAgentLogHistory(agentId: string): UseAgentLogHistoryReturn {
+  const orgApiBase = useOrganizationApiBase();
   const [hasMore, setHasMore] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
   const isLoadingRef = useRef(false);
@@ -43,7 +45,7 @@ export function useAgentLogHistory(agentId: string): UseAgentLogHistoryReturn {
         ? `?snapshot_id=${nextSnapshotIdRef.current}`
         : "";
       const response = await api.get<AgentLogHistoryRead>(
-        `/api/v1/agents/${agentId}/logs/history${snapshotParam}`,
+        `${orgApiBase}/agents/${agentId}/logs/history${snapshotParam}`,
         { schema: AgentLogHistoryReadSchema },
       );
       const data = response.data;
@@ -62,7 +64,7 @@ export function useAgentLogHistory(agentId: string): UseAgentLogHistoryReturn {
       isLoadingRef.current = false;
       setIsLoading(false);
     }
-  }, [agentId]);
+  }, [agentId, orgApiBase]);
 
   return { hasMore, isLoading, loadMore, reset };
 }

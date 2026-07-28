@@ -218,15 +218,15 @@ class Agent(BaseModel, table=True):
             "organization_id",
             name="uq_agent_id_organization",
         ),
-        sa.ForeignKeyConstraint(
-            ["organization_id", "template_slug", "template_version"],
-            [
-                "agent_template.organization_id",
-                "agent_template.template_slug",
-                "agent_template.version",
-            ],
-            name="fk_agent_template_slug_version",
-            ondelete="RESTRICT",
+        # An active agent pins exactly one template version via one of two
+        # mutually-exclusive FKs: platform_template_id for a global predefined
+        # template, or agent_template_id for an org-scoped custom/fork template.
+        # Soft-deleted agents may be detached when their old template lineage is
+        # purged.
+        sa.CheckConstraint(
+            "((deleted_at IS NOT NULL) AND platform_template_id IS NULL AND agent_template_id IS NULL) "
+            "OR ((platform_template_id IS NULL) <> (agent_template_id IS NULL))",
+            name="ck_agent_template_pin_state",
         ),
     )
 
@@ -255,11 +255,21 @@ class Agent(BaseModel, table=True):
         nullable=True,
         sa_type=sa.DateTime(timezone=True),  # type: ignore
     )
-    # Nullable so deleting a template lineage can detach soft-deleted agents:
-    # with either column NULL the composite FK is not enforced (MATCH SIMPLE).
-    # Live agents always carry a pin — read it through template_pin.
-    template_slug: str | None = SqlField(default=None, nullable=True, max_length=255)
-    template_version: int | None = SqlField(default=None, nullable=True)
+    # Template pin: active agents set exactly one of platform_template_id /
+    # agent_template_id (enforced by ck_agent_template_pin_state). Soft-deleted
+    # agents may be detached by template deletion.
+    platform_template_id: UUID | None = SqlField(
+        default=None,
+        foreign_key="platform_template.id",
+        nullable=True,
+        ondelete="RESTRICT",
+    )
+    agent_template_id: UUID | None = SqlField(
+        default=None,
+        foreign_key="agent_template.id",
+        nullable=True,
+        ondelete="RESTRICT",
+    )
     model: str = SqlField(nullable=False, default="")
     platform: AgentPlatform = SqlField(
         default=AgentPlatform.SLACK,
@@ -280,12 +290,6 @@ class Agent(BaseModel, table=True):
         default=CommandApprovalMode.AUTO,
         sa_column=Column(sa.String(10), nullable=False, server_default="auto"),
     )
-
-    @property
-    def template_pin(self) -> tuple[str, int]:
-        if self.template_slug is None or self.template_version is None:
-            raise RuntimeError(f"Agent {self.id} has no template pin")
-        return self.template_slug, self.template_version
 
 
 def compute_bot_token_hash(bot_token: str) -> str:
@@ -455,6 +459,18 @@ class AgentTemplateSkill(BaseModel, table=True):
     )
 
     template_id: UUID = SqlField(foreign_key="agent_template.id", nullable=False, ondelete="CASCADE")
+    skill_id: UUID = SqlField(foreign_key="skill.id", nullable=False, ondelete="RESTRICT")
+
+
+class PlatformTemplateSkill(BaseModel, table=True):
+    __tablename__: str = "platform_template_skill"
+
+    __table_args__ = (
+        sa.UniqueConstraint("template_id", "skill_id", name="uq_platform_template_skill"),
+        sa.Index("ix_platform_template_skill_template", "template_id"),
+    )
+
+    template_id: UUID = SqlField(foreign_key="platform_template.id", nullable=False, ondelete="CASCADE")
     skill_id: UUID = SqlField(foreign_key="skill.id", nullable=False, ondelete="RESTRICT")
 
 

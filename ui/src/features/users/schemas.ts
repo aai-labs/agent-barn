@@ -6,7 +6,7 @@ export const UserReadSchema = z.object({
   updatedAt: z.string(),
   fullName: z.string().nullable().optional(),
   email: z.string().email(),
-  isSuperuser: z.boolean(),
+  isPlatformAdmin: z.boolean(),
   emailVerifiedAt: z.string().nullable().optional(),
 });
 

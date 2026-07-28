@@ -1,15 +1,15 @@
-"""AF-147: cross-organization isolation (multi-tenant object-level access control).
+"""Cross-organization isolation (multi-tenant object-level access control).
 
 List-level scoping is covered per-domain elsewhere; this suite pins the object-level
-(IDOR) guarantees: authenticating as a member of org A and pointing X-Organization-Id
-at org A, you must not be able to read or mutate org B's resources *by id/slug*.
+(IDOR) guarantees: authenticating as a member of org A and using org A's URL scope,
+you must not be able to read or mutate org B's resources *by id/slug*.
 
 Isolation contract:
 - Resources (agents, skills, templates) return **404** cross-org — existence is never
   leaked to a non-member.
 - Organization/member *management* returns **403** — the org is a known entity you
   simply lack permission to administer.
-- Superusers transcend org boundaries and succeed when they target an org via the header.
+- Platform Administrators use platform routes; org URLs still require real membership.
 """
 
 import io
@@ -72,8 +72,20 @@ def _auth(context) -> dict:
     return {"Authorization": f"Bearer {context.access_token}"}
 
 
-def _headers(context, org_id: UUID) -> dict:
-    return {**_auth(context), "X-Organization-Id": str(org_id)}
+def _headers(context) -> dict:
+    return _auth(context)
+
+
+def _agents(org_id: UUID) -> str:
+    return f"/api/v1/organizations/{org_id}/agents"
+
+
+def _skills(org_id: UUID) -> str:
+    return f"/api/v1/organizations/{org_id}/skills"
+
+
+def _templates(org_id: UUID) -> str:
+    return f"/api/v1/organizations/{org_id}/templates"
 
 
 def _there_is_a_bare_org(org_id: UUID, name: str):
@@ -129,7 +141,7 @@ def test_cannot_read_agent_from_another_org():
     with given(_member_a_with_org_b_agent()) as context:
         agent_id = context.agent.id
         with when("a member of org A reads org B's agent, scoped to org A"):
-            response = context.client.get(f"/api/v1/agents/{agent_id}", headers=_headers(context, ORG_A))
+            response = context.client.get(f"{_agents(ORG_A)}/{agent_id}", headers=_headers(context))
             with then("the agent is not found"):
                 assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
@@ -138,9 +150,9 @@ def test_cannot_update_agent_from_another_org():
     with given(_member_a_with_org_b_agent()) as context:
         agent_id = context.agent.id
         response = context.client.patch(
-            f"/api/v1/agents/{agent_id}",
+            f"{_agents(ORG_A)}/{agent_id}",
             json={"name": "Hijacked"},
-            headers=_headers(context, ORG_A),
+            headers=_headers(context),
         )
         assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
@@ -148,35 +160,35 @@ def test_cannot_update_agent_from_another_org():
 def test_cannot_delete_agent_from_another_org():
     with given(_member_a_with_org_b_agent()) as context:
         agent_id = context.agent.id
-        response = context.client.delete(f"/api/v1/agents/{agent_id}", headers=_headers(context, ORG_A))
+        response = context.client.delete(f"{_agents(ORG_A)}/{agent_id}", headers=_headers(context))
         assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
 def test_cannot_start_agent_from_another_org():
     with given(_member_a_with_org_b_agent()) as context:
         agent_id = context.agent.id
-        response = context.client.post(f"/api/v1/agents/{agent_id}/start", headers=_headers(context, ORG_A))
+        response = context.client.post(f"{_agents(ORG_A)}/{agent_id}/start", headers=_headers(context))
         assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
 def test_cannot_stop_agent_from_another_org():
     with given(_member_a_with_org_b_agent()) as context:
         agent_id = context.agent.id
-        response = context.client.post(f"/api/v1/agents/{agent_id}/stop", headers=_headers(context, ORG_A))
+        response = context.client.post(f"{_agents(ORG_A)}/{agent_id}/stop", headers=_headers(context))
         assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
 def test_cannot_read_agent_health_from_another_org():
     with given(_member_a_with_org_b_agent()) as context:
         agent_id = context.agent.id
-        response = context.client.get(f"/api/v1/agents/{agent_id}/healthz", headers=_headers(context, ORG_A))
+        response = context.client.get(f"{_agents(ORG_A)}/{agent_id}/healthz", headers=_headers(context))
         assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
 def test_cannot_read_agent_template_from_another_org():
     with given(_member_a_with_org_b_agent()) as context:
         agent_id = context.agent.id
-        response = context.client.get(f"/api/v1/agents/{agent_id}/template/1", headers=_headers(context, ORG_A))
+        response = context.client.get(f"{_agents(ORG_A)}/{agent_id}/template/1", headers=_headers(context))
         assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
@@ -203,7 +215,7 @@ def _member_a_with_org_b_skill():
 def test_cannot_read_skill_from_another_org():
     with given(_member_a_with_org_b_skill()) as context:
         skill_id = context.skill_b.id
-        response = context.client.get(f"/api/v1/skills/{skill_id}", headers=_headers(context, ORG_A))
+        response = context.client.get(f"{_skills(ORG_A)}/{skill_id}", headers=_headers(context))
         assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
@@ -211,9 +223,9 @@ def test_cannot_update_skill_from_another_org():
     with given(_member_a_with_org_b_skill()) as context:
         skill_id = context.skill_b.id
         response = context.client.patch(
-            f"/api/v1/skills/{skill_id}",
+            f"{_skills(ORG_A)}/{skill_id}",
             json={"name": "Hijacked"},
-            headers=_headers(context, ORG_A),
+            headers=_headers(context),
         )
         assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
@@ -221,7 +233,7 @@ def test_cannot_update_skill_from_another_org():
 def test_cannot_delete_skill_from_another_org():
     with given(_member_a_with_org_b_skill()) as context:
         skill_id = context.skill_b.id
-        response = context.client.delete(f"/api/v1/skills/{skill_id}", headers=_headers(context, ORG_A))
+        response = context.client.delete(f"{_skills(ORG_A)}/{skill_id}", headers=_headers(context))
         assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
@@ -249,16 +261,16 @@ def _member_a_with_org_b_template():
 
 def test_cannot_read_template_from_another_org():
     with given(_member_a_with_org_b_template()) as context:
-        response = context.client.get(f"/api/v1/templates/{_ORG_B_SLUG}", headers=_headers(context, ORG_A))
+        response = context.client.get(f"{_templates(ORG_A)}/{_ORG_B_SLUG}", headers=_headers(context))
         assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
 def test_cannot_update_template_from_another_org():
     with given(_member_a_with_org_b_template()) as context:
         response = context.client.patch(
-            f"/api/v1/templates/{_ORG_B_SLUG}",
+            f"{_templates(ORG_A)}/{_ORG_B_SLUG}",
             json={"soul_md": "# Hijacked"},
-            headers=_headers(context, ORG_A),
+            headers=_headers(context),
         )
         assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
@@ -266,8 +278,8 @@ def test_cannot_update_template_from_another_org():
 def test_cannot_list_template_versions_from_another_org():
     with given(_member_a_with_org_b_template()) as context:
         response = context.client.get(
-            f"/api/v1/templates/{_ORG_B_SLUG}/versions",
-            headers=_headers(context, ORG_A),
+            f"{_templates(ORG_A)}/{_ORG_B_SLUG}/versions",
+            headers=_headers(context),
         )
         assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
@@ -294,7 +306,7 @@ def _owner_a_and_bare_org_b():
 
 def test_cannot_list_members_of_another_org():
     with given(_owner_a_and_bare_org_b()) as context:
-        response = context.client.get(f"/api/v1/organizations/{ORG_B}/members", headers=_headers(context, ORG_A))
+        response = context.client.get(f"/api/v1/organizations/{ORG_B}/members", headers=_headers(context))
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
@@ -303,7 +315,7 @@ def test_cannot_add_member_to_another_org():
         response = context.client.post(
             f"/api/v1/organizations/{ORG_B}/members",
             json={"email": "victim@example.com", "role": "MEMBER"},
-            headers=_headers(context, ORG_A),
+            headers=_headers(context),
         )
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
@@ -313,7 +325,7 @@ def test_cannot_change_member_role_in_another_org():
         response = context.client.patch(
             f"/api/v1/organizations/{ORG_B}/members/{uuid7()}",
             json={"role": "ADMIN"},
-            headers=_headers(context, ORG_A),
+            headers=_headers(context),
         )
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
@@ -322,7 +334,7 @@ def test_cannot_remove_member_from_another_org():
     with given(_owner_a_and_bare_org_b()) as context:
         response = context.client.delete(
             f"/api/v1/organizations/{ORG_B}/members/{uuid7()}",
-            headers=_headers(context, ORG_A),
+            headers=_headers(context),
         )
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
@@ -332,24 +344,24 @@ def test_cannot_transfer_ownership_of_another_org():
         response = context.client.post(
             f"/api/v1/organizations/{ORG_B}/transfer-ownership",
             json={"user_id": str(uuid7())},
-            headers=_headers(context, ORG_A),
+            headers=_headers(context),
         )
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
 # --------------------------------------------------------------------------- #
-# Superuser positive controls — targeting an org via the header succeeds
+# Platform Administrator non-member controls — targeting an org URL is forbidden
 # --------------------------------------------------------------------------- #
 
 
-def test_superuser_can_read_any_orgs_agent_via_header():
+def test_platform_admin_without_membership_cannot_read_org_agent_via_url():
     with given(
         [
             *_GIVEN,
             there_is_a_user(
                 id=SUPERUSER,
                 email="root@example.com",
-                is_superuser=True,
+                is_platform_admin=True,
                 organization_id=None,
             ),
             there_is_an_access_token_for_user(),
@@ -358,19 +370,18 @@ def test_superuser_can_read_any_orgs_agent_via_header():
         ]
     ) as context:
         agent_id = context.agent.id
-        response = context.client.get(f"/api/v1/agents/{agent_id}", headers=_headers(context, ORG_B))
-        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-        assert_that(response.json()["name"], equal_to("Agent B"))
+        response = context.client.get(f"{_agents(ORG_B)}/{agent_id}", headers=_headers(context))
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
-def test_superuser_can_list_any_orgs_members_via_header():
+def test_platform_admin_without_membership_cannot_list_org_members_via_url():
     with given(
         [
             *_GIVEN,
             there_is_a_user(
                 id=SUPERUSER,
                 email="root@example.com",
-                is_superuser=True,
+                is_platform_admin=True,
                 organization_id=None,
             ),
             there_is_a_user(
@@ -381,7 +392,5 @@ def test_superuser_can_list_any_orgs_members_via_header():
             there_is_an_access_token_for_user(user_id=SUPERUSER),
         ]
     ) as context:
-        response = context.client.get(f"/api/v1/organizations/{ORG_B}/members", headers=_headers(context, ORG_B))
-        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-        emails = [m["email"] for m in response.json()]
-        assert_that("owner-b@example.com" in emails, equal_to(True))
+        response = context.client.get(f"/api/v1/organizations/{ORG_B}/members", headers=_headers(context))
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))

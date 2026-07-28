@@ -159,6 +159,36 @@ export function TemplateDrawer({
     mode === "create"
       ? deriveSlug(name) || "—"
       : `${slug}@v${current?.version ?? "…"}`;
+  const showDeleteAction = !editing && mode === "view" && canManage && !!current;
+  const deleteBlockedReason =
+    current?.templateSource === "pre-defined"
+      ? "Pre-defined templates cannot be deleted"
+      : current?.inUse
+        ? "This template is being used by an agent"
+        : null;
+
+  function renderDeleteAction() {
+    if (!showDeleteAction) return null;
+    if (deleteBlockedReason) {
+      return (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span>
+              <button className="af-btn af-btn-ghost" disabled>
+                Delete
+              </button>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent>{deleteBlockedReason}</TooltipContent>
+        </Tooltip>
+      );
+    }
+    return (
+      <button className="af-btn af-btn-danger" onClick={() => setDeleting(true)}>
+        Delete
+      </button>
+    );
+  }
 
   return (
     <div className="fixed inset-0 z-50">
@@ -434,30 +464,7 @@ export function TemplateDrawer({
           className="px-6 py-4 flex items-center justify-between gap-2 flex-shrink-0"
           style={{ borderTop: "1px solid var(--line)" }}
         >
-          <div>
-            {!editing && mode === "view" && canManage && current && (
-              current.inUse || current.templateSource === "pre-defined" ? (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span>
-                      <button className="af-btn af-btn-ghost" disabled>
-                        Delete
-                      </button>
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    {current.templateSource === "pre-defined"
-                      ? "Pre-defined templates cannot be deleted"
-                      : "This template is being used by an agent"}
-                  </TooltipContent>
-                </Tooltip>
-              ) : (
-                <button className="af-btn af-btn-danger" onClick={() => setDeleting(true)}>
-                  Delete
-                </button>
-              )
-            )}
-          </div>
+          <div>{renderDeleteAction()}</div>
           <div className="flex items-center gap-2">
             {editing ? (
               <>
