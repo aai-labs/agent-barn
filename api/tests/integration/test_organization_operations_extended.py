@@ -42,6 +42,14 @@ _AGENT_GIVEN = [
 ]
 
 
+def _clear_active_org():
+    def step(context):
+        context.organization = None
+        context.organization_user = None
+
+    return step
+
+
 def test_regular_user_context_includes_only_their_organizations():
     org_a = uuid7()
     org_b = uuid7()
@@ -211,7 +219,7 @@ def test_user_cannot_view_another_organization():
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
-def test_platform_admin_can_update_any_organization():
+def test_platform_admin_without_membership_cannot_update_organization_by_url():
     org_id = uuid7()
     super_id = uuid7()
 
@@ -227,11 +235,11 @@ def test_platform_admin_can_update_any_organization():
                 organization_id=org_id,
                 role=OrganizationRole.OWNER,
             ),
+            _clear_active_org(),
             there_is_a_user(
                 id=super_id,
                 email="super-update@example.com",
                 is_platform_admin=True,
-                role=OrganizationRole.MEMBER,
             ),
             there_is_an_access_token_for_user(user_id=super_id),
         ]
@@ -243,8 +251,7 @@ def test_platform_admin_can_update_any_organization():
             json={"name": "Updated By Platform Admin"},
             headers={"Authorization": f"Bearer {context.access_token}"},
         )
-        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-        assert_that(response.json()["name"], equal_to("Updated By Platform Admin"))
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
 def test_owner_without_organization_update_cannot_update_organization():
@@ -339,7 +346,7 @@ def test_member_cannot_update_organization():
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
-def test_platform_admin_gets_404_for_missing_organization():
+def test_platform_admin_without_membership_gets_403_for_missing_organization_url():
     super_id = uuid7()
     missing_org = uuid7()
 
@@ -350,7 +357,12 @@ def test_platform_admin_gets_404_for_missing_organization():
             create_test_client(),
             database_repo_is_ready(),
             database_is_clean(),
-            there_is_a_user(id=super_id, email="super@example.com", is_platform_admin=True),
+            there_is_a_user(
+                id=super_id,
+                email="super@example.com",
+                is_platform_admin=True,
+                organization_id=None,
+            ),
             there_is_an_access_token_for_user(user_id=super_id),
         ]
     ) as context:
@@ -360,7 +372,7 @@ def test_platform_admin_gets_404_for_missing_organization():
             f"/api/v1/organizations/{missing_org}",
             headers={"Authorization": f"Bearer {context.access_token}"},
         )
-        assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
 def test_member_cannot_delete_organization():
@@ -399,7 +411,7 @@ def test_member_cannot_delete_organization():
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
-def test_platform_admin_can_delete_any_organization_by_url():
+def test_platform_admin_without_membership_cannot_delete_organization_by_url():
     super_id = uuid7()
     org_a = uuid7()
     org_b = uuid7()
@@ -414,6 +426,7 @@ def test_platform_admin_can_delete_any_organization_by_url():
                 id=super_id,
                 email="super-delete-context@example.com",
                 is_platform_admin=True,
+                organization_id=None,
             ),
             there_is_a_user(
                 email="owner-delete-context-a@example.com",
@@ -433,10 +446,10 @@ def test_platform_admin_can_delete_any_organization_by_url():
             headers={"Authorization": f"Bearer {context.access_token}"},
         )
 
-        assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
-def test_platform_admin_can_delete_any_organization():
+def test_platform_admin_without_membership_cannot_delete_organization():
     super_id = uuid7()
     org_id = uuid7()
     with given(
@@ -446,7 +459,12 @@ def test_platform_admin_can_delete_any_organization():
             create_test_client(),
             database_repo_is_ready(),
             database_is_clean(),
-            there_is_a_user(id=super_id, email="platform-admin@example.com", is_platform_admin=True),
+            there_is_a_user(
+                id=super_id,
+                email="platform-admin@example.com",
+                is_platform_admin=True,
+                organization_id=None,
+            ),
             there_is_a_user(
                 email="owner-admin-delete@example.com",
                 organization_id=org_id,
@@ -461,7 +479,7 @@ def test_platform_admin_can_delete_any_organization():
             f"/api/v1/organizations/{org_id}",
             headers={"Authorization": f"Bearer {context.access_token}"},
         )
-        assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
 def test_owner_cannot_delete_another_organization():

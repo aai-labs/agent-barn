@@ -205,7 +205,7 @@ def test_admin_can_create_skill():
         assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
 
 
-def test_platform_admin_without_skill_manage_grant_can_create_skill():
+def test_platform_admin_without_skill_manage_permission_cannot_create_skill():
     super_id = uuid7()
     with given(
         [
@@ -225,7 +225,7 @@ def test_platform_admin_without_skill_manage_grant_can_create_skill():
             headers=_auth(context),
         )
 
-        assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
 def test_create_skill_returns_201():

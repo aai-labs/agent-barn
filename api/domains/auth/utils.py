@@ -20,7 +20,6 @@ from api.domains.auth.service import JWT_ENCODING_ALGORITHM
 from api.domains.platform_admin.service import PlatformAdminService
 from api.domains.users.organization_users.models import (
     OrganizationRole,
-    OrganizationUser,
 )
 from api.domains.users.organization_users.repository import OrganizationUserRepository
 from api.domains.users.repository import UserRepository
@@ -80,18 +79,9 @@ def get_authenticated_user(
     if organization_id:
         user_organization = user_organization_map.get(organization_id, None)
         if not user_organization:
-            if user.is_platform_admin:
-                # Platform Administrators may operate in explicit Organization
-                # context without a persisted Membership.
-                user_organization = OrganizationUser(
-                    user_id=user.id,
-                    organization_id=organization_id,
-                    role=OrganizationRole.OWNER,
-                )
-            else:
-                raise ForbiddenException(detail="You do not have access to this organization")
+            raise ForbiddenException(detail="You do not have access to this organization")
 
-    if organization_roles and not user.is_platform_admin:
+    if organization_roles:
         if not user_organization or user_organization.role not in organization_roles:
             raise ForbiddenException(
                 detail=f"User {user.id} does not have the required roles: {[role.value for role in organization_roles]}"

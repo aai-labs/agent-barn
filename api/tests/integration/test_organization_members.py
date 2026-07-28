@@ -163,7 +163,7 @@ def test_member_list_respects_limit_and_defaults_to_unbounded():
         assert_that(unbounded.json(), has_length(3))
 
 
-def test_platform_admin_without_membership_read_grant_can_list_members():
+def test_platform_admin_without_membership_read_permission_cannot_list_members():
     super_id = uuid7()
     with given(
         [
@@ -181,7 +181,7 @@ def test_platform_admin_without_membership_read_grant_can_list_members():
     ) as context:
         response = context.client.get(_members_url(), headers=_auth(context))
 
-        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
 def test_owner_cannot_list_members_in_another_active_organization():

@@ -2,7 +2,7 @@
 
 The active organization is resolved from the organization_id path parameter,
 validated against membership in get_current_user, and drives org-scoped resource
-queries. Platform Administrators may target any org through an explicit org URL.
+queries. Platform Administrators must still be real members to use org URLs.
 """
 
 from uuid import UUID
@@ -145,7 +145,7 @@ def test_member_targeting_foreign_org_is_forbidden():
                 assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
-def test_platform_admin_can_target_any_org_and_is_isolated_per_url():
+def test_platform_admin_without_membership_cannot_target_org_url():
     with given(
         [
             *_GIVEN,
@@ -162,25 +162,20 @@ def test_platform_admin_can_target_any_org_and_is_isolated_per_url():
             there_is_an_agent(organization_id=ORG_B, name="Agent B"),
         ]
     ) as context:
-        with when("platform_admin targets org A"):
+        with when("platform admin targets org A without membership"):
             response_a = context.client.get(
                 _agents(ORG_A),
                 headers=_auth(context),
             )
-        with when("platform_admin targets org B"):
+        with when("platform admin targets org B without membership"):
             response_b = context.client.get(
                 _agents(ORG_B),
                 headers=_auth(context),
             )
 
-            with then("each request sees only its targeted org's agents"):
-                assert_that(response_a.status_code, equal_to(status.HTTP_200_OK))
-                assert_that(_agent_names(response_a), has_item("Agent A"))
-                assert_that(_agent_names(response_a), not_(has_item("Agent B")))
-
-                assert_that(response_b.status_code, equal_to(status.HTTP_200_OK))
-                assert_that(_agent_names(response_b), has_item("Agent B"))
-                assert_that(_agent_names(response_b), not_(has_item("Agent A")))
+            with then("each request is forbidden like any other non-member"):
+                assert_that(response_a.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+                assert_that(response_b.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
 def test_malformed_url_org_id_is_rejected():

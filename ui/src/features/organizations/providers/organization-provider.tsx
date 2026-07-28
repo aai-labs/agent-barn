@@ -16,7 +16,6 @@ import { AuthLoadingFallback } from "@/auth/components/auth-loading-fallback";
 import { useCurrentUser } from "@/auth/providers/user-context-provider";
 import { useOrgStore } from "@/features/organizations/stores/org-store";
 import { useOrgStoreHydrated } from "@/features/organizations/stores/use-org-store-hydrated";
-import { useAllOrganizations } from "@/features/organizations/hooks/use-all-organizations";
 
 import type { Organization } from "../schemas";
 
@@ -58,19 +57,13 @@ export function OrganizationProvider({ children }: { children: ReactNode }) {
   const urlOrganizationId =
     typeof params?.orgId === "string" ? params.orgId : null;
 
-  // Superusers aren't members of the orgs they manage, so their picker is populated
-  // from the full org list rather than their memberships.
-  const { organizations: allOrganizations, isLoading: isLoadingAllOrganizations } =
-    useAllOrganizations({ enabled: user.isPlatformAdmin });
-
-  const organizations = useMemo(() => {
-    if (user.isPlatformAdmin) {
-      return allOrganizations;
-    }
-    return (userContext.organizationUsers ?? []).map(
-      (membership) => membership.organization,
-    );
-  }, [user.isPlatformAdmin, allOrganizations, userContext.organizationUsers]);
+  const organizations = useMemo(
+    () =>
+      (userContext.organizationUsers ?? []).map(
+        (membership) => membership.organization,
+      ),
+    [userContext.organizationUsers],
+  );
 
   const fallbackOrganization = useMemo(
     () => organizations[0] ?? null,
@@ -121,7 +114,7 @@ export function OrganizationProvider({ children }: { children: ReactNode }) {
     if (previousOrgId === activeOrgId) return;
     switchedOrgIdRef.current = activeOrgId;
     // Only a genuine org-to-org switch should drop caches. The initial resolution
-    // (null -> org, e.g. a platform admin's org list arriving asynchronously) is not a switch:
+    // (null -> org, e.g. memberships arriving asynchronously) is not a switch:
     // evicting there would wipe the just-loaded agents/templates mid-render and flash a
     // reload. Nothing stale exists before the first org is known, so skip it.
     if (previousOrgId === null || activeOrgId === null) return;
@@ -131,14 +124,13 @@ export function OrganizationProvider({ children }: { children: ReactNode }) {
     });
   }, [activeOrgId, queryClient]);
 
-  // A URL org the user can't reach (non-platform-admin, not a member; or a
-  // stale/unknown id) falls back to an available org rather than 403-ing every
-  // scoped request.
+  // A URL org the user can't reach (not a member, stale, or unknown) falls back to an
+  // available org rather than 403-ing every scoped request.
   const canAccessUrlOrg =
     !urlOrganizationId ||
     organizations.some((org) => org.id === urlOrganizationId);
   useEffect(() => {
-    if (!hasHydrated || isLoadingAllOrganizations) return;
+    if (!hasHydrated) return;
     if (!canAccessUrlOrg && fallbackOrganization) {
       router.replace(`/dashboard/${fallbackOrganization.id}`);
     }
@@ -146,7 +138,6 @@ export function OrganizationProvider({ children }: { children: ReactNode }) {
     canAccessUrlOrg,
     fallbackOrganization,
     hasHydrated,
-    isLoadingAllOrganizations,
     router,
   ]);
 
@@ -154,7 +145,7 @@ export function OrganizationProvider({ children }: { children: ReactNode }) {
     return <AuthLoadingFallback message="Unable to load organizations." />;
   }
 
-  if (!hasHydrated || isLoadingAllOrganizations) {
+  if (!hasHydrated) {
     return <AuthLoadingFallback message="Loading organizations..." />;
   }
 

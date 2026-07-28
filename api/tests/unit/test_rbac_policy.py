@@ -153,25 +153,17 @@ def test_resolve_denies_missing_permission_by_default():
     )
 
 
-def test_resolve_platform_admin_uses_transient_explicit_org_context():
-    organization_id = uuid7()
-    user = _user(is_platform_admin=True)
-    transient_membership = OrganizationUser(
-        user_id=user.id,
-        organization_id=organization_id,
-        role=OrganizationRole.OWNER,
-    )
-    context = CurrentUserContext(
-        user=user,
-        organization_ids=[],
-        user_organization_map={},
-        current_user_organization=transient_membership,
-    )
+def test_resolve_platform_admin_uses_real_membership_permissions():
+    context, membership = _context(OrganizationRole.MEMBER, is_platform_admin=True)
     policy = PermissionPolicy()
 
     assert_that(
-        policy.resolve(context, organization_id, PermissionKey.ORGANIZATION_DELETE),
-        equal_to(AuthorizationScope(organization_id=organization_id)),
+        policy.resolve(context, membership.organization_id, PermissionKey.ORGANIZATION_DELETE),
+        none(),
+    )
+    assert_that(
+        policy.resolve(context, membership.organization_id, PermissionKey.ORGANIZATION_READ),
+        equal_to(AuthorizationScope(organization_id=membership.organization_id)),
     )
 
 

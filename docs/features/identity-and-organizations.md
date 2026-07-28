@@ -15,7 +15,7 @@ Authentication establishes a user and membership context; Organization is the te
 - Ordinary Organization and Membership capabilities resolve the Membership's current Organization Role through the immutable code-owned Permission mapping. Organization deletion, ownership transfer, and sensitive Admin changes remain protected Organization Owner/Platform Administrator governance invariants.
 - Organization Roles do not grant per-Agent operations to Members. Organization Owner/Admin have implicit Agent Owner authority; Organization Members receive Agent authority through explicit Agent Access Roles.
 - Organization-scoped routes carry the active organization in the URL. A route without an `organization_id` path parameter has no active Organization.
-- Normal users require membership in the selected organization. Platform Administrators can target organizations without persisted membership through explicit context behavior.
+- Org-scoped routes require real membership in the selected organization, including for Platform Administrators. Platform Administrator authority is reserved for platform routes.
 - Cross-organization resource access is intentionally hidden with 404 for tenant-owned entities; known but unauthorized organization administration uses 403.
 - Agent Farm has no default Organization. Platform-owned resources are global Platform Resources, not Organization-owned rows. Any organization with active agents must remove them before deletion.
 - Global user list/create/reset/delete operations require Platform Administrator authority.
@@ -30,7 +30,7 @@ Self-registration is disabled. Accounts enter through Platform Administrator pro
 
 ## Organization and membership flows
 
-Platform Administrators create organizations and establish an Owner Membership. Membership list, invite, role-update, and removal workflows require their corresponding Permissions; seeded Owner/Admin roles receive them. Owner-only rules protect ownership and sensitive Admin operations. Removing a pending Member also revokes outstanding invite/reset links.
+Platform Administrators create organizations and establish an Owner Membership through platform routes. Membership list, invite, role-update, and removal workflows require their corresponding Organization Permissions through real membership; seeded Owner/Admin roles receive them. Owner-only rules protect ownership and sensitive Admin operations. Removing a pending Member also revokes outstanding invite/reset links.
 
 The UI resolves Organization View from `/dashboard/[orgId]`; Platform View lives at `/dashboard/platform` and has no active Organization. Remembered organization state is only a navigation fallback for returning to Organization View. Organization-scoped hooks include the organization ID in API URLs. Organization switching removes known organization-scoped query caches because those keys are not organization-dimensioned.
 

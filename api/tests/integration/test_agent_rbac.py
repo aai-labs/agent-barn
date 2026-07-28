@@ -661,7 +661,7 @@ def test_removed_membership_cascades_agent_access():
         )
 
 
-def test_membershipless_platform_admin_can_manage_agent_share_in_explicit_org():
+def test_membershipless_platform_admin_cannot_manage_agent_share_in_org_url():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         organization = context.organization
         target, _ = _add_member(context)
@@ -683,4 +683,4 @@ def test_membershipless_platform_admin_can_manage_agent_share_in_explicit_org():
             headers=_auth(context),
         )
 
-        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))

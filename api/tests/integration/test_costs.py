@@ -151,10 +151,8 @@ def test_unassigned_member_cannot_view_agent_cost():
         assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
-def test_platform_admin_can_view_costs_summary():
-    """Platform Administrators transcend org roles: the owner/admin gate must not block them, even
-    though a platform_admin isn't a member of the org they're viewing (membership is
-    synthesized from the active-org header)."""
+def test_platform_admin_without_membership_cannot_view_costs_summary():
+    """Platform Administrators need real membership for org-scoped costs."""
     super_id = uuid7()
     org_id = uuid7()
     with given(
@@ -173,7 +171,7 @@ def test_platform_admin_can_view_costs_summary():
             create_test_client(),
             database_repo_is_ready(),
             database_is_clean(),
-            # Created before the org exists in context, so the platform_admin stays a non-member.
+            # Created before the org exists in context, so the platform admin stays a non-member.
             there_is_a_user(id=super_id, email="super-costs@example.com", is_platform_admin=True),
             there_is_an_organization_with_user_and_access_token(id=org_id, email="owner-super-costs@example.com"),
             use_org_for_auth(),
@@ -183,7 +181,7 @@ def test_platform_admin_can_view_costs_summary():
         litellm: LiteLLMClient = context.injector.get(LiteLLMClient)
         litellm.get_global_spend_report.return_value = {}
         response = context.client.get(f"{_BASE}/summary", headers=_auth(context))
-        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
 def test_get_costs_summary_returns_200_and_data():

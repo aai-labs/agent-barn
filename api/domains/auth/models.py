@@ -105,16 +105,12 @@ class CurrentUserContext(PydanticBaseModel):
         return self.current_user_organization
 
     # --- Authorization helpers ---
-    # Platform administrators can operate in explicit Organization context without a
-    # persisted Membership. Centralized here (next to the membership map they read) so
-    # services don't re-implement the branch, and so a new org-scoped endpoint can't
-    # forget the platform-admin case. Role is always resolved against the passed
-    # organization_id — never the request's active org — to keep cross-org escalation
-    # impossible.
+    # Role is always resolved against the passed organization_id — never the request's
+    # active org — to keep cross-org escalation impossible. Platform administrators
+    # have platform-route authority only; org-scoped authority still requires a real
+    # persisted Membership.
 
     def has_org_role(self, organization_id: UUID, roles: AbstractSet[OrganizationRole]) -> bool:
-        if self.user.is_platform_admin:
-            return True
         membership = self.user_organization_map.get(organization_id)
         return membership is not None and membership.role in roles
 

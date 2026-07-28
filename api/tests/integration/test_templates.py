@@ -450,7 +450,7 @@ def test_admin_can_create_template():
         assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
 
 
-def test_platform_admin_without_template_manage_grant_can_create_template():
+def test_platform_admin_without_template_manage_permission_cannot_create_template():
     super_id = uuid7()
     with given(
         [
@@ -470,7 +470,7 @@ def test_platform_admin_without_template_manage_grant_can_create_template():
             headers=_auth(context),
         )
 
-        assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
 def test_create_template_returns_201_v1_custom():

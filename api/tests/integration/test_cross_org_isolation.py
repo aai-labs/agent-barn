@@ -9,7 +9,7 @@ Isolation contract:
   leaked to a non-member.
 - Organization/member *management* returns **403** — the org is a known entity you
   simply lack permission to administer.
-- Platform Administrators transcend org boundaries and succeed when they target an org URL.
+- Platform Administrators use platform routes; org URLs still require real membership.
 """
 
 import io
@@ -350,11 +350,11 @@ def test_cannot_transfer_ownership_of_another_org():
 
 
 # --------------------------------------------------------------------------- #
-# Platform Administrator positive controls — targeting an org URL succeeds
+# Platform Administrator non-member controls — targeting an org URL is forbidden
 # --------------------------------------------------------------------------- #
 
 
-def test_platform_admin_can_read_any_orgs_agent_via_url():
+def test_platform_admin_without_membership_cannot_read_org_agent_via_url():
     with given(
         [
             *_GIVEN,
@@ -371,11 +371,10 @@ def test_platform_admin_can_read_any_orgs_agent_via_url():
     ) as context:
         agent_id = context.agent.id
         response = context.client.get(f"{_agents(ORG_B)}/{agent_id}", headers=_headers(context))
-        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-        assert_that(response.json()["name"], equal_to("Agent B"))
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
-def test_platform_admin_can_list_any_orgs_members_via_url():
+def test_platform_admin_without_membership_cannot_list_org_members_via_url():
     with given(
         [
             *_GIVEN,
@@ -394,6 +393,4 @@ def test_platform_admin_can_list_any_orgs_members_via_url():
         ]
     ) as context:
         response = context.client.get(f"/api/v1/organizations/{ORG_B}/members", headers=_headers(context))
-        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-        emails = [m["email"] for m in response.json()]
-        assert_that("owner-b@example.com" in emails, equal_to(True))
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
