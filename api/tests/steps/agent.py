@@ -19,7 +19,6 @@ from api.domains.agents.models import (
     compute_bot_token_hash,
 )
 from api.domains.agents.repository import AgentRepository
-from api.domains.auth.utils import set_default_org_id
 from api.domains.rbac.catalog import AGENT_EDITOR_ROLE_ID
 from api.domains.templates.defaults import (
     DEFAULT_AGENTS_MD,
@@ -35,7 +34,6 @@ from api.domains.templates.slug import generate_template_slug
 from api.infrastructure.crypto import encrypt_token
 from api.infrastructure.kubernetes.client import KubernetesClient
 from api.infrastructure.litellm.client import LiteLLMClient
-from api.tests.core.givenpy import LambdaWith
 
 TEST_ENCRYPTION_KEY: str = Fernet.generate_key().decode()
 TEST_SLACK_BOT_TOKEN = "xoxb-test-bot-token"
@@ -176,8 +174,18 @@ def there_is_agent_access(
 def use_org_for_auth():
     def step(context):
         org_id = context.organization.id
-        set_default_org_id(org_id)
-        return LambdaWith(lambda: None, lambda: set_default_org_id(None))
+        previous = context.client.headers.get("X-Organization-Id")
+        context.client.headers.update({"X-Organization-Id": str(org_id)})
+
+        def cleanup():
+            if previous is None:
+                context.client.headers.pop("X-Organization-Id", None)
+            else:
+                context.client.headers.update({"X-Organization-Id": previous})
+
+        from api.tests.core.givenpy import LambdaWith
+
+        return LambdaWith(lambda: None, cleanup)
 
     return step
 

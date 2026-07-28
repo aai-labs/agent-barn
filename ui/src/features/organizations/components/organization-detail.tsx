@@ -82,17 +82,14 @@ export function OrganizationDetail({ organizationId }: { organizationId: string 
   const currentRole = userContext.organizationUsers?.find(
     (m) => m.organizationId === organizationId,
   )?.role;
-  const canDelete =
-    !!organization &&
-    !organization.isDefault &&
-    (user.isSuperuser || currentRole === "OWNER");
+  const canDelete = !!organization && (user.isSuperuser || currentRole === "OWNER");
 
   const onDelete = () => {
     deleteOrganization.mutate(organizationId, {
       onSuccess: () => {
         toast.success("Organization deleted.");
         setDeleteOpen(false);
-        router.push(user.isSuperuser ? "/dashboard/organizations" : "/");
+        router.push(user.isSuperuser ? "/dashboard/platform/organizations" : "/");
       },
       onError: (e) => toast.error(e.message || "Failed to delete organization"),
     });
@@ -133,7 +130,7 @@ export function OrganizationDetail({ organizationId }: { organizationId: string 
     <div className="max-w-[1000px] mx-auto px-10 pt-9 pb-24">
       {user.isSuperuser && (
         <Link
-          href="/dashboard/organizations"
+          href="/dashboard/platform/organizations"
           className="inline-flex items-center gap-1 text-[13px] mb-4"
           style={{ color: "var(--ink-3)" }}
         >
@@ -159,14 +156,6 @@ export function OrganizationDetail({ organizationId }: { organizationId: string 
             >
               {organization.name}
             </h1>
-            {organization.isDefault && (
-              <span
-                className="flex-shrink-0 rounded-md px-1.5 py-0.5 text-[11px] font-medium"
-                style={{ background: "var(--bg-sunken)", color: "var(--ink-3)" }}
-              >
-                Default
-              </span>
-            )}
           </div>
           <p className="m-0 mt-1 text-[14px]" style={{ color: "var(--ink-3)" }}>
             {organization.description || "No description"}

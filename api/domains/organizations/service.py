@@ -40,8 +40,9 @@ class OrganizationService:
     permission_policy: PermissionPolicy
 
     def get_organization(self, organization_id: UUID, context: CurrentUserContext) -> OrganizationRead:
-        # Any member (or a superuser) may view the org; non-members are refused before
-        # the fetch so a 403-vs-404 difference can't confirm an org's existence.
+        # Any member (or a platform administrator in explicit Organization context) may
+        # view the org; non-members are refused before the fetch so a 403-vs-404
+        # difference can't confirm an org's existence.
         self._ensure_can_view_organization(organization_id, context)
         organization = self.organization_repository.get_read(organization_id)
         if not organization:
@@ -52,12 +53,12 @@ class OrganizationService:
         return organization
 
     def create_organization(self, data: OrganizationCreate, actor: CurrentUserContext) -> OrganizationCreateResult:
-        actor.require_superuser(detail="Only a superuser can create organizations")
+        actor.require_platform_admin(detail="Only a platform administrator can create organizations")
 
         # Org, owner-invite (user + token) and the OWNER membership all commit together,
         # so a failed step can't leave an org with no owner. The invite email is sent
         # only after commit.
-        organization = Organization(name=data.name, description=data.description, is_default=False)
+        organization = Organization(name=data.name, description=data.description)
         with Session(self.organization_repository.delegate.engine, expire_on_commit=False) as session:
             self.organization_repository.save_with_session(organization, session)
             prepared = self.auth_service.prepare_invite(session, email=str(data.owner_email), full_name=data.owner_name)
@@ -83,13 +84,6 @@ class OrganizationService:
                 detail="Failed to load organization",
             )
         return OrganizationCreateResult(organization=organization_read, invite_link=prepared.invite_link)
-
-    def ensure_default_organization(self) -> Organization:
-        existing = self.organization_repository.find_default()
-        if existing:
-            return existing
-        org = Organization(name="default", is_default=True)
-        return self.organization_repository.save(org)
 
     def get_paginated_organizations(
         self,
@@ -172,18 +166,13 @@ class OrganizationService:
         context: CurrentUserContext,
     ) -> None:
         # Deleting an org cascades its agents/templates/skills and orphans running
-        # pods, so it is owner/superuser only — admins can rename but not destroy.
+        # pods, so it is owner/platform-admin only — admins can rename but not destroy.
         self._ensure_is_owner(organization_id, context)
         organization = self.organization_repository.get(organization_id)
         if not organization:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Organization {organization_id} not found",
-            )
-        if organization.is_default:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="The default organization cannot be deleted",
             )
         # Deleting an org would cascade its agents and orphan their running pods.
         # Require an explicit teardown: the agents must be deleted first.

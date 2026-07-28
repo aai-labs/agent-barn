@@ -3,6 +3,7 @@
 import { useMutation } from "@tanstack/react-query";
 
 import { api } from "@/shared/api";
+import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
 
 export type PairAgentData = {
   agentId: string;
@@ -11,10 +12,11 @@ export type PairAgentData = {
 };
 
 export function usePairAgent() {
+  const orgApiBase = useOrganizationApiBase();
   return useMutation({
     mutationFn: async ({ agentId, platform, code }: PairAgentData) => {
       const response = await api.post<{ message: string }>(
-        `/api/v1/agents/${agentId}/pair`,
+        `${orgApiBase}/agents/${agentId}/pair`,
         { platform, code },
       );
       return response.data;

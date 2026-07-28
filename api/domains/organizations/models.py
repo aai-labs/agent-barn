@@ -15,7 +15,6 @@ class Organization(BaseModel, table=True):
 
     name: str = Field(nullable=False, min_length=3, max_length=255)
     description: str | None = Field(default=None, nullable=True)
-    is_default: bool = Field(default=False, nullable=False, sa_column_kwargs={"server_default": "false"})
 
     __table_args__ = (
         sa.Index("ix_organization_name", "name"),
@@ -32,7 +31,6 @@ class OrganizationRead(PydanticBaseModel):
     updated_at: datetime
     name: str
     description: str | None = None
-    is_default: bool
     owner_email: str | None = None
     owner_name: str | None = None
 

@@ -53,7 +53,7 @@ export function UsersGrid() {
     <div className="max-w-[1200px] mx-auto px-10 pt-9 pb-24">
       <ListPageHeader
         title="Users"
-        description="Super admin view of all users."
+        description="Platform view of all users."
         count={total}
         noun="user"
         onSearch={setSearch}
@@ -96,7 +96,7 @@ export function UsersGrid() {
               </div>
               <div className="flex items-center gap-1.5 text-[12.5px] mb-1.5" style={{ color: "var(--ink-3)" }}>
                 <Shield width={12} height={12} style={{ flexShrink: 0 }} />
-                {user.isSuperuser ? "Super admin" : "User"}
+                {user.isSuperuser ? "Platform admin" : "User"}
               </div>
               <div className="text-[12.5px] mb-3.5" style={{ color: "var(--ink-3)" }}>
                 Created: {formatDate(user.createdAt)}

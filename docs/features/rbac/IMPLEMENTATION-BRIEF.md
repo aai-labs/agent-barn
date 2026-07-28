@@ -20,7 +20,7 @@ Related context:
 
 Authorization combines three independent sources:
 
-1. **Platform authority** — superuser may act through explicit Organization context.
+1. **Platform authority** — a Platform Administrator may act through explicit Organization context.
 2. **Organization authority** — each Membership has exactly one fixed Organization Role: Owner, Admin, or Member.
 3. **Agent authority** — Organization Owner/Admin have implicit Agent Owner authority; an accepted Organization Member may receive additive authority from explicit Agent Access, Agent General Access, or both.
 
@@ -54,7 +54,7 @@ An Agent operation is allowed when the actor has the corresponding Permission th
 
 An Agent remains owned by its Organization. Agent Creator is immutable provenance; authority comes from implicit Organization governance or explicit Agent Access.
 
-- Organization Owner/Admin and superuser in explicit Organization context have implicit Agent Owner authority over every Agent in that Organization. No bulk Agent Access rows are required.
+- Organization Owner/Admin and Platform Administrators in explicit Organization context have implicit Agent Owner authority over every Agent in that Organization. No bulk Agent Access rows are required.
 - Creating an Agent atomically records creator provenance and grants the creator explicit Agent Owner access, including when the creator is currently Organization Owner/Admin.
 - An Organization Member without explicit Agent Access or applicable Agent General Access cannot see the Agent or any subordinate resource.
 - One Membership has at most one explicit Agent Access Role per Agent.
@@ -71,7 +71,7 @@ Explicit Agent Access and Agent General Access scope the complete Agent aggregat
 
 ## Data-access enforcement
 
-Visibility belongs in repository queries rather than post-fetch filtering. Member list, search, count, and detail queries must constrain by Organization, soft-deletion state, and either explicit Agent Access or applicable Agent General Access before ordering, totals, or pagination. Organization Owner/Admin and explicit superuser context use implicit Organization-wide visibility.
+Visibility belongs in repository queries rather than post-fetch filtering. Member list, search, count, and detail queries must constrain by Organization, soft-deletion state, and either explicit Agent Access or applicable Agent General Access before ordering, totals, or pagination. Organization Owner/Admin and explicit Platform Administrator context use implicit Organization-wide visibility.
 
 Subordinate repositories must join or use an accessible-Agent query so alternate endpoints cannot reveal conversations, tool calls, costs, logs, Skills, configuration, or credential metadata.
 

@@ -2,6 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/shared/api";
+import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
 import { PaginatedToolCalls, PaginatedToolCallsSchema } from "../schemas";
 import { toolCallsKey, TOOL_CALLS_PAGE_SIZE } from "../utils";
 
@@ -13,6 +14,7 @@ export interface ToolCallFilters {
 }
 
 export function useToolCalls(agentId: string, filters: ToolCallFilters, page: number) {
+  const orgApiBase = useOrganizationApiBase();
   return useQuery({
     queryKey: toolCallsKey.list({ agentId, ...filters, page }),
     queryFn: async () => {
@@ -25,7 +27,7 @@ export function useToolCalls(agentId: string, filters: ToolCallFilters, page: nu
       if (filters.toDate) params.set("to_date", toIso(filters.toDate));
 
       const response = await api.get<PaginatedToolCalls>(
-        `/api/v1/agents/${agentId}/tool-calls?${params.toString()}`,
+        `${orgApiBase}/agents/${agentId}/tool-calls?${params.toString()}`,
         { schema: PaginatedToolCallsSchema },
       );
       return response.data;

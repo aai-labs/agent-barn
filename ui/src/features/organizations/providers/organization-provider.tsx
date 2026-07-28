@@ -17,7 +17,6 @@ import { useCurrentUser } from "@/auth/providers/user-context-provider";
 import { useOrgStore } from "@/features/organizations/stores/org-store";
 import { useOrgStoreHydrated } from "@/features/organizations/stores/use-org-store-hydrated";
 import { useAllOrganizations } from "@/features/organizations/hooks/use-all-organizations";
-import { api, ORGANIZATION_HEADER } from "@/shared/api";
 
 import type { Organization } from "../schemas";
 
@@ -53,9 +52,9 @@ export function OrganizationProvider({ children }: { children: ReactNode }) {
   );
   const setOrganizationId = useOrgStore((state) => state.setOrganizationId);
 
-  // The active org lives in the URL (`/dashboard/[orgId]/…`). Global routes (all-orgs,
-  // account) have no orgId; there we fall back to the remembered/default org so the
-  // switcher still has a selection and the header stays valid.
+  // The active org lives in the URL (`/dashboard/[orgId]/...`). Platform and account
+  // routes have no active org; there we only keep a remembered fallback for switching
+  // back into organization view.
   const urlOrganizationId =
     typeof params?.orgId === "string" ? params.orgId : null;
 
@@ -74,7 +73,7 @@ export function OrganizationProvider({ children }: { children: ReactNode }) {
   }, [user.isSuperuser, allOrganizations, userContext.organizationUsers]);
 
   const fallbackOrganization = useMemo(
-    () => organizations.find((org) => org.isDefault) ?? organizations[0] ?? null,
+    () => organizations[0] ?? null,
     [organizations],
   );
 
@@ -95,18 +94,6 @@ export function OrganizationProvider({ children }: { children: ReactNode }) {
 
   const activeOrgId = selectedOrganization?.id ?? null;
 
-  // Attach the active org to every API request *before* children fetch. In render (not an
-  // effect) so the first child query is already scoped. Source of truth is the URL org.
-  const headerOrgIdRef = useRef<string | null>(null);
-  if (headerOrgIdRef.current !== activeOrgId) {
-    if (activeOrgId) {
-      api.setHeader(ORGANIZATION_HEADER, activeOrgId);
-    } else {
-      api.removeHeader(ORGANIZATION_HEADER);
-    }
-    headerOrgIdRef.current = activeOrgId;
-  }
-
   // Remember the active org so /dashboard (and post-login) can redirect into it.
   useEffect(() => {
     if (activeOrgId && activeOrgId !== storedOrganizationId) {
@@ -116,7 +103,7 @@ export function OrganizationProvider({ children }: { children: ReactNode }) {
 
   // On org switch, DROP org-scoped cache rather than merely invalidating it. Those list
   // keys aren't org-dimensioned, so invalidate would keep the previous org's data on
-  // screen during the refetch — the new org's URL/header active but the old org's
+  // screen during the refetch — the new org's URL active but the old org's
   // agents/templates/costs still rendered. Removing forces a fresh load instead. Only
   // org-scoped keys are touched (see ORG_SCOPED_QUERY_KEYS); user/session and global-list
   // queries are left intact so the authenticated tree doesn't remount.
@@ -144,8 +131,9 @@ export function OrganizationProvider({ children }: { children: ReactNode }) {
     });
   }, [activeOrgId, queryClient]);
 
-  // A URL org the user can't reach (non-superuser, not a member; or a stale/unknown id)
-  // falls back to their default org rather than 403-ing every scoped request.
+  // A URL org the user can't reach (non-platform-admin, not a member; or a
+  // stale/unknown id) falls back to an available org rather than 403-ing every
+  // scoped request.
   const canAccessUrlOrg =
     !urlOrganizationId ||
     organizations.some((org) => org.id === urlOrganizationId);

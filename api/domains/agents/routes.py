@@ -27,7 +27,7 @@ from api.domains.auth.utils import get_current_user
 from api.domains.templates.models import TemplateRead
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
-agents_router = APIRouter(prefix="/agents", tags=["agents"])
+agents_router = APIRouter(prefix="/organizations/{organization_id}/agents", tags=["agents"])
 
 
 @agents_router.post("", response_model=AgentRead, status_code=status.HTTP_201_CREATED)

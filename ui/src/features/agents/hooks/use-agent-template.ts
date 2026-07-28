@@ -3,16 +3,18 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { api } from "@/shared/api";
+import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
 
 import { AgentTemplateRead, AgentTemplateReadSchema } from "../schemas";
 import { agentsKey } from "../utils";
 
 export function useAgentTemplate(agentId: string, version: number) {
+  const orgApiBase = useOrganizationApiBase();
   const query = useQuery({
     queryKey: [...agentsKey.detail(agentId), "template", version],
     queryFn: async () => {
       const response = await api.get<AgentTemplateRead>(
-        `/api/v1/agents/${agentId}/template/${version}`,
+        `${orgApiBase}/agents/${agentId}/template/${version}`,
         { schema: AgentTemplateReadSchema },
       );
       return response.data;

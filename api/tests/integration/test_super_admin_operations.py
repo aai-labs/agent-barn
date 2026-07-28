@@ -39,7 +39,7 @@ def test_super_admin_can_list_all_users():
         client: TestClient = context.client
 
         response = client.get(
-            "/api/v1/users",
+            "/api/v1/platform/users",
             headers={"Authorization": f"Bearer {context.access_token}"},
         )
 
@@ -62,7 +62,7 @@ def test_regular_user_cannot_list_users():
         client: TestClient = context.client
 
         response = client.get(
-            "/api/v1/users",
+            "/api/v1/platform/users",
             headers={"Authorization": f"Bearer {context.access_token}"},
         )
 
@@ -92,7 +92,7 @@ def test_super_admin_can_delete_any_user():
         client: TestClient = context.client
 
         response = client.delete(
-            f"/api/v1/users/{target_id}",
+            f"/api/v1/platform/users/{target_id}",
             headers={"Authorization": f"Bearer {context.access_token}"},
         )
         assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))

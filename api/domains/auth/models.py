@@ -105,12 +105,12 @@ class CurrentUserContext(PydanticBaseModel):
         return self.current_user_organization
 
     # --- Authorization helpers ---
-    # Superuser transcends org boundaries, so every org-scoped authorization check is
-    # "superuser OR has an accepted role in the *target* org". Centralized here (next to
-    # the membership map they read) so services don't re-implement the branch, and so a
-    # new org-scoped endpoint can't forget the superuser case. Role is always resolved
-    # against the passed organization_id — never the request's active org — to keep
-    # cross-org escalation impossible.
+    # Platform administrators can operate in explicit Organization context without a
+    # persisted Membership. Centralized here (next to the membership map they read) so
+    # services don't re-implement the branch, and so a new org-scoped endpoint can't
+    # forget the platform-admin case. Role is always resolved against the passed
+    # organization_id — never the request's active org — to keep cross-org escalation
+    # impossible.
 
     def has_org_role(self, organization_id: UUID, roles: AbstractSet[OrganizationRole]) -> bool:
         if self.user.is_superuser:
@@ -127,6 +127,12 @@ class CurrentUserContext(PydanticBaseModel):
         if not self.has_org_role(organization_id, roles):
             raise ForbiddenException(detail=detail)
 
-    def require_superuser(self, detail: str = "This action requires a superuser.") -> None:
+    def require_platform_admin(
+        self,
+        detail: str = "This action requires platform administrator access.",
+    ) -> None:
         if not self.user.is_superuser:
             raise ForbiddenException(detail=detail)
+
+    def require_superuser(self, detail: str = "This action requires a superuser.") -> None:
+        self.require_platform_admin(detail=detail)

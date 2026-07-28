@@ -14,7 +14,7 @@ from api.domains.tool_calls.models import (
 from api.domains.tool_calls.service import ToolCallService
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
-tool_calls_router = APIRouter(prefix="/agents", tags=["tool-calls"])
+tool_calls_router = APIRouter(prefix="/organizations/{organization_id}/agents", tags=["tool-calls"])
 
 
 @tool_calls_router.get("/{agent_id}/tool-calls", response_model=PaginatedItems[ToolCallRead])

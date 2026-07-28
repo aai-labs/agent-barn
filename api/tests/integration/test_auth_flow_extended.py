@@ -22,8 +22,6 @@ from api.tests.core.modules import (
 from api.tests.mocks.email import MockEmailModule
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import (
-    the_default_organization_id_is,
-    there_is_a_default_organization,
     there_is_an_organization,
 )
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
@@ -191,12 +189,8 @@ def test_me_returns_safe_user_and_organizations():
         assert_that(payload, is_not(has_key("current_user_organization")))
 
 
-def test_me_works_for_user_not_in_default_org():
-    """A newly signed-up user owns their own org, not the default one. Bootstrapping
-    the account context via /me must not 403 just because the request (sent without an
-    X-Organization-Id header) falls back to the default org the user isn't a member of.
-    """
-    default_org = uuid7()
+def test_me_works_without_active_organization_header():
+    """Bootstrapping account context via /me does not require an active Organization."""
     own_org = uuid7()
     user_id = uuid7()
 
@@ -207,14 +201,12 @@ def test_me_works_for_user_not_in_default_org():
             create_test_client(),
             database_repo_is_ready(),
             database_is_clean(),
-            there_is_a_default_organization(id=default_org),
             there_is_a_user(
                 id=user_id,
                 email="fresh-signup@example.com",
                 organization_id=own_org,
                 role=OrganizationRole.OWNER,
             ),
-            the_default_organization_id_is(default_org),
             there_is_an_access_token_for_user(user_id=user_id),
         ]
     ) as context:

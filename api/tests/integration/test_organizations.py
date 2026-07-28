@@ -1,6 +1,6 @@
-"""Phase 2 (AF-147): superuser creates an organization and invites the first owner.
+"""Phase 2 (AF-147): Platform Administrator creates an organization and invites the first owner.
 
-`POST /organizations` creates a non-default org, attaches the given owner as OWNER
+`POST /platform/organizations` creates a customer org, attaches the given owner as OWNER
 (inviting them when they are new/unverified), and returns the set-password invite link
 so the superuser can also deliver it manually.
 """
@@ -30,7 +30,7 @@ from api.tests.steps.agent import MockK8sModule, MockLiteLLMModule
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
 
-_ORGS = "/api/v1/organizations"
+_ORGS = "/api/v1/platform/organizations"
 
 _GIVEN = [
     prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
@@ -57,7 +57,7 @@ def _there_is_a_superuser(email: str = "root@example.com"):
 
 def test_superuser_creates_organization_and_invites_owner():
     with given([*_GIVEN, _there_is_a_superuser()]) as context:
-        with when("superuser creates an org with a brand-new owner email"):
+        with when("platform admin creates an org with a brand-new owner email"):
             response = context.client.post(
                 _ORGS,
                 json={
@@ -73,7 +73,6 @@ def test_superuser_creates_organization_and_invites_owner():
                 assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
                 body = response.json()
                 assert_that(body["organization"]["name"], equal_to("Acme Inc"))
-                assert_that(body["organization"]["is_default"], is_(False))
                 assert_that(body["organization"]["owner_email"], equal_to("owner@acme.com"))
                 assert_that(body["invite_link"], not_none())
                 assert_that(
@@ -89,7 +88,7 @@ def test_superuser_creates_organization_and_invites_owner():
                 assert_that(owner, not_none())
                 assert_that(owner.email, equal_to("owner@acme.com"))
                 assert_that(owner.email_verified_at, is_(none()))
-                assert_that(org_repo.get(org_id).is_default, is_(False))
+                assert_that(org_repo.get(org_id), not_none())
 
 
 def test_new_organization_is_seeded_with_predefined_templates():
@@ -107,8 +106,8 @@ def test_new_organization_is_seeded_with_predefined_templates():
         org_id = create.json()["organization"]["id"]
 
         templates = context.client.get(
-            "/api/v1/templates",
-            headers={**_auth(context), "X-Organization-Id": org_id},
+            f"/api/v1/organizations/{org_id}/templates",
+            headers=_auth(context),
         )
         assert_that(templates.status_code, equal_to(status.HTTP_200_OK))
         assert_that(templates.json()["total"], equal_to(len(PREDEFINED_TEMPLATES)))
@@ -161,7 +160,7 @@ def test_create_organization_with_existing_active_owner_sends_no_invite():
             _there_is_a_superuser(),
         ]
     ) as context:
-        with when("superuser creates an org owned by an already-active user"):
+        with when("platform admin creates an org owned by an already-active user"):
             response = context.client.post(
                 _ORGS,
                 json={"name": "Corp Inc", "owner_email": "existing@corp.com"},

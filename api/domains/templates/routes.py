@@ -15,7 +15,7 @@ from api.domains.templates.models import (
 from api.domains.templates.service import TemplateService
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
-templates_router = APIRouter(prefix="/templates", tags=["templates"])
+templates_router = APIRouter(prefix="/organizations/{organization_id}/templates", tags=["templates"])
 
 
 @templates_router.get("", response_model=PaginatedItems[TemplateRead])

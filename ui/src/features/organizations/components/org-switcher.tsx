@@ -3,20 +3,22 @@
 import { useEffect, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 
-import { BuildingIcon, CheckIcon, ChevronDownIcon } from "@/components/icons";
+import { BuildingIcon, CheckIcon, ChevronDownIcon, ShieldIcon } from "@/components/icons";
+import { useCurrentUser } from "@/auth/providers/user-context-provider";
 import { useOrganizationContext } from "@/features/organizations/providers/organization-provider";
 import type { Organization } from "../schemas";
 
 // Segments directly under /dashboard/ that are NOT an org id (global admin / personal).
-// "users" is superuser-only global admin; "costs" is org-scoped and lives under [orgId].
-const GLOBAL_DASHBOARD_SEGMENTS = new Set(["organizations", "account", "users"]);
+const GLOBAL_DASHBOARD_SEGMENTS = new Set(["account", "platform"]);
 
 export function OrgSwitcher() {
   const { organizations, selectedOrganization } = useOrganizationContext();
+  const { user } = useCurrentUser();
   const router = useRouter();
   const pathname = usePathname() ?? "";
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const isPlatformView = pathname.startsWith("/dashboard/platform");
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -30,7 +32,7 @@ export function OrgSwitcher() {
 
   const onSelect = (org: Organization) => {
     setOpen(false);
-    if (org.id === selectedOrganization?.id) return;
+    if (!isPlatformView && org.id === selectedOrganization?.id) return;
 
     // Stay on the same sub-page under the new org by swapping the org segment; from a
     // global page (no org in the URL) land on the new org's home.
@@ -48,14 +50,21 @@ export function OrgSwitcher() {
     }
   };
 
+  const onSelectPlatform = () => {
+    setOpen(false);
+    if (!isPlatformView) {
+      router.push("/dashboard/platform");
+    }
+  };
+
   // Nothing to show (e.g. a superuser with no memberships) — the org is managed from
   // the Organizations page instead.
-  if (organizations.length === 0 || !selectedOrganization) {
+  if (!user.isSuperuser && (organizations.length === 0 || !selectedOrganization)) {
     return null;
   }
 
   // Only one org — show it as a static breadcrumb, no switcher affordance.
-  if (organizations.length === 1) {
+  if (!user.isSuperuser && organizations.length === 1 && selectedOrganization) {
     return (
       <div
         className="flex items-center gap-1.5 text-[13px]"
@@ -80,7 +89,7 @@ export function OrgSwitcher() {
         aria-expanded={open}
       >
         <span className="max-w-[180px] truncate font-medium">
-          {selectedOrganization.name}
+          {isPlatformView ? "Platform" : selectedOrganization?.name ?? "Platform"}
         </span>
         <ChevronDownIcon size={13} style={{ color: "var(--ink-4)" }} />
       </button>
@@ -99,10 +108,33 @@ export function OrgSwitcher() {
             className="px-3.5 py-1 text-[11px] font-semibold uppercase tracking-[0.08em]"
             style={{ color: "var(--ink-5)" }}
           >
-            Organizations
+            View
           </div>
+          {user.isSuperuser && (
+            <button
+              role="option"
+              aria-selected={isPlatformView}
+              className="af-hover-bg flex w-full items-center gap-2.5 px-3.5 py-2 text-left text-[13.5px]"
+              style={{ color: "var(--ink-2)" }}
+              onClick={onSelectPlatform}
+            >
+              <ShieldIcon size={15} style={{ color: "var(--ink-4)" }} />
+              <span className="flex-1 truncate">Platform</span>
+              {isPlatformView && (
+                <CheckIcon size={15} style={{ color: "var(--ink)" }} />
+              )}
+            </button>
+          )}
+          {organizations.length > 0 && (
+            <div
+              className="px-3.5 py-1 text-[11px] font-semibold uppercase tracking-[0.08em]"
+              style={{ color: "var(--ink-5)" }}
+            >
+              Organizations
+            </div>
+          )}
           {organizations.map((org) => {
-            const isSelected = org.id === selectedOrganization.id;
+            const isSelected = !isPlatformView && org.id === selectedOrganization?.id;
             return (
               <button
                 key={org.id}

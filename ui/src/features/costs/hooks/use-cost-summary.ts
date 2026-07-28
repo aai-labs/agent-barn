@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { api } from "@/shared/api";
+import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
 import { createQueryKeyStructure } from "@/shared/query-keys";
 import { costSummarySchema, type CostSummary } from "../schemas";
 
@@ -12,6 +13,7 @@ interface UseCostSummaryOptions {
 }
 
 export function useCostSummary({ startDate, endDate }: UseCostSummaryOptions = {}) {
+  const orgApiBase = useOrganizationApiBase();
   const params = new URLSearchParams();
   if (startDate) params.set("start_date", startDate);
   if (endDate) params.set("end_date", endDate);
@@ -21,7 +23,7 @@ export function useCostSummary({ startDate, endDate }: UseCostSummaryOptions = {
     queryKey: costKey.detail(`${startDate ?? "all"}-${endDate ?? "all"}`),
     queryFn: () =>
       api.get<CostSummary>(
-        `/api/v1/costs/summary${queryString ? `?${queryString}` : ""}`,
+        `${orgApiBase}/costs/summary${queryString ? `?${queryString}` : ""}`,
         { schema: costSummarySchema }
       ),
   });

@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useCurrentUser } from "@/auth/providers/user-context-provider";
 import { useLogout } from "@/auth/hooks/use-logout";
-import { PlusIcon, UserIcon, UsersIcon, BuildingIcon, LogOutIcon } from "@/components/icons";
+import { PlusIcon, UserIcon, UsersIcon, BuildingIcon, LogOutIcon, ShieldIcon } from "@/components/icons";
 import { LogoMark } from "@/components/logo-mark";
 import { OrgSwitcher } from "@/features/organizations/components/org-switcher";
 import { useActiveOrgRole } from "@/features/organizations/hooks/use-active-org-role";
@@ -24,16 +24,23 @@ export function TopNav({ onHire }: TopNavProps) {
 
   const orgId = selectedOrganization?.id;
   const orgBase = orgId ? `/dashboard/${orgId}` : "/dashboard";
+  const isPlatformView = pathname?.startsWith("/dashboard/platform") ?? false;
 
   // Owners/admins (and superusers) manage members and see org spend; plain members can't.
   const { canManage: canManageMembers } = useActiveOrgRole();
 
-  const navTabs = [
-    { href: orgBase, label: "Home" },
-    // Costs is owner/admin-only (the endpoint is gated too); hide it from members.
-    ...(canManageMembers ? [{ href: `${orgBase}/costs`, label: "Costs" }] : []),
-    { href: `${orgBase}/settings`, label: "Settings" },
-  ];
+  const navTabs = isPlatformView
+    ? [
+        { href: "/dashboard/platform", label: "Overview" },
+        { href: "/dashboard/platform/users", label: "Users" },
+        { href: "/dashboard/platform/organizations", label: "Organizations" },
+      ]
+    : [
+        { href: orgBase, label: "Home" },
+        // Costs is owner/admin-only (the endpoint is gated too); hide it from members.
+        ...(canManageMembers ? [{ href: `${orgBase}/costs`, label: "Costs" }] : []),
+        { href: `${orgBase}/settings`, label: "Settings" },
+      ];
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -99,9 +106,11 @@ export function TopNav({ onHire }: TopNavProps) {
       </nav>
 
       <div className="flex items-center gap-2.5">
-        <button className="af-btn af-btn-primary" onClick={onHire}>
+        {!isPlatformView && (
+          <button className="af-btn af-btn-primary" onClick={onHire}>
           <PlusIcon /> Hire agent
-        </button>
+          </button>
+        )}
         <div ref={menuRef} className="relative">
           <button
             className="w-[30px] h-[30px] rounded-full grid place-items-center text-[11.5px] font-semibold text-white flex-shrink-0"
@@ -154,10 +163,18 @@ export function TopNav({ onHire }: TopNavProps) {
               {user.isSuperuser && (
                 <div style={{ borderTop: "1px solid var(--line)" }} className="py-1">
                   <div className="px-3.5 py-1 text-[11px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-5)" }}>
-                    Super admin
+                    Platform
                   </div>
                   <Link
-                    href="/dashboard/users"
+                    href="/dashboard/platform"
+                    className="af-hover-bg w-full text-left flex items-center gap-2.5 px-3.5 py-2 text-[13.5px]"
+                    style={{ color: "var(--ink-2)" }}
+                    onClick={() => setMenuOpen(false)}
+                  >
+                    <ShieldIcon /> Platform view
+                  </Link>
+                  <Link
+                    href="/dashboard/platform/users"
                     className="af-hover-bg w-full text-left flex items-center gap-2.5 px-3.5 py-2 text-[13.5px]"
                     style={{ color: "var(--ink-2)" }}
                     onClick={() => setMenuOpen(false)}
@@ -165,7 +182,7 @@ export function TopNav({ onHire }: TopNavProps) {
                     <UsersIcon /> Users
                   </Link>
                   <Link
-                    href="/dashboard/organizations"
+                    href="/dashboard/platform/organizations"
                     className="af-hover-bg w-full text-left flex items-center gap-2.5 px-3.5 py-2 text-[13.5px]"
                     style={{ color: "var(--ink-2)" }}
                     onClick={() => setMenuOpen(false)}
@@ -196,4 +213,3 @@ export function TopNav({ onHire }: TopNavProps) {
     </header>
   );
 }
-

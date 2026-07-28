@@ -20,7 +20,6 @@ from api.tests.steps.agent import (
     there_is_an_agent,
 )
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
-from api.tests.steps.organization import there_is_a_default_organization
 from api.tests.steps.rbac import role_lacks_permission
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
 
@@ -703,31 +702,3 @@ def test_organization_with_only_deleted_agents_can_be_deleted():
             },
         )
         assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
-
-
-def test_default_organization_cannot_be_deleted():
-    super_id = uuid7()
-    default_org = uuid7()
-
-    with given(
-        [
-            prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
-            prepare_api_server(),
-            create_test_client(),
-            database_repo_is_ready(),
-            database_is_clean(),
-            there_is_a_user(id=super_id, email="super-defdel@example.com", is_superuser=True),
-            there_is_a_default_organization(id=default_org),
-            there_is_an_access_token_for_user(user_id=super_id),
-        ]
-    ) as context:
-        client: TestClient = context.client
-
-        response = client.delete(
-            f"/api/v1/organizations/{default_org}",
-            headers={
-                "Authorization": f"Bearer {context.access_token}",
-                "X-Organization-Id": str(default_org),
-            },
-        )
-        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))

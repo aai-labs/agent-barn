@@ -36,7 +36,7 @@ export function useInfiniteOrganizations(
       }
 
       const response = await api.get<PaginatedOrganizations>(
-        `/api/v1/organizations?${params.toString()}`,
+        `/api/v1/platform/organizations?${params.toString()}`,
         { schema: PaginatedOrganizationsSchema },
       );
       return response.data;

@@ -6,22 +6,23 @@ Read before changing template versioning, predefined template seeding, template 
 
 ## Role in the system
 
-Templates provide versioned agent configuration; Skills provide packaged instructions and references. A template version can require skills, while each agent pins a template version and carries its own explicit skill assignments.
+Templates provide versioned agent configuration; Skills provide packaged instructions and references. A template version can require skills, while each agent pins a template version and carries its own explicit skill assignments. Built-in catalogue content is a platform/global resource rather than belonging to a customer Organization.
 
 ## Template invariants
 
-- A template lineage is organization-scoped and identified by `template_slug`.
-- `(organization_id, template_slug, version)` is unique.
+- Predefined template lineages are platform/global resources. Custom template lineages are organization-scoped and identified by `template_slug`.
+- The current schema still stores every template with `organization_id`; migrating predefined templates to global scope requires replacing the org-scoped uniqueness/FK contract with a scope-aware template reference.
+- `(organization_id, template_slug, version)` is unique for custom templates. The global predefined catalogue needs an equivalent uniqueness contract that does not depend on a default Organization.
 - Agents pin an exact template version; publishing a later custom version does not move existing agents. System-managed predefined version 1 is the explicit mutable exception.
 - Creating a custom template starts at version 1.
 - Updating a custom template inserts the next version, preserves omitted content, and preserves required skills unless replacements are supplied.
 - Template name, slug, organization, and source remain stable across custom versions.
 - Template content consists of the configured Markdown artifacts: soul, identity, user, tools, agents, boot, bootstrap, and heartbeat.
-- Predefined template seeding may refresh predefined version 1 content and required-skill associations in place; a lineage that has moved beyond that predefined state is not overwritten. Existing agents pinned to predefined v1 re-render changed content, but seeding does not reconcile their explicit skill assignments if requirements change.
+- Predefined template seeding may refresh predefined version 1 content and required-skill associations in place; a lineage that has moved beyond that predefined state is not overwritten. Existing agents pinned to predefined v1 re-render changed content, but seeding does not reconcile their explicit skill assignments if requirements change. In the target model, predefined seeding writes one global catalogue rather than cloning rows into each Organization.
 
 ## Skill invariants
 
-- Built-in `aai_cli` skills are global; custom skills belong to one organization.
+- Built-in `aai_cli` skills are global Platform Resources; custom skills belong to one organization.
 - Built-in skills cannot be updated or deleted through normal skill CRUD.
 - Custom skill content is stored as a ZIP and validated for archive size, expanded size, entry count, encryption, compression ratio, absolute paths, and path traversal.
 - A custom skill cannot be deleted while assigned to an agent or required by a latest template version.

@@ -17,6 +17,7 @@ from api.domains.auth.exceptions import (
 )
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.service import JWT_ENCODING_ALGORITHM
+from api.domains.platform_admin.service import PlatformAdminService
 from api.domains.users.organization_users.models import (
     OrganizationRole,
     OrganizationUser,
@@ -25,34 +26,24 @@ from api.domains.users.organization_users.repository import OrganizationUserRepo
 from api.domains.users.repository import UserRepository
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
-_default_org_id: uuid.UUID | None = None
-
-
-def set_default_org_id(org_id: uuid.UUID | None) -> None:
-    global _default_org_id
-    _default_org_id = org_id
-
-
-ORGANIZATION_ID_HEADER = "X-Organization-Id"
 
 
 def get_organization_id(request: Request) -> uuid.UUID | None:
     """Resolve the active organization for the request.
 
-    Prefers the ``X-Organization-Id`` header (validated as a UUID); membership is
-    enforced later in ``get_authenticated_user``. Falls back to the global default org
-    when the header is absent (legacy single-tenant behaviour).
+    The active Organization is explicit. Platform routes do not resolve one, and
+    Organization-scoped routes carry it in their URL.
     """
-    header_value = request.headers.get(ORGANIZATION_ID_HEADER)
-    if header_value:
+    path_value = request.path_params.get("organization_id")
+    if path_value:
         try:
-            return uuid.UUID(header_value)
+            return uuid.UUID(str(path_value))
         except ValueError:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid {ORGANIZATION_ID_HEADER} header",
+                detail="Invalid organization_id path parameter",
             )
-    return _default_org_id
+    return None
 
 
 def get_authenticated_user(
@@ -90,8 +81,8 @@ def get_authenticated_user(
         user_organization = user_organization_map.get(organization_id, None)
         if not user_organization:
             if user.is_superuser:
-                # Superusers transcend org boundaries: synthesize a transient
-                # (unpersisted) membership so scoping resolves to the targeted org.
+                # Platform Administrators may operate in explicit Organization
+                # context without a persisted Membership.
                 user_organization = OrganizationUser(
                     user_id=user.id,
                     organization_id=organization_id,
@@ -129,9 +120,8 @@ def get_current_user(
         config: Config = Injected(Config),
     ) -> CurrentUserContext:
         # Some endpoints (e.g. /auth/me) only need the authenticated user and must work
-        # before an org is chosen. Skipping org resolution avoids a 403 when the request
-        # falls back to a default org the user isn't a member of. The user's full
-        # membership map is still populated for the caller.
+        # before an org is chosen. The user's full membership map is still populated
+        # for the caller.
         organization_id = get_organization_id(request) if require_organization else None
         context = get_authenticated_user(
             token=token,
@@ -144,6 +134,31 @@ def get_current_user(
         )
         if check_superuser and not context.user.is_superuser:
             raise ForbiddenException(detail=f"User {context.user.id} is not a superuser")
+        return context
+
+    return wrapper
+
+
+def require_platform_admin(
+    verified_required: bool = False,
+) -> Callable[..., CurrentUserContext]:
+    @inject
+    def wrapper(
+        token: Annotated[str, Depends(oauth2_scheme)],
+        user_repository: UserRepository = Injected(UserRepository),
+        organization_user_repository: OrganizationUserRepository = Injected(OrganizationUserRepository),
+        platform_admin_service: PlatformAdminService = Injected(PlatformAdminService),
+        config: Config = Injected(Config),
+    ) -> CurrentUserContext:
+        context = get_authenticated_user(
+            token=token,
+            config=config,
+            user_repository=user_repository,
+            organization_user_repository=organization_user_repository,
+            organization_id=None,
+            verified_required=verified_required,
+        )
+        platform_admin_service.require_platform_admin(context.user)
         return context
 
     return wrapper

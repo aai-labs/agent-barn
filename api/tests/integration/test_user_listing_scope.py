@@ -1,4 +1,4 @@
-"""AF-147: the `/users` list is a superuser-only *global* account admin view.
+"""AF-147: the `/platform/users` list is a Platform Administrator account view.
 
 - Superusers see every account across all orgs, regardless of the active org.
 - Everyone else (owners, admins, plain members) is forbidden — org-level people
@@ -20,7 +20,7 @@ from api.tests.core.modules import (
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
 
-_USERS = "/api/v1/users"
+_USERS = "/api/v1/platform/users"
 
 ORG_A = uuid7()
 ORG_B = uuid7()
@@ -74,7 +74,7 @@ def test_org_owner_cannot_list_users():
         with when("an org owner (not a superuser) tries to list users"):
             response = context.client.get(
                 _USERS,
-                headers={**_auth(context), "X-Organization-Id": str(ORG_A)},
+                headers=_auth(context),
             )
 
             with then("it is forbidden — Users is superuser-only"):
@@ -98,14 +98,14 @@ def test_plain_member_cannot_list_users():
         with when("a plain member tries to list users"):
             response = context.client.get(
                 _USERS,
-                headers={**_auth(context), "X-Organization-Id": str(ORG_A)},
+                headers=_auth(context),
             )
 
             with then("it is forbidden"):
                 assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
-def test_superuser_lists_all_users_globally_even_with_active_org():
+def test_superuser_lists_all_users_globally():
     super_id = uuid7()
     with given(
         [
@@ -117,10 +117,10 @@ def test_superuser_lists_all_users_globally_even_with_active_org():
             _org_a_populated(),
         ]
     ) as context:
-        with when("a superuser lists users while an org is active in the header"):
+        with when("a superuser lists users from platform view"):
             response = context.client.get(
                 _USERS,
-                headers={**_auth(context), "X-Organization-Id": str(ORG_A)},
+                headers=_auth(context),
             )
 
             with then("all users across orgs are returned — the view is global"):

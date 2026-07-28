@@ -23,7 +23,7 @@ export function useAllOrganizations({ enabled }: { enabled: boolean }) {
     queryKey: organizationsKey.list({ scope: { mode: "all" } }),
     queryFn: async () => {
       const response = await api.get<PaginatedOrganizations>(
-        `/api/v1/organizations?page=1&page_size=${ALL_ORGANIZATIONS_PAGE_SIZE}`,
+        `/api/v1/platform/organizations?page=1&page_size=${ALL_ORGANIZATIONS_PAGE_SIZE}`,
         { schema: PaginatedOrganizationsSchema },
       );
       return response.data;

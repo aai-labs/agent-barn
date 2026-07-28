@@ -133,7 +133,6 @@ def test_to_user_read_with_organization_fetches_memberships():
             updated_at=now,
             name="Org",
             description=None,
-            is_default=False,
             owner_email=None,
             owner_name=None,
         ),

@@ -143,7 +143,7 @@ class AuthService:
             session.refresh(user)
 
         # Seed the per-org predefined template catalog (+ required-skill links), matching
-        # create_organization and the default org. Idempotent; runs after commit.
+        # create_organization. Idempotent; runs after commit.
         self.template_service.seed_predefined_templates(org_id)
         return user
 

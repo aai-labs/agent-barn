@@ -9,7 +9,7 @@ from api.domains.auth.utils import get_current_user
 from api.domains.costs.models import AgentCostRead, OrgCostSummaryRead
 from api.domains.costs.service import CostService
 
-costs_router = APIRouter(prefix="/costs", tags=["costs"])
+costs_router = APIRouter(prefix="/organizations/{organization_id}/costs", tags=["costs"])
 
 # Org spend is billing-sensitive, so it's restricted to the org's managers — owners/admins
 # (superusers bypass). Plain members can run agents but not see the org's aggregate cost.
