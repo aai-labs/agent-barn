@@ -55,6 +55,22 @@ def test_build_deployment_has_pvc_owner_init_container():
     assert ic.security_context.run_as_user == 0
 
 
+def test_build_deployment_pod_carries_agent_component_label():
+    dep = build_deployment(
+        agent_id=UUID("00000000-0000-0000-0000-000000000001"),
+        org_id=UUID("00000000-0000-0000-0000-000000000002"),
+        namespace="default",
+        image="registry.example.com/openclaw:0.4.0",
+    )
+    pod_labels = dep.spec.template.metadata.labels
+    assert_that(pod_labels["agentfarm.io/component"], equal_to("agent"))
+    # Selector must NOT include the new label, so existing agents keep matching.
+    assert_that(
+        dep.spec.selector.match_labels,
+        equal_to({"app": "agent-00000000-0000-0000-0000-000000000001"}),
+    )
+
+
 _AGENT_ID = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
 _ORG_ID = UUID("11111111-2222-3333-4444-555555555555")
 _NS = "agent-farm"

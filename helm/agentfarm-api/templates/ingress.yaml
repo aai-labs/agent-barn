@@ -22,7 +22,10 @@ spec:
     - host: {{ . | trim }}
       http:
         paths:
-          - path: /
+          # /api only: the outer app also serves /metrics, which must stay
+          # cluster-internal (Prometheus scrapes the Service directly, not
+          # the ingress) — a / prefix would expose it to the internet.
+          - path: /api
             pathType: Prefix
             backend:
               service:

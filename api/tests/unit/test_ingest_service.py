@@ -306,6 +306,7 @@ def test_process_tool_results_calls_complete():
         session = MagicMock()
         tc_repo.get_session.return_value.__enter__ = MagicMock(return_value=session)
         tc_repo.get_session.return_value.__exit__ = MagicMock(return_value=False)
+        tc_repo.complete.return_value = None
         service = _make_service(tc_repo=tc_repo)
         agent = _make_agent()
         now = datetime.now(timezone.utc)

@@ -218,6 +218,12 @@ jobs:
           POSTGRES_LITELLM_USER: ${{ vars.POSTGRES_LITELLM_USER }}
           POSTGRES_LITELLM_PASSWORD: ${{ github.ref_name == 'staging' && secrets.STAGING_POSTGRES_LITELLM_PASSWORD || secrets.POSTGRES_LITELLM_PASSWORD }}
           POSTGRES_LITELLM_DB: ${{ vars.POSTGRES_LITELLM_DB }}
+          # Firecrawl (AF-152): helmfile hard-requires these; the release was
+          # merged to staging without the env plumbing.
+          POSTGRES_FIRECRAWL_USER: ${{ vars.POSTGRES_FIRECRAWL_USER }}
+          POSTGRES_FIRECRAWL_PASSWORD: ${{ secrets.POSTGRES_FIRECRAWL_PASSWORD }}
+          POSTGRES_FIRECRAWL_DB: ${{ vars.POSTGRES_FIRECRAWL_DB }}
+          FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
           LITELLM_MASTER_KEY: ${{ github.ref_name == 'staging' && secrets.STAGING_LITELLM_MASTER_KEY || secrets.LITELLM_MASTER_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           AGENT_DEFAULT_MODEL: ${{ vars.AGENT_DEFAULT_MODEL }}
@@ -244,4 +250,10 @@ jobs:
           REGISTRY_SERVER: ${{ vars.REGISTRY_URL }}
           REGISTRY_USERNAME: ${{ vars.REGISTRY_USERNAME }}
           REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+          SLACK_ALERTS_WEBHOOK_URL: ${{ secrets.SLACK_ALERTS_WEBHOOK_URL }}
+          GRAFANA_ADMIN_PASSWORD: ${{ github.ref_name == 'staging' && secrets.STAGING_GRAFANA_ADMIN_PASSWORD || secrets.GRAFANA_ADMIN_PASSWORD }}
+          # Per-env host: staging and prod each need their own DNS name — a
+          # shared host would collide on traefik routing and the TLS cert.
+          # (Same switch pattern as the staging branch's deploy.yml.)
+          GRAFANA_HOST: ${{ github.ref_name == 'staging' && vars.STAGING_GRAFANA_HOST || vars.GRAFANA_HOST }}
         run: helmfile -f helmfile.yaml.gotmpl sync --wait

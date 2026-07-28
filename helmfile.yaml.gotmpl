@@ -1,3 +1,9 @@
+repositories:
+  - name: prometheus-community
+    url: https://prometheus-community.github.io/helm-charts
+  - name: grafana
+    url: https://grafana.github.io/helm-charts
+
 helmDefaults:
   # Every environment pre-creates its namespace out-of-band (staging ahead of
   # time; prod via deploy.sh's `kubectl apply -f k8s/agent-farm-user.yaml`), and
@@ -109,6 +115,9 @@ releases:
         value: {{ env "REGISTRY_PREFIX" | default "registry.k8s.aai-labs.com" | quote }}
       - name: image.repository
         value: {{ env "API_IMAGE_REPOSITORY" | default "agentfarm-api" | quote }}
+      # Local k8s dev: set IfNotPresent to run images imported via `k3d image import`.
+      - name: image.pullPolicy
+        value: {{ env "API_IMAGE_PULL_POLICY" | default "Always" | quote }}
       - name: image.tag
         value: {{ env "API_IMAGE_TAG" | default "" | quote }}
       - name: litellmKeyServiceAccountName
@@ -163,6 +172,10 @@ releases:
         value: {{ env "REGISTRY_PASSWORD" | required "REGISTRY_PASSWORD is required" | quote }}
       - name: ingress.hosts
         value: {{ env "API_HOST" | required "API_HOST is required" | quote }}
+      # Same inference key the litellm release uses; the API polls GET /key
+      # with it for the remaining-credit-limit metric.
+      - name: openrouterApiKey
+        value: {{ env "OPENROUTER_API_KEY" | default "" | quote }}
     needs:
       - {{ env "NAMESPACE" | default "agent-farm" }}/postgres-app
       - {{ env "NAMESPACE" | default "agent-farm" }}/litellm
@@ -178,9 +191,48 @@ releases:
         value: {{ env "REGISTRY_PREFIX" | default "registry.k8s.aai-labs.com" | quote }}
       - name: image.repository
         value: {{ env "UI_IMAGE_REPOSITORY" | default "agentfarm-ui" | quote }}
+      # Local k8s dev: set IfNotPresent to run images imported via `k3d image import`.
+      - name: image.pullPolicy
+        value: {{ env "UI_IMAGE_PULL_POLICY" | default "Always" | quote }}
       - name: image.tag
         value: {{ env "UI_IMAGE_TAG" | default "" | quote }}
       - name: ingress.hosts
         value: {{ env "UI_HOST" | required "UI_HOST is required" | quote }}
+    needs:
+      - {{ env "NAMESPACE" | default "agent-farm" }}/agentfarm-api
+
+  # Prometheus + Grafana + Alertmanager, fully namespace-scoped (no CRDs, no
+  # cluster RBAC — the shared cluster only grants us a namespace); the release
+  # follows the stack into agent-farm-staging when deployed from there.
+  - name: monitoring
+    namespace: {{ env "NAMESPACE" | default "agent-farm" }}
+    chart: ./helm/monitoring
+    labels:
+      name: monitoring
+    set:
+      # Prometheus/kube-state-metrics reuse the tenant deploy SA (they may
+      # not create their own RBAC); the tenant chart names it <namespace>-user.
+      - name: prometheus.serviceAccounts.server.name
+        value: {{ printf "%s-user" (env "NAMESPACE" | default "agent-farm") | quote }}
+      - name: prometheus.kube-state-metrics.serviceAccount.name
+        value: {{ printf "%s-user" (env "NAMESPACE" | default "agent-farm") | quote }}
+      # Stamped on every alert so a shared Slack channel can tell staging
+      # and production incidents apart.
+      - name: prometheus.server.global.external_labels.environment
+        value: {{ env "ENVIRONMENT" | required "ENVIRONMENT is required" | quote }}
+      - name: slackWebhookUrl
+        value: {{ env "SLACK_ALERTS_WEBHOOK_URL" | required "SLACK_ALERTS_WEBHOOK_URL is required" | quote }}
+      - name: grafana.adminPassword
+        value: {{ env "GRAFANA_ADMIN_PASSWORD" | required "GRAFANA_ADMIN_PASSWORD is required" | quote }}
+      - name: grafana.ingress.hosts[0]
+        value: {{ env "GRAFANA_HOST" | required "GRAFANA_HOST is required" | quote }}
+      - name: grafana.ingress.tls[0].secretName
+        value: grafana-tls
+      - name: grafana.ingress.tls[0].hosts[0]
+        value: {{ env "GRAFANA_HOST" | required "GRAFANA_HOST is required" | quote }}
+{{ if env "STORAGE_CLASS" }}
+      - name: prometheus.server.persistentVolume.storageClass
+        value: {{ env "STORAGE_CLASS" | quote }}
+{{ end }}
     needs:
       - {{ env "NAMESPACE" | default "agent-farm" }}/agentfarm-api

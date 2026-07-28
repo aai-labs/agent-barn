@@ -26,6 +26,15 @@ rules:
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["create", "update"]
+  # Read access for the monitoring release: Prometheus service discovery and
+  # kube-state-metrics run under this SA (the tenant deployer may not create
+  # new RBAC, so they reuse the identity that already has namespaced read).
+  # On the shared cluster the tenant chart's workspace-maintainer Role
+  # already grants this — the rule below matters for local/dev clusters
+  # where this file is the only grant.
+  - apiGroups: [""]
+    resources: ["pods", "services", "endpoints"]
+    verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
