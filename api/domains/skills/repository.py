@@ -95,12 +95,22 @@ class SkillRepository:
             return session.exec(query).first() is not None
 
     def get_latest_template_slugs_requiring_skill(self, skill_id: UUID, org_id: UUID) -> list[str]:
-        """Return template slugs whose *latest* version lists this skill as required."""
+        """Return template slugs whose *latest* version lists this skill as required.
+
+        Considers both org-scoped templates and global predefined templates, so a
+        skill required by a global predefined template blocks deletion in every
+        org that can see it.
+        """
         with Session(self.delegate.engine) as session:
             latest = (
                 select(AgentTemplate.id)
                 .distinct(col(AgentTemplate.template_slug))
-                .where(col(AgentTemplate.organization_id) == org_id)
+                .where(
+                    or_(
+                        col(AgentTemplate.organization_id) == org_id,
+                        col(AgentTemplate.organization_id).is_(None),
+                    )
+                )
                 .order_by(
                     col(AgentTemplate.template_slug).asc(),
                     col(AgentTemplate.version).desc(),
@@ -123,13 +133,19 @@ class SkillRepository:
 
         When deletion is allowed (latest version no longer requires the skill),
         historical join rows from superseded versions must be removed first to
-        satisfy the RESTRICT FK constraint on skill.id.
+        satisfy the RESTRICT FK constraint on skill.id. Considers org-scoped and
+        global predefined templates together.
         """
         with Session(self.delegate.engine) as session:
             latest = (
                 select(AgentTemplate.id)
                 .distinct(col(AgentTemplate.template_slug))
-                .where(col(AgentTemplate.organization_id) == org_id)
+                .where(
+                    or_(
+                        col(AgentTemplate.organization_id) == org_id,
+                        col(AgentTemplate.organization_id).is_(None),
+                    )
+                )
                 .order_by(
                     col(AgentTemplate.template_slug).asc(),
                     col(AgentTemplate.version).desc(),

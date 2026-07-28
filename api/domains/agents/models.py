@@ -210,16 +210,12 @@ class Agent(BaseModel, table=True):
             "organization_id",
             name="uq_agent_id_organization",
         ),
-        sa.ForeignKeyConstraint(
-            ["organization_id", "template_slug", "template_version"],
-            [
-                "agent_template.organization_id",
-                "agent_template.template_slug",
-                "agent_template.version",
-            ],
-            name="fk_agent_template_slug_version",
-            ondelete="RESTRICT",
-        ),
+        # The agent pins a template version via (template_slug, template_version).
+        # Predefined templates are global (organization_id IS NULL) while custom
+        # templates are org-scoped, so a single org-scoped composite FK cannot
+        # express the reference. Template existence is therefore enforced at
+        # the service boundary (create/update/re-pin return 404 for unknown
+        # pins), mirroring how agent-skill integrity is guarded.
     )
 
     organization_id: UUID = SqlField(foreign_key="organization.id", nullable=False, ondelete="CASCADE")

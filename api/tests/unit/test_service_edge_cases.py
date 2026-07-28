@@ -106,7 +106,6 @@ def test_organization_service_update_not_found_raises_404():
         user_organization_service=Mock(),
         auth_service=Mock(),
         agent_service=Mock(),
-        template_service=Mock(),
         permission_policy=Mock(),
     )
     superuser = User(email="root@example.com", hashed_password="x", is_superuser=True)

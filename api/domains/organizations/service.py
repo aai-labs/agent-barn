@@ -19,7 +19,6 @@ from api.domains.organizations.models import (
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.rbac.catalog import ORG_OWNER_ONLY_ROLES, PermissionKey
 from api.domains.rbac.policy import PermissionPolicy
-from api.domains.templates.service import TemplateService
 from api.domains.users.organization_users.models import (
     OrganizationRole,
     OrganizationUser,
@@ -36,7 +35,6 @@ class OrganizationService:
     user_organization_service: OrganizationUserService
     auth_service: AuthService
     agent_service: AgentService
-    template_service: TemplateService
     permission_policy: PermissionPolicy
 
     def get_organization(self, organization_id: UUID, context: CurrentUserContext) -> OrganizationRead:
@@ -72,9 +70,8 @@ class OrganizationService:
             )
             session.commit()
 
-        # Templates are per-org (unlike global skills), so a new org needs its own copy
-        # of the predefined catalog. Idempotent; runs post-commit like the invite email.
-        self.template_service.seed_predefined_templates(organization.id)
+        # Predefined templates are global platform resources seeded once at
+        # startup, so a new org needs no per-org catalog clone.
         self.auth_service.send_prepared_invite(prepared)
 
         organization_read = self.organization_repository.get_read(organization.id)

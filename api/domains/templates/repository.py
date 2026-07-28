@@ -19,11 +19,39 @@ from api.infrastructure.shared.models import Pagination
 class TemplateRepository:
     delegate: PostgresRepositoryDelegate
 
+    @staticmethod
+    def _scope_filter(org_id: UUID):
+        """Match org-scoped templates OR global predefined templates (org_id IS NULL).
+
+        Predefined templates are platform/global resources visible to every
+        organization, mirroring built-in aai_cli skills.
+        """
+        return or_(
+            col(AgentTemplate.organization_id) == org_id,
+            col(AgentTemplate.organization_id).is_(None),
+        )
+
+    def get_latest_global_template(self, slug: str) -> AgentTemplate | None:
+        """Latest version of a *global* (organization_id IS NULL) lineage.
+
+        Used by the predefined seeder, which owns the global catalogue and must
+        not pick up org-scoped customizations of a predefined lineage.
+        """
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(AgentTemplate)
+                .where(col(AgentTemplate.organization_id).is_(None))
+                .where(col(AgentTemplate.template_slug) == slug)
+                .order_by(col(AgentTemplate.version).desc())
+                .limit(1)
+            )
+            return session.exec(query).first()
+
     def get_template_by_slug_and_version(self, org_id: UUID, slug: str, version: int) -> AgentTemplate | None:
         with Session(self.delegate.engine) as session:
             query = (
                 select(AgentTemplate)
-                .where(col(AgentTemplate.organization_id) == org_id)
+                .where(self._scope_filter(org_id))
                 .where(col(AgentTemplate.template_slug) == slug)
                 .where(col(AgentTemplate.version) == version)
             )
@@ -39,7 +67,7 @@ class TemplateRepository:
         with Session(self.delegate.engine) as session:
             query = (
                 select(AgentTemplate)
-                .where(col(AgentTemplate.organization_id) == org_id)
+                .where(self._scope_filter(org_id))
                 .where(col(AgentTemplate.template_slug) == slug)
                 .order_by(col(AgentTemplate.version).desc())
                 .limit(1)
@@ -50,7 +78,7 @@ class TemplateRepository:
         with Session(self.delegate.engine) as session:
             query = (
                 select(AgentTemplate)
-                .where(col(AgentTemplate.organization_id) == org_id)
+                .where(self._scope_filter(org_id))
                 .where(col(AgentTemplate.template_slug) == slug)
                 .order_by(col(AgentTemplate.version).desc())
             )
@@ -68,7 +96,7 @@ class TemplateRepository:
             # to the latest rows (outer query), not historical versions.
             latest = (
                 select(AgentTemplate)
-                .where(col(AgentTemplate.organization_id) == org_id)
+                .where(self._scope_filter(org_id))
                 .distinct(col(AgentTemplate.template_slug))
                 .order_by(
                     col(AgentTemplate.template_slug).asc(),
@@ -189,7 +217,7 @@ class TemplateRepository:
             for slug, version in slug_versions:
                 row = session.exec(
                     select(AgentTemplate.id)
-                    .where(col(AgentTemplate.organization_id) == org_id)
+                    .where(self._scope_filter(org_id))
                     .where(col(AgentTemplate.template_slug) == slug)
                     .where(col(AgentTemplate.version) == version)
                 ).first()

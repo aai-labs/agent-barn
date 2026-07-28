@@ -831,8 +831,8 @@ def test_seed_predefined_templates_creates_three_lineages():
         repository: TemplateRepository = context.injector.get(TemplateRepository)
         org_id = context.organization.id
 
-        with when("I seed the org"):
-            service.seed_predefined_templates(org_id)
+        with when("I seed the global predefined catalogue"):
+            service.seed_predefined_templates()
 
         with then("all pre-defined lineages exist at v1"):
             for slug in (
@@ -857,11 +857,10 @@ def test_seed_predefined_templates_is_idempotent():
     with given(_GIVEN) as context:
         service: TemplateService = context.injector.get(TemplateService)
         client: TestClient = context.client
-        org_id = context.organization.id
 
         with when("I seed twice"):
-            service.seed_predefined_templates(org_id)
-            service.seed_predefined_templates(org_id)
+            service.seed_predefined_templates()
+            service.seed_predefined_templates()
 
         with then("each lineage still has exactly one version"):
             response = client.get(f"{_BASE}?source=pre-defined", headers=_auth(context))
@@ -877,7 +876,7 @@ def test_seed_does_not_clobber_edited_predefined_template():
         repository: TemplateRepository = context.injector.get(TemplateRepository)
         client: TestClient = context.client
         org_id = context.organization.id
-        service.seed_predefined_templates(org_id)
+        service.seed_predefined_templates()
 
         with when("I edit scrum-master and reseed"):
             client.patch(
@@ -885,7 +884,7 @@ def test_seed_does_not_clobber_edited_predefined_template():
                 json={"soul_md": "# Edited Soul"},
                 headers=_auth(context),
             )
-            service.seed_predefined_templates(org_id)
+            service.seed_predefined_templates()
 
         with then("the edited version stays the latest"):
             latest = repository.get_latest_template(org_id, "scrum-master")
@@ -899,14 +898,14 @@ def test_seed_refreshes_stale_predefined_v1_in_place():
         service: TemplateService = context.injector.get(TemplateService)
         repository: TemplateRepository = context.injector.get(TemplateRepository)
         org_id = context.organization.id
-        service.seed_predefined_templates(org_id)
+        service.seed_predefined_templates()
 
         with when("the seeded v1 drifts from the code (an old seed) then we reseed"):
             seeded = repository.get_latest_template(org_id, "scrum-master")
             assert seeded is not None
             seeded.user_md = "# STALE - asks for credentials"
             repository.save_template(seeded)
-            service.seed_predefined_templates(org_id)
+            service.seed_predefined_templates()
 
         with then("the v1 row is refreshed in place to the current code content"):
             latest = repository.get_latest_template(org_id, "scrum-master")
@@ -926,10 +925,9 @@ def test_seed_predefined_templates_seeds_scrum_master_skills():
     ) as context:
         service: TemplateService = context.injector.get(TemplateService)
         client: TestClient = context.client
-        org_id = context.organization.id
 
-        with when("I seed the org"):
-            service.seed_predefined_templates(org_id)
+        with when("I seed the global predefined catalogue"):
+            service.seed_predefined_templates()
 
         with then("scrum-master has Jira and Confluence as required skills"):
             response = client.get(f"{_BASE}/scrum-master", headers=_auth(context))
@@ -951,8 +949,8 @@ def test_seed_predefined_templates_does_not_duplicate_skill_rows():
         org_id = context.organization.id
 
         with when("I seed twice"):
-            service.seed_predefined_templates(org_id)
-            service.seed_predefined_templates(org_id)
+            service.seed_predefined_templates()
+            service.seed_predefined_templates()
 
         with then("scrum-master still has exactly two required skills"):
             template = repository.get_latest_template(org_id, "scrum-master")
@@ -971,10 +969,9 @@ def test_seed_predefined_templates_code_reviewer_requires_no_host_skill():
     ) as context:
         service: TemplateService = context.injector.get(TemplateService)
         client: TestClient = context.client
-        org_id = context.organization.id
 
-        with when("I seed the org"):
-            service.seed_predefined_templates(org_id)
+        with when("I seed the global predefined catalogue"):
+            service.seed_predefined_templates()
 
         with then("code-reviewer pins no host skill — GitHub or Bitbucket is enforced at runtime"):
             response = client.get(f"{_BASE}/code-reviewer", headers=_auth(context))
@@ -993,13 +990,13 @@ def test_seed_predefined_templates_refreshes_stale_skills():
         service: TemplateService = context.injector.get(TemplateService)
         repository: TemplateRepository = context.injector.get(TemplateRepository)
         org_id = context.organization.id
-        service.seed_predefined_templates(org_id)
+        service.seed_predefined_templates()
 
         with when("the seeded skills are cleared from the DB then we reseed"):
             template = repository.get_latest_template(org_id, "jira-task-helper")
             assert template is not None
             repository.save_template_skills(template.id, [])
-            service.seed_predefined_templates(org_id)
+            service.seed_predefined_templates()
 
         with then("the required skills are restored to match the code declaration"):
             template = repository.get_latest_template(org_id, "jira-task-helper")
@@ -1014,8 +1011,8 @@ def test_predefined_content_keeps_raw_placeholders():
         repository: TemplateRepository = context.injector.get(TemplateRepository)
         org_id = context.organization.id
 
-        with when("I seed the org"):
-            service.seed_predefined_templates(org_id)
+        with when("I seed the global predefined catalogue"):
+            service.seed_predefined_templates()
 
         with then("scrum-master soul still contains raw placeholders"):
             template = repository.get_latest_template(org_id, "scrum-master")

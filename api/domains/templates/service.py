@@ -194,21 +194,24 @@ class TemplateService:
         self.repository.save_template_skills(new_template.id, resolved_ids)
         return self._with_required_skills(TemplateRead.model_validate(new_template))
 
-    def seed_predefined_templates(self, org_id: UUID) -> None:
-        """Insert missing pre-defined templates and refresh stale ones in place.
+    def seed_predefined_templates(self) -> None:
+        """Insert missing global pre-defined templates and refresh stale ones in place.
 
-        Pre-defined templates are system-managed. When the code's content changes,
-        the original v1 seed is overwritten in place so both new agents (created
-        from the latest version) and existing agents (which re-render their pinned
-        template on every start) pick up the change. A lineage the user has edited
-        (version > 1) is left untouched so customizations are never clobbered.
+        Pre-defined templates are system-managed platform/global resources
+        (organization_id IS NULL), seeded once for the whole platform rather
+        than cloned per Organization. When the code's content changes, the
+        global v1 seed is overwritten in place so both new agents (created from
+        the latest version) and existing agents (which re-render their pinned
+        template on every start) pick up the change. A lineage an org has
+        edited (an org-scoped version > 1) is left untouched so customizations
+        are never clobbered; the seeder only ever touches the global v1 row.
         """
-        for predefined, template in zip(PREDEFINED_TEMPLATES, build_predefined_templates(org_id)):
-            existing = self.repository.get_latest_template(org_id, template.template_slug)
+        for predefined, template in zip(PREDEFINED_TEMPLATES, build_predefined_templates()):
+            existing = self.repository.get_latest_global_template(template.template_slug)
             if existing is None:
                 self.repository.save_template(template)
                 existing = template
-                logger.warning("Seeded predefined template: %s v1", template.template_slug)
+                logger.warning("Seeded global predefined template: %s v1", template.template_slug)
             elif (
                 existing.version == 1
                 and existing.template_source == TemplateSource.PRE_DEFINED
@@ -217,7 +220,7 @@ class TemplateService:
                 copy_predefined_content(existing, template)
                 self.repository.save_template(existing)
                 logger.warning(
-                    "Refreshed predefined template in place: %s v1",
+                    "Refreshed global predefined template in place: %s v1",
                     template.template_slug,
                 )
 

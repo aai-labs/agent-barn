@@ -20,17 +20,33 @@ class TemplateSource(str, enum.Enum):
 class AgentTemplate(BaseModel, table=True):
     __tablename__: str = "agent_template"
 
+    # Predefined templates are global Platform resources (organization_id IS
+    # NULL); custom templates are organization-scoped. Because a single UNIQUE
+    # constraint cannot express "global rows are unique by (slug, version) and
+    # org rows are unique by (org, slug, version)" with a NULLable org_id, the
+    # contract is split into two partial unique indexes.
     __table_args__ = (
         sa.Index("ix_agent_template_organization_id", "organization_id"),
-        sa.UniqueConstraint(
+        sa.Index(
+            "uq_agent_template_global_slug_version",
+            "template_slug",
+            "version",
+            unique=True,
+            postgresql_where=sa.text("organization_id IS NULL"),
+        ),
+        sa.Index(
+            "uq_agent_template_org_slug_version",
             "organization_id",
             "template_slug",
             "version",
-            name="uq_agent_template_org_slug_version",
+            unique=True,
+            postgresql_where=sa.text("organization_id IS NOT NULL"),
         ),
     )
 
-    organization_id: UUID = SqlField(foreign_key="organization.id", nullable=False, ondelete="CASCADE")
+    organization_id: UUID | None = SqlField(
+        default=None, foreign_key="organization.id", nullable=True, ondelete="CASCADE"
+    )
     template_slug: str = SqlField(nullable=False, max_length=255)
     template_name: str = SqlField(nullable=False, max_length=255)
     template_source: TemplateSource = SqlField(
@@ -53,7 +69,7 @@ class TemplateRead(PydanticBaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
-    organization_id: UUID
+    organization_id: UUID | None
     template_slug: str
     template_name: str
     template_source: TemplateSource

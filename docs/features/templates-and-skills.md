@@ -10,15 +10,15 @@ Templates provide versioned agent configuration; Skills provide packaged instruc
 
 ## Template invariants
 
-- Predefined template lineages are platform/global resources. Custom template lineages are organization-scoped and identified by `template_slug`.
-- The current schema still stores every template with `organization_id`; migrating predefined templates to global scope requires replacing the org-scoped uniqueness/FK contract with a scope-aware template reference.
-- `(organization_id, template_slug, version)` is unique for custom templates. The global predefined catalogue needs an equivalent uniqueness contract that does not depend on a default Organization.
-- Agents pin an exact template version; publishing a later custom version does not move existing agents. System-managed predefined version 1 is the explicit mutable exception.
+- Predefined template lineages are platform/global resources (`organization_id IS NULL`), seeded once for the whole platform at startup. Custom template lineages are organization-scoped and identified by `template_slug`.
+- Uniqueness is scope-aware: a partial unique index on `(template_slug, version)` guards global predefined rows, and a partial unique index on `(organization_id, template_slug, version)` guards org-scoped custom rows. A NULLable `organization_id` cannot express both in one constraint.
+- Template visibility is scope-aware: an organization sees global predefined templates plus its own custom templates. Repository lookups match `organization_id = org_id OR organization_id IS NULL`.
+- Agents pin an exact template version by `(template_slug, template_version)`; publishing a later custom version does not move existing agents. System-managed predefined version 1 is the explicit mutable exception. The pin columns carry no database FK because a global predefined row can never satisfy an agent-scoped composite FK; template existence is enforced at the service boundary (create/update/re-pin return 404 for unknown pins).
 - Creating a custom template starts at version 1.
-- Updating a custom template inserts the next version, preserves omitted content, and preserves required skills unless replacements are supplied.
-- Template name, slug, organization, and source remain stable across custom versions.
+- Updating a custom template inserts the next org-scoped version, preserves omitted content, and preserves required skills unless replacements are supplied. Editing a predefined lineage in an org produces an org-scoped version > 1 alongside the global v1; the seeder only ever refreshes the global v1.
+- Template name, slug, source, and (for custom rows) organization remain stable across versions.
 - Template content consists of the configured Markdown artifacts: soul, identity, user, tools, agents, boot, bootstrap, and heartbeat.
-- Predefined template seeding may refresh predefined version 1 content and required-skill associations in place; a lineage that has moved beyond that predefined state is not overwritten. Existing agents pinned to predefined v1 re-render changed content, but seeding does not reconcile their explicit skill assignments if requirements change. In the target model, predefined seeding writes one global catalogue rather than cloning rows into each Organization.
+- Predefined template seeding may refresh the global predefined version 1 content and required-skill associations in place; a lineage that has moved beyond that predefined state (an org-scoped version > 1) is not overwritten. Existing agents pinned to predefined v1 re-render changed content, but seeding does not reconcile their explicit skill assignments if requirements change.
 
 ## Skill invariants
 

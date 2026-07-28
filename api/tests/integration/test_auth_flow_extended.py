@@ -108,15 +108,17 @@ def test_signup_is_disabled():
         assert_that(response.status_code, equal_to(status.HTTP_410_GONE))
 
 
-def test_signup_service_seeds_predefined_templates():
-    """Signup is disabled at the route, but the service must still seed a new org's
-    per-org template catalog (templates aren't global like skills) if it's re-enabled."""
+def test_signup_org_sees_global_predefined_templates():
+    """Signup is disabled at the route, but the service must let a new org see the
+    global predefined template catalog (predefined templates are platform/global
+    resources, not per-org seeds) if signup is re-enabled."""
     from fastapi import BackgroundTasks
 
     from api.domains.auth.models import SignupRequest
     from api.domains.auth.service import AuthService
     from api.domains.templates.predefined import PREDEFINED_TEMPLATES
     from api.domains.templates.repository import TemplateRepository
+    from api.domains.templates.service import TemplateService
     from api.domains.users.organization_users.repository import (
         OrganizationUserRepository,
     )
@@ -131,6 +133,7 @@ def test_signup_service_seeds_predefined_templates():
             database_is_clean(),
         ]
     ) as context:
+        context.injector.get(TemplateService).seed_predefined_templates()
         context.injector.get(AuthService).signup(
             SignupRequest(
                 email="signup-seed@example.com",
@@ -146,8 +149,9 @@ def test_signup_service_seeds_predefined_templates():
         org_id = memberships[0].organization_id
 
         template_repo = context.injector.get(TemplateRepository)
-        seeded = template_repo.get_latest_template(org_id, PREDEFINED_TEMPLATES[0].slug)
-        assert_that(seeded, is_not(none()))
+        visible = template_repo.get_latest_template(org_id, PREDEFINED_TEMPLATES[0].slug)
+        assert_that(visible, is_not(none()))
+        assert_that(visible.organization_id, none())
 
 
 def test_me_returns_safe_user_and_organizations():

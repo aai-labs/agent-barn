@@ -1,5 +1,3 @@
-from uuid import UUID
-
 from api.domains.templates.models import AgentTemplate, TemplateSource
 from api.domains.templates.predefined import PREDEFINED_TEMPLATES
 
@@ -30,11 +28,15 @@ def copy_predefined_content(existing: AgentTemplate, desired: AgentTemplate) -> 
         setattr(existing, field, getattr(desired, field))
 
 
-def build_predefined_templates(org_id: UUID) -> list[AgentTemplate]:
-    """v1 rows for every pre-defined template, ready to insert for an org."""
+def build_predefined_templates() -> list[AgentTemplate]:
+    """v1 rows for every pre-defined template, ready to insert as global resources.
+
+    Predefined templates are platform/global (organization_id IS NULL), like
+    built-in aai_cli skills, so a single row is shared by every organization.
+    """
     return [
         AgentTemplate(
-            organization_id=org_id,
+            organization_id=None,
             template_slug=predefined.slug,
             template_name=predefined.name,
             template_source=TemplateSource.PRE_DEFINED,

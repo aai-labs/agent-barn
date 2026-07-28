@@ -28,7 +28,6 @@ from api.domains.auth.repository import (
 )
 from api.domains.organizations.models import Organization
 from api.domains.organizations.repository import OrganizationRepository
-from api.domains.templates.service import TemplateService
 from api.domains.users.exceptions import EmailTakenHTTPException
 from api.domains.users.models import User
 from api.domains.users.organization_users.models import (
@@ -66,7 +65,6 @@ class AuthService:
     organization_repository: OrganizationRepository
     organization_user_repository: OrganizationUserRepository
     email_service: EmailService
-    template_service: TemplateService
 
     @staticmethod
     def _default_organization_name(full_name: str | None) -> str:
@@ -138,13 +136,11 @@ class AuthService:
                 ),
                 session,
             )
-            org_id = organization.id
             session.commit()
             session.refresh(user)
 
-        # Seed the per-org predefined template catalog (+ required-skill links), matching
-        # create_organization. Idempotent; runs after commit.
-        self.template_service.seed_predefined_templates(org_id)
+        # Predefined templates are global platform resources seeded once at
+        # startup, so a new org needs no per-org catalog clone.
         return user
 
     def signup(self, signup_request: SignupRequest, _: BackgroundTasks) -> Token:

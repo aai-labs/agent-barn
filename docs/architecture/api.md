@@ -38,7 +38,7 @@ Database records generally inherit UUID and timestamp fields from `../../api/inf
 
 ## Startup data
 
-The application lifespan ensures a bootstrap Platform Administrator and seeds built-in aai-cli skills. The system has no default Organization. Platform-owned resources are global resources, not Organization-owned rows. Built-in skills already follow that model with `organization_id = NULL`; predefined templates still need a migration and repository changes before they do. Platform-admin behavior must use the platform-admin seam rather than adding dependencies on an Organization. Changes to bootstrap entities can affect startup, tests, and predefined catalog behavior simultaneously.
+The application lifespan ensures a bootstrap Platform Administrator, seeds built-in aai-cli skills, and seeds the global predefined template catalogue. The system has no default Organization. Platform-owned resources are global resources, not Organization-owned rows: built-in skills and predefined templates both use `organization_id = NULL`, and org-scoped listing resolves them with a scope-aware (`organization_id = org_id OR organization_id IS NULL`) filter. Platform-admin behavior must use the platform-admin seam rather than adding dependencies on an Organization. Changes to bootstrap entities can affect startup, tests, and predefined catalog behavior simultaneously.
 
 ## Testing
 

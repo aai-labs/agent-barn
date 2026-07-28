@@ -24,6 +24,7 @@ from api.domains.skills.repository import SkillRepository
 from api.domains.skills.routes import skills_router
 from api.domains.skills.skill_seeder import seed_aai_cli_skills
 from api.domains.templates.routes import templates_router
+from api.domains.templates.service import TemplateService
 from api.domains.tool_calls.routes import tool_calls_router
 from api.domains.users.organization_users.routes import member_router
 from api.domains.users.routes import users_router
@@ -50,6 +51,7 @@ async def lifespan(_: FastAPI):
         user_service.ensure_default_superuser()
 
         seed_aai_cli_skills(injector.get(SkillRepository))
+        injector.get(TemplateService).seed_predefined_templates()
     except Exception:
         logger.error("Error during startup bootstrap: %s", traceback.format_exc())
         raise HTTPException(

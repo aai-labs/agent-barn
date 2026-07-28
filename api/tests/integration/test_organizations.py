@@ -91,12 +91,15 @@ def test_superuser_creates_organization_and_invites_owner():
                 assert_that(org_repo.get(org_id), not_none())
 
 
-def test_new_organization_is_seeded_with_predefined_templates():
-    """A newly created org must start with the predefined template catalog (skills are
-    global, but templates are per-org and have to be seeded)."""
-    from api.domains.templates.seeding import PREDEFINED_TEMPLATES
+def test_new_organization_sees_global_predefined_templates():
+    """A newly created org sees the global predefined template catalog without
+    per-org seeding (predefined templates are platform/global resources, like
+    built-in skills)."""
+    from api.domains.templates.predefined import PREDEFINED_TEMPLATES
+    from api.domains.templates.service import TemplateService
 
     with given([*_GIVEN, _there_is_a_superuser()]) as context:
+        context.injector.get(TemplateService).seed_predefined_templates()
         create = context.client.post(
             _ORGS,
             json={"name": "Seeded Inc", "owner_email": "owner@seeded.com"},
