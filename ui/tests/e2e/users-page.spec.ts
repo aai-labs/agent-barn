@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 
 import { DataSupport } from "../pages/data-support/data-support.po";
 
-const USERS_URL = "/dashboard/users";
+const USERS_URL = "/dashboard/platform/users";
 
 test.describe("Users Page — Create & Delete", () => {
   let data: DataSupport;

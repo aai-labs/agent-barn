@@ -54,7 +54,7 @@ export class UserDataSupport {
   } = {}) {
     let requestCount = 0;
 
-    await this.page.route("**/api/v1/users**", async (route) => {
+    await this.page.route("**/api/v1/platform/users**", async (route) => {
       if (route.request().method() !== "GET") {
         await route.fallback();
         return;
@@ -107,7 +107,7 @@ export class UserDataSupport {
     detail?: string;
     user?: unknown;
   } = {}) {
-    await this.page.route("**/api/v1/users", async (route) => {
+    await this.page.route("**/api/v1/platform/users", async (route) => {
       if (route.request().method() !== "POST") {
         await route.fallback();
         return;
@@ -149,7 +149,7 @@ export class UserDataSupport {
     status?: number;
     detail?: string;
   } = {}) {
-    await this.page.route("**/api/v1/users/**", async (route) => {
+    await this.page.route("**/api/v1/platform/users/**", async (route) => {
       if (route.request().method() !== "DELETE") {
         await route.fallback();
         return;
@@ -177,7 +177,7 @@ export class UserDataSupport {
     status?: number;
     detail?: string;
   } = {}) {
-    await this.page.route("**/api/v1/users/*/reset-password", async (route) => {
+    await this.page.route("**/api/v1/platform/users/*/reset-password", async (route) => {
       if (route.request().method() !== "POST") {
         await route.fallback();
         return;
@@ -245,7 +245,7 @@ export class UserDataSupport {
   } = {}) {
     let requestCount = 0;
 
-    await this.page.route("**/api/v1/organizations**", async (route) => {
+    await this.page.route("**/api/v1/platform/organizations**", async (route) => {
       if (route.request().method() !== "GET") {
         await route.fallback();
         return;

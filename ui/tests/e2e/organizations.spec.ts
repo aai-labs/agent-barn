@@ -6,7 +6,7 @@ import {
   ORG_B_ID,
 } from "../pages/data-support/organization-data-support.po";
 
-const ORGS_URL = "/dashboard/organizations";
+const ORGS_URL = "/dashboard/platform/organizations";
 const DETAIL_URL = `/dashboard/${ORG_A_ID}/members`;
 
 function twoOrgs() {
@@ -32,6 +32,39 @@ function twoOrgs() {
       owner_name: "Hank Scorpio",
     },
   ];
+}
+
+function userWithOrgMemberships({
+  isPlatformAdmin = true,
+  roles = ["OWNER", "OWNER"],
+}: {
+  isPlatformAdmin?: boolean;
+  roles?: [string, string] | string[];
+} = {}) {
+  const [orgA, orgB] = twoOrgs();
+  const userId = "44444444-4444-4444-8444-444444444444";
+  const membership = (organization: unknown, role: string, id: string) => ({
+    id,
+    created_at: "2024-01-01T00:00:00Z",
+    updated_at: "2024-01-01T00:00:00Z",
+    user_id: userId,
+    organization_id: (organization as { id: string }).id,
+    role,
+    organization,
+  });
+  return {
+    id: userId,
+    created_at: "2024-01-01T00:00:00Z",
+    updated_at: "2024-01-01T00:00:00Z",
+    full_name: "Grace Hopper",
+    email: "owner-a@example.com",
+    is_platform_admin: isPlatformAdmin,
+    email_verified_at: "2024-01-01T00:00:00Z",
+    organization_users: [
+      membership(orgA, roles[0] ?? "OWNER", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+      membership(orgB, roles[1] ?? "OWNER", "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"),
+    ],
+  };
 }
 
 test.describe("Organizations — list & create (platform_admin)", () => {
@@ -195,7 +228,9 @@ test.describe("Org switcher on the detail page", () => {
   test.beforeEach(async ({ page }) => {
     data = new DataSupport(page);
     await data.auth.interceptRefreshRequest();
-    await data.users.interceptGetUserContextRequest();
+    await data.users.interceptGetUserContextRequest({
+      userContext: userWithOrgMemberships(),
+    });
     await data.organizations.interceptListOrganizations({ items: twoOrgs() });
     await data.organizations.interceptGetOrganization();
     await data.organizations.interceptGetMembers();
@@ -219,32 +254,11 @@ test.describe("Org switcher — manage page for a member-only org", () => {
   let data: DataSupport;
   test.use({ storageState: { cookies: [], origins: [] } });
 
-  // Owner of org A, plain member of org B (non-platform_admin).
   function ownerOfAMemberOfB() {
-    const [orgA, orgB] = twoOrgs();
-    const userId = "44444444-4444-4444-8444-444444444444";
-    const membership = (organization: unknown, role: string, id: string) => ({
-      id,
-      created_at: "2024-01-01T00:00:00Z",
-      updated_at: "2024-01-01T00:00:00Z",
-      user_id: userId,
-      organization_id: (organization as { id: string }).id,
-      role,
-      organization,
+    return userWithOrgMemberships({
+      isPlatformAdmin: false,
+      roles: ["OWNER", "MEMBER"],
     });
-    return {
-      id: userId,
-      created_at: "2024-01-01T00:00:00Z",
-      updated_at: "2024-01-01T00:00:00Z",
-      full_name: "Grace Hopper",
-      email: "owner-a@example.com",
-      is_platform_admin: false,
-      email_verified_at: "2024-01-01T00:00:00Z",
-      organization_users: [
-        membership(orgA, "OWNER", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
-        membership(orgB, "MEMBER", "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"),
-      ],
-    };
   }
 
   test.beforeEach(async ({ page }) => {
@@ -284,7 +298,9 @@ test.describe("Org switcher (platform_admin)", () => {
   test.beforeEach(async ({ page }) => {
     data = new DataSupport(page);
     await data.auth.interceptRefreshRequest();
-    await data.users.interceptGetUserContextRequest();
+    await data.users.interceptGetUserContextRequest({
+      userContext: userWithOrgMemberships(),
+    });
     await data.organizations.interceptListOrganizations({ items: twoOrgs() });
   });
 
@@ -292,14 +308,15 @@ test.describe("Org switcher (platform_admin)", () => {
     await page.goto(ORGS_URL);
 
     const switcher = page.locator('button[aria-haspopup="listbox"]');
-    await expect(switcher).toContainText("AAI Labs");
+    await expect(switcher).toContainText("Platform");
 
     await switcher.click();
     const listbox = page.getByRole("listbox");
+    await expect(listbox.getByRole("option", { name: /aai labs/i })).toBeVisible();
     await expect(listbox.getByRole("option", { name: /globex/i })).toBeVisible();
 
     await listbox.getByRole("option", { name: /globex/i }).click();
-    await expect(switcher).toContainText("Globex");
+    await expect(page).toHaveURL(new RegExp(`/dashboard/${ORG_B_ID}$`));
   });
 });
 
