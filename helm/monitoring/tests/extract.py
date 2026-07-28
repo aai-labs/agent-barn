@@ -1,8 +1,9 @@
 """Extract testable Prometheus artifacts from the monitoring chart.
 
 Two modes:
-  rules              read `helm template` output on stdin, print the
-                     PrometheusRule's groups as a plain promtool rules file
+  rules              read `helm template` output on stdin, print the alert
+                     groups from the Prometheus server ConfigMap
+                     (alerting_rules.yml) as a plain promtool rules file
   dashboards <dir>   wrap every panel expr from the dashboard JSONs as a
                      recording rule so `promtool check rules` parse-checks
                      the PromQL (Grafana variables are substituted first)
@@ -25,10 +26,12 @@ _GRAFANA_VAR = re.compile(r"\$\{?[A-Za-z_][A-Za-z0-9_]*\}?")
 
 def _rules() -> None:
     for doc in yaml.safe_load_all(sys.stdin):
-        if doc and doc.get("kind") == "PrometheusRule":
-            yaml.safe_dump({"groups": doc["spec"]["groups"]}, sys.stdout, sort_keys=False)
-            return
-    sys.exit("no PrometheusRule document found on stdin")
+        if doc and doc.get("kind") == "ConfigMap":
+            raw = doc.get("data", {}).get("alerting_rules.yml")
+            if raw:
+                yaml.safe_dump({"groups": yaml.safe_load(raw)["groups"]}, sys.stdout, sort_keys=False)
+                return
+    sys.exit("no ConfigMap with alerting_rules.yml found on stdin")
 
 
 def _dashboards(directory: str) -> None:

@@ -1,9 +1,15 @@
 repositories:
   - name: prometheus-community
     url: https://prometheus-community.github.io/helm-charts
+  - name: grafana
+    url: https://grafana.github.io/helm-charts
 
 helmDefaults:
-  createNamespace: true
+  # The namespace always pre-exists (tenant chart on the shared cluster,
+  # k8s/agent-farm-user.yaml locally) and the deploy identities are
+  # namespace-scoped tenants that may not touch Namespace objects — helm
+  # must never try to create/apply one. Matches the staging branch.
+  createNamespace: false
 
 releases:
   - name: postgres-app
@@ -147,29 +153,39 @@ releases:
     needs:
       - agent-farm/agentfarm-api
 
-  # Prometheus + Grafana + Alertmanager (kube-prometheus-stack wrapper).
-  # One-time cluster prerequisite: kubectl apply -f k8s/monitoring-crd-rbac.yaml
-  # as a cluster admin, so the deployer SA may install the operator CRDs and
-  # cluster-scoped RBAC (see docs/guidelines/operations.md).
+  # Prometheus + Grafana + Alertmanager, fully namespace-scoped (no CRDs, no
+  # cluster RBAC — the shared cluster only grants us a namespace). NAMESPACE
+  # matches the staging-branch convention so the release follows the stack
+  # into agent-farm-staging when deployed from there.
   - name: monitoring
-    namespace: agent-farm
+    namespace: {{ env "NAMESPACE" | default "agent-farm" }}
     chart: ./helm/monitoring
     labels:
       name: monitoring
     set:
-      - name: kube-prometheus-stack.alertmanager.config.global.slack_api_url
+      # Prometheus/kube-state-metrics reuse the tenant deploy SA (they may
+      # not create their own RBAC); the tenant chart names it <namespace>-user.
+      - name: prometheus.serviceAccounts.server.name
+        value: {{ printf "%s-user" (env "NAMESPACE" | default "agent-farm") | quote }}
+      - name: prometheus.kube-state-metrics.serviceAccount.name
+        value: {{ printf "%s-user" (env "NAMESPACE" | default "agent-farm") | quote }}
+      # Stamped on every alert so a shared Slack channel can tell staging
+      # and production incidents apart.
+      - name: prometheus.server.global.external_labels.environment
+        value: {{ env "ENVIRONMENT" | required "ENVIRONMENT is required" | quote }}
+      - name: slackWebhookUrl
         value: {{ env "SLACK_ALERTS_WEBHOOK_URL" | required "SLACK_ALERTS_WEBHOOK_URL is required" | quote }}
-      - name: kube-prometheus-stack.grafana.adminPassword
+      - name: grafana.adminPassword
         value: {{ env "GRAFANA_ADMIN_PASSWORD" | required "GRAFANA_ADMIN_PASSWORD is required" | quote }}
-      - name: kube-prometheus-stack.grafana.ingress.hosts[0]
+      - name: grafana.ingress.hosts[0]
         value: {{ env "GRAFANA_HOST" | required "GRAFANA_HOST is required" | quote }}
-      - name: kube-prometheus-stack.grafana.ingress.tls[0].secretName
+      - name: grafana.ingress.tls[0].secretName
         value: grafana-tls
-      - name: kube-prometheus-stack.grafana.ingress.tls[0].hosts[0]
+      - name: grafana.ingress.tls[0].hosts[0]
         value: {{ env "GRAFANA_HOST" | required "GRAFANA_HOST is required" | quote }}
 {{ if env "STORAGE_CLASS" }}
-      - name: kube-prometheus-stack.prometheus.prometheusSpec.storageSpec.volumeClaimTemplate.spec.storageClassName
+      - name: prometheus.server.persistentVolume.storageClass
         value: {{ env "STORAGE_CLASS" | quote }}
 {{ end }}
     needs:
-      - agent-farm/agentfarm-api
+      - {{ env "NAMESPACE" | default "agent-farm" }}/agentfarm-api

@@ -1,6 +1,6 @@
-# promtool unit tests for templates/prometheusrule.yaml.
-# Run via `make check-monitoring` — rules.yaml is rendered from the chart
-# first (thresholds come from values.yaml: 5xx 0.05, tool calls 0.25, $5).
+# promtool unit tests for the alert rules in values.yaml
+# (prometheus.serverFiles."alerting_rules.yml"). Run via
+# `make check-monitoring` — rules.yaml is rendered from the chart first.
 # exp_annotations are asserted verbatim, so these also cover the
 # {{ $labels }} / {{ $value }} templating in summaries.
 rule_files:
@@ -44,7 +44,7 @@ tests:
               endpoint: http
             exp_annotations:
               summary: The agent-farm API target has disappeared entirely.
-              description: No scrape target exists for the API — the Service or ServiceMonitor is gone.
+              description: No scrape target exists for the API — the Service is gone or discovery is broken.
 
   # --- IngestAPIDown ---
   - interval: 1m
@@ -84,13 +84,36 @@ tests:
               summary: The API cannot reach Postgres.
               description: The database probe on the API /metrics endpoint is failing.
 
-  # --- HighAPI5xxRate: 33% errors at healthy traffic fires ---
+  # --- HighAPI5xxRate: 33% errors at healthy traffic fires BOTH tiers
+  # (5% warning + 20% critical) ---
   - interval: 1m
     input_series:
       - series: 'http_requests_total{job="agentfarm-api", status="2xx"}'
         values: "0+12x30"
       - series: 'http_requests_total{job="agentfarm-api", status="5xx"}'
         values: "0+6x30"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: HighAPI5xxRate
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: More than 20% of API requests are failing with 5xx.
+              description: Sustained server-error ratio over the last 5 minutes with non-trivial traffic.
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: More than 5% of API requests are failing with 5xx.
+              description: Sustained server-error ratio over the last 5 minutes with non-trivial traffic.
+
+  # --- HighAPI5xxRate: ~8% errors trips only the warning tier ---
+  - interval: 1m
+    input_series:
+      - series: 'http_requests_total{job="agentfarm-api", status="2xx"}'
+        values: "0+12x30"
+      - series: 'http_requests_total{job="agentfarm-api", status="5xx"}'
+        values: "0+1x30"
     alert_rule_test:
       - eval_time: 10m
         alertname: HighAPI5xxRate
@@ -141,7 +164,8 @@ tests:
         exp_alerts: []
 
   # --- AgentTargetDown: per-agent labels survive into the alert, and the
-  # Slack summary carries name + org + id ---
+  # Slack summary carries name + org + id. critical/2m per the ticket's
+  # alert table. ---
   - interval: 1m
     input_series:
       - series: 'up{job="agent", app="agent-abc", agent_name="abby", org_name="acme"}'
@@ -151,7 +175,7 @@ tests:
         alertname: AgentTargetDown
         exp_alerts:
           - exp_labels:
-              severity: warning
+              severity: critical
               job: agent
               app: agent-abc
               agent_name: abby

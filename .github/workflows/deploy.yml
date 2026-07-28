@@ -187,5 +187,8 @@ jobs:
           REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
           SLACK_ALERTS_WEBHOOK_URL: ${{ secrets.SLACK_ALERTS_WEBHOOK_URL }}
           GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
-          GRAFANA_HOST: ${{ vars.GRAFANA_HOST }}
+          # Per-env host: staging and prod each need their own DNS name — a
+          # shared host would collide on traefik routing and the TLS cert.
+          # (Same switch pattern as the staging branch's deploy.yml.)
+          GRAFANA_HOST: ${{ github.ref_name == 'staging' && vars.STAGING_GRAFANA_HOST || vars.GRAFANA_HOST }}
         run: helmfile -f helmfile.yaml.gotmpl sync --wait

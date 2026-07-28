@@ -70,8 +70,8 @@ def build_service(
             name=_resource_name(agent_id),
             namespace=namespace,
             # The Service carries the org-name and agent-name slugs because
-            # Prometheus copies target labels from the Service (ServiceMonitor
-            # targetLabels) — they give every pod generation of an agent a
+            # Prometheus relabels them onto every scraped series (agent job in
+            # helm/monitoring) — they give every pod generation of an agent a
             # stable, human-readable identity on dashboards.
             labels={
                 **_labels(agent_id, org_id),

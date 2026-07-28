@@ -88,7 +88,7 @@
       "gridPos": { "h": 5, "w": 6, "x": 18, "y": 0 },
       "targets": [
         {
-          "expr": "sum(increase(kube_pod_container_status_restarts_total{namespace=\"agent-farm\", pod=~\"agentfarm-api-.*\"}[1h]))",
+          "expr": "sum(increase(kube_pod_container_status_restarts_total{pod=~\"agentfarm-api-.*\"}[1h]))",
           "refId": "A"
         }
       ],
@@ -137,7 +137,7 @@
       "gridPos": { "h": 8, "w": 24, "x": 0, "y": 14 },
       "targets": [
         {
-          "expr": "sum by (pod) (increase(kube_pod_container_status_restarts_total{namespace=\"agent-farm\", pod=~\"agentfarm-api-.*\"}[1h]))",
+          "expr": "sum by (pod) (increase(kube_pod_container_status_restarts_total{pod=~\"agentfarm-api-.*\"}[1h]))",
           "legendFormat": "{{pod}}",
           "refId": "A"
         }

@@ -12,9 +12,10 @@ PROMTOOL_IMAGE="${PROMTOOL_IMAGE:-prom/prometheus:v3.5.0}"
 
 # --no-project --with pyyaml: the extractor only needs PyYAML, so don't
 # force a full api dependency sync (matters on fresh CI runners).
+# The alert rules live in the Prometheus server ConfigMap
+# (serverFiles."alerting_rules.yml"); extract.py pulls them back out of the
+# full render.
 helm template helm/monitoring \
-  --show-only templates/prometheusrule.yaml \
-  --set kube-prometheus-stack.grafana.adminPassword=unused \
   | uv run --no-project --with pyyaml python helm/monitoring/tests/extract.py rules \
   > "$GEN/rules.yaml"
 
