@@ -230,7 +230,7 @@ jobs:
           AGENT_MODEL_ALLOWLIST: ${{ vars.AGENT_MODEL_ALLOWLIST }}
           STORAGE_CLASS: ${{ vars.STORAGE_CLASS }}
           SECRET_SIGNING_KEY: ${{ github.ref_name == 'staging' && secrets.STAGING_SECRET_SIGNING_KEY || secrets.SECRET_SIGNING_KEY }}
-          PLATFORM_ADMIN_CREDENTIALS: ${{ github.ref_name == 'staging' && secrets.STAGING_SUPER_USER_CREDENTIALS || secrets.SUPER_USER_CREDENTIALS }}
+          PLATFORM_ADMIN_CREDENTIALS: ${{ github.ref_name == 'staging' && secrets.STAGING_PLATFORM_ADMIN_CREDENTIALS || secrets.PLATFORM_ADMIN_CREDENTIALS }}
           AGENT_TOKEN_ENCRYPTION_KEY: ${{ github.ref_name == 'staging' && secrets.STAGING_AGENT_TOKEN_ENCRYPTION_KEY || secrets.AGENT_TOKEN_ENCRYPTION_KEY }}
           ENVIRONMENT: ${{ env.ENVIRONMENT }}
           WEB_APP_URL: ${{ env.WEB_APP_URL }}
