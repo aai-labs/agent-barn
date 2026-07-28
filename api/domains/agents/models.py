@@ -210,12 +210,15 @@ class Agent(BaseModel, table=True):
             "organization_id",
             name="uq_agent_id_organization",
         ),
-        # The agent pins a template version via (template_slug, template_version).
-        # Predefined templates are global (organization_id IS NULL) while custom
-        # templates are org-scoped, so a single org-scoped composite FK cannot
-        # express the reference. Template existence is therefore enforced at
-        # the service boundary (create/update/re-pin return 404 for unknown
-        # pins), mirroring how agent-skill integrity is guarded.
+        # The agent pins exactly one template version via one of two
+        # mutually-exclusive FKs: platform_template_id for a global predefined
+        # template, or agent_template_id for an org-scoped custom/fork template.
+        # The CHECK guard ensures exactly one is set, restoring DB-level
+        # referential integrity for the pin.
+        sa.CheckConstraint(
+            "(platform_template_id IS NULL) <> (agent_template_id IS NULL)",
+            name="ck_agent_exactly_one_template_pin",
+        ),
     )
 
     organization_id: UUID = SqlField(foreign_key="organization.id", nullable=False, ondelete="CASCADE")
@@ -243,8 +246,22 @@ class Agent(BaseModel, table=True):
         nullable=True,
         sa_type=sa.DateTime(timezone=True),  # type: ignore
     )
-    template_slug: str = SqlField(nullable=False, max_length=255)
-    template_version: int = SqlField(nullable=False)
+    # Template pin: exactly one of platform_template_id / agent_template_id is
+    # set (enforced by ck_agent_exactly_one_template_pin). platform_template_id
+    # pins a global predefined template; agent_template_id pins an org-scoped
+    # custom or fork template.
+    platform_template_id: UUID | None = SqlField(
+        default=None,
+        foreign_key="platform_template.id",
+        nullable=True,
+        ondelete="RESTRICT",
+    )
+    agent_template_id: UUID | None = SqlField(
+        default=None,
+        foreign_key="agent_template.id",
+        nullable=True,
+        ondelete="RESTRICT",
+    )
     model: str = SqlField(nullable=False, default="")
     platform: AgentPlatform = SqlField(
         default=AgentPlatform.SLACK,
@@ -434,6 +451,18 @@ class AgentTemplateSkill(BaseModel, table=True):
     )
 
     template_id: UUID = SqlField(foreign_key="agent_template.id", nullable=False, ondelete="CASCADE")
+    skill_id: UUID = SqlField(foreign_key="skill.id", nullable=False, ondelete="RESTRICT")
+
+
+class PlatformTemplateSkill(BaseModel, table=True):
+    __tablename__: str = "platform_template_skill"
+
+    __table_args__ = (
+        sa.UniqueConstraint("template_id", "skill_id", name="uq_platform_template_skill"),
+        sa.Index("ix_platform_template_skill_template", "template_id"),
+    )
+
+    template_id: UUID = SqlField(foreign_key="platform_template.id", nullable=False, ondelete="CASCADE")
     skill_id: UUID = SqlField(foreign_key="skill.id", nullable=False, ondelete="RESTRICT")
 
 

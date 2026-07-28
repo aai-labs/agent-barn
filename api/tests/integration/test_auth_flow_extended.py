@@ -119,9 +119,6 @@ def test_signup_org_sees_global_predefined_templates():
     from api.domains.templates.predefined import PREDEFINED_TEMPLATES
     from api.domains.templates.repository import TemplateRepository
     from api.domains.templates.service import TemplateService
-    from api.domains.users.organization_users.repository import (
-        OrganizationUserRepository,
-    )
     from api.domains.users.repository import UserRepository
 
     with given(
@@ -145,13 +142,11 @@ def test_signup_org_sees_global_predefined_templates():
 
         user = context.injector.get(UserRepository).get_by_email("signup-seed@example.com")
         assert_that(user, is_not(none()))
-        memberships = context.injector.get(OrganizationUserRepository).get_by_user_id(user.id)
-        org_id = memberships[0].organization_id
 
         template_repo = context.injector.get(TemplateRepository)
-        visible = template_repo.get_latest_template(org_id, PREDEFINED_TEMPLATES[0].slug)
+        visible = template_repo.get_latest_platform_template(PREDEFINED_TEMPLATES[0].slug)
         assert_that(visible, is_not(none()))
-        assert_that(visible.organization_id, none())
+        # platform_template rows have no organization_id column — they are global
 
 
 def test_me_returns_safe_user_and_organizations():

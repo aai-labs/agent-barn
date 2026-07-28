@@ -193,7 +193,7 @@ def test_create_agent_does_not_create_template_rows():
         with then("the lineage still has only its original version"):
             assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             template_repository: TemplateRepository = context.injector.get(TemplateRepository)
-            latest = template_repository.get_latest_template(context.organization.id, "test-template")
+            latest = template_repository.get_latest_org_template(context.organization.id, "test-template")
             assert_that(latest, is_not(none()))
             assert latest is not None
             assert_that(latest.version, equal_to(1))
@@ -1269,11 +1269,8 @@ def test_start_agent_renders_template_placeholders():
 
         with then("the stored template keeps its raw placeholders"):
             template_repository: TemplateRepository = context.injector.get(TemplateRepository)
-            stored = template_repository.get_template_or_raise(
-                context.organization.id,
-                context.agent.template_slug,
-                context.agent.template_version,
-            )
+            stored = template_repository.get_pinned_template(context.agent)
+            assert stored is not None
             assert_that(
                 stored.soul_md,
                 equal_to("# Soul of {{ agent_display_name }} ({{agent_name}})"),

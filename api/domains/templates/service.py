@@ -8,7 +8,6 @@ from injector import inject, singleton
 from api.domains.auth.models import CurrentUserContext
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import PermissionPolicy
-from api.domains.skills.models import SkillRead
 from api.domains.skills.repository import SkillRepository
 from api.domains.templates.defaults import (
     DEFAULT_AGENTS_MD,
@@ -22,6 +21,7 @@ from api.domains.templates.defaults import (
 )
 from api.domains.templates.models import (
     AgentTemplate,
+    PlatformTemplate,
     TemplateCreate,
     TemplateFilter,
     TemplateRead,
@@ -61,12 +61,12 @@ class TemplateService:
                     detail=f"Skill {skill_id} not found",
                 )
 
-    def _with_required_skills(self, read: TemplateRead) -> TemplateRead:
-        skills = self.repository.get_required_skills(read.id)
-        return read.model_copy(update={"required_skills": [SkillRead.model_validate(s) for s in skills]})
+    def _to_read_with_skills(self, template: AgentTemplate | PlatformTemplate) -> TemplateRead:
+        skills = self.repository.get_required_skills_for(template)
+        return self.repository._to_read(template, skills)
 
-    def _get_latest_or_404(self, org_id: UUID, slug: str) -> AgentTemplate:
-        template = self.repository.get_latest_template(org_id, slug)
+    def _get_latest_or_404(self, org_id: UUID, slug: str) -> AgentTemplate | PlatformTemplate:
+        template = self.repository.resolve_latest_template(org_id, slug)
         if not template:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -82,15 +82,7 @@ class TemplateService:
     ) -> PaginatedItems[TemplateRead]:
         org_id = self._org_id(context)
         self.permission_policy.require_organization(context, org_id, PermissionKey.TEMPLATE_READ)
-        templates, total = self.repository.find_latest_templates(org_id, template_filter, pagination)
-        template_ids = [t.id for t in templates]
-        skills_by_template = self.repository.get_required_skills_for_templates(template_ids)
-        items = []
-        for t in templates:
-            read = TemplateRead.model_validate(t)
-            skills = skills_by_template.get(t.id, [])
-            read = read.model_copy(update={"required_skills": [SkillRead.model_validate(s) for s in skills]})
-            items.append(read)
+        items, total = self.repository.find_latest_templates(org_id, template_filter, pagination)
         return PaginatedItems(
             page=pagination.page,
             page_size=pagination.size,
@@ -102,27 +94,18 @@ class TemplateService:
         org_id = self._org_id(context)
         template = self._get_latest_or_404(org_id, slug)
         self.permission_policy.require_organization(context, org_id, PermissionKey.TEMPLATE_READ)
-        read = TemplateRead.model_validate(template)
-        return self._with_required_skills(read)
+        return self._to_read_with_skills(template)
 
     def list_template_versions(self, slug: str, context: CurrentUserContext) -> list[TemplateRead]:
         org_id = self._org_id(context)
-        versions = self.repository.find_versions(org_id, slug)
+        versions = self.repository.resolve_versions(org_id, slug)
         if not versions:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Template {slug} not found",
             )
         self.permission_policy.require_organization(context, org_id, PermissionKey.TEMPLATE_READ)
-        template_ids = [v.id for v in versions]
-        skills_by_template = self.repository.get_required_skills_for_templates(template_ids)
-        result = []
-        for v in versions:
-            read = TemplateRead.model_validate(v)
-            skills = skills_by_template.get(v.id, [])
-            read = read.model_copy(update={"required_skills": [SkillRead.model_validate(s) for s in skills]})
-            result.append(read)
-        return result
+        return [self._to_read_with_skills(v) for v in versions]
 
     def create_template(self, data: TemplateCreate, context: CurrentUserContext) -> TemplateRead:
         org_id = self._org_id(context)
@@ -133,7 +116,7 @@ class TemplateService:
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="template_name must contain at least one alphanumeric character",
             )
-        if self.repository.get_latest_template(org_id, slug) is not None:
+        if self.repository.resolve_latest_template(org_id, slug) is not None:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"A template with slug {slug} already exists",
@@ -158,21 +141,26 @@ class TemplateService:
         )
         self.repository.save_template(template)
         if data.required_skill_ids:
-            self.repository.save_template_skills(template.id, data.required_skill_ids)
-        return self._with_required_skills(TemplateRead.model_validate(template))
+            self.repository.save_org_template_skills(template.id, data.required_skill_ids)
+        return self._to_read_with_skills(template)
 
     def update_template(self, slug: str, data: TemplateUpdate, context: CurrentUserContext) -> TemplateRead:
         org_id = self._org_id(context)
         old = self._get_latest_or_404(org_id, slug)
         self.permission_policy.require_organization(context, org_id, PermissionKey.TEMPLATE_MANAGE)
         updated = data.model_dump(exclude_unset=True)
-        # Every update publishes a new immutable version of the lineage; the
-        # slug never changes and agent pins are left untouched.
+        # Every update publishes a new immutable org-scoped version of the
+        # lineage; the slug never changes and agent pins are left untouched.
+        # Editing a platform predefined template forks it into the org's
+        # agent_template table (version = platform v + 1, forked_from set).
+        forked_from = old.id if isinstance(old, PlatformTemplate) else old.forked_from_platform_template_id
+        source = TemplateSource.PRE_DEFINED if isinstance(old, PlatformTemplate) else old.template_source
         new_template = AgentTemplate(
             organization_id=org_id,
+            forked_from_platform_template_id=forked_from,
             template_slug=old.template_slug,
             template_name=updated.get("template_name", old.template_name),
-            template_source=old.template_source,
+            template_source=source,
             version=old.version + 1,
             description=updated.get("description", old.description),
             soul_md=updated.get("soul_md", old.soul_md),
@@ -185,51 +173,49 @@ class TemplateService:
             heartbeat_md=updated.get("heartbeat_md", old.heartbeat_md),
         )
         if data.required_skill_ids is None:
-            resolved_ids = list(self.repository.get_required_skill_ids(old.id))
+            resolved_ids = list(self.repository.get_required_skill_ids_for(old))
         else:
             if data.required_skill_ids:
                 self._validate_skill_ids(data.required_skill_ids, org_id)
             resolved_ids = data.required_skill_ids
         self.repository.save_template(new_template)
-        self.repository.save_template_skills(new_template.id, resolved_ids)
-        return self._with_required_skills(TemplateRead.model_validate(new_template))
+        self.repository.save_org_template_skills(new_template.id, resolved_ids)
+        return self._to_read_with_skills(new_template)
 
     def seed_predefined_templates(self) -> None:
         """Insert missing global pre-defined templates and refresh stale ones in place.
 
         Pre-defined templates are system-managed platform/global resources
-        (organization_id IS NULL), seeded once for the whole platform rather
-        than cloned per Organization. When the code's content changes, the
-        global v1 seed is overwritten in place so both new agents (created from
-        the latest version) and existing agents (which re-render their pinned
-        template on every start) pick up the change. A lineage an org has
-        edited (an org-scoped version > 1) is left untouched so customizations
-        are never clobbered; the seeder only ever touches the global v1 row.
+        living in the platform_template table (no organization_id), seeded
+        once for the whole platform. When the code's content changes, the
+        platform v1 seed is overwritten in place so both new agents (created
+        from the latest version) and existing agents (which re-render their
+        pinned template on every start) pick up the change. Org forks
+        (org-scoped agent_template rows with version > 1) are left untouched so
+        customizations are never clobbered; the seeder only ever touches the
+        platform v1 row.
         """
         for predefined, template in zip(PREDEFINED_TEMPLATES, build_predefined_templates()):
-            existing = self.repository.get_latest_global_template(template.template_slug)
+            existing = self.repository.get_latest_platform_template(template.template_slug)
             if existing is None:
-                self.repository.save_template(template)
+                self.repository.save_platform_template(template)
                 existing = template
-                logger.warning("Seeded global predefined template: %s v1", template.template_slug)
-            elif (
-                existing.version == 1
-                and existing.template_source == TemplateSource.PRE_DEFINED
-                and predefined_content_differs(existing, template)
-            ):
+                logger.warning("Seeded platform predefined template: %s v1", template.template_slug)
+            elif predefined_content_differs(existing, template):
                 copy_predefined_content(existing, template)
-                self.repository.save_template(existing)
+                self.repository.save_platform_template(existing)
                 logger.warning(
-                    "Refreshed global predefined template in place: %s v1",
+                    "Refreshed platform predefined template in place: %s v1",
                     template.template_slug,
                 )
 
-            if existing.version == 1 and existing.template_source == TemplateSource.PRE_DEFINED:
-                desired_ids = [
-                    skill.id
-                    for name in predefined.required_skill_names
-                    if (skill := self.skill_repository.get_by_name_global(name))
-                ]
-                existing_ids = self.repository.get_required_skill_ids(existing.id)
-                if set(desired_ids) != existing_ids:
-                    self.repository.save_template_skills(existing.id, desired_ids)
+            # Platform templates are always v1 (the seeder refreshes in place
+            # rather than publishing new versions).
+            desired_ids = [
+                skill.id
+                for name in predefined.required_skill_names
+                if (skill := self.skill_repository.get_by_name_global(name))
+            ]
+            existing_ids = self.repository.get_platform_required_skill_ids(existing.id)
+            if set(desired_ids) != existing_ids:
+                self.repository.save_platform_template_skills(existing.id, desired_ids)

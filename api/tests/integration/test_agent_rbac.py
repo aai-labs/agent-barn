@@ -187,12 +187,41 @@ def test_creator_keeps_assigned_agent_after_owner_is_demoted_to_member():
 def test_agent_and_creator_access_insert_roll_back_together():
     with given(_GIVEN) as context:
         repository: AgentRepository = context.injector.get(AgentRepository)
+        from api.domains.templates.defaults import (
+            DEFAULT_AGENTS_MD,
+            DEFAULT_BOOT_MD,
+            DEFAULT_BOOTSTRAP_MD,
+            DEFAULT_HEARTBEAT_MD,
+            DEFAULT_IDENTITY_MD,
+            DEFAULT_SOUL_MD,
+            DEFAULT_TOOLS_MD,
+            DEFAULT_USER_MD,
+        )
+        from api.domains.templates.models import AgentTemplate, TemplateSource
+        from api.domains.templates.repository import TemplateRepository
+
+        template_repo = context.injector.get(TemplateRepository)
+        template = AgentTemplate(
+            organization_id=context.organization.id,
+            template_slug="rollback-template",
+            template_name="Rollback Template",
+            template_source=TemplateSource.CUSTOM,
+            version=1,
+            soul_md=DEFAULT_SOUL_MD,
+            identity_md=DEFAULT_IDENTITY_MD,
+            user_md=DEFAULT_USER_MD,
+            tools_md=DEFAULT_TOOLS_MD,
+            agents_md=DEFAULT_AGENTS_MD,
+            boot_md=DEFAULT_BOOT_MD,
+            bootstrap_md=DEFAULT_BOOTSTRAP_MD,
+            heartbeat_md=DEFAULT_HEARTBEAT_MD,
+        )
+        template_repo.save_template(template)
         agent = Agent(
             organization_id=context.organization.id,
             created_by_user_id=context.user.id,
             name="Rollback Agent",
-            template_slug="test-template",
-            template_version=1,
+            agent_template_id=template.id,
         )
 
         with pytest.raises(IntegrityError):

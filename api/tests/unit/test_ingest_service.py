@@ -26,8 +26,7 @@ def _make_agent(ingest_key_encrypted: str | None = "encrypted-key") -> Agent:
         agent_type=AgentType.OPENCLAW,
         litellm_key_encrypted="encrypted",
         model="gpt-5",
-        template_slug="test",
-        template_version=1,
+        agent_template_id=uuid4(),
         ingest_key_encrypted=ingest_key_encrypted,
     )
 

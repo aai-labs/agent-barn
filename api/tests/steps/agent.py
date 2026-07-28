@@ -108,8 +108,7 @@ def there_is_an_agent(
             status=status,
             platform=platform,
             agent_type=agent_type,
-            template_slug=template.template_slug,
-            template_version=template.version,
+            agent_template_id=template.id,
         )
 
         if deleted:

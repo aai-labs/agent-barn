@@ -829,7 +829,6 @@ def test_seed_predefined_templates_creates_three_lineages():
     with given(_GIVEN) as context:
         service: TemplateService = context.injector.get(TemplateService)
         repository: TemplateRepository = context.injector.get(TemplateRepository)
-        org_id = context.organization.id
 
         with when("I seed the global predefined catalogue"):
             service.seed_predefined_templates()
@@ -843,11 +842,11 @@ def test_seed_predefined_templates_creates_three_lineages():
                 "jira-task-helper",
                 "documentation-agent",
             ):
-                template = repository.get_latest_template(org_id, slug)
+                template = repository.get_latest_platform_template(slug)
                 assert_that(template, is_not(none()))
                 assert template is not None
                 assert_that(template.version, equal_to(1))
-                assert_that(template.template_source, equal_to(TemplateSource.PRE_DEFINED))
+                # platform_template rows are inherently pre-defined (no source column)
 
         with then("the registry and DB agree on the count"):
             assert_that(len(PREDEFINED_TEMPLATES), equal_to(6))
@@ -886,33 +885,39 @@ def test_seed_does_not_clobber_edited_predefined_template():
             )
             service.seed_predefined_templates()
 
-        with then("the edited version stays the latest"):
-            latest = repository.get_latest_template(org_id, "scrum-master")
+        with then("the edited org fork stays the latest"):
+            latest = repository.get_latest_org_template(org_id, "scrum-master")
             assert latest is not None
             assert_that(latest.version, equal_to(2))
             assert_that(latest.soul_md, equal_to("# Edited Soul"))
+            assert_that(latest.template_source, equal_to(TemplateSource.PRE_DEFINED))
+            assert_that(latest.forked_from_platform_template_id, is_not(none()))
+
+        with then("the platform v1 seed is untouched"):
+            platform = repository.get_latest_platform_template("scrum-master")
+            assert platform is not None
+            assert_that(platform.version, equal_to(1))
 
 
 def test_seed_refreshes_stale_predefined_v1_in_place():
     with given(_GIVEN) as context:
         service: TemplateService = context.injector.get(TemplateService)
         repository: TemplateRepository = context.injector.get(TemplateRepository)
-        org_id = context.organization.id
         service.seed_predefined_templates()
 
         with when("the seeded v1 drifts from the code (an old seed) then we reseed"):
-            seeded = repository.get_latest_template(org_id, "scrum-master")
+            seeded = repository.get_latest_platform_template("scrum-master")
             assert seeded is not None
             seeded.user_md = "# STALE - asks for credentials"
-            repository.save_template(seeded)
+            repository.save_platform_template(seeded)
             service.seed_predefined_templates()
 
         with then("the v1 row is refreshed in place to the current code content"):
-            latest = repository.get_latest_template(org_id, "scrum-master")
+            latest = repository.get_latest_platform_template("scrum-master")
             assert latest is not None
             assert_that(latest.version, equal_to(1))
             assert_that(latest.user_md, is_not(contains_string("STALE")))
-            assert_that(latest.template_source, equal_to(TemplateSource.PRE_DEFINED))
+            # platform_template rows are inherently pre-defined (no source column)
 
 
 def test_seed_predefined_templates_seeds_scrum_master_skills():
@@ -946,16 +951,15 @@ def test_seed_predefined_templates_does_not_duplicate_skill_rows():
     ) as context:
         service: TemplateService = context.injector.get(TemplateService)
         repository: TemplateRepository = context.injector.get(TemplateRepository)
-        org_id = context.organization.id
 
         with when("I seed twice"):
             service.seed_predefined_templates()
             service.seed_predefined_templates()
 
         with then("scrum-master still has exactly two required skills"):
-            template = repository.get_latest_template(org_id, "scrum-master")
+            template = repository.get_latest_platform_template("scrum-master")
             assert template is not None
-            skill_ids = repository.get_required_skill_ids(template.id)
+            skill_ids = repository.get_platform_required_skill_ids(template.id)
             assert_that(len(skill_ids), equal_to(2))
 
 
@@ -989,19 +993,18 @@ def test_seed_predefined_templates_refreshes_stale_skills():
     ) as context:
         service: TemplateService = context.injector.get(TemplateService)
         repository: TemplateRepository = context.injector.get(TemplateRepository)
-        org_id = context.organization.id
         service.seed_predefined_templates()
 
         with when("the seeded skills are cleared from the DB then we reseed"):
-            template = repository.get_latest_template(org_id, "jira-task-helper")
+            template = repository.get_latest_platform_template("jira-task-helper")
             assert template is not None
-            repository.save_template_skills(template.id, [])
+            repository.save_platform_template_skills(template.id, [])
             service.seed_predefined_templates()
 
         with then("the required skills are restored to match the code declaration"):
-            template = repository.get_latest_template(org_id, "jira-task-helper")
+            template = repository.get_latest_platform_template("jira-task-helper")
             assert template is not None
-            skill_ids = repository.get_required_skill_ids(template.id)
+            skill_ids = repository.get_platform_required_skill_ids(template.id)
             assert_that(len(skill_ids), equal_to(1))
 
 
@@ -1009,13 +1012,12 @@ def test_predefined_content_keeps_raw_placeholders():
     with given(_GIVEN) as context:
         service: TemplateService = context.injector.get(TemplateService)
         repository: TemplateRepository = context.injector.get(TemplateRepository)
-        org_id = context.organization.id
 
         with when("I seed the global predefined catalogue"):
             service.seed_predefined_templates()
 
         with then("scrum-master soul still contains raw placeholders"):
-            template = repository.get_latest_template(org_id, "scrum-master")
+            template = repository.get_latest_platform_template("scrum-master")
             assert template is not None
             assert_that(template.soul_md, contains_string("{{ agent_display_name }}"))
 

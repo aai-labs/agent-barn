@@ -5,8 +5,8 @@ from injector import inject, singleton
 from sqlalchemy import func
 from sqlmodel import Session, col, delete, or_, select
 
-from api.domains.agents.models import Agent, AgentSkill, AgentTemplateSkill
-from api.domains.templates.models import AgentTemplate
+from api.domains.agents.models import Agent, AgentSkill, AgentTemplateSkill, PlatformTemplateSkill
+from api.domains.templates.models import AgentTemplate, PlatformTemplate
 from api.domains.skills.models import Skill, SkillFilter, SkillSource
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.infrastructure.shared.models import Pagination
@@ -97,67 +97,90 @@ class SkillRepository:
     def get_latest_template_slugs_requiring_skill(self, skill_id: UUID, org_id: UUID) -> list[str]:
         """Return template slugs whose *latest* version lists this skill as required.
 
-        Considers both org-scoped templates and global predefined templates, so a
-        skill required by a global predefined template blocks deletion in every
-        org that can see it.
+        Considers org-scoped agent_template versions (custom + forks) and global
+        platform_template versions, so a skill required by any template visible
+        to the org blocks deletion.
         """
+        slugs: set[str] = set()
         with Session(self.delegate.engine) as session:
-            latest = (
+            latest_org = (
                 select(AgentTemplate.id)
                 .distinct(col(AgentTemplate.template_slug))
-                .where(
-                    or_(
-                        col(AgentTemplate.organization_id) == org_id,
-                        col(AgentTemplate.organization_id).is_(None),
-                    )
-                )
+                .where(col(AgentTemplate.organization_id) == org_id)
                 .order_by(
                     col(AgentTemplate.template_slug).asc(),
                     col(AgentTemplate.version).desc(),
                 )
                 .subquery()
             )
-            query = (
+            org_q = (
                 select(AgentTemplate.template_slug)
-                .join(
-                    AgentTemplateSkill,
-                    col(AgentTemplate.id) == col(AgentTemplateSkill.template_id),
-                )
-                .where(col(AgentTemplate.id).in_(select(latest.c.id)))
+                .join(AgentTemplateSkill, col(AgentTemplate.id) == col(AgentTemplateSkill.template_id))
+                .where(col(AgentTemplate.id).in_(select(latest_org.c.id)))
                 .where(col(AgentTemplateSkill.skill_id) == skill_id)
             )
-            return list(session.exec(query).all())
+            slugs.update(session.exec(org_q).all())
+
+            latest_platform = (
+                select(PlatformTemplate.id)
+                .distinct(col(PlatformTemplate.template_slug))
+                .order_by(
+                    col(PlatformTemplate.template_slug).asc(),
+                    col(PlatformTemplate.version).desc(),
+                )
+                .subquery()
+            )
+            platform_q = (
+                select(PlatformTemplate.template_slug)
+                .join(
+                    PlatformTemplateSkill,
+                    col(PlatformTemplate.id) == col(PlatformTemplateSkill.template_id),
+                )
+                .where(col(PlatformTemplate.id).in_(select(latest_platform.c.id)))
+                .where(col(PlatformTemplateSkill.skill_id) == skill_id)
+            )
+            slugs.update(session.exec(platform_q).all())
+        return list(slugs)
 
     def delete_stale_template_skill_refs(self, skill_id: UUID, org_id: UUID) -> None:
-        """Delete agent_template_skill rows for non-latest template versions.
+        """Delete template-skill join rows for non-latest template versions.
 
         When deletion is allowed (latest version no longer requires the skill),
         historical join rows from superseded versions must be removed first to
-        satisfy the RESTRICT FK constraint on skill.id. Considers org-scoped and
-        global predefined templates together.
+        satisfy the RESTRICT FK constraint on skill.id. Handles org-scoped
+        agent_template versions and global platform_template versions.
         """
         with Session(self.delegate.engine) as session:
-            latest = (
+            latest_org = (
                 select(AgentTemplate.id)
                 .distinct(col(AgentTemplate.template_slug))
-                .where(
-                    or_(
-                        col(AgentTemplate.organization_id) == org_id,
-                        col(AgentTemplate.organization_id).is_(None),
-                    )
-                )
+                .where(col(AgentTemplate.organization_id) == org_id)
                 .order_by(
                     col(AgentTemplate.template_slug).asc(),
                     col(AgentTemplate.version).desc(),
                 )
                 .subquery()
             )
-            stmt = (
+            session.exec(  # type: ignore[call-overload]
                 delete(AgentTemplateSkill)
                 .where(col(AgentTemplateSkill.skill_id) == skill_id)
-                .where(col(AgentTemplateSkill.template_id).not_in(select(latest.c.id)))
+                .where(col(AgentTemplateSkill.template_id).not_in(select(latest_org.c.id)))
             )
-            session.exec(stmt)  # type: ignore[call-overload]
+
+            latest_platform = (
+                select(PlatformTemplate.id)
+                .distinct(col(PlatformTemplate.template_slug))
+                .order_by(
+                    col(PlatformTemplate.template_slug).asc(),
+                    col(PlatformTemplate.version).desc(),
+                )
+                .subquery()
+            )
+            session.exec(  # type: ignore[call-overload]
+                delete(PlatformTemplateSkill)
+                .where(col(PlatformTemplateSkill.skill_id) == skill_id)
+                .where(col(PlatformTemplateSkill.template_id).not_in(select(latest_platform.c.id)))
+            )
             session.commit()
 
     def get_agent_skills_with_details(self, agent_id: UUID) -> list[tuple[AgentSkill, Skill]]:
