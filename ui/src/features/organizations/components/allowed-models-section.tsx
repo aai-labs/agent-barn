@@ -8,30 +8,63 @@ import { ModelOption } from "@/features/agents/schemas";
 import { useUpdateOrganization } from "../hooks/use-organization-actions";
 import { Organization } from "../schemas";
 
+const stripPrefix = (m: string) => m.replace(/^litellm\/openrouter\//, "");
+
+// Legacy stored allowlists (and the migration backfill) can hold glob patterns
+// such as "*" or "openai/*". Detect them so they can be expanded against the
+// live catalog rather than shown as bogus "not in catalog" orphans.
+const isGlob = (m: string) => /[*?[\]]/.test(m);
+
+const globToRegExp = (pattern: string) => {
+  const escaped = pattern.replace(/[.+^${}()|\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".");
+  return new RegExp(`^${escaped}$`, "i");
+};
+
+// Catalog entries whose bare slug matches a glob pattern, returned as their
+// full prefixed catalog value.
+const expandGlob = (pattern: string, catalog: { value: string }[]) => {
+  const re = globToRegExp(stripPrefix(pattern).toLowerCase());
+  return catalog.map((c) => c.value).filter((v) => re.test(stripPrefix(v).toLowerCase()));
+};
+
 const getPrefixedModels = (dbModels: string[] | undefined, catalog: { value: string }[]) => {
   const catalogValues = new Set(catalog.map((c) => c.value));
-  return (dbModels || [])
-    .map((m) => {
-      // Already in the correct prefixed form
-      if (catalogValues.has(m)) return m;
-      // Try adding the prefix (handles bare OpenRouter slugs like "kwaipilot/..." and
-      // also models like "litellm/gpt-5-mini")
-      const withPrefix = `litellm/openrouter/${m}`;
-      if (catalogValues.has(withPrefix)) return withPrefix;
-      // Unknown / truly orphaned value — discard here, callers must handle
-      // preserving it separately (see getOrphanedModels).
-      return null;
-    })
-    .filter((m): m is string => m !== null);
+  const resolved = new Set<string>();
+  for (const m of dbModels || []) {
+    // Already in the correct prefixed form
+    if (catalogValues.has(m)) {
+      resolved.add(m);
+      continue;
+    }
+    // Try adding the prefix (handles bare OpenRouter slugs like "kwaipilot/..." and
+    // also models like "litellm/gpt-5-mini")
+    const withPrefix = `litellm/openrouter/${m}`;
+    if (catalogValues.has(withPrefix)) {
+      resolved.add(withPrefix);
+      continue;
+    }
+    // Glob pattern — expand it to every matching catalog entry.
+    if (isGlob(m)) {
+      for (const v of expandGlob(m, catalog)) resolved.add(v);
+      continue;
+    }
+    // Unknown / truly orphaned literal — discard here, callers must handle
+    // preserving it separately (see getOrphanedModels).
+  }
+  return [...resolved];
 };
 
 // Entries from the org's stored allowlist that don't resolve to any current
-// catalog entry (bare or prefixed) — e.g. a model OpenRouter has since
-// removed. Kept separate so they can be preserved on save instead of being
-// silently dropped.
+// catalog entry — a literal absent from the catalog (bare or prefixed) or a
+// glob that matches nothing. e.g. a model OpenRouter has since removed. Kept
+// separate so they can be preserved on save instead of being silently dropped.
 const getOrphanedModels = (dbModels: string[] | undefined, catalog: { value: string }[]) => {
   const catalogValues = new Set(catalog.map((c) => c.value));
-  return (dbModels || []).filter((m) => !catalogValues.has(m) && !catalogValues.has(`litellm/openrouter/${m}`));
+  return (dbModels || []).filter((m) => {
+    if (catalogValues.has(m) || catalogValues.has(`litellm/openrouter/${m}`)) return false;
+    if (isGlob(m)) return expandGlob(m, catalog).length === 0;
+    return true;
+  });
 };
 
 // The catalog-recognized baseline used for both initial selection and the

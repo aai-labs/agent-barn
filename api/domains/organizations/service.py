@@ -56,7 +56,12 @@ class OrganizationService:
             )
         return organization
 
-    def _validate_allowed_models(self, allowed_models: list[str]) -> None:
+    @staticmethod
+    def _bare_model(pattern: str) -> str:
+        # Strip any litellm gateway prefix so patterns match the bare OpenRouter slug.
+        return pattern.strip().lower().removeprefix("litellm/openrouter/")
+
+    def _validate_allowed_models(self, allowed_models: list[str], existing: list[str] | None = None) -> None:
         if not allowed_models:
             return
         try:
@@ -69,10 +74,15 @@ class OrganizationService:
             return
         if not catalog:
             return
+        # Entries already stored on the org are exempt from catalog validation:
+        # a model OpenRouter has since removed ("orphaned") must be preservable on
+        # save. Only newly-added patterns are checked against the live catalog.
+        existing_bare = {self._bare_model(m) for m in (existing or [])}
         catalog_ids_lower = [m["id"].lower() for m in catalog]
         for pattern in allowed_models:
-            # Strip any litellm gateway prefix so patterns match the bare OpenRouter slug.
-            bare = pattern.strip().lower().removeprefix("litellm/openrouter/")
+            bare = self._bare_model(pattern)
+            if bare in existing_bare:
+                continue
             if not any(fnmatch.fnmatch(cid, bare) for cid in catalog_ids_lower):
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -206,10 +216,14 @@ class OrganizationService:
             from sqlalchemy.orm.attributes import flag_modified
 
             if "allowed_models" in dump:
-                if dump["allowed_models"] is not None:
-                    self._validate_allowed_models(dump["allowed_models"])
+                if dump["allowed_models"] is None:
+                    # An explicit null is a no-op: allowed_models is non-nullable at
+                    # the model level, so never overwrite the stored list with NULL.
+                    del dump["allowed_models"]
+                else:
+                    self._validate_allowed_models(dump["allowed_models"], existing=organization.allowed_models)
                     dump["allowed_models"] = [m.removeprefix("litellm/openrouter/") for m in dump["allowed_models"]]
-                flag_modified(organization, "allowed_models")
+                    flag_modified(organization, "allowed_models")
 
             for key, value in dump.items():
                 setattr(organization, key, value)
