@@ -57,6 +57,14 @@ spec:
               value: "{{ .Values.postgres.host }}"
             - name: POSTGRES_PORT
               value: "{{ .Values.postgres.port }}"
+            - name: WORKER_PORT
+              value: "3005"
+            - name: EXTRACT_WORKER_PORT
+              value: "3004"
+            - name: NUQ_WORKER_COUNT
+              value: "2"
+            - name: HARNESS_STARTUP_TIMEOUT_MS
+              value: "120000"
           readinessProbe:
             tcpSocket:
               port: {{ .Values.service.apiPort }}
@@ -66,7 +74,7 @@ spec:
           livenessProbe:
             tcpSocket:
               port: {{ .Values.service.apiPort }}
-            initialDelaySeconds: 30
+            initialDelaySeconds: 150
             periodSeconds: 15
           resources:
             {{- toYaml .Values.resources.api | nindent 12 }}
