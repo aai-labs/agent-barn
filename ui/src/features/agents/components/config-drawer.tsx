@@ -216,9 +216,10 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
   const [pendingSection, setPendingSection] = useState<"tokens" | "secrets" | null>(null);
   const [repinSecretDrafts, setRepinSecretDrafts] = useState<IntegrationDraft[]>([]);
   const [repinVisible, setRepinVisible] = useState<Record<string, boolean>>({});
-  // groupKey -> chosen skill id, for the re-pin target's "at least one of"
-  // required skill groups.
-  const [repinGroupChoices, setRepinGroupChoices] = useState<Record<string, string>>({});
+  // groupKey -> explicitly chosen skill id, for the re-pin target's "at least
+  // one of" required skill groups. Only holds user overrides — the effective
+  // default (falling back to an already-assigned member) is derived below.
+  const [repinGroupOverrides, setRepinGroupOverrides] = useState<Record<string, string>>({});
 
   const tabs = getTabs(agent);
   // Clamp the URL-provided tab to one that's actually reachable for this agent
@@ -291,25 +292,22 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
   const { standalone: newStandaloneRequiredSkills, groups: newRequiredGroups } =
     splitRequiredSkills(newTemplateRequiredSkills);
 
-  // Default each group's choice to a member the agent is already assigned, if
-  // any; otherwise leave it unset so the user must pick explicitly. Re-runs
-  // whenever the re-pin target changes.
-  useEffect(() => {
-    const assignedIds = new Set(agent.skills.map((s) => s.id));
-    setRepinGroupChoices((prev) => {
-      const next: Record<string, string> = {};
-      for (const group of newRequiredGroups) {
-        if (prev[group.key] && group.members.some((m) => m.id === prev[group.key])) {
-          next[group.key] = prev[group.key];
-          continue;
-        }
-        const assigned = group.members.find((m) => assignedIds.has(m.id));
-        if (assigned) next[group.key] = assigned.id;
-      }
-      return next;
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [repinSlug, resolvedRepinVersion]);
+  // Each group's effective choice: an explicit user override if it's still a
+  // valid member of that group, else a member the agent is already assigned,
+  // else unset so the user must pick explicitly. Derived (not effect-driven)
+  // so it's always in sync with the currently resolved re-pin target — a
+  // stale override for a group that no longer exists is simply never read.
+  const assignedSkillIds = new Set(agent.skills.map((s) => s.id));
+  const repinGroupChoices: Record<string, string> = {};
+  for (const group of newRequiredGroups) {
+    const override = repinGroupOverrides[group.key];
+    if (override && group.members.some((m) => m.id === override)) {
+      repinGroupChoices[group.key] = override;
+      continue;
+    }
+    const assigned = group.members.find((m) => assignedSkillIds.has(m.id));
+    if (assigned) repinGroupChoices[group.key] = assigned.id;
+  }
 
   const chosenGroupSkills: TemplateRequiredSkill[] = newRequiredGroups
     .map((g) => g.members.find((m) => m.id === repinGroupChoices[g.key]))
@@ -388,7 +386,7 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
       setRepinVersion(null);
       setRepinSecretDrafts([]);
       setRepinVisible({});
-      setRepinGroupChoices({});
+      setRepinGroupOverrides({});
       setSavedTemplate(true);
       setTimeout(() => setSavedTemplate(false), 2500);
     } catch {
@@ -725,7 +723,7 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                               name={`repin-group-${group.key}`}
                               checked={repinGroupChoices[group.key] === member.id}
                               onChange={() =>
-                                setRepinGroupChoices((prev) => ({ ...prev, [group.key]: member.id }))
+                                setRepinGroupOverrides((prev) => ({ ...prev, [group.key]: member.id }))
                               }
                               disabled={isRunning}
                               className="accent-[var(--blue-9)]"
