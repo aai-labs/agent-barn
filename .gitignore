@@ -18,6 +18,7 @@ dist/
 .env
 .env.test
 .env.deploy
+.env.deploy.staging
 # Per-environment deploy configs hold real secrets; keep only the tracked spec.
 .env.deploy.*
 !.env.deploy.spec
@@ -140,5 +141,7 @@ kubeconfig.yaml
 helm/monitoring/charts/
 helm/**/*.tgz
 
+lessons/
+compose.remote.yml
 .dex/
 helm/monitoring/tests/generated/

@@ -375,6 +375,7 @@ class AgentService:
             if agent.platform == AgentPlatform.TEAMS and self.config.api_external_url
             else None
         )
+        template_slug, template_version = agent.template_pin
         return AgentRead(
             id=agent.id,
             name=agent.name,
@@ -382,8 +383,8 @@ class AgentService:
             platform=agent.platform,
             agent_type=agent.agent_type,
             organization_id=agent.organization_id,
-            template_slug=agent.template_slug,
-            template_version=agent.template_version,
+            template_slug=template_slug,
+            template_version=template_version,
             model=agent.model,
             approval_mode=agent.approval_mode,
             slack_config=slack_config_read,
@@ -409,9 +410,7 @@ class AgentService:
             telegram_config = self.repository.get_telegram_config(agent.id)
         secrets = self.repository.get_secrets_for_agent(agent.id)
         skills = [s for _, s in self.skill_repository.get_agent_skills_with_details(agent.id)]
-        template = self.template_repository.get_template_by_slug_and_version(
-            agent.organization_id, agent.template_slug, agent.template_version
-        )
+        template = self.template_repository.get_template_by_slug_and_version(agent.organization_id, *agent.template_pin)
         required_ids = self.template_repository.get_required_skill_ids(template.id) if template else set()
         allowed_actions = self.authorization.allowed_actions(context, [agent])[agent.id]
         return self._build_agent_read(
@@ -623,7 +622,7 @@ class AgentService:
     def get_agent_template(self, agent_id: UUID, version: int, context: CurrentUserContext) -> TemplateRead:
         org_id = self._org_id(context)
         agent = self.authorization.require_visible(context, agent_id)
-        template = self.template_repository.get_template_by_slug_and_version(org_id, agent.template_slug, version)
+        template = self.template_repository.get_template_by_slug_and_version(org_id, agent.template_pin[0], version)
         if not template:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -649,13 +648,13 @@ class AgentService:
         secrets_by_agent = self.repository.get_secrets_for_agents(agent_ids)
         skills_by_agent = self.skill_repository.get_skills_for_agents(agent_ids)
 
-        slug_versions = list({(a.template_slug, a.template_version) for a in agents})
+        slug_versions = list({a.template_pin for a in agents})
         template_id_map = self.template_repository.get_template_ids_for_slug_versions(org_id, slug_versions)
         template_ids = list(template_id_map.values())
         req_ids_by_template = self.template_repository.get_required_skill_ids_for_templates(template_ids)
 
         def _required_ids(agent: Agent) -> set[UUID]:
-            tid = template_id_map.get((agent.template_slug, agent.template_version))
+            tid = template_id_map.get(agent.template_pin)
             return req_ids_by_template.get(tid, set()) if tid else set()
 
         items = [
@@ -742,9 +741,7 @@ class AgentService:
 
         # Validate skill changes against the effective template's required skills
         if effective_template is None:
-            effective_template = self.template_repository.get_template_by_slug_and_version(
-                org_id, agent.template_slug, agent.template_version
-            )
+            effective_template = self.template_repository.get_template_by_slug_and_version(org_id, *agent.template_pin)
         required_ids = (
             self.template_repository.get_required_skill_ids(effective_template.id) if effective_template else set()
         )
@@ -910,7 +907,7 @@ class AgentService:
                 detail=f"Agent {agent_id} is already running",
             )
 
-        template = self.template_repository.get_template_or_raise(org_id, agent.template_slug, agent.template_version)
+        template = self.template_repository.get_template_or_raise(org_id, *agent.template_pin)
         # Placeholders are kept raw in storage and rendered at seed time.
         rendered = render_template(template, agent.name)
         ns = self.config.k8s_namespace
