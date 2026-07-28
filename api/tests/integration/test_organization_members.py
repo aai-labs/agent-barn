@@ -44,10 +44,7 @@ _GIVEN = [
 
 
 def _auth(context) -> dict:
-    return {
-        "Authorization": f"Bearer {context.access_token}",
-        "X-Organization-Id": str(ORG),
-    }
+    return {"Authorization": f"Bearer {context.access_token}"}
 
 
 def _members_url(org_id=ORG) -> str:

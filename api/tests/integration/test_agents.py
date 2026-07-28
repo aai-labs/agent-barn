@@ -46,7 +46,7 @@ from api.tests.steps.organization import (
 )
 from api.tests.steps.template import there_is_a_template, there_is_a_template_skill
 
-_BASE = "/api/v1/agents"
+_BASE = "/api/v1/organizations/{organization_id}/agents"
 
 _VALID_CREATE = {
     "name": "My Agent",

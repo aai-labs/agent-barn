@@ -174,14 +174,17 @@ def there_is_agent_access(
 def use_org_for_auth():
     def step(context):
         org_id = context.organization.id
-        previous = context.client.headers.get("X-Organization-Id")
-        context.client.headers.update({"X-Organization-Id": str(org_id)})
+        original_request = context.client.request
+
+        def request(method, url, *args, **kwargs):
+            if isinstance(url, str):
+                url = url.replace("{organization_id}", str(org_id))
+            return original_request(method, url, *args, **kwargs)
+
+        context.client.request = request
 
         def cleanup():
-            if previous is None:
-                context.client.headers.pop("X-Organization-Id", None)
-            else:
-                context.client.headers.update({"X-Organization-Id": previous})
+            context.client.request = original_request
 
         from api.tests.core.givenpy import LambdaWith
 

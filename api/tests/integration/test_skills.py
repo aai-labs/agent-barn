@@ -35,7 +35,7 @@ from api.tests.steps.rbac import role_lacks_permission
 from api.tests.steps.template import there_is_a_template, there_is_a_template_skill
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
 
-_BASE = "/api/v1/skills"
+_BASE = "/api/v1/organizations/{organization_id}/skills"
 
 _GIVEN = [
     set_env_variable(

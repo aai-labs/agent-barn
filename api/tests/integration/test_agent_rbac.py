@@ -42,7 +42,7 @@ from api.tests.steps.organization import (
 from api.tests.steps.template import there_is_a_template
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
 
-_BASE = "/api/v1/agents"
+_BASE = "/api/v1/organizations/{organization_id}/agents"
 _CREATE = {
     "name": "Member Agent",
     "platform": "slack",
@@ -268,13 +268,13 @@ def test_assigned_activity_and_cost_endpoints_cannot_be_bypassed():
             f"{_BASE}/{assigned_agent.id}/logs",
             f"{_BASE}/{assigned_agent.id}/conversations/channels",
             f"{_BASE}/{assigned_agent.id}/tool-calls",
-            f"/api/v1/costs/agents/{assigned_agent.id}",
+            f"/api/v1/organizations/{{organization_id}}/costs/agents/{assigned_agent.id}",
         )
         hidden_urls = (
             f"{_BASE}/{hidden_agent.id}/logs",
             f"{_BASE}/{hidden_agent.id}/conversations/channels",
             f"{_BASE}/{hidden_agent.id}/tool-calls",
-            f"/api/v1/costs/agents/{hidden_agent.id}",
+            f"/api/v1/organizations/{{organization_id}}/costs/agents/{hidden_agent.id}",
         )
 
         for url in assigned_urls:
@@ -645,18 +645,13 @@ def test_membershipless_superuser_can_manage_agent_share_in_explicit_org():
         superuser_id = context.user.id
         context.organization = organization
         there_is_an_access_token_for_user(superuser_id)(context)
-        headers = {
-            **_auth(context),
-            "X-Organization-Id": str(organization.id),
-        }
-
         response = context.client.put(
             _share_url(context.agent.id),
             json={
                 "general_access_role_id": None,
                 "assignments": [_assignment(target.id, AGENT_EDITOR_ROLE_ID)],
             },
-            headers=headers,
+            headers=_auth(context),
         )
 
         assert_that(response.status_code, equal_to(status.HTTP_200_OK))
