@@ -251,7 +251,7 @@ jobs:
           REGISTRY_USERNAME: ${{ vars.REGISTRY_USERNAME }}
           REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
           SLACK_ALERTS_WEBHOOK_URL: ${{ secrets.SLACK_ALERTS_WEBHOOK_URL }}
-          GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
+          GRAFANA_ADMIN_PASSWORD: ${{ github.ref_name == 'staging' && secrets.STAGING_GRAFANA_ADMIN_PASSWORD || secrets.GRAFANA_ADMIN_PASSWORD }}
           # Per-env host: staging and prod each need their own DNS name — a
           # shared host would collide on traefik routing and the TLS cert.
           # (Same switch pattern as the staging branch's deploy.yml.)
