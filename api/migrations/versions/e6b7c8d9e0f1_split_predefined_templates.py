@@ -1,7 +1,7 @@
 """split predefined templates into platform_template table
 
 Revision ID: e6b7c8d9e0f1
-Revises: d5a6b7c8d9e0
+Revises: d5a6b7c8d9e0, e7a4b9c2d5f1
 Create Date: 2026-07-28 00:00:00.000000
 
 Predefined templates move out of the org-scoped agent_template table into a
@@ -22,7 +22,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "e6b7c8d9e0f1"
-down_revision: Union[str, None] = "d5a6b7c8d9e0"
+down_revision: Union[str, Sequence[str], None] = ("d5a6b7c8d9e0", "e7a4b9c2d5f1")
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

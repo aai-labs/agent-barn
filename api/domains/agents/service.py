@@ -65,6 +65,7 @@ from api.domains.agents.models import (
     AgentTelegramConfigRead,
     AgentType,
     AgentUpdate,
+    FirecrawlContent,
     ConfluenceContent,
     GmailContent,
     JiraContent,
@@ -80,6 +81,7 @@ from api.domains.agents.repository import AgentRepository
 from api.domains.agents.runtime_policy import build_chat_commands_policy_md
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.token_service import SlackConfigTokenService
+from api.domains.organizations.lookup import OrganizationLookupService
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.skills.models import Skill
 from api.domains.skills.repository import SkillRepository
@@ -233,6 +235,7 @@ class AgentService:
     config: Config
     skill_repository: SkillRepository
     slack_token_service: SlackConfigTokenService
+    organization_lookup: OrganizationLookupService
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
@@ -246,6 +249,9 @@ class AgentService:
         else:
             agent.agent_template_id = template.id
             agent.platform_template_id = None
+
+    def count_agents_in_error(self) -> int:
+        return self.repository.count_agents_in_error()
 
     def _ensure_model_allowed(self, model: str | None) -> None:
         """Rejects models outside the allowlist. litellm is cluster-internal, so
@@ -902,6 +908,9 @@ class AgentService:
 
     def start_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
         org_id = self._org_id(context)
+        # Stamped as Service labels for monitoring; resolved here (not in the
+        # route) so every start path labels agents consistently.
+        org_name = self.organization_lookup.get_name(org_id)
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_LIFECYCLE_MANAGE)
 
         if agent.status == AgentStatus.RUNNING:
@@ -948,7 +957,7 @@ class AgentService:
 
             if slack_config.channel_ids:
                 self._join_public_channels(bot_token, slack_config.channel_ids)
-            service = build_service(agent.id, org_id, ns)
+            service = build_service(agent.id, org_id, ns, org_name=org_name, agent_name=agent.name)
 
             if agent.agent_type == AgentType.HERMES:
                 api_server_key = secrets.token_urlsafe(32)
@@ -1034,7 +1043,14 @@ class AgentService:
                 litellm_api_key=litellm_key,
                 litellm_base_url=self.config.agent_litellm_base_url,
             )
-            service = build_service(agent.id, org_id, ns, include_webhook_port=True)
+            service = build_service(
+                agent.id,
+                org_id,
+                ns,
+                include_webhook_port=True,
+                org_name=org_name,
+                agent_name=agent.name,
+            )
             deployment = build_deployment(
                 agent.id,
                 org_id,
@@ -1060,7 +1076,7 @@ class AgentService:
                 self.repository.save(agent)
                 return self._get_agent_read(agent, context)
 
-            service = build_service(agent.id, org_id, ns)
+            service = build_service(agent.id, org_id, ns, org_name=org_name, agent_name=agent.name)
 
             if agent.agent_type == AgentType.HERMES:
                 api_server_key = secrets.token_urlsafe(32)
@@ -1149,6 +1165,45 @@ class AgentService:
         aai_setup_sh = build_setup_sh(list(store), home_dir=aai_home) if decrypted else None
         if store:
             secret.string_data.update(build_env(store))
+
+        fc_content = decrypted.get(SecretProvider.FIRECRAWL)
+        fc_api_key = (
+            fc_content.api_key if isinstance(fc_content, FirecrawlContent) else self.config.agent_firecrawl_api_key
+        )
+        fc_base_url = (
+            fc_content.base_url
+            if isinstance(fc_content, FirecrawlContent) and fc_content.base_url
+            else self.config.agent_firecrawl_base_url
+        )
+        if fc_api_key and fc_base_url:
+            secret.string_data["FIRECRAWL_API_KEY"] = fc_api_key
+            if hermes_cfg is not None:
+                hermes_cfg["web"] = {"backend": "firecrawl"}
+                hermes_cfg["browser"] = {"cloud_provider": "firecrawl"}
+                secret.string_data["FIRECRAWL_API_URL"] = fc_base_url
+                secret.string_data["FIRECRAWL_BROWSER_TTL"] = "600"
+            if overlay is not None:
+                overlay["plugins"]["allow"].append("firecrawl")
+                overlay["plugins"]["entries"]["firecrawl"] = {
+                    "enabled": True,
+                    "config": {
+                        "webSearch": {
+                            "apiKey": "${FIRECRAWL_API_KEY}",
+                            "baseUrl": fc_base_url,
+                        },
+                        "webFetch": {
+                            "apiKey": "${FIRECRAWL_API_KEY}",
+                            "baseUrl": fc_base_url,
+                            "onlyMainContent": True,
+                            "maxAgeMs": 172800000,
+                            "timeoutSeconds": 60,
+                        },
+                    },
+                }
+                overlay["tools"]["web"] = {
+                    "fetch": {"provider": "firecrawl"},
+                    "search": {"enabled": True, "provider": "firecrawl"},
+                }
 
         ingest_key = secrets.token_urlsafe(32)
         secret.string_data.update(

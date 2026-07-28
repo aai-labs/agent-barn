@@ -711,6 +711,38 @@ def test_start_agent_sets_status_running():
             k8s.create_pvc.assert_called_once()
             k8s.create_service.assert_called_once()
             k8s.create_deployment.assert_called_once()
+            service = k8s.create_service.call_args.args[1]
+            assert_that(
+                service.metadata.labels["org-name"],
+                equal_to("test-organization"),
+            )
+            assert_that(
+                service.metadata.labels["agent-name"],
+                equal_to("test-agent"),
+            )
+
+
+def test_start_telegram_agent_labels_service_with_org_and_agent_name():
+    # Regression: the telegram start path once built its Service without the
+    # monitoring identity labels because org_name was threaded in from the
+    # route on the other platforms' paths only. Resolution now lives in the
+    # service, so every platform labels agents consistently.
+    with given([*_GIVEN, there_is_an_agent(platform=AgentPlatform.TELEGRAM)]) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+
+        with when("I start a telegram agent"):
+            with patch(
+                "api.domains.agents.service.validate_telegram_bot_token",
+                return_value=(True, "", {"username": "test_bot"}),
+            ):
+                response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("its Service carries the monitoring identity labels"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            service = k8s.create_service.call_args.args[1]
+            assert_that(service.metadata.labels["org-name"], equal_to("test-organization"))
+            assert_that(service.metadata.labels["agent-name"], equal_to("test-agent"))
 
 
 def test_start_already_running_returns_409():
@@ -2877,7 +2909,194 @@ def test_list_agents_marks_required_skills():
             assert_that(jira["required"], equal_to(True))
 
 
-# --- Bot token uniqueness ---
+_GIVEN_WITH_FIRECRAWL = [
+    set_env_variable(
+        {
+            "AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY,
+            "LITELLM_BASE_URL": "http://litellm:4000",
+            "LITELLM_SECRET_NAME": "litellm",
+            "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
+            "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
+            "API_EXTERNAL_URL": "https://api.test.com",
+            "SKIP_SLACK_TOKEN_VALIDATION": "true",
+            "AGENT_FIRECRAWL_BASE_URL": "http://firecrawl:3002",
+            "AGENT_FIRECRAWL_API_KEY": "fc-platform-key",
+        }
+    ),
+    prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
+    prepare_api_server(),
+    create_test_client(),
+    database_repo_is_ready(),
+    database_is_clean(),
+    there_is_an_organization_with_user_and_access_token(),
+    use_org_for_auth(),
+    there_is_a_template(),
+]
+
+_GIVEN_HERMES_WITH_FIRECRAWL = [
+    set_env_variable(
+        {
+            "AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY,
+            "LITELLM_BASE_URL": "http://litellm:4000",
+            "LITELLM_SECRET_NAME": "litellm",
+            "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
+            "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
+            "API_EXTERNAL_URL": "https://api.test.com",
+            "HERMES_IMAGE": "nousresearch/hermes-agent:v1.0",
+            "AGENT_FIRECRAWL_BASE_URL": "http://firecrawl:3002",
+            "AGENT_FIRECRAWL_API_KEY": "fc-platform-key",
+        }
+    ),
+    prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
+    prepare_api_server(),
+    create_test_client(),
+    database_repo_is_ready(),
+    database_is_clean(),
+    there_is_an_organization_with_user_and_access_token(),
+    use_org_for_auth(),
+    there_is_a_template(),
+]
+
+
+def test_start_openclaw_agent_with_platform_firecrawl():
+    with given([*_GIVEN_WITH_FIRECRAWL, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+
+        with when("I start an OpenClaw agent with platform firecrawl configured"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the overlay has firecrawl plugin and the secret has the key"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            overlay = json.loads(config_map.data["openclaw-config-overlay.json"])
+            assert_that("firecrawl" in overlay["plugins"]["allow"], equal_to(True))
+            assert_that(overlay["plugins"]["entries"], has_key("firecrawl"))
+            assert_that(overlay["tools"]["web"]["fetch"]["provider"], equal_to("firecrawl"))
+            secret = k8s.create_secret.call_args.args[1]
+            assert_that(secret.string_data["FIRECRAWL_API_KEY"], equal_to("fc-platform-key"))
+
+
+def test_start_hermes_agent_with_platform_firecrawl():
+    import yaml as _yaml
+
+    with given([*_GIVEN_HERMES_WITH_FIRECRAWL, there_is_an_agent(agent_type=AgentType.HERMES)]) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+
+        with when("I start a Hermes agent with platform firecrawl configured"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("hermes config has firecrawl and secret has the env vars"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            cfg = _yaml.safe_load(config_map.data["hermes-config.yaml"])
+            assert_that(cfg["web"], equal_to({"backend": "firecrawl"}))
+            assert_that(cfg["browser"], equal_to({"cloud_provider": "firecrawl"}))
+            secret = k8s.create_secret.call_args.args[1]
+            assert_that(secret.string_data["FIRECRAWL_API_KEY"], equal_to("fc-platform-key"))
+            assert_that(
+                secret.string_data["FIRECRAWL_API_URL"],
+                equal_to("http://firecrawl:3002"),
+            )
+
+
+def test_start_agent_per_agent_firecrawl_overrides_platform():
+    with given([*_GIVEN_WITH_FIRECRAWL, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+
+        with when("I add a per-agent firecrawl secret and start"):
+            client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"secrets": [{"provider": "firecrawl", "content": {"api_key": "fc-my-key"}}]},
+                headers=_auth(context),
+            )
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the per-agent key is used instead of the platform key"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            secret = k8s.create_secret.call_args.args[1]
+            assert_that(secret.string_data["FIRECRAWL_API_KEY"], equal_to("fc-my-key"))
+
+
+def test_start_agent_per_agent_firecrawl_overrides_base_url():
+    with given([*_GIVEN_WITH_FIRECRAWL, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+
+        with when("I add a per-agent firecrawl secret with base_url and start"):
+            client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={
+                    "secrets": [
+                        {
+                            "provider": "firecrawl",
+                            "content": {
+                                "api_key": "fc-cloud-key",
+                                "base_url": "https://api.firecrawl.dev",
+                            },
+                        }
+                    ]
+                },
+                headers=_auth(context),
+            )
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("both the key and base URL are overridden"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            secret = k8s.create_secret.call_args.args[1]
+            assert_that(secret.string_data["FIRECRAWL_API_KEY"], equal_to("fc-cloud-key"))
+            config_map = k8s.create_config_map.call_args.args[1]
+            overlay = json.loads(config_map.data["openclaw-config-overlay.json"])
+            fc_cfg = overlay["plugins"]["entries"]["firecrawl"]["config"]
+            assert_that(
+                fc_cfg["webSearch"]["baseUrl"],
+                equal_to("https://api.firecrawl.dev"),
+            )
+
+
+_GIVEN_WITHOUT_FIRECRAWL = [
+    set_env_variable(
+        {
+            "AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY,
+            "LITELLM_BASE_URL": "http://litellm:4000",
+            "LITELLM_SECRET_NAME": "litellm",
+            "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
+            "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
+            "API_EXTERNAL_URL": "https://api.test.com",
+            "SKIP_SLACK_TOKEN_VALIDATION": "true",
+            "AGENT_FIRECRAWL_BASE_URL": "",
+            "AGENT_FIRECRAWL_API_KEY": "",
+        }
+    ),
+    prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
+    prepare_api_server(),
+    create_test_client(),
+    database_repo_is_ready(),
+    database_is_clean(),
+    there_is_an_organization_with_user_and_access_token(),
+    use_org_for_auth(),
+    there_is_a_template(),
+]
+
+
+def test_start_openclaw_agent_without_firecrawl():
+    with given([*_GIVEN_WITHOUT_FIRECRAWL, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+
+        with when("I start an agent without any firecrawl env vars"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the overlay has no firecrawl and the secret has no firecrawl key"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            overlay = json.loads(config_map.data["openclaw-config-overlay.json"])
+            assert "firecrawl" not in overlay["plugins"]["allow"]
+            assert_that(overlay["plugins"]["entries"], is_not(has_key("firecrawl")))
+            secret = k8s.create_secret.call_args.args[1]
+            assert_that(secret.string_data, is_not(has_key("FIRECRAWL_API_KEY")))
 
 
 def test_create_agent_duplicate_bot_token_returns_409():

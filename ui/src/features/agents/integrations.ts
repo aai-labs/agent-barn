@@ -128,6 +128,15 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
       { key: "refreshToken", label: "Refresh token", type: "secret", required: true, hint: "OAuth 2.0 refresh token for the Zoho Mail account" },
     ],
   },
+  {
+    id: "firecrawl",
+    label: "Firecrawl",
+    scopeNote: "Optional — agents use the platform Firecrawl by default. Provide your own API key and URL to use Firecrawl Cloud or another instance.",
+    fields: [
+      { key: "apiKey", label: "API key", type: "secret", required: true, placeholder: "fc-…" },
+      { key: "baseUrl", label: "Base URL", type: "text", required: false, placeholder: "https://api.firecrawl.dev", hint: "Leave empty to use the platform's self-hosted Firecrawl." },
+    ],
+  },
   // zoho_calendar disabled: not currently offered as an integration. Re-enable by
   // uncommenting if needed again.
   // {

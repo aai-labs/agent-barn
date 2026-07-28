@@ -309,6 +309,33 @@ def test_get_template_unknown_slug_returns_404():
             assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
+def test_get_template_reports_in_use():
+    with given([*_GIVEN, there_is_an_agent(name="Pinned")]) as context:
+        client: TestClient = context.client
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+        template = repository.get_pinned_template(context.agent)
+        assert template is not None
+
+        with when("I get the template the agent is pinned to"):
+            response = client.get(f"{_BASE}/{template.template_slug}", headers=_auth(context))
+
+        with then("it is flagged in_use"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["in_use"], equal_to(True))
+
+
+def test_get_template_reports_not_in_use():
+    with given([*_GIVEN, there_is_a_template(slug="idle", name="Idle")]) as context:
+        client: TestClient = context.client
+
+        with when("I get a template no agent uses"):
+            response = client.get(f"{_BASE}/idle", headers=_auth(context))
+
+        with then("it is flagged not in_use"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["in_use"], equal_to(False))
+
+
 # --- versions ---
 
 
@@ -389,6 +416,23 @@ def test_list_template_versions_includes_required_skills():
             assert_that(len(versions[1]["required_skills"]), equal_to(1))
             assert_that(versions[1]["required_skills"][0]["name"], equal_to("Jira"))
             assert_that(versions[2]["required_skills"], equal_to([]))
+
+
+def test_list_template_versions_reports_in_use_for_every_version():
+    with given([*_GIVEN, there_is_an_agent(name="Pinned")]) as context:
+        client: TestClient = context.client
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+        template = repository.get_pinned_template(context.agent)
+        assert template is not None
+        there_is_a_template(slug=template.template_slug, name="Pinned", version=2)(context)
+
+        with when("I list the lineage's versions"):
+            response = client.get(f"{_BASE}/{template.template_slug}/versions", headers=_auth(context))
+
+        with then("every version is flagged in_use, even ones the agent isn't pinned to"):
+            versions = {v["version"]: v for v in response.json()}
+            assert_that(versions[1]["in_use"], equal_to(True))
+            assert_that(versions[2]["in_use"], equal_to(True))
 
 
 # --- create ---
@@ -828,33 +872,6 @@ def test_update_template_clears_skills():
 # --- delete ---
 
 
-def test_get_template_reports_in_use():
-    with given([*_GIVEN, there_is_an_agent(name="Pinned")]) as context:
-        client: TestClient = context.client
-        repository: TemplateRepository = context.injector.get(TemplateRepository)
-        template = repository.get_pinned_template(context.agent)
-        assert template is not None
-
-        with when("I get the template the agent is pinned to"):
-            response = client.get(f"{_BASE}/{template.template_slug}", headers=_auth(context))
-
-        with then("it is flagged in_use"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            assert_that(response.json()["in_use"], equal_to(True))
-
-
-def test_get_template_reports_not_in_use():
-    with given([*_GIVEN, there_is_a_template(slug="idle", name="Idle")]) as context:
-        client: TestClient = context.client
-
-        with when("I get a template no agent uses"):
-            response = client.get(f"{_BASE}/idle", headers=_auth(context))
-
-        with then("it is flagged not in_use"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            assert_that(response.json()["in_use"], equal_to(False))
-
-
 def test_delete_template_returns_204_and_purges_all_org_versions():
     with given(
         [
@@ -998,6 +1015,28 @@ def test_delete_template_of_another_org_returns_404():
         with then("I get 404 and their template survives"):
             assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
             assert_that(repository.get_latest_org_template(other_org.id, "theirs"), is_not(none()))
+
+
+def test_list_templates_reports_in_use():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_template(slug="idle", name="Idle"),
+            there_is_an_agent(name="Busy"),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+        template = repository.get_pinned_template(context.agent)
+        assert template is not None
+
+        with when("I list templates"):
+            response = client.get(_BASE, headers=_auth(context))
+
+        with then("only the agent's template is marked in use"):
+            by_slug = {item["template_slug"]: item for item in response.json()["items"]}
+            assert_that(by_slug[template.template_slug]["in_use"], equal_to(True))
+            assert_that(by_slug["idle"]["in_use"], equal_to(False))
 
 
 # --- seeding ---

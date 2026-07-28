@@ -1,0 +1,23 @@
+name: Monitoring
+
+on:
+  push:
+    paths:
+      - helm/monitoring/**
+      - Makefile
+      - .github/workflows/monitoring.yml
+
+jobs:
+  check:
+    name: Alert rules and dashboard queries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - uses: azure/setup-helm@v4
+      - name: Build chart dependencies
+        run: |
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+          helm repo add grafana https://grafana.github.io/helm-charts
+          helm dependency build helm/monitoring
+      - run: make check-monitoring
