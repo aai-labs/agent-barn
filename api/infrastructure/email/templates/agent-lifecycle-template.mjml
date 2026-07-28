@@ -1,0 +1,38 @@
+<mjml>
+  <mj-head>
+    <mj-title>Agent lifecycle notification</mj-title>
+    <mj-font name="Inter" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" />
+    <mj-attributes>
+      <mj-all font-family="Inter, Arial, sans-serif" />
+      <mj-text font-size="16px" line-height="1.6" color="#36322c" />
+      <mj-section padding="20px 0" />
+      <mj-column padding="0" />
+    </mj-attributes>
+  </mj-head>
+  <mj-body background-color="#f4f2ee">
+    <mj-section padding="40px 20px 12px 20px">
+      <mj-column>
+        <mj-text font-size="24px" font-weight="700" color="#1a1815" align="center">Agent Barn</mj-text>
+      </mj-column>
+    </mj-section>
+    <mj-section padding="0 20px">
+      <mj-column background-color="#ffffff" border="1px solid #e7e4dc" border-radius="12px">
+        <mj-text font-size="22px" font-weight="600" color="#1a1815" align="center" padding="32px 28px 14px 28px">
+          Agent {{ lifecycle_action }}
+        </mj-text>
+        <mj-text align="left" padding="8px 28px">Hi {{ user_name }},</mj-text>
+        <mj-text align="left" padding="4px 28px 18px 28px">
+          The agent <strong>{{ agent_name }}</strong> has {{ lifecycle_action }}.
+        </mj-text>
+        <mj-text align="left" font-size="14px" color="#97928a" padding="20px 28px 30px 28px">
+          You received this because you are the Agent Creator or have Agent Owner access for this agent.
+        </mj-text>
+      </mj-column>
+    </mj-section>
+    <mj-section padding="26px 20px 40px 20px">
+      <mj-column>
+        <mj-text align="center" font-size="12px" color="#97928a">&copy; {{ current_year }} Agent Barn. All rights reserved.</mj-text>
+      </mj-column>
+    </mj-section>
+  </mj-body>
+</mjml>

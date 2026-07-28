@@ -19,6 +19,7 @@ from api.domains.agents.models import (
     compute_bot_token_hash,
 )
 from api.domains.agents.repository import AgentRepository
+from api.domains.events import ActorIdentity, ActorIdentityType
 from api.domains.rbac.catalog import AGENT_EDITOR_ROLE_ID
 from api.domains.templates.defaults import (
     DEFAULT_AGENTS_MD,
@@ -117,7 +118,11 @@ def there_is_an_agent(
         if creator_membership_id is None:
             repository.save(agent)
         else:
-            repository.create_with_creator_access(agent, creator_membership_id)
+            repository.create_with_creator_access(
+                agent,
+                creator_membership_id,
+                actor=ActorIdentity(type=ActorIdentityType.USER, id=created_by_user_id or uuid_mod.uuid4()),
+            )
 
         if platform == AgentPlatform.SLACK:
             effective_bot_token = bot_token or f"xoxb-test-{uuid_mod.uuid4()}"

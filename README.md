@@ -67,7 +67,7 @@ API is served under `/api/v1`; frontend requests to `/api/*` are proxied to the 
 
 - Python `>=3.14` + [uv](https://github.com/astral-sh/uv)
 - Node.js `>=20` + [pnpm](https://pnpm.io/)
-- Docker (required for Postgres)
+- Docker (required for Postgres and Redis)
 
 ## Setup
 
@@ -92,7 +92,7 @@ make dev-api    # API on :8000
 make dev-ui     # UI on :3000
 ```
 
-With Docker (db + api + ui):
+With Docker (db + redis + api + worker + ui):
 
 ```bash
 make up         # start all
@@ -110,6 +110,18 @@ make db-down
 make db-logs
 make db-restart
 ```
+
+Redis + background worker only (needed alongside `make dev-api` to actually
+process Domain Events locally; `make up` starts these automatically):
+
+```bash
+make redis-up      # start Redis
+make dev-worker    # run the Dramatiq worker (non-docker)
+make reconcile     # one-shot repair pass for stuck/unpublished deliveries
+make redis-down
+```
+
+See [docs/features/domain-events.md](./docs/features/domain-events.md) for how Domain Event delivery works.
 
 ## Database Migrations
 

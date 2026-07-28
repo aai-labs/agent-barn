@@ -60,6 +60,9 @@ class Config(BaseSettings):
     # TTL for the credits poll behind agentfarm_openrouter_credits_remaining
     # (GET /key with the inference key above; no management key involved).
     openrouter_credits_cache_ttl_seconds: int = 300
+
+    redis_url: str = "redis://localhost:6379/0"
+
     # Comma-separated glob patterns (fnmatch) matched against OpenRouter model
     # ids to limit what the model picker offers, e.g. "z-ai/glm-5.2,openai/gpt-5*".
     # Empty allows the full catalogue.

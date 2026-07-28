@@ -102,6 +102,23 @@ ingress:
   clusterIssuer: letsencrypt-http01
   tlsSecretName: agentfarm-api-tls
 
+eventDelivery:
+  redisUrl: "redis://redis-master:6379/0"
+  reconciliation:
+    enabled: true
+    schedule: "*/5 * * * *"
+
+worker:
+  enabled: true
+  replicaCount: 1
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 100m
+    limits:
+      memory: 512Mi
+      cpu: 500m
+
 resources:
   requests:
     memory: 256Mi

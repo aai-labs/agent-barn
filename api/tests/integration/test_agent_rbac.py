@@ -8,6 +8,7 @@ from sqlmodel import Session, col, select
 
 from api.domains.agents.models import Agent, AgentAccess, AgentFilter
 from api.domains.agents.repository import AgentRepository
+from api.domains.events import ActorIdentity, ActorIdentityType
 from api.domains.organizations.models import Organization
 from api.domains.rbac.catalog import (
     AGENT_EDITOR_ROLE_ID,
@@ -225,7 +226,11 @@ def test_agent_and_creator_access_insert_roll_back_together():
         )
 
         with pytest.raises(IntegrityError):
-            repository.create_with_creator_access(agent, uuid7())
+            repository.create_with_creator_access(
+                agent,
+                uuid7(),
+                actor=ActorIdentity(type=ActorIdentityType.USER, id=context.user.id),
+            )
 
         assert_that(repository.get_by_id(agent.id), equal_to(None))
 

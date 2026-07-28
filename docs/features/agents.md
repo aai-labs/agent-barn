@@ -54,11 +54,11 @@ Update is allowed only while not running. It can change runtime-relevant configu
 
 ### Start
 
-Start renders the pinned template, decrypts credentials, selects Hermes/OpenClaw builders, combines explicit skills with provider-derived built-ins, appends integration context, creates a fresh ingest identity, and recreates Kubernetes configuration/deployment resources.
+Start renders the pinned template, decrypts credentials, selects Hermes/OpenClaw builders, combines explicit skills with provider-derived built-ins, appends integration context, creates a fresh ingest identity, and recreates Kubernetes configuration/deployment resources. A successful transition to `RUNNING` emits `agent.started`; its email handler notifies the Agent Creator and users with Agent Owner access, de-duplicated by email.
 
 ### Stop and delete
 
-Stop snapshots logs before removing active runtime resources and marking the agent stopped. Delete removes resources, soft-deletes the row, and preserves the record for history and cost attribution. Deletion also clears the Slack bot token hash, releasing the token for reuse by another agent.
+Stop snapshots logs before removing active runtime resources and marking the agent stopped. A successful transition to `STOPPED` emits `agent.stopped`; its email handler notifies the Agent Creator and users with Agent Owner access, de-duplicated by email. Delete removes resources, soft-deletes the row, and preserves the record for history and cost attribution. Deletion also clears the Slack bot token hash, releasing the token for reuse by another agent.
 
 ### Manage access
 

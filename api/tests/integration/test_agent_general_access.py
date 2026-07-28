@@ -5,6 +5,7 @@ from hamcrest import assert_that, contains_inanyorder, equal_to, has_item, is_no
 
 from api.domains.agents.models import AgentAccess
 from api.domains.agents.repository import AgentRepository
+from api.domains.events.models import OutboxMessage
 from api.domains.organizations.models import Organization
 from api.domains.rbac.catalog import (
     AGENT_EDITOR_ROLE_ID,
@@ -65,6 +66,11 @@ def _auth(context) -> dict[str, str]:
 
 def _access_settings_url(agent_id: UUID) -> str:
     return f"{_BASE}/{agent_id}/share"
+
+
+def _outbox_messages(context) -> list[OutboxMessage]:
+    repository: AgentRepository = context.injector.get(AgentRepository)
+    return repository.delegate.find_all(OutboxMessage)
 
 
 def test_general_access_defaults_to_restricted():
@@ -509,7 +515,7 @@ def test_access_settings_snapshot_replaces_general_and_direct_access():
     with given(_GIVEN) as context:
         agent_id = context.agent.id
         first_member, first_membership = _add_target_member(context)
-        second_member, _ = _add_target_member(context)
+        second_member, second_membership = _add_target_member(context)
         repository: AgentRepository = context.injector.get(AgentRepository)
         repository.delegate.save(
             AgentAccess(
@@ -552,6 +558,18 @@ def test_access_settings_snapshot_replaces_general_and_direct_access():
             [item["user_id"] for item in assigned.json()["assignments"]],
             is_not(has_item(str(first_member.id))),
         )
+        messages = sorted(_outbox_messages(context), key=lambda message: message.event_name)
+        assert_that(
+            [message.event_name for message in messages],
+            equal_to(["agent.access.granted", "agent.access.revoked", "agent.general_access.changed"]),
+        )
+        granted = next(message for message in messages if message.event_name == "agent.access.granted")
+        revoked = next(message for message in messages if message.event_name == "agent.access.revoked")
+        general = next(message for message in messages if message.event_name == "agent.general_access.changed")
+        assert_that(granted.payload["agent_id"], equal_to(str(agent_id)))
+        assert_that(granted.payload["membership_id"], equal_to(str(second_membership.id)))
+        assert_that(revoked.payload["membership_id"], equal_to(str(first_membership.id)))
+        assert_that(general.payload["new_access_role_id"], equal_to(str(AGENT_VIEWER_ROLE_ID)))
 
 
 def test_access_settings_rolls_back_when_snapshot_is_invalid():

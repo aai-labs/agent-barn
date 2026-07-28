@@ -34,6 +34,8 @@ Tenant-sensitive reads generally return 404 when a resource is absent, belongs t
 
 Most repositories reuse `../../api/infrastructure/postgres/repository.py`. Delegate operations open and commit a session per operation. A service workflow spanning several repository calls is therefore not automatically atomic; workflows requiring all-or-nothing behavior need an explicit repository transaction boundary.
 
+Event-producing workflows use the Domain Events outbox boundary instead of extending the generic delegate. A domain-specific repository operation owns one SQLModel session and one commit for business state, one immutable `event_outbox_message` row, and one `event_delivery` row per intended Event Handler. The session-aware outbox staging interface stages rows inside that repository-owned session without committing or opening another session; routes must not receive database sessions.
+
 Database records generally inherit UUID and timestamp fields from `../../api/infrastructure/postgres/models.py`. Schema evolution belongs in `../../api/migrations/versions/`; integration setup applies Alembic heads to a PostgreSQL test container.
 
 ## Startup data
@@ -58,10 +60,11 @@ The application lifespan ensures a bootstrap Platform Administrator, seeds built
 | Platform administration authority | `../../api/domains/platform_admin/service.py` |
 | Permission and Agent authorization | `../../api/domains/rbac/catalog.py`, `../../api/domains/rbac/policy.py`, `../../api/domains/agents/authorization.py` |
 | Shared persistence delegate | `../../api/infrastructure/postgres/repository.py` |
+| Domain Event outbox persistence | `../../api/domains/events/`, `../features/domain-events.md` |
 | Base database model | `../../api/infrastructure/postgres/models.py` |
 | Migrations | `../../api/migrations/versions/` |
 | Test app and database setup | `../../api/tests/conftest.py`, `../../api/tests/core/` |
 
 ## Change impact
 
-When adding or moving a product router, update `../../api/api_app.py`; ingest routes are registered through `../../api/ingest_app.py`. When a schema changes, update the database model, API DTO where required, migration, integration tests, and corresponding UI Zod schema. When a workflow spans repositories, verify whether partial persistence is acceptable before relying on the default session-per-operation behavior.
+When adding or moving a product router, update `../../api/api_app.py`; ingest routes are registered through `../../api/ingest_app.py`. When a schema changes, update the database model, API DTO where required, migration, integration tests, and corresponding UI Zod schema. When a workflow spans repositories, verify whether partial persistence is acceptable before relying on the default session-per-operation behavior. When a mutation produces a Domain Event, use a domain-specific transaction boundary and update the Domain Events feature guide if the envelope, delivery lifecycle, privacy rules, or excluded scope changes.

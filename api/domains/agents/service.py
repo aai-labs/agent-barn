@@ -80,6 +80,8 @@ from api.domains.agents.exceptions import BotTokenConflictHTTPException
 from api.domains.agents.repository import AgentRepository
 from api.domains.agents.runtime_policy import build_chat_commands_policy_md
 from api.domains.auth.models import CurrentUserContext
+from api.domains.events import EventDeliveryDispatcher, resolve_actor_identity
+from api.domains.events.catalog import AGENT_STARTED, AGENT_STOPPED
 from api.domains.auth.token_service import SlackConfigTokenService
 from api.domains.organizations.lookup import OrganizationLookupService
 from api.domains.rbac.catalog import PermissionKey
@@ -235,6 +237,7 @@ class AgentService:
     config: Config
     skill_repository: SkillRepository
     slack_token_service: SlackConfigTokenService
+    event_delivery_dispatcher: EventDeliveryDispatcher
     organization_lookup: OrganizationLookupService
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
@@ -529,7 +532,12 @@ class AgentService:
             if persisted_membership is not None and persisted_membership.user_id == context.user.id
             else None
         )
-        self.repository.create_with_creator_access(agent, creator_membership_id)
+        created = self.repository.create_with_creator_access(
+            agent,
+            creator_membership_id,
+            actor=resolve_actor_identity(context, org_id),
+        )
+        created_delivery_ids = created.delivery_ids
 
         slack_config = None
         teams_config = None
@@ -610,6 +618,8 @@ class AgentService:
 
         if skills_to_assign:
             self.repository.save_skills([AgentSkill(agent_id=agent.id, skill_id=s.id) for s in skills_to_assign])
+
+        self.event_delivery_dispatcher.enqueue_immediate(created_delivery_ids)
 
         if data.platform == AgentPlatform.TEAMS:
             return self.start_agent(agent.id, context)
@@ -919,6 +929,7 @@ class AgentService:
                 detail=f"Agent {agent_id} is already running",
             )
 
+        previous_status = agent.status.value
         template = self.template_repository.get_pinned_template(agent)
         if template is None:
             raise HTTPException(
@@ -1291,8 +1302,15 @@ class AgentService:
         agent.status = AgentStatus.RUNNING
         agent.last_error = None
         agent.ingest_key_encrypted = encrypt_token(ingest_key, self.config.agent_token_encryption_key)
-        self.repository.save(agent)
-        return self._get_agent_read(agent, context)
+        result = self.repository.save_with_lifecycle_event(
+            agent,
+            event_name=AGENT_STARTED,
+            actor=resolve_actor_identity(context, org_id),
+            previous_status=previous_status,
+            new_status=AgentStatus.RUNNING.value,
+        )
+        self.event_delivery_dispatcher.enqueue_immediate(result.delivery_ids)
+        return self._get_agent_read(result.agent, context)
 
     def get_agent_logs(
         self,
@@ -1412,6 +1430,7 @@ class AgentService:
                 detail=f"Agent {agent_id} is not running",
             )
 
+        previous_status = agent.status.value
         self._capture_logs_before_stop(agent)
         name = f"agent-{agent.id}"
         ns = self.config.k8s_namespace
@@ -1420,8 +1439,15 @@ class AgentService:
         self.k8s.delete_secret(name, ns)
 
         agent.status = AgentStatus.STOPPED
-        self.repository.save(agent)
-        return self._get_agent_read(agent, context)
+        result = self.repository.save_with_lifecycle_event(
+            agent,
+            event_name=AGENT_STOPPED,
+            actor=resolve_actor_identity(context, agent.organization_id),
+            previous_status=previous_status,
+            new_status=AgentStatus.STOPPED.value,
+        )
+        self.event_delivery_dispatcher.enqueue_immediate(result.delivery_ids)
+        return self._get_agent_read(result.agent, context)
 
     def count_active_agents(self, organization_id: UUID) -> int:
         """Number of non-deleted agents in an org. Used by other domains (e.g. org
