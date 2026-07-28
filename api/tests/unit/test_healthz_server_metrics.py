@@ -40,7 +40,7 @@ def healthz_server():
             try:
                 urllib.request.urlopen(f"{base}/ready", timeout=1)
                 break
-            except urllib.error.URLError, ConnectionError:
+            except (urllib.error.URLError, ConnectionError):
                 if time.monotonic() > deadline:
                     raise TimeoutError("healthz server did not start")
                 time.sleep(0.1)

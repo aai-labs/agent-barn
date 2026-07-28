@@ -163,6 +163,8 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _send_text(self, code: int, body: str) -> None:
         self.send_response(code)
+        # Prometheus exposition content type; canonical value lives in
+        # api/core/metrics.py (standalone script, cannot import it).
         self.send_header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
         self.end_headers()
         self.wfile.write(body.encode())

@@ -164,6 +164,8 @@ const server = http.createServer((req, res) => {
   if (req.url === '/ready') {
     sendJson(res, 200, { ready: true });
   } else if (req.url === '/metrics') {
+    // Prometheus exposition content type; canonical value lives in
+    // api/core/metrics.py (standalone script, cannot share the constant).
     res.writeHead(200, { 'Content-Type': 'text/plain; version=0.0.4; charset=utf-8' });
     res.end(metricsText());
   } else if (req.url === '/healthz') {
