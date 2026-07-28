@@ -166,12 +166,20 @@ class OutboxMessageRepository:
             session.refresh(delivery)
             return delivery
 
-    def mark_delivery_retryable_failure(self, delivery_id: UUID, error: BaseException | str) -> EventDelivery | None:
+    def mark_delivery_retryable_failure(
+        self, delivery_id: UUID, error: BaseException | str, *, enqueued_at: datetime | None = None
+    ) -> EventDelivery | None:
+        enqueued_at = enqueued_at or datetime.now(UTC)
         with Session(self.delegate.engine) as session:
             delivery = session.get(EventDelivery, delivery_id)
             if delivery is None:
                 return None
-            delivery.status = EventDeliveryStatus.PROCESSING
+            # Re-mark ENQUEUED (not PROCESSING) so claim_delivery can immediately reclaim
+            # the row when Dramatiq's own backoff fires the retry, instead of waiting for
+            # the PROCESSING-staleness window. enqueued_at is refreshed to now so the
+            # reconciliation sweep's ENQUEUED-staleness check doesn't race that same retry.
+            delivery.status = EventDeliveryStatus.ENQUEUED
+            delivery.enqueued_at = enqueued_at
             delivery.last_error = bound_delivery_error(error)
             delivery.dead_letter_reason = None
             session.add(delivery)

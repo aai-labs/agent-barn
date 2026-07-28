@@ -379,12 +379,40 @@ def test_retryable_failure_is_bounded_and_success_clears_current_error(
 
     with then("the unresolved error is redacted and then cleared without clearing attempts"):
         assert failed is not None
-        assert_that(failed.status, equal_to(EventDeliveryStatus.PROCESSING))
+        assert_that(failed.status, equal_to(EventDeliveryStatus.ENQUEUED))
         assert_that(failed.last_error, equal_to("Event delivery error contained sensitive details and was redacted"))
         assert succeeded is not None
         assert_that(succeeded.status, equal_to(EventDeliveryStatus.SUCCEEDED))
         assert_that(succeeded.last_error, none())
         assert_that(succeeded.attempt_count, equal_to(1))
+
+
+def test_retryable_failure_can_be_reclaimed_before_processing_goes_stale(
+    repository: OutboxMessageRepository,
+    registry: DomainEventRegistry,
+    organization_id: UUID,
+):
+    event = _event(registry, organization_id)
+    repository.create(event, registry)
+    delivery = repository.list_deliveries_for_event(event.event_id)[0]
+    first_claimed_at = datetime(2026, 7, 26, 10, 0, tzinfo=UTC)
+    repository.mark_delivery_enqueued(delivery.id, enqueued_at=first_claimed_at)
+    repository.claim_delivery(delivery.id, claimed_at=first_claimed_at)
+    repository.mark_delivery_retryable_failure(
+        delivery.id, "temporary", enqueued_at=first_claimed_at + timedelta(seconds=15)
+    )
+
+    with when("Dramatiq's own backoff retries the delivery well before the staleness window elapses"):
+        reclaimed = repository.claim_delivery(
+            delivery.id,
+            claimed_at=first_claimed_at + timedelta(seconds=15),
+            processing_stale_before=first_claimed_at + timedelta(seconds=15) - timedelta(minutes=15),
+        )
+
+    with then("the retry is not starved waiting for the processing-stale threshold"):
+        assert reclaimed is not None
+        assert_that(reclaimed.status, equal_to(EventDeliveryStatus.PROCESSING))
+        assert_that(reclaimed.attempt_count, equal_to(2))
 
 
 def test_dead_lettered_delivery_requires_reason_and_preserves_error(
@@ -604,12 +632,12 @@ def test_delivery_processor_classifies_retryable_and_terminal_handler_errors(
             retry_processor.process(retry_delivery.id)
         terminal_processed = terminal_processor.process(terminal_delivery.id)
 
-    with then("retryable errors stay processing and terminal errors dead-letter"):
+    with then("retryable errors are re-enqueued for immediate reclaim and terminal errors dead-letter"):
         retry_persisted = repository.get_delivery(retry_delivery.id)
         terminal_persisted = repository.get_delivery(terminal_delivery.id)
         assert retry_persisted is not None
         assert terminal_persisted is not None
-        assert_that(retry_persisted.status, equal_to(EventDeliveryStatus.PROCESSING))
+        assert_that(retry_persisted.status, equal_to(EventDeliveryStatus.ENQUEUED))
         assert_that(retry_persisted.last_error, equal_to("temporary"))
         assert_that(terminal_processed, equal_to(False))
         assert_that(terminal_persisted.status, equal_to(EventDeliveryStatus.DEAD_LETTERED))
