@@ -136,7 +136,7 @@ def test_admin_with_organization_cost_scope_can_view_summary():
 
 
 def test_member_cannot_view_costs_summary():
-    """Org spend is sensitive: only owners/admins (and superusers) may view it."""
+    """Org spend is sensitive: only owners/admins (and platform_admins) may view it."""
     member_id = uuid7()
     with given([*_GIVEN, _there_is_a_member_actor(member_id)]) as context:
         response = context.client.get(f"{_BASE}/summary", headers=_auth(context))
@@ -151,9 +151,9 @@ def test_unassigned_member_cannot_view_agent_cost():
         assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
-def test_superuser_can_view_costs_summary():
-    """Superusers transcend org roles: the owner/admin gate must not block them, even
-    though a superuser isn't a member of the org they're viewing (membership is
+def test_platform_admin_can_view_costs_summary():
+    """Platform Administrators transcend org roles: the owner/admin gate must not block them, even
+    though a platform_admin isn't a member of the org they're viewing (membership is
     synthesized from the active-org header)."""
     super_id = uuid7()
     org_id = uuid7()
@@ -173,8 +173,8 @@ def test_superuser_can_view_costs_summary():
             create_test_client(),
             database_repo_is_ready(),
             database_is_clean(),
-            # Created before the org exists in context, so the superuser stays a non-member.
-            there_is_a_user(id=super_id, email="super-costs@example.com", is_superuser=True),
+            # Created before the org exists in context, so the platform_admin stays a non-member.
+            there_is_a_user(id=super_id, email="super-costs@example.com", is_platform_admin=True),
             there_is_an_organization_with_user_and_access_token(id=org_id, email="owner-super-costs@example.com"),
             use_org_for_auth(),
             there_is_an_access_token_for_user(user_id=super_id),

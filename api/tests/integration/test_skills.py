@@ -205,7 +205,7 @@ def test_admin_can_create_skill():
         assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
 
 
-def test_superuser_without_skill_manage_grant_can_create_skill():
+def test_platform_admin_without_skill_manage_grant_can_create_skill():
     super_id = uuid7()
     with given(
         [
@@ -214,14 +214,14 @@ def test_superuser_without_skill_manage_grant_can_create_skill():
                 id=super_id,
                 email="super-skills@example.com",
                 role=OrganizationRole.MEMBER,
-                is_superuser=True,
+                is_platform_admin=True,
             ),
             there_is_an_access_token_for_user(user_id=super_id),
         ]
     ) as context:
         response = context.client.post(
             _BASE,
-            json={"name": "Superuser Skill", "zip_content": _make_zip()},
+            json={"name": "Platform administrator Skill", "zip_content": _make_zip()},
             headers=_auth(context),
         )
 

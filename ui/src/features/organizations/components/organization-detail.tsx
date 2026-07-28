@@ -82,14 +82,14 @@ export function OrganizationDetail({ organizationId }: { organizationId: string 
   const currentRole = userContext.organizationUsers?.find(
     (m) => m.organizationId === organizationId,
   )?.role;
-  const canDelete = !!organization && (user.isSuperuser || currentRole === "OWNER");
+  const canDelete = !!organization && (user.isPlatformAdmin || currentRole === "OWNER");
 
   const onDelete = () => {
     deleteOrganization.mutate(organizationId, {
       onSuccess: () => {
         toast.success("Organization deleted.");
         setDeleteOpen(false);
-        router.push(user.isSuperuser ? "/dashboard/platform/organizations" : "/");
+        router.push(user.isPlatformAdmin ? "/dashboard/platform/organizations" : "/");
       },
       onError: (e) => toast.error(e.message || "Failed to delete organization"),
     });
@@ -128,7 +128,7 @@ export function OrganizationDetail({ organizationId }: { organizationId: string 
 
   return (
     <div className="max-w-[1000px] mx-auto px-10 pt-9 pb-24">
-      {user.isSuperuser && (
+      {user.isPlatformAdmin && (
         <Link
           href="/dashboard/platform/organizations"
           className="inline-flex items-center gap-1 text-[13px] mb-4"

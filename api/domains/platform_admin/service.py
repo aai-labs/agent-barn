@@ -12,12 +12,11 @@ from api.domains.users.models import User
 class PlatformAdminService:
     """Seam for platform-level authority.
 
-    Phase 1 keeps the storage field small while callers depend on Platform
-    Administrator authority instead of Organization ownership.
+    Callers depend on Platform Administrator authority instead of Organization ownership.
     """
 
     def is_platform_admin(self, user: User) -> bool:
-        return user.is_superuser
+        return user.is_platform_admin
 
     def require_platform_admin(
         self,

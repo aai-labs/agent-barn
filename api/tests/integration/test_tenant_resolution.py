@@ -145,14 +145,14 @@ def test_member_targeting_foreign_org_is_forbidden():
                 assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
-def test_superuser_can_target_any_org_and_is_isolated_per_url():
+def test_platform_admin_can_target_any_org_and_is_isolated_per_url():
     with given(
         [
             *_GIVEN,
             there_is_a_user(
                 id=SUPERUSER,
                 email="root@example.com",
-                is_superuser=True,
+                is_platform_admin=True,
                 organization_id=None,
             ),
             there_is_an_access_token_for_user(),
@@ -162,12 +162,12 @@ def test_superuser_can_target_any_org_and_is_isolated_per_url():
             there_is_an_agent(organization_id=ORG_B, name="Agent B"),
         ]
     ) as context:
-        with when("superuser targets org A"):
+        with when("platform_admin targets org A"):
             response_a = context.client.get(
                 _agents(ORG_A),
                 headers=_auth(context),
             )
-        with when("superuser targets org B"):
+        with when("platform_admin targets org B"):
             response_b = context.client.get(
                 _agents(ORG_B),
                 headers=_auth(context),

@@ -1,6 +1,6 @@
 """AF-147: the `/platform/users` list is a Platform Administrator account view.
 
-- Superusers see every account across all orgs, regardless of the active org.
+- Platform Administrators see every account across all orgs, regardless of the active org.
 - Everyone else (owners, admins, plain members) is forbidden — org-level people
   management lives on the per-org Members page instead.
 """
@@ -71,13 +71,13 @@ def test_org_owner_cannot_list_users():
             there_is_an_access_token_for_user(user_id=owner_id),
         ]
     ) as context:
-        with when("an org owner (not a superuser) tries to list users"):
+        with when("an org owner (not a platform_admin) tries to list users"):
             response = context.client.get(
                 _USERS,
                 headers=_auth(context),
             )
 
-            with then("it is forbidden — Users is superuser-only"):
+            with then("it is forbidden — Users is platform_admin-only"):
                 assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
@@ -105,19 +105,19 @@ def test_plain_member_cannot_list_users():
                 assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
-def test_superuser_lists_all_users_globally():
+def test_platform_admin_lists_all_users_globally():
     super_id = uuid7()
     with given(
         [
             *_GIVEN,
-            # Create the superuser first, before any org context is set, so the shared
+            # Create the platform_admin first, before any org context is set, so the shared
             # user step doesn't try to attach them to an ambient organization.
-            there_is_a_user(id=super_id, email="root@example.com", is_superuser=True),
+            there_is_a_user(id=super_id, email="root@example.com", is_platform_admin=True),
             there_is_an_access_token_for_user(user_id=super_id),
             _org_a_populated(),
         ]
     ) as context:
-        with when("a superuser lists users from platform view"):
+        with when("a platform_admin lists users from platform view"):
             response = context.client.get(
                 _USERS,
                 headers=_auth(context),
@@ -125,5 +125,5 @@ def test_superuser_lists_all_users_globally():
 
             with then("all users across orgs are returned — the view is global"):
                 assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-                # member-a + owner-b + the superuser itself (not scoped to ORG_A).
+                # member-a + owner-b + the platform_admin itself (not scoped to ORG_A).
                 assert_that(response.json()["items"], has_length(3))

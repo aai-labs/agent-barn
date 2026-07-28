@@ -57,14 +57,14 @@ export function OrgSwitcher() {
     }
   };
 
-  // Nothing to show (e.g. a superuser with no memberships) — the org is managed from
+  // Nothing to show (e.g. a platform admin with no memberships) — the org is managed from
   // the Organizations page instead.
-  if (!user.isSuperuser && (organizations.length === 0 || !selectedOrganization)) {
+  if (!user.isPlatformAdmin && (organizations.length === 0 || !selectedOrganization)) {
     return null;
   }
 
   // Only one org — show it as a static breadcrumb, no switcher affordance.
-  if (!user.isSuperuser && organizations.length === 1 && selectedOrganization) {
+  if (!user.isPlatformAdmin && organizations.length === 1 && selectedOrganization) {
     return (
       <div
         className="flex items-center gap-1.5 text-[13px]"
@@ -110,7 +110,7 @@ export function OrgSwitcher() {
           >
             View
           </div>
-          {user.isSuperuser && (
+          {user.isPlatformAdmin && (
             <button
               role="option"
               aria-selected={isPlatformView}

@@ -7,14 +7,14 @@ from api.domains.users.models import User
 
 def test_is_platform_admin_uses_current_platform_admin_storage():
     service = PlatformAdminService()
-    user = User(email="admin@example.com", hashed_password="hash", is_superuser=True)
+    user = User(email="admin@example.com", hashed_password="hash", is_platform_admin=True)
 
     assert_that(service.is_platform_admin(user), equal_to(True))
 
 
 def test_require_platform_admin_rejects_non_admin_user():
     service = PlatformAdminService()
-    user = User(email="user@example.com", hashed_password="hash", is_superuser=False)
+    user = User(email="user@example.com", hashed_password="hash", is_platform_admin=False)
 
     assert_that(
         calling(service.require_platform_admin).with_args(user),

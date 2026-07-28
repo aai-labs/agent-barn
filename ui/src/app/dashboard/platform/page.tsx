@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { BuildingIcon, UsersIcon } from "@/components/icons";
-import { SuperAdminOnly } from "@/auth/components/super-admin-only";
+import { PlatformAdminOnly } from "@/auth/components/platform-admin-only";
 
 const platformLinks = [
   {
@@ -19,7 +19,7 @@ const platformLinks = [
 
 export default function PlatformPage() {
   return (
-    <SuperAdminOnly>
+    <PlatformAdminOnly>
       <div className="max-w-[980px] mx-auto px-10 pt-9 pb-24">
         <div className="mb-8">
           <h1 className="text-[28px] font-semibold tracking-tight" style={{ color: "var(--ink)" }}>
@@ -46,6 +46,6 @@ export default function PlatformPage() {
           ))}
         </div>
       </div>
-    </SuperAdminOnly>
+    </PlatformAdminOnly>
   );
 }

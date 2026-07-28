@@ -48,7 +48,7 @@ async def lifespan(_: FastAPI):
 
     try:
         injector.get(RbacSeeder).seed()
-        user_service.ensure_default_superuser()
+        user_service.ensure_default_platform_admin()
 
         seed_aai_cli_skills(injector.get(SkillRepository))
         injector.get(TemplateService).seed_predefined_templates()

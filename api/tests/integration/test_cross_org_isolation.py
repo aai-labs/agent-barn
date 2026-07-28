@@ -354,14 +354,14 @@ def test_cannot_transfer_ownership_of_another_org():
 # --------------------------------------------------------------------------- #
 
 
-def test_superuser_can_read_any_orgs_agent_via_url():
+def test_platform_admin_can_read_any_orgs_agent_via_url():
     with given(
         [
             *_GIVEN,
             there_is_a_user(
                 id=SUPERUSER,
                 email="root@example.com",
-                is_superuser=True,
+                is_platform_admin=True,
                 organization_id=None,
             ),
             there_is_an_access_token_for_user(),
@@ -375,14 +375,14 @@ def test_superuser_can_read_any_orgs_agent_via_url():
         assert_that(response.json()["name"], equal_to("Agent B"))
 
 
-def test_superuser_can_list_any_orgs_members_via_url():
+def test_platform_admin_can_list_any_orgs_members_via_url():
     with given(
         [
             *_GIVEN,
             there_is_a_user(
                 id=SUPERUSER,
                 email="root@example.com",
-                is_superuser=True,
+                is_platform_admin=True,
                 organization_id=None,
             ),
             there_is_a_user(

@@ -26,7 +26,7 @@ export function TopNav({ onHire }: TopNavProps) {
   const orgBase = orgId ? `/dashboard/${orgId}` : "/dashboard";
   const isPlatformView = pathname?.startsWith("/dashboard/platform") ?? false;
 
-  // Owners/admins (and superusers) manage members and see org spend; plain members can't.
+  // Owners/admins (and platform admins) manage members and see org spend; plain members can't.
   const { canManage: canManageMembers } = useActiveOrgRole();
 
   const navTabs = isPlatformView
@@ -160,7 +160,7 @@ export function TopNav({ onHire }: TopNavProps) {
                 )}
               </div>
 
-              {user.isSuperuser && (
+              {user.isPlatformAdmin && (
                 <div style={{ borderTop: "1px solid var(--line)" }} className="py-1">
                   <div className="px-3.5 py-1 text-[11px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-5)" }}>
                     Platform

@@ -80,7 +80,7 @@ def get_authenticated_user(
     if organization_id:
         user_organization = user_organization_map.get(organization_id, None)
         if not user_organization:
-            if user.is_superuser:
+            if user.is_platform_admin:
                 # Platform Administrators may operate in explicit Organization
                 # context without a persisted Membership.
                 user_organization = OrganizationUser(
@@ -91,7 +91,7 @@ def get_authenticated_user(
             else:
                 raise ForbiddenException(detail="You do not have access to this organization")
 
-    if organization_roles and not user.is_superuser:
+    if organization_roles and not user.is_platform_admin:
         if not user_organization or user_organization.role not in organization_roles:
             raise ForbiddenException(
                 detail=f"User {user.id} does not have the required roles: {[role.value for role in organization_roles]}"
@@ -107,7 +107,7 @@ def get_authenticated_user(
 
 def get_current_user(
     organization_roles: AbstractSet[OrganizationRole] | None = None,
-    check_superuser: bool = False,
+    check_platform_admin: bool = False,
     verified_required: bool = False,
     require_organization: bool = True,
 ) -> Callable[..., CurrentUserContext]:
@@ -132,8 +132,8 @@ def get_current_user(
             organization_roles=organization_roles,
             verified_required=verified_required,
         )
-        if check_superuser and not context.user.is_superuser:
-            raise ForbiddenException(detail=f"User {context.user.id} is not a superuser")
+        if check_platform_admin and not context.user.is_platform_admin:
+            raise ForbiddenException(detail=f"User {context.user.id} is not a platform administrator")
         return context
 
     return wrapper

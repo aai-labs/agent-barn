@@ -74,7 +74,7 @@ export class OrganizationDataSupport {
   async interceptCreateOrganization({
     success = true,
     status = 201,
-    detail = "Only a superuser can create organizations",
+    detail = "Only a platform_admin can create organizations",
     result,
   }: {
     success?: boolean;

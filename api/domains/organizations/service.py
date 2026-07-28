@@ -90,7 +90,7 @@ class OrganizationService:
         page_size: int = 15,
     ) -> PaginatedItems[OrganizationRead]:
         pagination = Pagination(page=page, size=page_size)
-        user_id = None if context.user.is_superuser else context.user.id
+        user_id = None if context.user.is_platform_admin else context.user.id
         return self.organization_repository.find_all_paginated_read(
             pagination=pagination,
             organization_filter=org_filter,

@@ -4,7 +4,7 @@
   "updated_at": "2026-04-22T17:57:41.097975Z",
   "full_name": "Super User",
   "email": "admin@aai-labs.com",
-  "is_superuser": true,
+  "is_platform_admin": true,
   "email_verified_at": null,
   "organization_users": []
 }

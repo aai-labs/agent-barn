@@ -34,7 +34,7 @@ function twoOrgs() {
   ];
 }
 
-test.describe("Organizations — list & create (superuser)", () => {
+test.describe("Organizations — list & create (platform_admin)", () => {
   let data: DataSupport;
   test.use({ storageState: { cookies: [], origins: [] } });
 
@@ -54,7 +54,7 @@ test.describe("Organizations — list & create (superuser)", () => {
     await expect(page.getByText("AAI Labs").first()).toBeVisible();
   });
 
-  test("superuser creates an org and sees the owner invite link", async ({
+  test("platform_admin creates an org and sees the owner invite link", async ({
     page,
   }) => {
     await page.goto(ORGS_URL);
@@ -219,7 +219,7 @@ test.describe("Org switcher — manage page for a member-only org", () => {
   let data: DataSupport;
   test.use({ storageState: { cookies: [], origins: [] } });
 
-  // Owner of org A, plain member of org B (non-superuser).
+  // Owner of org A, plain member of org B (non-platform_admin).
   function ownerOfAMemberOfB() {
     const [orgA, orgB] = twoOrgs();
     const userId = "44444444-4444-4444-8444-444444444444";
@@ -238,7 +238,7 @@ test.describe("Org switcher — manage page for a member-only org", () => {
       updated_at: "2024-01-01T00:00:00Z",
       full_name: "Grace Hopper",
       email: "owner-a@example.com",
-      is_superuser: false,
+      is_platform_admin: false,
       email_verified_at: "2024-01-01T00:00:00Z",
       organization_users: [
         membership(orgA, "OWNER", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
@@ -277,7 +277,7 @@ test.describe("Org switcher — manage page for a member-only org", () => {
   });
 });
 
-test.describe("Org switcher (superuser)", () => {
+test.describe("Org switcher (platform_admin)", () => {
   let data: DataSupport;
   test.use({ storageState: { cookies: [], origins: [] } });
 

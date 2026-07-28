@@ -15,12 +15,12 @@ from api.domains.users.models import User
 from api.domains.users.organization_users.models import OrganizationUser
 
 
-def _user(*, is_superuser: bool = False) -> User:
+def _user(*, is_platform_admin: bool = False) -> User:
     return User(
         email=f"{uuid7()}@example.com",
         hashed_password="hashed",
         email_verified_at=datetime.now(timezone.utc),
-        is_superuser=is_superuser,
+        is_platform_admin=is_platform_admin,
     )
 
 
@@ -28,10 +28,10 @@ def _context(
     role: OrganizationRole = OrganizationRole.MEMBER,
     *,
     organization_id: UUID | None = None,
-    is_superuser: bool = False,
+    is_platform_admin: bool = False,
 ) -> tuple[CurrentUserContext, OrganizationUser]:
     organization_id = organization_id or uuid7()
-    user = _user(is_superuser=is_superuser)
+    user = _user(is_platform_admin=is_platform_admin)
     membership = OrganizationUser(
         user_id=user.id,
         organization_id=organization_id,
@@ -153,9 +153,9 @@ def test_resolve_denies_missing_permission_by_default():
     )
 
 
-def test_resolve_superuser_uses_transient_explicit_org_context():
+def test_resolve_platform_admin_uses_transient_explicit_org_context():
     organization_id = uuid7()
-    user = _user(is_superuser=True)
+    user = _user(is_platform_admin=True)
     transient_membership = OrganizationUser(
         user_id=user.id,
         organization_id=organization_id,
@@ -182,9 +182,9 @@ def test_resolve_rejects_target_outside_active_organization():
     assert_that(policy.resolve(context, uuid7(), PermissionKey.ORGANIZATION_READ), none())
 
 
-def test_resolve_requires_active_organization_context_even_for_superuser():
+def test_resolve_requires_active_organization_context_even_for_platform_admin():
     policy = PermissionPolicy()
-    context = CurrentUserContext(user=_user(is_superuser=True))
+    context = CurrentUserContext(user=_user(is_platform_admin=True))
 
     assert_that(
         calling(policy.resolve).with_args(context, uuid7(), PermissionKey.ORGANIZATION_READ),

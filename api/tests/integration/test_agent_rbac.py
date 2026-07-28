@@ -661,19 +661,19 @@ def test_removed_membership_cascades_agent_access():
         )
 
 
-def test_membershipless_superuser_can_manage_agent_share_in_explicit_org():
+def test_membershipless_platform_admin_can_manage_agent_share_in_explicit_org():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         organization = context.organization
         target, _ = _add_member(context)
         context.organization = None
         there_is_a_user(
             id=uuid7(),
-            email="rbac-superuser@example.com",
-            is_superuser=True,
+            email="rbac-platform_admin@example.com",
+            is_platform_admin=True,
         )(context)
-        superuser_id = context.user.id
+        platform_admin_id = context.user.id
         context.organization = organization
-        there_is_an_access_token_for_user(superuser_id)(context)
+        there_is_an_access_token_for_user(platform_admin_id)(context)
         response = context.client.put(
             _share_url(context.agent.id),
             json={

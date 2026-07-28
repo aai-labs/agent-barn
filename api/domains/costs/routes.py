@@ -12,7 +12,7 @@ from api.domains.costs.service import CostService
 costs_router = APIRouter(prefix="/organizations/{organization_id}/costs", tags=["costs"])
 
 # Org spend is billing-sensitive, so it's restricted to the org's managers — owners/admins
-# (superusers bypass). Plain members can run agents but not see the org's aggregate cost.
+# (platform admins bypass). Plain members can run agents but not see the org's aggregate cost.
 
 
 @costs_router.get(

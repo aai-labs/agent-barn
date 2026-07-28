@@ -125,7 +125,7 @@ def legacy_database(isolated_database):
                 text(
                     'INSERT INTO "user" '
                     "(id, created_at, updated_at, email, full_name, hashed_password, "
-                    "is_superuser, security_stamp, email_verified_at) "
+                    "is_platform_admin, security_stamp, email_verified_at) "
                     "VALUES (:id, :now, :now, :email, NULL, :password, false, "
                     ":stamp, :verified_at)"
                 ),

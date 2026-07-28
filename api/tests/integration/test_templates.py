@@ -450,7 +450,7 @@ def test_admin_can_create_template():
         assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
 
 
-def test_superuser_without_template_manage_grant_can_create_template():
+def test_platform_admin_without_template_manage_grant_can_create_template():
     super_id = uuid7()
     with given(
         [
@@ -459,14 +459,14 @@ def test_superuser_without_template_manage_grant_can_create_template():
                 id=super_id,
                 email="super-templates@example.com",
                 role=OrganizationRole.MEMBER,
-                is_superuser=True,
+                is_platform_admin=True,
             ),
             there_is_an_access_token_for_user(user_id=super_id),
         ]
     ) as context:
         response = context.client.post(
             _BASE,
-            json={"template_name": "Superuser Template"},
+            json={"template_name": "Platform administrator Template"},
             headers=_auth(context),
         )
 

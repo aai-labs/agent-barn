@@ -61,16 +61,16 @@ export function OrganizationProvider({ children }: { children: ReactNode }) {
   // Superusers aren't members of the orgs they manage, so their picker is populated
   // from the full org list rather than their memberships.
   const { organizations: allOrganizations, isLoading: isLoadingAllOrganizations } =
-    useAllOrganizations({ enabled: user.isSuperuser });
+    useAllOrganizations({ enabled: user.isPlatformAdmin });
 
   const organizations = useMemo(() => {
-    if (user.isSuperuser) {
+    if (user.isPlatformAdmin) {
       return allOrganizations;
     }
     return (userContext.organizationUsers ?? []).map(
       (membership) => membership.organization,
     );
-  }, [user.isSuperuser, allOrganizations, userContext.organizationUsers]);
+  }, [user.isPlatformAdmin, allOrganizations, userContext.organizationUsers]);
 
   const fallbackOrganization = useMemo(
     () => organizations[0] ?? null,
@@ -121,7 +121,7 @@ export function OrganizationProvider({ children }: { children: ReactNode }) {
     if (previousOrgId === activeOrgId) return;
     switchedOrgIdRef.current = activeOrgId;
     // Only a genuine org-to-org switch should drop caches. The initial resolution
-    // (null -> org, e.g. a superuser's org list arriving asynchronously) is not a switch:
+    // (null -> org, e.g. a platform admin's org list arriving asynchronously) is not a switch:
     // evicting there would wipe the just-loaded agents/templates mid-render and flash a
     // reload. Nothing stale exists before the first org is known, so skip it.
     if (previousOrgId === null || activeOrgId === null) return;

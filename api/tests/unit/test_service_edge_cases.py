@@ -34,7 +34,7 @@ def build_user_service() -> tuple[
     config = Config(
         db_connection_url=cast(PostgresDsn, "postgresql://postgres:postgres@localhost:5432/test"),
         secret_signing_key="x" * 32,
-        super_user_credentials="admin@example.com:StrongPass123",
+        platform_admin_credentials="admin@example.com:StrongPass123",
         email_server_credential="noreply@example.com:password",
         email_smtp_server="smtp.example.com",
     )
@@ -108,8 +108,8 @@ def test_organization_service_update_not_found_raises_404():
         agent_service=Mock(),
         permission_policy=Mock(),
     )
-    superuser = User(email="root@example.com", hashed_password="x", is_superuser=True)
-    context = CurrentUserContext(user=superuser)
+    platform_admin = User(email="root@example.com", hashed_password="x", is_platform_admin=True)
+    context = CurrentUserContext(user=platform_admin)
 
     assert_that(
         calling(org_service.update_organization).with_args(uuid7(), OrganizationUpdate(name="new"), context),

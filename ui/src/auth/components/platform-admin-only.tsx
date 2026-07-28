@@ -6,10 +6,10 @@ import { ShieldAlert } from "lucide-react";
 import { useCurrentUser } from "@/auth/providers/user-context-provider";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
-export function SuperAdminOnly({ children }: { children: ReactNode }) {
+export function PlatformAdminOnly({ children }: { children: ReactNode }) {
   const { user } = useCurrentUser();
 
-  if (user.isSuperuser) {
+  if (user.isPlatformAdmin) {
     return <>{children}</>;
   }
 

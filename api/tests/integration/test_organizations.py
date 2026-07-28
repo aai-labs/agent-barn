@@ -2,7 +2,7 @@
 
 `POST /platform/organizations` creates a customer org, attaches the given owner as OWNER
 (inviting them when they are new/unverified), and returns the set-password invite link
-so the superuser can also deliver it manually.
+so the platform_admin can also deliver it manually.
 """
 
 from uuid import uuid7
@@ -45,18 +45,18 @@ def _auth(context) -> dict:
     return {"Authorization": f"Bearer {context.access_token}"}
 
 
-def _there_is_a_superuser(email: str = "root@example.com"):
+def _there_is_a_platform_admin(email: str = "root@example.com"):
     super_id = uuid7()
 
     def step(context):
-        there_is_a_user(id=super_id, email=email, is_superuser=True)(context)
+        there_is_a_user(id=super_id, email=email, is_platform_admin=True)(context)
         there_is_an_access_token_for_user(user_id=super_id)(context)
 
     return step
 
 
-def test_superuser_creates_organization_and_invites_owner():
-    with given([*_GIVEN, _there_is_a_superuser()]) as context:
+def test_platform_admin_creates_organization_and_invites_owner():
+    with given([*_GIVEN, _there_is_a_platform_admin()]) as context:
         with when("platform admin creates an org with a brand-new owner email"):
             response = context.client.post(
                 _ORGS,
@@ -98,7 +98,7 @@ def test_new_organization_sees_global_predefined_templates():
     from api.domains.templates.predefined import PREDEFINED_TEMPLATES
     from api.domains.templates.service import TemplateService
 
-    with given([*_GIVEN, _there_is_a_superuser()]) as context:
+    with given([*_GIVEN, _there_is_a_platform_admin()]) as context:
         context.injector.get(TemplateService).seed_predefined_templates()
         create = context.client.post(
             _ORGS,
@@ -116,7 +116,7 @@ def test_new_organization_sees_global_predefined_templates():
         assert_that(templates.json()["total"], equal_to(len(PREDEFINED_TEMPLATES)))
 
 
-def test_non_superuser_cannot_create_organization():
+def test_non_platform_admin_cannot_create_organization():
     with given(
         [
             *_GIVEN,
@@ -128,7 +128,7 @@ def test_non_superuser_cannot_create_organization():
             there_is_an_access_token_for_user(),
         ]
     ) as context:
-        with when("a non-superuser attempts to create an org"):
+        with when("a non-platform_admin attempts to create an org"):
             response = context.client.post(
                 _ORGS,
                 json={"name": "Nope Inc", "owner_email": "x@nope.com"},
@@ -140,7 +140,7 @@ def test_non_superuser_cannot_create_organization():
 
 
 def test_create_organization_short_name_is_rejected():
-    with given([*_GIVEN, _there_is_a_superuser()]) as context:
+    with given([*_GIVEN, _there_is_a_platform_admin()]) as context:
         with when("the org name is too short"):
             response = context.client.post(
                 _ORGS,
@@ -160,7 +160,7 @@ def test_create_organization_with_existing_active_owner_sends_no_invite():
         [
             *_GIVEN,
             there_is_a_user(email="existing@corp.com"),  # active, email verified
-            _there_is_a_superuser(),
+            _there_is_a_platform_admin(),
         ]
     ) as context:
         with when("platform admin creates an org owned by an already-active user"):

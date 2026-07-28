@@ -88,12 +88,12 @@ def test_get_authenticated_user_rejects_unverified_user_when_required():
     )
 
 
-def test_get_authenticated_user_requires_role_for_non_superuser():
+def test_get_authenticated_user_requires_role_for_non_platform_admin():
     user = User(
         email="member@example.com",
         hashed_password="x",
         email_verified_at=datetime.now(timezone.utc),
-        is_superuser=False,
+        is_platform_admin=False,
     )
     org_user = OrganizationUser(
         user_id=user.id,

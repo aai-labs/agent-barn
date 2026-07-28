@@ -113,7 +113,7 @@ class CurrentUserContext(PydanticBaseModel):
     # impossible.
 
     def has_org_role(self, organization_id: UUID, roles: AbstractSet[OrganizationRole]) -> bool:
-        if self.user.is_superuser:
+        if self.user.is_platform_admin:
             return True
         membership = self.user_organization_map.get(organization_id)
         return membership is not None and membership.role in roles
@@ -131,8 +131,5 @@ class CurrentUserContext(PydanticBaseModel):
         self,
         detail: str = "This action requires platform administrator access.",
     ) -> None:
-        if not self.user.is_superuser:
+        if not self.user.is_platform_admin:
             raise ForbiddenException(detail=detail)
-
-    def require_superuser(self, detail: str = "This action requires a superuser.") -> None:
-        self.require_platform_admin(detail=detail)

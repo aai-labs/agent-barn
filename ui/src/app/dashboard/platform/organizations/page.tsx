@@ -1,10 +1,10 @@
-import { SuperAdminOnly } from "@/auth/components/super-admin-only";
+import { PlatformAdminOnly } from "@/auth/components/platform-admin-only";
 import { OrganizationsGrid } from "@/features/organizations/components/organizations-grid";
 
 export default function PlatformOrganizationsPage() {
   return (
-    <SuperAdminOnly>
+    <PlatformAdminOnly>
       <OrganizationsGrid />
-    </SuperAdminOnly>
+    </PlatformAdminOnly>
   );
 }
