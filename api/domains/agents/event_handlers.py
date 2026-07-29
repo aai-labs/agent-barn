@@ -1,45 +1,28 @@
 from dataclasses import dataclass
 from collections.abc import Sequence
-from typing import Protocol
+from typing import ClassVar
 from uuid import UUID
 
 from injector import inject
 
-from api.domains.agents.repository import AgentLifecycleEmailRecipient
+from api.domains.agents.repository import AgentRepository
 from api.domains.events.catalog import AGENT_LIFECYCLE_EMAIL_HANDLER, AGENT_STARTED, AGENT_STOPPED
 from api.domains.events.handlers import EventDeliveryContext, RetryableEventHandlerError, SupportedEvent
 from api.domains.events.models import DomainEventEnvelope
-
-
-class AgentLifecycleEmailRepository(Protocol):
-    def find_lifecycle_email_recipients(
-        self, agent_id: UUID, organization_id: UUID
-    ) -> list[AgentLifecycleEmailRecipient]: ...
-
-    def find_notified_lifecycle_email_recipients(self, delivery_id: UUID) -> set[str]: ...
-
-    def record_lifecycle_email_recipient_notified(self, delivery_id: UUID, recipient_email: str) -> None: ...
-
-
-class AgentLifecycleEmailService(Protocol):
-    def send_agent_lifecycle_email(
-        self,
-        *,
-        receiver_email: str,
-        receiver_name: str | None,
-        agent_name: str,
-        lifecycle_action: str,
-    ) -> bool: ...
+from api.infrastructure.email.service import EmailService
 
 
 @inject
 @dataclass
 class AgentLifecycleEmailHandler:
-    repository: AgentLifecycleEmailRepository
-    email_service: AgentLifecycleEmailService
+    repository: AgentRepository
+    email_service: EmailService
 
-    name = AGENT_LIFECYCLE_EMAIL_HANDLER
-    supported_events: Sequence[SupportedEvent] = (SupportedEvent(AGENT_STARTED, 1), SupportedEvent(AGENT_STOPPED, 1))
+    name: ClassVar[str] = AGENT_LIFECYCLE_EMAIL_HANDLER
+    supported_events: ClassVar[Sequence[SupportedEvent]] = (
+        SupportedEvent(AGENT_STARTED, 1),
+        SupportedEvent(AGENT_STOPPED, 1),
+    )
 
     def handle(self, event: DomainEventEnvelope, context: EventDeliveryContext) -> None:
         agent_id = UUID(str(event.payload["agent_id"]))

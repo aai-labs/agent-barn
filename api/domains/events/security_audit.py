@@ -1,5 +1,6 @@
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import ClassVar
 
 from api.domains.events.catalog import (
     AGENT_ACCESS_GRANTED,
@@ -22,8 +23,8 @@ class SecurityAuditProjection:
     UNKNOWN_HANDLER until the real projection is built.
     """
 
-    name = SECURITY_AUDIT_HANDLER
-    supported_events: Sequence[SupportedEvent] = (
+    name: ClassVar[str] = SECURITY_AUDIT_HANDLER
+    supported_events: ClassVar[Sequence[SupportedEvent]] = (
         SupportedEvent(ORGANIZATION_ROLE_CHANGED, 1),
         SupportedEvent(AGENT_ACCESS_GRANTED, 1),
         SupportedEvent(AGENT_ACCESS_REVOKED, 1),
