@@ -5,11 +5,13 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "agentfarm-api.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
 spec:
   replicas: {{ .Values.replicaCount }}
   selector:
     matchLabels:
       {{- include "agentfarm-api.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: api
   template:
     metadata:
       annotations:
@@ -22,6 +24,7 @@ spec:
         checksum/kubeconfig: {{ include (print $.Template.BasePath "/kubeconfig-secret.yaml") . | sha256sum }}
       labels:
         {{- include "agentfarm-api.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: api
     spec:
       serviceAccountName: {{ .Release.Name }}
       imagePullSecrets:
