@@ -1,5 +1,6 @@
 node_modules
 .next
+.next-e2e
 .pnpm-store
 .git
 .DS_Store
