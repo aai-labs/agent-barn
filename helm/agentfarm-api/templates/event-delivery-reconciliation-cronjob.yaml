@@ -27,10 +27,15 @@ spec:
             - name: event-reconciler
               image: "{{ .Values.registryPrefix }}/{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
               imagePullPolicy: {{ .Values.image.pullPolicy }}
+              # Not `python -m api.domains.events.reconciliation`: running the
+              # module as __main__ re-imports it under a second module name,
+              # so its EventDeliveryReconciler class no longer matches the one
+              # AppModule's @provider registered a binding for — injector falls
+              # back to raw construction and fails on the Protocol-typed args.
               command:
                 - python
-                - -m
-                - api.domains.events.reconciliation
+                - -c
+                - "from api.domains.events.reconciliation import main; main()"
               envFrom:
                 - secretRef:
                     name: {{ .Values.secretName }}
