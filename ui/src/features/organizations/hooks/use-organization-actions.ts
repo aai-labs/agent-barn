@@ -19,7 +19,7 @@ export function useCreateOrganization() {
   return useMutation({
     mutationFn: async (data: CreateOrganizationFormData) => {
       const response = await api.post<OrganizationCreateResult>(
-        "/api/v1/organizations",
+        "/api/v1/platform/organizations",
         data,
         { schema: OrganizationCreateResultSchema },
       );

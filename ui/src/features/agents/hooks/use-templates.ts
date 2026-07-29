@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { api } from "@/shared/api";
+import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
 
 import {
   PaginatedTemplates,
@@ -19,6 +20,7 @@ export type TemplatesFilters = {
 };
 
 export function useTemplates(filters: TemplatesFilters = {}) {
+  const orgApiBase = useOrganizationApiBase();
   const { search, source, page = 1, pageSize = TEMPLATES_PAGE_SIZE } = filters;
 
   const query = useQuery({
@@ -30,7 +32,7 @@ export function useTemplates(filters: TemplatesFilters = {}) {
       if (search) params.set("search", search);
       if (source) params.set("source", source);
       const response = await api.get<PaginatedTemplates>(
-        `/api/v1/templates?${params.toString()}`,
+        `${orgApiBase}/templates?${params.toString()}`,
         { schema: PaginatedTemplatesSchema },
       );
       return response.data;

@@ -2,7 +2,7 @@ import re
 from dataclasses import dataclass
 from datetime import date
 
-from api.domains.templates.models import AgentTemplate
+from api.domains.templates.models import AgentTemplate, PlatformTemplate
 from api.domains.templates.slug import slugify
 
 _PLACEHOLDER = re.compile(r"\{\{\s*(\w+)\s*\}\}")
@@ -25,7 +25,7 @@ def _fill(text: str, variables: dict[str, str]) -> str:
     return _PLACEHOLDER.sub(lambda m: variables.get(m.group(1), m.group(0)), text)
 
 
-def render_template(template: AgentTemplate, agent_name: str) -> RenderedTemplate:
+def render_template(template: AgentTemplate | PlatformTemplate, agent_name: str) -> RenderedTemplate:
     variables = {
         "agent_display_name": agent_name,
         "agent_name": slugify(agent_name) or "agent",

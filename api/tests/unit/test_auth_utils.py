@@ -88,12 +88,12 @@ def test_get_authenticated_user_rejects_unverified_user_when_required():
     )
 
 
-def test_get_authenticated_user_requires_role_for_non_superuser():
+def test_get_authenticated_user_requires_role_for_org_context():
     user = User(
         email="member@example.com",
         hashed_password="x",
         email_verified_at=datetime.now(timezone.utc),
-        is_superuser=False,
+        is_platform_admin=True,
     )
     org_user = OrganizationUser(
         user_id=user.id,
@@ -115,6 +115,32 @@ def test_get_authenticated_user_requires_role_for_non_superuser():
             organization_user_repository=cast(OrganizationUserRepository, DummyOrgUserRepo([org_user])),
             organization_id=org_user.organization_id,
             organization_roles=[OrganizationRole.ADMIN],
+        ),
+        raises(ForbiddenException),
+    )
+
+
+def test_get_authenticated_user_rejects_platform_admin_without_org_membership():
+    user = User(
+        email="platform-admin@example.com",
+        hashed_password="x",
+        email_verified_at=datetime.now(timezone.utc),
+        is_platform_admin=True,
+    )
+    config = SimpleNamespace(secret_signing_key="x" * 32)
+    token = jwt.encode(
+        {"user_id": str(user.id), "token_type": "access"},
+        config.secret_signing_key,
+        algorithm="HS256",
+    )
+
+    assert_that(
+        calling(get_authenticated_user).with_args(
+            token=token,
+            config=cast(Config, config),
+            user_repository=cast(UserRepository, DummyUserRepo(user)),
+            organization_user_repository=cast(OrganizationUserRepository, DummyOrgUserRepo([])),
+            organization_id=uuid7(),
         ),
         raises(ForbiddenException),
     )

@@ -1,6 +1,5 @@
 from uuid import UUID, uuid7
 
-from api.domains.auth.utils import set_default_org_id
 from api.domains.organizations.models import Organization
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.users.organization_users.models import (
@@ -8,26 +7,13 @@ from api.domains.users.organization_users.models import (
     OrganizationUser,
 )
 from api.domains.users.organization_users.repository import OrganizationUserRepository
-from api.tests.core.givenpy import LambdaWith
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
-
-
-def the_default_organization_id_is(org_id: UUID):
-    """Set the global default-org fallback used when no X-Organization-Id header is
-    sent, restoring it after the test."""
-
-    def step(context):
-        set_default_org_id(org_id)
-        return LambdaWith(lambda: None, lambda: set_default_org_id(None))
-
-    return step
 
 
 def there_is_an_organization(
     name: str = "Test Organization",
     id: UUID | None = None,
     description: str = "A test organization",
-    is_default: bool = False,
     owner_id: UUID | None = None,
 ):
     def step(context):
@@ -46,7 +32,6 @@ def there_is_an_organization(
             id=id or uuid7(),
             name=name,
             description=description,
-            is_default=is_default,
             allowed_models=["*"],
         )
         organization_repository.save(organization)
@@ -80,13 +65,6 @@ def there_is_an_organization_user(
         )
         organization_user_repository.save(user_organization)
         context.organization_user = user_organization
-
-    return step
-
-
-def there_is_a_default_organization(name: str = "Default Organization", id: UUID | None = None):
-    def step(context):
-        there_is_an_organization(name=name, id=id, is_default=True)(context)
 
     return step
 

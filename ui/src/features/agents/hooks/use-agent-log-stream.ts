@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useAuthStore } from "@/auth/providers/auth-store";
+import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
 
 export type StreamStatus = "idle" | "connecting" | "streaming" | "disconnected";
 
@@ -20,6 +21,7 @@ export function useAgentLogStream({
   enabled,
   onLine,
 }: UseAgentLogStreamOptions) {
+  const orgApiBase = useOrganizationApiBase();
   const [status, setStatus] = useState<StreamStatus>("idle");
   const abortRef = useRef<AbortController | null>(null);
   const onLineRef = useRef(onLine);
@@ -66,7 +68,7 @@ export function useAgentLogStream({
 
       try {
         const response = await fetch(
-          `/api/v1/agents/${agentId}/logs/stream?tail_lines=0`,
+          `${orgApiBase}/agents/${agentId}/logs/stream?tail_lines=0`,
           {
             headers: {
               Authorization: `Bearer ${tokens.accessToken}`,
@@ -137,7 +139,7 @@ export function useAgentLogStream({
       disconnect();
       if (reconnectTimer) clearTimeout(reconnectTimer);
     };
-  }, [agentId, enabled, disconnect]);
+  }, [agentId, enabled, disconnect, orgApiBase]);
 
   return { status, disconnect };
 }

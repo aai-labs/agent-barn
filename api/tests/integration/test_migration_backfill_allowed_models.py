@@ -34,7 +34,7 @@ def test_backfill_allowed_models_migration():
         with engine.begin() as conn:
             conn.execute(
                 text(
-                    "INSERT INTO organization (id, name, is_default, created_at, updated_at) VALUES (:id, 'Old Org', false, now(), now())"
+                    "INSERT INTO organization (id, name, created_at, updated_at) VALUES (:id, 'Old Org', now(), now())"
                 ),
                 {"id": org_id},
             )
@@ -94,7 +94,7 @@ def test_backfill_allowed_models_migration_empty_config_allows_all():
         with engine.begin() as conn:
             conn.execute(
                 text(
-                    "INSERT INTO organization (id, name, is_default, created_at, updated_at) VALUES (:id, 'Old Org', false, now(), now())"
+                    "INSERT INTO organization (id, name, created_at, updated_at) VALUES (:id, 'Old Org', now(), now())"
                 ),
                 {"id": org_id},
             )

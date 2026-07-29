@@ -10,9 +10,9 @@ An Agent is the central operational aggregate. It connects organization tenancy,
 
 ## Invariants
 
-- Every agent belongs to one organization and pins an exact `(template_slug, template_version)` in that organization. The organization owns the Agent; creator identity is immutable provenance rather than ownership.
-- Human Agent creation atomically records creator provenance and explicit Agent Owner access for the creator. A membership-less superuser has implicit Agent Owner authority in explicit Organization context and does not receive an access row.
-- Organization Owner/Admin and superuser in explicit Organization context have implicit Agent Owner authority over every Agent. An Organization Member requires explicit Agent Access, applicable Agent General Access, or both; inaccessible and cross-Organization Agents are concealed with 404.
+- Every agent belongs to one organization and pins an exact Template version visible to that organization. The organization owns the Agent; creator identity is immutable provenance rather than ownership.
+- Human Agent creation atomically records creator provenance and explicit Agent Owner access for the creator.
+- Organization Owner/Admin have implicit Agent Owner authority over every Agent. An Organization Member requires explicit Agent Access, applicable Agent General Access, or both; inaccessible and cross-Organization Agents are concealed with 404.
 - The locked Agent Viewer role grants read, activity, and cost access; Agent Editor adds configuration, lifecycle, Skill assignment, and credential management; Agent Owner adds deletion and access management. Start and stop share the single `agent.lifecycle.manage` Permission because lifecycle authority is granted as one capability; current Agent state determines which transition is available.
 - Any effective role containing access-management Permission may replace the Agent's full share settings: Agent General Access plus the complete explicit Agent Access assignment list. Creator provenance is immutable but is not a separate authorization source.
 - Explicit Agent Access is granted only to accepted Organization Members in the same Organization. Pending invitees and cross-Organization users are ineligible; removing a Membership cascades its access rows.
@@ -54,11 +54,11 @@ Update is allowed only while not running. It can change runtime-relevant configu
 
 ### Start
 
-Start renders the pinned template, decrypts credentials, selects Hermes/OpenClaw builders, combines explicit skills with provider-derived built-ins, appends integration context, creates a fresh ingest identity, and recreates Kubernetes configuration/deployment resources.
+Start renders the pinned template, decrypts credentials, selects Hermes/OpenClaw builders, combines explicit skills with provider-derived built-ins, appends integration context, creates a fresh ingest identity, and recreates Kubernetes configuration/deployment resources. A successful transition to `RUNNING` emits `agent.started`; its email handler notifies the Agent Creator and users with Agent Owner access, de-duplicated by email.
 
 ### Stop and delete
 
-Stop snapshots logs before removing active runtime resources and marking the agent stopped. Delete removes resources, soft-deletes the row, and preserves the record for history and cost attribution. Deletion also clears the Slack bot token hash, releasing the token for reuse by another agent.
+Stop snapshots logs before removing active runtime resources and marking the agent stopped. A successful transition to `STOPPED` emits `agent.stopped`; its email handler notifies the Agent Creator and users with Agent Owner access, de-duplicated by email. Delete removes resources, soft-deletes the row, and preserves the record for history and cost attribution. Deletion also clears the Slack bot token hash, releasing the token for reuse by another agent.
 
 ### Manage access
 

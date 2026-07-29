@@ -3,4 +3,3 @@ node_modules
 .pnpm-store
 .git
 .DS_Store
-pnpm-workspace.yaml

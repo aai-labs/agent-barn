@@ -22,7 +22,6 @@ from api.domains.organizations.models import (
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.rbac.catalog import ORG_OWNER_ONLY_ROLES, PermissionKey
 from api.domains.rbac.policy import PermissionPolicy
-from api.domains.templates.service import TemplateService
 from api.domains.users.organization_users.models import (
     OrganizationRole,
     OrganizationUser,
@@ -41,12 +40,12 @@ class OrganizationService:
     user_organization_service: OrganizationUserService
     auth_service: AuthService
     agent_service: AgentService
-    template_service: TemplateService
     permission_policy: PermissionPolicy
 
     def get_organization(self, organization_id: UUID, context: CurrentUserContext) -> OrganizationRead:
-        # Any member (or a superuser) may view the org; non-members are refused before
-        # the fetch so a 403-vs-404 difference can't confirm an org's existence.
+        # Any member (or a platform administrator in explicit Organization context) may
+        # view the org; non-members are refused before the fetch so a 403-vs-404
+        # difference can't confirm an org's existence.
         self._ensure_can_view_organization(organization_id, context)
         organization = self.organization_repository.get_read(organization_id)
         if not organization:
@@ -90,7 +89,7 @@ class OrganizationService:
                 )
 
     def create_organization(self, data: OrganizationCreate, actor: CurrentUserContext) -> OrganizationCreateResult:
-        actor.require_superuser(detail="Only a superuser can create organizations")
+        actor.require_platform_admin(detail="Only a platform administrator can create organizations")
 
         config = get_config()
         if data.allowed_models is not None:
@@ -105,7 +104,6 @@ class OrganizationService:
         organization = Organization(
             name=data.name,
             description=data.description,
-            is_default=False,
             allowed_models=allowed_models,
         )
         with Session(self.organization_repository.delegate.engine, expire_on_commit=False) as session:
@@ -121,9 +119,8 @@ class OrganizationService:
             )
             session.commit()
 
-        # Templates are per-org (unlike global skills), so a new org needs its own copy
-        # of the predefined catalog. Idempotent; runs post-commit like the invite email.
-        self.template_service.seed_predefined_templates(organization.id)
+        # Predefined templates are global platform resources seeded once at
+        # startup, so a new org needs no per-org catalog clone.
         self.auth_service.send_prepared_invite(prepared)
 
         organization_read = self.organization_repository.get_read(organization.id)
@@ -134,15 +131,6 @@ class OrganizationService:
             )
         return OrganizationCreateResult(organization=organization_read, invite_link=prepared.invite_link)
 
-    def ensure_default_organization(self) -> Organization:
-        existing = self.organization_repository.find_default()
-        if existing:
-            return existing
-        config = get_config()
-        default_model = config.agent_default_model.removeprefix("litellm/openrouter/")
-        org = Organization(name="default", is_default=True, allowed_models=[default_model])
-        return self.organization_repository.save(org)
-
     def get_paginated_organizations(
         self,
         context: CurrentUserContext,
@@ -151,7 +139,7 @@ class OrganizationService:
         page_size: int = 15,
     ) -> PaginatedItems[OrganizationRead]:
         pagination = Pagination(page=page, size=page_size)
-        user_id = None if context.user.is_superuser else context.user.id
+        user_id = None if context.user.is_platform_admin else context.user.id
         return self.organization_repository.find_all_paginated_read(
             pagination=pagination,
             organization_filter=org_filter,
@@ -244,18 +232,13 @@ class OrganizationService:
         context: CurrentUserContext,
     ) -> None:
         # Deleting an org cascades its agents/templates/skills and orphans running
-        # pods, so it is owner/superuser only — admins can rename but not destroy.
+        # pods, so it is owner/platform-admin only — admins can rename but not destroy.
         self._ensure_is_owner(organization_id, context)
         organization = self.organization_repository.get(organization_id)
         if not organization:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Organization {organization_id} not found",
-            )
-        if organization.is_default:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="The default organization cannot be deleted",
             )
         # Deleting an org would cascade its agents and orphan their running pods.
         # Require an explicit teardown: the agents must be deleted first.

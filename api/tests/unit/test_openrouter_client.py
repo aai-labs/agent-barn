@@ -144,6 +144,7 @@ def _service(openrouter, allowlist=None, default_model=""):
         openrouter=openrouter,
         config=config,
         slack_token_service=MagicMock(),
+        event_delivery_dispatcher=MagicMock(),
         organization_lookup=org_lookup,
     )
 

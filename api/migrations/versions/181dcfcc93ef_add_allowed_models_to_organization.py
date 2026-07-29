@@ -1,7 +1,7 @@
 """Add allowed_models to organization
 
 Revision ID: 181dcfcc93ef
-Revises: ad8b4a278dd1
+Revises: 4934b7713177
 Create Date: 2026-07-15 12:08:32.523789
 
 """
@@ -15,7 +15,7 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision: str = "181dcfcc93ef"
-down_revision: Union[str, None] = "ad8b4a278dd1"
+down_revision: Union[str, None] = "4934b7713177"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

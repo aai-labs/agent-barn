@@ -16,8 +16,11 @@ from starlette.testclient import TestClient
 from api.domains.agents.models import AgentStatus
 from api.domains.agents.repository import AgentRepository
 from api.domains.organizations.repository import OrganizationRepository
+from api.domains.events.catalog import AGENT_CREATED, AGENT_STARTED, AGENT_STOPPED
+from api.domains.events.models import EventDeliveryStatus, OutboxMessage
 from api.domains.templates.repository import TemplateRepository
 from api.infrastructure.kubernetes.client import KubernetesClient
+from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
@@ -47,7 +50,7 @@ from api.tests.steps.organization import (
 )
 from api.tests.steps.template import there_is_a_template, there_is_a_template_skill
 
-_BASE = "/api/v1/agents"
+_BASE = "/api/v1/organizations/{organization_id}/agents"
 
 _VALID_CREATE = {
     "name": "My Agent",
@@ -93,6 +96,10 @@ def _auth(context) -> dict:
     return {"Authorization": f"Bearer {context.access_token}"}
 
 
+def _outbox_messages(context) -> list[OutboxMessage]:
+    return context.injector.get(PostgresRepositoryDelegate).find_all(OutboxMessage)
+
+
 def test_create_slack_agent_returns_201_stopped():
     with given(_GIVEN) as context:
         client: TestClient = context.client
@@ -124,6 +131,22 @@ def test_create_agent_rejects_model_not_in_org_allowlist():
         with then("it returns 400"):
             assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
             assert_that(response.json()["detail"], contains_string("not in the allowed model list"))
+
+
+def test_create_agent_emits_created_domain_event():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I create a Slack agent with valid data"):
+            response = client.post(_BASE, json=_VALID_CREATE, headers=_auth(context))
+
+        with then("an Agent created Domain Event is persisted"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            messages = _outbox_messages(context)
+            created_events = [message for message in messages if message.event_name == AGENT_CREATED]
+            assert_that(len(created_events), equal_to(1))
+            assert_that(created_events[0].payload["agent_name"], equal_to("My Agent"))
+            assert_that(created_events[0].payload["created_by_user_id"], equal_to(str(context.user.id)))
 
 
 def test_create_agent_missing_template_slug_returns_422():
@@ -211,7 +234,7 @@ def test_create_agent_does_not_create_template_rows():
         with then("the lineage still has only its original version"):
             assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             template_repository: TemplateRepository = context.injector.get(TemplateRepository)
-            latest = template_repository.get_latest_template(context.organization.id, "test-template")
+            latest = template_repository.get_latest_org_template(context.organization.id, "test-template")
             assert_that(latest, is_not(none()))
             assert latest is not None
             assert_that(latest.version, equal_to(1))
@@ -763,6 +786,27 @@ def test_start_telegram_agent_labels_service_with_org_and_agent_name():
             assert_that(service.metadata.labels["agent-name"], equal_to("test-agent"))
 
 
+def test_start_agent_emits_started_domain_event_and_delivery():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I start the agent"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("an Agent started Domain Event and pending email delivery are persisted"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            messages = _outbox_messages(context)
+            started_events = [message for message in messages if message.event_name == AGENT_STARTED]
+            assert_that(len(started_events), equal_to(1))
+            assert_that(started_events[0].payload["previous_status"], equal_to(AgentStatus.STOPPED.value))
+            assert_that(started_events[0].payload["new_status"], equal_to(AgentStatus.RUNNING.value))
+            deliveries = context.injector.get(AgentRepository).outbox_repository.list_deliveries_for_event(
+                started_events[0].event_id
+            )
+            assert_that(len(deliveries), equal_to(1))
+            assert_that(deliveries[0].status, equal_to(EventDeliveryStatus.PENDING))
+
+
 def test_start_already_running_returns_409():
     with given(
         [
@@ -829,6 +873,32 @@ def test_stop_agent_sets_status_stopped():
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             assert_that(response.json()["status"], equal_to(AgentStatus.STOPPED.value))
             k8s.delete_deployment.assert_called_once()
+
+
+def test_stop_agent_emits_stopped_domain_event_and_delivery():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(status=AgentStatus.RUNNING),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("I stop the agent"):
+            response = client.post(f"{_BASE}/{context.agent.id}/stop", headers=_auth(context))
+
+        with then("an Agent stopped Domain Event and pending email delivery are persisted"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            messages = _outbox_messages(context)
+            stopped_events = [message for message in messages if message.event_name == AGENT_STOPPED]
+            assert_that(len(stopped_events), equal_to(1))
+            assert_that(stopped_events[0].payload["previous_status"], equal_to(AgentStatus.RUNNING.value))
+            assert_that(stopped_events[0].payload["new_status"], equal_to(AgentStatus.STOPPED.value))
+            deliveries = context.injector.get(AgentRepository).outbox_repository.list_deliveries_for_event(
+                stopped_events[0].event_id
+            )
+            assert_that(len(deliveries), equal_to(1))
+            assert_that(deliveries[0].status, equal_to(EventDeliveryStatus.PENDING))
 
 
 def test_stop_non_running_agent_returns_409():
@@ -1341,11 +1411,8 @@ def test_start_agent_renders_template_placeholders():
 
         with then("the stored template keeps its raw placeholders"):
             template_repository: TemplateRepository = context.injector.get(TemplateRepository)
-            stored = template_repository.get_template_or_raise(
-                context.organization.id,
-                context.agent.template_slug,
-                context.agent.template_version,
-            )
+            stored = template_repository.get_pinned_template(context.agent)
+            assert stored is not None
             assert_that(
                 stored.soul_md,
                 equal_to("# Soul of {{ agent_display_name }} ({{agent_name}})"),

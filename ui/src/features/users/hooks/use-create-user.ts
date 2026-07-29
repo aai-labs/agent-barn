@@ -12,7 +12,7 @@ export function useCreateUser() {
 
   return useMutation({
     mutationFn: async (data: CreateUserData) => {
-      const response = await api.post("/api/v1/users", {
+      const response = await api.post("/api/v1/platform/users", {
         email: data.email,
         password: data.password,
         full_name: data.fullName || undefined,

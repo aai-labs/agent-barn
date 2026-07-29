@@ -15,7 +15,7 @@ from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
 
 
-def test_super_admin_can_list_all_users():
+def test_platform_admin_can_list_all_users():
     super_id = uuid7()
 
     with given(
@@ -28,7 +28,7 @@ def test_super_admin_can_list_all_users():
             there_is_a_user(
                 id=super_id,
                 email="super-list-users@example.com",
-                is_superuser=True,
+                is_platform_admin=True,
                 email_verified=False,
             ),
             there_is_a_user(email="user-a@example.com"),
@@ -39,7 +39,7 @@ def test_super_admin_can_list_all_users():
         client: TestClient = context.client
 
         response = client.get(
-            "/api/v1/users",
+            "/api/v1/platform/users",
             headers={"Authorization": f"Bearer {context.access_token}"},
         )
 
@@ -62,14 +62,14 @@ def test_regular_user_cannot_list_users():
         client: TestClient = context.client
 
         response = client.get(
-            "/api/v1/users",
+            "/api/v1/platform/users",
             headers={"Authorization": f"Bearer {context.access_token}"},
         )
 
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
-def test_super_admin_can_delete_any_user():
+def test_platform_admin_can_delete_any_user():
     super_id = uuid7()
     target_id = uuid7()
 
@@ -80,7 +80,7 @@ def test_super_admin_can_delete_any_user():
             create_test_client(),
             database_repo_is_ready(),
             database_is_clean(),
-            there_is_a_user(id=super_id, email="super-delete-user@example.com", is_superuser=True),
+            there_is_a_user(id=super_id, email="super-delete-user@example.com", is_platform_admin=True),
             there_is_a_user(
                 id=target_id,
                 email="target-delete-user@example.com",
@@ -92,7 +92,7 @@ def test_super_admin_can_delete_any_user():
         client: TestClient = context.client
 
         response = client.delete(
-            f"/api/v1/users/{target_id}",
+            f"/api/v1/platform/users/{target_id}",
             headers={"Authorization": f"Bearer {context.access_token}"},
         )
         assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
@@ -108,7 +108,7 @@ def test_super_admin_can_delete_any_user():
         assert_that(login_response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
 
 
-def test_super_admin_can_list_all_organizations():
+def test_platform_admin_can_list_all_organizations():
     super_id = uuid7()
 
     with given(
@@ -118,7 +118,7 @@ def test_super_admin_can_list_all_organizations():
             create_test_client(),
             database_repo_is_ready(),
             database_is_clean(),
-            there_is_a_user(id=super_id, email="super-list-orgs@example.com", is_superuser=True),
+            there_is_a_user(id=super_id, email="super-list-orgs@example.com", is_platform_admin=True),
             there_is_a_user(email="owner-org-a@example.com", organization_id=uuid7()),
             there_is_a_user(email="owner-org-b@example.com", organization_id=uuid7()),
             there_is_an_access_token_for_user(user_id=super_id),
@@ -127,7 +127,7 @@ def test_super_admin_can_list_all_organizations():
         client: TestClient = context.client
 
         response = client.get(
-            "/api/v1/organizations",
+            "/api/v1/platform/organizations",
             headers={"Authorization": f"Bearer {context.access_token}"},
         )
 

@@ -43,11 +43,8 @@ def test_catalog_access_by_non_admin_is_rejected():
     ) as context:
         client: TestClient = context.client
         response = client.get(
-            "/api/v1/agents/models?catalog=true",
-            headers={
-                "Authorization": f"Bearer {context.access_token}",
-                "X-Organization-Id": str(org_a),
-            },
+            f"/api/v1/organizations/{org_a}/agents/models?catalog=true",
+            headers={"Authorization": f"Bearer {context.access_token}"},
         )
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
@@ -74,10 +71,7 @@ def test_catalog_access_by_admin_is_allowed():
     ) as context:
         client: TestClient = context.client
         response = client.get(
-            "/api/v1/agents/models?catalog=true",
-            headers={
-                "Authorization": f"Bearer {context.access_token}",
-                "X-Organization-Id": str(org_a),
-            },
+            f"/api/v1/organizations/{org_a}/agents/models?catalog=true",
+            headers={"Authorization": f"Bearer {context.access_token}"},
         )
         assert_that(response.status_code, equal_to(status.HTTP_200_OK))

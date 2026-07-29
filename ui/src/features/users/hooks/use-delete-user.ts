@@ -11,7 +11,7 @@ export function useDeleteUser() {
 
   return useMutation({
     mutationFn: async (userId: string) => {
-      await api.delete(`/api/v1/users/${userId}`);
+      await api.delete(`/api/v1/platform/users/${userId}`);
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: usersKey.lists() });

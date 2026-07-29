@@ -6,7 +6,7 @@ from fastapi import HTTPException, status
 from hamcrest import assert_that, calling, equal_to, raises
 from pydantic import PostgresDsn
 
-from api.core.config import Config, get_config
+from api.core.config import Config
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.repository import RefreshTokenRepository
 from api.domains.organizations.models import OrganizationUpdate
@@ -34,7 +34,7 @@ def build_user_service() -> tuple[
     config = Config(
         db_connection_url=cast(PostgresDsn, "postgresql://postgres:postgres@localhost:5432/test"),
         secret_signing_key="x" * 32,
-        super_user_credentials="admin@example.com:StrongPass123",
+        platform_admin_credentials="admin@example.com:StrongPass123",
         email_server_credential="noreply@example.com:password",
         email_smtp_server="smtp.example.com",
     )
@@ -98,26 +98,6 @@ def test_delete_user_deletes_refresh_tokens_memberships_and_user():
     user_repository.delete.assert_called_once_with(user.id)
 
 
-def test_ensure_default_organization_sets_default_model_allowlist():
-    repo = Mock()
-    repo.find_default.return_value = None
-    repo.save.side_effect = lambda org: org
-    org_service = OrganizationService(
-        organization_repository=repo,
-        user_organization_service=Mock(),
-        auth_service=Mock(),
-        agent_service=Mock(),
-        template_service=Mock(),
-        permission_policy=Mock(),
-    )
-
-    org = org_service.ensure_default_organization()
-
-    expected_model = get_config().agent_default_model.removeprefix("litellm/openrouter/")
-    assert_that(org.is_default, equal_to(True))
-    assert_that(org.allowed_models, equal_to([expected_model]))
-
-
 def test_organization_service_update_not_found_raises_404():
     repo = Mock()
     repo.get.return_value = None
@@ -126,11 +106,10 @@ def test_organization_service_update_not_found_raises_404():
         user_organization_service=Mock(),
         auth_service=Mock(),
         agent_service=Mock(),
-        template_service=Mock(),
         permission_policy=Mock(),
     )
-    superuser = User(email="root@example.com", hashed_password="x", is_superuser=True)
-    context = CurrentUserContext(user=superuser)
+    platform_admin = User(email="root@example.com", hashed_password="x", is_platform_admin=True)
+    context = CurrentUserContext(user=platform_admin)
 
     assert_that(
         calling(org_service.update_organization).with_args(uuid7(), OrganizationUpdate(name="new"), context),

@@ -6,9 +6,9 @@ const BACKEND_URL =
 
 export async function GET(
   request: Request,
-  { params }: { params: Promise<{ agentId: string }> },
+  { params }: { params: Promise<{ organizationId: string; agentId: string }> },
 ) {
-  const { agentId } = await params;
+  const { organizationId, agentId } = await params;
   const { searchParams } = new URL(request.url);
   const tailLines = searchParams.get("tail_lines") ?? "0";
 
@@ -18,7 +18,7 @@ export async function GET(
   }
 
   const upstream = await fetch(
-    `${BACKEND_URL}/api/v1/agents/${agentId}/logs/stream?tail_lines=${tailLines}`,
+    `${BACKEND_URL}/api/v1/organizations/${organizationId}/agents/${agentId}/logs/stream?tail_lines=${tailLines}`,
     {
       headers: {
         Authorization: authorization,

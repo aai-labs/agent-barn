@@ -1,6 +1,7 @@
 from dataclasses import dataclass
-from datetime import datetime
-from uuid import UUID
+from datetime import UTC, datetime
+from typing import Any
+from uuid import UUID, uuid4
 
 from injector import inject, singleton
 from sqlalchemy import exists, func, or_
@@ -12,6 +13,7 @@ from api.domains.agents.models import (
     Agent,
     AgentAccess,
     AgentFilter,
+    AgentLifecycleEmailReceipt,
     AgentLogSnapshot,
     AgentSecret,
     AgentSkill,
@@ -21,6 +23,15 @@ from api.domains.agents.models import (
     AgentTelegramConfig,
     SecretProvider,
 )
+from api.domains.events import ActorIdentity, ActorIdentityType, EventDelivery, SubjectIdentity, SubjectIdentityType
+from api.domains.events.catalog import (
+    AGENT_ACCESS_GRANTED,
+    AGENT_ACCESS_REVOKED,
+    AGENT_CREATED,
+    AGENT_GENERAL_ACCESS_CHANGED,
+    EVENT_REGISTRY,
+)
+from api.domains.events.repository import OutboxMessageRepository
 from api.domains.rbac.catalog import (
     AGENT_OWNER_ROLE_ID,
     PERMISSION_ID_BY_KEY,
@@ -32,9 +43,22 @@ from api.domains.rbac.models import (
     Permission,
 )
 from api.domains.rbac.policy import AuthorizationScope
+from api.domains.users.models import User
 from api.domains.users.organization_users.models import OrganizationUser
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.infrastructure.shared.models import Pagination
+
+
+@dataclass(frozen=True)
+class AgentLifecycleEventResult:
+    agent: Agent
+    delivery_ids: list[UUID]
+
+
+@dataclass(frozen=True)
+class AgentLifecycleEmailRecipient:
+    email: str
+    full_name: str | None
 
 
 def agent_scope_predicates(authorization_scope: AuthorizationScope, *, include_deleted: bool = False):
@@ -70,6 +94,7 @@ def agent_scope_predicates(authorization_scope: AuthorizationScope, *, include_d
 @dataclass
 class AgentRepository:
     delegate: PostgresRepositoryDelegate
+    outbox_repository: OutboxMessageRepository
 
     def get_by_id(self, agent_id: UUID) -> Agent | None:
         with Session(self.delegate.engine) as session:
@@ -201,6 +226,8 @@ class AgentRepository:
         *,
         general_access_role_id: UUID | None,
         assignment_roles: dict[UUID, UUID],
+        actor: ActorIdentity | None = None,
+        correlation_id: UUID | None = None,
     ) -> bool:
         """Replace General Access and explicit assignments atomically."""
         with Session(self.delegate.engine, expire_on_commit=False) as session:
@@ -250,6 +277,7 @@ class AgentRepository:
                 if existing_membership_ids != set(assignment_roles):
                     return False
 
+            previous_general_access_role_id = agent.general_access_role_id
             agent.general_access_role_id = general_access_role_id
             session.add(agent)
 
@@ -263,9 +291,55 @@ class AgentRepository:
             ).all()
             existing_by_membership = {access.membership_id: access for access in existing_access}
             desired_membership_ids = set(assignment_roles)
+            audit_actor = actor or ActorIdentity(type=ActorIdentityType.SYSTEM, id="system")
+            audit_correlation_id = correlation_id or uuid4()
+
+            if previous_general_access_role_id != general_access_role_id:
+                self.outbox_repository.stage(
+                    session=session,
+                    registry=EVENT_REGISTRY,
+                    event=EVENT_REGISTRY.build_event(
+                        event_name=AGENT_GENERAL_ACCESS_CHANGED,
+                        schema_version=1,
+                        occurred_at=datetime.now(UTC),
+                        organization_id=organization_id,
+                        actor=audit_actor,
+                        subject=SubjectIdentity(
+                            type=SubjectIdentityType.AGENT, id=agent_id, organization_id=organization_id
+                        ),
+                        correlation_id=audit_correlation_id,
+                        payload={
+                            "organization_id": organization_id,
+                            "agent_id": agent_id,
+                            "previous_access_role_id": previous_general_access_role_id,
+                            "new_access_role_id": general_access_role_id,
+                        },
+                    ),
+                )
 
             for membership_id, access in existing_by_membership.items():
                 if membership_id not in desired_membership_ids:
+                    self.outbox_repository.stage(
+                        session=session,
+                        registry=EVENT_REGISTRY,
+                        event=EVENT_REGISTRY.build_event(
+                            event_name=AGENT_ACCESS_REVOKED,
+                            schema_version=1,
+                            occurred_at=datetime.now(UTC),
+                            organization_id=organization_id,
+                            actor=audit_actor,
+                            subject=SubjectIdentity(
+                                type=SubjectIdentityType.AGENT, id=agent_id, organization_id=organization_id
+                            ),
+                            correlation_id=audit_correlation_id,
+                            payload={
+                                "organization_id": organization_id,
+                                "agent_id": agent_id,
+                                "membership_id": membership_id,
+                                "previous_access_role_id": access.access_role_id,
+                            },
+                        ),
+                    )
                     session.delete(access)
 
             for membership_id, access_role_id in assignment_roles.items():
@@ -279,6 +353,27 @@ class AgentRepository:
                             access_role_id=access_role_id,
                         )
                     )
+                    self.outbox_repository.stage(
+                        session=session,
+                        registry=EVENT_REGISTRY,
+                        event=EVENT_REGISTRY.build_event(
+                            event_name=AGENT_ACCESS_GRANTED,
+                            schema_version=1,
+                            occurred_at=datetime.now(UTC),
+                            organization_id=organization_id,
+                            actor=audit_actor,
+                            subject=SubjectIdentity(
+                                type=SubjectIdentityType.AGENT, id=agent_id, organization_id=organization_id
+                            ),
+                            correlation_id=audit_correlation_id,
+                            payload={
+                                "organization_id": organization_id,
+                                "agent_id": agent_id,
+                                "membership_id": membership_id,
+                                "access_role_id": access_role_id,
+                            },
+                        ),
+                    )
                 else:
                     access.access_role_id = access_role_id
                     session.add(access)
@@ -286,7 +381,14 @@ class AgentRepository:
             session.commit()
             return True
 
-    def create_with_creator_access(self, agent: Agent, membership_id: UUID | None) -> Agent:
+    def create_with_creator_access(
+        self,
+        agent: Agent,
+        membership_id: UUID | None,
+        *,
+        actor: ActorIdentity,
+        correlation_id: UUID | None = None,
+    ) -> AgentLifecycleEventResult:
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             session.add(agent)
             session.flush()
@@ -299,9 +401,166 @@ class AgentRepository:
                         access_role_id=AGENT_OWNER_ROLE_ID,
                     )
                 )
+            event = EVENT_REGISTRY.build_event(
+                event_name=AGENT_CREATED,
+                schema_version=1,
+                occurred_at=datetime.now(UTC),
+                organization_id=agent.organization_id,
+                actor=actor,
+                subject=SubjectIdentity(
+                    type=SubjectIdentityType.AGENT,
+                    id=agent.id,
+                    organization_id=agent.organization_id,
+                ),
+                correlation_id=correlation_id or uuid4(),
+                payload={
+                    "organization_id": agent.organization_id,
+                    "agent_id": agent.id,
+                    "agent_name": agent.name,
+                    "platform": agent.platform,
+                    "runtime": agent.agent_type,
+                    "created_by_user_id": agent.created_by_user_id,
+                },
+            )
+            self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
+            delivery_ids = list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
             session.commit()
             session.refresh(agent)
-            return agent
+            return AgentLifecycleEventResult(agent=agent, delivery_ids=delivery_ids)
+
+    def save_with_lifecycle_event(
+        self,
+        agent: Agent,
+        *,
+        event_name: str,
+        actor: ActorIdentity,
+        previous_status: str,
+        new_status: str,
+        correlation_id: UUID | None = None,
+    ) -> AgentLifecycleEventResult:
+        return self._record_agent_event(
+            agent,
+            event_name=event_name,
+            actor=actor,
+            correlation_id=correlation_id,
+            previous_status=previous_status,
+            new_status=new_status,
+        )
+
+    def _record_agent_event(
+        self,
+        agent: Agent,
+        *,
+        event_name: str,
+        actor: ActorIdentity,
+        correlation_id: UUID | None,
+        previous_status: str | None,
+        new_status: str | None,
+    ) -> AgentLifecycleEventResult:
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            persisted = session.exec(
+                select(Agent)
+                .where(
+                    col(Agent.id) == agent.id,
+                    col(Agent.organization_id) == agent.organization_id,
+                    col(Agent.deleted_at).is_(None),
+                )
+                .with_for_update()
+            ).first()
+            if persisted is None:
+                return AgentLifecycleEventResult(agent=agent, delivery_ids=[])
+            persisted.status = agent.status
+            persisted.last_error = agent.last_error
+            persisted.ingest_key_encrypted = agent.ingest_key_encrypted
+            session.add(persisted)
+            session.flush()
+            payload: dict[str, Any] = {
+                "organization_id": persisted.organization_id,
+                "agent_id": persisted.id,
+                "agent_name": persisted.name,
+                "platform": persisted.platform,
+                "runtime": persisted.agent_type,
+            }
+            if event_name == AGENT_CREATED:
+                payload["created_by_user_id"] = persisted.created_by_user_id
+            else:
+                payload["previous_status"] = previous_status
+                payload["new_status"] = new_status
+            event = EVENT_REGISTRY.build_event(
+                event_name=event_name,
+                schema_version=1,
+                occurred_at=datetime.now(UTC),
+                organization_id=persisted.organization_id,
+                actor=actor,
+                subject=SubjectIdentity(
+                    type=SubjectIdentityType.AGENT,
+                    id=persisted.id,
+                    organization_id=persisted.organization_id,
+                ),
+                correlation_id=correlation_id or uuid4(),
+                payload=payload,
+            )
+            self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
+            delivery_ids = list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
+            session.commit()
+            return AgentLifecycleEventResult(agent=persisted, delivery_ids=delivery_ids)
+
+    def find_lifecycle_email_recipients(
+        self, agent_id: UUID, organization_id: UUID
+    ) -> list[AgentLifecycleEmailRecipient]:
+        with Session(self.delegate.engine) as session:
+            agent = session.exec(
+                select(Agent).where(
+                    col(Agent.id) == agent_id,
+                    col(Agent.organization_id) == organization_id,
+                    col(Agent.deleted_at).is_(None),
+                )
+            ).first()
+            if agent is None:
+                return []
+            users: list[User] = []
+            if agent.created_by_user_id is not None:
+                creator = session.get(User, agent.created_by_user_id)
+                if creator is not None:
+                    users.append(creator)
+            owner_users = session.exec(
+                select(User)
+                .join(OrganizationUser, col(OrganizationUser.user_id) == col(User.id))
+                .join(AgentAccess, col(AgentAccess.membership_id) == col(OrganizationUser.id))
+                .where(
+                    col(AgentAccess.agent_id) == agent_id,
+                    col(AgentAccess.organization_id) == organization_id,
+                    col(AgentAccess.access_role_id) == AGENT_OWNER_ROLE_ID,
+                )
+            ).all()
+            users.extend(owner_users)
+        recipients: dict[str, AgentLifecycleEmailRecipient] = {}
+        for user in users:
+            recipients.setdefault(
+                str(user.email).lower(),
+                AgentLifecycleEmailRecipient(email=str(user.email), full_name=user.full_name),
+            )
+        return list(recipients.values())
+
+    def find_notified_lifecycle_email_recipients(self, delivery_id: UUID) -> set[str]:
+        with Session(self.delegate.engine) as session:
+            return set(
+                session.exec(
+                    select(AgentLifecycleEmailReceipt.recipient_email).where(
+                        col(AgentLifecycleEmailReceipt.delivery_id) == delivery_id
+                    )
+                ).all()
+            )
+
+    def record_lifecycle_email_recipient_notified(self, delivery_id: UUID, recipient_email: str) -> None:
+        with Session(self.delegate.engine) as session:
+            session.add(AgentLifecycleEmailReceipt(delivery_id=delivery_id, recipient_email=recipient_email))
+            try:
+                session.commit()
+            except IntegrityError:
+                # Concurrent/duplicate delivery of the same handler execution; the
+                # receipt already exists, which is exactly the idempotency this records.
+                session.rollback()
 
     def find_access_assignments(self, agent_id: UUID, organization_id: UUID) -> list[AgentAccess]:
         with Session(self.delegate.engine) as session:

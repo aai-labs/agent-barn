@@ -15,7 +15,7 @@ from api.domains.conversations.models import (
 )
 from api.domains.conversations.service import ConversationService
 
-conversations_router = APIRouter(prefix="/agents", tags=["conversations"])
+conversations_router = APIRouter(prefix="/organizations/{organization_id}/agents", tags=["conversations"])
 
 
 def get_conversations_filter(

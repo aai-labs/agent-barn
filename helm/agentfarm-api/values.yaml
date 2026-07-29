@@ -15,13 +15,13 @@ hermesImage:
 replicaCount: 1
 
 # k8s Secret: DB_CONNECTION_URL, SECRET_SIGNING_KEY,
-# SUPER_USER_CREDENTIALS, ENVIRONMENT, WEB_APP_URL
+# PLATFORM_ADMIN_CREDENTIALS, ENVIRONMENT, WEB_APP_URL
 secretName: agentfarm-api
 
 dbConnectionUrl: ""
 secretSigningKey: ""
-superUserCredentials: ""
-superUserFullName: "Super User"
+platformAdminCredentials: ""
+platformAdminFullName: "Super User"
 agentTokenEncryptionKey: ""
 environment: ""
 webAppUrl: ""
@@ -101,6 +101,23 @@ ingress:
   hosts: "api.agent-farm.k8s.aai-labs.com"
   clusterIssuer: letsencrypt-http01
   tlsSecretName: agentfarm-api-tls
+
+eventDelivery:
+  redisUrl: "redis://redis-master:6379/0"
+  reconciliation:
+    enabled: true
+    schedule: "*/5 * * * *"
+
+worker:
+  enabled: true
+  replicaCount: 1
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 100m
+    limits:
+      memory: 512Mi
+      cpu: 500m
 
 resources:
   requests:

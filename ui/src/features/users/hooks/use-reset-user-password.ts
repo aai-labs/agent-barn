@@ -11,7 +11,7 @@ export function useResetUserPassword() {
 
   return useMutation({
     mutationFn: async ({ userId, newPassword }: { userId: string; newPassword: string }) => {
-      await api.post(`/api/v1/users/${userId}/reset-password`, {
+      await api.post(`/api/v1/platform/users/${userId}/reset-password`, {
         new_password: newPassword,
       });
     },

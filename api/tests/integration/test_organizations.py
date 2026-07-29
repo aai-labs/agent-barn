@@ -1,12 +1,12 @@
-"""Phase 2 (AF-147): superuser creates an organization and invites the first owner.
+"""Phase 2 (AF-147): Platform Administrator creates an organization and invites the first owner.
 
-`POST /organizations` creates a non-default org, attaches the given owner as OWNER
+`POST /platform/organizations` creates a customer org, attaches the given owner as OWNER
 (inviting them when they are new/unverified), and returns the set-password invite link
-so the superuser can also deliver it manually.
+so the platform_admin can also deliver it manually.
 """
 
 from unittest.mock import patch
-from uuid import uuid7
+from uuid import UUID, uuid7
 
 from fastapi import status
 from hamcrest import (
@@ -19,7 +19,8 @@ from hamcrest import (
 )
 
 from api.domains.organizations.repository import OrganizationRepository
-from api.domains.users.organization_users.models import OrganizationRole
+from api.domains.users.organization_users.models import OrganizationRole, OrganizationUser
+from api.domains.users.organization_users.repository import OrganizationUserRepository
 from api.domains.users.repository import UserRepository
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
@@ -31,7 +32,7 @@ from api.tests.steps.agent import MockK8sModule, MockLiteLLMModule
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
 
-_ORGS = "/api/v1/organizations"
+_ORGS = "/api/v1/platform/organizations"
 
 _GIVEN = [
     prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
@@ -46,19 +47,19 @@ def _auth(context) -> dict:
     return {"Authorization": f"Bearer {context.access_token}"}
 
 
-def _there_is_a_superuser(email: str = "root@example.com"):
+def _there_is_a_platform_admin(email: str = "root@example.com"):
     super_id = uuid7()
 
     def step(context):
-        there_is_a_user(id=super_id, email=email, is_superuser=True)(context)
+        there_is_a_user(id=super_id, email=email, is_platform_admin=True)(context)
         there_is_an_access_token_for_user(user_id=super_id)(context)
 
     return step
 
 
-def test_superuser_creates_organization_and_invites_owner():
-    with given([*_GIVEN, _there_is_a_superuser()]) as context:
-        with when("superuser creates an org with a brand-new owner email"):
+def test_platform_admin_creates_organization_and_invites_owner():
+    with given([*_GIVEN, _there_is_a_platform_admin()]) as context:
+        with when("platform admin creates an org with a brand-new owner email"):
             response = context.client.post(
                 _ORGS,
                 json={
@@ -74,7 +75,6 @@ def test_superuser_creates_organization_and_invites_owner():
                 assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
                 body = response.json()
                 assert_that(body["organization"]["name"], equal_to("Acme Inc"))
-                assert_that(body["organization"]["is_default"], is_(False))
                 assert_that(body["organization"]["owner_email"], equal_to("owner@acme.com"))
                 assert_that(body["invite_link"], not_none())
                 assert_that(
@@ -90,15 +90,18 @@ def test_superuser_creates_organization_and_invites_owner():
                 assert_that(owner, not_none())
                 assert_that(owner.email, equal_to("owner@acme.com"))
                 assert_that(owner.email_verified_at, is_(none()))
-                assert_that(org_repo.get(org_id).is_default, is_(False))
+                assert_that(org_repo.get(org_id), not_none())
 
 
-def test_new_organization_is_seeded_with_predefined_templates():
-    """A newly created org must start with the predefined template catalog (skills are
-    global, but templates are per-org and have to be seeded)."""
-    from api.domains.templates.seeding import PREDEFINED_TEMPLATES
+def test_new_organization_sees_global_predefined_templates():
+    """A newly created org sees the global predefined template catalog without
+    per-org seeding (predefined templates are platform/global resources, like
+    built-in skills)."""
+    from api.domains.templates.predefined import PREDEFINED_TEMPLATES
+    from api.domains.templates.service import TemplateService
 
-    with given([*_GIVEN, _there_is_a_superuser()]) as context:
+    with given([*_GIVEN, _there_is_a_platform_admin()]) as context:
+        context.injector.get(TemplateService).seed_predefined_templates()
         create = context.client.post(
             _ORGS,
             json={"name": "Seeded Inc", "owner_email": "owner@seeded.com"},
@@ -107,15 +110,29 @@ def test_new_organization_is_seeded_with_predefined_templates():
         assert_that(create.status_code, equal_to(status.HTTP_201_CREATED))
         org_id = create.json()["organization"]["id"]
 
+        # Platform admin needs org membership to list its templates.
+        org_uuid = UUID(org_id)
+        repo: OrganizationUserRepository = context.injector.get(OrganizationUserRepository)
+        org_user = OrganizationUser(
+            user_id=context.user.id,
+            organization_id=org_uuid,
+            role=OrganizationRole.ADMIN,
+        )
+        repo.save(org_user)
+        # Update the current_user_context so the auth middleware sees the membership.
+        context.current_user_context.organization_ids.append(org_uuid)
+        context.current_user_context.user_organization_map[org_uuid] = org_user
+        context.current_user_context.current_user_organization = org_user
+
         templates = context.client.get(
-            "/api/v1/templates",
-            headers={**_auth(context), "X-Organization-Id": org_id},
+            f"/api/v1/organizations/{org_id}/templates",
+            headers=_auth(context),
         )
         assert_that(templates.status_code, equal_to(status.HTTP_200_OK))
         assert_that(templates.json()["total"], equal_to(len(PREDEFINED_TEMPLATES)))
 
 
-def test_non_superuser_cannot_create_organization():
+def test_non_platform_admin_cannot_create_organization():
     with given(
         [
             *_GIVEN,
@@ -127,7 +144,7 @@ def test_non_superuser_cannot_create_organization():
             there_is_an_access_token_for_user(),
         ]
     ) as context:
-        with when("a non-superuser attempts to create an org"):
+        with when("a non-platform_admin attempts to create an org"):
             response = context.client.post(
                 _ORGS,
                 json={"name": "Nope Inc", "owner_email": "x@nope.com"},
@@ -139,7 +156,7 @@ def test_non_superuser_cannot_create_organization():
 
 
 def test_create_organization_short_name_is_rejected():
-    with given([*_GIVEN, _there_is_a_superuser()]) as context:
+    with given([*_GIVEN, _there_is_a_platform_admin()]) as context:
         with when("the org name is too short"):
             response = context.client.post(
                 _ORGS,
@@ -159,10 +176,10 @@ def test_create_organization_with_existing_active_owner_sends_no_invite():
         [
             *_GIVEN,
             there_is_a_user(email="existing@corp.com"),  # active, email verified
-            _there_is_a_superuser(),
+            _there_is_a_platform_admin(),
         ]
     ) as context:
-        with when("superuser creates an org owned by an already-active user"):
+        with when("platform admin creates an org owned by an already-active user"):
             response = context.client.post(
                 _ORGS,
                 json={"name": "Corp Inc", "owner_email": "existing@corp.com"},
@@ -195,8 +212,8 @@ def test_create_organization_requires_auth():
 @patch("api.infrastructure.openrouter.client.OpenRouterClient.list_models")
 def test_get_organization_strips_model_prefixes(mock_list_models):
     mock_list_models.return_value = [{"id": "google/gemini"}, {"id": "openai/gpt-4"}]
-    with given([*_GIVEN, _there_is_a_superuser()]) as context:
-        with when("superuser creates an org with prefixed models"):
+    with given([*_GIVEN, _there_is_a_platform_admin()]) as context:
+        with when("platform admin creates an org with prefixed models"):
             response = context.client.post(
                 _ORGS,
                 json={
@@ -220,9 +237,22 @@ def test_get_organization_strips_model_prefixes(mock_list_models):
 
         with when("I fetch the organization"):
             org_id = body["organization"]["id"]
+            # Org GET is org-scoped, so the platform admin needs membership to read it.
+            org_uuid = UUID(org_id)
+            org_user_repo: OrganizationUserRepository = context.injector.get(OrganizationUserRepository)
+            org_user = OrganizationUser(
+                user_id=context.user.id,
+                organization_id=org_uuid,
+                role=OrganizationRole.ADMIN,
+            )
+            org_user_repo.save(org_user)
+            context.current_user_context.organization_ids.append(org_uuid)
+            context.current_user_context.user_organization_map[org_uuid] = org_user
+            context.current_user_context.current_user_organization = org_user
+
             response2 = context.client.get(
-                f"{_ORGS}/{org_id}",
-                headers={**_auth(context), "X-Organization-Id": org_id},
+                f"/api/v1/organizations/{org_id}",
+                headers=_auth(context),
             )
 
         with then("the fetched organization has stripped prefixes"):
