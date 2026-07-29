@@ -155,6 +155,7 @@ Pick the block that matches how you run the API.
 export KUBECONFIG=.k3d/kubeconfig-host.yaml
 export K8S_KUBECONFIG_PATH=.k3d/kubeconfig-host.yaml
 make dev-api
+make dev-ingest   # second shell — see "Runtime telemetry" below
 ```
 
 **API in Docker** (`make up`): add this one line to `.env` (one-time — the path
@@ -167,7 +168,8 @@ API_K8S_KUBECONFIG_PATH=/app/.k3d/kubeconfig-internal.yaml
 Without this line the containerized API can't reach the cluster, so leave it out
 if you're not using k3d.
 
-Ports: LiteLLM proxy on `127.0.0.1:7070`, k8s API on `127.0.0.1:16443`.
+Ports: LiteLLM proxy on `127.0.0.1:7070`, k8s API on `127.0.0.1:16443`, ingest
+API on `127.0.0.1:8001`.
 
 Agent pods inside k3d reach LiteLLM at `http://host.docker.internal:7070` — set
 `AGENT_LITELLM_BASE_URL` to that in `.env`. On Docker Desktop that name resolves
@@ -205,6 +207,39 @@ registry. It needs, in `.env`:
 its `VERSION` tag, and the API launches pods using these env-var refs — so if a
 tag doesn't match its `VERSION`, you'll build, import, or pull an image that isn't
 the version the code expects.
+
+### 4. Runtime telemetry (conversations and tool calls)
+
+Agents don't store their history in the pod — runtime plugins push events to the
+ingest API, and the UI reads what was persisted. If that path is broken, agents
+run but their activity stays empty.
+
+Ingest listens on port `8001`, separate from the main API on `8000`. Pods reach
+it through the host, using the same `host.docker.internal` hop as LiteLLM:
+
+- **API in Docker** (`make up`) — `api/start.sh` already runs ingest inside the
+  container, and compose publishes `8001`. Nothing to do.
+- **API on the host** (`make dev-api`) — ingest needs its own process:
+  `make dev-ingest`.
+
+Both paths hand pods `INGEST_BASE_URL=http://host.docker.internal:8001/ingest/v1`
+by default, overriding the in-cluster Service address that only applies when the
+API itself runs in k8s. Override `INGEST_BASE_URL` (or `INGEST_PORT`) if you need
+a different address; no `.env` entry is required for the default setup.
+
+Troubleshooting — agents start but show no conversation or tool calls:
+
+```bash
+# from inside the cluster: does the ingest API answer?
+kubectl run ingest-check --rm -it --restart=Never --image=curlimages/curl -- \
+  curl -sS -o /dev/null -w '%{http_code}\n' \
+  http://host.docker.internal:8001/ingest/v1/openapi.json
+```
+
+`200` means the hop works, and the event endpoint behind it authenticates each
+pod with its own `INGEST_API_KEY`. A connection error means the hop is broken:
+with the API on the host, check `make dev-ingest` is running; on native Linux
+also check the host firewall allows the k3d bridge network to reach port 8001.
 
 ### Windows
 

@@ -1,14 +1,26 @@
 COMPOSE := docker compose -f compose.yml
 
 .PHONY: \
-	dev-api dev-ui migrate rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api fix-api test check fix \
+	dev-api dev-ingest dev-ui migrate rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api fix-api test check fix \
 	up down restart logs build clean db-up db-down db-logs db-restart \
 	cluster-up cluster-down cluster-reset k3d-load-images k3d-load-openclaw k3d-load-hermes
 
 # Non-docker commands
 
+# Agent pods in k3d push telemetry back through the host, so the pod-facing URL
+# has to override the in-cluster default (which only resolves when the API runs
+# in k8s). Same value as compose; run `make dev-ingest` alongside `make dev-api`.
+INGEST_PORT ?= 8001
+INGEST_BASE_URL ?= http://host.docker.internal:$(INGEST_PORT)/ingest/v1
+
 dev-api:
-	cd api && uv run python -m fastapi dev main.py --host 0.0.0.0 --port 8000
+	cd api && INGEST_BASE_URL=$(INGEST_BASE_URL) uv run python -m fastapi dev main.py --host 0.0.0.0 --port 8000
+
+# Ingest API — the sink agent pods push telemetry to. Under Docker this runs
+# inside the api container (api/start.sh); on the host it needs its own process.
+# --host 0.0.0.0 is required: the default loopback bind is unreachable from pods.
+dev-ingest:
+	cd api && uv run python -m fastapi dev ingest_main.py --host 0.0.0.0 --port $(INGEST_PORT)
 
 dev-ui:
 	cd ui && pnpm dev

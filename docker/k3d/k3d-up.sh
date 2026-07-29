@@ -28,6 +28,9 @@ fi
 CLUSTER="agentfarm-dev"
 K8S_API_PORT=16443
 LITELLM_HOST_PORT=7070
+# Host port the ingest API is reachable on, for the telemetry pods push back to.
+# Kept in step with INGEST_PORT in compose.yml and the Makefile.
+INGEST_HOST_PORT="${INGEST_PORT:-8001}"
 NAMESPACE="${K8S_NAMESPACE:-agent-farm}"
 KUBECONFIG_DIR="${REPO_ROOT}/.k3d"
 KUBECONFIG_HOST="${KUBECONFIG_DIR}/kubeconfig-host.yaml"
@@ -175,3 +178,7 @@ printf "  To run the API in Docker (make up) against this cluster, add to .env:\
 printf "    API_K8S_KUBECONFIG_PATH=/app/.k3d/kubeconfig-internal.yaml\n\n"
 printf "  Agents in k3d reach LiteLLM via:\n"
 printf "  http://host.docker.internal:%s\n\n" "${LITELLM_HOST_PORT}"
+printf "  Agents push telemetry back to the ingest API via:\n"
+printf "  http://host.docker.internal:%s/ingest/v1\n" "${INGEST_HOST_PORT}"
+printf "    make up         → served by the api container (port published)\n"
+printf "    make dev-api    → also run 'make dev-ingest' in a second shell\n\n"
