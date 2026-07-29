@@ -15,7 +15,6 @@ const LITELLM_PROXY_TARGET = process.env.LITELLM_PROXY_TARGET || '';
 
 let cache = null;
 let tokenCache = null;
-let llmCache = null;
 let proxyServer = null;
 let refreshing = false;
 
@@ -151,12 +150,6 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    if (llmCache && !llmCache.ok) {
-      res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ status: 'error', reason: llmCache.reason }));
-      return;
-    }
-
     if (!cache || !tokenCache) {
       res.writeHead(503, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ status: 'starting' }));
@@ -182,9 +175,8 @@ const server = http.createServer((req, res) => {
 });
 
 process.on('SIGTERM', () => {
-  server.close();
   if (proxyServer) proxyServer.close();
-  process.exit(0);
+  server.close(() => process.exit(0));
 });
 
 server.listen(PORT, () => console.log('[healthz] listening on :' + PORT));
@@ -215,7 +207,6 @@ if (LITELLM_PROXY_TARGET) {
         const chunks = [];
         upstreamRes.on('data', (c) => chunks.push(c));
         upstreamRes.on('end', () => {
-          llmCache = { ok: false, reason: cleanMsg };
           const body = JSON.stringify({
             error: { message: cleanMsg, type: null, param: null, code: String(upstreamRes.statusCode) }
           });
@@ -226,9 +217,6 @@ if (LITELLM_PROXY_TARGET) {
           clientRes.end(body);
         });
       } else {
-        if (upstreamRes.statusCode >= 200 && upstreamRes.statusCode < 300) {
-          llmCache = { ok: true };
-        }
         clientRes.writeHead(upstreamRes.statusCode, upstreamRes.headers);
         upstreamRes.pipe(clientRes);
       }

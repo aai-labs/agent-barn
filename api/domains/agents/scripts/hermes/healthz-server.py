@@ -19,7 +19,6 @@ LITELLM_PROXY_TARGET = os.environ.get("LITELLM_PROXY_TARGET", "")
 _lock = threading.Lock()
 _cache: dict = {"ok": None, "ever_connected": False, "reason": None}
 _token_cache: dict = {"ok": None, "reason": None}
-_llm_cache: dict = {"ok": None, "reason": None}
 
 AGENT_PLATFORM = os.environ.get("AGENT_PLATFORM", "slack")
 _SLACK_API = "https://slack.com/api"
@@ -121,16 +120,10 @@ class _Handler(BaseHTTPRequestHandler):
                 reason = _cache["reason"]
                 tok_ok = _token_cache["ok"]
                 tok_reason = _token_cache["reason"]
-                llm_ok = _llm_cache["ok"]
-                llm_reason = _llm_cache["reason"]
 
             # Token failures surface immediately as errors
             if tok_ok is False:
                 self._send(500, {"status": "error", "reason": tok_reason})
-                return
-
-            if llm_ok is False:
-                self._send(500, {"status": "error", "reason": llm_reason})
                 return
 
             if ok is None or tok_ok is None:
@@ -208,9 +201,6 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 clean_body = json.dumps(
                     {"error": {"message": clean_msg, "type": None, "param": None, "code": str(upstream.status)}}
                 ).encode()
-                with _lock:
-                    _llm_cache["ok"] = False
-                    _llm_cache["reason"] = clean_msg
                 self.send_response(upstream.status)
                 for key, val in upstream.getheaders():
                     if key.lower() in ("content-type",):
@@ -219,10 +209,6 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(clean_body)
             else:
-                with _lock:
-                    if 200 <= upstream.status < 300:
-                        _llm_cache["ok"] = True
-                        _llm_cache["reason"] = None
                 self.send_response(upstream.status)
                 for key, val in upstream.getheaders():
                     if key.lower() not in ("transfer-encoding",):
