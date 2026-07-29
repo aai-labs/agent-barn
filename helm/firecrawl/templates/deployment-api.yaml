@@ -44,9 +44,9 @@ spec:
             - name: NUM_WORKERS_PER_QUEUE
               value: "8"
             - name: REDIS_URL
-              value: "redis://{{ .Release.Name }}-redis:{{ .Values.service.redisPort }}"
+              value: "redis://{{ .Values.redis.host }}:{{ .Values.redis.port }}"
             - name: REDIS_RATE_LIMIT_URL
-              value: "redis://{{ .Release.Name }}-redis:{{ .Values.service.redisPort }}"
+              value: "redis://{{ .Values.redis.host }}:{{ .Values.redis.port }}"
             - name: PLAYWRIGHT_MICROSERVICE_URL
               value: "http://{{ .Release.Name }}-playwright:{{ .Values.service.playwrightPort }}/scrape"
             - name: USE_DB_AUTHENTICATION

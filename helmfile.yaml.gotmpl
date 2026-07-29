@@ -80,6 +80,12 @@ releases:
       - name: db.name
         value: {{ env "POSTGRES_FIRECRAWL_DB" | required "POSTGRES_FIRECRAWL_DB is required" | quote }}
 
+  - name: redis
+    namespace: {{ env "NAMESPACE" | default "agent-farm" }}
+    chart: ./helm/redis
+    labels:
+      name: redis
+
   - name: litellm
     namespace: {{ env "NAMESPACE" | default "agent-farm" }}
     chart: ./helm/litellm
@@ -114,6 +120,7 @@ releases:
         value: {{ env "POSTGRES_FIRECRAWL_DB" | required "POSTGRES_FIRECRAWL_DB is required" | quote }}
     needs:
       - {{ env "NAMESPACE" | default "agent-farm" }}/postgres-firecrawl
+      - {{ env "NAMESPACE" | default "agent-farm" }}/redis
 
   - name: agentfarm-api
     namespace: {{ env "NAMESPACE" | default "agent-farm" }}
@@ -190,6 +197,7 @@ releases:
       - {{ env "NAMESPACE" | default "agent-farm" }}/postgres-app
       - {{ env "NAMESPACE" | default "agent-farm" }}/litellm
       - {{ env "NAMESPACE" | default "agent-farm" }}/firecrawl
+      - {{ env "NAMESPACE" | default "agent-farm" }}/redis
 
   - name: agentfarm-ui
     namespace: {{ env "NAMESPACE" | default "agent-farm" }}

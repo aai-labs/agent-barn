@@ -102,8 +102,11 @@ ingress:
   clusterIssuer: letsencrypt-http01
   tlsSecretName: agentfarm-api-tls
 
+# Shared Redis instance (helm/redis release), not deployed by this chart.
+# Used by the general-purpose worker's dramatiq broker, not just event delivery.
+redisUrl: "redis://redis:6379/0"
+
 eventDelivery:
-  redisUrl: "redis://redis-master:6379/0"
   reconciliation:
     enabled: true
     schedule: "*/5 * * * *"
