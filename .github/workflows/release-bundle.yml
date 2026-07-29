@@ -25,10 +25,9 @@ jobs:
       - name: Resolve image versions
         id: ver
         run: |
-          chart_version() { grep '^appVersion:' "$1" | awk '{print $2}' | tr -d '"'; }
           {
-            echo "api=$(chart_version helm/agentfarm-api/Chart.yaml)"
-            echo "ui=$(chart_version helm/agentfarm-ui/Chart.yaml)"
+            echo "api=${{ inputs.tag }}"
+            echo "ui=${{ inputs.tag }}"
             echo "hermes=$(tr -d '[:space:]' < hermes-base/VERSION)"
             echo "openclaw=$(tr -d '[:space:]' < openclaw-base/VERSION)"
           } >> "$GITHUB_OUTPUT"

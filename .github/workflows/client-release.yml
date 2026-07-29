@@ -7,6 +7,11 @@ name: Client Release
 
 on:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag for API and UI images (e.g. v0.15.0)
+        required: true
+        type: string
 
 concurrency:
   group: client-release
@@ -32,13 +37,11 @@ jobs:
           - name: api
             context: .
             file: api/Dockerfile
-            version_file: helm/agentfarm-api/Chart.yaml
-            version_kind: chart
+            version_kind: workflow_input
           - name: ui
             context: ui
             file: ui/Dockerfile
-            version_file: helm/agentfarm-ui/Chart.yaml
-            version_kind: chart
+            version_kind: workflow_input
           - name: hermes-base
             context: hermes-base
             file: hermes-base/Dockerfile
@@ -68,8 +71,8 @@ jobs:
       - name: Resolve image version
         id: ver
         run: |
-          if [ "${{ matrix.version_kind }}" = "chart" ]; then
-            version=$(grep '^appVersion:' "${{ matrix.version_file }}" | awk '{print $2}' | tr -d '"')
+          if [ "${{ matrix.version_kind }}" = "workflow_input" ]; then
+            version="${{ inputs.tag }}"
           else
             version=$(tr -d '[:space:]' < "${{ matrix.version_file }}")
           fi

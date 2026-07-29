@@ -39,7 +39,7 @@ Agent runtimes report messages and tool-call state to the separate Ingest API us
 
 The API image also runs Domain Event delivery workloads with different commands: a Dramatiq worker deployment processes committed Event Delivery IDs from Redis, and a CronJob runs the one-shot Event Delivery reconciler. Product and Ingest API health probes remain PostgreSQL-only; worker readiness checks Redis connectivity through the delivery transport adapter.
 
-The deploy workflow reads API and UI image tags from each chart's `appVersion`, builds versioned images, and applies Helmfile. `../../AGENTS.md` is authoritative for independent API/UI `appVersion` and chart `version` rules.
+The deploy workflow builds API and UI images under moving environment tags, passes those tags into Helmfile as `API_IMAGE_TAG` and `UI_IMAGE_TAG`, and applies Helmfile. The current convention is `latest` on `main` and `latest-staging` on the `staging` branch. Manual and bundled release flows also pass explicit API/UI tags; chart metadata is not used as the source of truth for API/UI images.
 
 Every release's namespace and `needs:` entries are templated on a `NAMESPACE` env var (default `agent-farm`), which is how the `staging` branch deploys a fully separate stack into `agent-farm-staging` instead of prod's `agent-farm`. See [`../guidelines/operations.md`](../guidelines/operations.md#staging-environment) for the operator runbook and [`../adr/2026-07-13-staging-environment-namespace-isolation.md`](../adr/2026-07-13-staging-environment-namespace-isolation.md) for why namespace isolation was chosen over GitHub Environments or a second cluster.
 
@@ -71,4 +71,4 @@ Kubernetes `stream()` and `portforward()` temporarily monkey-patch `ApiClient.re
 
 ## Change impact
 
-Runtime changes must be checked against both platforms, builders, images/base configuration, agent lifecycle tests, telemetry, and persisted configuration contracts. Service-code changes require the affected chart `appVersion` bump; chart template/value changes require the chart `version` bump according to `../../AGENTS.md`.
+Runtime changes must be checked against both platforms, builders, images/base configuration, agent lifecycle tests, telemetry, and persisted configuration contracts. For staging/main GitHub deploys, service-code changes automatically deploy under environment-derived API/UI image tags; chart template/value changes still require the chart `version` bump according to `../../AGENTS.md`. Manual or bundled releases also use explicit API/UI image tags rather than chart metadata.

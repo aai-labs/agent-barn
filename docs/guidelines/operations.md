@@ -57,22 +57,20 @@ Staging is a fully separate stack in its own namespace (`agent-farm-staging`), d
 
 ## Versioning and releases
 
-Each deployable chart has independent versions in `Chart.yaml`:
+Each deployable chart has independent chart metadata in `Chart.yaml`:
 
-- `appVersion` is the immutable image tag built and deployed for that service. Bump it whenever that service's image content changes: minor for features, patch for fixes.
 - Chart `version` is the packaging version. Bump it when chart templates or values change, independently of application code.
 
 Rules:
 
-- API and UI versions are independent; bump only the service that changed.
-- Never reuse an `appVersion` for different image content.
-- Bump versions late, ideally immediately before the PR, to reduce merge conflicts.
-- CI enforces that changes under `api/**` must bump `helm/agentfarm-api/Chart.yaml` `appVersion`, and changes under `ui/**` must bump `helm/agentfarm-ui/Chart.yaml` `appVersion`.
+- API and UI image tags are explicit deployment inputs (`API_IMAGE_TAG`, `UI_IMAGE_TAG`), not chart metadata.
+- Bump chart versions late, ideally immediately before the PR, to reduce merge conflicts, when chart packaging actually changed.
 - The git commit or PR is the product release identifier; there is no shared API/UI release number.
-- `../../.github/workflows/deploy.yml` reads API and UI image tags from `../../helm/agentfarm-api/Chart.yaml` and `../../helm/agentfarm-ui/Chart.yaml`.
-- LiteLLM, PostgreSQL, and monitoring charts run upstream images and have no `appVersion`; bump only chart `version` when their chart templates change.
+- `../../.github/workflows/deploy.yml` builds API and UI images under moving environment tags and passes those tags into Helm via `API_IMAGE_TAG` and `UI_IMAGE_TAG`: `latest` on `main`, `latest-staging` on `staging`. Branch deploys no longer depend on chart `appVersion` bumps.
+- Manual/bundled release flows also pass explicit API/UI tags rather than reading them from chart metadata.
+- LiteLLM, PostgreSQL, and monitoring charts run upstream images; bump only chart `version` when their chart templates change.
 
-Documentation-only changes do not change a service image and do not require an `appVersion` bump.
+Documentation-only changes do not change a service image and do not require a service image-tag change.
 
 ## Monitoring stack
 

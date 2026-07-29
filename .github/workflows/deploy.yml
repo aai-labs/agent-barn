@@ -12,11 +12,6 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  service-version-guard:
-    uses: ./.github/workflows/service-version-guard.yml
-    with:
-      base_sha: ${{ github.event.before || '' }}
-
   # Reusable-workflow calls run against the same commit as this workflow, so
   # this is the actual CI gate: `build` below only starts once every one of
   # these succeeds. workflow_call ignores each workflow's own path filters, so
@@ -24,12 +19,10 @@ jobs:
   # set here regardless of what changed -- consistent with `build` itself
   # always rebuilding and pushing all four images on every run below.
   api:
-    needs: service-version-guard
     uses: ./.github/workflows/api.yml
     secrets: inherit
 
   ui:
-    needs: service-version-guard
     uses: ./.github/workflows/ui.yml
     secrets: inherit
 
@@ -77,6 +70,7 @@ jobs:
                 echo "namespace=agent-farm-staging"
                 echo "environment=staging"
                 echo "image_suffix=-staging"
+                echo "service_image_tag=latest-staging"
                 echo "push_latest=false"
                 # litellm-key hook runs as the deploy SA (already has secret perms)
                 # instead of the out-of-band agent-farm-user.
@@ -91,6 +85,7 @@ jobs:
                 echo "namespace=agent-farm"
                 echo "environment=production"
                 echo "image_suffix="
+                echo "service_image_tag=latest"
                 echo "push_latest=true"
                 echo "litellm_key_service_account=agent-farm-user"
                 echo "api_host=${{ vars.API_HOST }}"
@@ -110,9 +105,10 @@ jobs:
         id: image-versions
         env:
           IMAGE_SUFFIX: ${{ steps.resolve-env.outputs.image_suffix }}
+          SERVICE_IMAGE_TAG: ${{ steps.resolve-env.outputs.service_image_tag }}
         run: |
-          echo "api_image_tag=$(grep '^\s*appVersion:' helm/agentfarm-api/Chart.yaml | awk '{print $2}' | tr -d '"')${IMAGE_SUFFIX}" >> "$GITHUB_OUTPUT"
-          echo "ui_image_tag=$(grep '^\s*appVersion:' helm/agentfarm-ui/Chart.yaml | awk '{print $2}' | tr -d '"')${IMAGE_SUFFIX}" >> "$GITHUB_OUTPUT"
+          echo "api_image_tag=${SERVICE_IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "ui_image_tag=${SERVICE_IMAGE_TAG}" >> "$GITHUB_OUTPUT"
           echo "openclaw_image_tag=$(cat openclaw-base/VERSION)${IMAGE_SUFFIX}" >> "$GITHUB_OUTPUT"
           echo "hermes_image_tag=$(cat hermes-base/VERSION)${IMAGE_SUFFIX}" >> "$GITHUB_OUTPUT"
 

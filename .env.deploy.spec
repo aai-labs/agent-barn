@@ -26,9 +26,11 @@ UI_IMAGE_REPOSITORY=agentfarm-ui
 HERMES_IMAGE_REPOSITORY=agentfarm-hermes-base
 OPENCLAW_IMAGE_REPOSITORY=agentfarm-openclaw-base
 
-# ── Image tags (pin to specific versions for a real deploy) ──────────────────
-# For a staging deploy, suffix each with -staging (e.g. 0.13.0-staging); staging
-# builds its own images so it never clobbers prod's tags.
+# ── Image tags (pin explicit images for a manual deploy) ─────────────────────
+# GitHub Actions branch deploys set API/UI image tags automatically to the
+# environment's moving tag (`latest` on main, `latest-staging` on staging).
+# These values matter for manual deploy.sh / release-bundle usage, where you
+# still pin explicit tags.
 API_IMAGE_TAG=0.13.0
 UI_IMAGE_TAG=0.13.0
 OPENCLAW_IMAGE_TAG=0.4.0

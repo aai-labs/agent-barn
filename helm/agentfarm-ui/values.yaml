@@ -2,6 +2,7 @@ registryPrefix: "registry.k8s.aai-labs.com"
 
 image:
   repository: agentfarm-ui
+  tag: latest
   pullPolicy: Always
 
 replicaCount: 1
