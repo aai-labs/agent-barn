@@ -13,10 +13,10 @@ concurrency:
 
 jobs:
   # Reusable-workflow calls run against the same commit as this workflow, so
-  # this is the actual CI gate: `deploy` below only starts once every one of
+  # this is the actual CI gate: `build` below only starts once every one of
   # these succeeds. workflow_call ignores each workflow's own path filters, so
   # unlike their standalone push trigger, all four always run their full job
-  # set here regardless of what changed -- consistent with `deploy` itself
+  # set here regardless of what changed -- consistent with `build` itself
   # always rebuilding and pushing all four images on every run below.
   api:
     uses: ./.github/workflows/api.yml
@@ -34,11 +34,24 @@ jobs:
     uses: ./.github/workflows/openclaw-base.yml
     secrets: inherit
 
-  deploy:
+  # Split from `deploy` so a cluster-side failure (e.g. an immutable field on
+  # an existing resource) can be retried via "re-run failed jobs" without
+  # rebuilding/pushing every image again -- GitHub reuses this job's outputs
+  # and doesn't re-run it once it has succeeded.
+  build:
     needs: [api, ui, hermes-base, openclaw-base]
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
+    outputs:
+      namespace: ${{ steps.resolve-env.outputs.namespace }}
+      environment: ${{ steps.resolve-env.outputs.environment }}
+      litellm_key_service_account: ${{ steps.resolve-env.outputs.litellm_key_service_account }}
+      api_host: ${{ steps.resolve-env.outputs.api_host }}
+      ui_host: ${{ steps.resolve-env.outputs.ui_host }}
+      web_app_url: ${{ steps.resolve-env.outputs.web_app_url }}
+      api_image_tag: ${{ steps.image-versions.outputs.api_image_tag }}
+      ui_image_tag: ${{ steps.image-versions.outputs.ui_image_tag }}
+      openclaw_image_tag: ${{ steps.image-versions.outputs.openclaw_image_tag }}
+      hermes_image_tag: ${{ steps.image-versions.outputs.hermes_image_tag }}
 
     steps:
       - name: Checkout
@@ -49,33 +62,34 @@ jobs:
       # STAGING_ hosts. main -> production. Any other branch is rejected so a
       # feature branch can never deploy to prod.
       - name: Resolve environment
+        id: resolve-env
         run: |
           case "${{ github.ref_name }}" in
             staging)
               {
-                echo "NAMESPACE=agent-farm-staging"
-                echo "ENVIRONMENT=staging"
-                echo "IMAGE_SUFFIX=-staging"
-                echo "PUSH_LATEST=false"
+                echo "namespace=agent-farm-staging"
+                echo "environment=staging"
+                echo "image_suffix=-staging"
+                echo "push_latest=false"
                 # litellm-key hook runs as the deploy SA (already has secret perms)
                 # instead of the out-of-band agent-farm-user.
-                echo "LITELLM_KEY_SERVICE_ACCOUNT=agent-farm-staging-user"
-                echo "API_HOST=${{ vars.STAGING_API_HOST }}"
-                echo "UI_HOST=${{ vars.STAGING_UI_HOST }}"
-                echo "WEB_APP_URL=${{ vars.STAGING_WEB_APP_URL }}"
-              } >> "$GITHUB_ENV"
+                echo "litellm_key_service_account=agent-farm-staging-user"
+                echo "api_host=${{ vars.STAGING_API_HOST }}"
+                echo "ui_host=${{ vars.STAGING_UI_HOST }}"
+                echo "web_app_url=${{ vars.STAGING_WEB_APP_URL }}"
+              } >> "$GITHUB_OUTPUT"
               ;;
             main)
               {
-                echo "NAMESPACE=agent-farm"
-                echo "ENVIRONMENT=production"
-                echo "IMAGE_SUFFIX="
-                echo "PUSH_LATEST=true"
-                echo "LITELLM_KEY_SERVICE_ACCOUNT=agent-farm-user"
-                echo "API_HOST=${{ vars.API_HOST }}"
-                echo "UI_HOST=${{ vars.UI_HOST }}"
-                echo "WEB_APP_URL=${{ vars.WEB_APP_URL }}"
-              } >> "$GITHUB_ENV"
+                echo "namespace=agent-farm"
+                echo "environment=production"
+                echo "image_suffix="
+                echo "push_latest=true"
+                echo "litellm_key_service_account=agent-farm-user"
+                echo "api_host=${{ vars.API_HOST }}"
+                echo "ui_host=${{ vars.UI_HOST }}"
+                echo "web_app_url=${{ vars.WEB_APP_URL }}"
+              } >> "$GITHUB_OUTPUT"
               ;;
             *)
               echo "::error::Deploy is only allowed from 'staging' or 'main' (got '${{ github.ref_name }}')."
@@ -83,28 +97,17 @@ jobs:
               ;;
           esac
 
-      # Tags carry the env's IMAGE_SUFFIX (empty on main, -staging on staging) so
+      # Tags carry the env's image_suffix (empty on main, -staging on staging) so
       # staging builds/deploys its own images and never clobbers prod's tags.
       - name: Read image versions
+        id: image-versions
+        env:
+          IMAGE_SUFFIX: ${{ steps.resolve-env.outputs.image_suffix }}
         run: |
-          echo "API_IMAGE_TAG=$(grep '^\s*appVersion:' helm/agentfarm-api/Chart.yaml | awk '{print $2}' | tr -d '"')${IMAGE_SUFFIX}" >> $GITHUB_ENV
-          echo "UI_IMAGE_TAG=$(grep '^\s*appVersion:' helm/agentfarm-ui/Chart.yaml | awk '{print $2}' | tr -d '"')${IMAGE_SUFFIX}" >> $GITHUB_ENV
-          echo "OPENCLAW_IMAGE_TAG=$(cat openclaw-base/VERSION)${IMAGE_SUFFIX}" >> $GITHUB_ENV
-          echo "HERMES_IMAGE_TAG=$(cat hermes-base/VERSION)${IMAGE_SUFFIX}" >> $GITHUB_ENV
-
-      - name: Install Helm
-        run: |
-          curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-
-      - name: Install Helmfile
-        run: |
-          HELMFILE_VERSION=0.171.0
-          curl -fsSL \
-            https://github.com/helmfile/helmfile/releases/download/v${HELMFILE_VERSION}/helmfile_${HELMFILE_VERSION}_linux_amd64.tar.gz \
-            | tar -xz -C /usr/local/bin helmfile
-
-      - name: Install helm-diff plugin
-        run: helm plugin install https://github.com/databus23/helm-diff
+          echo "api_image_tag=$(grep '^\s*appVersion:' helm/agentfarm-api/Chart.yaml | awk '{print $2}' | tr -d '"')${IMAGE_SUFFIX}" >> "$GITHUB_OUTPUT"
+          echo "ui_image_tag=$(grep '^\s*appVersion:' helm/agentfarm-ui/Chart.yaml | awk '{print $2}' | tr -d '"')${IMAGE_SUFFIX}" >> "$GITHUB_OUTPUT"
+          echo "openclaw_image_tag=$(cat openclaw-base/VERSION)${IMAGE_SUFFIX}" >> "$GITHUB_OUTPUT"
+          echo "hermes_image_tag=$(cat hermes-base/VERSION)${IMAGE_SUFFIX}" >> "$GITHUB_OUTPUT"
 
       - name: Log in to registry
         run: |
@@ -114,6 +117,9 @@ jobs:
               --password-stdin
 
       - name: Build and push API image
+        env:
+          API_IMAGE_TAG: ${{ steps.image-versions.outputs.api_image_tag }}
+          PUSH_LATEST: ${{ steps.resolve-env.outputs.push_latest }}
         run: |
           docker build \
             -t '${{ vars.REGISTRY_URL }}/agentfarm-api:${{ env.API_IMAGE_TAG }}' \
@@ -126,9 +132,16 @@ jobs:
           fi
 
       - name: Extract primary API host
-        run: echo "PRIMARY_API_HOST=$(echo '${{ env.API_HOST }}' | cut -d',' -f1 | tr -d ' ')" >> $GITHUB_ENV
+        id: primary-api-host
+        env:
+          API_HOST: ${{ steps.resolve-env.outputs.api_host }}
+        run: echo "value=$(echo "$API_HOST" | cut -d',' -f1 | tr -d ' ')" >> "$GITHUB_OUTPUT"
 
       - name: Build and push UI image
+        env:
+          UI_IMAGE_TAG: ${{ steps.image-versions.outputs.ui_image_tag }}
+          PUSH_LATEST: ${{ steps.resolve-env.outputs.push_latest }}
+          PRIMARY_API_HOST: ${{ steps.primary-api-host.outputs.value }}
         run: |
           docker build \
             --build-arg NEXT_PUBLIC_BACKEND_URL=https://${{ env.PRIMARY_API_HOST }} \
@@ -144,6 +157,8 @@ jobs:
       - name: Build, smoke test, and push hermes-base image
         env:
           DOCKER_BUILDKIT: "1"
+          HERMES_IMAGE_TAG: ${{ steps.image-versions.outputs.hermes_image_tag }}
+          PUSH_LATEST: ${{ steps.resolve-env.outputs.push_latest }}
         run: |
           printf '%s' '${{ secrets.AAI_CLI_REPO_ACCESS_TOKEN }}' > /tmp/gh_token
           docker build \
@@ -165,6 +180,8 @@ jobs:
       - name: Build, smoke test, and push openclaw-base image
         env:
           DOCKER_BUILDKIT: "1"
+          OPENCLAW_IMAGE_TAG: ${{ steps.image-versions.outputs.openclaw_image_tag }}
+          PUSH_LATEST: ${{ steps.resolve-env.outputs.push_latest }}
         run: |
           printf '%s' '${{ secrets.AAI_CLI_REPO_ACCESS_TOKEN }}' > /tmp/gh_token
           docker build \
@@ -182,6 +199,30 @@ jobs:
             docker tag '${{ vars.REGISTRY_URL }}/agentfarm-openclaw-base:${{ env.OPENCLAW_IMAGE_TAG }}' '${{ vars.REGISTRY_URL }}/agentfarm-openclaw-base:latest'
             docker push '${{ vars.REGISTRY_URL }}/agentfarm-openclaw-base:latest'
           fi
+
+  deploy:
+    needs: [build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Helm
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+      - name: Install Helmfile
+        run: |
+          HELMFILE_VERSION=0.171.0
+          curl -fsSL \
+            https://github.com/helmfile/helmfile/releases/download/v${HELMFILE_VERSION}/helmfile_${HELMFILE_VERSION}_linux_amd64.tar.gz \
+            | tar -xz -C /usr/local/bin helmfile
+
+      - name: Install helm-diff plugin
+        run: helm plugin install https://github.com/databus23/helm-diff
 
       - name: Set up SSH tunnel to k3s
         run: |
@@ -208,13 +249,13 @@ jobs:
         env:
           KUBECONFIG: /home/runner/.kube/config
           # Target namespace, resolved from the branch (agent-farm / agent-farm-staging).
-          NAMESPACE: ${{ env.NAMESPACE }}
+          NAMESPACE: ${{ needs.build.outputs.namespace }}
           # SA the litellm-key hook runs as (staging: the namespace-scoped deploy SA).
-          LITELLM_KEY_SERVICE_ACCOUNT: ${{ env.LITELLM_KEY_SERVICE_ACCOUNT }}
-          API_IMAGE_TAG: ${{ env.API_IMAGE_TAG }}
-          UI_IMAGE_TAG: ${{ env.UI_IMAGE_TAG }}
-          OPENCLAW_IMAGE_TAG: ${{ env.OPENCLAW_IMAGE_TAG }}
-          HERMES_IMAGE_TAG: ${{ env.HERMES_IMAGE_TAG }}
+          LITELLM_KEY_SERVICE_ACCOUNT: ${{ needs.build.outputs.litellm_key_service_account }}
+          API_IMAGE_TAG: ${{ needs.build.outputs.api_image_tag }}
+          UI_IMAGE_TAG: ${{ needs.build.outputs.ui_image_tag }}
+          OPENCLAW_IMAGE_TAG: ${{ needs.build.outputs.openclaw_image_tag }}
+          HERMES_IMAGE_TAG: ${{ needs.build.outputs.hermes_image_tag }}
           # DB user/db names are shared: each namespace has its own Postgres, so
           # identical names don't collide. Only the passwords/keys are per-env.
           POSTGRES_APP_USER: ${{ vars.POSTGRES_APP_USER }}
@@ -237,8 +278,8 @@ jobs:
           SECRET_SIGNING_KEY: ${{ github.ref_name == 'staging' && secrets.STAGING_SECRET_SIGNING_KEY || secrets.SECRET_SIGNING_KEY }}
           PLATFORM_ADMIN_CREDENTIALS: ${{ github.ref_name == 'staging' && secrets.STAGING_PLATFORM_ADMIN_CREDENTIALS || secrets.PLATFORM_ADMIN_CREDENTIALS }}
           AGENT_TOKEN_ENCRYPTION_KEY: ${{ github.ref_name == 'staging' && secrets.STAGING_AGENT_TOKEN_ENCRYPTION_KEY || secrets.AGENT_TOKEN_ENCRYPTION_KEY }}
-          ENVIRONMENT: ${{ env.ENVIRONMENT }}
-          WEB_APP_URL: ${{ env.WEB_APP_URL }}
+          ENVIRONMENT: ${{ needs.build.outputs.environment }}
+          WEB_APP_URL: ${{ needs.build.outputs.web_app_url }}
           # Google OAuth client is shared; add the staging redirect URI in GCP Console.
           GOOGLE_CLOUD_CLIENT_ID: ${{ vars.GOOGLE_CLOUD_CLIENT_ID }}
           GOOGLE_CLOUD_CLIENT_SECRET: ${{ secrets.GOOGLE_CLOUD_CLIENT_SECRET }}
@@ -248,8 +289,8 @@ jobs:
           EMAIL_SERVER_CREDENTIAL: ${{ github.ref_name == 'main' && secrets.EMAIL_SERVER_CREDENTIAL || '' }}
           EMAIL_SMTP_SERVER: ${{ github.ref_name == 'main' && vars.EMAIL_SMTP_SERVER || '' }}
           EMAIL_FROM_ADDRESS: ${{ github.ref_name == 'main' && vars.EMAIL_FROM_ADDRESS || '' }}
-          API_HOST: ${{ env.API_HOST }}
-          UI_HOST: ${{ env.UI_HOST }}
+          API_HOST: ${{ needs.build.outputs.api_host }}
+          UI_HOST: ${{ needs.build.outputs.ui_host }}
           KUBECONFIG_B64: ${{ github.ref_name == 'staging' && secrets.STAGING_KUBECONFIG_B64 || secrets.KUBECONFIG_B64 }}
           POD_KUBECONFIG_B64: ${{ github.ref_name == 'staging' && secrets.STAGING_POD_KUBECONFIG_B64 || secrets.POD_KUBECONFIG_B64 }}
           REGISTRY_SERVER: ${{ vars.REGISTRY_URL }}
