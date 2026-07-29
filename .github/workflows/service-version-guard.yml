@@ -2,6 +2,9 @@ name: Service Version Guard
 
 on:
   pull_request:
+    branches:
+      - main
+      - staging
     paths:
       - api/**
       - ui/**
@@ -10,9 +13,9 @@ on:
       - .github/workflows/service-version-guard.yml
       - .github/workflows/deploy.yml
   push:
-    branches-ignore:
-      - staging
+    branches:
       - main
+      - staging
     paths:
       - api/**
       - ui/**
