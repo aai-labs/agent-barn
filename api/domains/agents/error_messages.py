@@ -7,6 +7,12 @@ _K8S_STATUS_MESSAGES: dict[int, str] = {
     422: "Invalid resource configuration — the cluster rejected the manifest.",
 }
 
+_TERMINAL_LLM_ERRORS: dict[int, str] = {
+    401: "LLM API key is invalid or expired. Check your API key configuration.",
+    402: "OpenRouter credits exhausted. Add credits at https://openrouter.ai/credits.",
+    403: "LLM API access denied. Check your account permissions.",
+}
+
 _POD_REASON_MESSAGES: dict[str, str] = {
     "CrashLoopBackOff": "Agent is crashing repeatedly on startup. Check the agent logs for details.",
     "OOMKilled": "Agent was killed — it ran out of memory.",
@@ -49,3 +55,11 @@ def friendly_k8s_error(exc: Exception) -> str:
     if "not found" in raw.lower() or "404" in raw:
         return _K8S_STATUS_MESSAGES[404]
     return raw[:500]
+
+
+def classify_terminal_llm_error(status_code: int) -> str | None:
+    return _TERMINAL_LLM_ERRORS.get(status_code)
+
+
+def build_clean_error_body(status_code: int, message: str) -> str:
+    return json.dumps({"error": {"message": message, "type": None, "param": None, "code": str(status_code)}})

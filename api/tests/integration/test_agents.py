@@ -1007,7 +1007,7 @@ def test_start_agent_configmap_has_overlay():
             )
             assert_that(
                 overlay["models"]["providers"]["litellm"]["baseUrl"],
-                equal_to("http://litellm:4000"),
+                equal_to("http://localhost:8090"),
             )
 
 
@@ -1952,7 +1952,7 @@ def test_start_hermes_agent_configmap_has_hermes_config():
             config_map = k8s.create_config_map.call_args.args[1]
             assert_that(config_map.data, has_key("hermes-config.yaml"))
             cfg = _yaml.safe_load(config_map.data["hermes-config.yaml"])
-            assert_that(cfg["model"]["base_url"], equal_to("http://litellm:4000"))
+            assert_that(cfg["model"]["base_url"], equal_to("http://localhost:8090"))
             assert_that(cfg["slack"]["unauthorized_dm_behavior"], equal_to("ignore"))
             assert_that(
                 cfg["display"]["platforms"]["slack"]["interim_assistant_messages"],
@@ -3022,3 +3022,43 @@ def test_create_agent_duplicate_token_does_not_leave_orphan():
         with then("no orphaned agent row is left behind"):
             agents = client.get(_BASE, headers=_auth(context)).json()["items"]
             assert_that(len(agents), equal_to(1))
+
+
+def test_start_agent_secret_has_litellm_proxy_target():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+
+        with when("I start the agent"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the secret contains LITELLM_PROXY_TARGET pointing to the real LiteLLM URL"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            secret = k8s.create_secret.call_args.args[1]
+            assert_that(secret.string_data["LITELLM_PROXY_TARGET"], equal_to("http://litellm:4000"))
+
+        with then("the secret routes LLM traffic through the local proxy"):
+            assert_that(secret.string_data["LITELLM_BASE_URL"], equal_to("http://localhost:8090"))
+
+
+def test_start_hermes_agent_secret_has_litellm_proxy_target():
+    with given(
+        [
+            *_GIVEN_WITH_HERMES_IMAGE,
+            there_is_an_agent(agent_type=AgentType.HERMES),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+
+        with when("I start the Hermes agent"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the secret contains LITELLM_PROXY_TARGET pointing to the real LiteLLM URL"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            secret = k8s.create_secret.call_args.args[1]
+            assert_that(secret.string_data["LITELLM_PROXY_TARGET"], equal_to("http://litellm:4000"))
+
+        with then("the secret routes LLM traffic through the local proxy"):
+            assert_that(secret.string_data["OPENAI_BASE_URL"], equal_to("http://localhost:8090"))
+            assert_that(secret.string_data["OPENROUTER_BASE_URL"], equal_to("http://localhost:8090"))
