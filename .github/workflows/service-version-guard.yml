@@ -1,0 +1,107 @@
+name: Service Version Guard
+
+on:
+  pull_request:
+    paths:
+      - api/**
+      - ui/**
+      - helm/agentfarm-api/Chart.yaml
+      - helm/agentfarm-ui/Chart.yaml
+      - .github/workflows/service-version-guard.yml
+      - .github/workflows/deploy.yml
+  push:
+    branches-ignore:
+      - staging
+      - main
+    paths:
+      - api/**
+      - ui/**
+      - helm/agentfarm-api/Chart.yaml
+      - helm/agentfarm-ui/Chart.yaml
+      - .github/workflows/service-version-guard.yml
+      - .github/workflows/deploy.yml
+  workflow_call:
+    inputs:
+      base_sha:
+        required: false
+        type: string
+
+jobs:
+  enforce:
+    name: Enforce service appVersion bumps
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify changed services bumped appVersion
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PULL_REQUEST_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+          WORKFLOW_CALL_BASE_SHA: ${{ inputs.base_sha }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          resolve_base_sha() {
+            if [ "$EVENT_NAME" = "pull_request" ] && [ -n "${PULL_REQUEST_BASE_SHA:-}" ]; then
+              printf '%s\n' "$PULL_REQUEST_BASE_SHA"
+              return
+            fi
+
+            if [ "$EVENT_NAME" = "push" ] && [ -n "${PUSH_BEFORE_SHA:-}" ] && [ "$PUSH_BEFORE_SHA" != "0000000000000000000000000000000000000000" ]; then
+              printf '%s\n' "$PUSH_BEFORE_SHA"
+              return
+            fi
+
+            if [ "$EVENT_NAME" = "workflow_call" ] && [ -n "${WORKFLOW_CALL_BASE_SHA:-}" ]; then
+              printf '%s\n' "$WORKFLOW_CALL_BASE_SHA"
+              return
+            fi
+
+            if git rev-parse HEAD^ >/dev/null 2>&1; then
+              git rev-parse HEAD^
+              return
+            fi
+
+            printf '%s\n' ""
+          }
+
+          BASE_SHA="$(resolve_base_sha)"
+          if [ -z "$BASE_SHA" ]; then
+            echo "No base SHA available; skipping service version guard."
+            exit 0
+          fi
+
+          echo "Comparing $BASE_SHA..$HEAD_SHA"
+
+          changed_files="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")"
+          printf '%s\n' "$changed_files"
+
+          require_app_version_bump() {
+            service_path="$1"
+            chart_path="$2"
+            service_label="$3"
+
+            if ! git diff --name-only "$BASE_SHA" "$HEAD_SHA" -- "$service_path" | grep -q .; then
+              echo "No ${service_label} service files changed."
+              return
+            fi
+
+            if ! git diff --name-only "$BASE_SHA" "$HEAD_SHA" -- "$chart_path" | grep -q .; then
+              echo "::error file=${chart_path}::${service_label} files changed, but ${chart_path} was not updated. Bump appVersion for the ${service_label} image."
+              exit 1
+            fi
+
+            if ! git diff "$BASE_SHA" "$HEAD_SHA" -- "$chart_path" | grep -q '^[+-]appVersion:'; then
+              echo "::error file=${chart_path}::${service_label} files changed, but ${chart_path} did not change appVersion. Bump appVersion for the ${service_label} image."
+              exit 1
+            fi
+
+            echo "${service_label} service files changed and appVersion was bumped."
+          }
+
+          require_app_version_bump "api/" "helm/agentfarm-api/Chart.yaml" "API"
+          require_app_version_bump "ui/" "helm/agentfarm-ui/Chart.yaml" "UI"

@@ -67,6 +67,7 @@ Rules:
 - API and UI versions are independent; bump only the service that changed.
 - Never reuse an `appVersion` for different image content.
 - Bump versions late, ideally immediately before the PR, to reduce merge conflicts.
+- CI enforces that changes under `api/**` must bump `helm/agentfarm-api/Chart.yaml` `appVersion`, and changes under `ui/**` must bump `helm/agentfarm-ui/Chart.yaml` `appVersion`.
 - The git commit or PR is the product release identifier; there is no shared API/UI release number.
 - `../../.github/workflows/deploy.yml` reads API and UI image tags from `../../helm/agentfarm-api/Chart.yaml` and `../../helm/agentfarm-ui/Chart.yaml`.
 - LiteLLM, PostgreSQL, and monitoring charts run upstream images and have no `appVersion`; bump only chart `version` when their chart templates change.

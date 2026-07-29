@@ -12,6 +12,11 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  service-version-guard:
+    uses: ./.github/workflows/service-version-guard.yml
+    with:
+      base_sha: ${{ github.event.before || '' }}
+
   # Reusable-workflow calls run against the same commit as this workflow, so
   # this is the actual CI gate: `build` below only starts once every one of
   # these succeeds. workflow_call ignores each workflow's own path filters, so
@@ -19,10 +24,12 @@ jobs:
   # set here regardless of what changed -- consistent with `build` itself
   # always rebuilding and pushing all four images on every run below.
   api:
+    needs: service-version-guard
     uses: ./.github/workflows/api.yml
     secrets: inherit
 
   ui:
+    needs: service-version-guard
     uses: ./.github/workflows/ui.yml
     secrets: inherit
 
