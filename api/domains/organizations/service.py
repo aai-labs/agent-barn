@@ -1,10 +1,13 @@
+import logging
 from dataclasses import dataclass
 from uuid import UUID
+import fnmatch
 
 from fastapi import HTTPException, status
 from injector import inject, singleton
 from sqlmodel import Session
 
+from api.core.config import get_config
 from api.domains.agents.service import AgentService
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.service import AuthService
@@ -25,6 +28,8 @@ from api.domains.users.organization_users.models import (
 )
 from api.domains.users.organization_users.service import OrganizationUserService
 from api.infrastructure.shared.models import PaginatedItems, Pagination
+
+logger = logging.getLogger(__name__)
 
 
 @inject
@@ -50,13 +55,57 @@ class OrganizationService:
             )
         return organization
 
+    @staticmethod
+    def _bare_model(pattern: str) -> str:
+        # Strip any litellm gateway prefix so patterns match the bare OpenRouter slug.
+        return pattern.strip().lower().removeprefix("litellm/openrouter/")
+
+    def _validate_allowed_models(self, allowed_models: list[str], existing: list[str] | None = None) -> None:
+        if not allowed_models:
+            return
+        try:
+            catalog = self.agent_service.openrouter.list_models()
+        except Exception as e:
+            # If the OpenRouter catalog is unavailable (e.g. no API key locally, a
+            # transient outage), skip validation so admins can still configure the
+            # allowlist — but log it so a silently-skipped validation is debuggable.
+            logger.warning("OpenRouter catalog unavailable, skipping model allowlist validation: %s", e)
+            return
+        if not catalog:
+            return
+        # Entries already stored on the org are exempt from catalog validation:
+        # a model OpenRouter has since removed ("orphaned") must be preservable on
+        # save. Only newly-added patterns are checked against the live catalog.
+        existing_bare = {self._bare_model(m) for m in (existing or [])}
+        catalog_ids_lower = [m["id"].lower() for m in catalog]
+        for pattern in allowed_models:
+            bare = self._bare_model(pattern)
+            if bare in existing_bare:
+                continue
+            if not any(fnmatch.fnmatch(cid, bare) for cid in catalog_ids_lower):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Model pattern '{pattern}' does not match any known models in the catalog.",
+                )
+
     def create_organization(self, data: OrganizationCreate, actor: CurrentUserContext) -> OrganizationCreateResult:
         actor.require_platform_admin(detail="Only a platform administrator can create organizations")
+
+        config = get_config()
+        if data.allowed_models is not None:
+            self._validate_allowed_models(data.allowed_models)
+            allowed_models = [m.removeprefix("litellm/openrouter/") for m in data.allowed_models]
+        else:
+            allowed_models = [config.agent_default_model.removeprefix("litellm/openrouter/")]
 
         # Org, owner-invite (user + token) and the OWNER membership all commit together,
         # so a failed step can't leave an org with no owner. The invite email is sent
         # only after commit.
-        organization = Organization(name=data.name, description=data.description)
+        organization = Organization(
+            name=data.name,
+            description=data.description,
+            allowed_models=allowed_models,
+        )
         with Session(self.organization_repository.delegate.engine, expire_on_commit=False) as session:
             self.organization_repository.save_with_session(organization, session)
             prepared = self.auth_service.prepare_invite(session, email=str(data.owner_email), full_name=data.owner_name)
@@ -145,11 +194,31 @@ class OrganizationService:
                 detail=f"Organization {organization_id} not found",
             )
 
-        for key, value in organization_data.model_dump(exclude_unset=True).items():
-            setattr(organization, key, value)
-        organization = self.organization_repository.save(organization)
+        dump = organization_data.model_dump(exclude_unset=True)
 
-        organization_read = self.organization_repository.get_read(organization.id)
+        # Mutate and commit inside a single live session
+        # so SQLAlchemy properly tracks list mutations and flushes the UPDATE.
+        with Session(self.organization_repository.delegate.engine, expire_on_commit=False) as session:
+            session.add(organization)
+
+            from sqlalchemy.orm.attributes import flag_modified
+
+            if "allowed_models" in dump:
+                if dump["allowed_models"] is None:
+                    # An explicit null is a no-op: allowed_models is non-nullable at
+                    # the model level, so never overwrite the stored list with NULL.
+                    del dump["allowed_models"]
+                else:
+                    self._validate_allowed_models(dump["allowed_models"], existing=organization.allowed_models)
+                    dump["allowed_models"] = [m.removeprefix("litellm/openrouter/") for m in dump["allowed_models"]]
+                    flag_modified(organization, "allowed_models")
+
+            for key, value in dump.items():
+                setattr(organization, key, value)
+
+            session.commit()
+
+        organization_read = self.organization_repository.get_read(organization_id)
         if not organization_read:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

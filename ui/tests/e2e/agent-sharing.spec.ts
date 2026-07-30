@@ -385,9 +385,9 @@ test.describe("Agent sharing", () => {
         updated_at: "2024-01-01T00:00:00Z",
         name: "AAI Labs",
         description: "Starter organization",
-        is_default: false,
         owner_email: "owner@example.com",
         owner_name: "Grace Hopper",
+        allowed_models: ["*"],
       },
       {
         id: ORG_B_ID,
@@ -395,9 +395,9 @@ test.describe("Agent sharing", () => {
         updated_at: "2024-01-01T00:00:00Z",
         name: "Globex",
         description: "Second organization",
-        is_default: false,
         owner_email: "hank@globex.com",
         owner_name: "Hank Scorpio",
+        allowed_models: ["*"],
       },
     ];
     await data.users.interceptGetUserContextRequest({

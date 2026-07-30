@@ -32,6 +32,7 @@ def there_is_an_organization(
             id=id or uuid7(),
             name=name,
             description=description,
+            allowed_models=["*"],
         )
         organization_repository.save(organization)
 

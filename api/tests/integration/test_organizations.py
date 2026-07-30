@@ -5,6 +5,7 @@
 so the platform_admin can also deliver it manually.
 """
 
+from unittest.mock import patch
 from uuid import UUID, uuid7
 
 from fastapi import status
@@ -206,3 +207,54 @@ def test_create_organization_requires_auth():
 
             with then("it is unauthorized"):
                 assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
+
+
+@patch("api.infrastructure.openrouter.client.OpenRouterClient.list_models")
+def test_get_organization_strips_model_prefixes(mock_list_models):
+    mock_list_models.return_value = [{"id": "google/gemini"}, {"id": "openai/gpt-4"}]
+    with given([*_GIVEN, _there_is_a_platform_admin()]) as context:
+        with when("platform admin creates an org with prefixed models"):
+            response = context.client.post(
+                _ORGS,
+                json={
+                    "name": "Model Inc",
+                    "owner_email": "model@corp.com",
+                    "allowed_models": [
+                        "litellm/openrouter/google/gemini",
+                        "litellm/openrouter/openai/gpt-4",
+                    ],
+                },
+                headers=_auth(context),
+            )
+
+            with then("org is created and models are stripped"):
+                assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+                body = response.json()
+                assert_that(
+                    body["organization"]["allowed_models"],
+                    equal_to(["google/gemini", "openai/gpt-4"]),
+                )
+
+        with when("I fetch the organization"):
+            org_id = body["organization"]["id"]
+            # Org GET is org-scoped, so the platform admin needs membership to read it.
+            org_uuid = UUID(org_id)
+            org_user_repo: OrganizationUserRepository = context.injector.get(OrganizationUserRepository)
+            org_user = OrganizationUser(
+                user_id=context.user.id,
+                organization_id=org_uuid,
+                role=OrganizationRole.ADMIN,
+            )
+            org_user_repo.save(org_user)
+            context.current_user_context.organization_ids.append(org_uuid)
+            context.current_user_context.user_organization_map[org_uuid] = org_user
+            context.current_user_context.current_user_organization = org_user
+
+            response2 = context.client.get(
+                f"/api/v1/organizations/{org_id}",
+                headers=_auth(context),
+            )
+
+        with then("the fetched organization has stripped prefixes"):
+            body2 = response2.json()
+            assert_that(body2["allowed_models"], equal_to(["google/gemini", "openai/gpt-4"]))

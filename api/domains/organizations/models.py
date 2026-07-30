@@ -5,6 +5,7 @@ import sqlalchemy as sa
 from fastapi import Query
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic import ConfigDict, EmailStr
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import CheckConstraint, Field
 
 from api.infrastructure.postgres.models import BaseModel
@@ -15,6 +16,7 @@ class Organization(BaseModel, table=True):
 
     name: str = Field(nullable=False, min_length=3, max_length=255)
     description: str | None = Field(default=None, nullable=True)
+    allowed_models: list[str] = Field(default_factory=list, sa_column=sa.Column(JSONB, server_default="[]"))
 
     __table_args__ = (
         sa.Index("ix_organization_name", "name"),
@@ -33,11 +35,13 @@ class OrganizationRead(PydanticBaseModel):
     description: str | None = None
     owner_email: str | None = None
     owner_name: str | None = None
+    allowed_models: list[str] = []
 
 
 class OrganizationUpdate(PydanticBaseModel):
     name: str | None = Field(min_length=3, max_length=255, default=None)
     description: str | None = None
+    allowed_models: list[str] | None = None
 
 
 class OrganizationCreate(PydanticBaseModel):
@@ -45,6 +49,7 @@ class OrganizationCreate(PydanticBaseModel):
     description: str | None = Field(default=None, nullable=True)
     owner_email: EmailStr
     owner_name: str | None = None
+    allowed_models: list[str] | None = None
 
 
 class OrganizationCreateResult(PydanticBaseModel):

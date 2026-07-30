@@ -15,6 +15,7 @@ function org(overrides: Record<string, unknown> = {}) {
     is_default: false,
     owner_email: "owner@example.com",
     owner_name: "Grace Hopper",
+    allowed_models: ["*"],
     ...overrides,
   };
 }

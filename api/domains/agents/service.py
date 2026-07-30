@@ -19,8 +19,11 @@ from api.domains.agents.aai_cli_artifacts import (
     build_tool_context_md,
     provider_secrets_map,
 )
+from api.domains.agents.runtime_policy import build_chat_commands_policy_md
 from api.domains.agents.aai_cli_skills import build_skills_manifest_from_zips
 from api.domains.agents.authorization import AgentAuthorization
+from api.domains.skills.models import Skill
+from api.domains.skills.repository import SkillRepository
 from api.domains.agents.builders import (
     build_config_map,
     build_deployment,
@@ -78,15 +81,12 @@ from api.domains.agents.models import (
 )
 from api.domains.agents.exceptions import BotTokenConflictHTTPException
 from api.domains.agents.repository import AgentRepository
-from api.domains.agents.runtime_policy import build_chat_commands_policy_md
 from api.domains.auth.models import CurrentUserContext
 from api.domains.events import EventDeliveryDispatcher, resolve_actor_identity
 from api.domains.events.catalog import AGENT_STARTED, AGENT_STOPPED
 from api.domains.auth.token_service import SlackConfigTokenService
 from api.domains.organizations.lookup import OrganizationLookupService
 from api.domains.rbac.catalog import PermissionKey
-from api.domains.skills.models import Skill
-from api.domains.skills.repository import SkillRepository
 from api.domains.templates.models import AgentTemplate, PlatformTemplate, TemplateRead
 from api.domains.templates.renderer import render_template
 from api.domains.templates.repository import TemplateRepository
@@ -176,10 +176,6 @@ _VALIDATORS: dict[SecretProvider, Any] = {
 }
 
 
-def _allowlist_patterns(allowlist: str) -> list[str]:
-    return [p.strip().lower() for p in allowlist.split(",") if p.strip()]
-
-
 def _enrich_atlassian_content(content: Any) -> Any:
     """For Atlassian integrations using scoped API tokens, fetch and store the cloud_id.
 
@@ -202,24 +198,28 @@ def _enrich_atlassian_content(content: Any) -> Any:
     return content
 
 
-def filter_models_by_allowlist(catalog: list[dict], allowlist: str) -> list[dict]:
-    """Keeps catalogue entries whose id matches any comma-separated glob pattern.
-    An empty allowlist passes everything through. Matching is case-insensitive.
+def filter_models_by_allowlist(catalog: list[dict], allowlist: list[str]) -> list[dict]:
+    """Keeps catalogue entries whose id matches any glob pattern in the allowlist.
+    An empty allowlist blocks everything. Matching is case-insensitive.
     """
-    patterns = _allowlist_patterns(allowlist)
+    if not allowlist:
+        return []
+    patterns = [p.strip().lower() for p in allowlist if p.strip()]
     if not patterns:
-        return catalog
+        return []
     return [model for model in catalog if any(fnmatch.fnmatch(model["id"].lower(), pattern) for pattern in patterns)]
 
 
-def is_model_allowed(model: str, allowlist: str) -> bool:
+def is_model_allowed(model: str, allowlist: list[str]) -> bool:
     """Whether a stored model string (litellm/openrouter/<slug>) is permitted by
-    the allowlist globs. An empty allowlist permits everything. The litellm/
+    the allowlist globs. An empty allowlist blocks everything. The litellm/
     gateway prefix is stripped so patterns match the OpenRouter slug.
     """
-    patterns = _allowlist_patterns(allowlist)
+    if not allowlist:
+        return False
+    patterns = [p.strip().lower() for p in allowlist if p.strip()]
     if not patterns:
-        return True
+        return False
     slug = model.removeprefix(_OPENROUTER_MODEL_PREFIX).lower()
     return any(fnmatch.fnmatch(slug, pattern) for pattern in patterns)
 
@@ -256,16 +256,20 @@ class AgentService:
     def count_agents_in_error(self) -> int:
         return self.repository.count_agents_in_error()
 
-    def _ensure_model_allowed(self, model: str | None) -> None:
+    def _ensure_model_allowed(self, model: str | None, org_id: UUID) -> None:
         """Rejects models outside the allowlist. litellm is cluster-internal, so
         create/update are the only paths that can set an agent's model; enforcing
         here is sufficient. An empty/None model defers to the configured default.
         """
-        if model and not is_model_allowed(model, self.config.agent_model_allowlist):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Model '{model}' is not in the allowed model list",
-            )
+        if model:
+            allowed_models = self.organization_lookup.get_allowed_models(org_id)
+            if allowed_models is None:
+                raise HTTPException(status_code=404, detail="Organization not found")
+            if not is_model_allowed(model, allowed_models):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Model '{model}' is not in the allowed model list",
+                )
 
     @staticmethod
     def _build_skill_pointers(skills: list[Skill]) -> str:
@@ -461,7 +465,7 @@ class AgentService:
     def create_agent(self, data: AgentCreate, context: CurrentUserContext) -> AgentRead:
         org_id = self._org_id(context)
         self.authorization.require_collection_scope(context, PermissionKey.AGENT_CREATE)
-        self._ensure_model_allowed(data.model)
+        self._ensure_model_allowed(data.model, org_id)
 
         if data.platform == AgentPlatform.SLACK:
             assert data.slack_bot_token is not None
@@ -755,7 +759,7 @@ class AgentService:
                 self._try_rename_slack_app(agent, updated["name"], context)
 
         if "model" in updated:
-            self._ensure_model_allowed(updated["model"])
+            self._ensure_model_allowed(updated["model"], org_id)
             agent.model = updated["model"]
 
         if "approval_mode" in updated:
@@ -947,6 +951,17 @@ class AgentService:
             else ""
         )
         effective_model = agent.model or self.config.agent_default_model
+
+        # Re-check the allowlist at start time, not just create/update: the org's
+        # allowlist can change after the agent was created, and a model that was
+        # valid then may no longer be permitted now.
+        allowed_models = self.organization_lookup.get_allowed_models(org_id)
+        if allowed_models is None or not is_model_allowed(effective_model, allowed_models):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Model '{effective_model}' is no longer in the organization's allowed model list",
+            )
+
         overlay: dict | None = None
         hermes_cfg: dict | None = None
 
@@ -1560,19 +1575,33 @@ class AgentService:
             except Exception as e:
                 logger.warning("Unexpected error joining channel %s: %s", channel_id, e)
 
-    def list_models(self, context: CurrentUserContext) -> list[dict]:
+    def list_models(self, context: CurrentUserContext, catalog: bool = False) -> list[dict]:
         """Returns the allowlisted OpenRouter models as picker options. The
         configured default (AGENT_DEFAULT_MODEL) is guaranteed present, flagged
         is_default, and listed first so the frontend and backend agree on it.
         """
+        org_id = self._org_id(context)
         self.authorization.require_collection_scope(context, PermissionKey.AGENT_CREATE)
-        catalog = self.openrouter.list_models()
-        allowed = filter_models_by_allowlist(catalog, self.config.agent_model_allowlist)
+        raw_catalog = self.openrouter.list_models()
+
+        if catalog:
+            self.authorization.policy.require(
+                context,
+                org_id,
+                PermissionKey.ORGANIZATION_UPDATE,
+                detail="You don't have permission to view the full model catalog.",
+            )
+            allowed = raw_catalog
+        else:
+            allowed_models = self.organization_lookup.get_allowed_models(org_id)
+            if allowed_models is None:
+                raise HTTPException(status_code=404, detail="Organization not found")
+            allowed = filter_models_by_allowlist(raw_catalog, allowed_models)
         options = [
             {
                 "value": f"litellm/openrouter/{model['id']}",
                 "label": model["name"],
-                "context_length": model.get("context_length"),
+                "contextLength": model.get("context_length"),
                 "pricing": model.get("pricing"),
             }
             for model in allowed
@@ -1580,20 +1609,19 @@ class AgentService:
 
         default_value = self.config.agent_default_model
         if default_value and not any(o["value"] == default_value for o in options):
-            options.insert(
-                0,
+            options.append(
                 {
                     "value": default_value,
-                    "label": default_value.removeprefix(_OPENROUTER_MODEL_PREFIX),
-                    "context_length": None,
+                    "label": default_value.removeprefix("litellm/openrouter/"),
+                    "contextLength": None,
                     "pricing": None,
-                },
+                }
             )
 
         # Stable sort puts the default first while preserving catalogue order.
         options.sort(key=lambda o: o["value"] != default_value)
         for option in options:
-            option["is_default"] = option["value"] == default_value
+            option["isDefault"] = option["value"] == default_value
         return options
 
     def list_slack_channels(self, agent_id: UUID, context: CurrentUserContext, search: str | None = None) -> list[dict]:
