@@ -805,9 +805,7 @@ def test_start_agent_wires_telemetry_push_into_the_secret():
         k8s: KubernetesClient = context.injector.get(KubernetesClient)
 
         with when("I start the agent"):
-            response = client.post(
-                f"{_BASE}/{context.agent.id}/start", headers=_auth(context)
-            )
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
 
         with then("the secret carries the telemetry push wiring the plugins read"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
