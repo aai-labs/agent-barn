@@ -540,6 +540,7 @@ def _setup_org_b(context):
         name="Org B",
         email="orgb-owner@example.com",
     )(context)
+    assert context.organization is not None
     org_b_id = context.organization.id
 
     original_request = context.client.request
