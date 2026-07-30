@@ -183,7 +183,7 @@ def _group_into_threads(
             continue
         try:
             tid_f = float(tid)
-        except ValueError, TypeError:
+        except (ValueError, TypeError):
             continue
 
         msgs_sorted = sorted(msgs, key=lambda m: (m.occurred_at, m.id))

@@ -1,10 +1,13 @@
+import logging
 from dataclasses import dataclass
 from uuid import UUID
+import fnmatch
 
 from fastapi import HTTPException, status
 from injector import inject, singleton
 from sqlmodel import Session
 
+from api.core.config import get_config
 from api.domains.agents.service import AgentService
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.service import AuthService
@@ -19,13 +22,14 @@ from api.domains.organizations.models import (
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.rbac.catalog import ORG_OWNER_ONLY_ROLES, PermissionKey
 from api.domains.rbac.policy import PermissionPolicy
-from api.domains.templates.service import TemplateService
 from api.domains.users.organization_users.models import (
     OrganizationRole,
     OrganizationUser,
 )
 from api.domains.users.organization_users.service import OrganizationUserService
 from api.infrastructure.shared.models import PaginatedItems, Pagination
+
+logger = logging.getLogger(__name__)
 
 
 @inject
@@ -36,12 +40,12 @@ class OrganizationService:
     user_organization_service: OrganizationUserService
     auth_service: AuthService
     agent_service: AgentService
-    template_service: TemplateService
     permission_policy: PermissionPolicy
 
     def get_organization(self, organization_id: UUID, context: CurrentUserContext) -> OrganizationRead:
-        # Any member (or a superuser) may view the org; non-members are refused before
-        # the fetch so a 403-vs-404 difference can't confirm an org's existence.
+        # Any member (or a platform administrator in explicit Organization context) may
+        # view the org; non-members are refused before the fetch so a 403-vs-404
+        # difference can't confirm an org's existence.
         self._ensure_can_view_organization(organization_id, context)
         organization = self.organization_repository.get_read(organization_id)
         if not organization:
@@ -51,13 +55,57 @@ class OrganizationService:
             )
         return organization
 
+    @staticmethod
+    def _bare_model(pattern: str) -> str:
+        # Strip any litellm gateway prefix so patterns match the bare OpenRouter slug.
+        return pattern.strip().lower().removeprefix("litellm/openrouter/")
+
+    def _validate_allowed_models(self, allowed_models: list[str], existing: list[str] | None = None) -> None:
+        if not allowed_models:
+            return
+        try:
+            catalog = self.agent_service.openrouter.list_models()
+        except Exception as e:
+            # If the OpenRouter catalog is unavailable (e.g. no API key locally, a
+            # transient outage), skip validation so admins can still configure the
+            # allowlist — but log it so a silently-skipped validation is debuggable.
+            logger.warning("OpenRouter catalog unavailable, skipping model allowlist validation: %s", e)
+            return
+        if not catalog:
+            return
+        # Entries already stored on the org are exempt from catalog validation:
+        # a model OpenRouter has since removed ("orphaned") must be preservable on
+        # save. Only newly-added patterns are checked against the live catalog.
+        existing_bare = {self._bare_model(m) for m in (existing or [])}
+        catalog_ids_lower = [m["id"].lower() for m in catalog]
+        for pattern in allowed_models:
+            bare = self._bare_model(pattern)
+            if bare in existing_bare:
+                continue
+            if not any(fnmatch.fnmatch(cid, bare) for cid in catalog_ids_lower):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Model pattern '{pattern}' does not match any known models in the catalog.",
+                )
+
     def create_organization(self, data: OrganizationCreate, actor: CurrentUserContext) -> OrganizationCreateResult:
-        actor.require_superuser(detail="Only a superuser can create organizations")
+        actor.require_platform_admin(detail="Only a platform administrator can create organizations")
+
+        config = get_config()
+        if data.allowed_models is not None:
+            self._validate_allowed_models(data.allowed_models)
+            allowed_models = [m.removeprefix("litellm/openrouter/") for m in data.allowed_models]
+        else:
+            allowed_models = [config.agent_default_model.removeprefix("litellm/openrouter/")]
 
         # Org, owner-invite (user + token) and the OWNER membership all commit together,
         # so a failed step can't leave an org with no owner. The invite email is sent
         # only after commit.
-        organization = Organization(name=data.name, description=data.description, is_default=False)
+        organization = Organization(
+            name=data.name,
+            description=data.description,
+            allowed_models=allowed_models,
+        )
         with Session(self.organization_repository.delegate.engine, expire_on_commit=False) as session:
             self.organization_repository.save_with_session(organization, session)
             prepared = self.auth_service.prepare_invite(session, email=str(data.owner_email), full_name=data.owner_name)
@@ -71,9 +119,8 @@ class OrganizationService:
             )
             session.commit()
 
-        # Templates are per-org (unlike global skills), so a new org needs its own copy
-        # of the predefined catalog. Idempotent; runs post-commit like the invite email.
-        self.template_service.seed_predefined_templates(organization.id)
+        # Predefined templates are global platform resources seeded once at
+        # startup, so a new org needs no per-org catalog clone.
         self.auth_service.send_prepared_invite(prepared)
 
         organization_read = self.organization_repository.get_read(organization.id)
@@ -84,13 +131,6 @@ class OrganizationService:
             )
         return OrganizationCreateResult(organization=organization_read, invite_link=prepared.invite_link)
 
-    def ensure_default_organization(self) -> Organization:
-        existing = self.organization_repository.find_default()
-        if existing:
-            return existing
-        org = Organization(name="default", is_default=True)
-        return self.organization_repository.save(org)
-
     def get_paginated_organizations(
         self,
         context: CurrentUserContext,
@@ -99,7 +139,7 @@ class OrganizationService:
         page_size: int = 15,
     ) -> PaginatedItems[OrganizationRead]:
         pagination = Pagination(page=page, size=page_size)
-        user_id = None if context.user.is_superuser else context.user.id
+        user_id = None if context.user.is_platform_admin else context.user.id
         return self.organization_repository.find_all_paginated_read(
             pagination=pagination,
             organization_filter=org_filter,
@@ -154,11 +194,31 @@ class OrganizationService:
                 detail=f"Organization {organization_id} not found",
             )
 
-        for key, value in organization_data.model_dump(exclude_unset=True).items():
-            setattr(organization, key, value)
-        organization = self.organization_repository.save(organization)
+        dump = organization_data.model_dump(exclude_unset=True)
 
-        organization_read = self.organization_repository.get_read(organization.id)
+        # Mutate and commit inside a single live session
+        # so SQLAlchemy properly tracks list mutations and flushes the UPDATE.
+        with Session(self.organization_repository.delegate.engine, expire_on_commit=False) as session:
+            session.add(organization)
+
+            from sqlalchemy.orm.attributes import flag_modified
+
+            if "allowed_models" in dump:
+                if dump["allowed_models"] is None:
+                    # An explicit null is a no-op: allowed_models is non-nullable at
+                    # the model level, so never overwrite the stored list with NULL.
+                    del dump["allowed_models"]
+                else:
+                    self._validate_allowed_models(dump["allowed_models"], existing=organization.allowed_models)
+                    dump["allowed_models"] = [m.removeprefix("litellm/openrouter/") for m in dump["allowed_models"]]
+                    flag_modified(organization, "allowed_models")
+
+            for key, value in dump.items():
+                setattr(organization, key, value)
+
+            session.commit()
+
+        organization_read = self.organization_repository.get_read(organization_id)
         if not organization_read:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -172,18 +232,13 @@ class OrganizationService:
         context: CurrentUserContext,
     ) -> None:
         # Deleting an org cascades its agents/templates/skills and orphans running
-        # pods, so it is owner/superuser only — admins can rename but not destroy.
+        # pods, so it is owner/platform-admin only — admins can rename but not destroy.
         self._ensure_is_owner(organization_id, context)
         organization = self.organization_repository.get(organization_id)
         if not organization:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Organization {organization_id} not found",
-            )
-        if organization.is_default:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="The default organization cannot be deleted",
             )
         # Deleting an org would cascade its agents and orphan their running pods.
         # Require an explicit teardown: the agents must be deleted first.

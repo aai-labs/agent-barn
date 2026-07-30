@@ -12,8 +12,8 @@ load_dotenv(ROOT_ENV_PATH, override=False)
 class Config(BaseSettings):
     db_connection_url: PostgresDsn
     secret_signing_key: str
-    super_user_credentials: str
-    super_user_full_name: str = "Super User"
+    platform_admin_credentials: str
+    platform_admin_full_name: str = "Super User"
     email_server_credential: str | None = None
     email_smtp_server: str | None = None
     # Optional visible "From" for outgoing mail. The SMTP login always uses the email
@@ -57,6 +57,12 @@ class Config(BaseSettings):
     openrouter_api_key: str = ""
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     openrouter_models_cache_ttl_seconds: int = 3600
+    # TTL for the credits poll behind agentfarm_openrouter_credits_remaining
+    # (GET /key with the inference key above; no management key involved).
+    openrouter_credits_cache_ttl_seconds: int = 300
+
+    redis_url: str = "redis://localhost:6379/0"
+
     # Comma-separated glob patterns (fnmatch) matched against OpenRouter model
     # ids to limit what the model picker offers, e.g. "z-ai/glm-5.2,openai/gpt-5*".
     # Empty allows the full catalogue.
@@ -68,6 +74,9 @@ class Config(BaseSettings):
     # injected into the agent's aai-cli gmail-work profile at start time.
     google_cloud_client_id: str = ""
     google_cloud_client_secret: str = ""
+
+    agent_firecrawl_base_url: str = ""
+    agent_firecrawl_api_key: str = ""
 
     @property
     def is_email_delivery_enabled(self) -> bool:

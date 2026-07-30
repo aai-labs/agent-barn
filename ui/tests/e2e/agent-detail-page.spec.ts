@@ -229,7 +229,7 @@ test.describe("Agent Detail Page — Template tab (re-pin)", () => {
 
     const patchPromise = page.waitForRequest(
       (req) =>
-        req.url().includes(`/api/v1/agents/${MOCK_AGENT_ID}`) &&
+        req.url().includes(`/agents/${MOCK_AGENT_ID}`) &&
         req.method() === "PATCH",
     );
     await page.getByRole("button", { name: "Apply template" }).click();
@@ -716,7 +716,7 @@ test.describe("Agent Detail Page — Personality tab (approval mode)", () => {
 
     const patchPromise = page.waitForRequest(
       (req) =>
-        req.url().includes(`/api/v1/agents/${MOCK_AGENT_ID}`) &&
+        req.url().includes(`/agents/${MOCK_AGENT_ID}`) &&
         req.method() === "PATCH",
     );
     await page.getByRole("button", { name: /^save$/i }).click();

@@ -6,6 +6,12 @@
 # For k3s: copy /etc/rancher/k3s/k3s.yaml somewhere readable and point here.
 KUBECONFIG=$HOME/.kube/config
 
+# Target namespace. Defaults to agent-farm. helmfile reads this, so every release
+# (plus its secrets/services/ingresses) lands here. For a separate STAGING stack,
+# set NAMESPACE=agent-farm-staging, use the -staging image tags below, and point
+# deploy.sh's `kubectl apply` line at k8s/agent-farm-user.staging.yaml.
+NAMESPACE=agent-farm
+
 # ── Container registry ───────────────────────────────────────────────────────
 REGISTRY_PREFIX=registry.k8s.aai-labs.com
 REGISTRY_SERVER=registry.k8s.aai-labs.com
@@ -20,7 +26,11 @@ UI_IMAGE_REPOSITORY=agentfarm-ui
 HERMES_IMAGE_REPOSITORY=agentfarm-hermes-base
 OPENCLAW_IMAGE_REPOSITORY=agentfarm-openclaw-base
 
-# ── Image tags (pin to specific versions for a real deploy) ──────────────────
+# ── Image tags (pin explicit images for a manual deploy) ─────────────────────
+# GitHub Actions branch deploys set API/UI image tags automatically to the
+# environment's moving tag (`latest` on main, `latest-staging` on staging).
+# These values matter for manual deploy.sh / release-bundle usage, where you
+# still pin explicit tags.
 API_IMAGE_TAG=0.13.0
 UI_IMAGE_TAG=0.13.0
 OPENCLAW_IMAGE_TAG=0.4.0
@@ -50,8 +60,7 @@ SECRET_SIGNING_KEY=
 #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 AGENT_TOKEN_ENCRYPTION_KEY=
 # Format: email:password
-SUPER_USER_CREDENTIALS=admin@example.com:
-SUPER_USER_FULL_NAME=
+PLATFORM_ADMIN_CREDENTIALS=admin@example.com:
 ENVIRONMENT=local
 
 # ── URLs / ingress hosts ─────────────────────────────────────────────────────
@@ -78,6 +87,19 @@ INGRESS_CLUSTER_ISSUER=letsencrypt-http01
 # Empty falls through to the cluster's default StorageClass. k3s default is
 # local-path. Set to a network-replicated class for node-loss durability.
 STORAGE_CLASS=local-path
+
+# ── Firecrawl ────────────────────────────────────────────────────────────────
+# API key used by the Firecrawl server (TEST_API_KEY) and agents (FIRECRAWL_API_KEY).
+# Same value serves both sides. Generate with: openssl rand -hex 24
+FIRECRAWL_API_KEY=
+# Optional: random key protecting the BullMQ admin dashboard. Defaults to '@'.
+# Not needed for production since Firecrawl is on ClusterIP (internal only).
+# FIRECRAWL_BULL_AUTH_KEY=
+
+# ── Postgres (Firecrawl DB) ──────────────────────────────────────────────────
+POSTGRES_FIRECRAWL_USER=firecrawl
+POSTGRES_FIRECRAWL_PASSWORD=
+POSTGRES_FIRECRAWL_DB=firecrawl
 
 # ── Model picker (AF-128) ────────────────────────────────────────────────────
 # Comma-separated fnmatch globs limiting OpenRouter models, e.g. z-ai/glm-5.2,openai/gpt-5*

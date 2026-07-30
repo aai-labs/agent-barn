@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from unittest.mock import Mock
-from uuid import uuid7
+from uuid import uuid4, uuid7
 
 import pytest
 from fastapi import HTTPException
@@ -40,8 +40,7 @@ def _agent(organization_id, *, creator_id=None, status=AgentStatus.STOPPED):
         organization_id=organization_id,
         created_by_user_id=creator_id,
         name="Agent",
-        template_slug="template",
-        template_version=1,
+        agent_template_id=uuid4(),
         status=status,
     )
 

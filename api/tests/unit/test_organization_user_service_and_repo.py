@@ -37,6 +37,7 @@ def test_organization_user_service_raises_404_when_membership_missing():
         auth_service=Mock(),
         user_repository=Mock(),
         permission_policy=Mock(),
+        event_delivery_dispatcher=Mock(),
     )
 
     assert_that(
@@ -56,6 +57,7 @@ def test_organization_user_service_maps_conflict_to_409():
         auth_service=Mock(),
         user_repository=Mock(),
         permission_policy=Mock(),
+        event_delivery_dispatcher=Mock(),
     )
     org_user = OrganizationUser(
         user_id=uuid7(),
@@ -73,7 +75,7 @@ def test_organization_user_service_maps_conflict_to_409():
 def test_organization_user_repository_maps_duplicate_member_constraint():
     delegate = Mock()
     delegate.save.side_effect = IntegrityError("stmt", "params", Exception("uq_user_organization"))
-    repository = OrganizationUserRepository(delegate=delegate)
+    repository = OrganizationUserRepository(delegate=delegate, outbox_repository=Mock())
     org_user = OrganizationUser(
         user_id=uuid7(),
         organization_id=uuid7(),
@@ -89,7 +91,7 @@ def test_organization_user_repository_maps_duplicate_member_constraint():
 def test_organization_user_repository_maps_one_owner_constraint():
     delegate = Mock()
     delegate.save.side_effect = IntegrityError("stmt", "params", Exception("uq_user_organization_one_owner_per_org"))
-    repository = OrganizationUserRepository(delegate=delegate)
+    repository = OrganizationUserRepository(delegate=delegate, outbox_repository=Mock())
     org_user = OrganizationUser(
         user_id=uuid7(),
         organization_id=uuid7(),
@@ -104,7 +106,7 @@ def test_organization_user_repository_maps_one_owner_constraint():
 
 def test_organization_user_repository_delete_all_by_user_id_returns_true_when_empty():
     delegate = Mock()
-    repository = OrganizationUserRepository(delegate=delegate)
+    repository = OrganizationUserRepository(delegate=delegate, outbox_repository=Mock())
     delegate.find_all.return_value = []
 
     result = repository.delete_all_by_user_id(uuid7())

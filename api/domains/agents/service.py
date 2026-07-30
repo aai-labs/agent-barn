@@ -19,8 +19,11 @@ from api.domains.agents.aai_cli_artifacts import (
     build_tool_context_md,
     provider_secrets_map,
 )
+from api.domains.agents.runtime_policy import build_chat_commands_policy_md
 from api.domains.agents.aai_cli_skills import build_skills_manifest_from_zips
 from api.domains.agents.authorization import AgentAuthorization
+from api.domains.skills.models import Skill
+from api.domains.skills.repository import SkillRepository
 from api.domains.agents.builders import (
     build_config_map,
     build_deployment,
@@ -65,6 +68,7 @@ from api.domains.agents.models import (
     AgentTelegramConfigRead,
     AgentType,
     AgentUpdate,
+    FirecrawlContent,
     ConfluenceContent,
     GmailContent,
     JiraContent,
@@ -77,13 +81,13 @@ from api.domains.agents.models import (
 )
 from api.domains.agents.exceptions import BotTokenConflictHTTPException
 from api.domains.agents.repository import AgentRepository
-from api.domains.agents.runtime_policy import build_chat_commands_policy_md
 from api.domains.auth.models import CurrentUserContext
+from api.domains.events import EventDeliveryDispatcher, resolve_actor_identity
+from api.domains.events.catalog import AGENT_STARTED, AGENT_STOPPED
 from api.domains.auth.token_service import SlackConfigTokenService
+from api.domains.organizations.lookup import OrganizationLookupService
 from api.domains.rbac.catalog import PermissionKey
-from api.domains.skills.models import Skill
-from api.domains.skills.repository import SkillRepository
-from api.domains.templates.models import TemplateRead
+from api.domains.templates.models import AgentTemplate, PlatformTemplate, TemplateRead
 from api.domains.templates.renderer import render_template
 from api.domains.templates.repository import TemplateRepository
 from api.infrastructure.crypto import decrypt_token, encrypt_token
@@ -172,10 +176,6 @@ _VALIDATORS: dict[SecretProvider, Any] = {
 }
 
 
-def _allowlist_patterns(allowlist: str) -> list[str]:
-    return [p.strip().lower() for p in allowlist.split(",") if p.strip()]
-
-
 def _enrich_atlassian_content(content: Any) -> Any:
     """For Atlassian integrations using scoped API tokens, fetch and store the cloud_id.
 
@@ -198,24 +198,28 @@ def _enrich_atlassian_content(content: Any) -> Any:
     return content
 
 
-def filter_models_by_allowlist(catalog: list[dict], allowlist: str) -> list[dict]:
-    """Keeps catalogue entries whose id matches any comma-separated glob pattern.
-    An empty allowlist passes everything through. Matching is case-insensitive.
+def filter_models_by_allowlist(catalog: list[dict], allowlist: list[str]) -> list[dict]:
+    """Keeps catalogue entries whose id matches any glob pattern in the allowlist.
+    An empty allowlist blocks everything. Matching is case-insensitive.
     """
-    patterns = _allowlist_patterns(allowlist)
+    if not allowlist:
+        return []
+    patterns = [p.strip().lower() for p in allowlist if p.strip()]
     if not patterns:
-        return catalog
+        return []
     return [model for model in catalog if any(fnmatch.fnmatch(model["id"].lower(), pattern) for pattern in patterns)]
 
 
-def is_model_allowed(model: str, allowlist: str) -> bool:
+def is_model_allowed(model: str, allowlist: list[str]) -> bool:
     """Whether a stored model string (litellm/openrouter/<slug>) is permitted by
-    the allowlist globs. An empty allowlist permits everything. The litellm/
+    the allowlist globs. An empty allowlist blocks everything. The litellm/
     gateway prefix is stripped so patterns match the OpenRouter slug.
     """
-    patterns = _allowlist_patterns(allowlist)
+    if not allowlist:
+        return False
+    patterns = [p.strip().lower() for p in allowlist if p.strip()]
     if not patterns:
-        return True
+        return False
     slug = model.removeprefix(_OPENROUTER_MODEL_PREFIX).lower()
     return any(fnmatch.fnmatch(slug, pattern) for pattern in patterns)
 
@@ -233,20 +237,39 @@ class AgentService:
     config: Config
     skill_repository: SkillRepository
     slack_token_service: SlackConfigTokenService
+    event_delivery_dispatcher: EventDeliveryDispatcher
+    organization_lookup: OrganizationLookupService
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
 
-    def _ensure_model_allowed(self, model: str | None) -> None:
+    @staticmethod
+    def _set_pin(agent: Agent, template: AgentTemplate | PlatformTemplate) -> None:
+        """Point an agent at a resolved template via the right mutually-exclusive FK."""
+        if isinstance(template, PlatformTemplate):
+            agent.platform_template_id = template.id
+            agent.agent_template_id = None
+        else:
+            agent.agent_template_id = template.id
+            agent.platform_template_id = None
+
+    def count_agents_in_error(self) -> int:
+        return self.repository.count_agents_in_error()
+
+    def _ensure_model_allowed(self, model: str | None, org_id: UUID) -> None:
         """Rejects models outside the allowlist. litellm is cluster-internal, so
         create/update are the only paths that can set an agent's model; enforcing
         here is sufficient. An empty/None model defers to the configured default.
         """
-        if model and not is_model_allowed(model, self.config.agent_model_allowlist):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Model '{model}' is not in the allowed model list",
-            )
+        if model:
+            allowed_models = self.organization_lookup.get_allowed_models(org_id)
+            if allowed_models is None:
+                raise HTTPException(status_code=404, detail="Organization not found")
+            if not is_model_allowed(model, allowed_models):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Model '{model}' is not in the allowed model list",
+                )
 
     @staticmethod
     def _build_skill_pointers(skills: list[Skill]) -> str:
@@ -352,6 +375,8 @@ class AgentService:
         skills: list[Skill] | None = None,
         required_skill_ids: set[UUID] | None = None,
         allowed_actions: list[PermissionKey] | None = None,
+        template_slug: str = "",
+        template_version: int = 0,
     ) -> AgentRead:
         slack_config_read = AgentSlackConfigRead.model_validate(slack_config) if slack_config else None
         if slack_config_read and slack_config:
@@ -376,8 +401,8 @@ class AgentService:
             platform=agent.platform,
             agent_type=agent.agent_type,
             organization_id=agent.organization_id,
-            template_slug=agent.template_slug,
-            template_version=agent.template_version,
+            template_slug=template_slug,
+            template_version=template_version,
             model=agent.model,
             approval_mode=agent.approval_mode,
             slack_config=slack_config_read,
@@ -403,10 +428,8 @@ class AgentService:
             telegram_config = self.repository.get_telegram_config(agent.id)
         secrets = self.repository.get_secrets_for_agent(agent.id)
         skills = [s for _, s in self.skill_repository.get_agent_skills_with_details(agent.id)]
-        template = self.template_repository.get_template_by_slug_and_version(
-            agent.organization_id, agent.template_slug, agent.template_version
-        )
-        required_ids = self.template_repository.get_required_skill_ids(template.id) if template else set()
+        template = self.template_repository.get_pinned_template(agent)
+        required_ids = self.template_repository.get_required_skill_ids_for(template) if template else set()
         allowed_actions = self.authorization.allowed_actions(context, [agent])[agent.id]
         return self._build_agent_read(
             agent,
@@ -417,6 +440,8 @@ class AgentService:
             skills,
             required_ids,
             allowed_actions,
+            template_slug=template.template_slug if template else "",
+            template_version=template.version if template else 0,
         )
 
     def _get_bot_display_name(self, agent_id: str, slack_config: AgentSlackConfig) -> str | None:
@@ -440,7 +465,7 @@ class AgentService:
     def create_agent(self, data: AgentCreate, context: CurrentUserContext) -> AgentRead:
         org_id = self._org_id(context)
         self.authorization.require_collection_scope(context, PermissionKey.AGENT_CREATE)
-        self._ensure_model_allowed(data.model)
+        self._ensure_model_allowed(data.model, org_id)
 
         if data.platform == AgentPlatform.SLACK:
             assert data.slack_bot_token is not None
@@ -460,12 +485,10 @@ class AgentService:
 
         # Pin to the requested version, or the lineage's latest if unspecified.
         if data.template_version is not None:
-            template = self.template_repository.get_template_by_slug_and_version(
-                org_id, data.template_slug, data.template_version
-            )
+            template = self.template_repository.resolve_template(org_id, data.template_slug, data.template_version)
             missing_detail = f"Template {data.template_slug} v{data.template_version} not found"
         else:
-            template = self.template_repository.get_latest_template(org_id, data.template_slug)
+            template = self.template_repository.resolve_latest_template(org_id, data.template_slug)
             missing_detail = f"Template {data.template_slug} not found"
         if template is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=missing_detail)
@@ -477,10 +500,9 @@ class AgentService:
             model=data.model or "",
             platform=data.platform,
             agent_type=data.agent_type,
-            template_slug=template.template_slug,
-            template_version=template.version,
             approval_mode=data.approval_mode,
         )
+        self._set_pin(agent, template)
 
         if self.config.litellm_base_url and self.config.litellm_secret_name:
             try:
@@ -493,7 +515,7 @@ class AgentService:
                 ) from exc
 
         # Validate that all template-required skills are present in the request.
-        required_ids = self.template_repository.get_required_skill_ids(template.id)
+        required_ids = self.template_repository.get_required_skill_ids_for(template)
         if required_ids:
             missing = required_ids - set(data.skill_ids)
             if missing:
@@ -514,7 +536,12 @@ class AgentService:
             if persisted_membership is not None and persisted_membership.user_id == context.user.id
             else None
         )
-        self.repository.create_with_creator_access(agent, creator_membership_id)
+        created = self.repository.create_with_creator_access(
+            agent,
+            creator_membership_id,
+            actor=resolve_actor_identity(context, org_id),
+        )
+        created_delivery_ids = created.delivery_ids
 
         slack_config = None
         teams_config = None
@@ -596,6 +623,8 @@ class AgentService:
         if skills_to_assign:
             self.repository.save_skills([AgentSkill(agent_id=agent.id, skill_id=s.id) for s in skills_to_assign])
 
+        self.event_delivery_dispatcher.enqueue_immediate(created_delivery_ids)
+
         if data.platform == AgentPlatform.TEAMS:
             return self.start_agent(agent.id, context)
         allowed_actions = self.authorization.allowed_actions(context, [agent])[agent.id]
@@ -608,6 +637,8 @@ class AgentService:
             skills_to_assign,
             required_ids,
             allowed_actions,
+            template_slug=template.template_slug,
+            template_version=template.version,
         )
 
     def get_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
@@ -617,13 +648,19 @@ class AgentService:
     def get_agent_template(self, agent_id: UUID, version: int, context: CurrentUserContext) -> TemplateRead:
         org_id = self._org_id(context)
         agent = self.authorization.require_visible(context, agent_id)
-        template = self.template_repository.get_template_by_slug_and_version(org_id, agent.template_slug, version)
+        pinned = self.template_repository.get_pinned_template(agent)
+        if pinned is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Agent {agent_id} has no pinned template",
+            )
+        template = self.template_repository.resolve_template(org_id, pinned.template_slug, version)
         if not template:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Template version {version} not found for agent {agent_id}",
             )
-        return TemplateRead.model_validate(template)
+        return self.template_repository.to_read(template, self.template_repository.get_required_skills_for(template))
 
     def list_agents(
         self,
@@ -631,7 +668,6 @@ class AgentService:
         pagination: Pagination,
         context: CurrentUserContext,
     ) -> PaginatedItems[AgentRead]:
-        org_id = self._org_id(context)
         read_scope = self.authorization.require_collection_scope(context, PermissionKey.AGENT_READ)
         agents, total = self.repository.find_all_active(read_scope, agent_filter, pagination)
         allowed_actions = self.authorization.allowed_actions(context, agents)
@@ -643,14 +679,8 @@ class AgentService:
         secrets_by_agent = self.repository.get_secrets_for_agents(agent_ids)
         skills_by_agent = self.skill_repository.get_skills_for_agents(agent_ids)
 
-        slug_versions = list({(a.template_slug, a.template_version) for a in agents})
-        template_id_map = self.template_repository.get_template_ids_for_slug_versions(org_id, slug_versions)
-        template_ids = list(template_id_map.values())
-        req_ids_by_template = self.template_repository.get_required_skill_ids_for_templates(template_ids)
-
-        def _required_ids(agent: Agent) -> set[UUID]:
-            tid = template_id_map.get((agent.template_slug, agent.template_version))
-            return req_ids_by_template.get(tid, set()) if tid else set()
+        req_ids_by_agent = self.template_repository.get_required_skill_ids_for_agents(agents)
+        pin_info = self.template_repository.get_pinned_template_info_for_agents(agents)
 
         items = [
             self._build_agent_read(
@@ -660,8 +690,10 @@ class AgentService:
                 telegram_configs.get(agent.id),
                 secrets_by_agent.get(agent.id, []),
                 skills_by_agent.get(agent.id, []),
-                _required_ids(agent),
+                req_ids_by_agent.get(agent.id, set()),
                 allowed_actions.get(agent.id, []),
+                template_slug=pin_info.get(agent.id, ("", 0))[0],
+                template_version=pin_info.get(agent.id, ("", 0))[1],
             )
             for agent in agents
         ]
@@ -711,7 +743,7 @@ class AgentService:
         # validator guarantees both keys appear together.
         effective_template = None
         if "template_slug" in updated:
-            effective_template = self.template_repository.get_template_by_slug_and_version(
+            effective_template = self.template_repository.resolve_template(
                 org_id, updated["template_slug"], updated["template_version"]
             )
             if effective_template is None:
@@ -719,8 +751,7 @@ class AgentService:
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=(f"Template {updated['template_slug']} v{updated['template_version']} not found"),
                 )
-            agent.template_slug = effective_template.template_slug
-            agent.template_version = effective_template.version
+            self._set_pin(agent, effective_template)
 
         if "name" in updated:
             agent.name = updated["name"]
@@ -728,7 +759,7 @@ class AgentService:
                 self._try_rename_slack_app(agent, updated["name"], context)
 
         if "model" in updated:
-            self._ensure_model_allowed(updated["model"])
+            self._ensure_model_allowed(updated["model"], org_id)
             agent.model = updated["model"]
 
         if "approval_mode" in updated:
@@ -736,11 +767,9 @@ class AgentService:
 
         # Validate skill changes against the effective template's required skills
         if effective_template is None:
-            effective_template = self.template_repository.get_template_by_slug_and_version(
-                org_id, agent.template_slug, agent.template_version
-            )
+            effective_template = self.template_repository.get_pinned_template(agent)
         required_ids = (
-            self.template_repository.get_required_skill_ids(effective_template.id) if effective_template else set()
+            self.template_repository.get_required_skill_ids_for(effective_template) if effective_template else set()
         )
         if required_ids:
             # Block removal of required skills.
@@ -893,6 +922,9 @@ class AgentService:
 
     def start_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
         org_id = self._org_id(context)
+        # Stamped as Service labels for monitoring; resolved here (not in the
+        # route) so every start path labels agents consistently.
+        org_name = self.organization_lookup.get_name(org_id)
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_LIFECYCLE_MANAGE)
 
         if agent.status == AgentStatus.RUNNING:
@@ -901,7 +933,13 @@ class AgentService:
                 detail=f"Agent {agent_id} is already running",
             )
 
-        template = self.template_repository.get_template_or_raise(org_id, agent.template_slug, agent.template_version)
+        previous_status = agent.status.value
+        template = self.template_repository.get_pinned_template(agent)
+        if template is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Agent {agent_id} has no pinned template",
+            )
         # Placeholders are kept raw in storage and rendered at seed time.
         rendered = render_template(template, agent.name)
         ns = self.config.k8s_namespace
@@ -913,6 +951,17 @@ class AgentService:
             else ""
         )
         effective_model = agent.model or self.config.agent_default_model
+
+        # Re-check the allowlist at start time, not just create/update: the org's
+        # allowlist can change after the agent was created, and a model that was
+        # valid then may no longer be permitted now.
+        allowed_models = self.organization_lookup.get_allowed_models(org_id)
+        if allowed_models is None or not is_model_allowed(effective_model, allowed_models):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Model '{effective_model}' is no longer in the organization's allowed model list",
+            )
+
         overlay: dict | None = None
         hermes_cfg: dict | None = None
 
@@ -934,7 +983,7 @@ class AgentService:
 
             if slack_config.channel_ids:
                 self._join_public_channels(bot_token, slack_config.channel_ids)
-            service = build_service(agent.id, org_id, ns)
+            service = build_service(agent.id, org_id, ns, org_name=org_name, agent_name=agent.name)
 
             if agent.agent_type == AgentType.HERMES:
                 api_server_key = secrets.token_urlsafe(32)
@@ -1020,7 +1069,14 @@ class AgentService:
                 litellm_api_key=litellm_key,
                 litellm_base_url=self.config.agent_litellm_base_url,
             )
-            service = build_service(agent.id, org_id, ns, include_webhook_port=True)
+            service = build_service(
+                agent.id,
+                org_id,
+                ns,
+                include_webhook_port=True,
+                org_name=org_name,
+                agent_name=agent.name,
+            )
             deployment = build_deployment(
                 agent.id,
                 org_id,
@@ -1046,7 +1102,7 @@ class AgentService:
                 self.repository.save(agent)
                 return self._get_agent_read(agent, context)
 
-            service = build_service(agent.id, org_id, ns)
+            service = build_service(agent.id, org_id, ns, org_name=org_name, agent_name=agent.name)
 
             if agent.agent_type == AgentType.HERMES:
                 api_server_key = secrets.token_urlsafe(32)
@@ -1136,6 +1192,45 @@ class AgentService:
         if store:
             secret.string_data.update(build_env(store))
 
+        fc_content = decrypted.get(SecretProvider.FIRECRAWL)
+        fc_api_key = (
+            fc_content.api_key if isinstance(fc_content, FirecrawlContent) else self.config.agent_firecrawl_api_key
+        )
+        fc_base_url = (
+            fc_content.base_url
+            if isinstance(fc_content, FirecrawlContent) and fc_content.base_url
+            else self.config.agent_firecrawl_base_url
+        )
+        if fc_api_key and fc_base_url:
+            secret.string_data["FIRECRAWL_API_KEY"] = fc_api_key
+            if hermes_cfg is not None:
+                hermes_cfg["web"] = {"backend": "firecrawl"}
+                hermes_cfg["browser"] = {"cloud_provider": "firecrawl"}
+                secret.string_data["FIRECRAWL_API_URL"] = fc_base_url
+                secret.string_data["FIRECRAWL_BROWSER_TTL"] = "600"
+            if overlay is not None:
+                overlay["plugins"]["allow"].append("firecrawl")
+                overlay["plugins"]["entries"]["firecrawl"] = {
+                    "enabled": True,
+                    "config": {
+                        "webSearch": {
+                            "apiKey": "${FIRECRAWL_API_KEY}",
+                            "baseUrl": fc_base_url,
+                        },
+                        "webFetch": {
+                            "apiKey": "${FIRECRAWL_API_KEY}",
+                            "baseUrl": fc_base_url,
+                            "onlyMainContent": True,
+                            "maxAgeMs": 172800000,
+                            "timeoutSeconds": 60,
+                        },
+                    },
+                }
+                overlay["tools"]["web"] = {
+                    "fetch": {"provider": "firecrawl"},
+                    "search": {"enabled": True, "provider": "firecrawl"},
+                }
+
         ingest_key = secrets.token_urlsafe(32)
         secret.string_data.update(
             {
@@ -1222,8 +1317,15 @@ class AgentService:
         agent.status = AgentStatus.RUNNING
         agent.last_error = None
         agent.ingest_key_encrypted = encrypt_token(ingest_key, self.config.agent_token_encryption_key)
-        self.repository.save(agent)
-        return self._get_agent_read(agent, context)
+        result = self.repository.save_with_lifecycle_event(
+            agent,
+            event_name=AGENT_STARTED,
+            actor=resolve_actor_identity(context, org_id),
+            previous_status=previous_status,
+            new_status=AgentStatus.RUNNING.value,
+        )
+        self.event_delivery_dispatcher.enqueue_immediate(result.delivery_ids)
+        return self._get_agent_read(result.agent, context)
 
     def get_agent_logs(
         self,
@@ -1343,6 +1445,7 @@ class AgentService:
                 detail=f"Agent {agent_id} is not running",
             )
 
+        previous_status = agent.status.value
         self._capture_logs_before_stop(agent)
         name = f"agent-{agent.id}"
         ns = self.config.k8s_namespace
@@ -1351,8 +1454,15 @@ class AgentService:
         self.k8s.delete_secret(name, ns)
 
         agent.status = AgentStatus.STOPPED
-        self.repository.save(agent)
-        return self._get_agent_read(agent, context)
+        result = self.repository.save_with_lifecycle_event(
+            agent,
+            event_name=AGENT_STOPPED,
+            actor=resolve_actor_identity(context, agent.organization_id),
+            previous_status=previous_status,
+            new_status=AgentStatus.STOPPED.value,
+        )
+        self.event_delivery_dispatcher.enqueue_immediate(result.delivery_ids)
+        return self._get_agent_read(result.agent, context)
 
     def count_active_agents(self, organization_id: UUID) -> int:
         """Number of non-deleted agents in an org. Used by other domains (e.g. org
@@ -1465,19 +1575,33 @@ class AgentService:
             except Exception as e:
                 logger.warning("Unexpected error joining channel %s: %s", channel_id, e)
 
-    def list_models(self, context: CurrentUserContext) -> list[dict]:
+    def list_models(self, context: CurrentUserContext, catalog: bool = False) -> list[dict]:
         """Returns the allowlisted OpenRouter models as picker options. The
         configured default (AGENT_DEFAULT_MODEL) is guaranteed present, flagged
         is_default, and listed first so the frontend and backend agree on it.
         """
+        org_id = self._org_id(context)
         self.authorization.require_collection_scope(context, PermissionKey.AGENT_CREATE)
-        catalog = self.openrouter.list_models()
-        allowed = filter_models_by_allowlist(catalog, self.config.agent_model_allowlist)
+        raw_catalog = self.openrouter.list_models()
+
+        if catalog:
+            self.authorization.policy.require(
+                context,
+                org_id,
+                PermissionKey.ORGANIZATION_UPDATE,
+                detail="You don't have permission to view the full model catalog.",
+            )
+            allowed = raw_catalog
+        else:
+            allowed_models = self.organization_lookup.get_allowed_models(org_id)
+            if allowed_models is None:
+                raise HTTPException(status_code=404, detail="Organization not found")
+            allowed = filter_models_by_allowlist(raw_catalog, allowed_models)
         options = [
             {
                 "value": f"litellm/openrouter/{model['id']}",
                 "label": model["name"],
-                "context_length": model.get("context_length"),
+                "contextLength": model.get("context_length"),
                 "pricing": model.get("pricing"),
             }
             for model in allowed
@@ -1485,20 +1609,19 @@ class AgentService:
 
         default_value = self.config.agent_default_model
         if default_value and not any(o["value"] == default_value for o in options):
-            options.insert(
-                0,
+            options.append(
                 {
                     "value": default_value,
-                    "label": default_value.removeprefix(_OPENROUTER_MODEL_PREFIX),
-                    "context_length": None,
+                    "label": default_value.removeprefix("litellm/openrouter/"),
+                    "contextLength": None,
                     "pricing": None,
-                },
+                }
             )
 
         # Stable sort puts the default first while preserving catalogue order.
         options.sort(key=lambda o: o["value"] != default_value)
         for option in options:
-            option["is_default"] = option["value"] == default_value
+            option["isDefault"] = option["value"] == default_value
         return options
 
     def list_slack_channels(self, agent_id: UUID, context: CurrentUserContext, search: str | None = None) -> list[dict]:

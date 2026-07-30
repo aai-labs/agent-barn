@@ -18,6 +18,10 @@ dist/
 .env
 .env.test
 .env.deploy
+.env.deploy.staging
+# Per-environment deploy configs hold real secrets; keep only the tracked spec.
+.env.deploy.*
+!.env.deploy.spec
 
 # Log files
 *.log
@@ -127,6 +131,19 @@ CLAUDE.md
 
 kubeconfig.yaml
 
-scripts/
+# Review helper scripts (untracked, shared across worktrees) — root only:
+# a bare scripts/ would also swallow tracked dirs like api/domains/agents/scripts/.
+# No trailing slash: review worktrees have it as a symlink, which dir-only
+# patterns would miss.
+/scripts
 
+# helm dependency archives (rebuilt by `helm dependency build`)
+helm/monitoring/charts/
+helm/**/*.tgz
+
+lessons/
+compose.remote.yml
 .dex/
+helm/monitoring/tests/generated/
+
+.kube

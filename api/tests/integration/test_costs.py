@@ -31,7 +31,7 @@ from api.tests.steps.rbac import role_lacks_permission
 from api.tests.steps.template import there_is_a_template
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
 
-_BASE = "/api/v1/costs"
+_BASE = "/api/v1/organizations/{organization_id}/costs"
 
 _GIVEN = [
     set_env_variable(
@@ -136,7 +136,7 @@ def test_admin_with_organization_cost_scope_can_view_summary():
 
 
 def test_member_cannot_view_costs_summary():
-    """Org spend is sensitive: only owners/admins (and superusers) may view it."""
+    """Org spend is sensitive: only owners/admins (and platform_admins) may view it."""
     member_id = uuid7()
     with given([*_GIVEN, _there_is_a_member_actor(member_id)]) as context:
         response = context.client.get(f"{_BASE}/summary", headers=_auth(context))
@@ -151,10 +151,8 @@ def test_unassigned_member_cannot_view_agent_cost():
         assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
-def test_superuser_can_view_costs_summary():
-    """Superusers transcend org roles: the owner/admin gate must not block them, even
-    though a superuser isn't a member of the org they're viewing (membership is
-    synthesized from the active-org header)."""
+def test_platform_admin_without_membership_cannot_view_costs_summary():
+    """Platform Administrators need real membership for org-scoped costs."""
     super_id = uuid7()
     org_id = uuid7()
     with given(
@@ -173,8 +171,8 @@ def test_superuser_can_view_costs_summary():
             create_test_client(),
             database_repo_is_ready(),
             database_is_clean(),
-            # Created before the org exists in context, so the superuser stays a non-member.
-            there_is_a_user(id=super_id, email="super-costs@example.com", is_superuser=True),
+            # Created before the org exists in context, so the platform admin stays a non-member.
+            there_is_a_user(id=super_id, email="super-costs@example.com", is_platform_admin=True),
             there_is_an_organization_with_user_and_access_token(id=org_id, email="owner-super-costs@example.com"),
             use_org_for_auth(),
             there_is_an_access_token_for_user(user_id=super_id),
@@ -183,7 +181,7 @@ def test_superuser_can_view_costs_summary():
         litellm: LiteLLMClient = context.injector.get(LiteLLMClient)
         litellm.get_global_spend_report.return_value = {}
         response = context.client.get(f"{_BASE}/summary", headers=_auth(context))
-        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
 def test_get_costs_summary_returns_200_and_data():

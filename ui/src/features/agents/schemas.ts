@@ -113,10 +113,11 @@ export const AgentSchema = z.object({
 
 export const AgentTemplateReadSchema = z.object({
   id: z.string().uuid(),
-  organizationId: z.string().uuid(),
+  organizationId: z.string().uuid().nullable(),
   templateSlug: z.string(),
   templateName: z.string(),
   templateSource: z.enum(["pre-defined", "custom"]),
+  forkedFromPlatformTemplateId: z.string().uuid().nullable().optional(),
   version: z.number().int(),
   description: z.string().nullable().optional(),
   soulMd: z.string(),
@@ -128,6 +129,7 @@ export const AgentTemplateReadSchema = z.object({
   bootstrapMd: z.string(),
   heartbeatMd: z.string(),
   requiredSkills: z.array(AgentAssignedSkillSchema).default([]),
+  inUse: z.boolean().default(false),
   createdAt: z.string(),
   updatedAt: z.string(),
 });

@@ -1,0 +1,15 @@
+apiVersion: v2
+name: monitoring
+description: Observability stack for agent-farm (namespace-scoped Prometheus + Grafana)
+version: 0.1.0
+dependencies:
+  # Deliberately NOT kube-prometheus-stack: this runs on a shared cluster
+  # where we own a single namespace, so the operator (CRDs, ClusterRoles,
+  # cluster-wide admission webhooks) is off the table. The plain charts below
+  # are fully namespace-scoped; see templates/prometheus-rbac.yaml.
+  - name: prometheus
+    version: "29.19.0"
+    repository: https://prometheus-community.github.io/helm-charts
+  - name: grafana
+    version: "10.5.15"
+    repository: https://grafana.github.io/helm-charts

@@ -1,5 +1,4 @@
 apiVersion: v2
 name: agentfarm-api
 description: FastAPI backend for agent-farm
-version: 0.6.1
-appVersion: "0.32.1"
+version: 0.6.6

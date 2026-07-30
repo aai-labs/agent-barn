@@ -3,16 +3,18 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { api } from "@/shared/api";
+import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
 
 import { AgentHealth, AgentHealthSchema } from "../schemas";
 import { agentsKey } from "../utils";
 
 export function useAgentHealth(agentId: string, enabled: boolean) {
+  const orgApiBase = useOrganizationApiBase();
   const query = useQuery({
     queryKey: agentsKey.health(agentId),
     queryFn: async () => {
       const response = await api.get<AgentHealth>(
-        `/api/v1/agents/${agentId}/healthz`,
+        `${orgApiBase}/agents/${agentId}/healthz`,
         { schema: AgentHealthSchema }
       );
       return response.data;

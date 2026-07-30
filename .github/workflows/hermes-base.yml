@@ -2,9 +2,16 @@ name: Hermes Base
 
 on:
   push:
+    # deploy.yml calls this workflow directly (via workflow_call) as a
+    # needs: prerequisite for staging/main pushes, so it isn't also
+    # triggered standalone here -- that would run it twice for the same commit.
+    branches-ignore:
+      - staging
+      - main
     paths:
       - hermes-base/**
       - .github/workflows/hermes-base.yml
+  workflow_call:
 
 jobs:
   build:

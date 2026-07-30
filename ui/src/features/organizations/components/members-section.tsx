@@ -192,7 +192,7 @@ export function MembersSection({
   const currentRole = userContext.organizationUsers?.find(
     (m) => m.organizationId === organizationId,
   )?.role;
-  const canManageOwnership = user.isSuperuser || currentRole === "OWNER";
+  const canManageOwnership = user.isPlatformAdmin || currentRole === "OWNER";
 
   const onChangeRole = (member: OrganizationMember, role: OrganizationRole) => {
     changeRole.mutate(

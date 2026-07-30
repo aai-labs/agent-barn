@@ -27,7 +27,7 @@ from api.domains.auth.utils import get_current_user
 from api.domains.templates.models import TemplateRead
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
-agents_router = APIRouter(prefix="/agents", tags=["agents"])
+agents_router = APIRouter(prefix="/organizations/{organization_id}/agents", tags=["agents"])
 
 
 @agents_router.post("", response_model=AgentRead, status_code=status.HTTP_201_CREATED)
@@ -58,8 +58,9 @@ def list_agents(
 def list_models(
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[AgentService, Injected(AgentService)],
+    catalog: Annotated[bool, Query()] = False,
 ):
-    return service.list_models(context)
+    return service.list_models(context, catalog=catalog)
 
 
 @agents_router.get("/share-roles", response_model=list[AgentAccessRoleRead])

@@ -1,0 +1,4 @@
+apiVersion: v2
+name: redis
+description: Shared Redis instance for agent-farm services (Firecrawl, API workers)
+version: 0.1.0

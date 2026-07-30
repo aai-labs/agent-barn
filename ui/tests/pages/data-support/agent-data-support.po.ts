@@ -226,13 +226,13 @@ export class AgentDataSupport {
     detail?: string;
     body?: unknown;
   } = {}) {
-    await this.page.route("**/api/v1/agents*", async (route) => {
+    await this.page.route("**/api/v1/organizations/*/agents*", async (route) => {
       if (route.request().method() !== "GET") {
         await route.fallback();
         return;
       }
       const url = new URL(route.request().url());
-      if (url.pathname !== "/api/v1/agents") {
+      if (!/\/api\/v1\/organizations\/[^/]+\/agents$/.test(url.pathname)) {
         await route.fallback();
         return;
       }
@@ -264,7 +264,7 @@ export class AgentDataSupport {
     detail?: string;
     body?: unknown;
   } = {}) {
-    await this.page.route(`**/api/v1/agents/${agentId}`, async (route) => {
+    await this.page.route(`**/api/v1/organizations/*/agents/${agentId}`, async (route) => {
       if (route.request().method() !== "GET") {
         await route.fallback();
         return;
@@ -293,7 +293,7 @@ export class AgentDataSupport {
     body?: unknown;
   } = {}) {
     await this.page.route(
-      `**/api/v1/agents/${agentId}/template/${version}`,
+      `**/api/v1/organizations/*/agents/${agentId}/template/${version}`,
       async (route) => {
         if (route.request().method() !== "GET") {
           await route.fallback();
@@ -319,7 +319,7 @@ export class AgentDataSupport {
     status?: number;
     body?: unknown;
   } = {}) {
-    await this.page.route(`**/api/v1/agents/${agentId}/healthz`, async (route) => {
+    await this.page.route(`**/api/v1/organizations/*/agents/${agentId}/healthz`, async (route) => {
       if (route.request().method() !== "GET") {
         await route.fallback();
         return;
@@ -344,7 +344,7 @@ export class AgentDataSupport {
     body?: unknown;
   } = {}) {
     await this.page.route(
-      `**/api/v1/agents/${agentId}/conversations/channels`,
+      `**/api/v1/organizations/*/agents/${agentId}/conversations/channels`,
       async (route) => {
         if (route.request().method() !== "GET") {
           await route.fallback();
@@ -368,7 +368,7 @@ export class AgentDataSupport {
     detail?: string;
     body?: unknown;
   } = {}) {
-    await this.page.route("**/api/v1/agents/models", async (route) => {
+    await this.page.route("**/api/v1/organizations/*/agents/models", async (route) => {
       if (route.request().method() !== "GET") {
         await route.fallback();
         return;
@@ -390,7 +390,7 @@ export class AgentDataSupport {
     detail?: string;
     body?: unknown;
   } = {}) {
-    await this.page.route("**/api/v1/agents/share-roles", async (route) => {
+    await this.page.route("**/api/v1/organizations/*/agents/share-roles", async (route) => {
       if (route.request().method() !== "GET") {
         await route.fallback();
         return;
@@ -414,7 +414,7 @@ export class AgentDataSupport {
     detail?: string;
     body?: unknown;
   } = {}) {
-    await this.page.route(`**/api/v1/agents/${agentId}/share`, async (route) => {
+    await this.page.route(`**/api/v1/organizations/*/agents/${agentId}/share`, async (route) => {
       if (route.request().method() !== "GET") {
         await route.fallback();
         return;
@@ -440,7 +440,7 @@ export class AgentDataSupport {
     detail?: string;
     body?: unknown;
   } = {}) {
-    await this.page.route(`**/api/v1/agents/${agentId}/share`, async (route) => {
+    await this.page.route(`**/api/v1/organizations/*/agents/${agentId}/share`, async (route) => {
       if (route.request().method() !== "PUT") {
         await route.fallback();
         return;
@@ -464,7 +464,7 @@ export class AgentDataSupport {
     detail?: string;
     body?: unknown;
   } = {}) {
-    await this.page.route("**/api/v1/agents", async (route) => {
+    await this.page.route("**/api/v1/organizations/*/agents", async (route) => {
       if (route.request().method() !== "POST") {
         await route.fallback();
         return;
@@ -486,7 +486,7 @@ export class AgentDataSupport {
     status?: number;
     detail?: string;
   } = {}) {
-    await this.page.route(`**/api/v1/agents/${agentId}`, async (route) => {
+    await this.page.route(`**/api/v1/organizations/*/agents/${agentId}`, async (route) => {
       if (route.request().method() !== "DELETE") {
         await route.fallback();
         return;
@@ -511,7 +511,7 @@ export class AgentDataSupport {
     body?: unknown;
   } = {}) {
     await this.page.route(
-      `**/api/v1/agents/${agentId}/start`,
+      `**/api/v1/organizations/*/agents/${agentId}/start`,
       async (route) => {
         if (route.request().method() !== "POST") {
           await route.fallback();
@@ -542,7 +542,7 @@ export class AgentDataSupport {
     body?: unknown;
   } = {}) {
     await this.page.route(
-      `**/api/v1/agents/${agentId}/stop`,
+      `**/api/v1/organizations/*/agents/${agentId}/stop`,
       async (route) => {
         if (route.request().method() !== "POST") {
           await route.fallback();
@@ -573,7 +573,7 @@ export class AgentDataSupport {
     message?: string;
   } = {}) {
     await this.page.route(
-      `**/api/v1/agents/${agentId}/pair`,
+      `**/api/v1/organizations/*/agents/${agentId}/pair`,
       async (route) => {
         if (route.request().method() !== "POST") {
           await route.fallback();
@@ -599,7 +599,7 @@ export class AgentDataSupport {
     detail?: string;
     body?: unknown;
   } = {}) {
-    await this.page.route(`**/api/v1/agents/${agentId}`, async (route) => {
+    await this.page.route(`**/api/v1/organizations/*/agents/${agentId}`, async (route) => {
       if (route.request().method() !== "PATCH") {
         await route.fallback();
         return;
@@ -624,7 +624,7 @@ export class AgentDataSupport {
     body?: unknown;
   } = {}) {
     await this.page.route(
-      `**/api/v1/agents/${agentId}/slack/channels*`,
+      `**/api/v1/organizations/*/agents/${agentId}/slack/channels*`,
       async (route) => {
         if (route.request().method() !== "GET") {
           await route.fallback();
@@ -654,7 +654,7 @@ export class AgentDataSupport {
     body?: unknown;
   } = {}) {
     await this.page.route(
-      `**/api/v1/agents/${agentId}/slack/users*`,
+      `**/api/v1/organizations/*/agents/${agentId}/slack/users*`,
       async (route) => {
         if (route.request().method() !== "GET") {
           await route.fallback();
@@ -683,13 +683,13 @@ export class AgentDataSupport {
     detail?: string;
     body?: unknown;
   } = {}) {
-    await this.page.route("**/api/v1/templates*", async (route) => {
+    await this.page.route("**/api/v1/organizations/*/templates*", async (route) => {
       if (route.request().method() !== "GET") {
         await route.fallback();
         return;
       }
       const url = new URL(route.request().url());
-      if (url.pathname !== "/api/v1/templates") {
+      if (!/\/api\/v1\/organizations\/[^/]+\/templates$/.test(url.pathname)) {
         await route.fallback();
         return;
       }
@@ -735,7 +735,7 @@ export class AgentDataSupport {
     detail?: string;
     body?: unknown;
   } = {}) {
-    await this.page.route(`**/api/v1/templates/${slug}`, async (route) => {
+    await this.page.route(`**/api/v1/organizations/*/templates/${slug}`, async (route) => {
       if (route.request().method() !== "GET") {
         await route.fallback();
         return;
@@ -759,7 +759,7 @@ export class AgentDataSupport {
     detail?: string;
     body?: unknown;
   } = {}) {
-    await this.page.route("**/api/v1/templates/*/versions", async (route) => {
+    await this.page.route("**/api/v1/organizations/*/templates/*/versions", async (route) => {
       if (route.request().method() !== "GET") {
         await route.fallback();
         return;
@@ -787,7 +787,7 @@ export class AgentDataSupport {
     detail?: string;
     body?: unknown;
   } = {}) {
-    await this.page.route("**/api/v1/templates", async (route) => {
+    await this.page.route("**/api/v1/organizations/*/templates", async (route) => {
       if (route.request().method() !== "POST") {
         await route.fallback();
         return;
@@ -813,7 +813,7 @@ export class AgentDataSupport {
     detail?: string;
     body?: unknown;
   } = {}) {
-    await this.page.route(`**/api/v1/templates/${slug}`, async (route) => {
+    await this.page.route(`**/api/v1/organizations/*/templates/${slug}`, async (route) => {
       if (route.request().method() !== "PATCH") {
         await route.fallback();
         return;
@@ -842,7 +842,7 @@ export class AgentDataSupport {
     body?: unknown;
   } = {}) {
     await this.page.route(
-      `**/api/v1/agents/${agentId}/tool-calls*`,
+      `**/api/v1/organizations/*/agents/${agentId}/tool-calls*`,
       async (route) => {
         if (route.request().method() !== "GET") {
           await route.fallback();
@@ -878,7 +878,7 @@ export class AgentDataSupport {
     detail?: string;
   } = {}) {
     await this.page.route(
-      `**/api/v1/agents/${agentId}/integrations/${provider}/validate`,
+      `**/api/v1/organizations/*/agents/${agentId}/integrations/${provider}/validate`,
       async (route) => {
         if (route.request().method() !== "POST") {
           await route.fallback();

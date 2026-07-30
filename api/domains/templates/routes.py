@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, Response, status
 from fastapi_injector import Injected
 
 from api.domains.auth.models import CurrentUserContext
@@ -15,7 +15,7 @@ from api.domains.templates.models import (
 from api.domains.templates.service import TemplateService
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
-templates_router = APIRouter(prefix="/templates", tags=["templates"])
+templates_router = APIRouter(prefix="/organizations/{organization_id}/templates", tags=["templates"])
 
 
 @templates_router.get("", response_model=PaginatedItems[TemplateRead])
@@ -68,3 +68,13 @@ def update_template(
     service: Annotated[TemplateService, Injected(TemplateService)],
 ):
     return service.update_template(slug, data, context)
+
+
+@templates_router.delete("/{slug}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_template(
+    slug: str,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[TemplateService, Injected(TemplateService)],
+):
+    service.delete_template(slug, context)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

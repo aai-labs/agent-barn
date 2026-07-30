@@ -132,12 +132,20 @@ class KubernetesClient:
         return self._apps_v1.list_namespaced_deployment(namespace, label_selector=label_selector).items
 
     def create_service(self, namespace: str, manifest: client.V1Service) -> client.V1Service:
-        return self._create_or_get(
-            self._core_v1.create_namespaced_service,
-            self._core_v1.read_namespaced_service,
-            namespace,
-            manifest,
-        )
+        # Not _create_or_get: agent stop keeps the Service (stable ClusterIP),
+        # so a restart must refresh its labels here or new monitoring labels
+        # (org-name, agent-name, agentfarm.io/component) would never propagate.
+        try:
+            return self._core_v1.create_namespaced_service(namespace, manifest)
+        except ApiException as e:
+            if e.status != 409:
+                raise
+            self._core_v1.patch_namespaced_service(
+                manifest.metadata.name,
+                namespace,
+                {"metadata": {"labels": manifest.metadata.labels}},
+            )
+            return self._core_v1.read_namespaced_service(manifest.metadata.name, namespace)
 
     def delete_service(self, name: str, namespace: str) -> None:
         self._delete_ignoring_not_found(self._core_v1.delete_namespaced_service, name, namespace)
