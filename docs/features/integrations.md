@@ -10,7 +10,7 @@ Integrations make external services available to an Agent. Agent Secrets hold en
 
 ## Supported providers
 
-Provider credential contracts are defined by `SecretProvider` and its content models in `../../api/domains/agents/models.py`. Current providers cover GitHub, Jira, Confluence, Bitbucket, Gmail, Google Calendar, Zoho Mail, and Zoho Calendar.
+Provider credential contracts are defined by `SecretProvider` and its content models in `../../api/domains/agents/models.py`. Current providers cover GitHub, Jira, Confluence, Bitbucket, Gmail, Google Calendar, Zoho Mail, Zoho Calendar, and Firecrawl.
 
 ## Shared credentials
 
@@ -33,6 +33,7 @@ Shared Credentials are org-scoped, admin-managed credential payloads that any me
 - Agent updates validate that remaining skill provider requirements are satisfied. Updating a Skill's provider metadata later does not revalidate existing agents.
 - Eligible built-in aai-cli skills are mounted at start when their provider credential is configured.
 - Application deployment secrets, per-user Slack configuration tokens, per-agent Agent Secrets, and Shared Credentials are distinct credential classes with different ownership and lifecycles.
+- Firecrawl is an infrastructure-level capability: when `AGENT_FIRECRAWL_BASE_URL` and `AGENT_FIRECRAWL_API_KEY` are configured, all agents receive web-fetch/search by default (analogous to LiteLLM). Agents with a per-agent Firecrawl Agent Secret override the platform key.
 
 ## Slack setup
 
@@ -59,6 +60,7 @@ At start, Agent Service decrypts provider payloads, backfills configured Google 
 | Built-in skill definitions                         | `../../api/domains/agents/aai_cli_skills/`                                                                                                          |
 | Slack configuration token lifecycle                | `../../api/domains/auth/token_service.py`, `../../api/domains/auth/routes.py`                                                                       |
 | Gmail OAuth                                        | `../../api/domains/integrations/google_oauth/routes.py`                                                                                             |
+| Firecrawl runtime wiring                           | `../../api/domains/agents/service.py` (platform-default + per-agent override)                                                                       |
 | UI credential forms                                | `../../ui/src/features/agents/`, `../../ui/src/features/account/`                                                                                   |
 | Tests                                              | `../../api/tests/integration/test_agents.py`, `../../api/tests/integration/test_shared_credentials.py`, `../../api/tests/integration/test_slack_config_token.py`, `../../api/tests/unit/test_google_oauth.py` |
 

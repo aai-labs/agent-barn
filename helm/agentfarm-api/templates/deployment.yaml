@@ -5,11 +5,13 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "agentfarm-api.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
 spec:
   replicas: {{ .Values.replicaCount }}
   selector:
     matchLabels:
       {{- include "agentfarm-api.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: api
   template:
     metadata:
       annotations:
@@ -22,13 +24,14 @@ spec:
         checksum/kubeconfig: {{ include (print $.Template.BasePath "/kubeconfig-secret.yaml") . | sha256sum }}
       labels:
         {{- include "agentfarm-api.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: api
     spec:
       serviceAccountName: {{ .Release.Name }}
       imagePullSecrets:
         {{- toYaml .Values.imagePullSecrets | nindent 8 }}
       containers:
         - name: api
-          image: "{{ .Values.registryPrefix }}/{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          image: "{{ .Values.registryPrefix }}/{{ .Values.image.repository }}:{{ required "image.tag is required" .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: http
@@ -41,6 +44,12 @@ spec:
             - secretRef:
                 name: {{ .Values.litellmApiKeySecretName }}
           env:
+            # The namespace this release runs in — the API creates agent
+            # workloads (Deployments/Services/PVCs/Secrets) here. Without it the
+            # app falls back to its hardcoded "agent-farm" default, so a staging
+            # pod would spawn agents into the prod namespace.
+            - name: K8S_NAMESPACE
+              value: {{ .Release.Namespace }}
             - name: K8S_KUBECONFIG_PATH
               value: /etc/kubeconfig/kubeconfig
             - name: OPENCLAW_IMAGE
@@ -57,6 +66,8 @@ spec:
               value: "{{ .Values.agentImagePullSecret }}"
             - name: AGENT_MODEL_ALLOWLIST
               value: "{{ .Values.agentModelAllowlist }}"
+            - name: AGENT_FIRECRAWL_BASE_URL
+              value: "{{ .Values.agentFirecrawlBaseUrl }}"
             {{- if .Values.agentDefaultModel }}
             - name: AGENT_DEFAULT_MODEL
               value: "{{ .Values.agentDefaultModel }}"

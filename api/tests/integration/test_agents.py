@@ -15,8 +15,11 @@ from starlette.testclient import TestClient
 
 from api.domains.agents.models import AgentStatus
 from api.domains.agents.repository import AgentRepository
+from api.domains.events.catalog import AGENT_CREATED, AGENT_STARTED, AGENT_STOPPED
+from api.domains.events.models import EventDeliveryStatus, OutboxMessage
 from api.domains.templates.repository import TemplateRepository
 from api.infrastructure.kubernetes.client import KubernetesClient
+from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
@@ -46,7 +49,7 @@ from api.tests.steps.organization import (
 )
 from api.tests.steps.template import there_is_a_template, there_is_a_template_skill
 
-_BASE = "/api/v1/agents"
+_BASE = "/api/v1/organizations/{organization_id}/agents"
 
 _VALID_CREATE = {
     "name": "My Agent",
@@ -92,6 +95,10 @@ def _auth(context) -> dict:
     return {"Authorization": f"Bearer {context.access_token}"}
 
 
+def _outbox_messages(context) -> list[OutboxMessage]:
+    return context.injector.get(PostgresRepositoryDelegate).find_all(OutboxMessage)
+
+
 def test_create_slack_agent_returns_201_stopped():
     with given(_GIVEN) as context:
         client: TestClient = context.client
@@ -106,6 +113,22 @@ def test_create_slack_agent_returns_201_stopped():
             assert_that(body["status"], equal_to(AgentStatus.STOPPED.value))
             assert_that(body, is_not(has_key("slack_bot_token")))
             assert_that(body, is_not(has_key("slack_app_token")))
+
+
+def test_create_agent_emits_created_domain_event():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I create a Slack agent with valid data"):
+            response = client.post(_BASE, json=_VALID_CREATE, headers=_auth(context))
+
+        with then("an Agent created Domain Event is persisted"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            messages = _outbox_messages(context)
+            created_events = [message for message in messages if message.event_name == AGENT_CREATED]
+            assert_that(len(created_events), equal_to(1))
+            assert_that(created_events[0].payload["agent_name"], equal_to("My Agent"))
+            assert_that(created_events[0].payload["created_by_user_id"], equal_to(str(context.user.id)))
 
 
 def test_create_agent_missing_template_slug_returns_422():
@@ -193,7 +216,7 @@ def test_create_agent_does_not_create_template_rows():
         with then("the lineage still has only its original version"):
             assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             template_repository: TemplateRepository = context.injector.get(TemplateRepository)
-            latest = template_repository.get_latest_template(context.organization.id, "test-template")
+            latest = template_repository.get_latest_org_template(context.organization.id, "test-template")
             assert_that(latest, is_not(none()))
             assert latest is not None
             assert_that(latest.version, equal_to(1))
@@ -711,6 +734,59 @@ def test_start_agent_sets_status_running():
             k8s.create_pvc.assert_called_once()
             k8s.create_service.assert_called_once()
             k8s.create_deployment.assert_called_once()
+            service = k8s.create_service.call_args.args[1]
+            assert_that(
+                service.metadata.labels["org-name"],
+                equal_to("test-organization"),
+            )
+            assert_that(
+                service.metadata.labels["agent-name"],
+                equal_to("test-agent"),
+            )
+
+
+def test_start_telegram_agent_labels_service_with_org_and_agent_name():
+    # Regression: the telegram start path once built its Service without the
+    # monitoring identity labels because org_name was threaded in from the
+    # route on the other platforms' paths only. Resolution now lives in the
+    # service, so every platform labels agents consistently.
+    with given([*_GIVEN, there_is_an_agent(platform=AgentPlatform.TELEGRAM)]) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+
+        with when("I start a telegram agent"):
+            with patch(
+                "api.domains.agents.service.validate_telegram_bot_token",
+                return_value=(True, "", {"username": "test_bot"}),
+            ):
+                response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("its Service carries the monitoring identity labels"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            service = k8s.create_service.call_args.args[1]
+            assert_that(service.metadata.labels["org-name"], equal_to("test-organization"))
+            assert_that(service.metadata.labels["agent-name"], equal_to("test-agent"))
+
+
+def test_start_agent_emits_started_domain_event_and_delivery():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I start the agent"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("an Agent started Domain Event and pending email delivery are persisted"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            messages = _outbox_messages(context)
+            started_events = [message for message in messages if message.event_name == AGENT_STARTED]
+            assert_that(len(started_events), equal_to(1))
+            assert_that(started_events[0].payload["previous_status"], equal_to(AgentStatus.STOPPED.value))
+            assert_that(started_events[0].payload["new_status"], equal_to(AgentStatus.RUNNING.value))
+            deliveries = context.injector.get(AgentRepository).outbox_repository.list_deliveries_for_event(
+                started_events[0].event_id
+            )
+            assert_that(len(deliveries), equal_to(1))
+            assert_that(deliveries[0].status, equal_to(EventDeliveryStatus.PENDING))
 
 
 def test_start_already_running_returns_409():
@@ -757,6 +833,32 @@ def test_stop_agent_sets_status_stopped():
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             assert_that(response.json()["status"], equal_to(AgentStatus.STOPPED.value))
             k8s.delete_deployment.assert_called_once()
+
+
+def test_stop_agent_emits_stopped_domain_event_and_delivery():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(status=AgentStatus.RUNNING),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("I stop the agent"):
+            response = client.post(f"{_BASE}/{context.agent.id}/stop", headers=_auth(context))
+
+        with then("an Agent stopped Domain Event and pending email delivery are persisted"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            messages = _outbox_messages(context)
+            stopped_events = [message for message in messages if message.event_name == AGENT_STOPPED]
+            assert_that(len(stopped_events), equal_to(1))
+            assert_that(stopped_events[0].payload["previous_status"], equal_to(AgentStatus.RUNNING.value))
+            assert_that(stopped_events[0].payload["new_status"], equal_to(AgentStatus.STOPPED.value))
+            deliveries = context.injector.get(AgentRepository).outbox_repository.list_deliveries_for_event(
+                stopped_events[0].event_id
+            )
+            assert_that(len(deliveries), equal_to(1))
+            assert_that(deliveries[0].status, equal_to(EventDeliveryStatus.PENDING))
 
 
 def test_stop_non_running_agent_returns_409():
@@ -1269,11 +1371,8 @@ def test_start_agent_renders_template_placeholders():
 
         with then("the stored template keeps its raw placeholders"):
             template_repository: TemplateRepository = context.injector.get(TemplateRepository)
-            stored = template_repository.get_template_or_raise(
-                context.organization.id,
-                context.agent.template_slug,
-                context.agent.template_version,
-            )
+            stored = template_repository.get_pinned_template(context.agent)
+            assert stored is not None
             assert_that(
                 stored.soul_md,
                 equal_to("# Soul of {{ agent_display_name }} ({{agent_name}})"),
@@ -2880,7 +2979,194 @@ def test_list_agents_marks_required_skills():
             assert_that(jira["required"], equal_to(True))
 
 
-# --- Bot token uniqueness ---
+_GIVEN_WITH_FIRECRAWL = [
+    set_env_variable(
+        {
+            "AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY,
+            "LITELLM_BASE_URL": "http://litellm:4000",
+            "LITELLM_SECRET_NAME": "litellm",
+            "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
+            "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
+            "API_EXTERNAL_URL": "https://api.test.com",
+            "SKIP_SLACK_TOKEN_VALIDATION": "true",
+            "AGENT_FIRECRAWL_BASE_URL": "http://firecrawl:3002",
+            "AGENT_FIRECRAWL_API_KEY": "fc-platform-key",
+        }
+    ),
+    prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
+    prepare_api_server(),
+    create_test_client(),
+    database_repo_is_ready(),
+    database_is_clean(),
+    there_is_an_organization_with_user_and_access_token(),
+    use_org_for_auth(),
+    there_is_a_template(),
+]
+
+_GIVEN_HERMES_WITH_FIRECRAWL = [
+    set_env_variable(
+        {
+            "AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY,
+            "LITELLM_BASE_URL": "http://litellm:4000",
+            "LITELLM_SECRET_NAME": "litellm",
+            "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
+            "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
+            "API_EXTERNAL_URL": "https://api.test.com",
+            "HERMES_IMAGE": "nousresearch/hermes-agent:v1.0",
+            "AGENT_FIRECRAWL_BASE_URL": "http://firecrawl:3002",
+            "AGENT_FIRECRAWL_API_KEY": "fc-platform-key",
+        }
+    ),
+    prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
+    prepare_api_server(),
+    create_test_client(),
+    database_repo_is_ready(),
+    database_is_clean(),
+    there_is_an_organization_with_user_and_access_token(),
+    use_org_for_auth(),
+    there_is_a_template(),
+]
+
+
+def test_start_openclaw_agent_with_platform_firecrawl():
+    with given([*_GIVEN_WITH_FIRECRAWL, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+
+        with when("I start an OpenClaw agent with platform firecrawl configured"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the overlay has firecrawl plugin and the secret has the key"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            overlay = json.loads(config_map.data["openclaw-config-overlay.json"])
+            assert_that("firecrawl" in overlay["plugins"]["allow"], equal_to(True))
+            assert_that(overlay["plugins"]["entries"], has_key("firecrawl"))
+            assert_that(overlay["tools"]["web"]["fetch"]["provider"], equal_to("firecrawl"))
+            secret = k8s.create_secret.call_args.args[1]
+            assert_that(secret.string_data["FIRECRAWL_API_KEY"], equal_to("fc-platform-key"))
+
+
+def test_start_hermes_agent_with_platform_firecrawl():
+    import yaml as _yaml
+
+    with given([*_GIVEN_HERMES_WITH_FIRECRAWL, there_is_an_agent(agent_type=AgentType.HERMES)]) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+
+        with when("I start a Hermes agent with platform firecrawl configured"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("hermes config has firecrawl and secret has the env vars"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            cfg = _yaml.safe_load(config_map.data["hermes-config.yaml"])
+            assert_that(cfg["web"], equal_to({"backend": "firecrawl"}))
+            assert_that(cfg["browser"], equal_to({"cloud_provider": "firecrawl"}))
+            secret = k8s.create_secret.call_args.args[1]
+            assert_that(secret.string_data["FIRECRAWL_API_KEY"], equal_to("fc-platform-key"))
+            assert_that(
+                secret.string_data["FIRECRAWL_API_URL"],
+                equal_to("http://firecrawl:3002"),
+            )
+
+
+def test_start_agent_per_agent_firecrawl_overrides_platform():
+    with given([*_GIVEN_WITH_FIRECRAWL, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+
+        with when("I add a per-agent firecrawl secret and start"):
+            client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"secrets": [{"provider": "firecrawl", "content": {"api_key": "fc-my-key"}}]},
+                headers=_auth(context),
+            )
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the per-agent key is used instead of the platform key"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            secret = k8s.create_secret.call_args.args[1]
+            assert_that(secret.string_data["FIRECRAWL_API_KEY"], equal_to("fc-my-key"))
+
+
+def test_start_agent_per_agent_firecrawl_overrides_base_url():
+    with given([*_GIVEN_WITH_FIRECRAWL, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+
+        with when("I add a per-agent firecrawl secret with base_url and start"):
+            client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={
+                    "secrets": [
+                        {
+                            "provider": "firecrawl",
+                            "content": {
+                                "api_key": "fc-cloud-key",
+                                "base_url": "https://api.firecrawl.dev",
+                            },
+                        }
+                    ]
+                },
+                headers=_auth(context),
+            )
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("both the key and base URL are overridden"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            secret = k8s.create_secret.call_args.args[1]
+            assert_that(secret.string_data["FIRECRAWL_API_KEY"], equal_to("fc-cloud-key"))
+            config_map = k8s.create_config_map.call_args.args[1]
+            overlay = json.loads(config_map.data["openclaw-config-overlay.json"])
+            fc_cfg = overlay["plugins"]["entries"]["firecrawl"]["config"]
+            assert_that(
+                fc_cfg["webSearch"]["baseUrl"],
+                equal_to("https://api.firecrawl.dev"),
+            )
+
+
+_GIVEN_WITHOUT_FIRECRAWL = [
+    set_env_variable(
+        {
+            "AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY,
+            "LITELLM_BASE_URL": "http://litellm:4000",
+            "LITELLM_SECRET_NAME": "litellm",
+            "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
+            "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
+            "API_EXTERNAL_URL": "https://api.test.com",
+            "SKIP_SLACK_TOKEN_VALIDATION": "true",
+            "AGENT_FIRECRAWL_BASE_URL": "",
+            "AGENT_FIRECRAWL_API_KEY": "",
+        }
+    ),
+    prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
+    prepare_api_server(),
+    create_test_client(),
+    database_repo_is_ready(),
+    database_is_clean(),
+    there_is_an_organization_with_user_and_access_token(),
+    use_org_for_auth(),
+    there_is_a_template(),
+]
+
+
+def test_start_openclaw_agent_without_firecrawl():
+    with given([*_GIVEN_WITHOUT_FIRECRAWL, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+
+        with when("I start an agent without any firecrawl env vars"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the overlay has no firecrawl and the secret has no firecrawl key"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            overlay = json.loads(config_map.data["openclaw-config-overlay.json"])
+            assert "firecrawl" not in overlay["plugins"]["allow"]
+            assert_that(overlay["plugins"]["entries"], is_not(has_key("firecrawl")))
+            secret = k8s.create_secret.call_args.args[1]
+            assert_that(secret.string_data, is_not(has_key("FIRECRAWL_API_KEY")))
 
 
 def test_create_agent_duplicate_bot_token_returns_409():

@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  # Mounted into our Grafana via dashboardsConfigMaps (values.yaml).
+  # Deliberately NOT labeled grafana_dashboard — the cluster's central
+  # Grafana sidecar imports that label from every namespace, and these
+  # dashboards are private to this stack.
+  name: grafana-dashboards
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "monitoring.labels" . | nindent 4 }}
+data:
+{{- range $path, $_ := .Files.Glob "dashboards/*.json" }}
+  {{ base $path }}: |-
+{{ $.Files.Get $path | indent 4 }}
+{{- end }}

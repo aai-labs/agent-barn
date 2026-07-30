@@ -216,13 +216,21 @@ _PROFILE_BUILDERS: dict[SecretProvider, Callable[..., str]] = {
 }
 
 
+_TOOL_CONTEXT_PROVIDERS = {
+    SecretProvider.GITHUB,
+    SecretProvider.JIRA,
+    SecretProvider.CONFLUENCE,
+    SecretProvider.BITBUCKET,
+}
+
+
 def build_tool_context_md(decrypted: Mapping[SecretProvider, SecretContent]) -> str:
     """Render a markdown section listing each configured integration's key metadata.
 
     Injected into tools_md at start_agent time so the agent knows what is already
     set up and doesn't ask the user for credentials that are already configured.
     """
-    if not decrypted:
+    if not decrypted or not (decrypted.keys() & _TOOL_CONTEXT_PROVIDERS):
         return ""
 
     lines: list[str] = [
@@ -330,7 +338,7 @@ def build_integrations_policy_md(
     ]
     for provider in SecretProvider:  # fixed enum order for deterministic output
         content = decrypted.get(provider)
-        if content is None:
+        if content is None or provider not in PROFILE_SLUGS:
             continue
         base = PROFILE_SLUGS[provider]
         if isinstance(content, GithubContent):
@@ -355,7 +363,7 @@ def build_config_toml(
     blocks = [_header(secrets_dir)]
     for provider in SecretProvider:
         content = decrypted.get(provider)
-        if content is not None:
+        if content is not None and provider in _PROFILE_BUILDERS:
             blocks.append(_PROFILE_BUILDERS[provider](content))
     return "\n".join(blocks)
 

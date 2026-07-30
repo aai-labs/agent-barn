@@ -54,7 +54,7 @@ export class OrganizationDataSupport {
     detail?: string;
   } = {}) {
     const list = items ?? [org()];
-    await this.page.route("**/api/v1/organizations?*", async (route) => {
+    await this.page.route("**/api/v1/platform/organizations?*", async (route) => {
       if (route.request().method() !== "GET") {
         await route.fallback();
         return;
@@ -74,7 +74,7 @@ export class OrganizationDataSupport {
   async interceptCreateOrganization({
     success = true,
     status = 201,
-    detail = "Only a superuser can create organizations",
+    detail = "Only a platform_admin can create organizations",
     result,
   }: {
     success?: boolean;
@@ -82,7 +82,7 @@ export class OrganizationDataSupport {
     detail?: string;
     result?: unknown;
   } = {}) {
-    await this.page.route("**/api/v1/organizations", async (route) => {
+    await this.page.route("**/api/v1/platform/organizations", async (route) => {
       if (route.request().method() !== "POST") {
         await route.fallback();
         return;

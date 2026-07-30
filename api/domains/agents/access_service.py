@@ -16,6 +16,7 @@ from api.domains.agents.models import (
 )
 from api.domains.agents.repository import AgentRepository
 from api.domains.auth.models import CurrentUserContext
+from api.domains.events import resolve_actor_identity
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.models import AgentAccessRole
 from api.domains.rbac.repository import RbacRepository
@@ -86,6 +87,7 @@ class AgentAccessService:
             agent.organization_id,
             general_access_role_id=data.general_access_role_id,
             assignment_roles=assignment_roles,
+            actor=resolve_actor_identity(context, agent.organization_id),
         ):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,

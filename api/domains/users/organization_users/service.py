@@ -7,6 +7,7 @@ from sqlmodel import Session
 
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.service import AuthService
+from api.domains.events import EventDeliveryDispatcher, resolve_actor_identity
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.rbac.catalog import ORG_OWNER_ONLY_ROLES, PermissionKey
 from api.domains.rbac.policy import PermissionPolicy
@@ -35,6 +36,7 @@ class OrganizationUserService:
     auth_service: AuthService
     user_repository: UserRepository
     permission_policy: PermissionPolicy
+    event_delivery_dispatcher: EventDeliveryDispatcher
 
     def find_by_user_id_and_organization_id(self, user_id: UUID, organization_id: UUID) -> OrganizationUserRead:
         organization_user = self.organization_user_repository.get_by_user_id_and_organization_id(
@@ -231,7 +233,7 @@ class OrganizationUserService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Cannot change the owner's role; transfer ownership instead",
             )
-        # Promoting to or demoting from ADMIN is reserved for owners/superusers; a plain
+        # Promoting to or demoting from ADMIN is reserved for owners/platform admins; a plain
         # admin can manage members but not other admins (nor mint new ones).
         touches_admin = OrganizationRole.ADMIN in (membership.role, data.role)
         if touches_admin and not context.has_org_role(organization_id, ORG_OWNER_ONLY_ROLES):
@@ -239,9 +241,16 @@ class OrganizationUserService:
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Only an owner can promote or demote admins",
             )
-        membership.role = data.role
-        self.organization_user_repository.save(membership)
-        return self._to_member_read(membership)
+        changed = self.organization_user_repository.change_role_with_event(
+            organization_id=organization_id,
+            user_id=user_id,
+            new_role=data.role,
+            actor=resolve_actor_identity(context, organization_id),
+        )
+        if changed is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Member not found in this organization")
+        self.event_delivery_dispatcher.enqueue_immediate(changed.delivery_ids)
+        return self._to_member_read(changed.membership)
 
     def remove_member(self, context: CurrentUserContext, organization_id: UUID, user_id: UUID) -> None:
         self.permission_policy.require_organization(

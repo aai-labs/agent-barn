@@ -7,9 +7,13 @@ API_PORT=8000
 ENVIRONMENT=local
 UI_APP_URL=http://localhost:3000
 
+# Optional: Redis is only needed to run the event delivery worker/reconciler
+# locally (`make redis-up`, `make dev-worker`); defaults to localhost:6379.
+REDIS_PORT=6379
+REDIS_URL=redis://localhost:6379/0
+
 SECRET_SIGNING_KEY=replace_with_a_secure_random_value
-SUPER_USER_CREDENTIALS=admin@example.com:replace_with_secure_password
-SUPER_USER_FULL_NAME=Super User
+PLATFORM_ADMIN_CREDENTIALS=admin@example.com:replace_with_secure_password
 
 # Optional: if unset, email delivery is disabled and send attempts are logged.
 EMAIL_SERVER_CREDENTIAL=

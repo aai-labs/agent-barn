@@ -133,7 +133,7 @@ def _post_message_html(
 
 @integrations_router.get("/google/authorize-url")
 def google_authorize_url(
-    _context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    _context: Annotated[CurrentUserContext, Depends(get_current_user(require_organization=False))],
     # Plain default (not Query(...)) so a direct call resolves to None rather than the
     # Query sentinel; FastAPI still parses it as an optional query parameter.
     client_id: str | None = None,
@@ -200,7 +200,7 @@ class GoogleTokenExchangeRequest(BaseModel):
 @integrations_router.post("/google/token")
 def google_token_exchange(
     body: GoogleTokenExchangeRequest,
-    _context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    _context: Annotated[CurrentUserContext, Depends(get_current_user(require_organization=False))],
     config: Config = Injected(Config),
 ):
     """Exchange the authorization code for a refresh token.

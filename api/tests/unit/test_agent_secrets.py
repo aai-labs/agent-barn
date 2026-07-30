@@ -8,6 +8,7 @@ from api.domains.agents.models import (
     PROVIDER_DISPLAY_NAMES,
     AgentCreate,
     BitbucketContent,
+    FirecrawlContent,
     GithubContent,
     GmailContent,
     JiraContent,
@@ -196,6 +197,55 @@ def test_gmail_content_accepts_refresh_token_only():
 def test_gmail_content_requires_refresh_token():
     with pytest.raises(ValidationError):
         validate_content(SecretProvider.GMAIL, {"client_id": "cid"})
+
+
+# --- Firecrawl (AF-152) ---
+
+
+def test_firecrawl_content_validates_api_key():
+    content = validate_content(SecretProvider.FIRECRAWL, {"api_key": "fc-abc123"})
+    assert isinstance(content, FirecrawlContent)
+    assert content.api_key == "fc-abc123"
+    assert content.base_url == ""
+
+
+def test_firecrawl_content_validates_api_key_with_base_url():
+    content = validate_content(
+        SecretProvider.FIRECRAWL,
+        {"api_key": "fc-abc123", "base_url": "https://api.firecrawl.dev"},
+    )
+    assert isinstance(content, FirecrawlContent)
+    assert content.api_key == "fc-abc123"
+    assert content.base_url == "https://api.firecrawl.dev"
+
+
+def test_firecrawl_content_rejects_missing_api_key():
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.FIRECRAWL, {})
+
+
+def test_firecrawl_content_rejects_extra_fields():
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.FIRECRAWL, {"api_key": "fc-x", "extra": "nope"})
+
+
+def test_firecrawl_encrypt_decrypt_round_trip():
+    original = validate_content(SecretProvider.FIRECRAWL, {"api_key": "fc-secret"})
+    blob = encrypt_content(original, _KEY)
+    assert "fc-secret" not in blob
+    assert decrypt_content(SecretProvider.FIRECRAWL, blob, _KEY) == original
+
+
+def test_firecrawl_encrypt_decrypt_round_trip_with_base_url():
+    original = validate_content(
+        SecretProvider.FIRECRAWL,
+        {"api_key": "fc-secret", "base_url": "https://api.firecrawl.dev"},
+    )
+    blob = encrypt_content(original, _KEY)
+    decrypted = decrypt_content(SecretProvider.FIRECRAWL, blob, _KEY)
+    assert decrypted == original
+    assert isinstance(decrypted, FirecrawlContent)
+    assert decrypted.base_url == "https://api.firecrawl.dev"
 
 
 def test_decrypt_content_reads_legacy_gmail_blob():

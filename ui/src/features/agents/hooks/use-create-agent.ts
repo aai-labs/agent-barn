@@ -3,6 +3,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/shared/api";
+import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
 
 import { Agent, AgentSchema } from "../schemas";
 import { agentsKey } from "../utils";
@@ -40,10 +41,11 @@ export type CreateAgentData = {
 
 export function useCreateAgent() {
   const queryClient = useQueryClient();
+  const orgApiBase = useOrganizationApiBase();
 
   return useMutation({
     mutationFn: async (data: CreateAgentData) => {
-      const response = await api.post<Agent>("/api/v1/agents", data, {
+      const response = await api.post<Agent>(`${orgApiBase}/agents`, data, {
         schema: AgentSchema,
       });
       return response.data;

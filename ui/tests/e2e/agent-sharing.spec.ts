@@ -38,6 +38,28 @@ const ORG_OWNER_MEMBER = {
   is_pending: false,
 };
 
+function platformAdminWithOrgMemberships(organizations: Array<Record<string, unknown>>) {
+  const userId = "019db657-3269-75a0-90f1-decb91b987d6";
+  return {
+    id: userId,
+    created_at: "2024-01-01T00:00:00Z",
+    updated_at: "2024-01-01T00:00:00Z",
+    full_name: "Grace Hopper",
+    email: "admin@aai-labs.com",
+    is_platform_admin: true,
+    email_verified_at: "2024-01-01T00:00:00Z",
+    organization_users: organizations.map((organization, index) => ({
+      id: `${index + 1}`.padStart(8, "0") + "-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      created_at: "2024-01-01T00:00:00Z",
+      updated_at: "2024-01-01T00:00:00Z",
+      user_id: userId,
+      organization_id: organization.id,
+      role: "OWNER",
+      organization,
+    })),
+  };
+}
+
 test.describe("Agent sharing", () => {
   test.use({ storageState: { cookies: [], origins: [] } });
 
@@ -93,7 +115,7 @@ test.describe("Agent sharing", () => {
   }) => {
     await data.organizations.interceptGetMembers({ members: [GRACE_MEMBER] });
     let putBody: unknown;
-    await page.route(`**/api/v1/agents/${MOCK_AGENT_ID}/share`, async (route) => {
+    await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/share`, async (route) => {
       if (route.request().method() !== "PUT") {
         await route.fallback();
         return;
@@ -356,38 +378,46 @@ test.describe("Agent sharing", () => {
     // genuine in-app org switch (see organization-provider.tsx's ORG_SCOPED_QUERY_KEYS
     // eviction). Exercise that same switch here — a page.goto would reload the whole
     // app and trivially "pass" without touching the eviction logic Share depends on.
-    await data.organizations.interceptListOrganizations({
-      items: [
-        {
-          id: TEST_ORG_ID,
-          created_at: "2024-01-01T00:00:00Z",
-          updated_at: "2024-01-01T00:00:00Z",
-          name: "AAI Labs",
-          description: "Starter organization",
-          is_default: false,
-          owner_email: "owner@example.com",
-          owner_name: "Grace Hopper",
-        },
-        {
-          id: ORG_B_ID,
-          created_at: "2024-01-01T00:00:00Z",
-          updated_at: "2024-01-01T00:00:00Z",
-          name: "Globex",
-          description: "Second organization",
-          is_default: false,
-          owner_email: "hank@globex.com",
-          owner_name: "Hank Scorpio",
-        },
-      ],
+    const organizations = [
+      {
+        id: TEST_ORG_ID,
+        created_at: "2024-01-01T00:00:00Z",
+        updated_at: "2024-01-01T00:00:00Z",
+        name: "AAI Labs",
+        description: "Starter organization",
+        is_default: false,
+        owner_email: "owner@example.com",
+        owner_name: "Grace Hopper",
+      },
+      {
+        id: ORG_B_ID,
+        created_at: "2024-01-01T00:00:00Z",
+        updated_at: "2024-01-01T00:00:00Z",
+        name: "Globex",
+        description: "Second organization",
+        is_default: false,
+        owner_email: "hank@globex.com",
+        owner_name: "Hank Scorpio",
+      },
+    ];
+    await data.users.interceptGetUserContextRequest({
+      userContext: platformAdminWithOrgMemberships(organizations),
     });
+    await data.organizations.interceptListOrganizations({ items: organizations });
     await data.organizations.interceptGetOrganization();
-    await page.route("**/api/v1/agents?*", async (route) => {
+    await page.route("**/api/v1/organizations/*/agents?*", async (route) => {
       if (route.request().method() !== "GET") {
         await route.fallback();
         return;
       }
-      const orgHeader = await route.request().headerValue("x-organization-id");
-      const agent = orgHeader === ORG_B_ID ? { ...mockAgent, name: "Aria" } : mockAgent;
+      const url = new URL(route.request().url());
+      if (!/\/api\/v1\/organizations\/[^/]+\/agents$/.test(url.pathname)) {
+        await route.fallback();
+        return;
+      }
+      const agent = url.pathname.includes(`/organizations/${ORG_B_ID}/`)
+        ? { ...mockAgent, name: "Aria" }
+        : mockAgent;
       await route.fulfill({
         status: 200,
         contentType: "application/json",

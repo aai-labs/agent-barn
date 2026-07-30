@@ -2,6 +2,7 @@ registryPrefix: "registry.k8s.aai-labs.com"
 
 image:
   repository: agentfarm-api
+  tag: latest
   pullPolicy: Always
 
 openclawImage:
@@ -15,13 +16,13 @@ hermesImage:
 replicaCount: 1
 
 # k8s Secret: DB_CONNECTION_URL, SECRET_SIGNING_KEY,
-# SUPER_USER_CREDENTIALS, ENVIRONMENT, WEB_APP_URL
+# PLATFORM_ADMIN_CREDENTIALS, ENVIRONMENT, WEB_APP_URL
 secretName: agentfarm-api
 
 dbConnectionUrl: ""
 secretSigningKey: ""
-superUserCredentials: ""
-superUserFullName: "Super User"
+platformAdminCredentials: ""
+platformAdminFullName: "Super User"
 agentTokenEncryptionKey: ""
 environment: ""
 webAppUrl: ""
@@ -39,8 +40,20 @@ emailFromAddress: ""
 googleCloudClientId: ""
 googleCloudClientSecret: ""
 
+# OpenRouter inference key (k8s Secret env var OPENROUTER_API_KEY), polled
+# via GET /key for the key's remaining credit limit metric. Same key litellm
+# uses; leave blank to skip the poll. The gauge reads +Inf until a credit
+# limit is set on the key at openrouter.ai.
+openrouterApiKey: ""
+
 litellmBaseUrl: "http://litellm:4000"
 agentLitellmBaseUrl: "http://litellm:4000"
+
+# Firecrawl — self-hosted web scraping service used by both agent runtimes.
+# The base URL points at the firecrawl ClusterIP service; the API key is the
+# platform-level key shared by all agents (users can override per-agent via UI).
+agentFirecrawlBaseUrl: "http://firecrawl:3002"
+agentFirecrawlApiKey: ""
 
 # Comma-separated fnmatch globs limiting which OpenRouter models the picker
 # offers, e.g. "z-ai/glm-5.2,openai/gpt-5*". Empty offers the full catalogue.
@@ -67,6 +80,12 @@ litellmApiKeySecretName: litellm-api-key
 # Pre-existing litellm Secret (used by hook Job to call /key/generate)
 litellmSecretName: litellm
 
+# ServiceAccount the litellm-key hook Job runs as (needs create/update on secrets).
+# Defaults to the out-of-band `agent-farm-user` (see k8s/agent-farm-user.yaml). Set
+# to the deploy identity's own SA when that SA already has secret perms and you can't
+# provision the agent-farm-user Role/RoleBinding (e.g. a namespace-scoped kubeconfig).
+litellmKeyServiceAccountName: agent-farm-user
+
 #  kubeconfig Secret for managing agent k8s resources
 kubeconfigSecretName: agent-farm-user-kubeconfig
 
@@ -83,6 +102,26 @@ ingress:
   hosts: "api.agent-farm.k8s.aai-labs.com"
   clusterIssuer: letsencrypt-http01
   tlsSecretName: agentfarm-api-tls
+
+# Shared Redis instance (helm/redis release), not deployed by this chart.
+# Used by the general-purpose worker's dramatiq broker, not just event delivery.
+redisUrl: "redis://redis:6379/0"
+
+eventDelivery:
+  reconciliation:
+    enabled: true
+    schedule: "*/5 * * * *"
+
+worker:
+  enabled: true
+  replicaCount: 1
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 100m
+    limits:
+      memory: 512Mi
+      cpu: 500m
 
 resources:
   requests:

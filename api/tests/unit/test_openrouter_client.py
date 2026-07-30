@@ -137,6 +137,8 @@ def _service(openrouter, allowlist="", default_model=""):
         config=config,
         slack_token_service=MagicMock(),
         shared_credential_repository=MagicMock(),
+        event_delivery_dispatcher=MagicMock(),
+        organization_lookup=MagicMock(),
     )
 
 
