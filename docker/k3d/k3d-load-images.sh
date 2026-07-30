@@ -8,10 +8,18 @@
 #   OPENCLAW_IMAGE    — fully-qualified image name+tag (from .env)
 #   HERMES_IMAGE      — fully-qualified image name+tag (from .env)
 #
+# Optional:
+#   APT_MIRROR        — Debian archive host for the base-image builds. The
+#                       default CDN occasionally serves a badly degraded edge
+#                       (~30KB/s), which stalls these builds for an hour or
+#                       more. Point this at a nearby full mirror to recover.
+#                       It must carry both /debian and /debian-security.
+#
 # Usage:
 #   make k3d-load-images              # build + import both
 #   TARGET=openclaw make k3d-load-images  # one image only
 #   TARGET=hermes   make k3d-load-images
+#   APT_MIRROR=mirror.csclub.uwaterloo.ca make k3d-load-images
 
 set -euo pipefail
 
@@ -27,6 +35,7 @@ fi
 
 CLUSTER="agentfarm-dev"
 TARGET="${TARGET:-all}"  # all | openclaw | hermes
+APT_MIRROR="${APT_MIRROR:-deb.debian.org}"
 COMPOSE="docker compose -f ${REPO_ROOT}/compose.yml --profile k3d"
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -60,8 +69,12 @@ build_image() {
   local tag="$4"
 
   step "Building ${name} → ${tag}"
+  if [[ "${APT_MIRROR}" != "deb.debian.org" ]]; then
+    green "  using Debian mirror: ${APT_MIRROR}"
+  fi
   docker build \
     --secret "id=gh_token,env=GH_TOKEN" \
+    --build-arg "APT_MIRROR=${APT_MIRROR}" \
     --file "${REPO_ROOT}/${dockerfile}" \
     --tag  "${tag}" \
     --progress=plain \

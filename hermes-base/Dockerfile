@@ -1,5 +1,17 @@
 # syntax=docker/dockerfile:1
+
+# Debian archive host — see openclaw-base/Dockerfile for the rationale. Must
+# carry both /debian and /debian-security. Override with:
+#   docker build --build-arg APT_MIRROR=mirror.csclub.uwaterloo.ca ...
+ARG APT_MIRROR=deb.debian.org
+
 FROM rust:1-slim-bookworm AS rust-build
+ARG APT_MIRROR
+RUN set -eu; \
+    if [ "$APT_MIRROR" != "deb.debian.org" ]; then \
+      sed -i "s|deb\.debian\.org|${APT_MIRROR}|g" /etc/apt/sources.list 2>/dev/null || true; \
+      sed -i "s|deb\.debian\.org|${APT_MIRROR}|g" /etc/apt/sources.list.d/*.sources 2>/dev/null || true; \
+    fi
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git pkg-config libssl-dev ca-certificates && rm -rf /var/lib/apt/lists/*
 
@@ -10,10 +22,17 @@ RUN --mount=type=secret,id=gh_token \
     cargo install --path repo --root /out --locked
 
 FROM nousresearch/hermes-agent:v2026.5.29.2
+ARG APT_MIRROR
 
 COPY --from=rust-build /out/bin/ /usr/local/bin/
 
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright
+
+RUN set -eu; \
+    if [ "$APT_MIRROR" != "deb.debian.org" ]; then \
+      sed -i "s|deb\.debian\.org|${APT_MIRROR}|g" /etc/apt/sources.list 2>/dev/null || true; \
+      sed -i "s|deb\.debian\.org|${APT_MIRROR}|g" /etc/apt/sources.list.d/*.sources 2>/dev/null || true; \
+    fi
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get update && \
