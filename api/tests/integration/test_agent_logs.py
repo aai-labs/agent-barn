@@ -22,7 +22,7 @@ from api.tests.steps.organization import (
     there_is_an_organization_with_user_and_access_token,
 )
 
-_BASE = "/api/v1/agents"
+_BASE = "/api/v1/organizations/{organization_id}/agents"
 
 _GIVEN = [
     set_env_variable(
@@ -53,9 +53,7 @@ def test_get_agent_logs_requires_auth():
             response = client.get(f"{_BASE}/{context.agent.id}/logs")
 
             with then("401 is returned"):
-                assert_that(
-                    response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED)
-                )
+                assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
 
 
 def test_get_agent_logs_returns_404_for_nonexistent_agent():
@@ -78,9 +76,7 @@ def test_stream_agent_logs_requires_auth():
             response = client.get(f"{_BASE}/{context.agent.id}/logs/stream")
 
             with then("401 is returned"):
-                assert_that(
-                    response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED)
-                )
+                assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
 
 
 def test_get_agent_logs_returns_empty_snapshot_for_stopped_agent():
@@ -88,9 +84,7 @@ def test_get_agent_logs_returns_empty_snapshot_for_stopped_agent():
         client: TestClient = context.client
 
         with when("I request logs for a stopped agent with no snapshots"):
-            response = client.get(
-                f"{_BASE}/{context.agent.id}/logs", headers=_auth(context)
-            )
+            response = client.get(f"{_BASE}/{context.agent.id}/logs", headers=_auth(context))
 
             with then("empty snapshot result is returned"):
                 assert_that(response.status_code, equal_to(status.HTTP_200_OK))

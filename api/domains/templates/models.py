@@ -20,6 +20,11 @@ class TemplateSource(str, enum.Enum):
 class AgentTemplate(BaseModel, table=True):
     __tablename__: str = "agent_template"
 
+    # agent_template is strictly organization-scoped: custom templates created
+    # by an org and org forks of platform predefined templates. Global
+    # predefined templates live in platform_template. A fork records its origin
+    # via forked_from_platform_template_id so "update available" detection is
+    # possible later.
     __table_args__ = (
         sa.Index("ix_agent_template_organization_id", "organization_id"),
         sa.UniqueConstraint(
@@ -30,8 +35,12 @@ class AgentTemplate(BaseModel, table=True):
         ),
     )
 
-    organization_id: UUID = SqlField(
-        foreign_key="organization.id", nullable=False, ondelete="CASCADE"
+    organization_id: UUID = SqlField(foreign_key="organization.id", nullable=False, ondelete="CASCADE")
+    forked_from_platform_template_id: UUID | None = SqlField(
+        default=None,
+        foreign_key="platform_template.id",
+        nullable=True,
+        ondelete="SET NULL",
     )
     template_slug: str = SqlField(nullable=False, max_length=255)
     template_name: str = SqlField(nullable=False, max_length=255)
@@ -51,14 +60,45 @@ class AgentTemplate(BaseModel, table=True):
     heartbeat_md: str = SqlField(nullable=False)
 
 
+class PlatformTemplate(BaseModel, table=True):
+    __tablename__: str = "platform_template"
+
+    # Global platform predefined templates. No organization_id — these are
+    # platform resources visible to every organization, like built-in aai_cli
+    # skills. Always template_source = pre-defined (implicit; not stored).
+    __table_args__ = (
+        sa.UniqueConstraint(
+            "template_slug",
+            "version",
+            name="uq_platform_template_slug_version",
+        ),
+    )
+
+    template_slug: str = SqlField(nullable=False, max_length=255)
+    template_name: str = SqlField(nullable=False, max_length=255)
+    version: int = SqlField(nullable=False)
+    description: str | None = SqlField(default=None, nullable=True, max_length=500)
+    soul_md: str = SqlField(nullable=False)
+    identity_md: str = SqlField(nullable=False)
+    user_md: str = SqlField(nullable=False)
+    tools_md: str = SqlField(nullable=False)
+    agents_md: str = SqlField(nullable=False)
+    boot_md: str = SqlField(nullable=False)
+    bootstrap_md: str = SqlField(nullable=False)
+    heartbeat_md: str = SqlField(nullable=False)
+
+
 class TemplateRead(PydanticBaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
-    organization_id: UUID
+    organization_id: UUID | None
     template_slug: str
     template_name: str
     template_source: TemplateSource
+    # Set only for org forks of a platform predefined template; NULL for custom
+    # templates and for platform templates themselves.
+    forked_from_platform_template_id: UUID | None = None
     version: int
     description: str | None
     soul_md: str
@@ -72,6 +112,7 @@ class TemplateRead(PydanticBaseModel):
     created_at: datetime
     updated_at: datetime
     required_skills: list[SkillRead] = Field(default_factory=list)
+    in_use: bool = False
 
 
 class TemplateCreate(PydanticBaseModel):

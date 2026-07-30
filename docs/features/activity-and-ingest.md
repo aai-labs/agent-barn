@@ -6,7 +6,7 @@ Read before changing conversation history, channel/thread grouping, runtime mess
 
 ## Role in the system
 
-The separately served Ingest API receives authenticated runtime telemetry. It persists Conversation Messages and Tool Calls, which the organization-scoped product API exposes as agent activity.
+The separately served Ingest API receives authenticated runtime telemetry. It persists Conversation Messages and Tool Calls, which the organization-scoped product API exposes as agent activity. These runtime Telemetry Events are separate from internal Domain Events and are not written to the Domain Event outbox.
 
 ## Invariants
 
@@ -16,8 +16,10 @@ The separately served Ingest API receives authenticated runtime telemetry. It pe
 - Conversation messages record direction, channel/direct-message type, session, channel, optional thread, names, content, and occurrence time.
 - Tool calls are unique per `(agent_id, external_id)` and use `PENDING`, `SUCCESS`, or `ERROR` status.
 - Duplicate message and pending tool-call identities are handled idempotently. Tool results update any matching row regardless of its current status; a result arriving before its pending event is currently dropped.
-- Conversation and tool-call reads are scoped through an organization-owned, non-deleted agent.
-- Slack channel and sender names may be enriched best-effort; Teams activity has no equivalent directory enrichment in this domain.
+- Product API conversation and tool-call reads require `activity.read` and are scoped through an accessible, organization-owned, non-deleted Agent. Assigned Members cannot bypass Agent Access through activity endpoints.
+- Runtime Ingest writes use Agent identity plus ingest-key authentication rather than a human Membership or Agent Access check.
+- Telemetry Events are runtime-originated operational facts. They are not Domain Events, Outbox Messages, Event Deliveries, or Security Audit Records.
+- Slack channel and sender names may be enriched best-effort; Telegram chat names are cached with a 10-minute TTL. Teams activity has no equivalent directory enrichment in this domain.
 
 ## Data flow
 
@@ -56,6 +58,7 @@ Runtime parsers own translation from runtime-specific records into the shared in
 ## Related decisions
 
 - [`2026-07-17-push-based-runtime-telemetry.md`](../adr/2026-07-17-push-based-runtime-telemetry.md)
+- Domain Event boundaries are documented separately in [`domain-events.md`](domain-events.md).
 
 ## Change impact
 

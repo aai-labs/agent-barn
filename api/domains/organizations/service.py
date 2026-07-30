@@ -1,4 +1,3 @@
-from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -18,10 +17,9 @@ from api.domains.organizations.models import (
     OrganizationUpdate,
 )
 from api.domains.organizations.repository import OrganizationRepository
-from api.domains.templates.service import TemplateService
+from api.domains.rbac.catalog import ORG_OWNER_ONLY_ROLES, PermissionKey
+from api.domains.rbac.policy import PermissionPolicy
 from api.domains.users.organization_users.models import (
-    ORG_MANAGER_ROLES,
-    ORG_OWNER_ONLY_ROLES,
     OrganizationRole,
     OrganizationUser,
 )
@@ -37,13 +35,12 @@ class OrganizationService:
     user_organization_service: OrganizationUserService
     auth_service: AuthService
     agent_service: AgentService
-    template_service: TemplateService
+    permission_policy: PermissionPolicy
 
-    def get_organization(
-        self, organization_id: UUID, context: CurrentUserContext
-    ) -> OrganizationRead:
-        # Any member (or a superuser) may view the org; non-members are refused before
-        # the fetch so a 403-vs-404 difference can't confirm an org's existence.
+    def get_organization(self, organization_id: UUID, context: CurrentUserContext) -> OrganizationRead:
+        # Any member (or a platform administrator in explicit Organization context) may
+        # view the org; non-members are refused before the fetch so a 403-vs-404
+        # difference can't confirm an org's existence.
         self._ensure_can_view_organization(organization_id, context)
         organization = self.organization_repository.get_read(organization_id)
         if not organization:
@@ -53,24 +50,16 @@ class OrganizationService:
             )
         return organization
 
-    def create_organization(
-        self, data: OrganizationCreate, actor: CurrentUserContext
-    ) -> OrganizationCreateResult:
-        actor.require_superuser(detail="Only a superuser can create organizations")
+    def create_organization(self, data: OrganizationCreate, actor: CurrentUserContext) -> OrganizationCreateResult:
+        actor.require_platform_admin(detail="Only a platform administrator can create organizations")
 
         # Org, owner-invite (user + token) and the OWNER membership all commit together,
         # so a failed step can't leave an org with no owner. The invite email is sent
         # only after commit.
-        organization = Organization(
-            name=data.name, description=data.description, is_default=False
-        )
-        with Session(
-            self.organization_repository.delegate.engine, expire_on_commit=False
-        ) as session:
+        organization = Organization(name=data.name, description=data.description)
+        with Session(self.organization_repository.delegate.engine, expire_on_commit=False) as session:
             self.organization_repository.save_with_session(organization, session)
-            prepared = self.auth_service.prepare_invite(
-                session, email=str(data.owner_email), full_name=data.owner_name
-            )
+            prepared = self.auth_service.prepare_invite(session, email=str(data.owner_email), full_name=data.owner_name)
             self.user_organization_service.add_membership_with_session(
                 OrganizationUser(
                     user_id=prepared.user.id,
@@ -81,9 +70,8 @@ class OrganizationService:
             )
             session.commit()
 
-        # Templates are per-org (unlike global skills), so a new org needs its own copy
-        # of the predefined catalog. Idempotent; runs post-commit like the invite email.
-        self.template_service.seed_predefined_templates(organization.id)
+        # Predefined templates are global platform resources seeded once at
+        # startup, so a new org needs no per-org catalog clone.
         self.auth_service.send_prepared_invite(prepared)
 
         organization_read = self.organization_repository.get_read(organization.id)
@@ -92,16 +80,7 @@ class OrganizationService:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to load organization",
             )
-        return OrganizationCreateResult(
-            organization=organization_read, invite_link=prepared.invite_link
-        )
-
-    def ensure_default_organization(self) -> Organization:
-        existing = self.organization_repository.find_default()
-        if existing:
-            return existing
-        org = Organization(name="default", is_default=True)
-        return self.organization_repository.save(org)
+        return OrganizationCreateResult(organization=organization_read, invite_link=prepared.invite_link)
 
     def get_paginated_organizations(
         self,
@@ -111,7 +90,7 @@ class OrganizationService:
         page_size: int = 15,
     ) -> PaginatedItems[OrganizationRead]:
         pagination = Pagination(page=page, size=page_size)
-        user_id = None if context.user.is_superuser else context.user.id
+        user_id = None if context.user.is_platform_admin else context.user.id
         return self.organization_repository.find_all_paginated_read(
             pagination=pagination,
             organization_filter=org_filter,
@@ -123,26 +102,27 @@ class OrganizationService:
         organization_id: UUID,
         context: CurrentUserContext,
     ) -> None:
-        # Any membership can view the org; authorized against the *target* org (path
-        # param), never the header org. frozenset(OrganizationRole) so a future role is
-        # included automatically rather than silently 403'd out.
-        context.require_org_role(
+        self.permission_policy.require_organization(
+            context,
             organization_id,
-            frozenset(OrganizationRole),
+            PermissionKey.ORGANIZATION_READ,
             detail="You don't have permission for this organization",
         )
 
-    def _ensure_can_manage_organization(
+    def _ensure_is_owner(
         self,
         organization_id: UUID,
         context: CurrentUserContext,
-        required_roles: AbstractSet[OrganizationRole] = ORG_MANAGER_ROLES,
     ) -> None:
-        # Authorized against the *target* org (path param), never the header org —
-        # see CurrentUserContext.require_org_role.
+        self.permission_policy.require_organization(
+            context,
+            organization_id,
+            PermissionKey.ORGANIZATION_DELETE,
+            detail="You don't have permission for this organization",
+        )
         context.require_org_role(
             organization_id,
-            required_roles,
+            ORG_OWNER_ONLY_ROLES,
             detail="You don't have permission for this organization",
         )
 
@@ -152,7 +132,12 @@ class OrganizationService:
         organization_data: OrganizationUpdate,
         context: CurrentUserContext,
     ) -> OrganizationRead:
-        self._ensure_can_manage_organization(organization_id, context)
+        self.permission_policy.require_organization(
+            context,
+            organization_id,
+            PermissionKey.ORGANIZATION_UPDATE,
+            detail="You don't have permission for this organization",
+        )
         organization = self.organization_repository.get(organization_id)
         if not organization:
             raise HTTPException(
@@ -178,20 +163,13 @@ class OrganizationService:
         context: CurrentUserContext,
     ) -> None:
         # Deleting an org cascades its agents/templates/skills and orphans running
-        # pods, so it is owner/superuser only — admins can rename but not destroy.
-        self._ensure_can_manage_organization(
-            organization_id, context, required_roles=ORG_OWNER_ONLY_ROLES
-        )
+        # pods, so it is owner/platform-admin only — admins can rename but not destroy.
+        self._ensure_is_owner(organization_id, context)
         organization = self.organization_repository.get(organization_id)
         if not organization:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Organization {organization_id} not found",
-            )
-        if organization.is_default:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="The default organization cannot be deleted",
             )
         # Deleting an org would cascade its agents and orphan their running pods.
         # Require an explicit teardown: the agents must be deleted first.
@@ -199,9 +177,6 @@ class OrganizationService:
         if active_agents > 0:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    "Delete this organization's agents before deleting it "
-                    f"({active_agents} still active)."
-                ),
+                detail=(f"Delete this organization's agents before deleting it ({active_agents} still active)."),
             )
         self.organization_repository.delete(organization.id)

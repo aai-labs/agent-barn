@@ -16,7 +16,7 @@ from api.domains.skills.models import (
 from api.domains.skills.service import SkillService
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
-skills_router = APIRouter(prefix="/skills", tags=["skills"])
+skills_router = APIRouter(prefix="/organizations/{organization_id}/skills", tags=["skills"])
 
 
 @skills_router.post("", response_model=SkillRead, status_code=status.HTTP_201_CREATED)

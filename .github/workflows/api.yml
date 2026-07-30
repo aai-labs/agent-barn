@@ -2,10 +2,17 @@ name: API
 
 on:
   push:
+    # deploy.yml calls this workflow directly (via workflow_call) as a
+    # needs: prerequisite for staging/main pushes, so it isn't also
+    # triggered standalone here -- that would run it twice for the same commit.
+    branches-ignore:
+      - staging
+      - main
     paths:
       - api/**
       - Makefile
       - .github/workflows/api.yml
+  workflow_call:
 
 jobs:
   lint:
@@ -21,6 +28,7 @@ jobs:
         working-directory: api
         run: uv sync --frozen
       - run: make check-api
+      - run: make check-migrations
 
   test:
     name: Test

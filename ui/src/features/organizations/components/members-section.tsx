@@ -69,6 +69,7 @@ const MENU_ITEM =
 function MemberActionsMenu({
   member,
   canManageOwnership,
+  canRemove,
   onMakeAdmin,
   onMakeMember,
   onResend,
@@ -77,6 +78,7 @@ function MemberActionsMenu({
 }: {
   member: OrganizationMember;
   canManageOwnership: boolean;
+  canRemove: boolean;
   onMakeAdmin: () => void;
   onMakeMember: () => void;
   onResend: () => void;
@@ -117,12 +119,13 @@ function MemberActionsMenu({
             boxShadow: "var(--shadow-pop)",
           }}
         >
-          {member.role !== "ADMIN" && (
+          {canManageOwnership && member.role !== "ADMIN" && (
             <button className={MENU_ITEM} style={{ color: "var(--ink-2)" }} onClick={() => run(onMakeAdmin)}>
               <Shield width={15} height={15} style={{ color: "var(--ink-4)" }} /> Make admin
             </button>
           )}
-          {member.role !== "MEMBER" && (
+          {member.role !== "MEMBER" &&
+            (member.role !== "ADMIN" || canManageOwnership) && (
             <button className={MENU_ITEM} style={{ color: "var(--ink-2)" }} onClick={() => run(onMakeMember)}>
               <UserRound width={15} height={15} style={{ color: "var(--ink-4)" }} /> Make member
             </button>
@@ -137,10 +140,14 @@ function MemberActionsMenu({
               <Crown width={15} height={15} style={{ color: "var(--ink-4)" }} /> Make owner
             </button>
           )}
-          <div style={{ borderTop: "1px solid var(--line)", margin: "4px 0" }} />
-          <button className={MENU_ITEM} style={{ color: "var(--err)" }} onClick={() => run(onRemove)}>
-            <Trash2 width={15} height={15} /> Remove from org
-          </button>
+          {canRemove && (
+            <>
+              <div style={{ borderTop: "1px solid var(--line)", margin: "4px 0" }} />
+              <button className={MENU_ITEM} style={{ color: "var(--err)" }} onClick={() => run(onRemove)}>
+                <Trash2 width={15} height={15} /> Remove from org
+              </button>
+            </>
+          )}
         </div>
       )}
     </div>
@@ -185,7 +192,7 @@ export function MembersSection({
   const currentRole = userContext.organizationUsers?.find(
     (m) => m.organizationId === organizationId,
   )?.role;
-  const canManageOwnership = user.isSuperuser || currentRole === "OWNER";
+  const canManageOwnership = user.isPlatformAdmin || currentRole === "OWNER";
 
   const onChangeRole = (member: OrganizationMember, role: OrganizationRole) => {
     changeRole.mutate(
@@ -305,6 +312,15 @@ export function MembersSection({
         <div className="flex flex-col gap-2.5">
           {filteredMembers.map((member) => {
             const isOwner = member.role === "OWNER";
+            const canRemoveMember =
+              member.role !== "ADMIN" ||
+              canManageOwnership ||
+              member.userId === user.id;
+            const hasMemberActions =
+              canManageOwnership ||
+              member.role !== "ADMIN" ||
+              member.isPending ||
+              canRemoveMember;
             return (
               <div
                 key={member.userId}
@@ -338,10 +354,11 @@ export function MembersSection({
 
                 <RoleBadge role={member.role} />
 
-                {!isOwner && (
+                {!isOwner && hasMemberActions && (
                   <MemberActionsMenu
                     member={member}
                     canManageOwnership={canManageOwnership}
+                    canRemove={canRemoveMember}
                     onMakeAdmin={() => confirmRoleChange(member, "ADMIN")}
                     onMakeMember={() => confirmRoleChange(member, "MEMBER")}
                     onResend={() => onResend(member)}

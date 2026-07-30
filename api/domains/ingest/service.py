@@ -6,6 +6,7 @@ from uuid import UUID
 from injector import inject, singleton
 
 from api.core.config import get_config
+from api.core.metrics import TOOL_CALLS
 from api.domains.agents.models import Agent, AgentPlatform
 from api.domains.agents.repository import AgentRepository
 from api.domains.conversations.models import AgentChatMessage
@@ -14,6 +15,7 @@ from api.domains.ingest.models import IngestBatchRequest
 from api.domains.tool_calls.repository import ToolCallRepository
 from api.infrastructure.crypto import decrypt_token
 from api.infrastructure.slack.client import SlackClient
+from api.infrastructure.telegram.client import get_chat_display_name
 
 logger = logging.getLogger(__name__)
 
@@ -35,9 +37,7 @@ class IngestService:
             raise PermissionError("agent has no ingest key")
 
         config = get_config()
-        stored_key = decrypt_token(
-            agent.ingest_key_encrypted, config.agent_token_encryption_key
-        )
+        stored_key = decrypt_token(agent.ingest_key_encrypted, config.agent_token_encryption_key)
 
         if not secrets.compare_digest(stored_key, provided_key):
             raise PermissionError("invalid ingest key")
@@ -51,7 +51,13 @@ class IngestService:
             self._process_tool_calls(agent, batch)
 
     def _process_messages(self, agent: Agent, batch: IngestBatchRequest) -> None:
-        user_map, channel_map = self._platform_maps(agent)
+        unresolved: set[str] = set()
+        for event in batch.messages:
+            if not event.sender_name and event.sender_id:
+                unresolved.add(event.sender_id)
+            if not event.channel_name and event.channel_id:
+                unresolved.add(event.channel_id)
+        user_map, channel_map = self._platform_maps(agent, unresolved_ids=list(unresolved))
 
         messages = []
         for event in batch.messages:
@@ -101,7 +107,7 @@ class IngestService:
                     event.occurred_at,
                 )
             for event in batch.tool_results:
-                self.tool_call_repository.complete(
+                completed = self.tool_call_repository.complete(
                     session,
                     agent.id,
                     event.external_id,
@@ -109,14 +115,23 @@ class IngestService:
                     event.is_error,
                     event.completed_at,
                 )
+                if completed is not None:
+                    TOOL_CALLS.labels(
+                        tool_name=completed.tool_name,
+                        status=completed.status.value.lower(),
+                    ).inc()
             session.commit()
 
-    def _platform_maps(self, agent: Agent) -> tuple[dict[str, str], dict[str, str]]:
+    def _platform_maps(
+        self, agent: Agent, unresolved_ids: list[str] | None = None
+    ) -> tuple[dict[str, str], dict[str, str]]:
         config = get_config()
         if not config.agent_token_encryption_key:
             return {}, {}
         if agent.platform == AgentPlatform.TEAMS:
             return {}, {}
+        if agent.platform == AgentPlatform.TELEGRAM:
+            return self._telegram_maps(agent, unresolved_ids or [])
         try:
             slack_config = self.agent_repository.get_slack_config(agent.id)
             if not slack_config:
@@ -128,14 +143,30 @@ class IngestService:
             slack = SlackClient(bot_token)
             users = slack.list_users(include_bots=True, include_deleted=True)
             channels = slack.list_channels()
-            user_map = {
-                u["id"]: u["display_name"] or u["real_name"] or u["name"] or u["id"]
-                for u in users
-            }
-            channel_map = {
-                c["id"]: c["name"] for c in channels if c["id"] and c["name"]
-            }
+            user_map = {u["id"]: u["display_name"] or u["real_name"] or u["name"] or u["id"] for u in users}
+            channel_map = {c["id"]: c["name"] for c in channels if c["id"] and c["name"]}
             return user_map, channel_map
         except Exception as e:
             logger.warning("Failed to fetch Slack maps for agent %s: %s", agent.id, e)
             return {}, {}
+
+    def _telegram_maps(self, agent: Agent, unresolved_ids: list[str]) -> tuple[dict[str, str], dict[str, str]]:
+        if not unresolved_ids:
+            return {}, {}
+        config = get_config()
+        telegram_config = self.agent_repository.get_telegram_config(agent.id)
+        if not telegram_config:
+            return {}, {}
+        bot_token = decrypt_token(
+            telegram_config.bot_token_encrypted,
+            config.agent_token_encryption_key,
+        )
+        resolved: dict[str, str] = {}
+        for chat_id in unresolved_ids:
+            raw_id = chat_id
+            if raw_id.upper().startswith("TELEGRAM:"):
+                raw_id = raw_id[len("TELEGRAM:") :]
+            name = get_chat_display_name(bot_token, raw_id)
+            if name:
+                resolved[chat_id] = name
+        return resolved, resolved

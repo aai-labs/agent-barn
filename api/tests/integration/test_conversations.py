@@ -30,7 +30,7 @@ from api.tests.steps.organization import (
     there_is_an_organization_with_user_and_access_token,
 )
 
-_BASE = "/api/v1/agents"
+_BASE = "/api/v1/organizations/{organization_id}/agents"
 
 _GIVEN = [
     set_env_variable(
@@ -101,9 +101,7 @@ def test_list_channels_unknown_agent_returns_404():
         client: TestClient = context.client
         fake_id = "00000000-0000-0000-0000-000000000099"
         with when("I list channels for a non-existent agent"):
-            response = client.get(
-                f"{_BASE}/{fake_id}/conversations/channels", headers=_auth(context)
-            )
+            response = client.get(f"{_BASE}/{fake_id}/conversations/channels", headers=_auth(context))
         with then("it returns 404"):
             assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
@@ -209,9 +207,7 @@ def test_list_messages_no_auth_returns_401():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         client: TestClient = context.client
         with when("I list messages without auth"):
-            response = client.get(
-                f"{_BASE}/{context.agent.id}/conversations/channels/CABC/messages"
-            )
+            response = client.get(f"{_BASE}/{context.agent.id}/conversations/channels/CABC/messages")
         with then("it returns 401"):
             assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
 

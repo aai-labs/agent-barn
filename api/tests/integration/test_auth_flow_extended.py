@@ -22,8 +22,6 @@ from api.tests.core.modules import (
 from api.tests.mocks.email import MockEmailModule
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import (
-    the_default_organization_id_is,
-    there_is_a_default_organization,
     there_is_an_organization,
 )
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
@@ -65,13 +63,9 @@ def test_refresh_works_with_cookie_and_revokes_previous_token():
                 assert_that(payload["refresh_token"], is_not(equal_to(old_refresh)))
 
         with when("I try to use previous refresh token"):
-            stale_response = client.post(
-                "/api/v1/auth/refresh", json={"refresh_token": old_refresh}
-            )
+            stale_response = client.post("/api/v1/auth/refresh", json={"refresh_token": old_refresh})
             with then("it is rejected"):
-                assert_that(
-                    stale_response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED)
-                )
+                assert_that(stale_response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
 
 
 def test_refresh_requires_token():
@@ -114,18 +108,17 @@ def test_signup_is_disabled():
         assert_that(response.status_code, equal_to(status.HTTP_410_GONE))
 
 
-def test_signup_service_seeds_predefined_templates():
-    """Signup is disabled at the route, but the service must still seed a new org's
-    per-org template catalog (templates aren't global like skills) if it's re-enabled."""
+def test_signup_org_sees_global_predefined_templates():
+    """Signup is disabled at the route, but the service must let a new org see the
+    global predefined template catalog (predefined templates are platform/global
+    resources, not per-org seeds) if signup is re-enabled."""
     from fastapi import BackgroundTasks
 
     from api.domains.auth.models import SignupRequest
     from api.domains.auth.service import AuthService
     from api.domains.templates.predefined import PREDEFINED_TEMPLATES
     from api.domains.templates.repository import TemplateRepository
-    from api.domains.users.organization_users.repository import (
-        OrganizationUserRepository,
-    )
+    from api.domains.templates.service import TemplateService
     from api.domains.users.repository import UserRepository
 
     with given(
@@ -137,6 +130,7 @@ def test_signup_service_seeds_predefined_templates():
             database_is_clean(),
         ]
     ) as context:
+        context.injector.get(TemplateService).seed_predefined_templates()
         context.injector.get(AuthService).signup(
             SignupRequest(
                 email="signup-seed@example.com",
@@ -146,18 +140,13 @@ def test_signup_service_seeds_predefined_templates():
             BackgroundTasks(),
         )
 
-        user = context.injector.get(UserRepository).get_by_email(
-            "signup-seed@example.com"
-        )
+        user = context.injector.get(UserRepository).get_by_email("signup-seed@example.com")
         assert_that(user, is_not(none()))
-        memberships = context.injector.get(OrganizationUserRepository).get_by_user_id(
-            user.id
-        )
-        org_id = memberships[0].organization_id
 
         template_repo = context.injector.get(TemplateRepository)
-        seeded = template_repo.get_latest_template(org_id, PREDEFINED_TEMPLATES[0].slug)
-        assert_that(seeded, is_not(none()))
+        visible = template_repo.get_latest_platform_template(PREDEFINED_TEMPLATES[0].slug)
+        assert_that(visible, is_not(none()))
+        # platform_template rows have no organization_id column — they are global
 
 
 def test_me_returns_safe_user_and_organizations():
@@ -199,12 +188,8 @@ def test_me_returns_safe_user_and_organizations():
         assert_that(payload, is_not(has_key("current_user_organization")))
 
 
-def test_me_works_for_user_not_in_default_org():
-    """A newly signed-up user owns their own org, not the default one. Bootstrapping
-    the account context via /me must not 403 just because the request (sent without an
-    X-Organization-Id header) falls back to the default org the user isn't a member of.
-    """
-    default_org = uuid7()
+def test_me_works_without_active_organization_header():
+    """Bootstrapping account context via /me does not require an active Organization."""
     own_org = uuid7()
     user_id = uuid7()
 
@@ -215,14 +200,12 @@ def test_me_works_for_user_not_in_default_org():
             create_test_client(),
             database_repo_is_ready(),
             database_is_clean(),
-            there_is_a_default_organization(id=default_org),
             there_is_a_user(
                 id=user_id,
                 email="fresh-signup@example.com",
                 organization_id=own_org,
                 role=OrganizationRole.OWNER,
             ),
-            the_default_organization_id_is(default_org),
             there_is_an_access_token_for_user(user_id=user_id),
         ]
     ) as context:
@@ -261,9 +244,7 @@ def test_forgot_and_reset_password_flow():
     ) as context:
         client: TestClient = context.client
 
-        forgot_response = client.post(
-            "/api/v1/auth/forgot-password", json={"email": "reset-flow@example.com"}
-        )
+        forgot_response = client.post("/api/v1/auth/forgot-password", json={"email": "reset-flow@example.com"})
         assert_that(forgot_response.status_code, equal_to(status.HTTP_200_OK))
         assert_that(
             forgot_response.json()["message"],
@@ -306,9 +287,7 @@ def test_forgot_password_for_unknown_user_is_noop():
     ) as context:
         client: TestClient = context.client
 
-        response = client.post(
-            "/api/v1/auth/forgot-password", json={"email": "missing@example.com"}
-        )
+        response = client.post("/api/v1/auth/forgot-password", json={"email": "missing@example.com"})
         assert_that(response.status_code, equal_to(status.HTTP_200_OK))
         assert_that(email_module.emails, has_length(0))
 
@@ -327,9 +306,7 @@ def test_reset_token_is_opaque_not_a_jwt():
         ]
     ) as context:
         client: TestClient = context.client
-        client.post(
-            "/api/v1/auth/forgot-password", json={"email": "opaque@example.com"}
-        )
+        client.post("/api/v1/auth/forgot-password", json={"email": "opaque@example.com"})
         token = _extract_token_from_email(email_module.emails[0].html_part)
         # A JWT has exactly two '.' separators; an opaque token has none.
         assert_that(token.count("."), equal_to(0))
@@ -354,14 +331,10 @@ def test_new_reset_request_invalidates_previous_token():
     ) as context:
         client: TestClient = context.client
 
-        client.post(
-            "/api/v1/auth/forgot-password", json={"email": "rotate@example.com"}
-        )
+        client.post("/api/v1/auth/forgot-password", json={"email": "rotate@example.com"})
         first_token = _extract_token_from_email(email_module.emails[0].html_part)
 
-        client.post(
-            "/api/v1/auth/forgot-password", json={"email": "rotate@example.com"}
-        )
+        client.post("/api/v1/auth/forgot-password", json={"email": "rotate@example.com"})
         second_token = _extract_token_from_email(email_module.emails[1].html_part)
 
         # The superseded first token must no longer work.

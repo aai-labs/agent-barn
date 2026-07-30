@@ -32,22 +32,16 @@ def build_user_service() -> tuple[
     organization_repository = Mock(spec=OrganizationRepository)
     refresh_token_repository = Mock(spec=RefreshTokenRepository)
     config = Config(
-        db_connection_url=cast(
-            PostgresDsn, "postgresql://postgres:postgres@localhost:5432/test"
-        ),
+        db_connection_url=cast(PostgresDsn, "postgresql://postgres:postgres@localhost:5432/test"),
         secret_signing_key="x" * 32,
-        super_user_credentials="admin@example.com:StrongPass123",
+        platform_admin_credentials="admin@example.com:StrongPass123",
         email_server_credential="noreply@example.com:password",
         email_smtp_server="smtp.example.com",
     )
     service = UserService(
         user_repository=cast(UserRepository, user_repository),
-        organization_user_service=cast(
-            OrganizationUserService, organization_user_service
-        ),
-        organization_user_repository=cast(
-            OrganizationUserRepository, organization_user_repository
-        ),
+        organization_user_service=cast(OrganizationUserService, organization_user_service),
+        organization_user_repository=cast(OrganizationUserRepository, organization_user_repository),
         organization_repository=cast(OrganizationRepository, organization_repository),
         refresh_token_repository=cast(RefreshTokenRepository, refresh_token_repository),
         config=config,
@@ -112,14 +106,12 @@ def test_organization_service_update_not_found_raises_404():
         user_organization_service=Mock(),
         auth_service=Mock(),
         agent_service=Mock(),
-        template_service=Mock(),
+        permission_policy=Mock(),
     )
-    superuser = User(email="root@example.com", hashed_password="x", is_superuser=True)
-    context = CurrentUserContext(user=superuser)
+    platform_admin = User(email="root@example.com", hashed_password="x", is_platform_admin=True)
+    context = CurrentUserContext(user=platform_admin)
 
     assert_that(
-        calling(org_service.update_organization).with_args(
-            uuid7(), OrganizationUpdate(name="new"), context
-        ),
+        calling(org_service.update_organization).with_args(uuid7(), OrganizationUpdate(name="new"), context),
         raises(HTTPException),
     )

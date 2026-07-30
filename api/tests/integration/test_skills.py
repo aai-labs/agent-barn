@@ -2,11 +2,14 @@ import base64
 import io
 import zipfile
 from unittest.mock import patch
+from uuid import uuid7
 
 from fastapi import status
 from hamcrest import assert_that, equal_to, has_item, has_items, not_
 from starlette.testclient import TestClient
 
+from api.domains.rbac.catalog import PermissionKey
+from api.domains.users.organization_users.models import OrganizationRole
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
     create_test_client,
@@ -28,9 +31,11 @@ from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import (
     there_is_an_organization_with_user_and_access_token,
 )
+from api.tests.steps.rbac import role_lacks_permission
 from api.tests.steps.template import there_is_a_template, there_is_a_template_skill
+from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
 
-_BASE = "/api/v1/skills"
+_BASE = "/api/v1/organizations/{organization_id}/skills"
 
 _GIVEN = [
     set_env_variable(
@@ -54,6 +59,23 @@ _GIVEN = [
 
 def _auth(context) -> dict:
     return {"Authorization": f"Bearer {context.access_token}"}
+
+
+def _there_is_a_role_actor(role: OrganizationRole):
+    def step(context):
+        user_id = uuid7()
+        there_is_a_user(
+            id=user_id,
+            email=f"{role.value.lower()}-skills@example.com",
+            role=role,
+        )(context)
+        there_is_an_access_token_for_user(user_id=user_id)(context)
+
+    return step
+
+
+def _there_is_a_member_actor():
+    return _there_is_a_role_actor(OrganizationRole.MEMBER)
 
 
 def _make_zip(filename: str = "skill.md", content: str = "# Skill") -> str:
@@ -94,9 +116,7 @@ def _make_encrypted_zip() -> str:
     return base64.b64encode(bytes(data)).decode()
 
 
-def _make_zip_spoofed_uncompressed_size(
-    file_count: int = 3, file_size: int = 500
-) -> str:
+def _make_zip_spoofed_uncompressed_size(file_count: int = 3, file_size: int = 500) -> str:
     # Build a zip whose central-directory file_size fields are zeroed (metadata spoofed
     # to 0), so the header-based total check sees 0 bytes, but actual extraction of
     # file_count × file_size bytes exceeds a patched _MAX_UNCOMPRESSED_BYTES limit.
@@ -115,9 +135,7 @@ def _make_zip_spoofed_uncompressed_size(
             if idx == -1:
                 break
             data[idx + compressed_off : idx + compressed_off + 4] = b"\x00\x00\x00\x00"
-            data[idx + uncompressed_off : idx + uncompressed_off + 4] = (
-                b"\x00\x00\x00\x00"
-            )
+            data[idx + uncompressed_off : idx + uncompressed_off + 4] = b"\x00\x00\x00\x00"
             pos = idx + 1
     return base64.b64encode(bytes(data)).decode()
 
@@ -126,6 +144,88 @@ _VALID_CREATE = {
     "name": "My Skill",
     "zip_content": None,
 }
+
+
+def test_member_cannot_create_skill():
+    with given([*_GIVEN, _there_is_a_member_actor()]) as context:
+        response = context.client.post(
+            _BASE,
+            json={"name": "Member Skill", "zip_content": _make_zip()},
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_admin_without_skill_manage_cannot_create_skill():
+    with given(
+        [
+            *_GIVEN,
+            _there_is_a_role_actor(OrganizationRole.ADMIN),
+            role_lacks_permission(OrganizationRole.ADMIN, PermissionKey.SKILL_MANAGE),
+        ]
+    ) as context:
+        response = context.client.post(
+            _BASE,
+            json={"name": "Blocked Admin Skill", "zip_content": _make_zip()},
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_admin_with_assigned_skill_manage_cannot_create_skill():
+    with given(
+        [
+            *_GIVEN,
+            _there_is_a_role_actor(OrganizationRole.ADMIN),
+            role_lacks_permission(
+                OrganizationRole.ADMIN,
+                PermissionKey.SKILL_MANAGE,
+            ),
+        ]
+    ) as context:
+        response = context.client.post(
+            _BASE,
+            json={"name": "Assigned Admin Skill", "zip_content": _make_zip()},
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_admin_can_create_skill():
+    with given([*_GIVEN, _there_is_a_role_actor(OrganizationRole.ADMIN)]) as context:
+        response = context.client.post(
+            _BASE,
+            json={"name": "Admin Skill", "zip_content": _make_zip()},
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+
+
+def test_platform_admin_without_skill_manage_permission_cannot_create_skill():
+    super_id = uuid7()
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_user(
+                id=super_id,
+                email="super-skills@example.com",
+                role=OrganizationRole.MEMBER,
+                is_platform_admin=True,
+            ),
+            there_is_an_access_token_for_user(user_id=super_id),
+        ]
+    ) as context:
+        response = context.client.post(
+            _BASE,
+            json={"name": "Platform administrator Skill", "zip_content": _make_zip()},
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
 def test_create_skill_returns_201():
@@ -244,16 +344,12 @@ def test_create_skill_with_spoofed_uncompressed_size_returns_400():
         with given(_GIVEN) as context:
             client: TestClient = context.client
 
-            with when(
-                "I create a skill with a zip that has spoofed metadata but oversized content"
-            ):
+            with when("I create a skill with a zip that has spoofed metadata but oversized content"):
                 response = client.post(
                     _BASE,
                     json={
                         "name": "Spoofed Skill",
-                        "zip_content": _make_zip_spoofed_uncompressed_size(
-                            file_count=3, file_size=500
-                        ),
+                        "zip_content": _make_zip_spoofed_uncompressed_size(file_count=3, file_size=500),
                     },
                     headers=_auth(context),
                 )
@@ -274,6 +370,27 @@ def test_create_skill_without_auth_returns_401():
 
         with then("request is rejected with 401"):
             assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
+
+
+def test_member_without_skill_read_cannot_list_skills():
+    with given(
+        [
+            *_GIVEN,
+            _there_is_a_member_actor(),
+            role_lacks_permission(OrganizationRole.MEMBER, PermissionKey.SKILL_READ),
+        ]
+    ) as context:
+        response = context.client.get(_BASE, headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_member_can_list_shared_skills():
+    with given([*_GIVEN, there_is_a_skill(name="Shared Skill"), _there_is_a_member_actor()]) as context:
+        response = context.client.get(_BASE, headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(response.json()["items"][0]["name"], equal_to("Shared Skill"))
 
 
 def test_list_skills_returns_org_and_global_skills():
@@ -339,9 +456,7 @@ def test_list_skills_search_filter():
         client: TestClient = context.client
 
         with when("I search for 'github'"):
-            response = client.get(
-                _BASE, params={"search": "github"}, headers=_auth(context)
-            )
+            response = client.get(_BASE, params={"search": "github"}, headers=_auth(context))
 
         with then("only matching skills are returned"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
@@ -363,9 +478,7 @@ def test_list_skills_source_filter():
         client: TestClient = context.client
 
         with when("I filter by source=custom"):
-            response = client.get(
-                _BASE, params={"source": "custom"}, headers=_auth(context)
-            )
+            response = client.get(_BASE, params={"source": "custom"}, headers=_auth(context))
 
         with then("only custom skills are returned"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
@@ -387,9 +500,7 @@ def test_list_skills_pagination():
         client: TestClient = context.client
 
         with when("I request page 1 with page_size=2"):
-            response = client.get(
-                _BASE, params={"page": 1, "page_size": 2}, headers=_auth(context)
-            )
+            response = client.get(_BASE, params={"page": 1, "page_size": 2}, headers=_auth(context))
 
         with then("only 2 items are returned and total reflects all skills"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
@@ -408,6 +519,20 @@ def test_list_skills_requires_auth():
 
         with then("request is rejected with 401"):
             assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
+
+
+def test_member_without_skill_read_cannot_get_skill():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Hidden Skill"),
+            _there_is_a_member_actor(),
+            role_lacks_permission(OrganizationRole.MEMBER, PermissionKey.SKILL_READ),
+        ]
+    ) as context:
+        response = context.client.get(f"{_BASE}/{context.skill.id}", headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
 def test_get_skill_returns_200():
@@ -439,9 +564,7 @@ def test_get_skill_from_another_org_returns_404():
         client: TestClient = context.client
 
         with when("I get a skill that belongs to another org"):
-            response = client.get(
-                f"{_BASE}/{context.other_org_skill.id}", headers=_auth(context)
-            )
+            response = client.get(f"{_BASE}/{context.other_org_skill.id}", headers=_auth(context))
 
         with then("it returns 404"):
             assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
@@ -456,6 +579,23 @@ def test_get_skill_requires_auth():
 
         with then("request is rejected with 401"):
             assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
+
+
+def test_member_cannot_update_skill():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Member Cannot Update"),
+            _there_is_a_member_actor(),
+        ]
+    ) as context:
+        response = context.client.patch(
+            f"{_BASE}/{context.skill.id}",
+            json={"name": "Changed"},
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
 def test_update_skill_returns_200():
@@ -539,16 +679,10 @@ def test_update_skill_with_spoofed_uncompressed_size_returns_400():
         with given([*_GIVEN, there_is_a_skill(name="Valid Skill")]) as context:
             client: TestClient = context.client
 
-            with when(
-                "I update the skill with a zip that has spoofed metadata but oversized content"
-            ):
+            with when("I update the skill with a zip that has spoofed metadata but oversized content"):
                 response = client.patch(
                     f"{_BASE}/{context.skill.id}",
-                    json={
-                        "zip_content": _make_zip_spoofed_uncompressed_size(
-                            file_count=3, file_size=500
-                        )
-                    },
+                    json={"zip_content": _make_zip_spoofed_uncompressed_size(file_count=3, file_size=500)},
                     headers=_auth(context),
                 )
 
@@ -592,12 +726,23 @@ def test_update_skill_requires_auth():
         client: TestClient = context.client
 
         with when("I update a skill without auth"):
-            response = client.patch(
-                f"{_BASE}/{context.skill.id}", json={"name": "New Name"}
-            )
+            response = client.patch(f"{_BASE}/{context.skill.id}", json={"name": "New Name"})
 
         with then("request is rejected with 401"):
             assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
+
+
+def test_member_cannot_delete_skill():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Member Cannot Delete"),
+            _there_is_a_member_actor(),
+        ]
+    ) as context:
+        response = context.client.delete(f"{_BASE}/{context.skill.id}", headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
 def test_delete_skill_returns_204():
@@ -605,9 +750,7 @@ def test_delete_skill_returns_204():
         client: TestClient = context.client
 
         with when("I delete the skill"):
-            response = client.delete(
-                f"{_BASE}/{context.skill.id}", headers=_auth(context)
-            )
+            response = client.delete(f"{_BASE}/{context.skill.id}", headers=_auth(context))
 
         with then("it returns 204"):
             assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
@@ -630,9 +773,7 @@ def test_delete_aai_cli_skill_returns_403():
         client: TestClient = context.client
 
         with when("I try to delete a built-in aai-cli skill"):
-            response = client.delete(
-                f"{_BASE}/{context.skill.id}", headers=_auth(context)
-            )
+            response = client.delete(f"{_BASE}/{context.skill.id}", headers=_auth(context))
 
         with then("it returns 403"):
             assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
@@ -650,9 +791,7 @@ def test_delete_skill_assigned_to_agent_returns_409():
         client: TestClient = context.client
 
         with when("I try to delete a skill that is assigned to an agent"):
-            response = client.delete(
-                f"{_BASE}/{context.skill.id}", headers=_auth(context)
-            )
+            response = client.delete(f"{_BASE}/{context.skill.id}", headers=_auth(context))
 
         with then("it returns 409"):
             assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
@@ -681,9 +820,7 @@ def test_delete_skill_required_by_template_returns_409():
         client: TestClient = context.client
 
         with when("I try to delete a skill required by a template"):
-            response = client.delete(
-                f"{_BASE}/{context.skill.id}", headers=_auth(context)
-            )
+            response = client.delete(f"{_BASE}/{context.skill.id}", headers=_auth(context))
 
         with then("it returns 409 naming the blocking template"):
             assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
@@ -707,12 +844,8 @@ def test_delete_skill_no_longer_required_by_latest_template_returns_204():
     ) as context:
         client: TestClient = context.client
 
-        with when(
-            "I delete a skill that was required by an old template version but not the latest"
-        ):
-            response = client.delete(
-                f"{_BASE}/{context.skill.id}", headers=_auth(context)
-            )
+        with when("I delete a skill that was required by an old template version but not the latest"):
+            response = client.delete(f"{_BASE}/{context.skill.id}", headers=_auth(context))
 
         with then("it returns 204 because only the latest version is checked"):
             assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))

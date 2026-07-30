@@ -131,7 +131,7 @@ def get_current_user_context(
 @auth_router.post("/me", response_model=UserRead)
 def update_current_user_profile(
     user_update: UserUpdate,
-    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    context: Annotated[CurrentUserContext, Depends(get_current_user(require_organization=False))],
     user_service: UserService = Injected(UserService),
 ):
     return user_service.update_current_user(context.user.id, user_update)
@@ -141,7 +141,7 @@ def update_current_user_profile(
 def change_current_user_password(
     password_data: UserPasswordChange,
     response: Response,
-    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    context: Annotated[CurrentUserContext, Depends(get_current_user(require_organization=False))],
     user_service: UserService = Injected(UserService),
     auth_service: AuthService = Injected(AuthService),
     config: Config = Injected(Config),
@@ -203,7 +203,7 @@ def logout(response: Response, config: Config = Injected(Config)):
 
 @auth_router.get("/me/slack-config-token", response_model=SlackConfigTokenRead)
 def get_slack_config_token(
-    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    context: Annotated[CurrentUserContext, Depends(get_current_user(require_organization=False))],
     service: SlackConfigTokenService = Injected(SlackConfigTokenService),
 ) -> SlackConfigTokenRead:
     return service.get_config_token_read(context.user.id)
@@ -212,17 +212,15 @@ def get_slack_config_token(
 @auth_router.put("/me/slack-config-token", response_model=SlackConfigTokenRead)
 def save_slack_config_token(
     body: SlackConfigTokenSave,
-    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    context: Annotated[CurrentUserContext, Depends(get_current_user(require_organization=False))],
     service: SlackConfigTokenService = Injected(SlackConfigTokenService),
 ) -> SlackConfigTokenRead:
-    return service.save_config_token(
-        context.user.id, body.access_token, body.refresh_token
-    )
+    return service.save_config_token(context.user.id, body.access_token, body.refresh_token)
 
 
 @auth_router.delete("/me/slack-config-token", status_code=status.HTTP_204_NO_CONTENT)
 def delete_slack_config_token(
-    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    context: Annotated[CurrentUserContext, Depends(get_current_user(require_organization=False))],
     service: SlackConfigTokenService = Injected(SlackConfigTokenService),
 ) -> None:
     service.delete_config_token(context.user.id)

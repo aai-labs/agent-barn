@@ -5,7 +5,11 @@ from fastapi import APIRouter, Depends, Query, Response, status
 from fastapi.responses import StreamingResponse
 from fastapi_injector import Injected
 
+from api.domains.agents.access_service import AgentAccessService
 from api.domains.agents.models import (
+    AgentAccessRoleRead,
+    AgentAccessSettingsRead,
+    AgentAccessSettingsUpdate,
     AgentCreate,
     AgentFilter,
     AgentHealthRead,
@@ -23,7 +27,7 @@ from api.domains.auth.utils import get_current_user
 from api.domains.templates.models import TemplateRead
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
-agents_router = APIRouter(prefix="/agents", tags=["agents"])
+agents_router = APIRouter(prefix="/organizations/{organization_id}/agents", tags=["agents"])
 
 
 @agents_router.post("", response_model=AgentRead, status_code=status.HTTP_201_CREATED)
@@ -58,6 +62,33 @@ def list_models(
     return service.list_models(context)
 
 
+@agents_router.get("/share-roles", response_model=list[AgentAccessRoleRead])
+def list_agent_share_roles(
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentAccessService, Injected(AgentAccessService)],
+):
+    return service.list_roles(context)
+
+
+@agents_router.get("/{agent_id}/share", response_model=AgentAccessSettingsRead)
+def get_agent_share_settings(
+    agent_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentAccessService, Injected(AgentAccessService)],
+):
+    return service.get_access_settings(agent_id, context)
+
+
+@agents_router.put("/{agent_id}/share", response_model=AgentAccessSettingsRead)
+def replace_agent_share_settings(
+    agent_id: UUID,
+    data: AgentAccessSettingsUpdate,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentAccessService, Injected(AgentAccessService)],
+):
+    return service.replace_access_settings(agent_id, data, context)
+
+
 @agents_router.get("/{agent_id}/logs/stream")
 def stream_agent_logs(
     agent_id: UUID,
@@ -65,8 +96,10 @@ def stream_agent_logs(
     service: Annotated[AgentService, Injected(AgentService)],
     tail_lines: Annotated[int, Query(ge=0, le=1000)] = 0,
 ):
+    lines = service.stream_agent_logs(agent_id, context, tail_lines=tail_lines)
+
     def event_generator():
-        for line in service.stream_agent_logs(agent_id, context, tail_lines=tail_lines):
+        for line in lines:
             yield f"data: {line}\n\n"
 
     return StreamingResponse(

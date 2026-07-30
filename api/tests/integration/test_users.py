@@ -12,7 +12,7 @@ from api.tests.core.modules import (
 )
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import (
-    there_is_a_default_organization,
+    there_is_an_organization,
 )
 from api.domains.users.organization_users.models import OrganizationRole
 from api.domains.users.organization_users.repository import OrganizationUserRepository
@@ -23,7 +23,7 @@ from api.tests.steps.user import (
 )
 
 
-def test_super_admin_can_create_user():
+def test_platform_admin_can_create_user():
     super_id = uuid7()
     org_id = uuid7()
 
@@ -37,9 +37,9 @@ def test_super_admin_can_create_user():
             there_is_a_user(
                 id=super_id,
                 email="super-create@example.com",
-                is_superuser=True,
+                is_platform_admin=True,
             ),
-            there_is_a_default_organization(id=org_id),
+            there_is_an_organization(id=org_id),
             there_is_an_access_token_for_user(user_id=super_id),
         ]
     ) as context:
@@ -47,7 +47,7 @@ def test_super_admin_can_create_user():
 
         with when("super admin creates a new user"):
             response = client.post(
-                "/api/v1/users",
+                "/api/v1/platform/users",
                 json={
                     "email": "newuser@example.com",
                     "password": "StrongPass123",
@@ -63,16 +63,12 @@ def test_super_admin_can_create_user():
             payload = response.json()
             assert_that(payload["email"], equal_to("newuser@example.com"))
             assert_that(payload["full_name"], equal_to("New User"))
-            assert_that(payload["is_superuser"], equal_to(False))
+            assert_that(payload["is_platform_admin"], equal_to(False))
             assert_that(payload, has_key("id"))
 
         with then("they are a member of the chosen org with the chosen role"):
-            org_user_repo: OrganizationUserRepository = context.injector.get(
-                OrganizationUserRepository
-            )
-            membership = org_user_repo.get_by_user_id_and_organization_id(
-                UUID(payload["id"]), org_id
-            )
+            org_user_repo: OrganizationUserRepository = context.injector.get(OrganizationUserRepository)
+            membership = org_user_repo.get_by_user_id_and_organization_id(UUID(payload["id"]), org_id)
             assert_that(membership, not_none())
             assert_that(membership.role, equal_to(OrganizationRole.ADMIN))
 
@@ -99,15 +95,13 @@ def test_create_user_with_owner_role_returns_400():
             create_test_client(),
             database_repo_is_ready(),
             database_is_clean(),
-            there_is_a_user(
-                id=super_id, email="super-own@example.com", is_superuser=True
-            ),
-            there_is_a_default_organization(id=org_id),
+            there_is_a_user(id=super_id, email="super-own@example.com", is_platform_admin=True),
+            there_is_an_organization(id=org_id),
             there_is_an_access_token_for_user(user_id=super_id),
         ]
     ) as context:
         response = context.client.post(
-            "/api/v1/users",
+            "/api/v1/platform/users",
             json={
                 "email": "wannabe-owner@example.com",
                 "password": "StrongPass123",
@@ -128,14 +122,12 @@ def test_create_user_with_unknown_org_returns_404():
             create_test_client(),
             database_repo_is_ready(),
             database_is_clean(),
-            there_is_a_user(
-                id=super_id, email="super-noorg@example.com", is_superuser=True
-            ),
+            there_is_a_user(id=super_id, email="super-noorg@example.com", is_platform_admin=True),
             there_is_an_access_token_for_user(user_id=super_id),
         ]
     ) as context:
         response = context.client.post(
-            "/api/v1/users",
+            "/api/v1/platform/users",
             json={
                 "email": "orphan@example.com",
                 "password": "StrongPass123",
@@ -160,10 +152,10 @@ def test_create_user_with_duplicate_email_returns_409():
             there_is_a_user(
                 id=super_id,
                 email="super-dup@example.com",
-                is_superuser=True,
+                is_platform_admin=True,
             ),
             there_is_a_user(email="existing@example.com"),
-            there_is_a_default_organization(id=org_id),
+            there_is_an_organization(id=org_id),
             there_is_an_access_token_for_user(user_id=super_id),
         ]
     ) as context:
@@ -171,7 +163,7 @@ def test_create_user_with_duplicate_email_returns_409():
 
         with when("super admin creates a user with an already taken email"):
             response = client.post(
-                "/api/v1/users",
+                "/api/v1/platform/users",
                 json={
                     "email": "existing@example.com",
                     "password": "StrongPass123",
@@ -198,9 +190,9 @@ def test_create_user_with_weak_password_returns_400():
             there_is_a_user(
                 id=super_id,
                 email="super-weak@example.com",
-                is_superuser=True,
+                is_platform_admin=True,
             ),
-            there_is_a_default_organization(id=org_id),
+            there_is_an_organization(id=org_id),
             there_is_an_access_token_for_user(user_id=super_id),
         ]
     ) as context:
@@ -208,7 +200,7 @@ def test_create_user_with_weak_password_returns_400():
 
         with when("super admin creates a user with a weak password"):
             response = client.post(
-                "/api/v1/users",
+                "/api/v1/platform/users",
                 json={
                     "email": "weakpass@example.com",
                     "password": "123",
@@ -221,7 +213,7 @@ def test_create_user_with_weak_password_returns_400():
             assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
 
 
-def test_non_super_admin_cannot_create_user():
+def test_non_platform_admin_cannot_create_user():
     org_id = uuid7()
 
     with given(
@@ -231,10 +223,10 @@ def test_non_super_admin_cannot_create_user():
             create_test_client(),
             database_repo_is_ready(),
             database_is_clean(),
-            there_is_a_default_organization(id=org_id),
+            there_is_an_organization(id=org_id),
             there_is_authenticated_user(
                 email="regular@example.com",
-                is_superuser=False,
+                is_platform_admin=False,
                 organization_id=org_id,
                 role=OrganizationRole.MEMBER,
             ),
@@ -242,9 +234,9 @@ def test_non_super_admin_cannot_create_user():
     ) as context:
         client: TestClient = context.client
 
-        with when("a non-super-admin tries to create a user"):
+        with when("a non-platform-admin tries to create a user"):
             response = client.post(
-                "/api/v1/users",
+                "/api/v1/platform/users",
                 json={
                     "email": "newuser@example.com",
                     "password": "StrongPass123",
@@ -257,7 +249,7 @@ def test_non_super_admin_cannot_create_user():
             assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
-def test_super_admin_cannot_delete_self():
+def test_platform_admin_cannot_delete_self():
     super_id = uuid7()
 
     with given(
@@ -270,7 +262,7 @@ def test_super_admin_cannot_delete_self():
             there_is_a_user(
                 id=super_id,
                 email="super-self-delete@example.com",
-                is_superuser=True,
+                is_platform_admin=True,
             ),
             there_is_an_access_token_for_user(user_id=super_id),
         ]
@@ -279,7 +271,7 @@ def test_super_admin_cannot_delete_self():
 
         with when("super admin tries to delete themselves"):
             response = client.delete(
-                f"/api/v1/users/{super_id}",
+                f"/api/v1/platform/users/{super_id}",
                 headers={"Authorization": f"Bearer {context.access_token}"},
             )
 
@@ -287,7 +279,7 @@ def test_super_admin_cannot_delete_self():
             assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
 
 
-def test_super_admin_can_delete_another_user():
+def test_platform_admin_can_delete_another_user():
     super_id = uuid7()
     target_id = uuid7()
 
@@ -301,7 +293,7 @@ def test_super_admin_can_delete_another_user():
             there_is_a_user(
                 id=super_id,
                 email="super-delete@example.com",
-                is_superuser=True,
+                is_platform_admin=True,
             ),
             there_is_a_user(
                 id=target_id,
@@ -315,7 +307,7 @@ def test_super_admin_can_delete_another_user():
 
         with when("super admin deletes another user"):
             response = client.delete(
-                f"/api/v1/users/{target_id}",
+                f"/api/v1/platform/users/{target_id}",
                 headers={"Authorization": f"Bearer {context.access_token}"},
             )
 
@@ -331,12 +323,10 @@ def test_super_admin_can_delete_another_user():
                 },
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
             )
-            assert_that(
-                login_response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED)
-            )
+            assert_that(login_response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
 
 
-def test_super_admin_can_reset_user_password():
+def test_platform_admin_can_reset_user_password():
     super_id = uuid7()
     target_id = uuid7()
     org_id = uuid7()
@@ -351,14 +341,14 @@ def test_super_admin_can_reset_user_password():
             there_is_a_user(
                 id=super_id,
                 email="super-reset@example.com",
-                is_superuser=True,
+                is_platform_admin=True,
             ),
             there_is_a_user(
                 id=target_id,
                 email="target-reset@example.com",
                 password="OldPass123",
             ),
-            there_is_a_default_organization(id=org_id),
+            there_is_an_organization(id=org_id),
             there_is_an_access_token_for_user(user_id=super_id),
         ]
     ) as context:
@@ -366,7 +356,7 @@ def test_super_admin_can_reset_user_password():
 
         with when("super admin resets another user's password"):
             response = client.post(
-                f"/api/v1/users/{target_id}/reset-password",
+                f"/api/v1/platform/users/{target_id}/reset-password",
                 json={"new_password": "NewStrong456"},
                 headers={"Authorization": f"Bearer {context.access_token}"},
             )
@@ -397,7 +387,7 @@ def test_super_admin_can_reset_user_password():
             assert_that(old_login.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
 
 
-def test_non_super_admin_cannot_reset_password():
+def test_non_platform_admin_cannot_reset_password():
     org_id = uuid7()
     target_id = uuid7()
 
@@ -412,10 +402,10 @@ def test_non_super_admin_cannot_reset_password():
                 id=target_id,
                 email="target-noreset@example.com",
             ),
-            there_is_a_default_organization(id=org_id),
+            there_is_an_organization(id=org_id),
             there_is_authenticated_user(
                 email="regular-noreset@example.com",
-                is_superuser=False,
+                is_platform_admin=False,
                 organization_id=org_id,
                 role=OrganizationRole.MEMBER,
             ),
@@ -423,9 +413,9 @@ def test_non_super_admin_cannot_reset_password():
     ) as context:
         client: TestClient = context.client
 
-        with when("a non-super-admin tries to reset a password"):
+        with when("a non-platform-admin tries to reset a password"):
             response = client.post(
-                f"/api/v1/users/{target_id}/reset-password",
+                f"/api/v1/platform/users/{target_id}/reset-password",
                 json={"new_password": "StrongPass123"},
                 headers={"Authorization": f"Bearer {context.access_token}"},
             )
@@ -448,7 +438,7 @@ def test_reset_password_with_weak_password_returns_400():
             there_is_a_user(
                 id=super_id,
                 email="super-weakreset@example.com",
-                is_superuser=True,
+                is_platform_admin=True,
             ),
             there_is_a_user(
                 id=target_id,
@@ -461,7 +451,7 @@ def test_reset_password_with_weak_password_returns_400():
 
         with when("super admin resets with a weak password"):
             response = client.post(
-                f"/api/v1/users/{target_id}/reset-password",
+                f"/api/v1/platform/users/{target_id}/reset-password",
                 json={"new_password": "123"},
                 headers={"Authorization": f"Bearer {context.access_token}"},
             )

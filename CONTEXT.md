@@ -1,6 +1,6 @@
 # Agent Farm
 
-Agent Farm manages organization-owned AI agents that operate in Slack or Microsoft Teams through a selected runtime and a versioned configuration.
+Agent Farm manages organization-owned AI agents that operate in Slack, Microsoft Teams, or Telegram through a selected runtime and a versioned configuration.
 
 ## Language
 
@@ -8,13 +8,57 @@ Agent Farm manages organization-owned AI agents that operate in Slack or Microso
 The tenant boundary that owns agents, templates, skills, memberships, and organization-scoped activity.
 _Avoid_: workspace, tenant account
 
+**Platform Administrator**:
+A user with platform-level authority to administer Agent Farm outside any single Organization. A Platform Administrator may also have normal Memberships, but platform authority is separate from Organization Membership authority.
+_Avoid_: superuser, super admin, global role
+
+**Platform Privilege**:
+The platform-level grant that makes a user a Platform Administrator.
+_Avoid_: global Membership, Organization Role, default Organization ownership
+
+**Platform Resource**:
+A global resource owned by Agent Farm itself rather than by an Organization.
+_Avoid_: default Organization resource, shared tenant data
+
+**Platform View**:
+The product mode where a Platform Administrator manages platform-level users, organizations, and operational metadata without an Active Organization.
+_Avoid_: default Organization, admin Organization, global workspace
+
+**Organization View**:
+The product mode where a user, including a Platform Administrator with Memberships, operates through Membership authority inside an Active Organization.
+_Avoid_: tenant view, platform view
+
+**Active Organization**:
+The single Organization currently selected for organization-scoped product behavior. Platform View has no Active Organization.
+_Avoid_: default Organization, primary Organization
+
 **Membership**:
 The relationship between a user and an organization, carrying exactly one organization role.
 _Avoid_: organization user, user organization
 
 **Organization Role**:
-A membership's authority level: owner, admin, or member. An organization can have at most one owner; normal creation and transfer flows establish one.
-_Avoid_: user role, global role
+A Membership's fixed organization-scoped authority. The roles are Organization Owner, Organization Admin, and Organization Member; an Organization can have at most one Organization Owner.
+_Avoid_: Agent Access Role, user role, global role, superuser
+
+**Permission**:
+A named capability granted through an Organization Role or Agent Access Role and evaluated for the active Organization and, when applicable, one Agent.
+_Avoid_: role check, global permission
+
+**Agent Access Role**:
+A permission-backed role governing what one Membership may do with one Agent. The locked defaults are Agent Viewer, Agent Editor, and Agent Owner; Organizations may define custom Agent Access Roles.
+_Avoid_: Organization Role, Agent ownership, access level
+
+**Agent Access**:
+The relationship assigning one Agent Access Role to one Membership for one Agent. Organization Owner/Admin authority over all Agents is implicit and is not an Agent Access relationship.
+_Avoid_: Agent ownership, Organization Membership
+
+**Agent General Access**:
+An Agent-scoped setting granting one Agent Access Role to all current and future accepted Organization Members, additive with explicit Agent Access. It is either Restricted or All Organization Members; new and migrated Agents are Restricted. Pending and removed Memberships receive nothing from it, and it never reduces Permissions granted by explicit Agent Access.
+_Avoid_: General access, public Agent, shared Agent
+
+**Agent Creator**:
+The user who originally created an Agent, retained as immutable provenance. Creation grants explicit Agent Owner access, but creator identity is not itself an authorization source.
+_Avoid_: Organization Owner, permanent Agent authority
 
 **Agent**:
 An organization-owned AI worker configured from a pinned template version and executed by one runtime on one chat platform.
@@ -25,11 +69,11 @@ The implementation that executes an agent. Agent Farm currently supports Hermes 
 _Avoid_: platform
 
 **Platform**:
-The chat system through which an agent interacts with people. Agent Farm currently supports Slack and Microsoft Teams.
+The chat system through which an agent interacts with people. Agent Farm currently supports Slack, Microsoft Teams, and Telegram.
 _Avoid_: runtime
 
 **Template**:
-An organization-scoped lineage of versioned Markdown configuration used to create and run agents.
+A versioned Markdown configuration lineage used to create and run agents. Predefined templates are Platform Resources; custom templates belong to one Organization.
 _Avoid_: prompt, preset
 
 **Template Version**:
@@ -52,9 +96,49 @@ _Avoid_: credential
 An inbound or outbound chat message ingested from an agent runtime and associated with a channel, direct message, session, and optional thread.
 _Avoid_: conversation
 
+**Telemetry Event**:
+A runtime-originated operational fact received through Ingest and used to maintain product activity records such as Conversation Messages and Tool Calls.
+_Avoid_: domain event, outbox message, audit event
+
 **Tool Call**:
 An ingested record of one external tool execution by an agent, with pending, success, or error status.
 _Avoid_: integration call
+
+**Domain Event**:
+An immutable, typed business fact that occurred within an Organization and may be handled internally by Agent Farm.
+_Avoid_: outbox row, telemetry event, audit log
+
+**Outbox Message**:
+The durable PostgreSQL record of a committed Domain Event that represents publication intent without depending on a broker-specific transport.
+_Avoid_: domain event, queue message, webhook event
+
+**Actor Identity**:
+The typed principal responsible for a Domain Event, such as a Membership, User, System process, or Runtime.
+_Avoid_: user ID, owner, creator
+
+**Subject Identity**:
+The typed resource or entity that a Domain Event is about.
+_Avoid_: agent ID, target, object
+
+**Event Payload**:
+The bounded, secret-safe JSON object carrying event-specific domain data for a Domain Event.
+_Avoid_: serialized model, database row snapshot, metadata
+
+**Event Delivery**:
+A durable, handler-specific delivery record for one Domain Event and one intended Event Handler. Its lifecycle is pending, enqueued, processing, succeeded, or dead-lettered; retry attempts do not define its identity.
+_Avoid_: retry attempt, outbox message, failed event
+
+**Dead-lettered Event Delivery**:
+An Event Delivery that reached terminal failure and has no automatic retry remaining.
+_Avoid_: failed event, failed message
+
+**Event Handler**:
+A named internal consumer of one or more Domain Events, with a stable identity used for delivery tracking and idempotency. Event Handler names are durable contracts once Event Deliveries can reference them.
+_Avoid_: worker, callback, subscriber
+
+**Security Audit Record**:
+A durable compliance artifact that records a security-relevant fact, usually produced as a projection from a Domain Event.
+_Avoid_: domain event, audit event, log line
 
 **Ingest**:
 The separately served, authenticated telemetry path through which agent runtimes report conversation messages and tool-call state to Agent Farm.
@@ -64,13 +148,20 @@ _Avoid_: webhook
 
 - An **Organization** has many **Memberships**, **Agents**, **Templates**, and custom **Skills**.
 - A **Membership** links one user to one **Organization** with one **Organization Role**.
-- An **Agent** belongs to one **Organization**, pins one **Template Version**, uses one **Runtime**, and connects to one **Platform**.
+- An **Organization Role** grants **Permissions** for Organization capabilities.
+- An **Agent Access Role** grants **Permissions** for one Agent aggregate.
+- An **Agent** belongs to one **Organization**, has one original **Agent Creator**, pins one **Template Version**, uses one **Runtime**, and connects to one **Platform**.
+- A **Membership** may have **Agent Access** to many Agents, and each relationship carries one **Agent Access Role**; creating an Agent grants its creator explicit Agent Owner access without transferring Organization ownership.
+- An **Agent** has one **Agent General Access** setting whose Permissions combine with (never subtract from) explicit Agent Access grants.
 - A **Template Version** may require multiple **Skills**.
 - An **Agent** may have multiple **Skills** and **Agent Secrets**.
-- An Agent runtime sends **Conversation Messages** and **Tool Calls** through **Ingest**.
+- Agent runtimes send **Telemetry Events** through **Ingest**, where they become **Conversation Messages** or **Tool Calls**.
+- A committed **Domain Event** is persisted as one **Outbox Message** and may have many **Event Deliveries**, one per intended handler.
+- A **Security Audit Record** may be produced from a **Domain Event**, but it is not itself the Domain Event.
 
 ## Flagged ambiguities
 
 - The API field `agent_type` represents the **Runtime**, while product documentation uses “runtime.” Treat Runtime as the domain term; changing the API field requires a compatibility decision.
 - The persisted field `openclaw_msg_id` stores the runtime-external message identifier for both OpenClaw and Hermes messages. Its name is narrower than its current meaning.
 - “Integration” is sometimes used for both the external service and its credential. Use **Integration** for the service and **Agent Secret** for the stored credential payload.
+- “Owner” names both an Organization Role and a default Agent Access Role. Use **Organization Owner** for tenant governance and **Agent Owner** for full authority over one Agent.

@@ -3,6 +3,7 @@
 import { useMutation } from "@tanstack/react-query";
 
 import { api } from "@/shared/api";
+import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
 import {
   CreateSlackAppResponseSchema,
   type CreateSlackAppResponse,
@@ -15,10 +16,11 @@ export type CreateSlackAppData = {
 };
 
 export function useCreateSlackApp() {
+  const orgApiBase = useOrganizationApiBase();
   return useMutation({
     mutationFn: async (data: CreateSlackAppData) => {
       const response = await api.post<CreateSlackAppResponse>(
-        "/api/v1/slack/apps",
+        `${orgApiBase}/slack/apps`,
         data,
         { schema: CreateSlackAppResponseSchema },
       );

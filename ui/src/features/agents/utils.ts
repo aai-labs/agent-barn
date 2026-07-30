@@ -1,5 +1,7 @@
 import { createQueryKeyStructure } from "@/shared/query-keys";
 
+import type { Agent, AgentAccessSettingsRead, AgentPermissionKey } from "./schemas";
+
 export const AGENTS_PAGE_SIZE = 50;
 export const TEMPLATES_PAGE_SIZE = 50;
 export const CONVERSATION_MESSAGES_PAGE_SIZE = 6;
@@ -16,7 +18,9 @@ export type ConversationsFiltersKey = {
 export const agentsKey = {
   ..._agentsKeyBase,
   health: (id: string) => [..._agentsKeyBase.detail(id), "health"] as const,
-    conversationChannels: (agentId: string) =>
+  shareSettings: (id: string) => [..._agentsKeyBase.detail(id), "share"] as const,
+  shareRoles: () => [..._agentsKeyBase.all, "share-roles"] as const,
+  conversationChannels: (agentId: string) =>
     [..._agentsKeyBase.detail(agentId), "conversation-channels"] as const,
   conversationMessages: (
     agentId: string,
@@ -48,6 +52,13 @@ const AGENT_COLORS = [
   ["#0f766e", "#0e7490"],
 ];
 
+export function canAgent(
+  agent: Pick<Agent, "allowedActions"> | null | undefined,
+  permission: AgentPermissionKey,
+): boolean {
+  return agent?.allowedActions.includes(permission) ?? false;
+}
+
 export function agentColor(id: string): string {
   const seed = parseInt(id.replace(/-/g, "")[0], 16);
   const c = AGENT_COLORS[seed % AGENT_COLORS.length];
@@ -66,4 +77,27 @@ export function formatModelName(model: string): string {
   return model.startsWith(MODEL_DISPLAY_PREFIX)
     ? model.slice(MODEL_DISPLAY_PREFIX.length)
     : model;
+}
+
+export type ShareDraftRow = {
+  userId: string;
+  roleId: string;
+};
+
+export type ShareDraftGeneralAccess = { all: boolean; roleId: string | null };
+
+export function isShareDraftDirty(
+  settings: AgentAccessSettingsRead | undefined,
+  rows: ShareDraftRow[],
+  draftGeneral: ShareDraftGeneralAccess,
+): boolean {
+  if (!settings) return false;
+  const generalRoleId = settings.generalAccess.role?.id ?? null;
+  if (draftGeneral.all !== !!settings.generalAccess.role) return true;
+  if (draftGeneral.all && draftGeneral.roleId !== generalRoleId) return true;
+  if (rows.length !== settings.assignments.length) return true;
+  return rows.some((row) => {
+    const original = settings.assignments.find((a) => a.userId === row.userId);
+    return !original || original.accessRole.id !== row.roleId;
+  });
 }

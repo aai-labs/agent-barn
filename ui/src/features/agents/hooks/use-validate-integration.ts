@@ -3,10 +3,12 @@
 import { useMutation } from "@tanstack/react-query";
 
 import { api } from "@/shared/api";
+import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
 
 import { IntegrationValidationResult, IntegrationValidationResultSchema } from "../schemas";
 
 export function useValidateIntegration() {
+  const orgApiBase = useOrganizationApiBase();
   return useMutation({
     mutationFn: async ({
       agentId,
@@ -16,7 +18,7 @@ export function useValidateIntegration() {
       provider: string;
     }): Promise<{ provider: string; result: IntegrationValidationResult }> => {
       const response = await api.post<IntegrationValidationResult>(
-        `/api/v1/agents/${agentId}/integrations/${provider}/validate`,
+        `${orgApiBase}/agents/${agentId}/integrations/${provider}/validate`,
         {},
         { schema: IntegrationValidationResultSchema },
       );

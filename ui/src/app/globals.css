@@ -194,6 +194,16 @@
   background: var(--bg-soft);
 }
 
+.af-btn-danger {
+  background: var(--err);
+  border-color: var(--err);
+  color: var(--bg-elev);
+}
+.af-btn-danger:not(:disabled):hover {
+  background: var(--err-strong, var(--err));
+  border-color: var(--err-strong, var(--err));
+}
+
 .af-btn-lg {
   padding: 11px 20px;
   font-size: 14.5px;

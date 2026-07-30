@@ -1,3 +1,5 @@
+from uuid import uuid7
+
 from fastapi import status
 from hamcrest import (
     assert_that,
@@ -9,13 +11,17 @@ from hamcrest import (
 )
 from starlette.testclient import TestClient
 
+from api.domains.agents.repository import AgentRepository
 from api.domains.organizations.models import Organization
 from api.domains.organizations.repository import OrganizationRepository
+from api.domains.rbac.catalog import PermissionKey
+from api.domains.rbac.policy import AuthorizationScope
 from api.domains.templates.defaults import DEFAULT_SOUL_MD
 from api.domains.templates.models import TemplateSource
 from api.domains.templates.predefined import PREDEFINED_TEMPLATES
 from api.domains.templates.repository import TemplateRepository
 from api.domains.templates.service import TemplateService
+from api.domains.users.organization_users.models import OrganizationRole
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
     create_test_client,
@@ -27,6 +33,7 @@ from api.tests.steps.agent import (
     TEST_ENCRYPTION_KEY,
     MockK8sModule,
     MockLiteLLMModule,
+    there_is_an_agent,
     there_is_a_skill,
     use_org_for_auth,
 )
@@ -34,10 +41,12 @@ from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import (
     there_is_an_organization_with_user_and_access_token,
 )
+from api.tests.steps.rbac import role_lacks_permission
 from api.tests.steps.template import there_is_a_template, there_is_a_template_skill
+from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
 
-_BASE = "/api/v1/templates"
-_AGENTS_BASE = "/api/v1/agents"
+_BASE = "/api/v1/organizations/{organization_id}/templates"
+_AGENTS_BASE = "/api/v1/organizations/{organization_id}/agents"
 
 _GIVEN = [
     set_env_variable(
@@ -64,7 +73,51 @@ def _auth(context) -> dict:
     return {"Authorization": f"Bearer {context.access_token}"}
 
 
+def _there_is_a_role_actor(role: OrganizationRole):
+    def step(context):
+        user_id = uuid7()
+        there_is_a_user(
+            id=user_id,
+            email=f"{role.value.lower()}-templates@example.com",
+            role=role,
+        )(context)
+        there_is_an_access_token_for_user(user_id=user_id)(context)
+
+    return step
+
+
+def _there_is_a_member_actor():
+    return _there_is_a_role_actor(OrganizationRole.MEMBER)
+
+
 # --- list ---
+
+
+def test_member_without_template_read_cannot_list_templates():
+    with given(
+        [
+            *_GIVEN,
+            _there_is_a_member_actor(),
+            role_lacks_permission(OrganizationRole.MEMBER, PermissionKey.TEMPLATE_READ),
+        ]
+    ) as context:
+        response = context.client.get(_BASE, headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_member_can_list_shared_templates():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_template(slug="shared", name="Shared"),
+            _there_is_a_member_actor(),
+        ]
+    ) as context:
+        response = context.client.get(_BASE, headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(response.json()["items"][0]["template_slug"], equal_to("shared"))
 
 
 def test_list_templates_returns_latest_version_per_slug():
@@ -93,14 +146,10 @@ def test_list_templates_returns_latest_version_per_slug():
 def test_list_templates_is_org_scoped():
     with given([*_GIVEN, there_is_a_template(slug="mine", name="Mine")]) as context:
         client: TestClient = context.client
-        org_repository: OrganizationRepository = context.injector.get(
-            OrganizationRepository
-        )
+        org_repository: OrganizationRepository = context.injector.get(OrganizationRepository)
         other_org = Organization(name="Other Org")
         org_repository.save(other_org)
-        there_is_a_template(slug="theirs", name="Theirs", organization_id=other_org.id)(
-            context
-        )
+        there_is_a_template(slug="theirs", name="Theirs", organization_id=other_org.id)(context)
 
         with when("I list templates"):
             response = client.get(_BASE, headers=_auth(context))
@@ -142,9 +191,7 @@ def test_list_templates_filters_by_source():
     with given(
         [
             *_GIVEN,
-            there_is_a_template(
-                slug="seeded", name="Seeded", source=TemplateSource.PRE_DEFINED
-            ),
+            there_is_a_template(slug="seeded", name="Seeded", source=TemplateSource.PRE_DEFINED),
             there_is_a_template(slug="own", name="Own"),
         ]
     ) as context:
@@ -216,6 +263,20 @@ def test_list_templates_includes_required_skills():
 # --- get ---
 
 
+def test_member_without_template_read_cannot_get_template():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_template(slug="alpha", name="Alpha"),
+            _there_is_a_member_actor(),
+            role_lacks_permission(OrganizationRole.MEMBER, PermissionKey.TEMPLATE_READ),
+        ]
+    ) as context:
+        response = context.client.get(f"{_BASE}/alpha", headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
 def test_get_template_returns_latest_with_metadata():
     with given(
         [
@@ -248,7 +309,48 @@ def test_get_template_unknown_slug_returns_404():
             assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
+def test_get_template_reports_in_use():
+    with given([*_GIVEN, there_is_an_agent(name="Pinned")]) as context:
+        client: TestClient = context.client
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+        template = repository.get_pinned_template(context.agent)
+        assert template is not None
+
+        with when("I get the template the agent is pinned to"):
+            response = client.get(f"{_BASE}/{template.template_slug}", headers=_auth(context))
+
+        with then("it is flagged in_use"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["in_use"], equal_to(True))
+
+
+def test_get_template_reports_not_in_use():
+    with given([*_GIVEN, there_is_a_template(slug="idle", name="Idle")]) as context:
+        client: TestClient = context.client
+
+        with when("I get a template no agent uses"):
+            response = client.get(f"{_BASE}/idle", headers=_auth(context))
+
+        with then("it is flagged not in_use"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["in_use"], equal_to(False))
+
+
 # --- versions ---
+
+
+def test_member_without_template_read_cannot_list_template_versions():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_template(slug="alpha", name="Alpha"),
+            _there_is_a_member_actor(),
+            role_lacks_permission(OrganizationRole.MEMBER, PermissionKey.TEMPLATE_READ),
+        ]
+    ) as context:
+        response = context.client.get(f"{_BASE}/alpha/versions", headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
 def test_list_template_versions_returns_all_desc():
@@ -308,9 +410,7 @@ def test_list_template_versions_includes_required_skills():
         with when("I list versions of the template"):
             response = client.get(f"{_BASE}/alpha/versions", headers=_auth(context))
 
-        with then(
-            "v1 includes the required skill; v2 has none (new version, no inherit via API)"
-        ):
+        with then("v1 includes the required skill; v2 has none (new version, no inherit via API)"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             versions = {v["version"]: v for v in response.json()}
             assert_that(len(versions[1]["required_skills"]), equal_to(1))
@@ -318,7 +418,106 @@ def test_list_template_versions_includes_required_skills():
             assert_that(versions[2]["required_skills"], equal_to([]))
 
 
+def test_list_template_versions_reports_in_use_for_every_version():
+    with given([*_GIVEN, there_is_an_agent(name="Pinned")]) as context:
+        client: TestClient = context.client
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+        template = repository.get_pinned_template(context.agent)
+        assert template is not None
+        there_is_a_template(slug=template.template_slug, name="Pinned", version=2)(context)
+
+        with when("I list the lineage's versions"):
+            response = client.get(f"{_BASE}/{template.template_slug}/versions", headers=_auth(context))
+
+        with then("every version is flagged in_use, even ones the agent isn't pinned to"):
+            versions = {v["version"]: v for v in response.json()}
+            assert_that(versions[1]["in_use"], equal_to(True))
+            assert_that(versions[2]["in_use"], equal_to(True))
+
+
 # --- create ---
+
+
+def test_member_cannot_create_template():
+    with given([*_GIVEN, _there_is_a_member_actor()]) as context:
+        response = context.client.post(
+            _BASE,
+            json={"template_name": "Member Template"},
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_admin_without_template_manage_cannot_create_template():
+    with given(
+        [
+            *_GIVEN,
+            _there_is_a_role_actor(OrganizationRole.ADMIN),
+            role_lacks_permission(OrganizationRole.ADMIN, PermissionKey.TEMPLATE_MANAGE),
+        ]
+    ) as context:
+        response = context.client.post(
+            _BASE,
+            json={"template_name": "Blocked Admin Template"},
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_admin_with_assigned_template_manage_cannot_create_template():
+    with given(
+        [
+            *_GIVEN,
+            _there_is_a_role_actor(OrganizationRole.ADMIN),
+            role_lacks_permission(
+                OrganizationRole.ADMIN,
+                PermissionKey.TEMPLATE_MANAGE,
+            ),
+        ]
+    ) as context:
+        response = context.client.post(
+            _BASE,
+            json={"template_name": "Assigned Admin Template"},
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_admin_can_create_template():
+    with given([*_GIVEN, _there_is_a_role_actor(OrganizationRole.ADMIN)]) as context:
+        response = context.client.post(
+            _BASE,
+            json={"template_name": "Admin Template"},
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+
+
+def test_platform_admin_without_template_manage_permission_cannot_create_template():
+    super_id = uuid7()
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_user(
+                id=super_id,
+                email="super-templates@example.com",
+                role=OrganizationRole.MEMBER,
+                is_platform_admin=True,
+            ),
+            there_is_an_access_token_for_user(user_id=super_id),
+        ]
+    ) as context:
+        response = context.client.post(
+            _BASE,
+            json={"template_name": "Platform administrator Template"},
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
 def test_create_template_returns_201_v1_custom():
@@ -347,9 +546,7 @@ def test_create_template_returns_201_v1_custom():
 
 
 def test_create_template_duplicate_slug_returns_409():
-    with given(
-        [*_GIVEN, there_is_a_template(slug="my-helper", name="My Helper")]
-    ) as context:
+    with given([*_GIVEN, there_is_a_template(slug="my-helper", name="My Helper")]) as context:
         client: TestClient = context.client
 
         with when("I create a template whose name slugifies to an existing slug"):
@@ -368,9 +565,7 @@ def test_create_template_same_name_in_other_org_is_allowed():
         client: TestClient = context.client
         other_org = Organization(name="Other Org")
         context.injector.get(OrganizationRepository).save(other_org)
-        there_is_a_template(
-            slug="my-helper", name="My Helper", organization_id=other_org.id
-        )(context)
+        there_is_a_template(slug="my-helper", name="My Helper", organization_id=other_org.id)(context)
 
         with when("I create a template with the same name in my org"):
             response = client.post(
@@ -395,9 +590,7 @@ def test_create_template_symbol_only_name_returns_422():
             )
 
         with then("it returns 422"):
-            assert_that(
-                response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY)
-            )
+            assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
 
 
 def test_create_template_empty_name_returns_422():
@@ -405,14 +598,10 @@ def test_create_template_empty_name_returns_422():
         client: TestClient = context.client
 
         with when("I create a template with an empty name"):
-            response = client.post(
-                _BASE, json={"template_name": ""}, headers=_auth(context)
-            )
+            response = client.post(_BASE, json={"template_name": ""}, headers=_auth(context))
 
         with then("it returns 422"):
-            assert_that(
-                response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY)
-            )
+            assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
 
 
 def test_create_template_with_required_skills_stores_them():
@@ -433,9 +622,7 @@ def test_create_template_with_required_skills_stores_them():
             assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             body = response.json()
             assert_that(len(body["required_skills"]), equal_to(1))
-            assert_that(
-                body["required_skills"][0]["id"], equal_to(str(context.skill.id))
-            )
+            assert_that(body["required_skills"][0]["id"], equal_to(str(context.skill.id)))
             assert_that(body["required_skills"][0]["name"], equal_to("Jira"))
 
         with then("GET also returns the required skill"):
@@ -466,13 +653,28 @@ def test_create_template_with_unknown_skill_returns_404():
 # --- update ---
 
 
+def test_member_cannot_update_template():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_template(slug="alpha", name="Alpha"),
+            _there_is_a_member_actor(),
+        ]
+    ) as context:
+        response = context.client.patch(
+            f"{_BASE}/alpha",
+            json={"description": "Changed"},
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
 def test_update_template_creates_new_version_with_merge():
     with given(
         [
             *_GIVEN,
-            there_is_a_template(
-                slug="alpha", name="Alpha", soul_md="# Old Soul", tools_md="# Tools"
-            ),
+            there_is_a_template(slug="alpha", name="Alpha", soul_md="# Old Soul", tools_md="# Tools"),
         ]
     ) as context:
         client: TestClient = context.client
@@ -516,9 +718,7 @@ def test_update_predefined_template_keeps_source():
     with given(
         [
             *_GIVEN,
-            there_is_a_template(
-                slug="seeded", name="Seeded", source=TemplateSource.PRE_DEFINED
-            ),
+            there_is_a_template(slug="seeded", name="Seeded", source=TemplateSource.PRE_DEFINED),
         ]
     ) as context:
         client: TestClient = context.client
@@ -537,9 +737,7 @@ def test_update_predefined_template_keeps_source():
 
 
 def test_update_template_does_not_touch_agent_pins():
-    with given(
-        [*_GIVEN, there_is_a_template(slug="test-template", name="Test Template")]
-    ) as context:
+    with given([*_GIVEN, there_is_a_template(slug="test-template", name="Test Template")]) as context:
         client: TestClient = context.client
 
         with when("an agent is hired from the lineage"):
@@ -566,9 +764,7 @@ def test_update_template_does_not_touch_agent_pins():
         with then("the agent stays pinned to its original version"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             assert_that(response.json()["version"], equal_to(2))
-            agent_response = client.get(
-                f"{_AGENTS_BASE}/{agent['id']}", headers=_auth(context)
-            )
+            agent_response = client.get(f"{_AGENTS_BASE}/{agent['id']}", headers=_auth(context))
             assert_that(agent_response.json()["template_version"], equal_to(1))
 
 
@@ -577,9 +773,7 @@ def test_update_template_unknown_slug_returns_404():
         client: TestClient = context.client
 
         with when("I update a non-existent template"):
-            response = client.patch(
-                f"{_BASE}/nope", json={"soul_md": "# X"}, headers=_auth(context)
-            )
+            response = client.patch(f"{_BASE}/nope", json={"soul_md": "# X"}, headers=_auth(context))
 
         with then("it returns 404"):
             assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
@@ -593,9 +787,7 @@ def test_update_template_empty_body_returns_422():
             response = client.patch(f"{_BASE}/alpha", json={}, headers=_auth(context))
 
         with then("it returns 422"):
-            assert_that(
-                response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY)
-            )
+            assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
 
 
 def test_update_template_inherits_skills_by_default():
@@ -677,6 +869,176 @@ def test_update_template_clears_skills():
             assert_that(body["required_skills"], equal_to([]))
 
 
+# --- delete ---
+
+
+def test_delete_template_returns_204_and_purges_all_org_versions():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Jira"),
+            there_is_a_template(slug="doomed", name="Doomed", version=1),
+            there_is_a_template_skill(),
+            there_is_a_template(slug="doomed", name="Doomed", version=2),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+
+        with when("I delete the template"):
+            response = client.delete(f"{_BASE}/doomed", headers=_auth(context))
+
+        with then("every org-scoped version and its skill links are gone"):
+            assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+            assert_that(repository.find_org_versions(context.organization.id, "doomed"), equal_to([]))
+            assert_that(
+                client.get(f"{_BASE}/doomed", headers=_auth(context)).status_code,
+                equal_to(status.HTTP_404_NOT_FOUND),
+            )
+
+
+def test_delete_template_unknown_slug_returns_404():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I delete a template that does not exist"):
+            response = client.delete(f"{_BASE}/no-such-slug", headers=_auth(context))
+
+        with then("I get 404"):
+            assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_delete_template_requires_auth():
+    with given([*_GIVEN, there_is_a_template(slug="doomed", name="Doomed")]) as context:
+        client: TestClient = context.client
+
+        with when("I delete without auth"):
+            response = client.delete(f"{_BASE}/doomed")
+
+        with then("I get 401"):
+            assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
+
+
+def test_member_cannot_delete_template():
+    with given([*_GIVEN, there_is_a_template(slug="doomed", name="Doomed"), _there_is_a_member_actor()]) as context:
+        response = context.client.delete(f"{_BASE}/doomed", headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_delete_predefined_template_returns_403():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_template(slug="builtin", name="Built In", source=TemplateSource.PRE_DEFINED),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+
+        with when("I try to delete a pre-defined template"):
+            response = client.delete(f"{_BASE}/builtin", headers=_auth(context))
+
+        with then("I get 403 and the template survives"):
+            assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+            assert_that(repository.get_latest_org_template(context.organization.id, "builtin"), is_not(none()))
+
+
+def test_delete_platform_template_returns_403():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        service: TemplateService = context.injector.get(TemplateService)
+
+        with when("I seed and try to delete a global platform template"):
+            service.seed_predefined_templates()
+            response = client.delete(f"{_BASE}/general-purpose", headers=_auth(context))
+
+        with then("I get 403"):
+            assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_delete_template_used_by_live_agent_returns_409():
+    with given([*_GIVEN, there_is_an_agent(name="Pinned")]) as context:
+        client: TestClient = context.client
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+        template = repository.get_pinned_template(context.agent)
+        assert template is not None
+        there_is_a_template(slug=template.template_slug, name="Pinned", version=2)(context)
+
+        with when("I try to delete the template the agent uses"):
+            response = client.delete(f"{_BASE}/{template.template_slug}", headers=_auth(context))
+
+        with then("I get 409 and every version survives"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+            assert_that(len(repository.find_org_versions(context.organization.id, template.template_slug)), equal_to(2))
+
+
+def test_delete_template_referenced_by_soft_deleted_agent_returns_204():
+    with given([*_GIVEN, there_is_an_agent(name="Ghost", deleted=True)]) as context:
+        client: TestClient = context.client
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+        template = repository.get_pinned_template(context.agent)
+        assert template is not None
+
+        with when("I delete the template only a soft-deleted agent references"):
+            response = client.delete(f"{_BASE}/{template.template_slug}", headers=_auth(context))
+
+        with then("the template is purged and the agent's pin is cleared"):
+            assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+            assert_that(
+                client.get(f"{_BASE}/{template.template_slug}", headers=_auth(context)).status_code,
+                equal_to(status.HTTP_404_NOT_FOUND),
+            )
+            agent_repository: AgentRepository = context.injector.get(AgentRepository)
+            ghost = agent_repository.get_deleted_in_scope(
+                context.agent.id,
+                AuthorizationScope(organization_id=context.organization.id),
+            )
+            assert_that(ghost, is_not(none()))
+            assert ghost is not None
+            assert_that(ghost.agent_template_id, none())
+            assert_that(ghost.platform_template_id, none())
+
+
+def test_delete_template_of_another_org_returns_404():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        org_repository: OrganizationRepository = context.injector.get(OrganizationRepository)
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+        other_org = Organization(name="Other Org")
+        org_repository.save(other_org)
+        there_is_a_template(slug="theirs", name="Theirs", organization_id=other_org.id)(context)
+
+        with when("I delete another org's template"):
+            response = client.delete(f"{_BASE}/theirs", headers=_auth(context))
+
+        with then("I get 404 and their template survives"):
+            assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+            assert_that(repository.get_latest_org_template(other_org.id, "theirs"), is_not(none()))
+
+
+def test_list_templates_reports_in_use():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_template(slug="idle", name="Idle"),
+            there_is_an_agent(name="Busy"),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+        template = repository.get_pinned_template(context.agent)
+        assert template is not None
+
+        with when("I list templates"):
+            response = client.get(_BASE, headers=_auth(context))
+
+        with then("only the agent's template is marked in use"):
+            by_slug = {item["template_slug"]: item for item in response.json()["items"]}
+            assert_that(by_slug[template.template_slug]["in_use"], equal_to(True))
+            assert_that(by_slug["idle"]["in_use"], equal_to(False))
+
+
 # --- seeding ---
 
 
@@ -684,10 +1046,9 @@ def test_seed_predefined_templates_creates_three_lineages():
     with given(_GIVEN) as context:
         service: TemplateService = context.injector.get(TemplateService)
         repository: TemplateRepository = context.injector.get(TemplateRepository)
-        org_id = context.organization.id
 
-        with when("I seed the org"):
-            service.seed_predefined_templates(org_id)
+        with when("I seed the global predefined catalogue"):
+            service.seed_predefined_templates()
 
         with then("all pre-defined lineages exist at v1"):
             for slug in (
@@ -695,33 +1056,32 @@ def test_seed_predefined_templates_creates_three_lineages():
                 "scrum-master",
                 "code-reviewer",
                 "email-reminder",
+                "jira-task-helper",
+                "documentation-agent",
             ):
-                template = repository.get_latest_template(org_id, slug)
+                template = repository.get_latest_platform_template(slug)
                 assert_that(template, is_not(none()))
                 assert template is not None
                 assert_that(template.version, equal_to(1))
-                assert_that(
-                    template.template_source, equal_to(TemplateSource.PRE_DEFINED)
-                )
+                # platform_template rows are inherently pre-defined (no source column)
 
         with then("the registry and DB agree on the count"):
-            assert_that(len(PREDEFINED_TEMPLATES), equal_to(4))
+            assert_that(len(PREDEFINED_TEMPLATES), equal_to(6))
 
 
 def test_seed_predefined_templates_is_idempotent():
     with given(_GIVEN) as context:
         service: TemplateService = context.injector.get(TemplateService)
         client: TestClient = context.client
-        org_id = context.organization.id
 
         with when("I seed twice"):
-            service.seed_predefined_templates(org_id)
-            service.seed_predefined_templates(org_id)
+            service.seed_predefined_templates()
+            service.seed_predefined_templates()
 
         with then("each lineage still has exactly one version"):
             response = client.get(f"{_BASE}?source=pre-defined", headers=_auth(context))
             body = response.json()
-            assert_that(body["total"], equal_to(4))
+            assert_that(body["total"], equal_to(6))
             for item in body["items"]:
                 assert_that(item["version"], equal_to(1))
 
@@ -732,7 +1092,7 @@ def test_seed_does_not_clobber_edited_predefined_template():
         repository: TemplateRepository = context.injector.get(TemplateRepository)
         client: TestClient = context.client
         org_id = context.organization.id
-        service.seed_predefined_templates(org_id)
+        service.seed_predefined_templates()
 
         with when("I edit scrum-master and reseed"):
             client.patch(
@@ -740,35 +1100,41 @@ def test_seed_does_not_clobber_edited_predefined_template():
                 json={"soul_md": "# Edited Soul"},
                 headers=_auth(context),
             )
-            service.seed_predefined_templates(org_id)
+            service.seed_predefined_templates()
 
-        with then("the edited version stays the latest"):
-            latest = repository.get_latest_template(org_id, "scrum-master")
+        with then("the edited org fork stays the latest"):
+            latest = repository.get_latest_org_template(org_id, "scrum-master")
             assert latest is not None
             assert_that(latest.version, equal_to(2))
             assert_that(latest.soul_md, equal_to("# Edited Soul"))
+            assert_that(latest.template_source, equal_to(TemplateSource.PRE_DEFINED))
+            assert_that(latest.forked_from_platform_template_id, is_not(none()))
+
+        with then("the platform v1 seed is untouched"):
+            platform = repository.get_latest_platform_template("scrum-master")
+            assert platform is not None
+            assert_that(platform.version, equal_to(1))
 
 
 def test_seed_refreshes_stale_predefined_v1_in_place():
     with given(_GIVEN) as context:
         service: TemplateService = context.injector.get(TemplateService)
         repository: TemplateRepository = context.injector.get(TemplateRepository)
-        org_id = context.organization.id
-        service.seed_predefined_templates(org_id)
+        service.seed_predefined_templates()
 
         with when("the seeded v1 drifts from the code (an old seed) then we reseed"):
-            seeded = repository.get_latest_template(org_id, "scrum-master")
+            seeded = repository.get_latest_platform_template("scrum-master")
             assert seeded is not None
             seeded.user_md = "# STALE - asks for credentials"
-            repository.save_template(seeded)
-            service.seed_predefined_templates(org_id)
+            repository.save_platform_template(seeded)
+            service.seed_predefined_templates()
 
         with then("the v1 row is refreshed in place to the current code content"):
-            latest = repository.get_latest_template(org_id, "scrum-master")
+            latest = repository.get_latest_platform_template("scrum-master")
             assert latest is not None
             assert_that(latest.version, equal_to(1))
             assert_that(latest.user_md, is_not(contains_string("STALE")))
-            assert_that(latest.template_source, equal_to(TemplateSource.PRE_DEFINED))
+            # platform_template rows are inherently pre-defined (no source column)
 
 
 def test_seed_predefined_templates_seeds_scrum_master_skills():
@@ -781,10 +1147,9 @@ def test_seed_predefined_templates_seeds_scrum_master_skills():
     ) as context:
         service: TemplateService = context.injector.get(TemplateService)
         client: TestClient = context.client
-        org_id = context.organization.id
 
-        with when("I seed the org"):
-            service.seed_predefined_templates(org_id)
+        with when("I seed the global predefined catalogue"):
+            service.seed_predefined_templates()
 
         with then("scrum-master has Jira and Confluence as required skills"):
             response = client.get(f"{_BASE}/scrum-master", headers=_auth(context))
@@ -803,62 +1168,60 @@ def test_seed_predefined_templates_does_not_duplicate_skill_rows():
     ) as context:
         service: TemplateService = context.injector.get(TemplateService)
         repository: TemplateRepository = context.injector.get(TemplateRepository)
-        org_id = context.organization.id
 
         with when("I seed twice"):
-            service.seed_predefined_templates(org_id)
-            service.seed_predefined_templates(org_id)
+            service.seed_predefined_templates()
+            service.seed_predefined_templates()
 
         with then("scrum-master still has exactly two required skills"):
-            template = repository.get_latest_template(org_id, "scrum-master")
+            template = repository.get_latest_platform_template("scrum-master")
             assert template is not None
-            skill_ids = repository.get_required_skill_ids(template.id)
+            skill_ids = repository.get_platform_required_skill_ids(template.id)
             assert_that(len(skill_ids), equal_to(2))
 
 
-def test_seed_predefined_templates_seeds_code_reviewer_skill():
+def test_seed_predefined_templates_code_reviewer_requires_no_host_skill():
     with given(
         [
             *_GIVEN,
             there_is_a_skill(name="GitHub", global_skill=True),
+            there_is_a_skill(name="Bitbucket", global_skill=True),
         ]
     ) as context:
         service: TemplateService = context.injector.get(TemplateService)
         client: TestClient = context.client
-        org_id = context.organization.id
 
-        with when("I seed the org"):
-            service.seed_predefined_templates(org_id)
+        with when("I seed the global predefined catalogue"):
+            service.seed_predefined_templates()
 
-        with then("code-reviewer has GitHub as a required skill"):
+        with then("code-reviewer pins no host skill — GitHub or Bitbucket is enforced at runtime"):
             response = client.get(f"{_BASE}/code-reviewer", headers=_auth(context))
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             skill_names = [s["name"] for s in response.json()["required_skills"]]
-            assert_that(skill_names, has_items("GitHub"))
+            assert_that(skill_names, equal_to([]))
 
 
 def test_seed_predefined_templates_refreshes_stale_skills():
     with given(
         [
             *_GIVEN,
-            there_is_a_skill(name="GitHub", global_skill=True),
+            there_is_a_skill(name="Jira", global_skill=True),
         ]
     ) as context:
         service: TemplateService = context.injector.get(TemplateService)
         repository: TemplateRepository = context.injector.get(TemplateRepository)
-        org_id = context.organization.id
-        service.seed_predefined_templates(org_id)
+        service.seed_predefined_templates()
 
         with when("the seeded skills are cleared from the DB then we reseed"):
-            template = repository.get_latest_template(org_id, "code-reviewer")
+            template = repository.get_latest_platform_template("jira-task-helper")
             assert template is not None
-            repository.save_template_skills(template.id, [])
-            service.seed_predefined_templates(org_id)
+            repository.save_platform_template_skills(template.id, [])
+            service.seed_predefined_templates()
 
         with then("the required skills are restored to match the code declaration"):
-            template = repository.get_latest_template(org_id, "code-reviewer")
+            template = repository.get_latest_platform_template("jira-task-helper")
             assert template is not None
-            skill_ids = repository.get_required_skill_ids(template.id)
+            skill_ids = repository.get_platform_required_skill_ids(template.id)
             assert_that(len(skill_ids), equal_to(1))
 
 
@@ -866,13 +1229,12 @@ def test_predefined_content_keeps_raw_placeholders():
     with given(_GIVEN) as context:
         service: TemplateService = context.injector.get(TemplateService)
         repository: TemplateRepository = context.injector.get(TemplateRepository)
-        org_id = context.organization.id
 
-        with when("I seed the org"):
-            service.seed_predefined_templates(org_id)
+        with when("I seed the global predefined catalogue"):
+            service.seed_predefined_templates()
 
         with then("scrum-master soul still contains raw placeholders"):
-            template = repository.get_latest_template(org_id, "scrum-master")
+            template = repository.get_latest_platform_template("scrum-master")
             assert template is not None
             assert_that(template.soul_md, contains_string("{{ agent_display_name }}"))
 
@@ -904,7 +1266,12 @@ def test_agent_repin_moves_only_that_agent():
             ).json()
             second = client.post(
                 _AGENTS_BASE,
-                json={**create_payload, "name": "Second"},
+                json={
+                    **create_payload,
+                    "name": "Second",
+                    "slack_bot_token": "xoxb-token-2",
+                    "slack_app_token": "xapp-1-token-2",
+                },
                 headers=_auth(context),
             ).json()
             assert_that(first["template_version"], equal_to(2))
@@ -919,9 +1286,7 @@ def test_agent_repin_moves_only_that_agent():
 
         with then("only the first agent moves; no new template version is created"):
             assert_that(response.json()["template_version"], equal_to(1))
-            second_refreshed = client.get(
-                f"{_AGENTS_BASE}/{second['id']}", headers=_auth(context)
-            ).json()
+            second_refreshed = client.get(f"{_AGENTS_BASE}/{second['id']}", headers=_auth(context)).json()
             assert_that(second_refreshed["template_version"], equal_to(2))
             catalog = client.get(f"{_BASE}/shared", headers=_auth(context)).json()
             assert_that(catalog["version"], equal_to(2))

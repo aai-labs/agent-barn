@@ -43,13 +43,17 @@ def _buffer_push(event):
         _buffer.append(event)
 
 
+_PLATFORM = os.environ.get("AGENT_PLATFORM", "slack")
+
+
 def _build_session_key(chat_type, chat_id):
     prefix = "dm" if chat_type == "dm" else "group"
-    return f"agent:main:slack:{prefix}:{chat_id}"
+    return f"agent:main:{_PLATFORM}:{prefix}:{chat_id}"
 
 
 def _now_iso():
     from datetime import datetime, timezone
+
     return datetime.now(timezone.utc).isoformat()
 
 
@@ -72,11 +76,13 @@ def _flush():
         elif event["type"] == "tool_result":
             tool_results.append(event["data"])
 
-    body = json.dumps({
-        "messages": messages,
-        "tool_calls": tool_calls,
-        "tool_results": tool_results,
-    }).encode("utf-8")
+    body = json.dumps(
+        {
+            "messages": messages,
+            "tool_calls": tool_calls,
+            "tool_results": tool_results,
+        }
+    ).encode("utf-8")
 
     url = f"{_ingest_url}/agents/{_agent_id}/events"
     req = urllib.request.Request(
@@ -89,7 +95,7 @@ def _flush():
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req) as resp:
+        with urllib.request.urlopen(req):
             pass
     except Exception as e:
         logger.warning("telemetry-push flush failed: %s", e)
@@ -125,7 +131,7 @@ def _on_pre_gateway_dispatch(event, **kwargs):
     _thread_ctx_end = "[End of thread context]"
     idx = text.find(_thread_ctx_end)
     if idx != -1:
-        text = text[idx + len(_thread_ctx_end):].strip()
+        text = text[idx + len(_thread_ctx_end) :].strip()
     ts = _now_iso()
     msg_id = f"hermes:in:{chat_id}:{int(time.time() * 1000)}:{_next_counter()}"
     session_key = _build_session_key(chat_type, chat_id)
@@ -138,22 +144,24 @@ def _on_pre_gateway_dispatch(event, **kwargs):
         _last_channel["chat_type"] = chat_type
         _last_channel["thread_id"] = thread_id
 
-    _buffer_push({
-        "type": "message",
-        "data": {
-            "msg_id": msg_id,
-            "session_key": session_key,
-            "channel_id": chat_id,
-            "thread_id": thread_id,
-            "direction": "INBOUND",
-            "conversation_type": conv_type,
-            "sender_id": user_id,
-            "sender_name": None,
-            "channel_name": None,
-            "content": text,
-            "occurred_at": ts,
-        },
-    })
+    _buffer_push(
+        {
+            "type": "message",
+            "data": {
+                "msg_id": msg_id,
+                "session_key": session_key,
+                "channel_id": chat_id,
+                "thread_id": thread_id,
+                "direction": "INBOUND",
+                "conversation_type": conv_type,
+                "sender_id": user_id,
+                "sender_name": None,
+                "channel_name": None,
+                "content": text,
+                "occurred_at": ts,
+            },
+        }
+    )
     return None
 
 
@@ -173,22 +181,24 @@ def _on_post_llm_call(session_id=None, user_message=None, assistant_response=Non
         session_key = f"{session_key}:{thread_id}"
     msg_id = f"hermes:out:{channel_id}:{int(time.time() * 1000)}:{_next_counter()}"
 
-    _buffer_push({
-        "type": "message",
-        "data": {
-            "msg_id": msg_id,
-            "session_key": session_key,
-            "channel_id": channel_id,
-            "thread_id": thread_id,
-            "direction": "OUTBOUND",
-            "conversation_type": conv_type,
-            "sender_id": None,
-            "sender_name": None,
-            "channel_name": None,
-            "content": assistant_response,
-            "occurred_at": ts,
-        },
-    })
+    _buffer_push(
+        {
+            "type": "message",
+            "data": {
+                "msg_id": msg_id,
+                "session_key": session_key,
+                "channel_id": channel_id,
+                "thread_id": thread_id,
+                "direction": "OUTBOUND",
+                "conversation_type": conv_type,
+                "sender_id": None,
+                "sender_name": None,
+                "channel_name": None,
+                "content": assistant_response,
+                "occurred_at": ts,
+            },
+        }
+    )
 
 
 def _on_pre_tool_call(tool_name=None, args=None, task_id=None, **kwargs):
@@ -199,16 +209,18 @@ def _on_pre_tool_call(tool_name=None, args=None, task_id=None, **kwargs):
         key = f"{task_id}:{tool_name}"
         _tool_call_ids[key] = external_id
 
-    _buffer_push({
-        "type": "tool_call",
-        "data": {
-            "external_id": external_id,
-            "session_id": task_id or "",
-            "tool_name": tool_name or "",
-            "arguments": args or {},
-            "occurred_at": ts,
-        },
-    })
+    _buffer_push(
+        {
+            "type": "tool_call",
+            "data": {
+                "external_id": external_id,
+                "session_id": task_id or "",
+                "tool_name": tool_name or "",
+                "arguments": args or {},
+                "occurred_at": ts,
+            },
+        }
+    )
     return None
 
 
@@ -221,15 +233,17 @@ def _on_post_tool_call(tool_name=None, args=None, result=None, task_id=None, dur
     if external_id is None:
         external_id = f"hermes:{task_id}:{tool_name}:{int(time.time() * 1000)}:{_next_counter()}"
 
-    _buffer_push({
-        "type": "tool_result",
-        "data": {
-            "external_id": external_id,
-            "result": result,
-            "is_error": False,
-            "completed_at": ts,
-        },
-    })
+    _buffer_push(
+        {
+            "type": "tool_result",
+            "data": {
+                "external_id": external_id,
+                "result": result,
+                "is_error": False,
+                "completed_at": ts,
+            },
+        }
+    )
 
 
 def _on_session_end(**kwargs):

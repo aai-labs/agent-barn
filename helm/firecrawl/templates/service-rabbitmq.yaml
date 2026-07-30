@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-rabbitmq
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "firecrawl.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: amqp
+      port: {{ .Values.service.rabbitmqPort }}
+      targetPort: 5672
+  selector:
+    {{- include "firecrawl.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: rabbitmq

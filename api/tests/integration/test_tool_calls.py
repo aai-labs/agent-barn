@@ -25,7 +25,7 @@ from api.tests.steps.organization import (
     there_is_an_organization_with_user_and_access_token,
 )
 
-_BASE = "/api/v1/agents"
+_BASE = "/api/v1/organizations/{organization_id}/agents"
 
 _GIVEN = [
     set_env_variable(
@@ -51,9 +51,7 @@ def _auth(context) -> dict:
     return {"Authorization": f"Bearer {context.access_token}"}
 
 
-def _seed_tool_call(
-    context, external_id, tool_name, arguments, status_val, result=None
-):
+def _seed_tool_call(context, external_id, tool_name, arguments, status_val, result=None):
     repo: ToolCallRepository = context.injector.get(ToolCallRepository)
     now = datetime.now(timezone.utc)
     with repo.get_session() as session:
@@ -93,9 +91,7 @@ def test_list_tool_calls_unknown_agent_returns_404():
         unknown_id = uuid.uuid4()
 
         with when("I request tool calls for an unknown agent"):
-            response = context.client.get(
-                f"{_BASE}/{unknown_id}/tool-calls", headers=_auth(context)
-            )
+            response = context.client.get(f"{_BASE}/{unknown_id}/tool-calls", headers=_auth(context))
 
         with then("it returns 404"):
             assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
@@ -104,9 +100,7 @@ def test_list_tool_calls_unknown_agent_returns_404():
 def test_list_tool_calls_empty_returns_200():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         with when("I request tool calls with no data seeded"):
-            response = context.client.get(
-                f"{_BASE}/{context.agent.id}/tool-calls", headers=_auth(context)
-            )
+            response = context.client.get(f"{_BASE}/{context.agent.id}/tool-calls", headers=_auth(context))
 
         with then("it returns 200 with empty results"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
@@ -127,9 +121,7 @@ def test_list_tool_calls_returns_seeded_results():
         )
 
         with when("I request tool calls"):
-            response = context.client.get(
-                f"{_BASE}/{context.agent.id}/tool-calls", headers=_auth(context)
-            )
+            response = context.client.get(f"{_BASE}/{context.agent.id}/tool-calls", headers=_auth(context))
 
         with then("it returns 200 with the seeded tool call"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
@@ -152,9 +144,7 @@ def test_list_tool_calls_pending_status():
         )
 
         with when("I request tool calls"):
-            response = context.client.get(
-                f"{_BASE}/{context.agent.id}/tool-calls", headers=_auth(context)
-            )
+            response = context.client.get(f"{_BASE}/{context.agent.id}/tool-calls", headers=_auth(context))
 
         with then("the tool call appears with status PENDING"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))

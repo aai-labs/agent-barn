@@ -17,13 +17,8 @@ _ENV = {
 def _load_plugin():
     import importlib.util
 
-    path = (
-        os.path.dirname(__file__)
-        + "/../../domains/agents/scripts/hermes/plugins/telemetry-push/__init__.py"
-    )
-    spec = importlib.util.spec_from_file_location(
-        "telemetry_push", os.path.abspath(path)
-    )
+    path = os.path.dirname(__file__) + "/../../domains/agents/scripts/hermes/plugins/telemetry-push/__init__.py"
+    spec = importlib.util.spec_from_file_location("telemetry_push", os.path.abspath(path))
     assert spec is not None
     mod = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
@@ -31,9 +26,7 @@ def _load_plugin():
     return mod
 
 
-def _make_event(
-    text="hello", chat_type="dm", chat_id="C123", user_id="U456", message_id=None
-):
+def _make_event(text="hello", chat_type="dm", chat_id="C123", user_id="U456", message_id=None):
     source = types.SimpleNamespace(
         platform="slack",
         chat_type=chat_type,
@@ -134,9 +127,7 @@ def test_pre_gateway_dispatch_buffers_inbound_message():
         with patch.dict(os.environ, _ENV, clear=True):
             mod = _load_plugin()
             hooks, _ = _register(mod)
-        event = _make_event(
-            text="hello", chat_type="dm", chat_id="C123", user_id="U456"
-        )
+        event = _make_event(text="hello", chat_type="dm", chat_id="C123", user_id="U456")
 
         with when("I dispatch an inbound message"):
             result = hooks["pre_gateway_dispatch"](event)
@@ -169,11 +160,7 @@ def test_post_llm_call_buffers_outbound_message():
             )
 
         with then("an outbound message is buffered"):
-            outbound = [
-                e
-                for e in mod._buffer
-                if e["type"] == "message" and e["data"]["direction"] == "OUTBOUND"
-            ]
+            outbound = [e for e in mod._buffer if e["type"] == "message" and e["data"]["direction"] == "OUTBOUND"]
             assert_that(outbound, has_length(1))
             assert_that(outbound[0]["data"]["content"], equal_to("hello back"))
 
@@ -203,9 +190,7 @@ def test_post_tool_call_buffers_tool_result():
         with patch.dict(os.environ, _ENV, clear=True):
             mod = _load_plugin()
             hooks, _ = _register(mod)
-        hooks["pre_tool_call"](
-            tool_name="terminal", args={"command": "ls"}, task_id="task-1"
-        )
+        hooks["pre_tool_call"](tool_name="terminal", args={"command": "ls"}, task_id="task-1")
 
         with when("a post_tool_call fires for the same tool"):
             hooks["post_tool_call"](
@@ -237,9 +222,7 @@ def test_flush_sends_correct_payload(mock_urlopen):
         with patch.dict(os.environ, _ENV, clear=True):
             mod = _load_plugin()
             hooks, _ = _register(mod)
-        event = _make_event(
-            text="test msg", chat_type="dm", chat_id="C123", user_id="U456"
-        )
+        event = _make_event(text="test msg", chat_type="dm", chat_id="C123", user_id="U456")
         hooks["pre_gateway_dispatch"](event)
 
         with when("I flush the buffer"):

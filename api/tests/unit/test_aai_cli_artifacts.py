@@ -11,6 +11,7 @@ from api.domains.agents.aai_cli_artifacts import (
 from typing import cast
 
 from api.domains.agents.models import (
+    FirecrawlContent,
     GmailContent,
     SecretProvider,
     ZohoMailContent,
@@ -80,14 +81,9 @@ def test_env_var_for():
     assert env_var_for("jira.api_token") == "AAI_SECRET_JIRA_API_TOKEN"
     assert env_var_for("github.token") == "AAI_SECRET_GITHUB_TOKEN"
     assert env_var_for("google.client_secret") == "AAI_SECRET_GOOGLE_CLIENT_SECRET"
-    assert (
-        env_var_for("google.gmail_refresh_token")
-        == "AAI_SECRET_GOOGLE_GMAIL_REFRESH_TOKEN"
-    )
+    assert env_var_for("google.gmail_refresh_token") == "AAI_SECRET_GOOGLE_GMAIL_REFRESH_TOKEN"
     assert env_var_for("zoho.client_secret") == "AAI_SECRET_ZOHO_CLIENT_SECRET"
-    assert (
-        env_var_for("zoho.mail_refresh_token") == "AAI_SECRET_ZOHO_MAIL_REFRESH_TOKEN"
-    )
+    assert env_var_for("zoho.mail_refresh_token") == "AAI_SECRET_ZOHO_MAIL_REFRESH_TOKEN"
 
 
 def test_config_toml_emits_only_present_store_profiles():
@@ -112,6 +108,57 @@ def test_config_toml_emits_only_present_store_profiles():
     # token values never appear in the config
     assert "jira_tok" not in toml
     assert "ghp_tok" not in toml
+
+
+def test_config_toml_jira_scoped_token_uses_gateway_url():
+    jira_scoped = validate_content(
+        SecretProvider.JIRA,
+        {
+            "site_url": "https://x.atlassian.net",
+            "email": "svc-account@x.com",
+            "api_token": "jira_scoped_tok",
+            "use_scoped_token": True,
+            "cloud_id": "cloud-abc",
+        },
+    )
+    toml = build_config_toml({SecretProvider.JIRA: jira_scoped})
+    assert "[profiles.jira-work]" in toml
+    assert 'auth_type = "basic_api_token"' in toml
+    assert 'site_url = "https://api.atlassian.com/ex/jira/cloud-abc"' in toml
+    assert 'email = "svc-account@x.com"' in toml
+
+
+def test_config_toml_jira_scoped_token_missing_cloud_id_skips_profile():
+    jira_scoped_no_cloud_id = validate_content(
+        SecretProvider.JIRA,
+        {
+            "site_url": "https://x.atlassian.net",
+            "email": "svc-account@x.com",
+            "api_token": "jira_scoped_tok",
+            "use_scoped_token": True,
+        },
+    )
+    toml = build_config_toml({SecretProvider.JIRA: jira_scoped_no_cloud_id})
+    assert "[profiles.jira-work]" not in toml
+    assert "cloud_id missing" in toml
+
+
+def test_config_toml_confluence_scoped_token_uses_gateway_url():
+    confluence_scoped = validate_content(
+        SecretProvider.CONFLUENCE,
+        {
+            "site_url": "https://x.atlassian.net",
+            "email": "svc-account@x.com",
+            "api_token": "conf_scoped_tok",
+            "use_scoped_token": True,
+            "cloud_id": "cloud-abc",
+        },
+    )
+    toml = build_config_toml({SecretProvider.CONFLUENCE: confluence_scoped})
+    assert "[profiles.confluence-work]" in toml
+    assert 'auth_type = "basic_api_token"' in toml
+    assert 'site_url = "https://api.atlassian.com/ex/confluence/cloud-abc"' in toml
+    assert 'email = "svc-account@x.com"' in toml
 
 
 def test_config_toml_gmail_uses_secret_store():
@@ -166,8 +213,7 @@ def test_setup_sh_gmail_sets_both_secrets():
     )
     assert (
         f"printf '%s' \"$AAI_SECRET_GOOGLE_GMAIL_REFRESH_TOKEN\" | "
-        f"aai-cli --config {CONFIG_PATH} secrets set google.gmail_refresh_token"
-        in setup
+        f"aai-cli --config {CONFIG_PATH} secrets set google.gmail_refresh_token" in setup
     )
 
 
@@ -234,10 +280,7 @@ def test_setup_sh_hermes_home_dir_exports_opt_data():
     setup = build_setup_sh([SecretProvider.JIRA], home_dir="/opt/data")
     assert "export HOME=/opt/data" in setup
     assert "mkdir -p /opt/data/.config/aai-cli" in setup
-    assert (
-        "cp /app/config/aai-cli-config.toml /opt/data/.config/aai-cli/config.toml"
-        in setup
-    )
+    assert "cp /app/config/aai-cli-config.toml /opt/data/.config/aai-cli/config.toml" in setup
     assert "/home/node" not in setup
 
 
@@ -281,8 +324,12 @@ def test_tool_context_md_lists_bitbucket_profile():
 
 def test_tool_context_md_omits_non_aai_cli_providers():
     md = build_tool_context_md({SecretProvider.GMAIL: _GMAIL})
-    # Gmail is not listed as a named profile in the context block
-    assert "gmail-work" not in md
+    assert md == ""
+
+
+def test_tool_context_md_empty_when_only_firecrawl():
+    md = build_tool_context_md({SecretProvider.FIRECRAWL: FirecrawlContent(api_key="fc-x")})
+    assert md == ""
 
 
 def test_tool_context_md_never_leaks_tokens():
@@ -435,9 +482,7 @@ def test_profile_slugs_are_single_source_of_truth_for_jira():
     # from PROFILE_SLUGS, so they can never drift apart.
     slug = PROFILE_SLUGS[SecretProvider.JIRA]
     assert f"[profiles.{slug}]" in build_config_toml({SecretProvider.JIRA: _JIRA})
-    assert f"--profile {slug}" in build_integrations_policy_md(
-        {SecretProvider.JIRA: _JIRA}
-    )
+    assert f"--profile {slug}" in build_integrations_policy_md({SecretProvider.JIRA: _JIRA})
 
 
 def test_integrations_policy_md_never_leaks_tokens():

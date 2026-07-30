@@ -6,7 +6,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-PORT = 8081
+PORT = int(os.environ.get("HEALTHZ_PORT", "8081"))
 HERMES_URL = "http://localhost:8642/v1/models"
 POLL_INTERVAL = 10
 TOKEN_POLL_INTERVAL = 300  # 5 minutes
@@ -15,7 +15,9 @@ _lock = threading.Lock()
 _cache: dict = {"ok": None, "ever_connected": False, "reason": None}
 _token_cache: dict = {"ok": None, "reason": None}
 
+AGENT_PLATFORM = os.environ.get("AGENT_PLATFORM", "slack")
 _SLACK_API = "https://slack.com/api"
+_TELEGRAM_API = "https://api.telegram.org"
 _SKIP_VALIDATION = os.environ.get("SKIP_SLACK_TOKEN_VALIDATION", "").lower() in ("1", "true", "yes")
 
 
@@ -53,6 +55,19 @@ def _check_token(url: str, token: str, label: str) -> tuple[bool, str]:
         return False, f"{label} validation failed: {exc}"
 
 
+def _check_telegram_token(token: str) -> tuple[bool, str]:
+    try:
+        url = f"{_TELEGRAM_API}/bot{token}/getMe"
+        req = Request(url)
+        with urlopen(req, timeout=15) as resp:
+            body = json.loads(resp.read())
+        if body.get("ok"):
+            return True, ""
+        return False, f"Invalid Telegram bot token: {body.get('description', 'unknown_error')}"
+    except Exception as exc:
+        return False, f"Telegram token validation failed: {exc}"
+
+
 def _poll_tokens() -> None:
     if _SKIP_VALIDATION:
         with _lock:
@@ -60,13 +75,16 @@ def _poll_tokens() -> None:
             _token_cache["reason"] = None
         return
 
-    bot_token = os.environ.get("SLACK_BOT_TOKEN", "")
-    app_token = os.environ.get("SLACK_APP_TOKEN", "")
-
     while True:
-        ok, reason = _check_token(f"{_SLACK_API}/auth.test", bot_token, "bot token")
-        if ok:
-            ok, reason = _check_token(f"{_SLACK_API}/apps.connections.open", app_token, "app token")
+        if AGENT_PLATFORM == "telegram":
+            telegram_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+            ok, reason = _check_telegram_token(telegram_token)
+        else:
+            bot_token = os.environ.get("SLACK_BOT_TOKEN", "")
+            app_token = os.environ.get("SLACK_APP_TOKEN", "")
+            ok, reason = _check_token(f"{_SLACK_API}/auth.test", bot_token, "bot token")
+            if ok:
+                ok, reason = _check_token(f"{_SLACK_API}/apps.connections.open", app_token, "app token")
         with _lock:
             _token_cache["ok"] = ok
             _token_cache["reason"] = reason if not ok else None
@@ -77,6 +95,48 @@ threading.Thread(target=_poll, daemon=True).start()
 threading.Thread(target=_poll_tokens, daemon=True).start()
 
 
+def _snapshot() -> tuple:
+    """One consistent read of both caches; handlers stay lock-free."""
+    with _lock:
+        return (
+            _cache["ok"],
+            _cache["ever_connected"],
+            _cache["reason"],
+            _token_cache["ok"],
+            _token_cache["reason"],
+        )
+
+
+def _metrics_text(ok, ever, tok_ok) -> str:
+    # Token gauge stays 1 while unknown/starting; 0 only on a definite
+    # failure, so a slow first validation never trips an alert.
+    lines = [
+        "# HELP agent_healthz_ok 1 if the agent runtime is reachable, 0 otherwise",
+        "# TYPE agent_healthz_ok gauge",
+        f"agent_healthz_ok {1 if ok else 0}",
+        "# HELP agent_healthz_ever_connected 1 once the runtime has connected at least once",
+        "# TYPE agent_healthz_ever_connected gauge",
+        f"agent_healthz_ever_connected {1 if ever else 0}",
+        "# HELP agent_slack_tokens_ok 0 if Slack token validation definitely failed, 1 otherwise",
+        "# TYPE agent_slack_tokens_ok gauge",
+        f"agent_slack_tokens_ok {0 if tok_ok is False else 1}",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _healthz_result(ok, ever, reason, tok_ok, tok_reason) -> tuple[int, dict]:
+    # Token failures surface immediately as errors
+    if tok_ok is False:
+        return 500, {"status": "error", "reason": tok_reason}
+    if ok is None or tok_ok is None:
+        return 503, {"status": "starting"}
+    if ok:
+        return 200, {"status": "ok"}
+    if ever:
+        return 500, {"status": "error", "reason": reason}
+    return 503, {"status": "starting", "reason": reason}
+
+
 class _Handler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: object) -> None:
         pass
@@ -84,27 +144,12 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         if self.path == "/ready":
             self._send(200, {"ready": True})
+        elif self.path == "/metrics":
+            ok, ever, _, tok_ok, _ = _snapshot()
+            self._send_text(200, _metrics_text(ok, ever, tok_ok))
         elif self.path == "/healthz":
-            with _lock:
-                ok = _cache["ok"]
-                ever = _cache["ever_connected"]
-                reason = _cache["reason"]
-                tok_ok = _token_cache["ok"]
-                tok_reason = _token_cache["reason"]
-
-            # Token failures surface immediately as errors
-            if tok_ok is False:
-                self._send(500, {"status": "error", "reason": tok_reason})
-                return
-
-            if ok is None or tok_ok is None:
-                self._send(503, {"status": "starting"})
-            elif ok:
-                self._send(200, {"status": "ok"})
-            elif ever:
-                self._send(500, {"status": "error", "reason": reason})
-            else:
-                self._send(503, {"status": "starting", "reason": reason})
+            code, body = _healthz_result(*_snapshot())
+            self._send(code, body)
         else:
             self.send_response(404)
             self.end_headers()
@@ -115,6 +160,14 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.end_headers()
         self.wfile.write(data)
+
+    def _send_text(self, code: int, body: str) -> None:
+        self.send_response(code)
+        # Prometheus exposition content type; canonical value lives in
+        # api/core/metrics.py (standalone script, cannot import it).
+        self.send_header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(body.encode())
 
 
 HTTPServer(("", PORT), _Handler).serve_forever()

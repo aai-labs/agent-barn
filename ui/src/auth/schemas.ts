@@ -52,7 +52,7 @@ export const CurrentUserSchema = z.object({
   id: z.string().uuid(),
   email: z.string().email(),
   fullName: z.string().nullable(),
-  isSuperuser: z.boolean(),
+  isPlatformAdmin: z.boolean(),
   emailVerifiedAt: z.string().nullable().optional(),
   organizationUsers: z.array(OrganizationUserReadSchema).nullable().optional(),
 });

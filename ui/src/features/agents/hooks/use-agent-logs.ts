@@ -3,16 +3,18 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { api } from "@/shared/api";
+import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
 
 import { AgentLogsRead, AgentLogsReadSchema } from "../schemas";
 import { agentsKey } from "../utils";
 
 export function useAgentLogs(agentId: string, enabled: boolean = true) {
+  const orgApiBase = useOrganizationApiBase();
   const query = useQuery({
     queryKey: agentsKey.logs(agentId),
     queryFn: async () => {
       const response = await api.get<AgentLogsRead>(
-        `/api/v1/agents/${agentId}/logs`,
+        `${orgApiBase}/agents/${agentId}/logs`,
         { schema: AgentLogsReadSchema },
       );
       return response.data;

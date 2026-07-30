@@ -12,9 +12,7 @@ from api.infrastructure.slack.client import (
 _REQUEST = httpx.Request("GET", "https://slack.com/api/users.list")
 
 
-def _resp(
-    page: dict, *, status: int = 200, headers: dict | None = None
-) -> httpx.Response:
+def _resp(page: dict, *, status: int = 200, headers: dict | None = None) -> httpx.Response:
     """An httpx.Response carrying page as the JSON body."""
     return httpx.Response(status, json=page, headers=headers, request=_REQUEST)
 
@@ -45,16 +43,12 @@ def test_list_users_paginates_all_pages():
     pages = [
         {
             "ok": True,
-            "members": [
-                {"id": "U1", "name": "alice", "profile": {"display_name": "Al"}}
-            ],
+            "members": [{"id": "U1", "name": "alice", "profile": {"display_name": "Al"}}],
             "response_metadata": {"next_cursor": "next"},
         },
         {
             "ok": True,
-            "members": [
-                {"id": "U2", "name": "bob", "profile": {"display_name": "Bobby"}}
-            ],
+            "members": [{"id": "U2", "name": "bob", "profile": {"display_name": "Bobby"}}],
             "response_metadata": {"next_cursor": ""},
         },
     ]
@@ -143,9 +137,7 @@ _MIXED_USERS_PAGE = {
 
 def test_list_users_include_flags_keep_bots_and_deleted():
     with patch("httpx.request", _mock_httpx([_resp(_MIXED_USERS_PAGE)])):
-        users = SlackClient("xoxb-token").list_users(
-            include_bots=True, include_deleted=True
-        )
+        users = SlackClient("xoxb-token").list_users(include_bots=True, include_deleted=True)
 
     assert [u["id"] for u in users] == ["U1", "U2", "U3"]
     # The projection never leaks the internal filter flags.
@@ -191,9 +183,7 @@ def test_validate_bot_token_ok():
 
 
 def test_validate_bot_token_maps_known_error():
-    with patch(
-        "httpx.request", _mock_httpx([_resp({"ok": False, "error": "invalid_auth"})])
-    ):
+    with patch("httpx.request", _mock_httpx([_resp({"ok": False, "error": "invalid_auth"})])):
         ok, message = SlackClient("xoxb-token").validate_bot_token()
 
     assert ok is False
@@ -211,9 +201,7 @@ def test_validate_bot_token_falls_back_for_unknown_error():
 def test_validate_app_token_ok_uses_app_token():
     mock = _mock_httpx([_resp({"ok": True})])
     with patch("httpx.request", mock):
-        ok, message = SlackClient(
-            "xoxb-token", app_token="xapp-token"
-        ).validate_app_token()
+        ok, message = SlackClient("xoxb-token", app_token="xapp-token").validate_app_token()
 
     assert ok is True
     assert message == ""
@@ -259,9 +247,7 @@ def test_get_bot_info_returns_fields_on_success():
 
 
 def test_get_bot_info_returns_empty_dict_on_non_ok():
-    with patch(
-        "httpx.request", _mock_httpx([_resp({"ok": False, "error": "invalid_auth"})])
-    ):
+    with patch("httpx.request", _mock_httpx([_resp({"ok": False, "error": "invalid_auth"})])):
         info = SlackClient("xoxb-token").get_bot_info()
 
     assert info == {}

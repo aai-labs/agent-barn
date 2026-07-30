@@ -3,13 +3,14 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/shared/api";
+import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
 
 import { Agent, AgentSchema } from "../schemas";
 import { agentsKey } from "../utils";
 
 export type CreateAgentData = {
   name: string;
-  platform: "slack" | "teams";
+  platform: "slack" | "teams" | "telegram";
   agentType?: "openclaw" | "hermes";
   // Slack (required when platform=slack)
   slackBotToken?: string;
@@ -21,6 +22,10 @@ export type CreateAgentData = {
   teamsAppId?: string;
   teamsAppPassword?: string;
   teamsTenantId?: string;
+  // Telegram (required when platform=telegram)
+  telegramBotToken?: string;
+  telegramGroupPolicy?: "open" | "allowlist";
+  telegramDmPolicy?: "off" | "open" | "allowlist";
   // Template reference — pins to templateVersion if given, else latest.
   templateSlug: string;
   templateVersion?: number;
@@ -28,16 +33,17 @@ export type CreateAgentData = {
   // Skills to assign on creation
   skillIds?: string[];
   // Integration credentials (provider + provider-specific content; name is server-stamped)
-  secrets?: Array<{ provider: string; content: Record<string, string | string[]> }>;
+  secrets?: Array<{ provider: string; content: Record<string, string | string[] | boolean> }>;
   approvalMode?: "manual" | "auto" | "off";
 };
 
 export function useCreateAgent() {
   const queryClient = useQueryClient();
+  const orgApiBase = useOrganizationApiBase();
 
   return useMutation({
     mutationFn: async (data: CreateAgentData) => {
-      const response = await api.post<Agent>("/api/v1/agents", data, {
+      const response = await api.post<Agent>(`${orgApiBase}/agents`, data, {
         schema: AgentSchema,
       });
       return response.data;

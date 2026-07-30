@@ -21,3 +21,7 @@ data:
     general_settings:
       master_key: os.environ/LITELLM_MASTER_KEY
       store_model_in_db: false
+
+    litellm_settings:
+      # Expose /metrics in Prometheus format (scraped by the monitoring stack).
+      callbacks: ["prometheus"]

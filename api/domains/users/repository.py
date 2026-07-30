@@ -6,14 +6,14 @@ from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
-from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
+from api.domains.users.exceptions import EmailTakenHTTPException
+from api.domains.users.models import User, UserFilter
 from api.domains.users.organization_users.models import (
     OrganizationRole,
     OrganizationUser,
 )
+from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.infrastructure.shared.models import PaginatedItems, Pagination
-from api.domains.users.exceptions import EmailTakenHTTPException
-from api.domains.users.models import User, UserFilter
 
 
 @inject
@@ -28,9 +28,7 @@ class UserRepository:
         rows = self.delegate.find_all_by_query(model=User, query=query)
         return rows[0] if rows else None
 
-    def get_by_id_and_organization_id(
-        self, user_id: UUID, organization_id: UUID
-    ) -> User | None:
+    def get_by_id_and_organization_id(self, user_id: UUID, organization_id: UUID) -> User | None:
         query = (
             select(User)
             .join(OrganizationUser, col(OrganizationUser.user_id) == col(User.id))
@@ -57,8 +55,8 @@ class UserRepository:
         rows = self.delegate.find_all_by_query(model=User, query=query)
         return rows[0] if rows else None
 
-    def get_superuser(self) -> User | None:
-        query = select(User).where(col(User.is_superuser).is_(True))
+    def get_platform_admin(self) -> User | None:
+        query = select(User).where(col(User.is_platform_admin).is_(True))
         return self.delegate.find_one_by_query(model=User, query=query)
 
     def find_one(self, **kwargs) -> User | None:
@@ -72,20 +70,14 @@ class UserRepository:
         query = select(User)
 
         if organization_id:
-            query = query.join(
-                OrganizationUser, col(OrganizationUser.user_id) == col(User.id)
-            )
+            query = query.join(OrganizationUser, col(OrganizationUser.user_id) == col(User.id))
             query = query.where(
                 col(OrganizationUser.organization_id) == organization_id,
-                col(User.is_superuser).is_(False),
+                col(User.is_platform_admin).is_(False),
             )
 
             if query_filters.organization_roles:
-                query = query.where(
-                    col(OrganizationUser.role).in_(
-                        [role.value for role in query_filters.organization_roles]
-                    )
-                )
+                query = query.where(col(OrganizationUser.role).in_(query_filters.organization_roles))
 
         if query_filters.search:
             search_pattern = f"%{query_filters.search}%"
@@ -107,9 +99,7 @@ class UserRepository:
         organization_id: UUID | None = None,
     ) -> list[User]:
         query = self._get_query(query_filters, organization_id=organization_id)
-        return self.delegate.find_all_by_query(
-            model=User, query=query, order_by=[("updated_at", "asc")]
-        )
+        return self.delegate.find_all_by_query(model=User, query=query, order_by=[("updated_at", "asc")])
 
     def find_all_paginated(
         self,

@@ -32,9 +32,7 @@ class OrganizationRepository:
         owner_email: str | None,
         owner_name: str | None,
     ) -> OrganizationRead:
-        return OrganizationRead(
-            **organization.model_dump(), owner_email=owner_email, owner_name=owner_name
-        )
+        return OrganizationRead(**organization.model_dump(), owner_email=owner_email, owner_name=owner_name)
 
     def _build_organization_read_query(self):
         user_email = col(User.email).label("owner_email")
@@ -71,9 +69,7 @@ class OrganizationRepository:
             .exists()
         )
 
-    def _apply_organization_read_filters(
-        self, query, organization_filter: OrganizationFilter
-    ):
+    def _apply_organization_read_filters(self, query, organization_filter: OrganizationFilter):
         if organization_filter.search:
             search = f"%{organization_filter.search}%"
             query = query.where(
@@ -87,17 +83,12 @@ class OrganizationRepository:
 
         return query
 
-    def find_default(self) -> Organization | None:
-        return self.delegate.find_one(Organization, is_default=True)
-
     def get(self, organization_id: UUID) -> Organization | None:
         return self.delegate.find_by_id(Organization, organization_id)
 
     def get_read(self, organization_id: UUID) -> OrganizationRead | None:
         with Session(self.delegate.engine) as session:
-            query = self._build_organization_read_query().where(
-                col(Organization.id) == organization_id
-            )
+            query = self._build_organization_read_query().where(col(Organization.id) == organization_id)
             row = session.exec(query).first()
             if row is None:
                 return None
@@ -131,15 +122,11 @@ class OrganizationRepository:
             )
             if user_id:
                 count_query = count_query.where(self._member_of_organization(user_id))
-            count_query = self._apply_organization_read_filters(
-                count_query, organization_filter
-            )
+            count_query = self._apply_organization_read_filters(count_query, organization_filter)
             total = session.scalar(count_query) or 0
 
             if pagination:
-                query = query.offset((pagination.page - 1) * pagination.size).limit(
-                    pagination.size
-                )
+                query = query.offset((pagination.page - 1) * pagination.size).limit(pagination.size)
 
             rows = session.exec(query).all()
             items = [
@@ -158,9 +145,7 @@ class OrganizationRepository:
         self.delegate.save(organization)
         return organization
 
-    def save_with_session(
-        self, organization: Organization, session: Session
-    ) -> Organization:
+    def save_with_session(self, organization: Organization, session: Session) -> Organization:
         session.add(organization)
         session.flush()
         return organization

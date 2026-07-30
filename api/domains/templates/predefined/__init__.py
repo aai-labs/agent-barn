@@ -8,8 +8,10 @@ from api.domains.templates.defaults import (
 )
 from api.domains.templates.predefined import (
     code_reviewer,
+    documentation_agent,
     email_reminder,
     general_purpose,
+    jira_task_helper,
     scrum_master,
 )
 
@@ -70,7 +72,38 @@ PREDEFINED_TEMPLATES: tuple[PredefinedTemplate, ...] = (
         boot_md=code_reviewer.BOOT_MD,
         bootstrap_md=DEFAULT_BOOTSTRAP_MD,
         heartbeat_md=code_reviewer.HEARTBEAT_MD,
-        required_skill_names=("GitHub",),
+        # Code host is GitHub OR Bitbucket — an "either" the AND-only skill gate
+        # can't express, so it's enforced at runtime by AGENTS.md Setup Step 1.
+        # Configuring either host auto-mounts its aai-cli skill at start.
+        required_skill_names=(),
+    ),
+    PredefinedTemplate(
+        slug="jira-task-helper",
+        name="Jira Task Helper",
+        description="Turns a plain-language request — in any language — into a well-structured Jira task and files it for you.",
+        soul_md=jira_task_helper.SOUL_MD,
+        identity_md=jira_task_helper.IDENTITY_MD,
+        user_md=jira_task_helper.USER_MD,
+        tools_md=jira_task_helper.TOOLS_MD,
+        agents_md=jira_task_helper.AGENTS_MD,
+        boot_md=jira_task_helper.BOOT_MD,
+        bootstrap_md=DEFAULT_BOOTSTRAP_MD,
+        heartbeat_md=DEFAULT_HEARTBEAT_MD,
+        required_skill_names=("Jira",),
+    ),
+    PredefinedTemplate(
+        slug="documentation-agent",
+        name="Documentation Agent",
+        description="Documents merged pull requests (GitHub or Bitbucket) into Confluence, keeps a changelog, and posts a weekly digest of what shipped to Slack.",
+        soul_md=documentation_agent.SOUL_MD,
+        identity_md=documentation_agent.IDENTITY_MD,
+        user_md=documentation_agent.USER_MD,
+        tools_md=documentation_agent.TOOLS_MD,
+        agents_md=documentation_agent.AGENTS_MD,
+        boot_md=documentation_agent.BOOT_MD,
+        bootstrap_md=DEFAULT_BOOTSTRAP_MD,
+        heartbeat_md=documentation_agent.HEARTBEAT_MD,
+        required_skill_names=("Jira", "Confluence"),
     ),
     PredefinedTemplate(
         slug="email-reminder",

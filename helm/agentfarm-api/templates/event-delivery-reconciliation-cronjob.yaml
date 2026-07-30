@@ -1,0 +1,46 @@
+{{- if .Values.eventDelivery.reconciliation.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .Release.Name }}-event-reconciler
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentfarm-api.labels" . | nindent 4 }}
+    app.kubernetes.io/component: event-reconciler
+spec:
+  schedule: {{ .Values.eventDelivery.reconciliation.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            {{- include "agentfarm-api.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: event-reconciler
+        spec:
+          restartPolicy: OnFailure
+          imagePullSecrets:
+            {{- toYaml .Values.imagePullSecrets | nindent 12 }}
+          containers:
+            - name: event-reconciler
+              image: "{{ .Values.registryPrefix }}/{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              # Not `python -m api.domains.events.reconciliation`: running the
+              # module as __main__ re-imports it under a second module name,
+              # so its EventDeliveryReconciler class no longer matches the one
+              # AppModule's @provider registered a binding for — injector falls
+              # back to raw construction and fails on the Protocol-typed args.
+              command:
+                - python
+                - -c
+                - "from api.domains.events.reconciliation import main; main()"
+              envFrom:
+                - secretRef:
+                    name: {{ .Values.secretName }}
+                - secretRef:
+                    name: {{ .Values.litellmApiKeySecretName }}
+              resources:
+                {{- toYaml .Values.worker.resources | nindent 16 }}
+{{- end }}

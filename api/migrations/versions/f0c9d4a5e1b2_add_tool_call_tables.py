@@ -17,9 +17,7 @@ down_revision: Union[str, None] = "e9b4f23c5a71"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-tool_call_status_enum = postgresql.ENUM(
-    "PENDING", "SUCCESS", "ERROR", name="toolcallstatus", create_type=False
-)
+tool_call_status_enum = postgresql.ENUM("PENDING", "SUCCESS", "ERROR", name="toolcallstatus", create_type=False)
 
 
 def upgrade() -> None:
@@ -41,18 +39,12 @@ def upgrade() -> None:
         sa.Column("occurred_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("duration_ms", sa.Integer(), nullable=True),
-        sa.ForeignKeyConstraint(
-            ["organization_id"], ["organization.id"], ondelete="CASCADE"
-        ),
+        sa.ForeignKeyConstraint(["organization_id"], ["organization.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["agent_id"], ["agent.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint(
-            "agent_id", "external_id", name="uq_tool_call_agent_external"
-        ),
+        sa.UniqueConstraint("agent_id", "external_id", name="uq_tool_call_agent_external"),
     )
-    op.create_index(
-        "ix_tool_call_agent_occurred", "tool_call", ["agent_id", "occurred_at"]
-    )
+    op.create_index("ix_tool_call_agent_occurred", "tool_call", ["agent_id", "occurred_at"])
     op.create_index("ix_tool_call_agent_tool", "tool_call", ["agent_id", "tool_name"])
 
     op.create_table(

@@ -1,8 +1,8 @@
 COMPOSE := docker compose -f compose.yml
 
 .PHONY: \
-	dev-api dev-ingest dev-ui migrate rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api fix-api test check fix \
-	up down restart logs build clean db-up db-down db-logs db-restart \
+	dev-api dev-ingest dev-ui dev-worker reconcile migrate rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring fix-api test check fix \
+	up down restart logs build clean db-up db-down db-logs db-restart redis-up redis-down redis-logs worker-logs \
 	cluster-up cluster-down cluster-reset k3d-load-images k3d-load-openclaw k3d-load-hermes
 
 # Non-docker commands
@@ -24,6 +24,13 @@ dev-ingest:
 
 dev-ui:
 	cd ui && pnpm dev
+
+dev-worker:
+	cd api && uv run dramatiq api.worker_app --processes 1 --threads 4
+
+# One-shot reconciliation pass; production runs this on a CronJob schedule.
+reconcile:
+	cd api && uv run python -m api.domains.events.reconciliation
 
 migrate:
 	cd api && uv run python -m alembic upgrade head
@@ -55,6 +62,18 @@ coverage:
 
 check-api:
 	cd api && uv run ruff check . && uv run ruff format --check . && uv run ty check .
+
+check-migrations:
+	@cd api && heads=$$(uv run python -m alembic heads); \
+	count=$$(printf '%s\n' "$$heads" | grep -c .); \
+	if [ "$$count" -ne 1 ]; then \
+		echo "Expected exactly one alembic head, found $$count:"; \
+		printf '%s\n' "$$heads"; \
+		exit 1; \
+	fi
+
+check-monitoring:
+	helm/monitoring/tests/run.sh
 
 fix-api:
 	cd api && uv run ruff check --fix && uv run ruff format .
@@ -91,6 +110,18 @@ db-logs:
 
 db-restart:
 	$(COMPOSE) restart db
+
+redis-up:
+	$(COMPOSE) up -d redis
+
+redis-down:
+	$(COMPOSE) stop redis
+
+redis-logs:
+	$(COMPOSE) logs -f redis
+
+worker-logs:
+	$(COMPOSE) logs -f worker
 
 # k3d dev environment — k3s cluster + LiteLLM + litellm-db in Docker.
 # Requires: Docker running. No host k3d or helm install needed.

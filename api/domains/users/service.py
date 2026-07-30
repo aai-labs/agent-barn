@@ -14,7 +14,7 @@ from api.domains.organizations.repository import OrganizationRepository
 from api.domains.users.models import (
     AdminUserCreate,
     User,
-    UserCreateSuperAdmin,
+    UserCreatePlatformAdmin,
     UserFilter,
     UserPasswordChange,
     UserRead,
@@ -40,21 +40,17 @@ class UserService:
     refresh_token_repository: RefreshTokenRepository
     config: Config
 
-    def ensure_default_superuser(self) -> User:
-        existing = self.user_repository.get_superuser()
+    def ensure_default_platform_admin(self) -> User:
+        existing = self.user_repository.get_platform_admin()
         if existing:
             return existing
-        email, password = self.config.super_user_credentials.split(":")
-        full_name = self.config.super_user_full_name
-        return self.create_superuser(
-            email=email, password=password, full_name=full_name
-        )
+        email, password = self.config.platform_admin_credentials.split(":")
+        full_name = self.config.platform_admin_full_name
+        return self.create_platform_admin(email=email, password=password, full_name=full_name)
 
-    def create_superuser(
-        self, email: str, password: str, full_name: str | None = None
-    ) -> User:
+    def create_platform_admin(self, email: str, password: str, full_name: str | None = None) -> User:
         validate_strong_password(password)
-        user_data = UserCreateSuperAdmin(email=email, full_name=full_name)
+        user_data = UserCreatePlatformAdmin(email=email, full_name=full_name)
         user = User(
             **user_data.model_dump(),
             hashed_password=hash_text(password),
@@ -74,7 +70,7 @@ class UserService:
                 detail="Organization not found",
             )
 
-        # Superuser-provisioned: the admin sets the password directly, so the account is
+        # Platform-admin provisioned: the admin sets the password directly, so the account is
         # active (verified) immediately — not a pending invite.
         user = User(
             email=data.email,
@@ -93,12 +89,8 @@ class UserService:
         )
         return user
 
-    def get_user_by_id_and_organization_id(
-        self, user_id: UUID, organization_id: UUID
-    ) -> User:
-        user = self.user_repository.get_by_id_and_organization_id(
-            user_id, organization_id
-        )
+    def get_user_by_id_and_organization_id(self, user_id: UUID, organization_id: UUID) -> User:
+        user = self.user_repository.get_by_id_and_organization_id(user_id, organization_id)
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -136,7 +128,7 @@ class UserService:
         page_size: int = 15,
     ) -> PaginatedItems[UserRead]:
         pagination = Pagination(page=page, size=page_size)
-        # Global account admin (superuser-only route): list every account. Org-level
+        # Global account admin (platform-admin-only route): list every account. Org-level
         # people management lives on the per-org Members page instead.
         del context  # scoping is intentionally global here
         paginated_users: PaginatedItems[User] = self.user_repository.find_all_paginated(
@@ -162,9 +154,7 @@ class UserService:
     def verify_user_password(self, user_id: UUID, password: str) -> None:
         user = self.get_user(user_id)
         if not check_hash(password, user.hashed_password):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid password"
-            )
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid password")
 
     def change_password(self, user_id: UUID, password_data: UserPasswordChange) -> None:
         user = self.get_user(user_id)

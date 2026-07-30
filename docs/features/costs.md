@@ -13,10 +13,10 @@ Costs provides organization and per-agent spend views by querying LiteLLM and jo
 - Organization summaries consider active and soft-deleted agents so historical spend remains attributable, but omit agents that have no LiteLLM key.
 - The service obtains a LiteLLM spend report and joins records to agents through the identity derived from each decrypted per-agent LiteLLM key.
 - Summary output aggregates total spend, model spend, daily spend, and per-agent spend.
-- Per-agent detail falls back from active to deleted agents.
+- Per-Agent detail requires `cost.read` through the effective Agent Access Role. Agent Viewer, Editor, and Owner can read accessible active-Agent costs; Organization Owner/Admin may also read deleted-Agent history.
 - Per-agent detail for an agent without a LiteLLM key returns zero-valued data with status `stopped`; the summary omits that agent.
 - For agents with a key, cost-facing status is mapped to `active`, `stopped`, `error`, or `deleted`; it is not the persisted AgentStatus enum.
-- Cost summary and detail routes require organization manager authority (owner/admin, with superuser bypass).
+- Organization cost summaries require the Organization Permission `cost.read`; fixed Organization Owner/Admin roles receive it. An Agent Access Role never authorizes an Organization-wide summary, and per-Agent detail cannot reveal inaccessible or deleted Agents.
 
 ## Boundaries
 
@@ -32,7 +32,7 @@ Agents own LiteLLM key creation, encryption, deletion blocking, and lifecycle st
 | LiteLLM client                | `../../api/infrastructure/litellm/`         |
 | Agent key lifecycle           | `../../api/domains/agents/service.py`       |
 | UI schemas, hooks, and charts | `../../ui/src/features/costs/`              |
-| Tests                         | `../../api/tests/integration/test_costs.py` |
+| Tests                         | `../../api/tests/integration/test_costs.py`, `../../api/tests/integration/test_agent_rbac.py` |
 
 ## Change impact
 

@@ -36,23 +36,17 @@ def build_user_service() -> tuple[
     organization_repository = Mock(spec=OrganizationRepository)
     refresh_token_repository = Mock(spec=RefreshTokenRepository)
     config = Config(
-        db_connection_url=cast(
-            PostgresDsn, "postgresql://postgres:postgres@localhost:5432/test"
-        ),
+        db_connection_url=cast(PostgresDsn, "postgresql://postgres:postgres@localhost:5432/test"),
         secret_signing_key="x" * 32,
-        super_user_credentials="admin@example.com:StrongPass123",
-        super_user_full_name="Super User",
+        platform_admin_credentials="admin@example.com:StrongPass123",
+        platform_admin_full_name="Super User",
         email_server_credential="noreply@example.com:password",
         email_smtp_server="smtp.example.com",
     )
     service = UserService(
         user_repository=cast(UserRepository, user_repository),
-        organization_user_service=cast(
-            OrganizationUserService, organization_user_service
-        ),
-        organization_user_repository=cast(
-            OrganizationUserRepository, organization_user_repository
-        ),
+        organization_user_service=cast(OrganizationUserService, organization_user_service),
+        organization_user_repository=cast(OrganizationUserRepository, organization_user_repository),
         organization_repository=cast(OrganizationRepository, organization_repository),
         refresh_token_repository=cast(RefreshTokenRepository, refresh_token_repository),
         config=config,
@@ -67,7 +61,7 @@ def build_user_service() -> tuple[
     )
 
 
-def test_ensure_default_superuser_returns_existing_user():
+def test_ensure_default_platform_admin_returns_existing_user():
     service, user_repository, _, _, _ = build_user_service()
     existing = User(
         email="admin@example.com",
@@ -75,51 +69,49 @@ def test_ensure_default_superuser_returns_existing_user():
         full_name="Super User",
         email_verified_at=None,
     )
-    user_repository.get_superuser.return_value = existing
+    user_repository.get_platform_admin.return_value = existing
 
-    result = service.ensure_default_superuser()
+    result = service.ensure_default_platform_admin()
 
     assert_that(result, equal_to(existing))
     user_repository.save.assert_not_called()
 
 
-def test_ensure_default_superuser_does_not_update_existing():
+def test_ensure_default_platform_admin_does_not_update_existing():
     service, user_repository, _, _, _ = build_user_service()
     existing = User(
         email="different@example.com",
         hashed_password=hash_text("DifferentPass999"),
         full_name="Different Name",
     )
-    user_repository.get_superuser.return_value = existing
+    user_repository.get_platform_admin.return_value = existing
 
-    result = service.ensure_default_superuser()
+    result = service.ensure_default_platform_admin()
 
     assert_that(result, equal_to(existing))
     assert_that(result.email, equal_to("different@example.com"))
     user_repository.save.assert_not_called()
 
 
-def test_ensure_default_superuser_creates_when_missing():
+def test_ensure_default_platform_admin_creates_when_missing():
     service, user_repository, _, _, _ = build_user_service()
-    user_repository.get_superuser.return_value = None
+    user_repository.get_platform_admin.return_value = None
     user_repository.save.side_effect = lambda user: user
 
-    result = service.ensure_default_superuser()
+    result = service.ensure_default_platform_admin()
 
     assert_that(result.email, equal_to("admin@example.com"))
-    assert_that(result.is_superuser, equal_to(True))
+    assert_that(result.is_platform_admin, equal_to(True))
     user_repository.save.assert_called_once()
 
 
-def test_create_superuser_sets_superuser_and_no_verified_timestamp():
+def test_create_platform_admin_sets_platform_admin_and_no_verified_timestamp():
     service, user_repository, _, _, _ = build_user_service()
     user_repository.save.side_effect = lambda user: user
 
-    user = service.create_superuser(
-        email="admin2@example.com", password="StrongPass123"
-    )
+    user = service.create_platform_admin(email="admin2@example.com", password="StrongPass123")
 
-    assert_that(user.is_superuser, equal_to(True))
+    assert_that(user.is_platform_admin, equal_to(True))
     assert user.email_verified_at is None
 
 
@@ -141,7 +133,6 @@ def test_to_user_read_with_organization_fetches_memberships():
             updated_at=now,
             name="Org",
             description=None,
-            is_default=False,
             owner_email=None,
             owner_name=None,
         ),

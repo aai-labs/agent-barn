@@ -17,6 +17,20 @@ services:
       timeout: 5s
       retries: 20
 
+  redis:
+    image: redis:7-alpine
+    container_name: aai_redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - aai_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
   api:
     build:
       context: .
@@ -26,10 +40,12 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       DB_CONNECTION_URL: postgresql://${POSTGRES_USER:?POSTGRES_USER is required}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@db:5432/${POSTGRES_DB:?POSTGRES_DB is required}
       SECRET_SIGNING_KEY: ${SECRET_SIGNING_KEY:?SECRET_SIGNING_KEY is required}
-      SUPER_USER_CREDENTIALS: ${SUPER_USER_CREDENTIALS:?SUPER_USER_CREDENTIALS is required}
+      PLATFORM_ADMIN_CREDENTIALS: ${PLATFORM_ADMIN_CREDENTIALS:?PLATFORM_ADMIN_CREDENTIALS is required}
       EMAIL_SERVER_CREDENTIAL: ${EMAIL_SERVER_CREDENTIAL-}
       EMAIL_SMTP_SERVER: ${EMAIL_SMTP_SERVER-}
       # Gmail "Authenticate with Google" OAuth client (optional; empty disables the flow).
@@ -37,6 +53,7 @@ services:
       GOOGLE_CLOUD_CLIENT_SECRET: ${GOOGLE_CLOUD_CLIENT_SECRET-}
       ENVIRONMENT: ${ENVIRONMENT:?ENVIRONMENT is required}
       UI_APP_URL: ${UI_APP_URL:?UI_APP_URL is required}
+      REDIS_URL: redis://redis:6379/0
       # Local k8s (k3d) dev: point this at the in-container kubeconfig to let the
       # API drive the k3d cluster. Unset by default so plain `make up` is
       # unchanged; `make cluster-up` prints the exact value to add to .env.
@@ -89,6 +106,28 @@ services:
       # Linux host.docker.internal maps to the bridge gateway, not loopback.
       # Every request needs the agent's INGEST_API_KEY as a bearer token.
       - "${INGEST_PORT:-8001}:8001"
+
+  worker:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    container_name: aai_worker
+    restart: unless-stopped
+    command: ["dramatiq", "api.worker_app", "--processes", "1", "--threads", "4"]
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DB_CONNECTION_URL: postgresql://${POSTGRES_USER:?POSTGRES_USER is required}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@db:5432/${POSTGRES_DB:?POSTGRES_DB is required}
+      SECRET_SIGNING_KEY: ${SECRET_SIGNING_KEY:?SECRET_SIGNING_KEY is required}
+      SUPER_USER_CREDENTIALS: ${SUPER_USER_CREDENTIALS:?SUPER_USER_CREDENTIALS is required}
+      EMAIL_SERVER_CREDENTIAL: ${EMAIL_SERVER_CREDENTIAL-}
+      EMAIL_SMTP_SERVER: ${EMAIL_SMTP_SERVER-}
+      ENVIRONMENT: ${ENVIRONMENT:?ENVIRONMENT is required}
+      UI_APP_URL: ${UI_APP_URL:?UI_APP_URL is required}
+      REDIS_URL: redis://redis:6379/0
 
   ui:
     build:
@@ -163,3 +202,4 @@ services:
 volumes:
   aai_db_postgres_data:
   aai_litellm_db_data:
+  aai_redis_data:
