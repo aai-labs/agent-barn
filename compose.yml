@@ -46,6 +46,33 @@ services:
       # in Docker, so pods must come back through the host. Same value as the
       # host-run path in the Makefile — see README "Runtime telemetry".
       INGEST_BASE_URL: ${INGEST_BASE_URL:-http://host.docker.internal:${INGEST_PORT:-8001}/ingest/v1}
+      # Agent management against the local cluster. Without these the API starts
+      # fine but every agent operation fails — creation can't encrypt platform
+      # tokens, and start can't mint a LiteLLM key or name a pod image.
+      AGENT_TOKEN_ENCRYPTION_KEY: ${AGENT_TOKEN_ENCRYPTION_KEY-}
+      K8S_NAMESPACE: ${K8S_NAMESPACE:-agent-farm}
+      STORAGE_CLASS: ${STORAGE_CLASS-}
+      OPENCLAW_IMAGE: ${OPENCLAW_IMAGE-}
+      HERMES_IMAGE: ${HERMES_IMAGE-}
+      # Empty locally: `make k3d-load-images` imports the images, so pods never pull.
+      AGENT_IMAGE_PULL_SECRET: ${AGENT_IMAGE_PULL_SECRET-}
+      # The API mints per-agent LiteLLM keys over the compose network; agent pods
+      # then call LiteLLM through the host, the same hop as telemetry. This URL
+      # depends on where the API runs, so it gets its own var like
+      # API_K8S_KUBECONFIG_PATH: .env's LITELLM_BASE_URL is host-facing
+      # (127.0.0.1) and inside this container would resolve to the container.
+      LITELLM_BASE_URL: ${API_LITELLM_BASE_URL:-http://litellm:4000}
+      LITELLM_SECRET_NAME: ${LITELLM_SECRET_NAME:-litellm}
+      # 7070 is the host port the litellm service publishes below.
+      AGENT_LITELLM_BASE_URL: ${AGENT_LITELLM_BASE_URL:-http://host.docker.internal:7070}
+      # Defaults mirror api/core/config.py: an unset var interpolates to an empty
+      # string, which would override the code default rather than fall back to it
+      # (and empty fails outright for the typed bool).
+      AGENT_DEFAULT_MODEL: ${AGENT_DEFAULT_MODEL:-litellm/openrouter/qwen/qwen3.6-plus}
+      AGENT_MODEL_ALLOWLIST: ${AGENT_MODEL_ALLOWLIST-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY-}
+      API_EXTERNAL_URL: ${API_EXTERNAL_URL-}
+      SKIP_SLACK_TOKEN_VALIDATION: ${SKIP_SLACK_TOKEN_VALIDATION:-false}
     extra_hosts:
       # Reach the host-published k8s API from inside the container. No-op on
       # Docker Desktop; required on Linux/CI where host.docker.internal is unset.
