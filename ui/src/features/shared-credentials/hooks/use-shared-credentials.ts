@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { api } from "@/shared/api";
+import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
 
 import {
   PaginatedSharedCredentialsSchema,
@@ -18,6 +19,7 @@ export type SharedCredentialsFilters = {
 };
 
 export function useSharedCredentials(filters: SharedCredentialsFilters = {}) {
+  const orgApiBase = useOrganizationApiBase();
   const {
     search,
     provider,
@@ -34,7 +36,7 @@ export function useSharedCredentials(filters: SharedCredentialsFilters = {}) {
       if (search) params.set("search", search);
       if (provider) params.set("provider", provider);
       const response = await api.get<PaginatedSharedCredentials>(
-        `/api/v1/shared-credentials?${params.toString()}`,
+        `${orgApiBase}/shared-credentials?${params.toString()}`,
         { schema: PaginatedSharedCredentialsSchema },
       );
       return response.data;

@@ -24,7 +24,7 @@ from api.tests.steps.organization import (
     there_is_an_organization_with_user_and_access_token,
 )
 
-_AGENTS = "/api/v1/agents"
+_AGENTS = "/api/v1/organizations/{organization_id}/agents"
 
 _GIVEN = [
     set_env_variable(

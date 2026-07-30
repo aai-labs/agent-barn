@@ -18,7 +18,9 @@ from api.domains.shared_credentials.service import SharedCredentialService
 from api.domains.rbac.catalog import IMPLICIT_AGENT_OWNER_ROLES
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
-shared_credentials_router = APIRouter(prefix="/shared-credentials", tags=["shared-credentials"])
+shared_credentials_router = APIRouter(
+    prefix="/organizations/{organization_id}/shared-credentials", tags=["shared-credentials"]
+)
 
 
 @shared_credentials_router.post("", response_model=SharedCredentialRead, status_code=status.HTTP_201_CREATED)
@@ -94,7 +96,10 @@ def delete_shared_credential(
 @shared_credentials_router.post("/{credential_id}/validate")
 def validate_shared_credential(
     credential_id: UUID,
-    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    context: Annotated[
+        CurrentUserContext,
+        Depends(get_current_user(organization_roles=IMPLICIT_AGENT_OWNER_ROLES)),
+    ],
     service: Annotated[SharedCredentialService, Injected(SharedCredentialService)],
 ):
     return service.validate_shared_credential(credential_id, context)

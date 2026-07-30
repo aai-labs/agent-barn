@@ -345,8 +345,8 @@ class AgentService:
         removed_providers = set(data.removed_secret_providers or [])
         shared_attach_providers: set[str] = set()
         if data.shared_credentials:
-            shared_creds = self.shared_credential_repository.get_many_by_ids(
-                [sc.shared_credential_id for sc in data.shared_credentials]
+            shared_creds = self.shared_credential_repository.get_by_ids_and_org(
+                [sc.shared_credential_id for sc in data.shared_credentials], org_id
             )
             shared_attach_providers = {c.provider for c in shared_creds}
         remaining_providers = (current_providers - removed_providers) | upsert_providers | shared_attach_providers
@@ -382,7 +382,7 @@ class AgentService:
         shared_ids = [s.shared_credential_id for s in (secrets or []) if s.shared_credential_id is not None]
         shared_creds_by_id = {}
         if shared_ids:
-            shared_creds = self.shared_credential_repository.get_many_by_ids(shared_ids)
+            shared_creds = self.shared_credential_repository.get_by_ids_and_org(shared_ids, agent.organization_id)
             shared_creds_by_id = {c.id: c for c in shared_creds}
         secrets_read = []
         for secret in secrets or []:
@@ -633,11 +633,11 @@ class AgentService:
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"Shared credential {attach.shared_credential_id} not found",
                 )
-            manual_providers = {s.provider for s in secrets}
-            if shared_cred.provider in manual_providers:
+            used_providers = {s.provider for s in secrets}
+            if shared_cred.provider in used_providers:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Provider {shared_cred.provider} already has a manual credential",
+                    detail=f"Provider {shared_cred.provider} already has a credential in this request",
                 )
             saved = self.repository.save_secret(
                 AgentSecret(
@@ -948,7 +948,9 @@ class AgentService:
 
         # Shared credential attachments
         if "shared_credentials" in updated:
-            upserted_manual_providers = {item.provider for item, _ in upserts} if "secrets" in updated else set()
+            current_secrets = self.repository.get_secrets_for_agent(agent.id)
+            manual_providers = {s.provider for s in current_secrets if not s.shared_credential_id}
+            shared_providers_seen: set[str] = set()
             for attach in data.shared_credentials or []:
                 shared_cred = self.shared_credential_repository.get_by_id_and_org(attach.shared_credential_id, org_id)
                 if shared_cred is None:
@@ -956,11 +958,17 @@ class AgentService:
                         status_code=status.HTTP_404_NOT_FOUND,
                         detail=f"Shared credential {attach.shared_credential_id} not found",
                     )
-                if shared_cred.provider in upserted_manual_providers:
+                if shared_cred.provider in manual_providers:
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail=f"Provider {shared_cred.provider} already has a manual credential",
                     )
+                if shared_cred.provider in shared_providers_seen:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Duplicate shared credential provider: {shared_cred.provider}",
+                    )
+                shared_providers_seen.add(shared_cred.provider)
                 existing = self.repository.get_secret(agent.id, shared_cred.provider)
                 if existing:
                     existing.content = None
@@ -1225,7 +1233,7 @@ class AgentService:
         shared_ids = [s.shared_credential_id for s in agent_secrets if s.shared_credential_id is not None]
         shared_by_id = {}
         if shared_ids:
-            shared_creds = self.shared_credential_repository.get_many_by_ids(shared_ids)
+            shared_creds = self.shared_credential_repository.get_by_ids_and_org(shared_ids, org_id)
             shared_by_id = {c.id: c for c in shared_creds}
         key = self.config.agent_token_encryption_key
         decrypted = {}
@@ -1720,6 +1728,7 @@ class AgentService:
 
     def validate_integration(self, agent_id: UUID, provider: SecretProvider, context: CurrentUserContext) -> dict:
         """Validate an existing secret on demand. Never persists — returns result directly."""
+        org_id = self._org_id(context)
         self.authorization.require_action(context, agent_id, PermissionKey.AGENT_SECRET_MANAGE)
         secret = self.repository.get_secret(agent_id, provider)
         if secret is None:
@@ -1734,7 +1743,7 @@ class AgentService:
                 detail=f"No validator available for {provider.value}",
             )
         if secret.shared_credential_id:
-            shared = self.shared_credential_repository.get_many_by_ids([secret.shared_credential_id])
+            shared = self.shared_credential_repository.get_by_ids_and_org([secret.shared_credential_id], org_id)
             if not shared:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,

@@ -3,6 +3,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/shared/api";
+import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
 
 import { SharedCredentialReadSchema, type SharedCredentialRead } from "../schemas";
 import { sharedCredentialsKey } from "../utils";
@@ -21,11 +22,12 @@ export type SharedCredentialUpdatePayload = {
 
 export function useCreateSharedCredential() {
   const queryClient = useQueryClient();
+  const orgApiBase = useOrganizationApiBase();
 
   return useMutation({
     mutationFn: async ({ ...body }: SharedCredentialCreatePayload) => {
       const response = await api.post<SharedCredentialRead>(
-        "/api/v1/shared-credentials",
+        `${orgApiBase}/shared-credentials`,
         body,
         { schema: SharedCredentialReadSchema },
       );
@@ -41,11 +43,12 @@ export function useCreateSharedCredential() {
 
 export function useUpdateSharedCredential() {
   const queryClient = useQueryClient();
+  const orgApiBase = useOrganizationApiBase();
 
   return useMutation({
     mutationFn: async ({ credentialId, ...body }: SharedCredentialUpdatePayload) => {
       const response = await api.patch<SharedCredentialRead>(
-        `/api/v1/shared-credentials/${credentialId}`,
+        `${orgApiBase}/shared-credentials/${credentialId}`,
         body,
         { schema: SharedCredentialReadSchema },
       );
@@ -61,10 +64,11 @@ export function useUpdateSharedCredential() {
 
 export function useDeleteSharedCredential() {
   const queryClient = useQueryClient();
+  const orgApiBase = useOrganizationApiBase();
 
   return useMutation({
     mutationFn: async (credentialId: string) => {
-      await api.delete(`/api/v1/shared-credentials/${credentialId}`);
+      await api.delete(`${orgApiBase}/shared-credentials/${credentialId}`);
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({
@@ -75,10 +79,12 @@ export function useDeleteSharedCredential() {
 }
 
 export function useValidateSharedCredential() {
+  const orgApiBase = useOrganizationApiBase();
+
   return useMutation({
     mutationFn: async (credentialId: string) => {
       const response = await api.post(
-        `/api/v1/shared-credentials/${credentialId}/validate`,
+        `${orgApiBase}/shared-credentials/${credentialId}/validate`,
         {},
       );
       return response.data;

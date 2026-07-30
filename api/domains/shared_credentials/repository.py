@@ -7,6 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
 from api.domains.agents.models import Agent, AgentSecret
+from api.domains.shared_credentials.exceptions import SharedCredentialNameConflictHTTPException
 from api.domains.shared_credentials.models import (
     SharedCredential,
     SharedCredentialFilter,
@@ -26,12 +27,7 @@ class SharedCredentialRepository:
             self.delegate.save(credential)
         except IntegrityError as e:
             if "uq_shared_credential_org_name" in str(e).lower():
-                from fastapi import HTTPException, status
-
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=f"A shared credential named '{credential.name}' already exists in this organization",
-                )
+                raise SharedCredentialNameConflictHTTPException(credential.name)
             raise
         return credential
 
@@ -120,8 +116,3 @@ class SharedCredentialRepository:
                 .where(col(SharedCredential.organization_id) == org_id)
             )
             return list(session.exec(query).all())
-
-    def get_many_by_ids(self, ids: list[UUID]) -> list[SharedCredential]:
-        if not ids:
-            return []
-        return self.delegate.find_many(SharedCredential, ids)

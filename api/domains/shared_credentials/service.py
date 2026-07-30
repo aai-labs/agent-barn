@@ -158,7 +158,7 @@ class SharedCredentialService:
         return [SharedCredentialBrief.model_validate(c) for c in credentials]
 
     def validate_shared_credential(self, credential_id: UUID, context: CurrentUserContext) -> dict:
-        org_id = self._org_id(context)
+        org_id = self._require_manager(context)
         credential = self._get_or_404(credential_id, org_id)
 
         validator = PROVIDER_VALIDATORS.get(credential.provider)

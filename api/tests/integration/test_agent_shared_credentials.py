@@ -25,7 +25,7 @@ from api.tests.steps.organization import (
 )
 from api.tests.steps.template import there_is_a_template
 
-_AGENTS = "/api/v1/agents"
+_AGENTS = "/api/v1/organizations/{organization_id}/agents"
 
 _JIRA_CONTENT = {
     "site_url": "https://test.atlassian.net",
