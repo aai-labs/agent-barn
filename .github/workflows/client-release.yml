@@ -57,7 +57,7 @@ jobs:
             needs_token: true
             smoke: openclaw-base/smoke-test.sh
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: docker/setup-buildx-action@v3
 
