@@ -130,6 +130,11 @@ restorePreinstalledMsteamsPlugin(overlay);
 let config = {};
 try { config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')); } catch {}
 
+// PRUNE DEPRECATED FIELDS FROM OLD CONFIG
+if (config.tools && config.tools.exec) {
+  delete config.tools.exec;
+}
+
 const merged = deepMerge(config, overlay);
 
 for (const parts of REPLACE_PATHS) {

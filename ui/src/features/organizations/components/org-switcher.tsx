@@ -104,26 +104,28 @@ export function OrgSwitcher() {
             boxShadow: "var(--shadow-pop)",
           }}
         >
-          <div
-            className="px-3.5 py-1 text-[11px] font-semibold uppercase tracking-[0.08em]"
-            style={{ color: "var(--ink-5)" }}
-          >
-            View
-          </div>
           {user.isPlatformAdmin && (
-            <button
-              role="option"
-              aria-selected={isPlatformView}
-              className="af-hover-bg flex w-full items-center gap-2.5 px-3.5 py-2 text-left text-[13.5px]"
-              style={{ color: "var(--ink-2)" }}
-              onClick={onSelectPlatform}
-            >
-              <ShieldIcon size={15} style={{ color: "var(--ink-4)" }} />
-              <span className="flex-1 truncate">Platform</span>
-              {isPlatformView && (
-                <CheckIcon size={15} style={{ color: "var(--ink)" }} />
-              )}
-            </button>
+            <>
+              <div
+                className="px-3.5 py-1 text-[11px] font-semibold uppercase tracking-[0.08em]"
+                style={{ color: "var(--ink-5)" }}
+              >
+                View
+              </div>
+              <button
+                role="option"
+                aria-selected={isPlatformView}
+                className="af-hover-bg flex w-full items-center gap-2.5 px-3.5 py-2 text-left text-[13.5px]"
+                style={{ color: "var(--ink-2)" }}
+                onClick={onSelectPlatform}
+              >
+                <ShieldIcon size={15} style={{ color: "var(--ink-4)" }} />
+                <span className="flex-1 truncate">Platform</span>
+                {isPlatformView && (
+                  <CheckIcon size={15} style={{ color: "var(--ink)" }} />
+                )}
+              </button>
+            </>
           )}
           {organizations.length > 0 && (
             <div
