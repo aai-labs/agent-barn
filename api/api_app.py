@@ -1,7 +1,7 @@
 import logging
 import traceback
 from contextlib import asynccontextmanager
-from typing import Annotated  # type hints
+from typing import Annotated
 
 from fastapi import FastAPI, HTTPException, Response, status
 from fastapi.middleware.cors import CORSMiddleware
