@@ -410,12 +410,30 @@ class AgentTelegramConfig(BaseModel, table=True):
 class AgentSecret(BaseModel, table=True):
     __tablename__: str = "agent_secret"
 
-    __table_args__ = (sa.UniqueConstraint("agent_id", "provider", name="uq_agent_secret_agent_provider"),)
+    __table_args__ = (
+        sa.UniqueConstraint("agent_id", "provider", name="uq_agent_secret_agent_provider"),
+        sa.CheckConstraint(
+            "(shared_credential_id IS NULL AND content IS NOT NULL) OR "
+            "(shared_credential_id IS NOT NULL AND content IS NULL)",
+            name="ck_agent_secret_content_xor_shared",
+        ),
+        # Postgres does not index the referencing side of an FK; without this,
+        # reference counts and RESTRICT enforcement both scan the table.
+        sa.Index("ix_agent_secret_shared_credential_id", "shared_credential_id"),
+    )
 
     agent_id: UUID = SqlField(foreign_key="agent.id", nullable=False, ondelete="CASCADE")
     provider: SecretProvider = SqlField(sa_column=Column(sa.String(), nullable=False))
     secret_name: str = SqlField(nullable=False, max_length=255)  # predefined label
-    content: str = SqlField(sa_column=Column(sa.Text(), nullable=False))  # Fernet-encrypted JSON blob
+    content: str | None = SqlField(
+        sa_column=Column(sa.Text(), nullable=True)
+    )  # Fernet-encrypted JSON blob; NULL when shared_credential_id is set
+    shared_credential_id: UUID | None = SqlField(
+        default=None,
+        foreign_key="shared_credential.id",
+        nullable=True,
+        ondelete="RESTRICT",
+    )
 
 
 class AgentSkill(BaseModel, table=True):
@@ -505,6 +523,10 @@ class AgentSecretCreate(PydanticBaseModel):  # no secret_name — backend stamps
         return self
 
 
+class AgentSharedCredentialAttach(PydanticBaseModel):
+    shared_credential_id: UUID
+
+
 class AgentCreate(PydanticBaseModel):
     name: str = Field(min_length=1, max_length=255)
     platform: AgentPlatform = AgentPlatform.SLACK
@@ -534,6 +556,7 @@ class AgentCreate(PydanticBaseModel):
     model: str | None = None
     # Integration credentials (optional)
     secrets: list[AgentSecretCreate] = Field(default_factory=list)
+    shared_credentials: list[AgentSharedCredentialAttach] = Field(default_factory=list)
     # Custom org skills to assign on creation (optional)
     skill_ids: list[UUID] = Field(default_factory=list)
     approval_mode: CommandApprovalMode = CommandApprovalMode.AUTO
@@ -590,6 +613,7 @@ class AgentUpdate(PydanticBaseModel):
     # Integration credentials: upsert (add/replace) + explicit removal.
     # Providers not mentioned in either list are left untouched.
     secrets: list[AgentSecretCreate] | None = None
+    shared_credentials: list[AgentSharedCredentialAttach] | None = None
     removed_secret_providers: list[SecretProvider] | None = None
     approval_mode: CommandApprovalMode | None = None
 
@@ -652,6 +676,8 @@ class AgentSecretRead(PydanticBaseModel):  # label + provider only — no secret
 
     provider: SecretProvider
     secret_name: str
+    shared_credential_id: UUID | None = None
+    shared_credential_name: str | None = None
 
 
 class AgentAccessRoleRead(PydanticBaseModel):
