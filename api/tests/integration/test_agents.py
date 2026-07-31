@@ -8,6 +8,7 @@ from hamcrest import (
     contains_string,
     equal_to,
     has_key,
+    is_in,
     is_not,
     none,
 )
@@ -808,7 +809,10 @@ def test_start_agent_emits_started_domain_event_and_delivery():
                 started_events[0].event_id
             )
             assert_that(len(deliveries), equal_to(1))
-            assert_that(deliveries[0].status, equal_to(EventDeliveryStatus.PENDING))
+            # Delivery is always persisted PENDING; the immediate enqueue attempt right
+            # after is best-effort (falls back to background reconciliation on failure),
+            # so whether it's already ENQUEUED here depends on Redis being reachable.
+            assert_that(deliveries[0].status, is_in([EventDeliveryStatus.PENDING, EventDeliveryStatus.ENQUEUED]))
 
 
 def test_start_already_running_returns_409():
@@ -903,7 +907,10 @@ def test_stop_agent_emits_stopped_domain_event_and_delivery():
                 stopped_events[0].event_id
             )
             assert_that(len(deliveries), equal_to(1))
-            assert_that(deliveries[0].status, equal_to(EventDeliveryStatus.PENDING))
+            # Delivery is always persisted PENDING; the immediate enqueue attempt right
+            # after is best-effort (falls back to background reconciliation on failure),
+            # so whether it's already ENQUEUED here depends on Redis being reachable.
+            assert_that(deliveries[0].status, is_in([EventDeliveryStatus.PENDING, EventDeliveryStatus.ENQUEUED]))
 
 
 def test_stop_non_running_agent_returns_409():
