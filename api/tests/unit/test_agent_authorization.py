@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import Mock
 from uuid import uuid4, uuid7
 
@@ -19,7 +19,7 @@ def _context(role: OrganizationRole = OrganizationRole.MEMBER):
     user = User(
         email=f"{uuid7()}@example.com",
         hashed_password="hashed",
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     membership = OrganizationUser(
         user_id=user.id,

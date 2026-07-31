@@ -3,8 +3,10 @@ from datetime import datetime
 from uuid import UUID
 
 import sqlalchemy as sa
-from pydantic import BaseModel as PydanticBaseModel, ConfigDict
-from sqlmodel import Column, Enum, Field as SqlField
+from pydantic import BaseModel as PydanticBaseModel
+from pydantic import ConfigDict
+from sqlmodel import Column, Enum
+from sqlmodel import Field as SqlField
 
 from api.infrastructure.postgres.models import BaseModel
 

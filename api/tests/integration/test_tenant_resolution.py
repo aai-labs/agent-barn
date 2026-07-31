@@ -21,9 +21,9 @@ from api.tests.core.modules import (
     set_env_variable,
 )
 from api.tests.steps.agent import (
+    TEST_ENCRYPTION_KEY,
     MockK8sModule,
     MockLiteLLMModule,
-    TEST_ENCRYPTION_KEY,
     there_is_an_agent,
 )
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
@@ -94,55 +94,59 @@ def _there_is_an_assigned_agent(org_id: UUID, name: str):
 
 
 def test_member_lists_agents_scoped_to_url_org():
-    with given(
-        [
-            *_GIVEN,
-            there_is_a_user(
-                id=MEMBER_A,
-                email="member-a@example.com",
-                organization_id=ORG_A,
-                role=OrganizationRole.MEMBER,
-            ),
-            there_is_an_access_token_for_user(),
-            _there_is_a_bare_org(ORG_B, "Org B"),
-            _there_is_an_assigned_agent(ORG_A, "Agent A"),
-            there_is_an_agent(organization_id=ORG_B, name="Agent B"),
-        ]
-    ) as context:
-        with when("member lists agents under org A URL"):
-            response = context.client.get(
-                _agents(ORG_A),
-                headers=_auth(context),
-            )
+    with (
+        given(
+            [
+                *_GIVEN,
+                there_is_a_user(
+                    id=MEMBER_A,
+                    email="member-a@example.com",
+                    organization_id=ORG_A,
+                    role=OrganizationRole.MEMBER,
+                ),
+                there_is_an_access_token_for_user(),
+                _there_is_a_bare_org(ORG_B, "Org B"),
+                _there_is_an_assigned_agent(ORG_A, "Agent A"),
+                there_is_an_agent(organization_id=ORG_B, name="Agent B"),
+            ]
+        ) as context,
+        when("member lists agents under org A URL"),
+    ):
+        response = context.client.get(
+            _agents(ORG_A),
+            headers=_auth(context),
+        )
 
-            with then("only org A agents are returned"):
-                assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-                assert_that(_agent_names(response), has_item("Agent A"))
-                assert_that(_agent_names(response), not_(has_item("Agent B")))
+        with then("only org A agents are returned"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(_agent_names(response), has_item("Agent A"))
+            assert_that(_agent_names(response), not_(has_item("Agent B")))
 
 
 def test_member_targeting_foreign_org_is_forbidden():
-    with given(
-        [
-            *_GIVEN,
-            there_is_a_user(
-                id=MEMBER_A,
-                email="member-a@example.com",
-                organization_id=ORG_A,
-                role=OrganizationRole.MEMBER,
-            ),
-            there_is_an_access_token_for_user(),
-            _there_is_a_bare_org(ORG_B, "Org B"),
-        ]
-    ) as context:
-        with when("member requests an org URL they do not belong to"):
-            response = context.client.get(
-                _agents(ORG_B),
-                headers=_auth(context),
-            )
+    with (
+        given(
+            [
+                *_GIVEN,
+                there_is_a_user(
+                    id=MEMBER_A,
+                    email="member-a@example.com",
+                    organization_id=ORG_A,
+                    role=OrganizationRole.MEMBER,
+                ),
+                there_is_an_access_token_for_user(),
+                _there_is_a_bare_org(ORG_B, "Org B"),
+            ]
+        ) as context,
+        when("member requests an org URL they do not belong to"),
+    ):
+        response = context.client.get(
+            _agents(ORG_B),
+            headers=_auth(context),
+        )
 
-            with then("request is forbidden"):
-                assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+        with then("request is forbidden"):
+            assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
 def test_platform_admin_without_membership_cannot_target_org_url():
@@ -179,38 +183,42 @@ def test_platform_admin_without_membership_cannot_target_org_url():
 
 
 def test_malformed_url_org_id_is_rejected():
-    with given(
-        [
-            *_GIVEN,
-            there_is_a_user(
-                id=MEMBER_A,
-                email="member-a@example.com",
-                organization_id=ORG_A,
-                role=OrganizationRole.MEMBER,
-            ),
-            there_is_an_access_token_for_user(),
-        ]
-    ) as context:
-        with when("the organization_id path parameter is not a valid UUID"):
-            response = context.client.get(
-                _agents("not-a-uuid"),
-                headers=_auth(context),
-            )
+    with (
+        given(
+            [
+                *_GIVEN,
+                there_is_a_user(
+                    id=MEMBER_A,
+                    email="member-a@example.com",
+                    organization_id=ORG_A,
+                    role=OrganizationRole.MEMBER,
+                ),
+                there_is_an_access_token_for_user(),
+            ]
+        ) as context,
+        when("the organization_id path parameter is not a valid UUID"),
+    ):
+        response = context.client.get(
+            _agents("not-a-uuid"),
+            headers=_auth(context),
+        )
 
-            with then("request is rejected as bad request"):
-                assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+        with then("request is rejected as bad request"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
 
 
 def test_old_unscoped_agent_route_is_not_available():
-    with given(
-        [
-            *_GIVEN,
-            there_is_an_organization_with_user_and_access_token(id=ORG_A, name="Org A", email="owner@example.com"),
-            there_is_an_agent(organization_id=ORG_A, name="Agent A"),
-        ]
-    ) as context:
-        with when("the old unscoped agent route is called"):
-            response = context.client.get("/api/v1/agents", headers=_auth(context))
+    with (
+        given(
+            [
+                *_GIVEN,
+                there_is_an_organization_with_user_and_access_token(id=ORG_A, name="Org A", email="owner@example.com"),
+                there_is_an_agent(organization_id=ORG_A, name="Agent A"),
+            ]
+        ) as context,
+        when("the old unscoped agent route is called"),
+    ):
+        response = context.client.get("/api/v1/agents", headers=_auth(context))
 
-            with then("the route is not available"):
-                assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+        with then("the route is not available"):
+            assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))

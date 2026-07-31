@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID, uuid7
 
 from hamcrest import assert_that, calling, equal_to, has_properties, none, raises
@@ -19,7 +19,7 @@ def _user(*, is_platform_admin: bool = False) -> User:
     return User(
         email=f"{uuid7()}@example.com",
         hashed_password="hashed",
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
         is_platform_admin=is_platform_admin,
     )
 

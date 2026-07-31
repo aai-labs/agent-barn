@@ -113,7 +113,7 @@ def there_is_an_agent(
         )
 
         if deleted:
-            agent.deleted_at = datetime.datetime.now(datetime.timezone.utc)
+            agent.deleted_at = datetime.datetime.now(datetime.UTC)
 
         if creator_membership_id is None:
             repository.save(agent)

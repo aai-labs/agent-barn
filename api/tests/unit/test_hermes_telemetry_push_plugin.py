@@ -53,11 +53,10 @@ def _register(mod):
 
 def test_register_returns_early_without_env_vars():
     with given():
-        with when("I register the plugin without env vars"):
-            with patch.dict(os.environ, {}, clear=True):
-                mod = _load_plugin()
-                ctx = MagicMock()
-                mod.register(ctx)
+        with when("I register the plugin without env vars"), patch.dict(os.environ, {}, clear=True):
+            mod = _load_plugin()
+            ctx = MagicMock()
+            mod.register(ctx)
 
         with then("no hooks are registered"):
             ctx.register_hook.assert_not_called()
@@ -65,12 +64,11 @@ def test_register_returns_early_without_env_vars():
 
 def test_register_hooks_with_env_vars():
     with given():
-        with when("I register the plugin with valid env vars"):
-            with patch.dict(os.environ, _ENV, clear=True):
-                mod = _load_plugin()
-                ctx = MagicMock()
-                mod.register(ctx)
-                hook_names = [call.args[0] for call in ctx.register_hook.call_args_list]
+        with when("I register the plugin with valid env vars"), patch.dict(os.environ, _ENV, clear=True):
+            mod = _load_plugin()
+            ctx = MagicMock()
+            mod.register(ctx)
+            hook_names = [call.args[0] for call in ctx.register_hook.call_args_list]
 
         with then("all five hooks are registered"):
             assert_that("pre_gateway_dispatch" in hook_names, equal_to(True))
@@ -283,9 +281,8 @@ def test_empty_flush_is_noop():
         with patch.dict(os.environ, _ENV, clear=True):
             mod = _load_plugin()
 
-        with when("I flush an empty buffer"):
-            with patch("urllib.request.urlopen") as mock_urlopen:
-                mod._flush()
+        with when("I flush an empty buffer"), patch("urllib.request.urlopen") as mock_urlopen:
+            mod._flush()
 
         with then("no HTTP request is made"):
             mock_urlopen.assert_not_called()

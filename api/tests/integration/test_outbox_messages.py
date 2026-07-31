@@ -165,22 +165,21 @@ def test_validation_failure_leaves_no_outbox_message(
     registry: DomainEventRegistry,
     organization_id: UUID,
 ):
-    with when("payload validation fails before persistence"):
-        with pytest.raises(DomainEventValidationError):
-            registry.build_event(
-                event_name="agent.sampled",
-                schema_version=1,
-                occurred_at=datetime.now(UTC),
-                organization_id=organization_id,
-                actor=ActorIdentity(type=ActorIdentityType.USER, id=uuid4(), organization_id=organization_id),
-                subject=SubjectIdentity(type=SubjectIdentityType.AGENT, id=uuid4(), organization_id=organization_id),
-                correlation_id=uuid4(),
-                payload={
-                    "agent_id": str(uuid4()),
-                    "organization_id": str(organization_id),
-                    "nested": {"refresh_token": "secret"},
-                },
-            )
+    with when("payload validation fails before persistence"), pytest.raises(DomainEventValidationError):
+        registry.build_event(
+            event_name="agent.sampled",
+            schema_version=1,
+            occurred_at=datetime.now(UTC),
+            organization_id=organization_id,
+            actor=ActorIdentity(type=ActorIdentityType.USER, id=uuid4(), organization_id=organization_id),
+            subject=SubjectIdentity(type=SubjectIdentityType.AGENT, id=uuid4(), organization_id=organization_id),
+            correlation_id=uuid4(),
+            payload={
+                "agent_id": str(uuid4()),
+                "organization_id": str(organization_id),
+                "nested": {"refresh_token": "secret"},
+            },
+        )
 
     with then("no Outbox Message is inserted"):
         assert_that(repository.count(), equal_to(0))
@@ -194,10 +193,9 @@ def test_rolled_back_outbox_message_is_not_visible(
 ):
     event = _event(registry, organization_id)
 
-    with when("an Outbox Message is staged and the session rolls back"):
-        with Session(delegate.engine) as session:
-            session.add(repository.build_message(event))
-            session.rollback()
+    with when("an Outbox Message is staged and the session rolls back"), Session(delegate.engine) as session:
+        session.add(repository.build_message(event))
+        session.rollback()
 
     with then("the event cannot be recovered for delivery"):
         assert_that(repository.get_by_event_id(event.event_id), none())
@@ -212,9 +210,8 @@ def test_duplicate_event_id_is_rejected_without_inserting_second_message(
     event = _event(registry, organization_id)
     repository.create(event, registry)
 
-    with when("the same event is inserted again"):
-        with pytest.raises(IntegrityError):
-            repository.create(event, registry)
+    with when("the same event is inserted again"), pytest.raises(IntegrityError):
+        repository.create(event, registry)
 
     with then("only the original Outbox Message is visible"):
         assert_that(repository.count(), equal_to(1))
@@ -251,19 +248,18 @@ def test_event_delivery_uniqueness_is_event_and_handler_not_retry_attempt(
     event = _event(registry, organization_id)
     message = repository.create(event, registry)
 
-    with when("another row is inserted for the same event and handler"):
-        with pytest.raises(IntegrityError):
-            with Session(delegate.engine) as session:
-                session.add(
-                    EventDelivery(
-                        outbox_message_id=message.id,
-                        event_id=event.event_id,
-                        organization_id=organization_id,
-                        handler_name="audit.projection",
-                        attempt_count=99,
-                    )
+    with when("another row is inserted for the same event and handler"), pytest.raises(IntegrityError):
+        with Session(delegate.engine) as session:
+            session.add(
+                EventDelivery(
+                    outbox_message_id=message.id,
+                    event_id=event.event_id,
+                    organization_id=organization_id,
+                    handler_name="audit.projection",
+                    attempt_count=99,
                 )
-                session.commit()
+            )
+            session.commit()
 
     with then("the original intended delivery is still the only row for that handler"):
         deliveries = repository.list_deliveries_for_event(event.event_id)
@@ -440,14 +436,13 @@ def test_dead_lettered_delivery_requires_reason_and_preserves_error(
         assert_that(dead_lettered.last_error, equal_to("handler rejected event"))
         assert_that(dead_lettered.completed_at, equal_to(datetime(2026, 7, 26, 10, 45, tzinfo=UTC)))
 
-    with then("the database rejects dead-lettered rows without a reason"):
-        with pytest.raises(IntegrityError):
-            with Session(delegate.engine) as session:
-                persisted = session.get(EventDelivery, delivery.id)
-                assert persisted is not None
-                persisted.dead_letter_reason = None
-                session.add(persisted)
-                session.commit()
+    with then("the database rejects dead-lettered rows without a reason"), pytest.raises(IntegrityError):
+        with Session(delegate.engine) as session:
+            persisted = session.get(EventDelivery, delivery.id)
+            assert persisted is not None
+            persisted.dead_letter_reason = None
+            session.add(persisted)
+            session.commit()
 
 
 def test_reconciliation_candidates_are_delivery_state_and_timestamp_specific(
@@ -714,12 +709,11 @@ def test_outbox_insert_failure_rolls_back_business_mutation(
     business_mutation = Organization(name="Outbox Insert Rollback", description=None)
     business_mutation_id = business_mutation.id
 
-    with when("a duplicate event_id fails while business state is pending"):
-        with pytest.raises(IntegrityError):
-            with Session(delegate.engine) as session:
-                session.add(business_mutation)
-                repository.stage(session=session, event=event, registry=registry)
-                session.commit()
+    with when("a duplicate event_id fails while business state is pending"), pytest.raises(IntegrityError):
+        with Session(delegate.engine) as session:
+            session.add(business_mutation)
+            repository.stage(session=session, event=event, registry=registry)
+            session.commit()
 
     with then("the pending business mutation rolls back with the failed event insert"):
         assert_that(_organization_exists(delegate, business_mutation_id), equal_to(False))
@@ -737,19 +731,18 @@ def test_duplicate_delivery_constraint_rolls_back_business_mutation(
     business_mutation = Organization(name="Delivery Rollback", description=None)
     business_mutation_id = business_mutation.id
 
-    with when("a duplicate Event Delivery fails while business state is pending"):
-        with pytest.raises(IntegrityError):
-            with Session(delegate.engine) as session:
-                session.add(business_mutation)
-                session.add(
-                    EventDelivery(
-                        outbox_message_id=message.id,
-                        event_id=event.event_id,
-                        organization_id=organization_id,
-                        handler_name="audit.projection",
-                    )
+    with when("a duplicate Event Delivery fails while business state is pending"), pytest.raises(IntegrityError):
+        with Session(delegate.engine) as session:
+            session.add(business_mutation)
+            session.add(
+                EventDelivery(
+                    outbox_message_id=message.id,
+                    event_id=event.event_id,
+                    organization_id=organization_id,
+                    handler_name="audit.projection",
                 )
-                session.commit()
+            )
+            session.commit()
 
     with then("the pending business mutation rolls back with the failed delivery insert"):
         assert_that(_organization_exists(delegate, business_mutation_id), equal_to(False))
@@ -797,13 +790,12 @@ def test_outbox_message_rows_are_immutable(
     event = _event(registry, organization_id)
     message = repository.create(event, registry)
 
-    with when("a persisted Outbox Message is updated"):
-        with pytest.raises(SQLAlchemyError):
-            with delegate.engine.begin() as connection:
-                connection.execute(
-                    text("UPDATE event_outbox_message SET event_name = 'agent.changed' WHERE id = :id"),
-                    {"id": message.id},
-                )
+    with when("a persisted Outbox Message is updated"), pytest.raises(SQLAlchemyError):
+        with delegate.engine.begin() as connection:
+            connection.execute(
+                text("UPDATE event_outbox_message SET event_name = 'agent.changed' WHERE id = :id"),
+                {"id": message.id},
+            )
 
     with then("the original event fact remains unchanged"):
         found = repository.get_by_event_id(event.event_id)

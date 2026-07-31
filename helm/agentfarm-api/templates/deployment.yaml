@@ -22,6 +22,10 @@ spec:
         # litellm-api-key secret is created by a Job at runtime, so it has no
         # render-time content to checksum and is intentionally not tracked here.
         checksum/kubeconfig: {{ include (print $.Template.BasePath "/kubeconfig-secret.yaml") . | sha256sum }}
+        # Roll the pods on every deploy of a new commit even when the image
+        # tag itself is an unchanged moving tag (e.g. `latest`) — otherwise
+        # Helm sees no manifest diff and skips the rollout entirely.
+        build-sha: {{ .Values.buildSha | quote }}
       labels:
         {{- include "agentfarm-api.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: api

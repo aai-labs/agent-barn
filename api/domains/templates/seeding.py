@@ -1,7 +1,6 @@
 from api.domains.templates.models import PlatformTemplate
 from api.domains.templates.predefined import PREDEFINED_TEMPLATES
 
-
 # Content fields a predefined template owns; used to detect/propagate code changes.
 PREDEFINED_CONTENT_FIELDS: tuple[str, ...] = (
     "template_name",

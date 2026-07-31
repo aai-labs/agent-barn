@@ -1,4 +1,4 @@
-from api.domains.agents.service import is_model_allowed, filter_models_by_allowlist
+from api.domains.agents.service import filter_models_by_allowlist, is_model_allowed
 
 
 def test_is_model_allowed_empty_rejects_everything():

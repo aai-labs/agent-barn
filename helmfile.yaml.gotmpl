@@ -137,6 +137,8 @@ releases:
         value: {{ env "API_IMAGE_PULL_POLICY" | default "Always" | quote }}
       - name: image.tag
         value: {{ env "API_IMAGE_TAG" | default "" | quote }}
+      - name: buildSha
+        value: {{ env "GIT_SHA" | default "" | quote }}
       - name: litellmKeyServiceAccountName
         value: {{ env "LITELLM_KEY_SERVICE_ACCOUNT" | default "agent-farm-user" | quote }}
       - name: openclawImage.repository
@@ -214,6 +216,8 @@ releases:
         value: {{ env "UI_IMAGE_PULL_POLICY" | default "Always" | quote }}
       - name: image.tag
         value: {{ env "UI_IMAGE_TAG" | default "" | quote }}
+      - name: buildSha
+        value: {{ env "GIT_SHA" | default "" | quote }}
       - name: ingress.hosts
         value: {{ env "UI_HOST" | required "UI_HOST is required" | quote }}
     needs:

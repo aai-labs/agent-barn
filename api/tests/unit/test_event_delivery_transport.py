@@ -20,7 +20,7 @@ class FakeActor:
 
 
 def test_transport_enqueue_sends_only_delivery_id_and_safe_metadata(monkeypatch):
-    import api.worker_app as worker_app
+    from api import worker_app
 
     actor = FakeActor()
     monkeypatch.setattr(worker_app, "event_delivery_actor", actor)

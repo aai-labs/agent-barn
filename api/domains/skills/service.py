@@ -77,7 +77,7 @@ class SkillService:
                             detail=f"Zip entry is encrypted: {entry.filename!r}",
                         )
                     name = entry.filename
-                    if name.startswith("/") or name.startswith("\\"):
+                    if name.startswith(("/", "\\")):
                         raise HTTPException(
                             status_code=status.HTTP_400_BAD_REQUEST,
                             detail=f"Zip entry has an absolute path: {name!r}",

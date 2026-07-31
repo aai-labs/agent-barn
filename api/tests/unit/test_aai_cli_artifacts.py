@@ -1,3 +1,5 @@
+from typing import cast
+
 from api.domains.agents.aai_cli_artifacts import (
     CONFIG_PATH,
     PROFILE_SLUGS,
@@ -8,8 +10,6 @@ from api.domains.agents.aai_cli_artifacts import (
     build_tool_context_md,
     env_var_for,
 )
-from typing import cast
-
 from api.domains.agents.models import (
     FirecrawlContent,
     GmailContent,

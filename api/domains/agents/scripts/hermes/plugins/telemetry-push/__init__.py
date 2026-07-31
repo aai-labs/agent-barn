@@ -6,6 +6,7 @@ import os
 import threading
 import time
 import urllib.request
+from datetime import UTC
 
 logger = logging.getLogger(__name__)
 
@@ -52,9 +53,9 @@ def _build_session_key(chat_type, chat_id):
 
 
 def _now_iso():
-    from datetime import datetime, timezone
+    from datetime import datetime
 
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _flush():
@@ -122,7 +123,7 @@ def _flush_loop():
 def _on_pre_gateway_dispatch(event, **kwargs):
     source = getattr(event, "source", None)
     if source is None:
-        return None
+        return
     chat_type = str(getattr(source, "chat_type", "") or "").lower()
     chat_id = str(getattr(source, "chat_id", "") or "")
     user_id = str(getattr(source, "user_id", "") or "")
@@ -162,7 +163,7 @@ def _on_pre_gateway_dispatch(event, **kwargs):
             },
         }
     )
-    return None
+    return
 
 
 def _on_post_llm_call(session_id=None, user_message=None, assistant_response=None, **kwargs):
@@ -221,7 +222,6 @@ def _on_pre_tool_call(tool_name=None, args=None, task_id=None, **kwargs):
             },
         }
     )
-    return None
 
 
 def _on_post_tool_call(tool_name=None, args=None, result=None, task_id=None, duration_ms=None, **kwargs):

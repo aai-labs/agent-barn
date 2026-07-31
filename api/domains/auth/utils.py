@@ -1,6 +1,7 @@
 import uuid
+from collections.abc import Callable
 from collections.abc import Set as AbstractSet
-from typing import Annotated, Callable
+from typing import Annotated
 
 import jwt
 from fastapi import Depends, HTTPException, Request, status
@@ -81,11 +82,10 @@ def get_authenticated_user(
         if not user_organization:
             raise ForbiddenException(detail="You do not have access to this organization")
 
-    if organization_roles:
-        if not user_organization or user_organization.role not in organization_roles:
-            raise ForbiddenException(
-                detail=f"User {user.id} does not have the required roles: {[role.value for role in organization_roles]}"
-            )
+    if organization_roles and (not user_organization or user_organization.role not in organization_roles):
+        raise ForbiddenException(
+            detail=f"User {user.id} does not have the required roles: {[role.value for role in organization_roles]}"
+        )
 
     return CurrentUserContext(
         user=user,

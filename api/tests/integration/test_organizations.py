@@ -87,7 +87,7 @@ def test_platform_admin_creates_organization_and_invites_owner():
                 org_repo: OrganizationRepository = context.injector.get(OrganizationRepository)
                 org_id = response.json()["organization"]["id"]
                 owner = user_repo.get_organization_owner(org_id)
-                assert_that(owner, not_none())
+                assert owner is not None
                 assert_that(owner.email, equal_to("owner@acme.com"))
                 assert_that(owner.email_verified_at, is_(none()))
                 assert_that(org_repo.get(org_id), not_none())
@@ -133,42 +133,43 @@ def test_new_organization_sees_global_predefined_templates():
 
 
 def test_non_platform_admin_cannot_create_organization():
-    with given(
-        [
-            *_GIVEN,
-            there_is_a_user(
-                email="member@example.com",
-                organization_id=uuid7(),
-                role=OrganizationRole.MEMBER,
-            ),
-            there_is_an_access_token_for_user(),
-        ]
-    ) as context:
-        with when("a non-platform_admin attempts to create an org"):
-            response = context.client.post(
-                _ORGS,
-                json={"name": "Nope Inc", "owner_email": "x@nope.com"},
-                headers=_auth(context),
-            )
+    with (
+        given(
+            [
+                *_GIVEN,
+                there_is_a_user(
+                    email="member@example.com",
+                    organization_id=uuid7(),
+                    role=OrganizationRole.MEMBER,
+                ),
+                there_is_an_access_token_for_user(),
+            ]
+        ) as context,
+        when("a non-platform_admin attempts to create an org"),
+    ):
+        response = context.client.post(
+            _ORGS,
+            json={"name": "Nope Inc", "owner_email": "x@nope.com"},
+            headers=_auth(context),
+        )
 
-            with then("it is forbidden"):
-                assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+        with then("it is forbidden"):
+            assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
 def test_create_organization_short_name_is_rejected():
-    with given([*_GIVEN, _there_is_a_platform_admin()]) as context:
-        with when("the org name is too short"):
-            response = context.client.post(
-                _ORGS,
-                json={"name": "ab", "owner_email": "owner@short.com"},
-                headers=_auth(context),
-            )
+    with given([*_GIVEN, _there_is_a_platform_admin()]) as context, when("the org name is too short"):
+        response = context.client.post(
+            _ORGS,
+            json={"name": "ab", "owner_email": "owner@short.com"},
+            headers=_auth(context),
+        )
 
-            with then("validation rejects it"):
-                assert_that(
-                    response.status_code,
-                    equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY),
-                )
+        with then("validation rejects it"):
+            assert_that(
+                response.status_code,
+                equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY),
+            )
 
 
 def test_create_organization_with_existing_active_owner_sends_no_invite():
@@ -194,19 +195,19 @@ def test_create_organization_with_existing_active_owner_sends_no_invite():
                 user_repo: UserRepository = context.injector.get(UserRepository)
                 org_id = body["organization"]["id"]
                 owner = user_repo.get_organization_owner(org_id)
+                assert owner is not None
                 assert_that(owner.email, equal_to("existing@corp.com"))
 
 
 def test_create_organization_requires_auth():
-    with given([*_GIVEN]) as context:
-        with when("no auth token is provided"):
-            response = context.client.post(
-                _ORGS,
-                json={"name": "Anon Inc", "owner_email": "a@anon.com"},
-            )
+    with given([*_GIVEN]) as context, when("no auth token is provided"):
+        response = context.client.post(
+            _ORGS,
+            json={"name": "Anon Inc", "owner_email": "a@anon.com"},
+        )
 
-            with then("it is unauthorized"):
-                assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
+        with then("it is unauthorized"):
+            assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
 
 
 @patch("api.infrastructure.openrouter.client.OpenRouterClient.list_models")

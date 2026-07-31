@@ -1,4 +1,5 @@
 import hashlib
+from unittest.mock import MagicMock
 from uuid import uuid7
 
 from fastapi import status
@@ -127,7 +128,7 @@ def test_admin_with_organization_cost_scope_can_view_summary():
             there_is_an_access_token_for_user(user_id=admin_id),
         ]
     ) as context:
-        litellm: LiteLLMClient = context.injector.get(LiteLLMClient)
+        litellm: MagicMock = context.injector.get(LiteLLMClient)
         litellm.get_global_spend_report.return_value = {}
 
         response = context.client.get(f"{_BASE}/summary", headers=_auth(context))
@@ -178,7 +179,7 @@ def test_platform_admin_without_membership_cannot_view_costs_summary():
             there_is_an_access_token_for_user(user_id=super_id),
         ]
     ) as context:
-        litellm: LiteLLMClient = context.injector.get(LiteLLMClient)
+        litellm: MagicMock = context.injector.get(LiteLLMClient)
         litellm.get_global_spend_report.return_value = {}
         response = context.client.get(f"{_BASE}/summary", headers=_auth(context))
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
@@ -187,7 +188,7 @@ def test_platform_admin_without_membership_cannot_view_costs_summary():
 def test_get_costs_summary_returns_200_and_data():
     with given(_GIVEN) as context:
         client: TestClient = context.client
-        litellm: LiteLLMClient = context.injector.get(LiteLLMClient)
+        litellm: MagicMock = context.injector.get(LiteLLMClient)
 
         key_hash = hashlib.sha256(FAKE_LITELLM_KEY.encode()).hexdigest()
 
@@ -222,7 +223,7 @@ def test_get_costs_summary_returns_200_and_data():
 def test_get_agent_cost_returns_200_and_data():
     with given(_GIVEN) as context:
         client: TestClient = context.client
-        litellm: LiteLLMClient = context.injector.get(LiteLLMClient)
+        litellm: MagicMock = context.injector.get(LiteLLMClient)
         agent_id = str(context.agent.id)
 
         litellm.get_key_info.return_value = {

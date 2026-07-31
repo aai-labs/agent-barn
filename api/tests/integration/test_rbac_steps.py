@@ -33,14 +33,16 @@ def test_temporary_missing_permission_is_restored_after_normal_exit():
 
 
 def test_temporary_missing_permission_is_restored_after_exception():
-    with pytest.raises(RuntimeError):
-        with given(
+    with (
+        pytest.raises(RuntimeError),
+        given(
             [
                 *_GIVEN,
                 role_lacks_permission(OrganizationRole.ADMIN, PermissionKey.SKILL_MANAGE),
             ]
-        ):
-            assert not rbac_policy.organization_role_allows(OrganizationRole.ADMIN, PermissionKey.SKILL_MANAGE)
-            raise RuntimeError("exercise cleanup")
+        ),
+    ):
+        assert not rbac_policy.organization_role_allows(OrganizationRole.ADMIN, PermissionKey.SKILL_MANAGE)
+        raise RuntimeError("exercise cleanup")
 
     assert rbac_policy.organization_role_allows(OrganizationRole.ADMIN, PermissionKey.SKILL_MANAGE)

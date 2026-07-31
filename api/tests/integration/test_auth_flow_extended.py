@@ -13,6 +13,7 @@ from hamcrest import (
 )
 from starlette.testclient import TestClient
 
+from api.domains.users.organization_users.models import OrganizationRole
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
     create_test_client,
@@ -25,7 +26,6 @@ from api.tests.steps.organization import (
     there_is_an_organization,
 )
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
-from api.domains.users.organization_users.models import OrganizationRole
 
 
 def _extract_token_from_email(email_html: str) -> str:
