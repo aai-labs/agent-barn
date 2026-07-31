@@ -37,7 +37,7 @@ from .openclaw import (
     build_secret_telegram,
 )
 
-__all__ = [
+__all__ = [  # noqa: RUF022 - grouped by runtime (common/openclaw/hermes), not alphabetical
     # common
     "build_pvc",
     "build_service",

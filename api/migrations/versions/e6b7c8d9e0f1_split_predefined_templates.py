@@ -16,15 +16,15 @@ have no pin after template deletion.
 
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
 
 revision: str = "e6b7c8d9e0f1"
-down_revision: Union[str, Sequence[str], None] = ("d5a6b7c8d9e0", "e7a4b9c2d5f1")
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = ("d5a6b7c8d9e0", "e7a4b9c2d5f1")
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:

@@ -1,8 +1,4 @@
 from dataclasses import dataclass
-from typing import Generic, TypeVar
-
-
-T = TypeVar("T")
 
 
 @dataclass
@@ -12,7 +8,7 @@ class Pagination:
 
 
 @dataclass
-class PaginatedItems(Generic[T]):
+class PaginatedItems[T]:
     page: int
     page_size: int
     total: int

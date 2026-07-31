@@ -3,9 +3,8 @@ import urllib.parse
 
 from fastapi import HTTPException, status
 
-from api.infrastructure.slack.transport import request_json
-
 from api.infrastructure.slack.manifest import BOT_EVENTS, BOT_SCOPES
+from api.infrastructure.slack.transport import request_json
 
 _BASE = "https://slack.com/api"
 

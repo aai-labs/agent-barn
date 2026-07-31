@@ -20,9 +20,9 @@ from api.core.metrics import (
     render_metrics,
     setup_http_metrics,
 )
-from api.domains.agents.service import AgentService
 from api.core.utils import create_injector
 from api.domains.agents.routes import agents_router
+from api.domains.agents.service import AgentService
 from api.domains.agents.slack_routes import slack_router
 from api.domains.agents.webhook_routes import webhook_router
 from api.domains.auth.routes import auth_router

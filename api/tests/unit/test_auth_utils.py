@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import cast
 from uuid import uuid7
@@ -6,20 +6,20 @@ from uuid import uuid7
 import jwt
 from hamcrest import assert_that, calling, equal_to, raises
 
+from api.core.config import Config
 from api.domains.auth.exceptions import (
     CredentialsException,
     EmailNotVerifiedException,
     ForbiddenException,
 )
 from api.domains.auth.utils import get_authenticated_user
-from api.core.config import Config
 from api.domains.users.models import User
-from api.domains.users.repository import UserRepository
 from api.domains.users.organization_users.models import (
     OrganizationRole,
     OrganizationUser,
 )
 from api.domains.users.organization_users.repository import OrganizationUserRepository
+from api.domains.users.repository import UserRepository
 
 
 class DummyUserRepo:
@@ -42,7 +42,7 @@ def test_get_authenticated_user_returns_context():
     user = User(
         email="ctx@example.com",
         hashed_password="x",
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     org_user = OrganizationUser(
         user_id=user.id,
@@ -92,7 +92,7 @@ def test_get_authenticated_user_requires_role_for_org_context():
     user = User(
         email="member@example.com",
         hashed_password="x",
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
         is_platform_admin=True,
     )
     org_user = OrganizationUser(
@@ -124,7 +124,7 @@ def test_get_authenticated_user_rejects_platform_admin_without_org_membership():
     user = User(
         email="platform-admin@example.com",
         hashed_password="x",
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
         is_platform_admin=True,
     )
     config = SimpleNamespace(secret_signing_key="x" * 32)
@@ -150,7 +150,7 @@ def test_get_authenticated_user_rejects_invalid_token_type():
     user = User(
         email="token@example.com",
         hashed_password="x",
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     config = SimpleNamespace(secret_signing_key="x" * 32)
     token = jwt.encode(

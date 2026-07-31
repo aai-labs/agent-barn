@@ -1,7 +1,7 @@
 from uuid import UUID
 
-from pydantic import BaseModel as PydanticBaseModel, ConfigDict, Field
-
+from pydantic import BaseModel as PydanticBaseModel
+from pydantic import ConfigDict, Field
 
 # ---------------------------------------------------------------------------
 # Response models

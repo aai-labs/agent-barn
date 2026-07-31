@@ -32,8 +32,8 @@ from api.tests.steps.agent import (
     TEST_ENCRYPTION_KEY,
     MockK8sModule,
     MockLiteLLMModule,
-    there_is_an_agent,
     there_is_agent_access,
+    there_is_an_agent,
     use_org_for_auth,
 )
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
@@ -661,7 +661,7 @@ def test_removed_membership_cascades_agent_access():
 
         assert_that(granted.status_code, equal_to(status.HTTP_200_OK))
         assert_that(
-            repository.find_access_membership_ids(context.agent.id, context.organization.id),
+            list(repository.find_access_membership_ids(context.agent.id, context.organization.id)),
             is_not(has_item(target_membership.id)),
         )
 

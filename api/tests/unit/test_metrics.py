@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
@@ -45,7 +45,7 @@ def _make_agent() -> Agent:
 
 
 def _make_tool_call(agent: Agent, tool_name: str, status: ToolCallStatus) -> ToolCall:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return ToolCall(
         organization_id=agent.organization_id,
         agent_id=agent.id,
@@ -86,7 +86,7 @@ def _result_batch() -> IngestBatchRequest:
                 external_id="tc-1",
                 result="boom",
                 is_error=True,
-                completed_at=datetime.now(timezone.utc),
+                completed_at=datetime.now(UTC),
             )
         ]
     )

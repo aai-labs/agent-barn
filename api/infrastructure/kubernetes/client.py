@@ -6,6 +6,7 @@ import os
 import tempfile
 from collections.abc import Generator
 from dataclasses import dataclass, field
+from typing import ClassVar
 
 import yaml
 from injector import inject, singleton
@@ -214,7 +215,7 @@ class KubernetesClient:
                 return pod.metadata.name
         return None
 
-    _TERMINAL_WAITING_REASONS = {
+    _TERMINAL_WAITING_REASONS: ClassVar[set[str]] = {
         "CrashLoopBackOff",
         "ImagePullBackOff",
         "ErrImagePull",
@@ -277,7 +278,7 @@ class KubernetesClient:
         namespace: str,
         tail_lines: int = 0,
         container: str = "agent",
-    ) -> Generator[str, None, None]:
+    ) -> Generator[str]:
         pod_name = self.get_pod_name_for_deployment(deployment_name, namespace)
         if pod_name is None:
             return

@@ -12,14 +12,14 @@ Create Date: 2026-06-07
 
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 from alembic import op
 
 revision: str = "7e2a9c4b1d63"
-down_revision: Union[str, None] = "c2d3e4f5a6b7"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "c2d3e4f5a6b7"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 # old short-name model string -> new openrouter-slug model string
 _REMAP = {

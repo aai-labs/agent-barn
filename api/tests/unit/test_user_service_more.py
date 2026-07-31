@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import cast
 from unittest.mock import Mock
 from uuid import uuid7
@@ -119,7 +119,7 @@ def test_to_user_read_with_organization_fetches_memberships():
     service, _, organization_user_service, _, _ = build_user_service()
     user = User(email="u@example.com", hashed_password="hash")
     org_id = uuid7()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     org_user_read = OrganizationUserRead(
         id=uuid7(),
         created_at=now,

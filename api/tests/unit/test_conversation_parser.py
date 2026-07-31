@@ -3,11 +3,11 @@
 import json
 from uuid import UUID
 
-from api.domains.conversations.models import ConversationType, MessageDirection
 from api.domains.conversations.hermes_parser import (
     hermes_channel_sessions,
     hermes_distinct_conversations,
 )
+from api.domains.conversations.models import ConversationType, MessageDirection
 from api.domains.conversations.parser import parse_sessions
 
 _AGENT_ID = UUID("00000000-0000-0000-0000-000000000001")
@@ -69,7 +69,7 @@ _IRRELEVANT_LINE = json.dumps(
     }
 )
 
-_CHANNEL_JSONL = "\n".join([_INBOUND_LINE, _OUTBOUND_LINE, _IRRELEVANT_LINE])
+_CHANNEL_JSONL = f"{_INBOUND_LINE}\n{_OUTBOUND_LINE}\n{_IRRELEVANT_LINE}"
 _THREAD_JSONL = json.dumps(
     {
         "id": "msg-thread-001",
@@ -325,7 +325,7 @@ _DM_OUTBOUND_LINE = json.dumps(
     }
 )
 
-_DM_JSONL = "\n".join([_DM_CUSTOM_MESSAGE, _DM_OUTBOUND_LINE])
+_DM_JSONL = f"{_DM_CUSTOM_MESSAGE}\n{_DM_OUTBOUND_LINE}"
 
 
 def test_dm_parse_inbound_messages():
@@ -497,7 +497,7 @@ def test_parses_teams_outbound_message():
         _TEAMS_SESSIONS_JSON,
         _make_get_jsonl(
             {
-                "tttt-uuuu": "\n".join([_TEAMS_INBOUND_LINE, _TEAMS_OUTBOUND_LINE]),
+                "tttt-uuuu": f"{_TEAMS_INBOUND_LINE}\n{_TEAMS_OUTBOUND_LINE}",
                 "vvvv-wwww": "",
             }
         ),
@@ -782,7 +782,7 @@ def test_openclaw_parser_telegram_session_prefix():
     messages = parse_sessions(
         _AGENT_ID,
         _TELEGRAM_SESSIONS_JSON,
-        _make_get_jsonl({"tgtg-uuid": "\n".join([_TELEGRAM_INBOUND_LINE, _TELEGRAM_OUTBOUND_LINE])}),
+        _make_get_jsonl({"tgtg-uuid": f"{_TELEGRAM_INBOUND_LINE}\n{_TELEGRAM_OUTBOUND_LINE}"}),
     )
 
     outbound = [m for m in messages if m.direction == MessageDirection.OUTBOUND]
@@ -795,7 +795,7 @@ def test_openclaw_parser_telegram_dm_session_prefix():
     messages = parse_sessions(
         _AGENT_ID,
         _TELEGRAM_DM_SESSIONS_JSON,
-        _make_get_jsonl({"tg-dm-uuid": "\n".join([_TELEGRAM_DM_INBOUND_LINE, _TELEGRAM_DM_OUTBOUND_LINE])}),
+        _make_get_jsonl({"tg-dm-uuid": f"{_TELEGRAM_DM_INBOUND_LINE}\n{_TELEGRAM_DM_OUTBOUND_LINE}"}),
     )
 
     assert len(messages) == 2

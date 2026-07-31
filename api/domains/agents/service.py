@@ -19,11 +19,8 @@ from api.domains.agents.aai_cli_artifacts import (
     build_tool_context_md,
     provider_secrets_map,
 )
-from api.domains.agents.runtime_policy import build_chat_commands_policy_md
 from api.domains.agents.aai_cli_skills import build_skills_manifest_from_zips
 from api.domains.agents.authorization import AgentAuthorization
-from api.domains.skills.models import Skill
-from api.domains.skills.repository import SkillRepository
 from api.domains.agents.builders import (
     build_config_map,
     build_deployment,
@@ -43,6 +40,7 @@ from api.domains.agents.builders import (
     build_service,
 )
 from api.domains.agents.error_messages import friendly_k8s_error, friendly_pod_reason
+from api.domains.agents.exceptions import BotTokenConflictHTTPException
 from api.domains.agents.models import (
     PROVIDER_DISPLAY_NAMES,
     Agent,
@@ -68,25 +66,27 @@ from api.domains.agents.models import (
     AgentTelegramConfigRead,
     AgentType,
     AgentUpdate,
-    FirecrawlContent,
     ConfluenceContent,
+    FirecrawlContent,
     GmailContent,
     JiraContent,
     PairRequest,
     SecretProvider,
-    decrypt_content,
     compute_bot_token_hash,
+    decrypt_content,
     encrypt_content,
     validate_content,
 )
-from api.domains.agents.exceptions import BotTokenConflictHTTPException
 from api.domains.agents.repository import AgentRepository
+from api.domains.agents.runtime_policy import build_chat_commands_policy_md
 from api.domains.auth.models import CurrentUserContext
+from api.domains.auth.token_service import SlackConfigTokenService
 from api.domains.events import EventDeliveryDispatcher, resolve_actor_identity
 from api.domains.events.catalog import AGENT_STARTED, AGENT_STOPPED
-from api.domains.auth.token_service import SlackConfigTokenService
 from api.domains.organizations.lookup import OrganizationLookupService
 from api.domains.rbac.catalog import PermissionKey
+from api.domains.skills.models import Skill
+from api.domains.skills.repository import SkillRepository
 from api.domains.templates.models import AgentTemplate, PlatformTemplate, TemplateRead
 from api.domains.templates.renderer import render_template
 from api.domains.templates.repository import TemplateRepository
@@ -328,7 +328,7 @@ class AgentService:
     def _validate_skill_update(
         self,
         agent: Agent,
-        data: "AgentUpdate",
+        data: AgentUpdate,
         org_id: UUID,
     ) -> None:
         """Validate that new skills are accessible and that all remaining skills
@@ -445,7 +445,7 @@ class AgentService:
         )
 
     def _get_bot_display_name(self, agent_id: str, slack_config: AgentSlackConfig) -> str | None:
-        now = dt.datetime.now(dt.timezone.utc)
+        now = dt.datetime.now(dt.UTC)
         cached = _bot_name_cache.get(agent_id)
         if cached and now - cached[1] < _BOT_NAME_TTL:
             return cached[0]
@@ -1399,7 +1399,7 @@ class AgentService:
             next_snapshot_id=older.id if older is not None else None,
         )
 
-    def _capture_logs_before_stop(self, agent: "Agent") -> None:
+    def _capture_logs_before_stop(self, agent: Agent) -> None:
         try:
             log_text = self.k8s.read_pod_logs(
                 f"agent-{agent.id}",
@@ -1416,7 +1416,7 @@ class AgentService:
                 idx = log_text.find("\n")
                 if idx > 0:
                     log_text = log_text[idx + 1 :]
-            now = dt.datetime.now(dt.timezone.utc)
+            now = dt.datetime.now(dt.UTC)
             byte_size = len(log_text.encode("utf-8"))
             self.repository.save_log_snapshot(
                 AgentLogSnapshot(
@@ -1485,7 +1485,7 @@ class AgentService:
             slack_config.bot_token_hash = None
             self.repository.save_slack_config(slack_config)
 
-        agent.deleted_at = dt.datetime.now(dt.timezone.utc)
+        agent.deleted_at = dt.datetime.now(dt.UTC)
         self.repository.save(agent)
 
         if agent.litellm_key_encrypted:

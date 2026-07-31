@@ -12,15 +12,15 @@ template existence is enforced at the service boundary instead.
 
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
 
 revision: str = "d5a6b7c8d9e0"
-down_revision: Union[str, None] = "c6d7e8f9a0b1"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "c6d7e8f9a0b1"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:

@@ -6,30 +6,30 @@ readme = "README.md"
 requires-python = ">=3.14"
 
 dependencies = [
-    "alembic>=1.18.4",
+    "alembic>=1.18.5",
     "alembic-postgresql-enum>=1.10.0",
     "bcrypt>=5.0.0",
-    "cryptography>=44.0.0",
+    "cryptography>=49.0.0",
     "fastapi-injector>=0.9.0",
-    "fastapi[standard]>=0.136.0",
+    "fastapi[standard]>=0.141.1",
     "jinja2>=3.1.6",
     "mjml>=0.12.0",
     "psycopg2-binary>=2.9.12",
-    "pydantic-settings>=2.14.0",
-    "pyjwt>=2.12.1",
+    "pydantic-settings>=2.14.2",
+    "pyjwt>=2.13.0",
     "python-dotenv>=1.2.2",
     "pyhamcrest>=2.1.0",
-    "pytest>=8.4.2",
-    "pytest-cov>=7.0.0",
-    "sqlalchemy>=2.0.49",
-    "sqlmodel>=0.0.38",
-    "testcontainers[postgres]>=4.13.2",
-    "kubernetes>=31.0.0",
-    "pyyaml>=6.0",
-    "httpx>=0.27.0",
-    "dramatiq[redis,watch]>=1.18.0",
-    "redis>=6.0.0",
-    "prometheus-fastapi-instrumentator>=8.0.2",
+    "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
+    "sqlalchemy>=2.0.51",
+    "sqlmodel>=0.0.39",
+    "testcontainers[postgres]>=4.15.0",
+    "kubernetes>=36.0.3",
+    "pyyaml>=6.0.3",
+    "httpx>=0.28.1",
+    "dramatiq[redis,watch]>=2.2.0",
+    "redis>=8.1.0",
+    "prometheus-fastapi-instrumentator>=8.1.0",
 ]
 
 [tool.pytest.ini_options]
@@ -38,6 +38,30 @@ pythonpath = [".."]
 [tool.ty.environment]
 python = ".venv/bin/python"
 root = [".."]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+# B008   - FastAPI dependency injection relies on function calls in default
+#          arguments (Query, Body, Injected, Depends, filter objects). This is
+#          idiomatic and required, not a bug.
+# BLE001 - top-level error handlers intentionally catch broad `Exception`.
+# S110   - same as BLE001: best-effort scope/permission probes and error-message
+#          formatting intentionally swallow failures and fall back silently.
+ignore = ["B008", "BLE001", "S110"]
+
+[tool.ruff.lint.per-file-ignores]
+# N999 - hermes plugin bundle directories are named to match the plugin ids the
+#        Hermes runtime expects (e.g. "slack-channel-allowlist"), not imported
+#        as Python packages, so hyphens are intentional.
+"domains/agents/scripts/hermes/plugins/**/__init__.py" = ["N999"]
+# SIM117 - tests use a given/when/then BDD DSL where each nested `with` is a
+#          deliberate narrative block; merging them loses that structure.
+"tests/**" = ["SIM117"]
+
+[tool.ruff.format]
+quote-style = "double"
 
 [tool.coverage.run]
 omit = [
@@ -49,6 +73,6 @@ omit = [
 
 [dependency-groups]
 dev = [
-    "ruff>=0.15.11",
-    "ty>=0.0.32",
+    "ruff>=0.16.1",
+    "ty>=0.0.65",
 ]

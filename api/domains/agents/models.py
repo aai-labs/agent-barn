@@ -8,7 +8,8 @@ import sqlalchemy as sa
 from fastapi import Query
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic import ConfigDict, Field, model_validator
-from sqlmodel import Column, Enum, Field as SqlField, Index
+from sqlmodel import Column, Enum, Index
+from sqlmodel import Field as SqlField
 
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.users.organization_users.models import OrganizationRole
@@ -499,7 +500,7 @@ class AgentSecretCreate(PydanticBaseModel):  # no secret_name — backend stamps
     content: dict
 
     @model_validator(mode="after")
-    def validate_provider_content(self) -> "AgentSecretCreate":
+    def validate_provider_content(self) -> AgentSecretCreate:
         validate_content(self.provider, self.content)
         return self
 
@@ -538,22 +539,20 @@ class AgentCreate(PydanticBaseModel):
     approval_mode: CommandApprovalMode = CommandApprovalMode.AUTO
 
     @model_validator(mode="after")
-    def validate_platform_credentials(self) -> "AgentCreate":
+    def validate_platform_credentials(self) -> AgentCreate:
         if self.agent_type == AgentType.HERMES and self.platform == AgentPlatform.TEAMS:
             raise ValueError("Hermes agents do not support the Teams platform")
-        if self.platform == AgentPlatform.SLACK:
-            if not self.slack_bot_token or not self.slack_app_token:
-                raise ValueError("slack_bot_token and slack_app_token are required for Slack agents")
+        if self.platform == AgentPlatform.SLACK and (not self.slack_bot_token or not self.slack_app_token):
+            raise ValueError("slack_bot_token and slack_app_token are required for Slack agents")
         elif self.platform == AgentPlatform.TEAMS:
             if not self.teams_app_id or not self.teams_app_password or not self.teams_tenant_id:
                 raise ValueError("teams_app_id, teams_app_password, and teams_tenant_id are required for Teams agents")
-        elif self.platform == AgentPlatform.TELEGRAM:
-            if not self.telegram_bot_token:
-                raise ValueError("telegram_bot_token is required for Telegram agents")
+        elif self.platform == AgentPlatform.TELEGRAM and not self.telegram_bot_token:
+            raise ValueError("telegram_bot_token is required for Telegram agents")
         return self
 
     @model_validator(mode="after")
-    def validate_unique_secret_providers(self) -> "AgentCreate":
+    def validate_unique_secret_providers(self) -> AgentCreate:
         providers = [s.provider for s in self.secrets]
         if len(providers) != len(set(providers)):
             raise ValueError("Duplicate secret providers are not allowed")
@@ -595,7 +594,7 @@ class AgentUpdate(PydanticBaseModel):
     approval_mode: CommandApprovalMode | None = None
 
     @model_validator(mode="after")
-    def validate_skill_operations(self) -> "AgentUpdate":
+    def validate_skill_operations(self) -> AgentUpdate:
         overlap = set(self.skill_ids) & set(self.removed_skill_ids)
         if overlap:
             ids = ", ".join(str(i) for i in overlap)
@@ -603,13 +602,13 @@ class AgentUpdate(PydanticBaseModel):
         return self
 
     @model_validator(mode="after")
-    def validate_template_repin(self) -> "AgentUpdate":
+    def validate_template_repin(self) -> AgentUpdate:
         if (self.template_slug is None) != (self.template_version is None):
             raise ValueError("template_slug and template_version must be provided together")
         return self
 
     @model_validator(mode="after")
-    def validate_secret_operations(self) -> "AgentUpdate":
+    def validate_secret_operations(self) -> AgentUpdate:
         upserts = [s.provider for s in self.secrets or []]
         if len(upserts) != len(set(upserts)):
             raise ValueError("Duplicate secret providers are not allowed")

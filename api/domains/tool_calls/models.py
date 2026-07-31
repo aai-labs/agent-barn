@@ -8,7 +8,8 @@ from fastapi import Query
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic import ConfigDict
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlmodel import Column, Enum, Field as SqlField, Index, UniqueConstraint
+from sqlmodel import Column, Enum, Index, UniqueConstraint
+from sqlmodel import Field as SqlField
 
 from api.infrastructure.postgres.models import BaseModel
 

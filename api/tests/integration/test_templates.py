@@ -33,8 +33,8 @@ from api.tests.steps.agent import (
     TEST_ENCRYPTION_KEY,
     MockK8sModule,
     MockLiteLLMModule,
-    there_is_an_agent,
     there_is_a_skill,
+    there_is_an_agent,
     use_org_for_auth,
 )
 from api.tests.steps.database import database_is_clean, database_repo_is_ready

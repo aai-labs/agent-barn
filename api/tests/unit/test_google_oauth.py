@@ -14,12 +14,12 @@ _NO_CONTEXT = cast(CurrentUserContext, None)
 
 
 def _config(**overrides):
-    base = dict(
-        secret_signing_key="test-signing-key",
-        web_app_url="http://localhost:3000",
-        google_cloud_client_id="client-id.apps.googleusercontent.com",
-        google_cloud_client_secret="client-secret",
-    )
+    base = {
+        "secret_signing_key": "test-signing-key",
+        "web_app_url": "http://localhost:3000",
+        "google_cloud_client_id": "client-id.apps.googleusercontent.com",
+        "google_cloud_client_secret": "client-secret",
+    }
     base.update(overrides)
     return SimpleNamespace(**base)
 
@@ -134,7 +134,7 @@ def test_callback_propagates_google_denial():
 
 
 def _token_request(**overrides):
-    base = dict(code="auth-code")
+    base = {"code": "auth-code"}
     base.update(overrides)
     return oauth.GoogleTokenExchangeRequest(**base)
 
@@ -204,7 +204,7 @@ def test_token_exchange_errors_on_non_200(monkeypatch):
     monkeypatch.setattr(
         oauth.httpx,
         "post",
-        lambda *a, **k: SimpleNamespace(status_code=400, json=lambda: {}),
+        lambda *a, **k: SimpleNamespace(status_code=400, json=dict),
     )
     with pytest.raises(HTTPException) as exc:
         oauth.google_token_exchange(body=_token_request(), _context=_NO_CONTEXT, config=_config())
