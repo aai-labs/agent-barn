@@ -37,3 +37,67 @@ jobs:
             openclaw-base:ci \
             /bin/sh /smoke-test.sh
 
+  push:
+    name: Push
+    if: github.event_name == 'workflow_call'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Log in to registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ vars.REGISTRY_URL }}
+          username: ${{ vars.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+      - name: Resolve image tag
+        id: tag
+        run: |
+          version=$(tr -d '[:space:]' < openclaw-base/VERSION)
+          if [ "${{ github.ref_name }}" = "staging" ]; then
+            echo "value=${version}-staging" >> "$GITHUB_OUTPUT"
+            echo "push_latest=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${version}" >> "$GITHUB_OUTPUT"
+            echo "push_latest=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build and load for smoke test
+        uses: docker/build-push-action@v6
+        with:
+          context: openclaw-base
+          file: openclaw-base/Dockerfile
+          load: true
+          tags: ${{ vars.REGISTRY_URL }}/agentfarm-openclaw-base:${{ steps.tag.outputs.value }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          secrets: |
+            gh_token=${{ secrets.AAI_CLI_REPO_ACCESS_TOKEN }}
+      - name: Smoke test
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}/openclaw-base/smoke-test.sh:/smoke-test.sh:ro" \
+            ${{ vars.REGISTRY_URL }}/agentfarm-openclaw-base:${{ steps.tag.outputs.value }} \
+            /bin/sh /smoke-test.sh
+      - name: Push
+        uses: docker/build-push-action@v6
+        with:
+          context: openclaw-base
+          file: openclaw-base/Dockerfile
+          push: true
+          tags: ${{ vars.REGISTRY_URL }}/agentfarm-openclaw-base:${{ steps.tag.outputs.value }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          secrets: |
+            gh_token=${{ secrets.AAI_CLI_REPO_ACCESS_TOKEN }}
+      - name: Push latest tag
+        if: steps.tag.outputs.push_latest == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: openclaw-base
+          file: openclaw-base/Dockerfile
+          push: true
+          tags: ${{ vars.REGISTRY_URL }}/agentfarm-openclaw-base:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          secrets: |
+            gh_token=${{ secrets.AAI_CLI_REPO_ACCESS_TOKEN }}
+
