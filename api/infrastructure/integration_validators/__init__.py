@@ -33,8 +33,8 @@ def format_validation_result(result: IntegrationValidationResult) -> dict:
 
 
 __all__ = [
-    "IntegrationValidationResult",
     "PROVIDER_VALIDATORS",
+    "IntegrationValidationResult",
     "format_validation_result",
     "validate_bitbucket",
     "validate_confluence",

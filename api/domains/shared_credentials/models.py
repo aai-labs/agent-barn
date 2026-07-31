@@ -5,11 +5,11 @@ import sqlalchemy as sa
 from fastapi import Query
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic import ConfigDict, Field
-from sqlmodel import Column, Field as SqlField
+from sqlmodel import Column
+from sqlmodel import Field as SqlField
 
 from api.domains.agents.models import SecretProvider
 from api.infrastructure.postgres.models import BaseModel
-
 
 SHARED_CREDENTIAL_ALLOWED_PROVIDERS: frozenset[SecretProvider] = frozenset(
     {

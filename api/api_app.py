@@ -30,8 +30,8 @@ from api.domains.conversations.routes import conversations_router
 from api.domains.costs.routes import costs_router
 from api.domains.integrations.google_oauth.routes import integrations_router
 from api.domains.organizations.routes import org_router, platform_org_router
-from api.domains.shared_credentials.routes import shared_credentials_router
 from api.domains.rbac.seeder import RbacSeeder
+from api.domains.shared_credentials.routes import shared_credentials_router
 from api.domains.skills.repository import SkillRepository
 from api.domains.skills.routes import skills_router
 from api.domains.skills.skill_seeder import seed_aai_cli_skills

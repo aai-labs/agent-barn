@@ -6,6 +6,7 @@ from fastapi_injector import Injected
 
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import get_current_user
+from api.domains.rbac.catalog import IMPLICIT_AGENT_OWNER_ROLES
 from api.domains.shared_credentials.models import (
     SharedCredentialBrief,
     SharedCredentialCreate,
@@ -15,7 +16,6 @@ from api.domains.shared_credentials.models import (
     get_shared_credential_filter,
 )
 from api.domains.shared_credentials.service import SharedCredentialService
-from api.domains.rbac.catalog import IMPLICIT_AGENT_OWNER_ROLES
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 shared_credentials_router = APIRouter(

@@ -12,6 +12,7 @@ from api.domains.agents.models import (
     validate_content,
 )
 from api.domains.auth.models import CurrentUserContext
+from api.domains.rbac.catalog import IMPLICIT_AGENT_OWNER_ROLES
 from api.domains.shared_credentials.models import (
     SHARED_CREDENTIAL_ALLOWED_PROVIDERS,
     SharedCredential,
@@ -22,7 +23,6 @@ from api.domains.shared_credentials.models import (
     SharedCredentialUpdate,
 )
 from api.domains.shared_credentials.repository import SharedCredentialRepository
-from api.domains.rbac.catalog import IMPLICIT_AGENT_OWNER_ROLES
 from api.infrastructure.integration_validators import (
     PROVIDER_VALIDATORS,
     format_validation_result,
