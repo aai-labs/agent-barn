@@ -10,23 +10,18 @@ from sqlmodel import Session
 from api.core.config import get_config
 from api.domains.agents.service import AgentService
 from api.domains.auth.models import CurrentUserContext
-from api.domains.auth.service import AuthService
+from api.domains.organizations.exceptions import OrganizationCreationLimitReached
 from api.domains.organizations.models import (
     Organization,
     OrganizationCreate,
-    OrganizationCreateResult,
     OrganizationFilter,
     OrganizationRead,
     OrganizationUpdate,
+    PlatformOrganizationRead,
 )
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.rbac.catalog import ORG_OWNER_ONLY_ROLES, PermissionKey
 from api.domains.rbac.policy import PermissionPolicy
-from api.domains.users.organization_users.models import (
-    OrganizationRole,
-    OrganizationUser,
-)
-from api.domains.users.organization_users.service import OrganizationUserService
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 logger = logging.getLogger(__name__)
@@ -37,8 +32,6 @@ logger = logging.getLogger(__name__)
 @dataclass
 class OrganizationService:
     organization_repository: OrganizationRepository
-    user_organization_service: OrganizationUserService
-    auth_service: AuthService
     agent_service: AgentService
     permission_policy: PermissionPolicy
 
@@ -48,6 +41,18 @@ class OrganizationService:
         # difference can't confirm an org's existence.
         self._ensure_can_view_organization(organization_id, context)
         organization = self.organization_repository.get_read(organization_id)
+        if not organization:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Organization {organization_id} not found",
+            )
+        return organization
+
+    def get_platform_organization(self, organization_id: UUID) -> PlatformOrganizationRead:
+        # Platform Administrators have no Membership in arbitrary Organizations, so this
+        # deliberately skips _ensure_can_view_organization and returns the dedicated
+        # Platform Oversight read model instead of the member-facing OrganizationRead.
+        organization = self.organization_repository.get_platform_read(organization_id)
         if not organization:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -88,40 +93,33 @@ class OrganizationService:
                     detail=f"Model pattern '{pattern}' does not match any known models in the catalog.",
                 )
 
-    def create_organization(self, data: OrganizationCreate, actor: CurrentUserContext) -> OrganizationCreateResult:
-        actor.require_platform_admin(detail="Only a platform administrator can create organizations")
-
+    def create_organization_for_current_user(
+        self,
+        data: OrganizationCreate,
+        actor: CurrentUserContext,
+    ) -> OrganizationRead:
         config = get_config()
-        if data.allowed_models is not None:
-            self._validate_allowed_models(data.allowed_models)
-            allowed_models = [m.removeprefix("litellm/openrouter/") for m in data.allowed_models]
-        else:
-            allowed_models = [config.agent_default_model.removeprefix("litellm/openrouter/")]
+        allowed_models = [config.agent_default_model.removeprefix("litellm/openrouter/")]
 
-        # Org, owner-invite (user + token) and the OWNER membership all commit together,
-        # so a failed step can't leave an org with no owner. The invite email is sent
-        # only after commit.
         organization = Organization(
             name=data.name,
             description=data.description,
+            created_by_user_id=actor.user.id,
             allowed_models=allowed_models,
         )
-        with Session(self.organization_repository.delegate.engine, expire_on_commit=False) as session:
-            self.organization_repository.save_with_session(organization, session)
-            prepared = self.auth_service.prepare_invite(session, email=str(data.owner_email), full_name=data.owner_name)
-            self.user_organization_service.add_membership_with_session(
-                OrganizationUser(
-                    user_id=prepared.user.id,
-                    organization_id=organization.id,
-                    role=OrganizationRole.OWNER,
-                ),
-                session,
+        try:
+            # Organization creation and the creator's Owner Membership are one
+            # transaction, including the concurrency-safe quota check.
+            self.organization_repository.create_for_user(
+                organization,
+                actor.user.id,
+                config.organization_creation_limit,
             )
-            session.commit()
-
-        # Predefined templates are global platform resources seeded once at
-        # startup, so a new org needs no per-org catalog clone.
-        self.auth_service.send_prepared_invite(prepared)
+        except OrganizationCreationLimitReached as error:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"You can create up to {error.limit} organizations",
+            ) from error
 
         organization_read = self.organization_repository.get_read(organization.id)
         if not organization_read:
@@ -129,7 +127,7 @@ class OrganizationService:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to load organization",
             )
-        return OrganizationCreateResult(organization=organization_read, invite_link=prepared.invite_link)
+        return organization_read
 
     def get_paginated_organizations(
         self,

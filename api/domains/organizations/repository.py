@@ -6,10 +6,12 @@ from sqlalchemy import and_, func
 from sqlalchemy.orm import aliased
 from sqlmodel import Session, col, or_, select
 
+from api.domains.organizations.exceptions import OrganizationCreationLimitReached
 from api.domains.organizations.models import (
     Organization,
     OrganizationFilter,
     OrganizationRead,
+    PlatformOrganizationRead,
 )
 from api.domains.users.models import User
 from api.domains.users.organization_users.models import (
@@ -95,6 +97,37 @@ class OrganizationRepository:
             organization, owner_email, owner_name = row
             return self._to_organization_read(organization, owner_email, owner_name)
 
+    def get_platform_read(self, organization_id: UUID) -> PlatformOrganizationRead | None:
+        owner = aliased(User)
+        creator = aliased(User)
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(Organization, owner, creator)
+                .outerjoin(
+                    OrganizationUser,
+                    and_(
+                        col(OrganizationUser.organization_id) == Organization.id,
+                        col(OrganizationUser.role) == OrganizationRole.OWNER,
+                    ),
+                )
+                .outerjoin(owner, col(owner.id) == col(OrganizationUser.user_id))
+                .outerjoin(creator, col(creator.id) == Organization.created_by_user_id)
+                .where(col(Organization.id) == organization_id)
+            )
+            row = session.exec(query).first()
+            if row is None:
+                return None
+            organization, owner_user, creator_user = row
+            return PlatformOrganizationRead(
+                **organization.model_dump(),
+                owner_user_id=owner_user.id if owner_user else None,
+                owner_email=owner_user.email if owner_user else None,
+                owner_name=owner_user.full_name if owner_user else None,
+                creator_user_id=creator_user.id if creator_user else None,
+                creator_email=creator_user.email if creator_user else None,
+                creator_name=creator_user.full_name if creator_user else None,
+            )
+
     def find_all_paginated_read(
         self,
         organization_filter: OrganizationFilter,
@@ -149,6 +182,34 @@ class OrganizationRepository:
         session.add(organization)
         session.flush()
         return organization
+
+    def create_for_user(
+        self,
+        organization: Organization,
+        creator_id: UUID,
+        creation_limit: int,
+    ) -> Organization:
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            # Serialize creation attempts for one user. Without this lock, two
+            # concurrent requests could both observe one remaining quota slot.
+            creator = session.exec(select(User).where(col(User.id) == creator_id).with_for_update()).one()
+            created_count = session.scalar(
+                select(func.count()).select_from(Organization).where(col(Organization.created_by_user_id) == creator.id)
+            )
+            if (created_count or 0) >= creation_limit:
+                raise OrganizationCreationLimitReached(creation_limit)
+
+            session.add(organization)
+            session.flush()
+            session.add(
+                OrganizationUser(
+                    user_id=creator.id,
+                    organization_id=organization.id,
+                    role=OrganizationRole.OWNER,
+                )
+            )
+            session.commit()
+            return organization
 
     def delete(self, organization_id: UUID) -> bool:
         return self.delegate.delete_one(Organization, organization_id)

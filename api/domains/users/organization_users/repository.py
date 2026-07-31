@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from injector import inject, singleton
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
@@ -105,6 +106,37 @@ class OrganizationUserRepository:
             if limit is not None:
                 query = query.limit(limit)
             return list(session.exec(query).all())
+
+    def get_members_with_users_paginated(
+        self,
+        organization_id: UUID,
+        *,
+        search: str | None = None,
+        page: int = 1,
+        page_size: int = 15,
+    ) -> tuple[list[tuple[OrganizationUser, User]], int]:
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(OrganizationUser, User)
+                .join(User, col(User.id) == col(OrganizationUser.user_id))
+                .where(col(OrganizationUser.organization_id) == organization_id)
+            )
+            count_query = (
+                select(func.count())
+                .select_from(OrganizationUser)
+                .join(User, col(User.id) == col(OrganizationUser.user_id))
+                .where(col(OrganizationUser.organization_id) == organization_id)
+            )
+            if search:
+                pattern = f"%{search}%"
+                condition = col(User.full_name).ilike(pattern) | col(User.email).ilike(pattern)
+                query = query.where(condition)
+                count_query = count_query.where(condition)
+
+            total = session.scalar(count_query) or 0
+            query = query.order_by(col(OrganizationUser.created_at).asc())
+            query = query.offset((page - 1) * page_size).limit(page_size)
+            return list(session.exec(query).all()), total
 
     def delete(self, membership: OrganizationUser) -> bool:
         return self.delegate.delete(membership)

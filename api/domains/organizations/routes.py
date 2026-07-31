@@ -8,10 +8,10 @@ from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import get_current_user, require_platform_admin
 from api.domains.organizations.models import (
     OrganizationCreate,
-    OrganizationCreateResult,
     OrganizationFilter,
     OrganizationRead,
     OrganizationUpdate,
+    PlatformOrganizationRead,
     get_organization_filter,
 )
 from api.domains.organizations.service import OrganizationService
@@ -21,13 +21,16 @@ org_router = APIRouter(prefix="/organizations", tags=["organizations"])
 platform_org_router = APIRouter(prefix="/platform/organizations", tags=["platform-organizations"])
 
 
-@platform_org_router.post("", response_model=OrganizationCreateResult, status_code=status.HTTP_201_CREATED)
-def create_organization(
+@org_router.post("", response_model=OrganizationRead, status_code=status.HTTP_201_CREATED)
+def create_organization_for_current_user(
     data: OrganizationCreate,
-    context: Annotated[CurrentUserContext, Depends(require_platform_admin())],
+    context: Annotated[
+        CurrentUserContext,
+        Depends(get_current_user(require_organization=False)),
+    ],
     organization_service: Annotated[OrganizationService, Injected(OrganizationService)],
 ):
-    return organization_service.create_organization(data, context)
+    return organization_service.create_organization_for_current_user(data, context)
 
 
 @org_router.get("/{organization_id}", response_model=OrganizationRead)
@@ -53,6 +56,15 @@ def get_organizations(
         page_size=page_size,
         page=page,
     )
+
+
+@platform_org_router.get("/{organization_id}", response_model=PlatformOrganizationRead)
+def get_platform_organization(
+    organization_id: UUID,
+    _: Annotated[CurrentUserContext, Depends(require_platform_admin())],
+    organization_service: Annotated[OrganizationService, Injected(OrganizationService)],
+):
+    return organization_service.get_platform_organization(organization_id)
 
 
 @org_router.patch("/{organization_id}", response_model=OrganizationRead)

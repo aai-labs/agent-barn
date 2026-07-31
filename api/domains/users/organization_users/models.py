@@ -56,6 +56,18 @@ class OrganizationMemberRead(PydanticBaseModel):
     is_pending: bool  # invite not yet accepted (email unverified)
 
 
+class PlatformOrganizationMemberRead(PydanticBaseModel):
+    """Dedicated read model for Platform View oversight of an Organization's members,
+    kept separate from OrganizationMemberRead per the Platform Oversight ADR (no reuse
+    of Organization-scoped DTOs)."""
+
+    user_id: UUID
+    email: str
+    full_name: str | None = None
+    role: OrganizationRole
+    is_pending: bool  # invite not yet accepted (email unverified)
+
+
 class AddMemberRequest(PydanticBaseModel):
     email: EmailStr
     full_name: str | None = None

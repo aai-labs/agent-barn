@@ -21,10 +21,12 @@ from api.domains.users.organization_users.models import (
     OrganizationRole,
     OrganizationUser,
     OrganizationUserRead,
+    PlatformOrganizationMemberRead,
     TransferOwnershipRequest,
 )
 from api.domains.users.organization_users.repository import OrganizationUserRepository
 from api.domains.users.repository import UserRepository
+from api.infrastructure.shared.models import PaginatedItems
 
 
 @inject
@@ -164,6 +166,37 @@ class OrganizationUserService:
             )
             for membership, user in rows
         ]
+
+    def list_platform_members(
+        self,
+        organization_id: UUID,
+        *,
+        search: str | None = None,
+        page: int = 1,
+        page_size: int = 15,
+    ) -> PaginatedItems[PlatformOrganizationMemberRead]:
+        # Platform Administrators have no Membership in arbitrary Organizations, so this
+        # deliberately skips the MEMBERSHIP_READ permission check that org-scoped
+        # list_members enforces, and returns a dedicated Platform Oversight read model.
+        if self.organization_repository.get(organization_id) is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
+        rows, total = self.organization_user_repository.get_members_with_users_paginated(
+            organization_id,
+            search=search,
+            page=page,
+            page_size=page_size,
+        )
+        items = [
+            PlatformOrganizationMemberRead(
+                user_id=user.id,
+                email=user.email,
+                full_name=user.full_name,
+                role=membership.role,
+                is_pending=user.email_verified_at is None,
+            )
+            for membership, user in rows
+        ]
+        return PaginatedItems(page=page, page_size=page_size, total=total, items=items)
 
     def add_member(
         self,
