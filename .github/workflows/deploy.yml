@@ -257,6 +257,11 @@ jobs:
           LITELLM_KEY_SERVICE_ACCOUNT: ${{ needs.build.outputs.litellm_key_service_account }}
           API_IMAGE_TAG: ${{ needs.build.outputs.api_image_tag }}
           UI_IMAGE_TAG: ${{ needs.build.outputs.ui_image_tag }}
+          # Stamped into the api/ui/worker pod template annotations so a deploy
+          # under a moving image tag (latest / latest-staging) still produces a
+          # manifest diff and rolls the pods, even when the image tag string
+          # itself is unchanged from the previous deploy.
+          GIT_SHA: ${{ github.sha }}
           OPENCLAW_IMAGE_TAG: ${{ needs.build.outputs.openclaw_image_tag }}
           HERMES_IMAGE_TAG: ${{ needs.build.outputs.hermes_image_tag }}
           # DB user/db names are shared: each namespace has its own Postgres, so
