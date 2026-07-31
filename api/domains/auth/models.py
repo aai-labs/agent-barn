@@ -1,3 +1,4 @@
+import enum
 from collections.abc import Set as AbstractSet
 from datetime import datetime
 from uuid import UUID
@@ -23,9 +24,17 @@ class Token(PydanticBaseModel):
     token_type: str
 
 
+class CredentialClass(str, enum.Enum):
+    USER_SESSION = "USER_SESSION"
+    API_KEY = "API_KEY"
+    SERVICE = "SERVICE"
+    RUNTIME = "RUNTIME"
+
+
 class TokenData(PydanticBaseModel):
     user_id: str
     stamp: str
+    credential_class: CredentialClass = CredentialClass.USER_SESSION
 
 
 class RefreshTokenRequest(PydanticBaseModel):
@@ -95,6 +104,7 @@ class SlackConfigTokenRead(PydanticBaseModel):
 
 class CurrentUserContext(PydanticBaseModel):
     user: User
+    credential_class: CredentialClass = CredentialClass.USER_SESSION
     organization_ids: list[UUID] = Field(default_factory=list)
     user_organization_map: dict[UUID, OrganizationUser] = Field(default_factory=dict)
     current_user_organization: OrganizationUser | None = None

@@ -16,7 +16,7 @@ from api.domains.auth.exceptions import (
     EmailNotVerifiedException,
     ForbiddenException,
 )
-from api.domains.auth.models import CurrentUserContext
+from api.domains.auth.models import CredentialClass, CurrentUserContext
 from api.domains.auth.service import JWT_ENCODING_ALGORITHM
 from api.domains.platform_admin.service import PlatformAdminService
 from api.domains.users.organization_users.models import (
@@ -59,10 +59,11 @@ def get_authenticated_user(
         payload = jwt.decode(token, config.secret_signing_key, algorithms=[JWT_ENCODING_ALGORITHM])
         current_user_id: str | None = payload.get("user_id")
         token_type: str | None = payload.get("token_type")
+        credential_class = CredentialClass(payload.get("credential_class", CredentialClass.USER_SESSION))
 
         if current_user_id is None or token_type != "access":
             raise CredentialsException()
-    except InvalidTokenError:
+    except InvalidTokenError, ValueError:
         raise CredentialsException()
 
     user = user_repository.get(uuid.UUID(current_user_id))
@@ -89,6 +90,7 @@ def get_authenticated_user(
 
     return CurrentUserContext(
         user=user,
+        credential_class=credential_class,
         organization_ids=organization_ids,
         user_organization_map=user_organization_map,
         current_user_organization=user_organization,
@@ -148,6 +150,8 @@ def require_platform_admin(
             organization_id=None,
             verified_required=verified_required,
         )
+        if context.credential_class != CredentialClass.USER_SESSION:
+            raise ForbiddenException(detail="Platform authority requires an authenticated user session")
         platform_admin_service.require_platform_admin(context.user)
         return context
 
