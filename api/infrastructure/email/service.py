@@ -2,19 +2,18 @@ import logging
 import os
 import traceback
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 
 from injector import inject, singleton
 from jinja2 import Template
 from mjml import mjml_to_html
 
+from api.core.config import Config
+from api.infrastructure.email.client import EmailClient
 from api.infrastructure.email.exceptions import (
     EmailRenderingException,
 )
-from api.infrastructure.email.models import EmailTemplate, EmailTemplateAttribute
-from api.infrastructure.email.client import EmailClient
-from api.infrastructure.email.models import Email
-from api.core.config import Config
+from api.infrastructure.email.models import Email, EmailTemplate, EmailTemplateAttribute
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +47,7 @@ class EmailService:
         data = {}
         for attribute in email_template.attributes:
             data[attribute.name] = attribute.value
-        data["current_year"] = datetime.now().year
+        data["current_year"] = datetime.now(UTC).year
 
         mjml = template.render(data)
         html = self.render(mjml=mjml)

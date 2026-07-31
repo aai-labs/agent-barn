@@ -6,8 +6,8 @@ from sqlalchemy import func
 from sqlmodel import Session, col, delete, or_, select
 
 from api.domains.agents.models import Agent, AgentSkill, AgentTemplateSkill, PlatformTemplateSkill
-from api.domains.templates.models import AgentTemplate, PlatformTemplate
 from api.domains.skills.models import Skill, SkillFilter, SkillSource
+from api.domains.templates.models import AgentTemplate, PlatformTemplate
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.infrastructure.shared.models import Pagination
 

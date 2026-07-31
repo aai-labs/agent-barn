@@ -6,6 +6,7 @@ import os
 import tempfile
 from collections.abc import Generator
 from dataclasses import dataclass, field
+from typing import ClassVar
 
 import yaml
 from injector import inject, singleton
@@ -24,13 +25,22 @@ _SERVICE_ACCOUNT_TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/tok
 @dataclass
 @singleton
 class KubernetesClient:
+    """Cluster access is configured lazily, on first actual API call, not at
+    construction time. The DI container builds this as a singleton on app startup
+    regardless of whether the current request needs it, so eagerly loading a
+    kubeconfig here would crash the whole API (including routes that have nothing
+    to do with agent lifecycle) whenever no cluster is reachable — e.g. plain
+    `docker compose up` without minikube/a real cluster."""
+
     config: Config
-    _apps_v1: client.AppsV1Api = field(init=False)
-    _core_v1: client.CoreV1Api = field(init=False)
-    _stream_core_v1: client.CoreV1Api = field(init=False)
+    _apps_v1_client: client.AppsV1Api | None = field(init=False, default=None)
+    _core_v1_client: client.CoreV1Api | None = field(init=False, default=None)
+    _stream_core_v1_client: client.CoreV1Api | None = field(init=False, default=None)
     _kubeconfig_path: str | None = field(init=False, default=None)
 
-    def __post_init__(self) -> None:
+    def _ensure_configured(self) -> None:
+        if self._core_v1_client is not None:
+            return
         if self.config.k8s_kubeconfig_path:
             self._kubeconfig_path = self._resolve_kubeconfig(self.config.k8s_kubeconfig_path)
             k8s_config.load_kube_config(config_file=self._kubeconfig_path)
@@ -38,14 +48,51 @@ class KubernetesClient:
             try:
                 k8s_config.load_incluster_config()
             except k8s_config.ConfigException:
-                k8s_config.load_kube_config()
-        self._apps_v1 = client.AppsV1Api()
-        self._core_v1 = client.CoreV1Api()
+                try:
+                    k8s_config.load_kube_config()
+                except k8s_config.ConfigException as e:
+                    raise k8s_config.ConfigException(
+                        "No Kubernetes cluster is configured (no in-cluster config, no "
+                        "~/.kube/config, and K8S_KUBECONFIG_PATH is unset). Agent lifecycle "
+                        "features need a real cluster; set K8S_KUBECONFIG_PATH to point at one."
+                    ) from e
+        self._apps_v1_client = client.AppsV1Api()
+        self._core_v1_client = client.CoreV1Api()
         if self.config.k8s_kubeconfig_path:
             stream_api_client = k8s_config.new_client_from_config(config_file=self._kubeconfig_path)
         else:
             stream_api_client = client.ApiClient()
-        self._stream_core_v1 = client.CoreV1Api(api_client=stream_api_client)
+        self._stream_core_v1_client = client.CoreV1Api(api_client=stream_api_client)
+
+    @property
+    def _apps_v1(self) -> client.AppsV1Api:
+        self._ensure_configured()
+        assert self._apps_v1_client is not None
+        return self._apps_v1_client
+
+    @_apps_v1.setter
+    def _apps_v1(self, value: client.AppsV1Api) -> None:
+        self._apps_v1_client = value
+
+    @property
+    def _core_v1(self) -> client.CoreV1Api:
+        self._ensure_configured()
+        assert self._core_v1_client is not None
+        return self._core_v1_client
+
+    @_core_v1.setter
+    def _core_v1(self, value: client.CoreV1Api) -> None:
+        self._core_v1_client = value
+
+    @property
+    def _stream_core_v1(self) -> client.CoreV1Api:
+        self._ensure_configured()
+        assert self._stream_core_v1_client is not None
+        return self._stream_core_v1_client
+
+    @_stream_core_v1.setter
+    def _stream_core_v1(self, value: client.CoreV1Api) -> None:
+        self._stream_core_v1_client = value
 
     @staticmethod
     def _incluster_apiserver() -> str | None:
@@ -214,7 +261,7 @@ class KubernetesClient:
                 return pod.metadata.name
         return None
 
-    _TERMINAL_WAITING_REASONS = {
+    _TERMINAL_WAITING_REASONS: ClassVar[set[str]] = {
         "CrashLoopBackOff",
         "ImagePullBackOff",
         "ErrImagePull",
@@ -277,7 +324,7 @@ class KubernetesClient:
         namespace: str,
         tail_lines: int = 0,
         container: str = "agent",
-    ) -> Generator[str, None, None]:
+    ) -> Generator[str]:
         pod_name = self.get_pod_name_for_deployment(deployment_name, namespace)
         if pod_name is None:
             return

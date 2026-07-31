@@ -5,6 +5,12 @@ image:
   tag: latest
   pullPolicy: Always
 
+# Stamped onto the pod template as an annotation so a deploy under a moving
+# tag (e.g. `latest`) still produces a manifest diff and rolls the pods —
+# without this, Helm sees an unchanged image string and skips the rollout,
+# leaving the old code running despite a new image being pushed.
+buildSha: ""
+
 replicaCount: 1
 
 imagePullSecrets:

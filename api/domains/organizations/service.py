@@ -1,7 +1,7 @@
+import fnmatch
 import logging
 from dataclasses import dataclass
 from uuid import UUID
-import fnmatch
 
 from fastapi import HTTPException, status
 from injector import inject, singleton

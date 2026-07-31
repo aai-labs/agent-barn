@@ -1,5 +1,6 @@
-from hamcrest import assert_that, calling, equal_to, has_length, is_not, none, raises
 from uuid import uuid7
+
+from hamcrest import assert_that, calling, equal_to, has_length, is_not, none, raises
 
 from api.domains.users.exceptions import EmailTakenHTTPException
 from api.domains.users.models import User, UserFilter
@@ -22,6 +23,7 @@ def test_i_can_save_new_user():
             with then("it should be persisted"):
                 saved = repository.get_by_email("new_user@example.com")
                 assert_that(saved, is_not(none()))
+                assert saved is not None
                 assert_that(saved.email, equal_to("new_user@example.com"))
 
 

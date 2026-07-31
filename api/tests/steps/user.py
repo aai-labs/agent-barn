@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID, uuid7
 
 from api.domains.auth.hashing import hash_text
@@ -56,7 +56,7 @@ def there_is_a_user(
                 hashed_password=hash_text(password),
                 full_name=name,
                 is_platform_admin=is_platform_admin,
-                email_verified_at=datetime.now(timezone.utc) if email_verified else None,
+                email_verified_at=datetime.now(UTC) if email_verified else None,
             )
             user_repository.save(user)
 

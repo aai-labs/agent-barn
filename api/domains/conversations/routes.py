@@ -9,9 +9,9 @@ from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.routes import get_current_user
 from api.domains.conversations.models import (
     ConversationChannelRead,
-    ConversationThreadsPage,
     ConversationsCursor,
     ConversationsFilter,
+    ConversationThreadsPage,
 )
 from api.domains.conversations.service import ConversationService
 

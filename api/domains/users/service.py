@@ -1,13 +1,13 @@
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID, uuid7
 
 from fastapi import HTTPException, status
 from injector import inject
 
 from api.core.config import Config
-from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.hashing import check_hash, hash_text
+from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.password_validation import validate_strong_password
 from api.domains.auth.repository import RefreshTokenRepository
 from api.domains.organizations.repository import OrganizationRepository
@@ -76,7 +76,7 @@ class UserService:
             email=data.email,
             full_name=data.full_name,
             hashed_password=hash_text(data.password),
-            email_verified_at=datetime.now(timezone.utc),
+            email_verified_at=datetime.now(UTC),
         )
         self.user_repository.save(user)
 

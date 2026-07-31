@@ -27,7 +27,7 @@ _GIVEN = [
 
 
 def _now() -> dt.datetime:
-    return dt.datetime.now(dt.timezone.utc)
+    return dt.datetime.now(dt.UTC)
 
 
 def _make_snapshot(
@@ -65,9 +65,9 @@ def test_get_latest_log_snapshot_returns_most_recent():
         repo: AgentRepository = context.injector.get(AgentRepository)
         agent_id = context.agent.id
 
-        t1 = dt.datetime(2026, 6, 1, tzinfo=dt.timezone.utc)
-        t2 = dt.datetime(2026, 6, 10, tzinfo=dt.timezone.utc)
-        t3 = dt.datetime(2026, 6, 20, tzinfo=dt.timezone.utc)
+        t1 = dt.datetime(2026, 6, 1, tzinfo=dt.UTC)
+        t2 = dt.datetime(2026, 6, 10, tzinfo=dt.UTC)
+        t3 = dt.datetime(2026, 6, 20, tzinfo=dt.UTC)
 
         repo.save_log_snapshot(_make_snapshot(agent_id, "old", session_ended_at=t1))
         repo.save_log_snapshot(_make_snapshot(agent_id, "middle", session_ended_at=t2))

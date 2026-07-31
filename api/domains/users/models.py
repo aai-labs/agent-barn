@@ -1,6 +1,5 @@
 from datetime import datetime
-from uuid import uuid7
-from uuid import UUID
+from uuid import UUID, uuid7
 
 from fastapi import Query
 from pydantic import BaseModel as PydanticBaseModel
@@ -8,11 +7,11 @@ from pydantic import EmailStr
 from sqlalchemy import Column, DateTime, Index
 from sqlmodel import Field
 
-from api.infrastructure.postgres.models import BaseModel
 from api.domains.users.organization_users.models import (
     OrganizationRole,
     OrganizationUserRead,
 )
+from api.infrastructure.postgres.models import BaseModel
 
 
 class User(BaseModel, table=True):

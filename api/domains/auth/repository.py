@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from typing import List
 from uuid import UUID
 
 from injector import inject, singleton
@@ -22,7 +21,7 @@ class RefreshTokenRepository:
     def get(self, token: str) -> RefreshToken | None:
         return self.delegate.find_one(RefreshToken, token=token)
 
-    def get_by_user(self, user_id: UUID) -> List[RefreshToken]:
+    def get_by_user(self, user_id: UUID) -> list[RefreshToken]:
         return self.delegate.find_all(RefreshToken, user_id=user_id)
 
     def save(self, refresh_token: RefreshToken) -> RefreshToken:
@@ -32,7 +31,7 @@ class RefreshTokenRepository:
     def delete(self, refresh_token: RefreshToken) -> bool:
         return self.delegate.delete_one(RefreshToken, refresh_token.id)
 
-    def delete_all_by(self, tokens: List[RefreshToken]) -> bool:
+    def delete_all_by(self, tokens: list[RefreshToken]) -> bool:
         return self.delegate.delete_many(tokens)
 
 
@@ -62,7 +61,7 @@ class PasswordResetTokenRepository:
             session.exec(
                 select(PasswordResetToken).where(
                     PasswordResetToken.user_id == user_id,
-                    PasswordResetToken.is_used == False,  # noqa: E712
+                    PasswordResetToken.is_used == False,
                 )
             )
         )

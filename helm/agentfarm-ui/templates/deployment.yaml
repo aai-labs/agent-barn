@@ -12,6 +12,8 @@ spec:
       {{- include "agentfarm-ui.selectorLabels" . | nindent 6 }}
   template:
     metadata:
+      annotations:
+        build-sha: {{ .Values.buildSha | quote }}
       labels:
         {{- include "agentfarm-ui.selectorLabels" . | nindent 8 }}
     spec:

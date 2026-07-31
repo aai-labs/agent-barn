@@ -119,6 +119,7 @@ def test_update_organization_preserves_existing_orphaned_model():
         client: TestClient = context.client
         org_repo: OrganizationRepository = context.injector.get(OrganizationRepository)
         org = org_repo.get(org_a)
+        assert org is not None
         # gpt-4o is in the catalog; removed/model has been dropped by OpenRouter.
         org.allowed_models = ["openai/gpt-4o", "removed/model"]
         org_repo.save(org)
@@ -164,6 +165,7 @@ def test_update_organization_ignores_null_allowed_models():
         client: TestClient = context.client
         org_repo: OrganizationRepository = context.injector.get(OrganizationRepository)
         org = org_repo.get(org_a)
+        assert org is not None
         org.allowed_models = ["openai/gpt-4o"]
         org_repo.save(org)
 

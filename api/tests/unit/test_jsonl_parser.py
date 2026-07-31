@@ -97,9 +97,9 @@ def test_timestamps_are_utc():
 
         with then("all timestamps are UTC"):
             for call in calls:
-                assert_that(call.occurred_at.tzinfo, equal_to(datetime.timezone.utc))
+                assert_that(call.occurred_at.tzinfo, equal_to(datetime.UTC))
             for result in results:
-                assert_that(result.completed_at.tzinfo, equal_to(datetime.timezone.utc))
+                assert_that(result.completed_at.tzinfo, equal_to(datetime.UTC))
 
 
 def test_occurred_at_from_inner_message_timestamp():
@@ -109,7 +109,7 @@ def test_occurred_at_from_inner_message_timestamp():
 
         with then("occurred_at is derived from the inner message timestamp in milliseconds"):
             call = next(c for c in calls if c.external_id == "call_ppiEohyny133JGEiW98cIbdA")
-            expected = datetime.datetime.fromtimestamp(1748000017.575, tz=datetime.timezone.utc)
+            expected = datetime.datetime.fromtimestamp(1748000017.575, tz=datetime.UTC)
             assert_that(call.occurred_at, equal_to(expected))
 
 

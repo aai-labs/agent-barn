@@ -1,10 +1,12 @@
 from uuid import UUID, uuid7
 
 from fastapi import status
-from hamcrest import assert_that, equal_to, has_key, not_none
+from hamcrest import assert_that, equal_to, has_key
 from starlette.testclient import TestClient
 
-from api.tests.core.givenpy import given, when, then
+from api.domains.users.organization_users.models import OrganizationRole
+from api.domains.users.organization_users.repository import OrganizationUserRepository
+from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
     create_test_client,
     prepare_api_server,
@@ -14,8 +16,6 @@ from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import (
     there_is_an_organization,
 )
-from api.domains.users.organization_users.models import OrganizationRole
-from api.domains.users.organization_users.repository import OrganizationUserRepository
 from api.tests.steps.user import (
     there_is_a_user,
     there_is_an_access_token_for_user,
@@ -69,7 +69,7 @@ def test_platform_admin_can_create_user():
         with then("they are a member of the chosen org with the chosen role"):
             org_user_repo: OrganizationUserRepository = context.injector.get(OrganizationUserRepository)
             membership = org_user_repo.get_by_user_id_and_organization_id(UUID(payload["id"]), org_id)
-            assert_that(membership, not_none())
+            assert membership is not None
             assert_that(membership.role, equal_to(OrganizationRole.ADMIN))
 
         with then("the new user can login"):

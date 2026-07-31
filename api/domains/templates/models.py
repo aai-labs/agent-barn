@@ -6,7 +6,8 @@ import sqlalchemy as sa
 from fastapi import Query
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic import ConfigDict, Field, model_validator
-from sqlmodel import Column, Field as SqlField
+from sqlmodel import Column
+from sqlmodel import Field as SqlField
 
 from api.domains.skills.models import SkillRead
 from api.infrastructure.postgres.models import BaseModel
@@ -144,7 +145,7 @@ class TemplateUpdate(PydanticBaseModel):
     required_skill_ids: list[UUID] | None = None
 
     @model_validator(mode="after")
-    def validate_not_empty(self) -> "TemplateUpdate":
+    def validate_not_empty(self) -> TemplateUpdate:
         if not self.model_fields_set:
             raise ValueError("At least one field must be provided")
         return self

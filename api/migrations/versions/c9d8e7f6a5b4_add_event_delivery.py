@@ -6,16 +6,16 @@ Create Date: 2026-07-25
 
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "c9d8e7f6a5b4"
-down_revision: Union[str, None] = "b4c7e2a19d34"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "b4c7e2a19d34"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 event_delivery_status_enum = postgresql.ENUM(
     "PENDING",

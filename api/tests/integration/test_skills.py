@@ -18,13 +18,13 @@ from api.tests.core.modules import (
     set_env_variable,
 )
 from api.tests.steps.agent import (
+    TEST_ENCRYPTION_KEY,
     MockK8sModule,
     MockLiteLLMModule,
-    TEST_ENCRYPTION_KEY,
     skill_is_assigned_to_agent,
-    there_is_an_agent,
     there_is_a_skill,
     there_is_a_skill_for_another_org,
+    there_is_an_agent,
     use_org_for_auth,
 )
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
@@ -340,22 +340,21 @@ def test_create_skill_with_oversized_zip_returns_400():
 def test_create_skill_with_spoofed_uncompressed_size_returns_400():
     # The zip's metadata declares 0 bytes per entry (bypassing the header check), but
     # actual extraction totals 1500 bytes — above the patched 1000-byte limit.
-    with patch("api.domains.skills.service._MAX_UNCOMPRESSED_BYTES", 1000):
-        with given(_GIVEN) as context:
-            client: TestClient = context.client
+    with patch("api.domains.skills.service._MAX_UNCOMPRESSED_BYTES", 1000), given(_GIVEN) as context:
+        client: TestClient = context.client
 
-            with when("I create a skill with a zip that has spoofed metadata but oversized content"):
-                response = client.post(
-                    _BASE,
-                    json={
-                        "name": "Spoofed Skill",
-                        "zip_content": _make_zip_spoofed_uncompressed_size(file_count=3, file_size=500),
-                    },
-                    headers=_auth(context),
-                )
+        with when("I create a skill with a zip that has spoofed metadata but oversized content"):
+            response = client.post(
+                _BASE,
+                json={
+                    "name": "Spoofed Skill",
+                    "zip_content": _make_zip_spoofed_uncompressed_size(file_count=3, file_size=500),
+                },
+                headers=_auth(context),
+            )
 
-            with then("it returns 400"):
-                assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+        with then("it returns 400"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
 
 
 def test_create_skill_without_auth_returns_401():

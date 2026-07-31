@@ -1,14 +1,14 @@
-from datetime import datetime, timezone, tzinfo
+from datetime import UTC, datetime, tzinfo
 
 
 class Clock:
     clock_instance = None
 
     def get_now(self) -> datetime:
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)
 
     def now(self) -> datetime:
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)
 
     def get_local_now(self, timezone: tzinfo) -> datetime:
         return self.get_now().astimezone(timezone)

@@ -1,8 +1,9 @@
-import subprocess
 import os
+import subprocess
 from uuid import uuid7
-from sqlalchemy import text, create_engine
+
 from hamcrest import assert_that, equal_to
+from sqlalchemy import create_engine, text
 
 from api.core.config import get_config
 
