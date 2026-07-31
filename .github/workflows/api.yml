@@ -38,6 +38,7 @@ jobs:
 
   test:
     name: Test
+    needs: [lint]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -52,6 +53,7 @@ jobs:
 
   test-k8s:
     name: Test k8s integration
+    needs: [lint]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -103,7 +105,7 @@ jobs:
   push:
     name: Push
     if: inputs.push_image
-    needs: [lint, test, test-k8s]
+    needs: [build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

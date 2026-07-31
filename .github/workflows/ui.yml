@@ -42,6 +42,7 @@ jobs:
 
   test:
     name: Test
+    needs: [lint]
     runs-on: ubuntu-latest
     container:
       image: mcr.microsoft.com/playwright:v1.62.0-noble
@@ -85,7 +86,7 @@ jobs:
   push:
     name: Push
     if: inputs.push_image
-    needs: [lint, test]
+    needs: [build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
