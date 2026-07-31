@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { SharedManualToggle } from "@/features/shared-credentials/components/shared-manual-toggle";
+import { useSharedManualSwitch } from "@/features/shared-credentials/hooks/use-shared-manual-switch";
 import { SHARED_CREDENTIAL_PROVIDER_LABELS } from "@/features/shared-credentials/utils";
 import { useSkills } from "@/features/skills/hooks/use-skills";
 import { SKILL_PROVIDER_LABELS } from "@/features/skills/utils";
@@ -1434,6 +1435,11 @@ export function SkillsStep({
   const [page, setPage] = useState(1);
   const [visible, setVisible] = useState<Record<string, boolean>>({});
 
+  const { switchToShared, switchToManual, handlePickShared } = useSharedManualSwitch(
+    skillCredentials,
+    onSkillCredentialsChange,
+  );
+
   const { skills, total, isLoading } = useSkills({
     search: search || undefined,
     page,
@@ -1637,27 +1643,9 @@ export function SkillsStep({
                     provider={providerId}
                     useShared={useShared}
                     selectedId={draft.sharedCredentialId || undefined}
-                    onSwitchToManual={() =>
-                      onSkillCredentialsChange(
-                        skillCredentials.map((c) =>
-                          c.provider === providerId ? { ...c, sharedCredentialId: undefined } : c,
-                        ),
-                      )
-                    }
-                    onSwitchToShared={() =>
-                      onSkillCredentialsChange(
-                        skillCredentials.map((c) =>
-                          c.provider === providerId ? { ...c, content: {}, sharedCredentialId: "" } : c,
-                        ),
-                      )
-                    }
-                    onPickShared={(brief) =>
-                      onSkillCredentialsChange(
-                        skillCredentials.map((c) =>
-                          c.provider === providerId ? { ...c, sharedCredentialId: brief?.id ?? "" } : c,
-                        ),
-                      )
-                    }
+                    onSwitchToManual={() => switchToManual(providerId)}
+                    onSwitchToShared={() => switchToShared(providerId)}
+                    onPickShared={(brief) => handlePickShared(providerId, brief)}
                   />
                 )}
 
@@ -1766,6 +1754,11 @@ export function IntegrationsStep({
 }) {
   const [visible, setVisible] = useState<Record<string, boolean>>({});
 
+  const { switchToShared, switchToManual, handlePickShared } = useSharedManualSwitch(
+    integrations,
+    onChange,
+  );
+
   const usedProviders = new Set(integrations.map((i) => i.provider));
   const available = INTEGRATION_PROVIDERS.filter((p) => !usedProviders.has(p.id));
 
@@ -1832,27 +1825,9 @@ export function IntegrationsStep({
                 provider={draft.provider}
                 useShared={useShared}
                 selectedId={draft.sharedCredentialId || undefined}
-                onSwitchToManual={() =>
-                  onChange(
-                    integrations.map((i) =>
-                      i.provider === draft.provider ? { ...i, sharedCredentialId: undefined } : i,
-                    ),
-                  )
-                }
-                onSwitchToShared={() =>
-                  onChange(
-                    integrations.map((i) =>
-                      i.provider === draft.provider ? { ...i, content: {}, sharedCredentialId: "" } : i,
-                    ),
-                  )
-                }
-                onPickShared={(brief) =>
-                  onChange(
-                    integrations.map((i) =>
-                      i.provider === draft.provider ? { ...i, sharedCredentialId: brief?.id ?? "" } : i,
-                    ),
-                  )
-                }
+                onSwitchToManual={() => switchToManual(draft.provider)}
+                onSwitchToShared={() => switchToShared(draft.provider)}
+                onPickShared={(brief) => handlePickShared(draft.provider, brief)}
               />
             )}
 

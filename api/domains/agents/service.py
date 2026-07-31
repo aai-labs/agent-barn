@@ -146,6 +146,7 @@ _CREDENTIAL_FIELDS = frozenset(
         "teams_app_id",
         "teams_app_password",
         "secrets",
+        "shared_credentials",
         "removed_secret_providers",
     }
 )

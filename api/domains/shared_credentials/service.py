@@ -107,16 +107,16 @@ class SharedCredentialService:
             credential.content = encrypt_content(validated, self.config.agent_token_encryption_key)
 
         self.repository.save(credential)
-        agent_count = self.repository.count_agent_references(credential.id)
+        agent_count = self.repository.count_agent_references(credential.id, org_id)
         return self._to_read(credential, agent_count=agent_count)
 
     def delete_shared_credential(self, credential_id: UUID, context: CurrentUserContext) -> None:
         org_id = self._require_manager(context)
         credential = self._get_or_404(credential_id, org_id)
 
-        self.repository.delete_orphaned_references(credential.id)
+        self.repository.delete_orphaned_references(credential.id, org_id)
 
-        agent_count = self.repository.count_agent_references(credential.id)
+        agent_count = self.repository.count_agent_references(credential.id, org_id)
         if agent_count > 0:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -130,7 +130,7 @@ class SharedCredentialService:
     def get_shared_credential(self, credential_id: UUID, context: CurrentUserContext) -> SharedCredentialRead:
         org_id = self._org_id(context)
         credential = self._get_or_404(credential_id, org_id)
-        agent_count = self.repository.count_agent_references(credential.id)
+        agent_count = self.repository.count_agent_references(credential.id, org_id)
         return self._to_read(credential, agent_count=agent_count)
 
     def list_shared_credentials(
@@ -141,10 +141,8 @@ class SharedCredentialService:
     ) -> PaginatedItems[SharedCredentialRead]:
         org_id = self._org_id(context)
         credentials, total = self.repository.find_all_for_org(org_id, cred_filter, pagination)
-        reads = []
-        for cred in credentials:
-            agent_count = self.repository.count_agent_references(cred.id)
-            reads.append(self._to_read(cred, agent_count=agent_count))
+        counts = self.repository.count_agent_references_for_ids([c.id for c in credentials], org_id)
+        reads = [self._to_read(cred, agent_count=counts.get(cred.id, 0)) for cred in credentials]
         return PaginatedItems(
             page=pagination.page,
             page_size=pagination.size,

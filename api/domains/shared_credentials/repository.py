@@ -80,23 +80,49 @@ class SharedCredentialRepository:
     def delete(self, credential: SharedCredential) -> None:
         self.delegate.delete(credential)
 
-    def count_agent_references(self, credential_id: UUID) -> int:
+    def count_agent_references(self, credential_id: UUID, org_id: UUID) -> int:
         with Session(self.delegate.engine) as session:
             query = (
                 select(func.count())
                 .select_from(AgentSecret)
                 .join(Agent, col(AgentSecret.agent_id) == col(Agent.id))
                 .where(col(AgentSecret.shared_credential_id) == credential_id)
+                .where(col(Agent.organization_id) == org_id)
                 .where(col(Agent.deleted_at).is_(None))
             )
             return session.scalar(query) or 0
 
-    def delete_orphaned_references(self, credential_id: UUID) -> int:
+    def count_agent_references_for_ids(self, credential_ids: list[UUID], org_id: UUID) -> dict[UUID, int]:
+        """Reference counts for a page of credentials in one grouped query.
+
+        Credentials with no live references are absent from the result — callers
+        supply the 0 default.
+        """
+        if not credential_ids:
+            return {}
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(col(AgentSecret.shared_credential_id), func.count())
+                .select_from(AgentSecret)
+                .join(Agent, col(AgentSecret.agent_id) == col(Agent.id))
+                .where(col(AgentSecret.shared_credential_id).in_(credential_ids))
+                .where(col(Agent.organization_id) == org_id)
+                .where(col(Agent.deleted_at).is_(None))
+                .group_by(col(AgentSecret.shared_credential_id))
+            )
+            counts: dict[UUID, int] = {}
+            for credential_id, count in session.exec(query).all():
+                if credential_id is not None:
+                    counts[credential_id] = count
+            return counts
+
+    def delete_orphaned_references(self, credential_id: UUID, org_id: UUID) -> int:
         with Session(self.delegate.engine) as session:
             orphaned = (
                 select(AgentSecret)
                 .join(Agent, col(AgentSecret.agent_id) == col(Agent.id))
                 .where(col(AgentSecret.shared_credential_id) == credential_id)
+                .where(col(Agent.organization_id) == org_id)
                 .where(col(Agent.deleted_at).is_not(None))
             )
             rows = list(session.exec(orphaned).all())
