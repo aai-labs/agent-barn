@@ -13,8 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v5
-      - uses: azure/setup-helm@v4
+      - uses: astral-sh/setup-uv@v7
+      - uses: azure/setup-helm@v5
       - name: Build chart dependencies
         run: |
           helm repo add prometheus-community https://prometheus-community.github.io/helm-charts

@@ -25,8 +25,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/build-push-action@v6
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
         with:
           context: openclaw-base
           file: openclaw-base/Dockerfile
@@ -51,7 +51,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Log in to registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ vars.REGISTRY_URL }}
           username: ${{ vars.REGISTRY_USERNAME }}
@@ -68,7 +68,7 @@ jobs:
             echo "push_latest=true" >> "$GITHUB_OUTPUT"
           fi
       - name: Build and load for smoke test
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: openclaw-base
           file: openclaw-base/Dockerfile
@@ -84,7 +84,7 @@ jobs:
             ${{ vars.REGISTRY_URL }}/agentfarm-openclaw-base:${{ steps.tag.outputs.value }} \
             /bin/sh /smoke-test.sh
       - name: Push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: openclaw-base
           file: openclaw-base/Dockerfile
@@ -95,7 +95,7 @@ jobs:
             gh_token=${{ secrets.AAI_CLI_REPO_ACCESS_TOKEN }}
       - name: Push latest tag
         if: steps.tag.outputs.push_latest == 'true'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: openclaw-base
           file: openclaw-base/Dockerfile
