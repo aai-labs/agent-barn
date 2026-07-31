@@ -2,6 +2,15 @@ name: Deploy to k3s
 
 on:
   workflow_dispatch:
+    inputs:
+      # TEMP: testing-only escape hatch to validate the build-sha rollout fix
+      # without rebuilding images that haven't changed. Revert this input and
+      # its `if:` guards below once verified.
+      skip_build_push:
+        description: "Skip rebuilding/pushing images; reuse whatever is currently tagged latest/latest-staging"
+        required: false
+        type: boolean
+        default: false
   push:
     branches:
       - staging
@@ -19,18 +28,22 @@ jobs:
   # set here regardless of what changed -- consistent with `build` itself
   # always rebuilding and pushing all four images on every run below.
   api:
+    if: ${{ inputs.skip_build_push != true }}
     uses: ./.github/workflows/api.yml
     secrets: inherit
 
   ui:
+    if: ${{ inputs.skip_build_push != true }}
     uses: ./.github/workflows/ui.yml
     secrets: inherit
 
   hermes-base:
+    if: ${{ inputs.skip_build_push != true }}
     uses: ./.github/workflows/hermes-base.yml
     secrets: inherit
 
   openclaw-base:
+    if: ${{ inputs.skip_build_push != true }}
     uses: ./.github/workflows/openclaw-base.yml
     secrets: inherit
 
@@ -40,6 +53,10 @@ jobs:
   # and doesn't re-run it once it has succeeded.
   build:
     needs: [api, ui, hermes-base, openclaw-base]
+    # TEMP: `needs` jobs above are conditionally skipped when skip_build_push
+    # is set, which would otherwise skip `build` too (default needs-success
+    # behavior) -- explicitly allow proceeding past skipped (not failed) deps.
+    if: ${{ always() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
     runs-on: ubuntu-latest
     outputs:
       namespace: ${{ steps.resolve-env.outputs.namespace }}
@@ -120,6 +137,7 @@ jobs:
               --password-stdin
 
       - name: Build and push API image
+        if: ${{ inputs.skip_build_push != true }}
         env:
           API_IMAGE_TAG: ${{ steps.image-versions.outputs.api_image_tag }}
           PUSH_LATEST: ${{ steps.resolve-env.outputs.push_latest }}
@@ -141,6 +159,7 @@ jobs:
         run: echo "value=$(echo "$API_HOST" | cut -d',' -f1 | tr -d ' ')" >> "$GITHUB_OUTPUT"
 
       - name: Build and push UI image
+        if: ${{ inputs.skip_build_push != true }}
         env:
           UI_IMAGE_TAG: ${{ steps.image-versions.outputs.ui_image_tag }}
           PUSH_LATEST: ${{ steps.resolve-env.outputs.push_latest }}
@@ -158,6 +177,7 @@ jobs:
           fi
 
       - name: Build, smoke test, and push hermes-base image
+        if: ${{ inputs.skip_build_push != true }}
         env:
           DOCKER_BUILDKIT: "1"
           HERMES_IMAGE_TAG: ${{ steps.image-versions.outputs.hermes_image_tag }}
@@ -181,6 +201,7 @@ jobs:
           fi
 
       - name: Build, smoke test, and push openclaw-base image
+        if: ${{ inputs.skip_build_push != true }}
         env:
           DOCKER_BUILDKIT: "1"
           OPENCLAW_IMAGE_TAG: ${{ steps.image-versions.outputs.openclaw_image_tag }}
