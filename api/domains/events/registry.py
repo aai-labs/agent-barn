@@ -9,7 +9,13 @@ from pydantic import BaseModel, ValidationError
 from pydantic_core import PydanticSerializationError
 
 from api.domains.events.constants import SENSITIVE_TOKEN_PARTS
-from api.domains.events.models import ActorIdentity, DomainEventEnvelope, EventPayload, SubjectIdentity
+from api.domains.events.models import (
+    ActorIdentity,
+    DomainEventEnvelope,
+    EventPayload,
+    EventScope,
+    SubjectIdentity,
+)
 
 MAX_PAYLOAD_BYTES = 16 * 1024
 
@@ -69,21 +75,24 @@ class DomainEventRegistry:
         event_name: str,
         schema_version: int,
         occurred_at: datetime,
-        organization_id: UUID,
+        organization_id: UUID | None,
         actor: ActorIdentity,
         subject: SubjectIdentity,
         correlation_id: UUID,
         payload: EventPayload,
         causation_id: UUID | None = None,
+        event_scope: EventScope = EventScope.ORGANIZATION,
     ) -> DomainEventEnvelope:
         definition = self.get(event_name, schema_version)
+        self._validate_scope(event_scope, organization_id)
         self._validate_identity_organization("actor", actor, organization_id)
         self._validate_identity_organization("subject", subject, organization_id)
-        safe_payload = self._validate_payload(definition, payload, organization_id)
+        safe_payload = self._validate_payload(definition, payload, event_scope, organization_id)
         return DomainEventEnvelope(
             event_name=event_name,
             schema_version=schema_version,
             occurred_at=occurred_at,
+            event_scope=event_scope,
             organization_id=organization_id,
             actor=actor,
             subject=subject,
@@ -96,7 +105,8 @@ class DomainEventRegistry:
         self,
         definition: DomainEventDefinition,
         payload: EventPayload,
-        organization_id: UUID,
+        event_scope: EventScope,
+        organization_id: UUID | None,
     ) -> EventPayload:
         if not isinstance(payload, dict):
             raise DomainEventValidationError("Event Payload must be a JSON object")
@@ -113,7 +123,7 @@ class DomainEventRegistry:
             raise DomainEventValidationError("Event Payload schema must serialize to a JSON object")
 
         self._validate_json_value(payload_data, path="payload")
-        self._validate_payload_organization(payload_data, organization_id)
+        self._validate_payload_organization(payload_data, event_scope, organization_id)
         encoded = json.dumps(payload_data, separators=(",", ":"), sort_keys=True)
         if len(encoded.encode("utf-8")) > self._max_payload_bytes:
             raise DomainEventValidationError("Event Payload exceeds maximum size")
@@ -144,15 +154,32 @@ class DomainEventRegistry:
 
     @staticmethod
     def _validate_identity_organization(
-        identity_name: str, identity: ActorIdentity | SubjectIdentity, organization_id: UUID
+        identity_name: str,
+        identity: ActorIdentity | SubjectIdentity,
+        organization_id: UUID | None,
     ) -> None:
         if identity.organization_id is not None and identity.organization_id != organization_id:
             raise DomainEventValidationError(f"{identity_name} belongs to a different Organization")
 
     @staticmethod
-    def _validate_payload_organization(payload: EventPayload, organization_id: UUID) -> None:
+    def _validate_scope(event_scope: EventScope, organization_id: UUID | None) -> None:
+        if event_scope == EventScope.ORGANIZATION and organization_id is None:
+            raise DomainEventValidationError("Organization-scoped events require an Organization")
+        if event_scope == EventScope.PLATFORM and organization_id is not None:
+            raise DomainEventValidationError("Platform-scoped events cannot reference an Organization")
+
+    @staticmethod
+    def _validate_payload_organization(
+        payload: EventPayload,
+        event_scope: EventScope,
+        organization_id: UUID | None,
+    ) -> None:
         for path, value in _walk_dicts(payload):
             ref_org = value.get("organization_id")
+            if ref_org is not None and event_scope == EventScope.PLATFORM:
+                raise DomainEventValidationError(
+                    f"Platform Event Payload reference at {path} cannot contain an Organization"
+                )
             if ref_org is not None and str(ref_org) != str(organization_id):
                 raise DomainEventValidationError(f"Payload reference at {path} belongs to a different Organization")
 

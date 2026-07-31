@@ -5,7 +5,7 @@ from uuid import UUID
 
 import sqlalchemy as sa
 from injector import inject, singleton
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 from api.domains.events.constants import SENSITIVE_TOKEN_PARTS
 from api.domains.events.models import (
@@ -73,6 +73,7 @@ class OutboxMessageRepository:
             event_name=event.event_name,
             schema_version=event.schema_version,
             occurred_at=event.occurred_at,
+            event_scope=event.event_scope,
             organization_id=event.organization_id,
             actor=event.actor.model_dump(mode="json"),
             subject=event.subject.model_dump(mode="json"),
@@ -86,6 +87,7 @@ class OutboxMessageRepository:
             EventDelivery(
                 outbox_message_id=message.id,
                 event_id=message.event_id,
+                event_scope=message.event_scope,
                 organization_id=message.organization_id,
                 handler_name=handler_name,
             )
@@ -95,6 +97,10 @@ class OutboxMessageRepository:
     def get_by_event_id(self, event_id: UUID) -> OutboxMessage | None:
         with Session(self.delegate.engine) as session:
             return session.exec(select(OutboxMessage).where(OutboxMessage.event_id == event_id)).one_or_none()
+
+    def get_latest(self) -> OutboxMessage | None:
+        with Session(self.delegate.engine) as session:
+            return session.exec(select(OutboxMessage).order_by(col(OutboxMessage.created_at).desc())).first()
 
     def list_deliveries_for_event(self, event_id: UUID) -> list[EventDelivery]:
         with Session(self.delegate.engine) as session:

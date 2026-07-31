@@ -29,7 +29,12 @@ from api.domains.events.handlers import (
     SupportedEvent,
     TerminalEventHandlerError,
 )
-from api.domains.events.models import DomainEventEnvelope, EventDelivery, OutboxMessage
+from api.domains.events.models import (
+    DomainEventEnvelope,
+    EventDelivery,
+    EventScope,
+    OutboxMessage,
+)
 from api.domains.events.processor import EventDeliveryProcessor
 from api.domains.events.repository import OutboxMessageRepository
 from api.domains.organizations.models import Organization
@@ -254,6 +259,7 @@ def test_event_delivery_uniqueness_is_event_and_handler_not_retry_attempt(
                 EventDelivery(
                     outbox_message_id=message.id,
                     event_id=event.event_id,
+                    event_scope=EventScope.ORGANIZATION,
                     organization_id=organization_id,
                     handler_name="audit.projection",
                     attempt_count=99,
@@ -738,6 +744,7 @@ def test_duplicate_delivery_constraint_rolls_back_business_mutation(
                 EventDelivery(
                     outbox_message_id=message.id,
                     event_id=event.event_id,
+                    event_scope=EventScope.ORGANIZATION,
                     organization_id=organization_id,
                     handler_name="audit.projection",
                 )

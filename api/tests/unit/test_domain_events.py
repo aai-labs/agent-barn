@@ -11,6 +11,7 @@ from api.domains.events import (
     DomainEventDefinition,
     DomainEventRegistry,
     DomainEventValidationError,
+    EventScope,
     SubjectIdentity,
     SubjectIdentityType,
     UnsupportedDomainEventError,
@@ -85,6 +86,55 @@ def test_build_event_accepts_registered_schema_version_and_returns_envelope():
     assert event.organization_id == organization_id
     assert event.causation_id is None
     assert event.payload["organization_id"] == str(organization_id)
+
+
+def test_build_platform_event_requires_no_organization_reference():
+    event = _registry().build_event(
+        event_name="agent.anything_sampled",
+        schema_version=1,
+        occurred_at=datetime(2026, 7, 31, tzinfo=UTC),
+        event_scope=EventScope.PLATFORM,
+        organization_id=None,
+        actor=ActorIdentity(type=ActorIdentityType.USER, id=uuid4()),
+        subject=SubjectIdentity(type=SubjectIdentityType.USER, id=uuid4()),
+        correlation_id=uuid4(),
+        payload={"value": "platform change"},
+    )
+
+    assert event.event_scope == EventScope.PLATFORM
+    assert event.organization_id is None
+
+
+def test_build_platform_event_rejects_organization_identity():
+    organization_id = uuid4()
+
+    with pytest.raises(DomainEventValidationError, match="cannot reference"):
+        _registry().build_event(
+            event_name="agent.anything_sampled",
+            schema_version=1,
+            occurred_at=datetime(2026, 7, 31, tzinfo=UTC),
+            event_scope=EventScope.PLATFORM,
+            organization_id=organization_id,
+            actor=ActorIdentity(type=ActorIdentityType.USER, id=uuid4()),
+            subject=SubjectIdentity(type=SubjectIdentityType.USER, id=uuid4()),
+            correlation_id=uuid4(),
+            payload={"value": "platform change"},
+        )
+
+
+def test_build_organization_event_rejects_missing_organization():
+    with pytest.raises(DomainEventValidationError, match="require an Organization"):
+        _registry().build_event(
+            event_name="agent.anything_sampled",
+            schema_version=1,
+            occurred_at=datetime(2026, 7, 31, tzinfo=UTC),
+            event_scope=EventScope.ORGANIZATION,
+            organization_id=None,
+            actor=ActorIdentity(type=ActorIdentityType.USER, id=uuid4()),
+            subject=SubjectIdentity(type=SubjectIdentityType.USER, id=uuid4()),
+            correlation_id=uuid4(),
+            payload={"value": "organization change"},
+        )
 
 
 def test_registry_returns_handler_names_for_registered_event():

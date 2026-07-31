@@ -11,6 +11,8 @@ AGENT_GENERAL_ACCESS_CHANGED = "agent.general_access.changed"
 AGENT_CREATED = "agent.created"
 AGENT_STARTED = "agent.started"
 AGENT_STOPPED = "agent.stopped"
+PLATFORM_USER_PRIVILEGE_GRANTED = "platform.user_privilege.granted"
+PLATFORM_USER_PRIVILEGE_REVOKED = "platform.user_privilege.revoked"
 
 SECURITY_AUDIT_HANDLER = "security_audit.projection"
 AGENT_LIFECYCLE_EMAIL_HANDLER = "agent.lifecycle_email.notification"
@@ -76,6 +78,16 @@ class AgentLifecyclePayload(BaseModel):
     runtime: str
 
 
+class PlatformUserPrivilegeChangedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    actor_user_id: UUID
+    actor_display: str
+    subject_user_id: UUID
+    subject_display: str
+    reason: str
+
+
 def build_default_event_registry() -> DomainEventRegistry:
     registry = DomainEventRegistry()
     for event_name, payload_model in (
@@ -106,6 +118,18 @@ def build_default_event_registry() -> DomainEventRegistry:
                 schema_version=1,
                 payload_model=AgentLifecyclePayload,
                 handler_names=(AGENT_LIFECYCLE_EMAIL_HANDLER,),
+            )
+        )
+    for event_name in (
+        PLATFORM_USER_PRIVILEGE_GRANTED,
+        PLATFORM_USER_PRIVILEGE_REVOKED,
+    ):
+        registry.register(
+            DomainEventDefinition(
+                event_name=event_name,
+                schema_version=1,
+                payload_model=PlatformUserPrivilegeChangedPayload,
+                handler_names=(SECURITY_AUDIT_HANDLER,),
             )
         )
     return registry
