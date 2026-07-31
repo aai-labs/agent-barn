@@ -1,3 +1,5 @@
+from unittest.mock import MagicMock
+
 from fastapi import status
 from hamcrest import assert_that, contains_string, equal_to
 from starlette.testclient import TestClient
@@ -55,7 +57,7 @@ def _auth(context) -> dict:
 def test_start_agent_with_shared_credential_sets_status_running():
     with given([*_GIVEN, there_is_an_agent(), there_is_a_shared_credential()]) as ctx:
         client: TestClient = ctx.client
-        k8s: KubernetesClient = ctx.injector.get(KubernetesClient)
+        k8s: MagicMock = ctx.injector.get(KubernetesClient)
 
         with when("I attach a shared jira credential and start the agent"):
             client.patch(
