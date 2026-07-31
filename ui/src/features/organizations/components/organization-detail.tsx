@@ -103,7 +103,7 @@ export function OrganizationDetail({ organizationId }: { organizationId: string 
 
   if (isLoading) {
     return (
-      <div className="max-w-[1000px] mx-auto px-10 pt-9 pb-24">
+      <div className="af-page">
         <div
           className="flex items-center gap-2 py-10 text-[13.5px]"
           style={{ color: "var(--ink-3)" }}
@@ -117,7 +117,7 @@ export function OrganizationDetail({ organizationId }: { organizationId: string 
 
   if (!organization) {
     return (
-      <div className="max-w-[1000px] mx-auto px-10 pt-9 pb-24">
+      <div className="af-page">
         <div className="text-[14px]" style={{ color: "var(--ink-3)" }}>
           Organization not found.
         </div>
@@ -128,7 +128,7 @@ export function OrganizationDetail({ organizationId }: { organizationId: string 
   const memberCount = membersLoading ? null : members.length;
 
   return (
-    <div className="max-w-[1000px] mx-auto px-10 pt-9 pb-24">
+    <div className="af-page">
       {user.isPlatformAdmin && (
         <Link
           href="/dashboard/platform/organizations"

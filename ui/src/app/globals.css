@@ -135,6 +135,16 @@
 
 /* ─── Agent Barn utility classes ─────────────────────────────────── */
 
+/* Canonical dashboard page content width. Every /dashboard/** page body should
+   use this (instead of ad-hoc max-w-[...] mx-auto px-10 pt-9 pb-24 variants) so
+   content width doesn't visibly shift when navigating between pages. */
+.af-page {
+  max-width: 1200px;
+  margin-left: auto;
+  margin-right: auto;
+  padding: 36px 40px 96px;
+}
+
 .af-card {
   background: var(--bg-elev);
   border: 1px solid var(--line);

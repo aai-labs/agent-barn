@@ -106,7 +106,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
 
   return (
     <div style={{ background: "var(--bg)" }}>
-      <div className="max-w-[73.75rem] mx-auto px-10 pt-7 pb-24">
+      <div className="af-page">
         <Link
           href={homeHref}
           className="inline-flex items-center gap-1.5 text-[0.8125rem] mb-6 px-2 py-1 -ml-2 rounded-lg hover:bg-[var(--bg-soft)] transition-colors"
