@@ -64,7 +64,7 @@ def database_is_clean():
         delegate.delete_all(RefreshToken)
         delegate.delete_all(PasswordResetToken)
         delegate.delete_all(OrganizationUser)
-        delegate.delete_all(User)
         delegate.delete_all(Organization)
+        delegate.delete_all(User)
 
     return step
