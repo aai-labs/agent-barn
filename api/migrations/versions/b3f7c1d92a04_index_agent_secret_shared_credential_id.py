@@ -5,7 +5,7 @@ index every reference count scans agent_secret, and every DELETE on
 shared_credential scans it again to enforce the RESTRICT constraint.
 
 Revision ID: b3f7c1d92a04
-Revises: dee13d2cd664
+Revises: dee13d2cd664, 181dcfcc93ef
 Create Date: 2026-07-31 10:14:22.881034
 
 """
@@ -17,7 +17,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "b3f7c1d92a04"
-down_revision: Union[str, None] = "dee13d2cd664"
+down_revision: Union[str, tuple[str, str], None] = ("dee13d2cd664", "181dcfcc93ef")
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
