@@ -19,13 +19,11 @@ import {
   expandGithubContent,
   getIntegrationProvider,
   hasIncompleteIntegration,
-  isOAuthConnected,
   type IntegrationDraft,
 } from "../integrations";
 import { useUpdateAgent } from "../hooks/use-update-agent";
 import type { Agent, AgentAssignedSkill } from "../schemas";
-import { FormField, GoogleAuthButton, TokenInput } from "./hire-dialog-primitives";
-import { RepoListField } from "./hire-dialog-steps";
+import { IntegrationFields } from "./integration-fields";
 
 interface AgentSkillsTabProps {
   agent: Agent;
@@ -41,7 +39,6 @@ export function AgentSkillsTab({ agent, isRunning }: AgentSkillsTabProps) {
   const [pendingAddIds, setPendingAddIds] = useState<string[]>([]);
   const [pendingRemoveIds, setPendingRemoveIds] = useState<string[]>([]);
   const [newSecretDrafts, setNewSecretDrafts] = useState<IntegrationDraft[]>([]);
-  const [visible, setVisible] = useState<Record<string, boolean>>({});
   const [saved, setSaved] = useState(false);
 
   const existingSecretProviders = new Set(
@@ -341,97 +338,18 @@ export function AgentSkillsTab({ agent, isRunning }: AgentSkillsTabProps) {
                 )}
 
                 {!useShared && (
-                  <>
-                    {providerSpec.authMethod === "google_oauth" && (
-                      <GoogleAuthButton
-                        connected={isOAuthConnected(draft)}
-                        onConnected={({ refreshToken, clientId, clientSecret }) => {
-                          setField(providerId, "refreshToken", refreshToken);
-                          setField(providerId, "clientId", clientId);
-                          setField(providerId, "clientSecret", clientSecret);
-                        }}
-                      />
-                    )}
-                    {providerSpec.fields.map((field) => {
-                      if (field.dependsOn && draft.content[field.dependsOn.key] !== field.dependsOn.value) {
-                        return null;
-                      }
-                      const label = field.required
-                        ? field.label
-                        : `${field.label} (optional)`;
-
-                      if (field.type === "repo-list") {
-                        const repos = Array.isArray(draft.content[field.key])
-                          ? (draft.content[field.key] as string[])
-                          : [];
-                        return (
-                          <FormField key={field.key} label={label} hint={field.hint}>
-                            <RepoListField
-                              repos={repos}
-                              onChange={(next) => setRepos(providerId, field.key, next)}
-                              placeholder={field.placeholder}
-                            />
-                          </FormField>
-                        );
-                      }
-
-                      const rawValue = draft.content[field.key];
-                      const value = typeof rawValue === "string" ? rawValue : "";
-
-                      if (field.type === "secret") {
-                        const vkey = `${providerId}:${field.key}`;
-                        return (
-                          <FormField key={field.key} label={label} hint={field.hint}>
-                            <TokenInput
-                              value={value}
-                              onChange={(v) => setField(providerId, field.key, v)}
-                              visible={!!visible[vkey]}
-                              onToggle={() =>
-                                setVisible((s) => ({ ...s, [vkey]: !s[vkey] }))
-                              }
-                              placeholder={field.placeholder}
-                            />
-                          </FormField>
-                        );
-                      }
-
-                      if (field.type === "radio") {
-                        return (
-                          <FormField key={field.key} label={label} hint={field.hint}>
-                            <div className="flex flex-col gap-2 mt-1">
-                              {field.options?.map((opt) => (
-                                <label key={opt.value} className="flex items-center gap-2 cursor-pointer">
-                                  <input
-                                    type="radio"
-                                    name={`tab-${providerId}-${field.key}`}
-                                    value={opt.value}
-                                    checked={value === opt.value}
-                                    onChange={(e) => setField(providerId, field.key, e.target.value)}
-                                    className="accent-[var(--blue-9)]"
-                                  />
-                                  <span className="text-[13px]" style={{ color: "var(--ink-1)" }}>{opt.label}</span>
-                                </label>
-                              ))}
-                            </div>
-                          </FormField>
-                        );
-                      }
-
-                      return (
-                        <FormField key={field.key} label={label} hint={field.hint}>
-                          <input
-                            className="af-input"
-                            value={value}
-                            onChange={(e) =>
-                              setField(providerId, field.key, e.target.value)
-                            }
-                            placeholder={field.placeholder}
-                            autoComplete="off"
-                          />
-                        </FormField>
-                      );
-                    })}
-                  </>
+                  <IntegrationFields
+                    provider={providerSpec}
+                    draft={draft}
+                    namePrefix="tab-"
+                    onFieldChange={(key, value) => setField(providerId, key, value)}
+                    onReposChange={(key, repos) => setRepos(providerId, key, repos)}
+                    onOAuthConnected={({ refreshToken, clientId, clientSecret }) => {
+                      setField(providerId, "refreshToken", refreshToken);
+                      setField(providerId, "clientId", clientId);
+                      setField(providerId, "clientSecret", clientSecret);
+                    }}
+                  />
                 )}
               </div>
             );
