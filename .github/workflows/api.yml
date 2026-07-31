@@ -131,5 +131,4 @@ jobs:
           push: true
           tags: ${{ vars.REGISTRY_URL }}/agentfarm-api:${{ steps.tag.outputs.value }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
 

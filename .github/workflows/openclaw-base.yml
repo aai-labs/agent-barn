@@ -75,7 +75,6 @@ jobs:
           load: true
           tags: ${{ vars.REGISTRY_URL }}/agentfarm-openclaw-base:${{ steps.tag.outputs.value }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
           secrets: |
             gh_token=${{ secrets.AAI_CLI_REPO_ACCESS_TOKEN }}
       - name: Smoke test
@@ -92,7 +91,6 @@ jobs:
           push: true
           tags: ${{ vars.REGISTRY_URL }}/agentfarm-openclaw-base:${{ steps.tag.outputs.value }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
           secrets: |
             gh_token=${{ secrets.AAI_CLI_REPO_ACCESS_TOKEN }}
       - name: Push latest tag
@@ -104,7 +102,6 @@ jobs:
           push: true
           tags: ${{ vars.REGISTRY_URL }}/agentfarm-openclaw-base:latest
           cache-from: type=gha
-          cache-to: type=gha,mode=max
           secrets: |
             gh_token=${{ secrets.AAI_CLI_REPO_ACCESS_TOKEN }}
 

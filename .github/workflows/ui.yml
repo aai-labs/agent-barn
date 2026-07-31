@@ -116,5 +116,4 @@ jobs:
           build-args: |
             NEXT_PUBLIC_BACKEND_URL=https://${{ steps.tag.outputs.api_host }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
 
