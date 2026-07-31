@@ -1,6 +1,6 @@
 import logging
 import traceback
-from contextlib import asynccontextmanager  # noqa: I001
+from contextlib import asynccontextmanager
 from typing import Annotated
 
 from fastapi import FastAPI, HTTPException, Response, status
