@@ -8,6 +8,18 @@ Agent Farm manages organization-owned AI agents that operate in Slack, Microsoft
 The tenant boundary that owns agents, templates, skills, memberships, and organization-scoped activity.
 _Avoid_: workspace, tenant account
 
+**Organization Creator**:
+The user who originally created an Organization, retained as immutable provenance. Creation grants an Organization Owner Membership, but later ownership changes do not change the Organization Creator.
+_Avoid_: Organization Owner, current owner
+
+**Organization Status**:
+The platform-controlled lifecycle state of an Organization: Active or Suspended. Suspension preserves the Organization and its Memberships while disabling organization-scoped access and runtime activity until reactivation.
+_Avoid_: deleted Organization, disabled Membership
+
+**Organization Creation Limit**:
+The deployment-configured maximum number of non-deleted Organizations attributed to one Organization Creator. Active and Suspended Organizations both count, and Platform Privilege does not bypass the limit.
+_Avoid_: Membership limit, ownership limit, Platform Administrator quota
+
 **Platform Administrator**:
 A user with platform-level authority to administer Agent Farm outside any single Organization. A Platform Administrator may also have normal Memberships, but platform authority is separate from Organization Membership authority.
 _Avoid_: superuser, super admin, global role
@@ -21,8 +33,12 @@ A global resource owned by Agent Farm itself rather than by an Organization.
 _Avoid_: default Organization resource, shared tenant data
 
 **Platform View**:
-The product mode where a Platform Administrator manages platform-level users, organizations, and operational metadata without an Active Organization.
+The product mode where a Platform Administrator manages Platform Resources and Platform Oversight Data without an Active Organization or direct access to Organization-owned resources.
 _Avoid_: default Organization, admin Organization, global workspace
+
+**Platform Oversight Data**:
+An explicitly allowlisted, read-only representation of user, Organization, Membership, Agent, activity, model-usage, and platform-borne cost facts used for cross-Organization governance. It excludes tenant content, configuration payloads, credentials, Secrets, and raw telemetry.
+_Avoid_: Organization View, impersonation, unrestricted tenant access
 
 **Organization View**:
 The product mode where a user, including a Platform Administrator with Memberships, operates through Membership authority inside an Active Organization.
@@ -63,6 +79,14 @@ _Avoid_: Organization Owner, permanent Agent authority
 **Agent**:
 An organization-owned AI worker configured from a pinned template version and executed by one runtime on one chat platform.
 _Avoid_: bot, pod
+
+**Configured Model**:
+The model currently selected for an Agent. It describes present configuration, not necessarily every model the Agent used historically.
+_Avoid_: model usage, observed model
+
+**Observed Model Usage**:
+The models and token usage attributed to Agent executions during a defined reporting period. It may include multiple models and may differ from the Agent's current Configured Model.
+_Avoid_: configured model, current model
 
 **Runtime**:
 The implementation that executes an agent. Agent Farm currently supports Hermes and OpenClaw.
@@ -105,8 +129,12 @@ An ingested record of one external tool execution by an agent, with pending, suc
 _Avoid_: integration call
 
 **Domain Event**:
-An immutable, typed business fact that occurred within an Organization and may be handled internally by Agent Farm.
+An immutable, typed business fact that occurred at Platform or Organization scope and may be handled internally by Agent Farm.
 _Avoid_: outbox row, telemetry event, audit log
+
+**Event Scope**:
+The boundary within which a Domain Event occurred: Platform or Organization. Organization-scoped events identify exactly one Organization; Platform-scoped events identify none.
+_Avoid_: default Organization, global tenant
 
 **Outbox Message**:
 The durable PostgreSQL record of a committed Domain Event that represents publication intent without depending on a broker-specific transport.
@@ -137,7 +165,7 @@ A named internal consumer of one or more Domain Events, with a stable identity u
 _Avoid_: worker, callback, subscriber
 
 **Security Audit Record**:
-A durable compliance artifact that records a security-relevant fact, usually produced as a projection from a Domain Event.
+A durable, immutable compliance artifact that records a security-relevant fact, usually produced as a projection from a Domain Event. It survives deletion of the Organization, user, Membership, Agent, or other subject it describes.
 _Avoid_: domain event, audit event, log line
 
 **Ingest**:
@@ -147,16 +175,19 @@ _Avoid_: webhook
 ## Relationships
 
 - An **Organization** has many **Memberships**, **Agents**, **Templates**, and custom **Skills**.
+- An **Organization** has one immutable **Organization Creator**, and creation grants that user the initial Organization Owner **Membership**.
+- **Platform Oversight Data** may describe Organizations and their resources but never establishes an Active Organization or grants Organization authority.
 - A **Membership** links one user to one **Organization** with one **Organization Role**.
 - An **Organization Role** grants **Permissions** for Organization capabilities.
 - An **Agent Access Role** grants **Permissions** for one Agent aggregate.
 - An **Agent** belongs to one **Organization**, has one original **Agent Creator**, pins one **Template Version**, uses one **Runtime**, and connects to one **Platform**.
+- An **Agent** has one current **Configured Model** and may have **Observed Model Usage** for multiple models over time.
 - A **Membership** may have **Agent Access** to many Agents, and each relationship carries one **Agent Access Role**; creating an Agent grants its creator explicit Agent Owner access without transferring Organization ownership.
 - An **Agent** has one **Agent General Access** setting whose Permissions combine with (never subtract from) explicit Agent Access grants.
 - A **Template Version** may require multiple **Skills**.
 - An **Agent** may have multiple **Skills** and **Agent Secrets**.
 - Agent runtimes send **Telemetry Events** through **Ingest**, where they become **Conversation Messages** or **Tool Calls**.
-- A committed **Domain Event** is persisted as one **Outbox Message** and may have many **Event Deliveries**, one per intended handler.
+- A **Domain Event** has one **Event Scope**. A committed Domain Event is persisted as one **Outbox Message** and may have many **Event Deliveries**, one per intended handler.
 - A **Security Audit Record** may be produced from a **Domain Event**, but it is not itself the Domain Event.
 
 ## Flagged ambiguities
