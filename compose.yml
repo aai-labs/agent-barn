@@ -104,6 +104,9 @@ services:
         condition: service_started
     environment:
       NEXT_PUBLIC_BACKEND_URL: http://api:8000
+      # Non-interactive: without this, pnpm prompts before pruning node_modules
+      # when the lockfile changes, which hangs forever with no TTY in the container.
+      CI: "true"
     volumes:
       - ./ui:/app
       - aai_ui_node_modules:/app/node_modules
