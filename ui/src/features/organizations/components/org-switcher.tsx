@@ -2,11 +2,13 @@
 
 import { useEffect, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
+import { PlusIcon } from "lucide-react";
 
 import { BuildingIcon, CheckIcon, ChevronDownIcon, ShieldIcon } from "@/components/icons";
 import { useCurrentUser } from "@/auth/providers/user-context-provider";
 import { useOrganizationContext } from "@/features/organizations/providers/organization-provider";
 import type { Organization } from "../schemas";
+import { CreateOrganizationDialog } from "./create-organization-dialog";
 
 // Segments directly under /dashboard/ that are NOT an org id (global admin / personal).
 const GLOBAL_DASHBOARD_SEGMENTS = new Set(["account", "platform"]);
@@ -17,6 +19,7 @@ export function OrgSwitcher() {
   const router = useRouter();
   const pathname = usePathname() ?? "";
   const [open, setOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const isPlatformView = pathname.startsWith("/dashboard/platform");
 
@@ -57,53 +60,37 @@ export function OrgSwitcher() {
     }
   };
 
-  // Nothing to show (e.g. a platform admin with no memberships) — the org is managed from
-  // the Organizations page instead.
-  if (!user.isPlatformAdmin && (organizations.length === 0 || !selectedOrganization)) {
-    return null;
-  }
-
-  // Only one org — show it as a static breadcrumb, no switcher affordance.
-  if (!user.isPlatformAdmin && organizations.length === 1 && selectedOrganization) {
-    return (
-      <div
-        className="flex items-center gap-1.5 text-[13px]"
-        style={{ color: "var(--ink-3)" }}
-      >
-        <span style={{ color: "var(--ink-5)" }}>/</span>
-        <span>{selectedOrganization.name}</span>
-      </div>
-    );
-  }
-
   return (
-    <div ref={ref} className="relative flex items-center gap-1.5">
-      <span className="text-[13px]" style={{ color: "var(--ink-5)" }}>
-        /
-      </span>
-      <button
-        className="af-hover-bg flex items-center gap-1.5 rounded-lg px-2 py-[5px] text-[13px]"
-        style={{ color: "var(--ink-2)" }}
-        onClick={() => setOpen((v) => !v)}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-      >
-        <span className="max-w-[180px] truncate font-medium">
-          {isPlatformView ? "Platform" : selectedOrganization?.name ?? "Platform"}
+    <>
+      <div ref={ref} className="relative flex items-center gap-1.5">
+        <span className="text-[13px]" style={{ color: "var(--ink-5)" }}>
+          /
         </span>
-        <ChevronDownIcon size={13} style={{ color: "var(--ink-4)" }} />
-      </button>
-
-      {open && (
-        <div
-          role="listbox"
-          className="absolute left-3 top-[calc(100%+8px)] z-50 max-h-80 w-64 overflow-y-auto rounded-xl py-1"
-          style={{
-            background: "var(--bg-elev)",
-            border: "1px solid var(--line)",
-            boxShadow: "var(--shadow-pop)",
-          }}
+        <button
+          className="af-hover-bg flex items-center gap-1.5 rounded-lg px-2 py-[5px] text-[13px]"
+          style={{ color: "var(--ink-2)" }}
+          onClick={() => setOpen((v) => !v)}
+          aria-haspopup="listbox"
+          aria-expanded={open}
         >
+          <span className="max-w-[180px] truncate font-medium">
+            {isPlatformView
+              ? "Platform"
+              : selectedOrganization?.name ?? "Organizations"}
+          </span>
+          <ChevronDownIcon size={13} style={{ color: "var(--ink-4)" }} />
+        </button>
+
+        {open && (
+          <div
+            role="listbox"
+            className="absolute left-3 top-[calc(100%+8px)] z-50 max-h-80 w-64 overflow-y-auto rounded-xl py-1"
+            style={{
+              background: "var(--bg-elev)",
+              border: "1px solid var(--line)",
+              boxShadow: "var(--shadow-pop)",
+            }}
+          >
           {user.isPlatformAdmin && (
             <>
               <div
@@ -154,8 +141,22 @@ export function OrgSwitcher() {
               </button>
             );
           })}
-        </div>
-      )}
-    </div>
+            <div className="mx-3 my-1" style={{ borderTop: "1px solid var(--line)" }} />
+            <button
+              className="af-hover-bg flex w-full items-center gap-2.5 px-3.5 py-2 text-left text-[13.5px]"
+              style={{ color: "var(--ink-2)" }}
+              onClick={() => {
+                setOpen(false);
+                setCreateOpen(true);
+              }}
+            >
+              <PlusIcon size={15} style={{ color: "var(--ink-4)" }} />
+              Create organization
+            </button>
+          </div>
+        )}
+      </div>
+      <CreateOrganizationDialog open={createOpen} onOpenChange={setCreateOpen} />
+    </>
   );
 }

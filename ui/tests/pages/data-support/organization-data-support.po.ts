@@ -75,7 +75,7 @@ export class OrganizationDataSupport {
   async interceptCreateOrganization({
     success = true,
     status = 201,
-    detail = "Only a platform_admin can create organizations",
+    detail = "You can create up to 5 organizations",
     result,
   }: {
     success?: boolean;
@@ -83,7 +83,7 @@ export class OrganizationDataSupport {
     detail?: string;
     result?: unknown;
   } = {}) {
-    await this.page.route("**/api/v1/platform/organizations", async (route) => {
+    await this.page.route("**/api/v1/organizations", async (route) => {
       if (route.request().method() !== "POST") {
         await route.fallback();
         return;
@@ -96,20 +96,22 @@ export class OrganizationDataSupport {
         });
         return;
       }
+      const request = route.request().postDataJSON() as {
+        name?: string;
+        description?: string;
+      };
       await route.fulfill({
         status,
         contentType: "application/json",
         body: JSON.stringify(
-          result ?? {
-            organization: org({
+          result ??
+            org({
               id: ORG_B_ID,
-              name: "New Org",
-              owner_email: "founder@acme.com",
-              owner_name: null,
+              name: request.name ?? "New Org",
+              description: request.description ?? null,
+              owner_email: "owner-a@example.com",
+              owner_name: "Grace Hopper",
             }),
-            invite_link:
-              "http://127.0.0.1:3003/set-password?token=create-token-123",
-          },
         ),
       });
     });

@@ -87,7 +87,7 @@ export class UserDataSupport {
                     full_name: "Ada Lovelace",
                     email: "ada@example.com",
                     is_platform_admin: false,
-                    email_verified_at: "2024-01-01T00:00:00Z",
+                    email_verified_at: null,
                   },
                 ],
               }),
@@ -127,17 +127,67 @@ export class UserDataSupport {
         contentType: "application/json",
         body: JSON.stringify(
           user ?? {
-            id: "22222222-2222-4222-8222-222222222222",
-            created_at: "2024-01-01T00:00:00Z",
-            updated_at: "2024-01-01T00:00:00Z",
-            full_name: "New User",
-            email: "new@example.com",
-            is_platform_admin: false,
-            email_verified_at: null,
+            user: {
+              id: "22222222-2222-4222-8222-222222222222",
+              created_at: "2024-01-01T00:00:00Z",
+              updated_at: "2024-01-01T00:00:00Z",
+              full_name: "New User",
+              email: "new@example.com",
+              is_platform_admin: false,
+              email_verified_at: null,
+              organization_users: [],
+            },
+            organization: {
+              id: "33333333-3333-4333-8333-333333333333",
+              created_at: "2024-01-01T00:00:00Z",
+              updated_at: "2024-01-01T00:00:00Z",
+              name: "New User Studio",
+              description: null,
+              owner_email: "new@example.com",
+              owner_name: "New User",
+              allowed_models: ["openai/gpt-5"],
+            },
+            invite_link: "http://localhost:3000/set-password?token=new-user-token",
           },
         ),
       });
     });
+  }
+
+  async interceptResendUserInviteRequest({
+    success = true,
+    status = 409,
+    detail = "An active user does not need an invitation",
+  }: {
+    success?: boolean;
+    status?: number;
+    detail?: string;
+  } = {}) {
+    await this.page.route(
+      "**/api/v1/platform/users/*/resend-invite",
+      async (route) => {
+        if (route.request().method() !== "POST") {
+          await route.fallback();
+          return;
+        }
+        if (!success) {
+          await route.fulfill({
+            status,
+            contentType: "application/json",
+            body: JSON.stringify({ detail }),
+          });
+          return;
+        }
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            invite_link:
+              "http://localhost:3000/set-password?token=resent-user-token",
+          }),
+        });
+      },
+    );
   }
 
   async interceptDeleteUserRequest({
@@ -194,6 +244,53 @@ export class UserDataSupport {
 
       await route.fulfill({ status: 204 });
     });
+  }
+
+  async interceptPlatformPrivilegeRequest({
+    success = true,
+    status = 409,
+    detail = "Platform Privilege is already in the requested state",
+  }: {
+    success?: boolean;
+    status?: number;
+    detail?: string;
+  } = {}) {
+    await this.page.route(
+      "**/api/v1/platform/users/*/platform-privilege",
+      async (route) => {
+        if (route.request().method() !== "PATCH") {
+          await route.fallback();
+          return;
+        }
+        if (!success) {
+          await route.fulfill({
+            status,
+            contentType: "application/json",
+            body: JSON.stringify({ detail }),
+          });
+          return;
+        }
+        const request = route.request().postDataJSON() as {
+          is_platform_admin?: boolean;
+          isPlatformAdmin?: boolean;
+        };
+        const isPlatformAdmin =
+          request.is_platform_admin ?? request.isPlatformAdmin ?? false;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            id: "11111111-1111-4111-8111-111111111111",
+            created_at: "2024-01-01T00:00:00Z",
+            updated_at: "2024-01-01T00:00:00Z",
+            full_name: "Ada Lovelace",
+            email: "ada@example.com",
+            is_platform_admin: isPlatformAdmin,
+            email_verified_at: "2024-01-01T00:00:00Z",
+          }),
+        });
+      },
+    );
   }
 
   async interceptChangePasswordRequest({

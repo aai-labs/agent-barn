@@ -4,11 +4,10 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/shared/api";
 import { toastError } from "@/shared/toast";
+import { currentUserContextKey } from "@/auth/utils";
 
 import {
   type CreateOrganizationFormData,
-  type OrganizationCreateResult,
-  OrganizationCreateResultSchema,
   OrganizationSchema,
 } from "../schemas";
 import { organizationsKey } from "../utils";
@@ -18,15 +17,16 @@ export function useCreateOrganization() {
 
   return useMutation({
     mutationFn: async (data: CreateOrganizationFormData) => {
-      const response = await api.post<OrganizationCreateResult>(
-        "/api/v1/platform/organizations",
+      const response = await api.post(
+        "/api/v1/organizations",
         data,
-        { schema: OrganizationCreateResultSchema },
+        { schema: OrganizationSchema },
       );
       return response.data;
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: organizationsKey.lists() });
+      void queryClient.invalidateQueries({ queryKey: currentUserContextKey.all });
     },
   });
 }
@@ -54,7 +54,7 @@ export function useUpdateOrganization() {
       organizationId: string;
       data: Partial<{ name: string; description: string; allowedModels: string[] }>;
     }) => {
-      const response = await api.patch<OrganizationCreateResult["organization"]>(
+      const response = await api.patch(
         `/api/v1/organizations/${organizationId}`,
         data,
         { schema: OrganizationSchema },
