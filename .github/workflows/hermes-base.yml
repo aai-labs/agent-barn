@@ -12,6 +12,12 @@ on:
       - hermes-base/**
       - .github/workflows/hermes-base.yml
   workflow_call:
+    inputs:
+      push_image:
+        description: Whether to build and push the image to the registry
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   build:
@@ -39,7 +45,7 @@ jobs:
 
   push:
     name: Push
-    if: github.event_name == 'workflow_call'
+    if: inputs.push_image
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

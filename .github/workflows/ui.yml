@@ -13,6 +13,12 @@ on:
       - Makefile
       - .github/workflows/ui.yml
   workflow_call:
+    inputs:
+      push_image:
+        description: Whether to build and push the image to the registry
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   lint:
@@ -78,7 +84,7 @@ jobs:
 
   push:
     name: Push
-    if: github.event_name == 'workflow_call'
+    if: inputs.push_image
     needs: [lint, test]
     runs-on: ubuntu-latest
     steps:

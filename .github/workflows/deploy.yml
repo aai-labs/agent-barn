@@ -63,24 +63,32 @@ jobs:
     if: ${{ needs.detect-changes.outputs.api == 'true' }}
     uses: ./.github/workflows/api.yml
     secrets: inherit
+    with:
+      push_image: true
 
   ui:
     needs: [detect-changes]
     if: ${{ needs.detect-changes.outputs.ui == 'true' }}
     uses: ./.github/workflows/ui.yml
     secrets: inherit
+    with:
+      push_image: true
 
   hermes-base:
     needs: [detect-changes]
     if: ${{ needs.detect-changes.outputs.hermes == 'true' }}
     uses: ./.github/workflows/hermes-base.yml
     secrets: inherit
+    with:
+      push_image: true
 
   openclaw-base:
     needs: [detect-changes]
     if: ${{ needs.detect-changes.outputs.openclaw == 'true' }}
     uses: ./.github/workflows/openclaw-base.yml
     secrets: inherit
+    with:
+      push_image: true
 
   # Replaces the old `build` job: resolves per-environment config (namespace,
   # hosts, image tags, service account) from the branch. No longer builds
