@@ -6,6 +6,14 @@ on:
       - helm/monitoring/**
       - Makefile
       - .github/workflows/monitoring.yml
+  pull_request:
+    branches:
+      - staging
+      - main
+    paths:
+      - helm/monitoring/**
+      - Makefile
+      - .github/workflows/monitoring.yml
 
 jobs:
   check:

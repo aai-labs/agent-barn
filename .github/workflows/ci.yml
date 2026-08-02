@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches-ignore:
+      - staging
+      - main
+  pull_request:
+    branches:
+      - staging
+      - main
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ═══════════════════════════════════════════════════════════════
+  # Phase 1: Detect changed components
+  # ═══════════════════════════════════════════════════════════════
+
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      api: ${{ steps.changes.outputs.api }}
+      ui: ${{ steps.changes.outputs.ui }}
+      hermes: ${{ steps.changes.outputs.hermes }}
+      openclaw: ${{ steps.changes.outputs.openclaw }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Detect changed components
+        id: changes
+        run: |
+          api=false; ui=false; hermes=false; openclaw=false
+
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            range="${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }}"
+          else
+            range="HEAD~1 HEAD"
+          fi
+
+          if ! git diff --name-only $range > /tmp/changed.txt 2>/dev/null; then
+            api=true; ui=true; hermes=true; openclaw=true
+          else
+            if grep -qE '^(api/|Makefile$)' /tmp/changed.txt; then api=true; fi
+            if grep -qE '^(ui/|Makefile$)' /tmp/changed.txt; then ui=true; fi
+            if grep -q '^hermes-base/' /tmp/changed.txt; then hermes=true; fi
+            if grep -q '^openclaw-base/' /tmp/changed.txt; then openclaw=true; fi
+          fi
+
+          echo "api=$api" >> "$GITHUB_OUTPUT"
+          echo "ui=$ui" >> "$GITHUB_OUTPUT"
+          echo "hermes=$hermes" >> "$GITHUB_OUTPUT"
+          echo "openclaw=$openclaw" >> "$GITHUB_OUTPUT"
+
+  # ═══════════════════════════════════════════════════════════════
+  # Phase 2: Lint, test, build each changed component (no push)
+  # ═══════════════════════════════════════════════════════════════
+
+  ci-api:
+    needs: [detect-changes]
+    if: ${{ needs.detect-changes.outputs.api == 'true' }}
+    uses: ./.github/workflows/api.yml
+    secrets: inherit
+
+  ci-ui:
+    needs: [detect-changes]
+    if: ${{ needs.detect-changes.outputs.ui == 'true' }}
+    uses: ./.github/workflows/ui.yml
+    secrets: inherit
+
+  ci-hermes:
+    needs: [detect-changes]
+    if: ${{ needs.detect-changes.outputs.hermes == 'true' }}
+    uses: ./.github/workflows/hermes-base.yml
+    secrets: inherit
+
+  ci-openclaw:
+    needs: [detect-changes]
+    if: ${{ needs.detect-changes.outputs.openclaw == 'true' }}
+    uses: ./.github/workflows/openclaw-base.yml
+    secrets: inherit
