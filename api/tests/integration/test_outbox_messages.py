@@ -74,15 +74,15 @@ def delegate():
     delegate = PostgresRepositoryDelegate(get_config())
     with delegate.engine.begin() as connection:
         connection.execute(text("TRUNCATE event_outbox_message CASCADE"))
-        connection.execute(text('DELETE FROM "user"'))
         connection.execute(text("DELETE FROM organization"))
+        connection.execute(text('DELETE FROM "user"'))
     try:
         yield delegate
     finally:
         with delegate.engine.begin() as connection:
             connection.execute(text("TRUNCATE event_outbox_message CASCADE"))
-            connection.execute(text('DELETE FROM "user"'))
             connection.execute(text("DELETE FROM organization"))
+            connection.execute(text('DELETE FROM "user"'))
         delegate.close()
 
 
