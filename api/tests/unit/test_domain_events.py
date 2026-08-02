@@ -122,6 +122,30 @@ def test_build_platform_event_rejects_organization_identity():
         )
 
 
+def test_registered_platform_scope_rejects_organization_subject_without_metadata():
+    registry = DomainEventRegistry()
+    registry.register(
+        DomainEventDefinition(
+            event_name="platform.sampled",
+            schema_version=1,
+            payload_model=AnyPayload,
+            event_scope=EventScope.PLATFORM,
+        )
+    )
+
+    with pytest.raises(DomainEventValidationError, match="subject cannot reference"):
+        registry.build_event(
+            event_name="platform.sampled",
+            schema_version=1,
+            occurred_at=datetime(2026, 7, 31, tzinfo=UTC),
+            organization_id=None,
+            actor=ActorIdentity(type=ActorIdentityType.USER, id=uuid4()),
+            subject=SubjectIdentity(type=SubjectIdentityType.AGENT, id=uuid4()),
+            correlation_id=uuid4(),
+            payload={"value": "platform change"},
+        )
+
+
 def test_build_organization_event_rejects_missing_organization():
     with pytest.raises(DomainEventValidationError, match="require an Organization"):
         _registry().build_event(

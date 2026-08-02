@@ -34,7 +34,7 @@ Self-registration is disabled. Accounts enter through Platform Administrator pro
 
 Any authenticated user, including a Platform Administrator, creates an Organization through `POST /organizations` using only a name and optional description. The server records that user as the immutable Organization Creator, creates their Owner Membership in the same transaction, and applies the platform default model configuration. The configurable per-creator limit defaults to five non-deleted Organizations; Platform Privilege does not bypass it. A Platform-provisioned user's initial Organization follows the same creator and default-model rules and counts toward that limit.
 
-Organization Name is a mutable display label and is intentionally not globally unique. Platform View disambiguates same-named Organizations with owner identity and Organization ID; the planned Organization detail surface will also expose immutable Creator identity. A separate globally unique human-facing handle is deferred until a URL, CLI, API, or support workflow requires one.
+Organization Name is a mutable display label and is intentionally not globally unique. Platform View disambiguates same-named Organizations with owner identity and Organization ID, and its allowlisted Organization detail projection exposes immutable Creator identity without exposing Organization configuration. A separate globally unique human-facing handle is deferred until a URL, CLI, API, or support workflow requires one.
 
 Legacy Organizations backfill Organization Creator from their current Owner Membership. A genuinely ownerless legacy Organization retains an unknown creator instead of inventing provenance.
 

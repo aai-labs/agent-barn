@@ -2,6 +2,7 @@ import { createQueryKeyStructure } from "@/shared/query-keys";
 
 export const ORGANIZATIONS_PAGE_SIZE = 12;
 export const organizationsKey = createQueryKeyStructure("organizations");
+export const platformOrganizationsKey = createQueryKeyStructure("platform-organizations");
 export const organizationMembersKey = createQueryKeyStructure(
   "organization-members",
 );

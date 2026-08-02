@@ -1,6 +1,10 @@
 import { z } from "zod";
 
-import { OrganizationRoleSchema, OrganizationSchema } from "@/features/organizations/schemas";
+import {
+  OrganizationRoleSchema,
+  OrganizationSchema,
+  PlatformOrganizationSchema,
+} from "@/features/organizations/schemas";
 
 export const UserOrganizationMembershipSchema = z.object({
   id: z.string().uuid(),
@@ -24,11 +28,28 @@ export const UserReadSchema = z.object({
   organizationUsers: z.array(UserOrganizationMembershipSchema).nullable().optional(),
 });
 
+export const PlatformUserOrganizationMembershipSchema = z.object({
+  id: z.string().uuid(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  userId: z.string().uuid(),
+  organizationId: z.string().uuid(),
+  role: OrganizationRoleSchema,
+  organization: PlatformOrganizationSchema,
+});
+
+export const PlatformUserReadSchema = UserReadSchema.extend({
+  organizationUsers: z
+    .array(PlatformUserOrganizationMembershipSchema)
+    .nullable()
+    .optional(),
+});
+
 export const PaginatedUsersSchema = z.object({
   page: z.number().int().min(1),
   pageSize: z.number().int().min(1),
   total: z.number().int().min(0),
-  items: z.array(UserReadSchema),
+  items: z.array(PlatformUserReadSchema),
 });
 
 export const PlatformUserCreateFormSchema = z.object({
@@ -46,8 +67,8 @@ export const PlatformUserCreateFormSchema = z.object({
 });
 
 export const PlatformUserCreateResultSchema = z.object({
-  user: UserReadSchema,
-  organization: OrganizationSchema,
+  user: PlatformUserReadSchema,
+  organization: PlatformOrganizationSchema,
   inviteLink: z.string().url(),
 });
 
@@ -56,6 +77,7 @@ export const PlatformUserInviteResultSchema = z.object({
 });
 
 export type UserRead = z.infer<typeof UserReadSchema>;
+export type PlatformUserRead = z.infer<typeof PlatformUserReadSchema>;
 export type UserOrganizationMembership = z.infer<
   typeof UserOrganizationMembershipSchema
 >;

@@ -88,3 +88,34 @@ test.describe("Users Page — bounded platform authority", () => {
     await expect(page.getByText(/Platform Privilege granted/i)).toBeVisible();
   });
 });
+
+test.describe("Platform user detail", () => {
+  let data: DataSupport;
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  test.beforeEach(async ({ page }) => {
+    data = new DataSupport(page);
+    await data.auth.interceptRefreshRequest();
+    await data.users.interceptGetUserContextRequest();
+    await data.users.interceptGetPlatformUser();
+  });
+
+  test("renders user identity and the platform navigation", async ({ page }) => {
+    await page.goto(`${USERS_URL}/11111111-1111-4111-8111-111111111111`);
+
+    await expect(page.getByRole("heading", { name: "Ada Lovelace" })).toBeVisible();
+    await expect(page.getByText("ada@example.com")).toBeVisible();
+    await expect(page.getByRole("main").getByRole("link", { name: /users/i })).toHaveAttribute(
+      "href",
+      USERS_URL,
+    );
+  });
+
+  test("shows a retryable error for an unavailable user", async ({ page }) => {
+    await data.users.interceptGetPlatformUser({ status: 500 });
+    await page.goto(`${USERS_URL}/11111111-1111-4111-8111-111111111111`);
+
+    await expect(page.getByText(/couldn't load this user/i)).toBeVisible();
+    await expect(page.getByRole("button", { name: /retry/i })).toBeVisible();
+  });
+});

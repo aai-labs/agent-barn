@@ -5,10 +5,10 @@ import { useInfiniteQuery } from "@tanstack/react-query";
 import { api } from "@/shared/api";
 
 import {
-  PaginatedOrganizations,
-  PaginatedOrganizationsSchema,
+  PaginatedPlatformOrganizations,
+  PaginatedPlatformOrganizationsSchema,
 } from "../schemas";
-import { ORGANIZATIONS_PAGE_SIZE, organizationsKey } from "../utils";
+import { ORGANIZATIONS_PAGE_SIZE, platformOrganizationsKey } from "../utils";
 
 type UseInfiniteOrganizationsOptions = {
   search?: string;
@@ -22,7 +22,7 @@ export function useInfiniteOrganizations(
   const pageSize = options.pageSize ?? ORGANIZATIONS_PAGE_SIZE;
 
   const query = useInfiniteQuery({
-    queryKey: organizationsKey.list({
+    queryKey: platformOrganizationsKey.list({
       scope: { mode: "infinite" },
       filters: { search, pageSize },
     }),
@@ -35,9 +35,9 @@ export function useInfiniteOrganizations(
         params.set("search", search);
       }
 
-      const response = await api.get<PaginatedOrganizations>(
+      const response = await api.get<PaginatedPlatformOrganizations>(
         `/api/v1/platform/organizations?${params.toString()}`,
-        { schema: PaginatedOrganizationsSchema },
+        { schema: PaginatedPlatformOrganizationsSchema },
       );
       return response.data;
     },

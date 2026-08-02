@@ -115,9 +115,7 @@ class OutboxMessage(DatabaseBaseModel, table=True):
     )
     organization_id: UUID | None = SqlField(
         default=None,
-        foreign_key="organization.id",
         nullable=True,
-        ondelete="CASCADE",
     )
     actor: dict[str, Any] = SqlField(sa_column=Column(JSONB, nullable=False))
     subject: dict[str, Any] = SqlField(sa_column=Column(JSONB, nullable=False))
@@ -154,9 +152,7 @@ class EventDelivery(DatabaseBaseModel, table=True):
     )
     organization_id: UUID | None = SqlField(
         default=None,
-        foreign_key="organization.id",
         nullable=True,
-        ondelete="CASCADE",
     )
     handler_name: str = SqlField(nullable=False, max_length=255)
     status: EventDeliveryStatus = SqlField(

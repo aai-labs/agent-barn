@@ -8,11 +8,11 @@ import {
   type PlatformOrganization,
   PlatformOrganizationSchema,
 } from "../schemas";
-import { organizationsKey } from "../utils";
+import { platformOrganizationsKey } from "../utils";
 
 export function usePlatformOrganization(organizationId: string) {
   const query = useQuery({
-    queryKey: organizationsKey.detail(organizationId),
+    queryKey: platformOrganizationsKey.detail(organizationId),
     queryFn: async () => {
       const response = await api.get<PlatformOrganization>(
         `/api/v1/platform/organizations/${organizationId}`,

@@ -42,7 +42,7 @@ def get_organization(
     return organization_service.get_organization(organization_id, context)
 
 
-@platform_org_router.get("", response_model=PaginatedItems[OrganizationRead])
+@platform_org_router.get("", response_model=PaginatedItems[PlatformOrganizationRead])
 def get_organizations(
     context: Annotated[CurrentUserContext, Depends(require_platform_admin())],
     filters: Annotated[OrganizationFilter, Depends(get_organization_filter)],

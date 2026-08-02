@@ -3,6 +3,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/shared/api";
+import { platformOrganizationsKey } from "@/features/organizations/utils";
 
 import {
   type PlatformUserCreateForm,
@@ -29,6 +30,7 @@ export function useCreateUser() {
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: usersKey.lists() });
+      void queryClient.invalidateQueries({ queryKey: platformOrganizationsKey.lists() });
     },
   });
 }

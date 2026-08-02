@@ -11,8 +11,8 @@ from api.domains.users.models import (
     PlatformUserCreate,
     PlatformUserCreateResult,
     PlatformUserInviteResult,
+    PlatformUserRead,
     UserFilter,
-    UserRead,
     get_user_filter,
 )
 from api.domains.users.service import UserService
@@ -30,7 +30,7 @@ def create_user(
     return user_service.create_platform_user(data)
 
 
-@users_router.get("", response_model=PaginatedItems[UserRead])
+@users_router.get("", response_model=PaginatedItems[PlatformUserRead])
 def list_users(
     context: Annotated[CurrentUserContext, Depends(require_platform_admin())],
     filters: Annotated[UserFilter, Depends(get_user_filter)],
@@ -41,16 +41,16 @@ def list_users(
     return user_service.get_paginated_users(filters=filters, context=context, page=page, page_size=page_size)
 
 
-@users_router.get("/{user_id}", response_model=UserRead)
+@users_router.get("/{user_id}", response_model=PlatformUserRead)
 def get_user(
     user_id: UUID,
     _: Annotated[CurrentUserContext, Depends(require_platform_admin())],
     user_service: UserService = Injected(UserService),
 ):
-    return user_service.to_user_read(user_service.get_user(user_id))
+    return user_service.to_platform_user_read(user_service.get_user(user_id))
 
 
-@users_router.patch("/{user_id}/platform-privilege", response_model=UserRead)
+@users_router.patch("/{user_id}/platform-privilege", response_model=PlatformUserRead)
 def change_platform_privilege(
     user_id: UUID,
     data: PlatformPrivilegeUpdate,

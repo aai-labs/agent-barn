@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import {
   Building,
@@ -12,20 +12,13 @@ import {
 } from "lucide-react";
 
 import { AppErrorState } from "@/components/app-error-state";
+import { DetailStatTile } from "@/components/detail-stat-tile";
 import { SearchInput } from "@/components/search-input";
 
 import { usePlatformOrganization } from "../hooks/use-platform-organization";
 import { usePlatformOrganizationMembers } from "../hooks/use-platform-organization-members";
 import type { PlatformOrganizationMember } from "../schemas";
-
-function orgInitials(name: string) {
-  const letters = name
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((w) => w[0])
-    .join("");
-  return (letters || name).slice(0, 2).toUpperCase();
-}
+import { organizationInitials } from "./organization-detail-utils";
 
 function initialsOf(member: PlatformOrganizationMember) {
   return (member.fullName ?? member.email)
@@ -34,34 +27,6 @@ function initialsOf(member: PlatformOrganizationMember) {
     .join("")
     .slice(0, 2)
     .toUpperCase();
-}
-
-function StatTile({
-  icon,
-  label,
-  children,
-}: {
-  icon: ReactNode;
-  label: string;
-  children: ReactNode;
-}) {
-  return (
-    <div className="af-card px-4 py-3.5">
-      <div
-        className="text-[11px] font-semibold uppercase tracking-[0.06em] mb-1.5"
-        style={{ color: "var(--ink-5)" }}
-      >
-        {label}
-      </div>
-      <div
-        className="flex items-center gap-2 text-[13.5px] min-w-0"
-        style={{ color: "var(--ink)" }}
-      >
-        <span style={{ color: "var(--ink-4)", flexShrink: 0 }}>{icon}</span>
-        <span className="min-w-0 truncate">{children}</span>
-      </div>
-    </div>
-  );
 }
 
 const ROLE_LABEL: Record<string, string> = {
@@ -138,7 +103,7 @@ export function PlatformOrganizationDetail({ organizationId }: { organizationId:
           style={{ background: "linear-gradient(135deg, #4338ca, #7c3aed)" }}
           aria-hidden
         >
-          {orgInitials(organization.name)}
+          {organizationInitials(organization.name)}
         </div>
 
         <div className="min-w-0 flex-1 pt-0.5">
@@ -155,26 +120,26 @@ export function PlatformOrganizationDetail({ organizationId }: { organizationId:
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 mb-9">
-        <StatTile icon={<Users width={14} height={14} />} label="Members">
+        <DetailStatTile icon={<Users width={14} height={14} />} label="Members">
           {membersLoading ? "—" : `${memberTotal} ${memberTotal === 1 ? "member" : "members"}`}
-        </StatTile>
-        <StatTile icon={<UserRound width={14} height={14} />} label="Owner">
+        </DetailStatTile>
+        <DetailStatTile icon={<UserRound width={14} height={14} />} label="Owner">
           <span title={organization.ownerEmail ?? undefined}>
             {organization.ownerName || organization.ownerEmail || "No owner"}
           </span>
-        </StatTile>
-        <StatTile icon={<Building width={14} height={14} />} label="Creator">
+        </DetailStatTile>
+        <DetailStatTile icon={<Building width={14} height={14} />} label="Creator">
           <span title={organization.creatorEmail ?? undefined}>
             {organization.creatorName || organization.creatorEmail || "Unknown"}
           </span>
-        </StatTile>
-        <StatTile icon={<CalendarDays width={14} height={14} />} label="Created">
+        </DetailStatTile>
+        <DetailStatTile icon={<CalendarDays width={14} height={14} />} label="Created">
           {new Date(organization.createdAt).toLocaleDateString(undefined, {
             year: "numeric",
             month: "short",
             day: "numeric",
           })}
-        </StatTile>
+        </DetailStatTile>
       </div>
 
       <div style={{ borderTop: "1px solid var(--line)" }} className="pt-8">

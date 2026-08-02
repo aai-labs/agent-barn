@@ -8,8 +8,10 @@ from hamcrest import (
     contains_string,
     equal_to,
     has_entries,
+    has_key,
     has_length,
     is_,
+    not_,
     not_none,
 )
 from starlette.testclient import TestClient
@@ -92,6 +94,7 @@ def test_platform_admin_creates_pending_user_with_initial_owned_organization():
 
         assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
         body = response.json()
+        assert_that(body["organization"], not_(has_key("allowed_models")))
         assert_that(
             body,
             has_entries(
@@ -522,7 +525,9 @@ def test_platform_admin_can_list_all_organizations():
         )
 
         assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-        assert_that(response.json()["items"], has_length(2))
+        body = response.json()
+        assert_that(body["items"], has_length(2))
+        assert_that(body["items"][0], not_(has_key("allowed_models")))
 
 
 def test_platform_admin_gets_user_detail_with_organization_memberships():
@@ -558,6 +563,7 @@ def test_platform_admin_gets_user_detail_with_organization_memberships():
         assert_that(body["organization_users"], has_length(1))
         assert_that(body["organization_users"][0]["organization"]["id"], equal_to(str(org_id)))
         assert_that(body["organization_users"][0]["role"], equal_to("MEMBER"))
+        assert_that(body["organization_users"][0]["organization"], not_(has_key("allowed_models")))
 
 
 def test_platform_admin_get_user_detail_404_for_missing_user():
@@ -632,6 +638,7 @@ def test_platform_admin_gets_organization_detail_with_creator_and_owner_identity
         assert_that(response.status_code, equal_to(status.HTTP_200_OK))
         body = response.json()
         assert_that(body["owner_email"], equal_to("org-creator@example.com"))
+        assert_that(body, not_(has_key("allowed_models")))
         # there_is_a_user's ad-hoc Organization isn't stamped with created_by_user_id,
         # so Creator is legitimately absent here; a real org (created via the
         # self-service route) always has one. Assert the field is present on the DTO.

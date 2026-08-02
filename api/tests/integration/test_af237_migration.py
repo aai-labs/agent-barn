@@ -11,7 +11,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 
 PRE_AF237_REVISION = "181dcfcc93ef"
-AF237_REVISION = "2a4f6c8e1b30"
+CURRENT_REVISION = "3b7c9d1e4f62"
 ALEMBIC_INI = Path(__file__).resolve().parents[2] / "alembic.ini"
 
 
@@ -140,7 +140,7 @@ def test_migration_backfills_creator_from_owner_and_keeps_ownerless_unknown(
             },
         )
 
-    command.upgrade(legacy_af237_database.config, AF237_REVISION)
+    command.upgrade(legacy_af237_database.config, CURRENT_REVISION)
 
     with legacy_af237_database.engine.connect() as connection:
         result = connection.execute(
@@ -159,7 +159,23 @@ def test_migration_backfills_creator_from_owner_and_keeps_ownerless_unknown(
                 )
             ).scalars()
         )
+        connection.execute(
+            text("DELETE FROM organization WHERE id = :organization_id"),
+            {"organization_id": owned_org_id},
+        )
+        retained_events = (
+            connection.execute(
+                text(
+                    "SELECT COUNT(*) FROM event_outbox_message WHERE event_id = :event_id "
+                    "UNION ALL SELECT COUNT(*) FROM event_delivery WHERE event_id = :event_id"
+                ),
+                {"event_id": event_id},
+            )
+            .scalars()
+            .all()
+        )
 
     assert_that(rows[owned_org_id], equal_to(owner_id))
     assert_that(rows[ownerless_org_id], is_(None))
     assert_that(event_scopes, equal_to({"ORGANIZATION"}))
+    assert_that(retained_events, equal_to([1, 1]))

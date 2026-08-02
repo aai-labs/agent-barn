@@ -10,7 +10,7 @@ import {
   type CreateOrganizationFormData,
   OrganizationSchema,
 } from "../schemas";
-import { organizationsKey } from "../utils";
+import { organizationsKey, platformOrganizationsKey } from "../utils";
 
 export function useCreateOrganization() {
   const queryClient = useQueryClient();
@@ -26,6 +26,7 @@ export function useCreateOrganization() {
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: organizationsKey.lists() });
+      void queryClient.invalidateQueries({ queryKey: platformOrganizationsKey.lists() });
       void queryClient.invalidateQueries({ queryKey: currentUserContextKey.all });
     },
   });
@@ -40,6 +41,7 @@ export function useDeleteOrganization() {
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: organizationsKey.lists() });
+      void queryClient.invalidateQueries({ queryKey: platformOrganizationsKey.lists() });
     },
   });
 }
@@ -63,8 +65,12 @@ export function useUpdateOrganization() {
     },
     onSuccess: (_, variables) => {
       void queryClient.invalidateQueries({ queryKey: organizationsKey.lists() });
+      void queryClient.invalidateQueries({ queryKey: platformOrganizationsKey.lists() });
       void queryClient.invalidateQueries({
         queryKey: organizationsKey.detail(variables.organizationId),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: platformOrganizationsKey.detail(variables.organizationId),
       });
     },
     onError: (error: Error) => {

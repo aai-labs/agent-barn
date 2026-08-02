@@ -148,6 +148,7 @@ class OrganizationUserRepository:
         user_id: UUID,
         new_role: OrganizationRole,
         actor: ActorIdentity,
+        actor_display: str | None = None,
         correlation_id: UUID | None = None,
     ) -> RoleChangeWithEventResult | None:
         with Session(self.delegate.engine, expire_on_commit=False) as session:
@@ -165,11 +166,14 @@ class OrganizationUserRepository:
             membership.role = new_role
             session.add(membership)
             session.flush()
+            subject_user = session.get(User, membership.user_id) if membership.user_id is not None else None
             event = self.build_role_changed_event(
                 membership=membership,
                 previous_role=previous_role,
                 new_role=new_role,
                 actor=actor,
+                actor_display=actor_display,
+                subject_display=(subject_user.full_name or subject_user.email) if subject_user else None,
                 correlation_id=correlation_id or uuid4(),
             )
             self.outbox_repository.stage(session=session, event=event, registry=EVENT_REGISTRY)
@@ -184,6 +188,8 @@ class OrganizationUserRepository:
         previous_role: OrganizationRole,
         new_role: OrganizationRole,
         actor: ActorIdentity,
+        actor_display: str | None = None,
+        subject_display: str | None = None,
         correlation_id: UUID,
     ) -> DomainEventEnvelope:
         return EVENT_REGISTRY.build_event(
@@ -204,6 +210,8 @@ class OrganizationUserRepository:
                 "user_id": membership.user_id,
                 "previous_role": previous_role.value,
                 "new_role": new_role.value,
+                "actor_display": actor_display or actor.type.value,
+                "subject_display": subject_display or str(membership.user_id or membership.id),
             },
         )
 

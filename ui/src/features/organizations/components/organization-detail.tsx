@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -29,43 +29,9 @@ import { useOrganizationMembers } from "../hooks/use-organization-members";
 import { useRequireOrgManager } from "../hooks/use-require-org-manager";
 import { MembersSection } from "./members-section";
 import { AllowedModelsSection } from "./allowed-models-section";
+import { DetailStatTile } from "@/components/detail-stat-tile";
 
-function orgInitials(name: string) {
-  const letters = name
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((w) => w[0])
-    .join("");
-  return (letters || name).slice(0, 2).toUpperCase();
-}
-
-function StatTile({
-  icon,
-  label,
-  children,
-}: {
-  icon: ReactNode;
-  label: string;
-  children: ReactNode;
-}) {
-  return (
-    <div className="af-card px-4 py-3.5">
-      <div
-        className="text-[11px] font-semibold uppercase tracking-[0.06em] mb-1.5"
-        style={{ color: "var(--ink-5)" }}
-      >
-        {label}
-      </div>
-      <div
-        className="flex items-center gap-2 text-[13.5px] min-w-0"
-        style={{ color: "var(--ink)" }}
-      >
-        <span style={{ color: "var(--ink-4)", flexShrink: 0 }}>{icon}</span>
-        <span className="min-w-0 truncate">{children}</span>
-      </div>
-    </div>
-  );
-}
+import { organizationInitials } from "./organization-detail-utils";
 
 export function OrganizationDetail({ organizationId }: { organizationId: string }) {
   // Member management is owner/admin-only; redirect a member here (e.g. via org switch).
@@ -146,7 +112,7 @@ export function OrganizationDetail({ organizationId }: { organizationId: string 
           style={{ background: "linear-gradient(135deg, #4338ca, #7c3aed)" }}
           aria-hidden
         >
-          {orgInitials(organization.name)}
+          {organizationInitials(organization.name)}
         </div>
 
         <div className="min-w-0 flex-1 pt-0.5">
@@ -179,23 +145,23 @@ export function OrganizationDetail({ organizationId }: { organizationId: string 
 
       {/* Stat row */}
       <div className="grid gap-3 sm:grid-cols-3 mb-9">
-        <StatTile icon={<Users width={14} height={14} />} label="Members">
+        <DetailStatTile icon={<Users width={14} height={14} />} label="Members">
           {memberCount === null
             ? "—"
             : `${memberCount} ${memberCount === 1 ? "member" : "members"}`}
-        </StatTile>
-        <StatTile icon={<UserRound width={14} height={14} />} label="Owner">
+        </DetailStatTile>
+        <DetailStatTile icon={<UserRound width={14} height={14} />} label="Owner">
           <span title={organization.ownerEmail ?? undefined}>
             {organization.ownerName || organization.ownerEmail || "No owner"}
           </span>
-        </StatTile>
-        <StatTile icon={<CalendarDays width={14} height={14} />} label="Created">
+        </DetailStatTile>
+        <DetailStatTile icon={<CalendarDays width={14} height={14} />} label="Created">
           {new Date(organization.createdAt).toLocaleDateString(undefined, {
             year: "numeric",
             month: "short",
             day: "numeric",
           })}
-        </StatTile>
+        </DetailStatTile>
       </div>
 
       <div style={{ borderTop: "1px solid var(--line)" }} className="pt-8">

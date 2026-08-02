@@ -20,7 +20,6 @@ function twoOrgs() {
       is_default: false,
       owner_email: "owner@example.com",
       owner_name: "Grace Hopper",
-      allowed_models: ["*"],
     },
     {
       id: ORG_B_ID,
@@ -31,7 +30,6 @@ function twoOrgs() {
       is_default: false,
       owner_email: "hank@globex.com",
       owner_name: "Hank Scorpio",
-      allowed_models: ["*"],
     },
   ];
 }
@@ -97,6 +95,40 @@ test.describe("Organizations — list", () => {
       page.getByRole("heading", { name: /organizations/i }),
     ).toBeVisible();
     await expect(page.getByText("AAI Labs").first()).toBeVisible();
+  });
+});
+
+test.describe("Platform organization detail", () => {
+  let data: DataSupport;
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  test.beforeEach(async ({ page }) => {
+    data = new DataSupport(page);
+    await data.auth.interceptRefreshRequest();
+    await data.users.interceptGetUserContextRequest();
+    await data.organizations.interceptGetPlatformOrganization();
+    await data.organizations.interceptGetPlatformOrganizationMembers();
+  });
+
+  test("renders allowlisted organization identity and members", async ({ page }) => {
+    await page.goto(`/dashboard/platform/organizations/${ORG_A_ID}`);
+
+    await expect(page.getByRole("heading", { name: "AAI Labs" })).toBeVisible();
+    await expect(page.getByText("Starter organization")).toBeVisible();
+    await expect(page.getByText("Grace Hopper").first()).toBeVisible();
+    await expect(page.getByText("Ada Lovelace")).toBeVisible();
+    await expect(page.getByRole("main").getByRole("link", { name: /organizations/i })).toHaveAttribute(
+      "href",
+      ORGS_URL,
+    );
+  });
+
+  test("shows a retryable error for an unavailable organization", async ({ page }) => {
+    await data.organizations.interceptGetPlatformOrganization({ status: 500 });
+    await page.goto(`/dashboard/platform/organizations/${ORG_A_ID}`);
+
+    await expect(page.getByText(/couldn't load this organization/i)).toBeVisible();
+    await expect(page.getByRole("button", { name: /retry/i })).toBeVisible();
   });
 });
 

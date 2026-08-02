@@ -22,6 +22,7 @@ from api.domains.users.models import (
     PlatformUserCreate,
     PlatformUserCreateResult,
     PlatformUserInviteResult,
+    PlatformUserRead,
     User,
     UserCreatePlatformAdmin,
     UserFilter,
@@ -107,14 +108,14 @@ class UserService:
             session.commit()
 
         self.auth_service.send_prepared_invite(prepared)
-        organization_read = self.organization_repository.get_read(organization.id)
+        organization_read = self.organization_repository.get_platform_read(organization.id)
         if organization_read is None or prepared.invite_link is None:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to complete user onboarding",
             )
         return PlatformUserCreateResult(
-            user=self.to_user_read(prepared.user),
+            user=self.to_platform_user_read(prepared.user),
             organization=organization_read,
             invite_link=prepared.invite_link,
         )
@@ -169,13 +170,17 @@ class UserService:
         organization_users = self.organization_user_service.find_by_user_id(user.id)
         return UserRead(**user.model_dump(), organization_users=organization_users)
 
+    def to_platform_user_read(self, user: User) -> PlatformUserRead:
+        organization_users = self.organization_user_service.find_platform_by_user_id(user.id)
+        return PlatformUserRead(**user.model_dump(), organization_users=organization_users)
+
     def get_paginated_users(
         self,
         filters: UserFilter,
         context: CurrentUserContext,
         page: int = 1,
         page_size: int = 15,
-    ) -> PaginatedItems[UserRead]:
+    ) -> PaginatedItems[PlatformUserRead]:
         pagination = Pagination(page=page, size=page_size)
         # Global account admin (platform-admin-only route): list every account. Org-level
         # people management lives on the per-org Members page instead.
@@ -186,8 +191,8 @@ class UserService:
             organization_id=None,
         )
 
-        return PaginatedItems[UserRead](
-            items=[UserRead(**user.model_dump()) for user in paginated_users.items],
+        return PaginatedItems[PlatformUserRead](
+            items=[PlatformUserRead(**user.model_dump()) for user in paginated_users.items],
             total=paginated_users.total,
             page=paginated_users.page,
             page_size=paginated_users.page_size,
@@ -200,7 +205,7 @@ class UserService:
         user_id: UUID,
         is_platform_admin: bool,
         reason: str,
-    ) -> UserRead:
+    ) -> PlatformUserRead:
         if actor.user.id == user_id and not is_platform_admin:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -229,7 +234,7 @@ class UserService:
                 detail=f"User with ID {user_id} not found",
             )
         self.event_delivery_dispatcher.enqueue_immediate(changed.delivery_ids)
-        return UserRead(**changed.user.model_dump())
+        return PlatformUserRead(**changed.user.model_dump())
 
     def update_current_user(self, user_id: UUID, user_data: UserUpdate) -> UserRead:
         user = self.get_user(user_id)

@@ -5,7 +5,11 @@ import type { InfiniteData } from "@tanstack/react-query";
 
 import { api } from "@/shared/api";
 
-import { type PaginatedUsers, type UserRead, UserReadSchema } from "../schemas";
+import {
+  type PaginatedUsers,
+  type PlatformUserRead,
+  PlatformUserReadSchema,
+} from "../schemas";
 import { usersKey } from "../utils";
 
 type PlatformPrivilegeChange = {
@@ -26,7 +30,7 @@ export function usePlatformPrivilege() {
       const response = await api.patch(
         `/api/v1/platform/users/${userId}/platform-privilege`,
         { isPlatformAdmin, reason },
-        { schema: UserReadSchema },
+        { schema: PlatformUserReadSchema },
       );
       return response.data;
     },
@@ -36,7 +40,7 @@ export function usePlatformPrivilege() {
       // background refetch to land before the button reflects the new state.
       queryClient.setQueryData(
         usersKey.detail(variables.userId),
-        (previous: UserRead | undefined) =>
+        (previous: PlatformUserRead | undefined) =>
           previous ? { ...previous, ...data } : previous,
       );
 

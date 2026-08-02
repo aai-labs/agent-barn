@@ -57,6 +57,43 @@ class OrganizationRepository:
         )
 
     @staticmethod
+    def _build_platform_organization_read_query():
+        owner = aliased(User)
+        creator = aliased(User)
+        return (
+            select(
+                col(Organization.id).label("id"),
+                col(Organization.created_at).label("created_at"),
+                col(Organization.updated_at).label("updated_at"),
+                col(Organization.name).label("name"),
+            )
+            .add_columns(
+                col(Organization.description).label("description"),
+                col(owner.id).label("owner_user_id"),
+                col(owner.email).label("owner_email"),
+                col(owner.full_name).label("owner_name"),
+                col(creator.id).label("creator_user_id"),
+                col(creator.email).label("creator_email"),
+                col(creator.full_name).label("creator_name"),
+            )
+            .select_from(Organization)
+            .outerjoin(
+                OrganizationUser,
+                and_(
+                    col(OrganizationUser.organization_id) == Organization.id,
+                    col(OrganizationUser.role) == OrganizationRole.OWNER,
+                ),
+            )
+            .outerjoin(owner, col(owner.id) == col(OrganizationUser.user_id))
+            .outerjoin(creator, col(creator.id) == col(Organization.created_by_user_id)),
+            owner,
+        )
+
+    @staticmethod
+    def _to_platform_organization_read(row) -> PlatformOrganizationRead:
+        return PlatformOrganizationRead(**row._mapping)
+
+    @staticmethod
     def _member_of_organization(user_id: UUID):
         # Scope "my orgs" by *any* membership, correlated to the outer Organization.
         # Deliberately separate from the owner-display join above (which is OWNER-only,
@@ -98,34 +135,70 @@ class OrganizationRepository:
             return self._to_organization_read(organization, owner_email, owner_name)
 
     def get_platform_read(self, organization_id: UUID) -> PlatformOrganizationRead | None:
-        owner = aliased(User)
-        creator = aliased(User)
         with Session(self.delegate.engine) as session:
-            query = (
-                select(Organization, owner, creator)
-                .outerjoin(
-                    OrganizationUser,
-                    and_(
-                        col(OrganizationUser.organization_id) == Organization.id,
-                        col(OrganizationUser.role) == OrganizationRole.OWNER,
-                    ),
-                )
-                .outerjoin(owner, col(owner.id) == col(OrganizationUser.user_id))
-                .outerjoin(creator, col(creator.id) == Organization.created_by_user_id)
-                .where(col(Organization.id) == organization_id)
-            )
+            query, _ = self._build_platform_organization_read_query()
+            query = query.where(col(Organization.id) == organization_id)
             row = session.exec(query).first()
             if row is None:
                 return None
-            organization, owner_user, creator_user = row
-            return PlatformOrganizationRead(
-                **organization.model_dump(),
-                owner_user_id=owner_user.id if owner_user else None,
-                owner_email=owner_user.email if owner_user else None,
-                owner_name=owner_user.full_name if owner_user else None,
-                creator_user_id=creator_user.id if creator_user else None,
-                creator_email=creator_user.email if creator_user else None,
-                creator_name=creator_user.full_name if creator_user else None,
+            return self._to_platform_organization_read(row)
+
+    @staticmethod
+    def _apply_platform_organization_filters(query, organization_filter: OrganizationFilter, owner):
+        if organization_filter.search:
+            search = f"%{organization_filter.search}%"
+            query = query.where(
+                or_(
+                    col(Organization.name).ilike(search),
+                    col(Organization.description).ilike(search),
+                    col(owner.email).ilike(search),
+                    col(owner.full_name).ilike(search),
+                )
+            )
+        return query
+
+    @staticmethod
+    def _build_platform_organization_count_query():
+        owner = aliased(User)
+        return (
+            select(func.count(func.distinct(Organization.id)))
+            .select_from(Organization)
+            .outerjoin(
+                OrganizationUser,
+                and_(
+                    col(OrganizationUser.organization_id) == Organization.id,
+                    col(OrganizationUser.role) == OrganizationRole.OWNER,
+                ),
+            )
+            .outerjoin(owner, col(owner.id) == col(OrganizationUser.user_id)),
+            owner,
+        )
+
+    def find_all_paginated_platform_read(
+        self,
+        organization_filter: OrganizationFilter,
+        pagination: Pagination | None = None,
+    ) -> PaginatedItems[PlatformOrganizationRead]:
+        with Session(self.delegate.engine) as session:
+            query, owner = self._build_platform_organization_read_query()
+            query = self._apply_platform_organization_filters(query, organization_filter, owner)
+            query = query.order_by(col(Organization.updated_at).asc())
+
+            count_query, count_owner = self._build_platform_organization_count_query()
+            count_query = self._apply_platform_organization_filters(count_query, organization_filter, count_owner)
+            total = session.scalar(count_query) or 0
+
+            if pagination:
+                query = query.offset((pagination.page - 1) * pagination.size).limit(pagination.size)
+
+            rows = session.exec(query).all()
+            items = [self._to_platform_organization_read(row) for row in rows]
+
+            return PaginatedItems(
+                page=pagination.page if pagination else 1,
+                page_size=pagination.size if pagination else len(items),
+                total=total,
+                items=items,
             )
 
     def find_all_paginated_read(

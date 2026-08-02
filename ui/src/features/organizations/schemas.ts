@@ -50,13 +50,6 @@ export const AddMemberFormSchema = z.object({
   role: z.enum(["ADMIN", "MEMBER"]),
 });
 
-export const PaginatedOrganizationsSchema = z.object({
-  page: z.number().int().min(1),
-  pageSize: z.number().int().min(1),
-  total: z.number().int().min(0),
-  items: z.array(OrganizationSchema),
-});
-
 // Dedicated Platform View read models — kept separate from OrganizationSchema /
 // OrganizationMemberSchema above since the platform detail endpoints return a
 // different (Creator-identity-including) shape than the member-facing routes.
@@ -72,7 +65,13 @@ export const PlatformOrganizationSchema = z.object({
   creatorUserId: z.string().uuid().nullable().optional(),
   creatorEmail: z.string().nullable().optional(),
   creatorName: z.string().nullable().optional(),
-  allowedModels: z.array(z.string()).default([]),
+});
+
+export const PaginatedPlatformOrganizationsSchema = z.object({
+  page: z.number().int().min(1),
+  pageSize: z.number().int().min(1),
+  total: z.number().int().min(0),
+  items: z.array(PlatformOrganizationSchema),
 });
 
 export const PlatformOrganizationMemberSchema = z.object({
@@ -91,6 +90,9 @@ export const PaginatedPlatformOrganizationMembersSchema = z.object({
 });
 
 export type PlatformOrganization = z.infer<typeof PlatformOrganizationSchema>;
+export type PaginatedPlatformOrganizations = z.infer<
+  typeof PaginatedPlatformOrganizationsSchema
+>;
 export type PlatformOrganizationMember = z.infer<
   typeof PlatformOrganizationMemberSchema
 >;
@@ -101,7 +103,6 @@ export type PaginatedPlatformOrganizationMembers = z.infer<
 export type Organization = z.infer<typeof OrganizationSchema>;
 export type OrganizationCreate = z.infer<typeof OrganizationCreateSchema>;
 export type CreateOrganizationFormData = z.infer<typeof CreateOrganizationFormSchema>;
-export type PaginatedOrganizations = z.infer<typeof PaginatedOrganizationsSchema>;
 export type OrganizationRole = z.infer<typeof OrganizationRoleSchema>;
 export type OrganizationMember = z.infer<typeof OrganizationMemberSchema>;
 export type MemberInviteResult = z.infer<typeof MemberInviteResultSchema>;

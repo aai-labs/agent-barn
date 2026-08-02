@@ -22,6 +22,7 @@ from api.domains.users.organization_users.models import (
     OrganizationUser,
     OrganizationUserRead,
     PlatformOrganizationMemberRead,
+    PlatformOrganizationUserRead,
     TransferOwnershipRequest,
 )
 from api.domains.users.organization_users.repository import OrganizationUserRepository
@@ -98,6 +99,26 @@ class OrganizationUserService:
 
             organization_reads.append(
                 OrganizationUserRead(
+                    **organization_user.model_dump(),
+                    organization=organization,
+                )
+            )
+
+        return organization_reads
+
+    def find_platform_by_user_id(self, user_id: UUID) -> list[PlatformOrganizationUserRead]:
+        organization_users = self.organization_user_repository.get_by_user_id(user_id)
+        if not organization_users:
+            return []
+
+        organization_reads: list[PlatformOrganizationUserRead] = []
+        for organization_user in organization_users:
+            organization = self.organization_repository.get_platform_read(organization_user.organization_id)
+            if not organization:
+                continue
+
+            organization_reads.append(
+                PlatformOrganizationUserRead(
                     **organization_user.model_dump(),
                     organization=organization,
                 )
@@ -279,6 +300,7 @@ class OrganizationUserService:
             user_id=user_id,
             new_role=data.role,
             actor=resolve_actor_identity(context, organization_id),
+            actor_display=context.user.full_name or context.user.email,
         )
         if changed is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Member not found in this organization")

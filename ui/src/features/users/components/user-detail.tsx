@@ -16,6 +16,7 @@ import { toast } from "sonner";
 
 import { useCurrentUser } from "@/auth/providers/user-context-provider";
 import { AppErrorState } from "@/components/app-error-state";
+import { DetailStatTile } from "@/components/detail-stat-tile";
 import { Button } from "@/components/ui/button";
 
 import { useResendUserInvite } from "../hooks/use-create-user";
@@ -26,34 +27,6 @@ import { UserInviteLinkDialog } from "./user-invite-link-dialog";
 function formatDateTime(date: string | null | undefined) {
   if (!date) return null;
   return new Date(date).toLocaleString();
-}
-
-function StatTile({
-  icon,
-  label,
-  children,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="af-card px-4 py-3.5">
-      <div
-        className="text-[11px] font-semibold uppercase tracking-[0.06em] mb-1.5"
-        style={{ color: "var(--ink-5)" }}
-      >
-        {label}
-      </div>
-      <div
-        className="flex items-center gap-2 text-[13.5px] min-w-0"
-        style={{ color: "var(--ink)" }}
-      >
-        <span style={{ color: "var(--ink-4)", flexShrink: 0 }}>{icon}</span>
-        <span className="min-w-0 truncate">{children}</span>
-      </div>
-    </div>
-  );
 }
 
 const ROLE_LABEL: Record<string, string> = {
@@ -186,22 +159,22 @@ export function UserDetail({ userId }: { userId: string }) {
       </div>
 
       <div className="grid gap-3 sm:grid-cols-3 mb-9">
-        <StatTile
+        <DetailStatTile
           icon={user.isPlatformAdmin ? <ShieldCheck width={14} height={14} /> : <ShieldOff width={14} height={14} />}
           label="Platform privilege"
         >
           {user.isPlatformAdmin ? "Platform admin" : "Standard user"}
-        </StatTile>
-        <StatTile icon={<MailPlusIcon width={14} height={14} />} label="Email verified">
+        </DetailStatTile>
+        <DetailStatTile icon={<MailPlusIcon width={14} height={14} />} label="Email verified">
           {formatDateTime(user.emailVerifiedAt) ?? "Not verified"}
-        </StatTile>
-        <StatTile icon={<CalendarDays width={14} height={14} />} label="Created">
+        </DetailStatTile>
+        <DetailStatTile icon={<CalendarDays width={14} height={14} />} label="Created">
           {new Date(user.createdAt).toLocaleDateString(undefined, {
             year: "numeric",
             month: "short",
             day: "numeric",
           })}
-        </StatTile>
+        </DetailStatTile>
       </div>
 
       <div style={{ borderTop: "1px solid var(--line)" }} className="pt-8">

@@ -145,7 +145,6 @@ export class UserDataSupport {
               description: null,
               owner_email: "new@example.com",
               owner_name: "New User",
-              allowed_models: ["openai/gpt-5"],
             },
             invite_link: "http://localhost:3000/set-password?token=new-user-token",
           },
@@ -377,9 +376,45 @@ export class UserDataSupport {
                     is_default: false,
                     owner_email: "owner@example.com",
                     owner_name: "Grace Hopper",
-                    allowed_models: ["*"],
                   },
                 ],
+              }),
+        ),
+      });
+    });
+  }
+
+  async interceptGetPlatformUser({
+    userId = "11111111-1111-4111-8111-111111111111",
+    user,
+    status = 200,
+    detail = "User not found",
+  }: {
+    userId?: string;
+    user?: unknown;
+    status?: number;
+    detail?: string;
+  } = {}) {
+    await this.page.route(`**/api/v1/platform/users/${userId}`, async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status,
+        contentType: "application/json",
+        body: JSON.stringify(
+          status >= 400
+            ? { detail }
+            : (user ?? {
+                id: userId,
+                created_at: "2024-01-01T00:00:00Z",
+                updated_at: "2024-01-01T00:00:00Z",
+                full_name: "Ada Lovelace",
+                email: "ada@example.com",
+                is_platform_admin: false,
+                email_verified_at: "2024-01-01T00:00:00Z",
+                organization_users: [],
               }),
         ),
       });

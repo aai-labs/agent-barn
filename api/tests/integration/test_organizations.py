@@ -1,3 +1,4 @@
+from typing import cast
 from uuid import UUID, uuid7
 
 from fastapi import status
@@ -9,7 +10,9 @@ from hamcrest import (
 )
 
 from api.core.config import Config
+from api.domains.organizations.models import Organization
 from api.domains.organizations.repository import OrganizationRepository
+from api.domains.users.models import User
 from api.domains.users.repository import UserRepository
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
@@ -74,11 +77,11 @@ def test_authenticated_user_creates_owned_organization():
             organization = organization_repo.get(organization_id)
             owner = user_repo.get_organization_owner(organization_id)
 
-            assert organization is not None
-            assert owner is not None
             assert_that(organization, not_none())
+            organization = cast(Organization, organization)
             assert_that(organization.created_by_user_id, equal_to(context.user.id))
             assert_that(owner, not_none())
+            owner = cast(User, owner)
             assert_that(owner.id, equal_to(context.user.id))
 
 

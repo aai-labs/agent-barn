@@ -135,13 +135,11 @@ class OrganizationService:
         org_filter: OrganizationFilter = OrganizationFilter(),
         page: int = 1,
         page_size: int = 15,
-    ) -> PaginatedItems[OrganizationRead]:
+    ) -> PaginatedItems[PlatformOrganizationRead]:
         pagination = Pagination(page=page, size=page_size)
-        user_id = None if context.user.is_platform_admin else context.user.id
-        return self.organization_repository.find_all_paginated_read(
+        return self.organization_repository.find_all_paginated_platform_read(
             pagination=pagination,
             organization_filter=org_filter,
-            user_id=user_id,
         )
 
     def _ensure_can_view_organization(

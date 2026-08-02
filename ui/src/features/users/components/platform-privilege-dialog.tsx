@@ -13,10 +13,15 @@ import {
 } from "@/components/ui/dialog";
 
 import { usePlatformPrivilege } from "../hooks/use-platform-privilege";
-import type { UserRead } from "../schemas";
+
+type PlatformPrivilegeUser = {
+  id: string;
+  email: string;
+  isPlatformAdmin: boolean;
+};
 
 interface PlatformPrivilegeDialogProps {
-  user: UserRead | null;
+  user: PlatformPrivilegeUser | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }

@@ -8,10 +8,11 @@ from pydantic import EmailStr, StringConstraints
 from sqlalchemy import Column, DateTime, Index
 from sqlmodel import Field
 
-from api.domains.organizations.models import OrganizationRead
+from api.domains.organizations.models import PlatformOrganizationRead
 from api.domains.users.organization_users.models import (
     OrganizationRole,
     OrganizationUserRead,
+    PlatformOrganizationUserRead,
 )
 from api.infrastructure.postgres.models import BaseModel
 
@@ -48,6 +49,12 @@ class UserRead(BaseModel):
     organization_users: list[OrganizationUserRead] | None = None
 
 
+class PlatformUserRead(UserRead):
+    """Platform View user read model with allowlisted membership organizations."""
+
+    organization_users: list[PlatformOrganizationUserRead] | None = None
+
+
 class PlatformUserCreate(PydanticBaseModel):
     model_config = {"extra": "forbid"}
 
@@ -69,8 +76,8 @@ class PlatformUserCreate(PydanticBaseModel):
 
 
 class PlatformUserCreateResult(PydanticBaseModel):
-    user: UserRead
-    organization: OrganizationRead
+    user: PlatformUserRead
+    organization: PlatformOrganizationRead
     invite_link: str
 
 

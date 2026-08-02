@@ -42,7 +42,7 @@ class OrganizationRead(PydanticBaseModel):
     description: str | None = None
     owner_email: str | None = None
     owner_name: str | None = None
-    allowed_models: list[str] = []
+    allowed_models: list[str] = Field(default_factory=list)
 
 
 class PlatformOrganizationRead(PydanticBaseModel):
@@ -63,7 +63,6 @@ class PlatformOrganizationRead(PydanticBaseModel):
     creator_user_id: UUID | None = None
     creator_email: str | None = None
     creator_name: str | None = None
-    allowed_models: list[str] = []
 
 
 class OrganizationUpdate(PydanticBaseModel):

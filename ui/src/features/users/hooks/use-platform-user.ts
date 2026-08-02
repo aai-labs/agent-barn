@@ -4,16 +4,16 @@ import { useQuery } from "@tanstack/react-query";
 
 import { api } from "@/shared/api";
 
-import { type UserRead, UserReadSchema } from "../schemas";
+import { type PlatformUserRead, PlatformUserReadSchema } from "../schemas";
 import { usersKey } from "../utils";
 
 export function usePlatformUser(userId: string) {
   const query = useQuery({
     queryKey: usersKey.detail(userId),
     queryFn: async () => {
-      const response = await api.get<UserRead>(
+      const response = await api.get<PlatformUserRead>(
         `/api/v1/platform/users/${userId}`,
-        { schema: UserReadSchema },
+        { schema: PlatformUserReadSchema },
       );
       return response.data;
     },

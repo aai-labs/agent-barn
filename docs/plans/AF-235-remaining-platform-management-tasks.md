@@ -4,7 +4,7 @@ Status: Draft backlog — create Jira tasks, then remove this file
 Parent epic: [AF-235](https://aai-labs.atlassian.net/browse/AF-235)
 Defined after sharpening [AF-237](https://aai-labs.atlassian.net/browse/AF-237)
 
-AF-237 owns self-service Organization creation and the narrow Platform Administrator authority boundary. The following independently deliverable tasks remain under AF-235.
+AF-237 owns self-service Organization creation and the narrow Platform Administrator authority boundary. Its delivered Platform View slice includes allowlisted Organization/user identity and membership detail projections; the broader independently deliverable oversight tasks below remain under AF-235.
 
 ## Task 1 — Suspend and reactivate Organizations with asynchronous Agent cleanup
 

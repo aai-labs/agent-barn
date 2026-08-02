@@ -20,7 +20,7 @@ import { Button } from "@/components/ui/button";
 
 import { useResendUserInvite } from "../hooks/use-create-user";
 import { useInfiniteUsers } from "../hooks/use-infinite-users";
-import type { UserRead } from "../schemas";
+import type { PlatformUserRead } from "../schemas";
 
 import { CreateUserDialog } from "./create-user-dialog";
 import { PlatformPrivilegeDialog } from "./platform-privilege-dialog";
@@ -46,7 +46,7 @@ function LoadingCard() {
 export function UsersGrid() {
   const [search, setSearch] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
-  const [privilegeTarget, setPrivilegeTarget] = useState<UserRead | null>(null);
+  const [privilegeTarget, setPrivilegeTarget] = useState<PlatformUserRead | null>(null);
   const [resentInvite, setResentInvite] = useState<{
     email: string;
     inviteLink: string;
