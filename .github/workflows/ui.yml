@@ -13,17 +13,23 @@ on:
       - Makefile
       - .github/workflows/ui.yml
   workflow_call:
+    inputs:
+      push_image:
+        description: Whether to build and push the image to the registry
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v5
         with:
           package_json_file: ui/package.json
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: "24"
           cache: pnpm
@@ -36,20 +42,21 @@ jobs:
 
   test:
     name: Test
+    needs: [lint]
     runs-on: ubuntu-latest
     container:
       image: mcr.microsoft.com/playwright:v1.62.0-noble
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install make
         run: apt-get update && apt-get install -y --no-install-recommends make
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v5
         with:
           package_json_file: ui/package.json
       - name: Get pnpm store directory
         shell: bash
         run: echo "STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_ENV"
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: ${{ env.STORE_PATH }}
           key: pnpm-store-${{ runner.os }}-${{ hashFiles('ui/pnpm-lock.yaml') }}
@@ -65,9 +72,9 @@ jobs:
     needs: [lint, test]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/build-push-action@v6
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
         with:
           context: ui
           file: ui/Dockerfile
@@ -75,4 +82,38 @@ jobs:
           tags: agentfarm-ui:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  push:
+    name: Push
+    if: inputs.push_image
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Log in to registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ vars.REGISTRY_URL }}
+          username: ${{ vars.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+      - name: Resolve image tag and API host
+        id: tag
+        run: |
+          if [ "${{ github.ref_name }}" = "staging" ]; then
+            echo "value=latest-staging" >> "$GITHUB_OUTPUT"
+            echo "api_host=$(echo '${{ vars.STAGING_API_HOST }}' | cut -d',' -f1 | tr -d ' ')" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=latest" >> "$GITHUB_OUTPUT"
+            echo "api_host=$(echo '${{ vars.API_HOST }}' | cut -d',' -f1 | tr -d ' ')" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: ui
+          file: ui/Dockerfile
+          push: true
+          tags: ${{ vars.REGISTRY_URL }}/agentfarm-ui:${{ steps.tag.outputs.value }}
+          build-args: |
+            NEXT_PUBLIC_BACKEND_URL=https://${{ steps.tag.outputs.api_host }}
+          cache-from: type=gha
 

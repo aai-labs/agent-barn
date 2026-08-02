@@ -6,6 +6,9 @@ import { useDebouncedValue } from "@tanstack/react-pacer";
 import { AppErrorState } from "@/components/app-error-state";
 import { SearchIcon } from "@/components/icons";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { SharedManualToggle } from "@/features/shared-credentials/components/shared-manual-toggle";
+import { useSharedManualSwitch } from "@/features/shared-credentials/hooks/use-shared-manual-switch";
+import { SHARED_CREDENTIAL_PROVIDER_LABELS } from "@/features/shared-credentials/utils";
 import { useSkills } from "@/features/skills/hooks/use-skills";
 import { SKILL_PROVIDER_LABELS } from "@/features/skills/utils";
 import { SkillSourceBadge } from "@/features/skills/components/skill-drawer";
@@ -16,13 +19,11 @@ import {
   expandGithubContent,
   getIntegrationProvider,
   hasIncompleteIntegration,
-  isOAuthConnected,
   type IntegrationDraft,
 } from "../integrations";
-import { FormField, GoogleAuthButton, TokenInput } from "./hire-dialog-primitives";
-import { RepoListField } from "./hire-dialog-steps";
 import { useUpdateAgent } from "../hooks/use-update-agent";
 import type { Agent, AgentAssignedSkill } from "../schemas";
+import { IntegrationFields } from "./integration-fields";
 
 interface AgentSkillsTabProps {
   agent: Agent;
@@ -38,7 +39,6 @@ export function AgentSkillsTab({ agent, isRunning }: AgentSkillsTabProps) {
   const [pendingAddIds, setPendingAddIds] = useState<string[]>([]);
   const [pendingRemoveIds, setPendingRemoveIds] = useState<string[]>([]);
   const [newSecretDrafts, setNewSecretDrafts] = useState<IntegrationDraft[]>([]);
-  const [visible, setVisible] = useState<Record<string, boolean>>({});
   const [saved, setSaved] = useState(false);
 
   const existingSecretProviders = new Set(
@@ -122,6 +122,11 @@ export function AgentSkillsTab({ agent, isRunning }: AgentSkillsTabProps) {
     );
   }
 
+  const { switchToShared, switchToManual, handlePickShared } = useSharedManualSwitch(
+    newSecretDrafts,
+    setNewSecretDrafts,
+  );
+
   async function handleSave() {
     updateAgent.reset();
     try {
@@ -142,18 +147,24 @@ export function AgentSkillsTab({ agent, isRunning }: AgentSkillsTabProps) {
         ),
       ];
 
+      const manualDrafts = newSecretDrafts.filter((d) => !d.sharedCredentialId);
+      const sharedDrafts = newSecretDrafts.filter((d) => !!d.sharedCredentialId);
+
       await updateAgent.mutateAsync({
         agentId: agent.id,
         skillIds: pendingAddIds,
         removedSkillIds: pendingRemoveIds,
         ...(orphanedProviders.length > 0 ? { removedSecretProviders: orphanedProviders } : {}),
-        ...(newSecretDrafts.length > 0
+        ...(manualDrafts.length > 0
           ? {
-              secrets: newSecretDrafts.map((d) => ({
+              secrets: manualDrafts.map((d) => ({
                 provider: d.provider,
                 content: coerceBooleanFields(d.provider === "github" ? expandGithubContent(d.content) : d.content),
               })),
             }
+          : {}),
+        ...(sharedDrafts.length > 0
+          ? { sharedCredentials: sharedDrafts.map((d) => ({ sharedCredentialId: d.sharedCredentialId! })) }
           : {}),
       });
       setPendingAddIds([]);
@@ -302,6 +313,9 @@ export function AgentSkillsTab({ agent, isRunning }: AgentSkillsTabProps) {
               );
             }
 
+            const isSharedEligible = !!SHARED_CREDENTIAL_PROVIDER_LABELS[providerId];
+            const useShared = draft.sharedCredentialId !== undefined;
+
             return (
               <div
                 key={providerId}
@@ -311,95 +325,32 @@ export function AgentSkillsTab({ agent, isRunning }: AgentSkillsTabProps) {
                 <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
                   {providerSpec.label}
                 </div>
-                {providerSpec.authMethod === "google_oauth" && (
-                  <GoogleAuthButton
-                    connected={isOAuthConnected(draft)}
-                    onConnected={({ refreshToken, clientId, clientSecret }) => {
+
+                {isSharedEligible && (
+                  <SharedManualToggle
+                    provider={providerId}
+                    useShared={useShared}
+                    selectedId={draft.sharedCredentialId || undefined}
+                    onSwitchToManual={() => switchToManual(providerId)}
+                    onSwitchToShared={() => switchToShared(providerId)}
+                    onPickShared={(brief) => handlePickShared(providerId, brief)}
+                  />
+                )}
+
+                {!useShared && (
+                  <IntegrationFields
+                    provider={providerSpec}
+                    draft={draft}
+                    namePrefix="tab-"
+                    onFieldChange={(key, value) => setField(providerId, key, value)}
+                    onReposChange={(key, repos) => setRepos(providerId, key, repos)}
+                    onOAuthConnected={({ refreshToken, clientId, clientSecret }) => {
                       setField(providerId, "refreshToken", refreshToken);
                       setField(providerId, "clientId", clientId);
                       setField(providerId, "clientSecret", clientSecret);
                     }}
                   />
                 )}
-                {providerSpec.fields.map((field) => {
-                  if (field.dependsOn && draft.content[field.dependsOn.key] !== field.dependsOn.value) {
-                    return null;
-                  }
-                  const label = field.required
-                    ? field.label
-                    : `${field.label} (optional)`;
-
-                  if (field.type === "repo-list") {
-                    const repos = Array.isArray(draft.content[field.key])
-                      ? (draft.content[field.key] as string[])
-                      : [];
-                    return (
-                      <FormField key={field.key} label={label} hint={field.hint}>
-                        <RepoListField
-                          repos={repos}
-                          onChange={(next) => setRepos(providerId, field.key, next)}
-                          placeholder={field.placeholder}
-                        />
-                      </FormField>
-                    );
-                  }
-
-                  const rawValue = draft.content[field.key];
-                  const value = typeof rawValue === "string" ? rawValue : "";
-
-                  if (field.type === "secret") {
-                    const vkey = `${providerId}:${field.key}`;
-                    return (
-                      <FormField key={field.key} label={label} hint={field.hint}>
-                        <TokenInput
-                          value={value}
-                          onChange={(v) => setField(providerId, field.key, v)}
-                          visible={!!visible[vkey]}
-                          onToggle={() =>
-                            setVisible((s) => ({ ...s, [vkey]: !s[vkey] }))
-                          }
-                          placeholder={field.placeholder}
-                        />
-                      </FormField>
-                    );
-                  }
-                  
-                  if (field.type === "radio") {
-                    return (
-                      <FormField key={field.key} label={label} hint={field.hint}>
-                        <div className="flex flex-col gap-2 mt-1">
-                          {field.options?.map((opt) => (
-                            <label key={opt.value} className="flex items-center gap-2 cursor-pointer">
-                              <input
-                                type="radio"
-                                name={`tab-${providerId}-${field.key}`}
-                                value={opt.value}
-                                checked={value === opt.value}
-                                onChange={(e) => setField(providerId, field.key, e.target.value)}
-                                className="accent-[var(--blue-9)]"
-                              />
-                              <span className="text-[13px]" style={{ color: "var(--ink-1)" }}>{opt.label}</span>
-                            </label>
-                          ))}
-                        </div>
-                      </FormField>
-                    );
-                  }
-
-                  return (
-                    <FormField key={field.key} label={label} hint={field.hint}>
-                      <input
-                        className="af-input"
-                        value={value}
-                        onChange={(e) =>
-                          setField(providerId, field.key, e.target.value)
-                        }
-                        placeholder={field.placeholder}
-                        autoComplete="off"
-                      />
-                    </FormField>
-                  );
-                })}
               </div>
             );
           })}

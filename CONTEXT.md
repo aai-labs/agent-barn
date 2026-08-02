@@ -109,8 +109,12 @@ A packaged set of agent instructions or references that can be assigned to an ag
 _Avoid_: integration, tool
 
 **Agent Secret**:
-An encrypted, provider-specific credential payload assigned to one agent so its runtime can access an external service.
+An encrypted, provider-specific credential payload assigned to one agent so its runtime can access an external service. May hold its own encrypted content or reference a Shared Credential.
 _Avoid_: skill, application secret
+
+**Shared Credential**:
+An encrypted, provider-specific credential payload owned by an organization and reusable across agents. Admins manage shared credentials; any org member can attach one to an agent.
+_Avoid_: org secret, global credential
 
 **Integration**:
 An external service made available to an agent through an Agent Secret and runtime-specific configuration.
@@ -174,7 +178,7 @@ _Avoid_: webhook
 
 ## Relationships
 
-- An **Organization** has many **Memberships**, **Agents**, **Templates**, and custom **Skills**.
+- An **Organization** has many **Memberships**, **Agents**, **Templates**, custom **Skills**, and **Shared Credentials**.
 - An **Organization** has one immutable **Organization Creator**, and creation grants that user the initial Organization Owner **Membership**.
 - **Platform Oversight Data** may describe Organizations and their resources but never establishes an Active Organization or grants Organization authority.
 - A **Membership** links one user to one **Organization** with one **Organization Role**.

@@ -197,6 +197,54 @@ def use_org_for_auth():
     return step
 
 
+def there_is_a_shared_credential(
+    provider: str = "jira",
+    name: str = "Shared Jira",
+    content: dict | None = None,
+):
+    def step(context):
+        from api.domains.agents.models import (
+            SecretProvider,
+            encrypt_content,
+            validate_content,
+        )
+        from api.domains.shared_credentials.models import SharedCredential
+        from api.domains.shared_credentials.repository import (
+            SharedCredentialRepository,
+        )
+
+        default_contents: dict[str, dict] = {
+            "jira": {
+                "site_url": "https://test.atlassian.net",
+                "email": "admin@test.com",
+                "api_token": "shared-jira-token",
+            },
+            "github": {
+                "token": "ghp_shared_token",
+                "owner": "shared-org",
+                "org": "shared-org",
+                "repos": [],
+            },
+        }
+        raw = content or default_contents.get(provider, {})
+        sp = SecretProvider(provider)
+        validated = validate_content(sp, raw)
+        encrypted = encrypt_content(validated, TEST_ENCRYPTION_KEY)
+
+        repo: SharedCredentialRepository = context.injector.get(SharedCredentialRepository)
+        cred = SharedCredential(
+            organization_id=context.organization.id,
+            provider=SecretProvider(provider),
+            name=name,
+            content=encrypted,
+            created_by=context.user.id,
+        )
+        repo.save(cred)
+        context.shared_credential = cred
+
+    return step
+
+
 def skill_is_assigned_to_agent():
     def step(context):
         from api.domains.agents.models import AgentSkill
