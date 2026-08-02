@@ -73,7 +73,7 @@ test.describe("Users Page — bounded platform authority", () => {
     await page.goto(USERS_URL);
 
     await page
-      .getByRole("button", { name: /grant Platform Privilege/i })
+      .getByRole("button", { name: /grant platform admin/i })
       .click();
     const dialog = page.getByRole("dialog");
     await expect(
