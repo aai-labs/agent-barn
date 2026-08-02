@@ -66,3 +66,4 @@ RUN mkdir -p /opt/openclaw-preinstalled/npm && \
 USER node
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
+# ci-pipeline test touch
