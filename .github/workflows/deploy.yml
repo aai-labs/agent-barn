@@ -55,186 +55,24 @@ jobs:
           echo "openclaw=$openclaw" >> "$GITHUB_OUTPUT"
 
   # ═══════════════════════════════════════════════════════════════
-  # Phase 2: Lint (API + UI, parallel)
-  # ═══════════════════════════════════════════════════════════════
-
-  lint-api:
-    needs: [detect-changes]
-    if: ${{ needs.detect-changes.outputs.api == 'true' }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v7
-        with:
-          python-version: "3.14"
-          enable-cache: true
-      - name: Install dependencies
-        working-directory: api
-        run: uv sync --frozen
-      - run: make check-api
-      - run: make check-migrations
-
-  lint-ui:
-    needs: [detect-changes]
-    if: ${{ needs.detect-changes.outputs.ui == 'true' }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: pnpm/action-setup@v5
-        with:
-          package_json_file: ui/package.json
-      - uses: actions/setup-node@v5
-        with:
-          node-version: "24"
-          cache: pnpm
-          cache-dependency-path: ui/pnpm-lock.yaml
-      - name: Install dependencies
-        working-directory: ui
-        run: pnpm install --frozen-lockfile
-      - run: make lint-ui
-      - run: make check-ui
-
-  # ═══════════════════════════════════════════════════════════════
-  # Phase 3: Test (API + UI, parallel within component)
-  # ═══════════════════════════════════════════════════════════════
-
-  test-api:
-    needs: [lint-api]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v7
-        with:
-          python-version: "3.14"
-          enable-cache: true
-      - name: Install dependencies
-        working-directory: api
-        run: uv sync --frozen
-      - run: make test-api
-
-  test-k8s-api:
-    needs: [lint-api]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v7
-        with:
-          python-version: "3.14"
-          enable-cache: true
-      - name: Install dependencies
-        working-directory: api
-        run: uv sync --frozen
-      - name: Open SSH tunnel to k3s
-        run: |
-          mkdir -p ~/.ssh
-          printf '%s\n' '${{ secrets.BASTION_SSH_KEY }}' > ~/.ssh/bastion_ed25519
-          chmod 600 ~/.ssh/bastion_ed25519
-          printf '%s' '${{ secrets.KUBECONFIG_B64 }}' | base64 -d > $RUNNER_TEMP/kubeconfig
-          ssh -fN \
-            -i ~/.ssh/bastion_ed25519 \
-            -o StrictHostKeyChecking=no \
-            -o ExitOnForwardFailure=yes \
-            -o ServerAliveInterval=60 \
-            -o ServerAliveCountMax=3 \
-            -L 6443:10.100.0.11:6443 \
-            bastion@k8s.aai-labs.com
-          sleep 3
-          sed -i 's|server: https://.*|server: https://127.0.0.1:6443|' $RUNNER_TEMP/kubeconfig
-      - name: Run k8s integration tests
-        env:
-          K8S_KUBECONFIG_PATH: ${{ runner.temp }}/kubeconfig
-          K8S_NAMESPACE: agent-farm
-        run: make test-api-k8s
-
-  test-ui:
-    needs: [lint-ui]
-    runs-on: ubuntu-latest
-    container:
-      image: mcr.microsoft.com/playwright:v1.62.0-noble
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install make
-        run: apt-get update && apt-get install -y --no-install-recommends make
-      - uses: pnpm/action-setup@v5
-        with:
-          package_json_file: ui/package.json
-      - name: Get pnpm store directory
-        shell: bash
-        run: echo "STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_ENV"
-      - uses: actions/cache@v5
-        with:
-          path: ${{ env.STORE_PATH }}
-          key: pnpm-store-${{ runner.os }}-${{ hashFiles('ui/pnpm-lock.yaml') }}
-          restore-keys: |
-            pnpm-store-${{ runner.os }}-
-      - name: Install dependencies
-        working-directory: ui
-        run: pnpm install --frozen-lockfile
-      - run: make test-ui
-
-  # ═══════════════════════════════════════════════════════════════
-  # Phase 4: Build + Push (all 4 in parallel)
+  # Phase 2: Lint, test, build + push each changed component (parallel)
   # ═══════════════════════════════════════════════════════════════
 
   push-api:
-    needs: [test-api, test-k8s-api]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - name: Log in to registry
-        uses: docker/login-action@v4
-        with:
-          registry: ${{ vars.REGISTRY_URL }}
-          username: ${{ vars.REGISTRY_USERNAME }}
-          password: ${{ secrets.REGISTRY_PASSWORD }}
-      - name: Resolve image tag
-        id: tag
-        run: |
-          if [ "${{ github.ref_name }}" = "staging" ]; then
-            echo "value=latest-staging" >> "$GITHUB_OUTPUT"
-          else
-            echo "value=latest" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Build and push
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: api/Dockerfile
-          push: true
-          tags: ${{ vars.REGISTRY_URL }}/agentfarm-api:${{ steps.tag.outputs.value }}
-          cache-from: type=gha
+    needs: [detect-changes]
+    if: ${{ needs.detect-changes.outputs.api == 'true' }}
+    uses: ./.github/workflows/api.yml
+    secrets: inherit
+    with:
+      push_image: true
 
   push-ui:
-    needs: [test-ui]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - name: Log in to registry
-        uses: docker/login-action@v4
-        with:
-          registry: ${{ vars.REGISTRY_URL }}
-          username: ${{ vars.REGISTRY_USERNAME }}
-          password: ${{ secrets.REGISTRY_PASSWORD }}
-      - name: Resolve image tag and API host
-        id: tag
-        run: |
-          if [ "${{ github.ref_name }}" = "staging" ]; then
-            echo "value=latest-staging" >> "$GITHUB_OUTPUT"
-            echo "api_host=$(echo '${{ vars.STAGING_API_HOST }}' | cut -d',' -f1 | tr -d ' ')" >> "$GITHUB_OUTPUT"
-          else
-            echo "value=latest" >> "$GITHUB_OUTPUT"
-            echo "api_host=$(echo '${{ vars.API_HOST }}' | cut -d',' -f1 | tr -d ' ')" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Build and push
-        uses: docker/build-push-action@v7
-        with:
-          context: ui
-          file: ui/Dockerfile
-          push: true
-          tags: ${{ vars.REGISTRY_URL }}/agentfarm-ui:${{ steps.tag.outputs.value }}
-          build-args: |
-            NEXT_PUBLIC_BACKEND_URL=https://${{ steps.tag.outputs.api_host }}
-          cache-from: type=gha
+    needs: [detect-changes]
+    if: ${{ needs.detect-changes.outputs.ui == 'true' }}
+    uses: ./.github/workflows/ui.yml
+    secrets: inherit
+    with:
+      push_image: true
 
   push-hermes:
     needs: [detect-changes]
@@ -253,7 +91,7 @@ jobs:
       push_image: true
 
   # ═══════════════════════════════════════════════════════════════
-  # Phase 5: Resolve environment config
+  # Phase 3: Resolve environment config
   # ═══════════════════════════════════════════════════════════════
 
   resolve-env:
@@ -318,7 +156,7 @@ jobs:
           echo "hermes_image_tag=$(cat hermes-base/VERSION)${IMAGE_SUFFIX}" >> "$GITHUB_OUTPUT"
 
   # ═══════════════════════════════════════════════════════════════
-  # Phase 6: Deploy
+  # Phase 4: Deploy
   # ═══════════════════════════════════════════════════════════════
 
   deploy:

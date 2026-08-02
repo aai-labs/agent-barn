@@ -1,16 +1,8 @@
 name: Openclaw Base
 
 on:
-  push:
-    # deploy.yml calls this workflow directly (via workflow_call) as a
-    # needs: prerequisite for staging/main pushes, so it isn't also
-    # triggered standalone here -- that would run it twice for the same commit.
-    branches-ignore:
-      - staging
-      - main
-    paths:
-      - openclaw-base/**
-      - .github/workflows/openclaw-base.yml
+  # Reusable only -- called by deploy.yml (staging/main, push_image: true)
+  # and ci.yml (other branches/PRs, push_image: false).
   workflow_call:
     inputs:
       push_image:
