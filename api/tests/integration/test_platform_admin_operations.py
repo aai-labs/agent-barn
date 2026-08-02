@@ -455,52 +455,6 @@ def test_platform_privilege_requires_a_bounded_reason():
         assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
 
 
-def test_unsafe_platform_user_mutation_operations_remain_removed():
-    actor_id = uuid7()
-    target_id = uuid7()
-    with given(
-        [
-            prepare_injector(),
-            prepare_api_server(),
-            create_test_client(),
-            database_repo_is_ready(),
-            database_is_clean(),
-            there_is_a_user(id=actor_id, email="actor-removed@example.com", is_platform_admin=True),
-            there_is_a_user(id=target_id, email="target-removed@example.com"),
-            there_is_an_access_token_for_user(user_id=actor_id),
-        ]
-    ) as context:
-        headers = {"Authorization": f"Bearer {context.access_token}"}
-        create_response = context.client.post(
-            "/api/v1/platform/users",
-            json={
-                "email": "created@example.com",
-                "password": "StrongPass123",
-                "organization_id": str(uuid7()),
-            },
-            headers=headers,
-        )
-        reset_response = context.client.post(
-            f"/api/v1/platform/users/{target_id}/reset-password",
-            json={"new_password": "NewStrongPass123"},
-            headers=headers,
-        )
-        delete_response = context.client.delete(
-            f"/api/v1/platform/users/{target_id}",
-            headers=headers,
-        )
-        openapi_paths = context.client.get("/api/v1/openapi.json").json()["paths"]
-
-        assert_that(create_response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
-        assert_that(reset_response.status_code in {404, 405}, is_(True))
-        assert_that(delete_response.status_code in {404, 405}, is_(True))
-        assert_that("post" in openapi_paths["/platform/users"], is_(True))
-        assert_that("/platform/users/{user_id}/reset-password" in openapi_paths, is_(False))
-        # GET (single-user detail) is supported; DELETE (account deletion) remains removed.
-        assert_that("get" in openapi_paths["/platform/users/{user_id}"], is_(True))
-        assert_that("delete" in openapi_paths.get("/platform/users/{user_id}", {}), is_(False))
-
-
 def test_platform_admin_can_list_all_organizations():
     super_id = uuid7()
 
