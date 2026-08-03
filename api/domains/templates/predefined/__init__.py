@@ -29,7 +29,10 @@ class PredefinedTemplate:
     boot_md: str
     bootstrap_md: str
     heartbeat_md: str
-    required_skill_names: tuple[str, ...] = ()
+    # An entry is either a bare skill name (standalone, AND-required) or a
+    # tuple of names forming an "at least one of" (OR) requirement group,
+    # e.g. ("GitHub", "Bitbucket").
+    required_skill_names: tuple[str | tuple[str, ...], ...] = ()
 
 
 PREDEFINED_TEMPLATES: tuple[PredefinedTemplate, ...] = (
@@ -72,10 +75,9 @@ PREDEFINED_TEMPLATES: tuple[PredefinedTemplate, ...] = (
         boot_md=code_reviewer.BOOT_MD,
         bootstrap_md=DEFAULT_BOOTSTRAP_MD,
         heartbeat_md=code_reviewer.HEARTBEAT_MD,
-        # Code host is GitHub OR Bitbucket — an "either" the AND-only skill gate
-        # can't express, so it's enforced at runtime by AGENTS.md Setup Step 1.
-        # Configuring either host auto-mounts its aai-cli skill at start.
-        required_skill_names=(),
+        # Code host is GitHub OR Bitbucket — enforced at agent-creation time
+        # as an "at least one of" requirement group (see requirements.py).
+        required_skill_names=(("GitHub", "Bitbucket"),),
     ),
     PredefinedTemplate(
         slug="jira-task-helper",

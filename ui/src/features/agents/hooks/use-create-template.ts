@@ -20,6 +20,8 @@ export type CreateTemplateData = {
   bootstrapMd?: string;
   heartbeatMd?: string;
   requiredSkillIds?: string[];
+  // "At least one of" requirement groups (e.g. GitHub OR Bitbucket).
+  requiredSkillGroups?: { groupKey: string; skillIds: string[] }[];
 };
 
 export function useCreateTemplate() {

@@ -15,6 +15,7 @@ import { useTemplateVersions } from "../hooks/use-template-versions";
 import { useCreateTemplate } from "../hooks/use-create-template";
 import { useUpdateTemplate } from "../hooks/use-update-template";
 import type { AgentTemplateRead } from "../schemas";
+import { generateGroupKey, splitRequiredSkills } from "../utils";
 import { DeleteTemplateDialog } from "./delete-template-dialog";
 import {
   TEMPLATE_FILE_KEYS,
@@ -49,6 +50,7 @@ function filesFrom(template: AgentTemplateRead): TemplateFiles {
 }
 
 type SkillEntry = { id: string; name: string; source: string; requiredProviders: string[] };
+type GroupDraft = { key: string; members: SkillEntry[] };
 
 function deriveSlug(name: string): string {
   return name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
@@ -82,14 +84,25 @@ export function TemplateDrawer({
   const [selectedSkillDetails, setSelectedSkillDetails] = useState<SkillEntry[]>([]);
   const [skillSearch, setSkillSearch] = useState("");
   const [debouncedSkillSearch] = useDebouncedValue(skillSearch, { wait: 300 });
+  const [groupDrafts, setGroupDrafts] = useState<GroupDraft[]>([]);
+  const [groupingSelection, setGroupingSelection] = useState<Set<string>>(new Set());
+  const [selectMode, setSelectMode] = useState(false);
+  const [groupSkillSearch, setGroupSkillSearch] = useState<Record<string, string>>({});
 
   const { skills, isLoading: skillsLoading } = useSkills({ search: debouncedSkillSearch || undefined, pageSize: 100 });
   const requiredSkillIds = selectedSkillDetails.map((s) => s.id);
-  const unselectedSkills = skills.filter((s) => !requiredSkillIds.includes(s.id));
 
   // The version currently being displayed/edited (defaults to latest).
   const resolvedVersion = selectedVersion ?? versions[0]?.version ?? null;
   const current = versions.find((v) => v.version === resolvedVersion) ?? versions[0];
+
+  // A skill is always in exactly one of: selectedSkillDetails (standalone),
+  // one groupDrafts entry's members, or unselected — every "add" action below
+  // pulls candidates from this list, so that invariant holds structurally.
+  const groupedDraftSkillIds = new Set(groupDrafts.flatMap((g) => g.members.map((m) => m.id)));
+  const unselectedSkills = skills.filter(
+    (s) => !requiredSkillIds.includes(s.id) && !groupedDraftSkillIds.has(s.id),
+  );
 
   // In view mode the selected version is displayed directly; local draft state
   // only matters once the user starts editing (snapshotted from `current`).
@@ -104,16 +117,31 @@ export function TemplateDrawer({
     if (current) {
       setFiles(filesFrom(current));
       setDescription(current.description ?? "");
+      const { standalone, groups } = splitRequiredSkills(current.requiredSkills);
       setSelectedSkillDetails(
-        current.requiredSkills.map((s) => ({
+        standalone.map((s) => ({
           id: s.id,
           name: s.name,
           source: s.source,
           requiredProviders: s.requiredProviders,
         })),
       );
+      setGroupDrafts(
+        groups.map((g) => ({
+          key: g.key,
+          members: g.members.map((m) => ({
+            id: m.id,
+            name: m.name,
+            source: m.source,
+            requiredProviders: m.requiredProviders,
+          })),
+        })),
+      );
     }
     setSkillSearch("");
+    setGroupSkillSearch({});
+    setGroupingSelection(new Set());
+    setSelectMode(false);
     setSavedVersion(null);
     setEditing(true);
   }
@@ -126,17 +154,54 @@ export function TemplateDrawer({
     setSelectedSkillDetails((prev) => prev.filter((s) => s.id !== id));
   }
 
+  function createGroupFromSelection() {
+    const members = skills.filter((s) => groupingSelection.has(s.id));
+    if (members.length < 2) return;
+    const memberEntries: SkillEntry[] = members.map((s) => ({
+      id: s.id,
+      name: s.name,
+      source: s.source,
+      requiredProviders: s.requiredProviders,
+    }));
+    const key = generateGroupKey(memberEntries, groupDrafts.map((g) => g.key));
+    setGroupDrafts((prev) => [...prev, { key, members: memberEntries }]);
+    setGroupingSelection(new Set());
+    setSelectMode(false);
+  }
+
+  function addToGroup(groupKey: string, skill: SkillEntry) {
+    setGroupDrafts((prev) =>
+      prev.map((g) => (g.key === groupKey ? { ...g, members: [...g.members, skill] } : g)),
+    );
+  }
+
+  function removeFromGroup(groupKey: string, skillId: string) {
+    setGroupDrafts((prev) =>
+      prev
+        .map((g) => (g.key === groupKey ? { ...g, members: g.members.filter((m) => m.id !== skillId) } : g))
+        .filter((g) => g.members.length > 0),
+    );
+  }
+
+  function dissolveGroup(groupKey: string) {
+    const group = groupDrafts.find((g) => g.key === groupKey);
+    if (!group) return;
+    setSelectedSkillDetails((sel) => [...sel, ...group.members]);
+    setGroupDrafts((prev) => prev.filter((g) => g.key !== groupKey));
+  }
+
   async function handleSave() {
     createTemplate.reset();
     updateTemplate.reset();
+    const requiredSkillGroups = groupDrafts.map((g) => ({ groupKey: g.key, skillIds: g.members.map((m) => m.id) }));
     try {
       if (mode === "create") {
-        await createTemplate.mutateAsync({ templateName: name, description: description || null, ...files, requiredSkillIds });
+        await createTemplate.mutateAsync({ templateName: name, description: description || null, ...files, requiredSkillIds, requiredSkillGroups });
         onClose();
         return;
       }
       // Saving publishes a new immutable version; the name is inherited.
-      const updated = await updateTemplate.mutateAsync({ slug: slug!, description: description || null, ...files, requiredSkillIds });
+      const updated = await updateTemplate.mutateAsync({ slug: slug!, description: description || null, ...files, requiredSkillIds, requiredSkillGroups });
       await refetch();
       setSelectedVersion(updated.version);
       setEditing(false);
@@ -297,17 +362,31 @@ export function TemplateDrawer({
                     Required skills
                   </label>
                   {current && current.requiredSkills.length > 0 ? (
-                    <div className="flex flex-wrap gap-1.5">
-                      {current.requiredSkills.map((skill) => (
-                        <span
-                          key={skill.id}
-                          className="text-[12px] font-medium px-2.5 py-0.5 rounded-full"
-                          style={{ background: "var(--bg-soft)", color: "var(--ink-2)", border: "1px solid var(--line)" }}
-                        >
-                          {skill.name}
-                        </span>
-                      ))}
-                    </div>
+                    (() => {
+                      const { standalone, groups } = splitRequiredSkills(current.requiredSkills);
+                      return (
+                        <div className="flex flex-col gap-1.5">
+                          {standalone.length > 0 && (
+                            <div className="flex flex-wrap gap-1.5">
+                              {standalone.map((skill) => (
+                                <span
+                                  key={skill.id}
+                                  className="text-[12px] font-medium px-2.5 py-0.5 rounded-full"
+                                  style={{ background: "var(--bg-soft)", color: "var(--ink-2)", border: "1px solid var(--line)" }}
+                                >
+                                  {skill.name}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                          {groups.map((group) => (
+                            <div key={group.key} className="text-[12.5px]" style={{ color: "var(--ink-3)" }}>
+                              One of: {group.members.map((m) => m.name).join(", ")}
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    })()
                   ) : (
                     <div className="text-[13px]" style={{ color: "var(--ink-4)" }}>None</div>
                   )}
@@ -326,6 +405,99 @@ export function TemplateDrawer({
                   <label className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>
                     Required skills
                   </label>
+
+                  {groupDrafts.length > 0 && (
+                    <div className="flex flex-col gap-3">
+                      {groupDrafts.map((group) => {
+                        const groupSearch = groupSkillSearch[group.key] ?? "";
+                        const groupCandidates = unselectedSkills.filter((s) =>
+                          s.name.toLowerCase().includes(groupSearch.toLowerCase()),
+                        );
+                        return (
+                          <div
+                            key={group.key}
+                            data-testid={`required-skill-group-${group.key}`}
+                            className="flex flex-col gap-2 p-3 rounded-2xl"
+                            style={{ border: "1px dashed var(--line-strong)" }}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-[12.5px]" style={{ color: "var(--ink-3)" }}>
+                                One of: {group.members.map((m) => m.name).join(", ")}
+                              </span>
+                              <button
+                                type="button"
+                                className="af-btn af-btn-sm af-btn-ghost"
+                                onClick={() => dissolveGroup(group.key)}
+                              >
+                                Dissolve group
+                              </button>
+                            </div>
+
+                            <div className="flex flex-col gap-1.5">
+                              {group.members.map((member) => (
+                                <div
+                                  key={member.id}
+                                  className="flex items-center gap-2 px-3 py-2 rounded-xl"
+                                  style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
+                                >
+                                  <div className="flex-1 min-w-0 flex items-center gap-2">
+                                    <span className="font-medium text-[0.8125rem]" style={{ color: "var(--ink)" }}>
+                                      {member.name}
+                                    </span>
+                                    <SkillSourceBadge source={member.source} />
+                                  </div>
+                                  <button
+                                    type="button"
+                                    className="af-btn af-btn-sm af-btn-ghost"
+                                    onClick={() => removeFromGroup(group.key, member.id)}
+                                  >
+                                    Remove
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+
+                            <div
+                              className="flex items-center gap-2 px-3 py-1.5 rounded-xl"
+                              style={{ border: "1px solid var(--line)" }}
+                            >
+                              <SearchIcon size={13} style={{ color: "var(--ink-4)", flexShrink: 0 }} />
+                              <input
+                                className="flex-1 text-[0.78125rem] outline-none bg-transparent"
+                                style={{ color: "var(--ink)" }}
+                                placeholder="Search skills to add to this group…"
+                                value={groupSearch}
+                                onChange={(e) =>
+                                  setGroupSkillSearch((prev) => ({ ...prev, [group.key]: e.target.value }))
+                                }
+                              />
+                            </div>
+                            {groupCandidates.slice(0, 5).map((skill) => (
+                              <div key={skill.id} className="flex items-center gap-2 px-3 py-1.5 rounded-xl">
+                                <span className="flex-1 text-[0.78125rem]" style={{ color: "var(--ink-2)" }}>
+                                  {skill.name}
+                                </span>
+                                <button
+                                  type="button"
+                                  className="af-btn af-btn-sm af-btn-ghost"
+                                  onClick={() =>
+                                    addToGroup(group.key, {
+                                      id: skill.id,
+                                      name: skill.name,
+                                      source: skill.source,
+                                      requiredProviders: skill.requiredProviders,
+                                    })
+                                  }
+                                >
+                                  Add
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
 
                   {selectedSkillDetails.length > 0 ? (
                     <div className="flex flex-col gap-2 overflow-y-auto" style={{ maxHeight: "15rem" }}>
@@ -367,18 +539,30 @@ export function TemplateDrawer({
                     </div>
                   )}
 
-                  <div
-                    className="flex items-center gap-2 px-3 py-2 rounded-xl mt-1"
-                    style={{ border: "1px solid var(--line)", background: "var(--bg-elev)" }}
-                  >
-                    <SearchIcon size={14} style={{ color: "var(--ink-4)", flexShrink: 0 }} />
-                    <input
-                      className="flex-1 text-[0.8125rem] outline-none bg-transparent"
-                      style={{ color: "var(--ink)" }}
-                      placeholder="Search skills to add…"
-                      value={skillSearch}
-                      onChange={(e) => setSkillSearch(e.target.value)}
-                    />
+                  <div className="flex items-center justify-between gap-2 mt-1">
+                    <div
+                      className="flex items-center gap-2 px-3 py-2 rounded-xl flex-1"
+                      style={{ border: "1px solid var(--line)", background: "var(--bg-elev)" }}
+                    >
+                      <SearchIcon size={14} style={{ color: "var(--ink-4)", flexShrink: 0 }} />
+                      <input
+                        className="flex-1 text-[0.8125rem] outline-none bg-transparent"
+                        style={{ color: "var(--ink)" }}
+                        placeholder="Search skills to add…"
+                        value={skillSearch}
+                        onChange={(e) => setSkillSearch(e.target.value)}
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      className="af-btn af-btn-sm af-btn-ghost"
+                      onClick={() => {
+                        setSelectMode((v) => !v);
+                        setGroupingSelection(new Set());
+                      }}
+                    >
+                      {selectMode ? "Cancel grouping" : "Group skills…"}
+                    </button>
                   </div>
 
                   <div className="flex flex-col gap-2 overflow-y-auto" style={{ maxHeight: "14rem" }}>
@@ -392,36 +576,82 @@ export function TemplateDrawer({
                         {skillSearch ? "No skills match." : "No more skills to add."}
                       </div>
                     ) : (
-                      unselectedSkills.map((skill) => (
-                        <div
-                          key={skill.id}
-                          className="flex items-center gap-2 px-3.5 py-2.5 rounded-2xl flex-shrink-0"
-                          style={{ border: "1px solid var(--line)" }}
-                        >
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2">
-                              <span className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>
-                                {skill.name}
-                              </span>
-                              <SkillSourceBadge source={skill.source} />
+                      unselectedSkills.map((skill) => {
+                        const checked = groupingSelection.has(skill.id);
+                        return (
+                          <div
+                            key={skill.id}
+                            className="flex items-center gap-2 px-3.5 py-2.5 rounded-2xl flex-shrink-0"
+                            style={{
+                              border: checked ? "1.5px solid var(--ink)" : "1px solid var(--line)",
+                              background: checked ? "var(--bg-soft)" : undefined,
+                            }}
+                          >
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>
+                                  {skill.name}
+                                </span>
+                                <SkillSourceBadge source={skill.source} />
+                              </div>
+                              {skill.requiredProviders.length > 0 && (
+                                <span className="text-[0.75rem]" style={{ color: "var(--ink-4)" }}>
+                                  Requires:{" "}
+                                  {skill.requiredProviders.map((p) => SKILL_PROVIDER_LABELS[p] ?? p).join(", ")}
+                                </span>
+                              )}
                             </div>
-                            {skill.requiredProviders.length > 0 && (
-                              <span className="text-[0.75rem]" style={{ color: "var(--ink-4)" }}>
-                                Requires:{" "}
-                                {skill.requiredProviders.map((p) => SKILL_PROVIDER_LABELS[p] ?? p).join(", ")}
-                              </span>
+                            {selectMode ? (
+                              <button
+                                type="button"
+                                role="checkbox"
+                                aria-checked={checked}
+                                className="af-btn af-btn-sm af-btn-ghost"
+                                onClick={() =>
+                                  setGroupingSelection((prev) => {
+                                    const next = new Set(prev);
+                                    if (next.has(skill.id)) {
+                                      next.delete(skill.id);
+                                    } else {
+                                      next.add(skill.id);
+                                    }
+                                    return next;
+                                  })
+                                }
+                              >
+                                {checked ? "Selected" : "Select"}
+                              </button>
+                            ) : (
+                              <button
+                                className="af-btn af-btn-sm af-btn-ghost"
+                                onClick={() => addRequiredSkill({ id: skill.id, name: skill.name, source: skill.source, requiredProviders: skill.requiredProviders })}
+                              >
+                                Add
+                              </button>
                             )}
                           </div>
-                          <button
-                            className="af-btn af-btn-sm af-btn-ghost"
-                            onClick={() => addRequiredSkill({ id: skill.id, name: skill.name, source: skill.source, requiredProviders: skill.requiredProviders })}
-                          >
-                            Add
-                          </button>
-                        </div>
-                      ))
+                        );
+                      })
                     )}
                   </div>
+
+                  {selectMode && groupingSelection.size >= 2 && (
+                    <div
+                      className="flex items-center justify-between gap-2 px-3.5 py-2 rounded-xl"
+                      style={{ border: "1px solid var(--line)", background: "var(--bg-elev)" }}
+                    >
+                      <span className="text-[0.8125rem]" style={{ color: "var(--ink-2)" }}>
+                        {groupingSelection.size} selected
+                      </span>
+                      <button
+                        type="button"
+                        className="af-btn af-btn-sm af-btn-primary"
+                        onClick={createGroupFromSelection}
+                      >
+                        Group as &quot;at least one of&quot;
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
 

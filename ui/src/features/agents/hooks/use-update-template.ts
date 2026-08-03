@@ -21,6 +21,9 @@ export type UpdateTemplateData = {
   bootstrapMd?: string;
   heartbeatMd?: string;
   requiredSkillIds?: string[];
+  // "At least one of" requirement groups (e.g. GitHub OR Bitbucket). Omitting
+  // this field inherits the prior version's groups.
+  requiredSkillGroups?: { groupKey: string; skillIds: string[] }[];
 };
 
 export function useUpdateTemplate() {
