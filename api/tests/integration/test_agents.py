@@ -3401,7 +3401,7 @@ def test_start_hermes_agent_secret_has_litellm_proxy_target():
         ]
     ) as context:
         client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
 
         with when("I start the Hermes agent"):
             response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
