@@ -92,7 +92,7 @@ test.describe("Settings · Templates", () => {
     await content.fill("# Soul next");
 
     const patchPromise = page.waitForRequest(
-      (req) => req.url().includes("/api/v1/templates/my-custom") && req.method() === "PATCH",
+      (req) => req.url().includes("/templates/my-custom") && req.method() === "PATCH",
     );
     await page.getByRole("button", { name: "Save", exact: true }).click();
     const patchRequest = await patchPromise;
@@ -115,7 +115,9 @@ test.describe("Settings · Templates", () => {
     await page.getByLabel("SOUL.md content").fill("# A fresh soul");
 
     const createPromise = page.waitForRequest(
-      (req) => req.url().endsWith("/api/v1/templates") && req.method() === "POST",
+      (req) =>
+        /\/api\/v1\/organizations\/[^/]+\/templates$/.test(new URL(req.url()).pathname) &&
+        req.method() === "POST",
     );
     await page.getByRole("button", { name: "Create template" }).click();
     const createRequest = await createPromise;
@@ -167,7 +169,7 @@ test.describe("Settings · Templates", () => {
     await page.getByRole("button", { name: "Add" }).first().click();
 
     const patchPromise = page.waitForRequest(
-      (req) => req.url().includes("/api/v1/templates/my-custom") && req.method() === "PATCH",
+      (req) => req.url().includes("/templates/my-custom") && req.method() === "PATCH",
     );
     await page.getByRole("button", { name: "Save", exact: true }).click();
     const patchRequest = await patchPromise;

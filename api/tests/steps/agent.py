@@ -19,7 +19,7 @@ from api.domains.agents.models import (
     compute_bot_token_hash,
 )
 from api.domains.agents.repository import AgentRepository
-from api.domains.auth.utils import set_default_org_id
+from api.domains.events import ActorIdentity, ActorIdentityType
 from api.domains.rbac.catalog import AGENT_EDITOR_ROLE_ID
 from api.domains.templates.defaults import (
     DEFAULT_AGENTS_MD,
@@ -35,7 +35,6 @@ from api.domains.templates.slug import generate_template_slug
 from api.infrastructure.crypto import encrypt_token
 from api.infrastructure.kubernetes.client import KubernetesClient
 from api.infrastructure.litellm.client import LiteLLMClient
-from api.tests.core.givenpy import LambdaWith
 
 TEST_ENCRYPTION_KEY: str = Fernet.generate_key().decode()
 TEST_SLACK_BOT_TOKEN = "xoxb-test-bot-token"
@@ -110,17 +109,20 @@ def there_is_an_agent(
             status=status,
             platform=platform,
             agent_type=agent_type,
-            template_slug=template.template_slug,
-            template_version=template.version,
+            agent_template_id=template.id,
         )
 
         if deleted:
-            agent.deleted_at = datetime.datetime.now(datetime.timezone.utc)
+            agent.deleted_at = datetime.datetime.now(datetime.UTC)
 
         if creator_membership_id is None:
             repository.save(agent)
         else:
-            repository.create_with_creator_access(agent, creator_membership_id)
+            repository.create_with_creator_access(
+                agent,
+                creator_membership_id,
+                actor=ActorIdentity(type=ActorIdentityType.USER, id=created_by_user_id or uuid_mod.uuid4()),
+            )
 
         if platform == AgentPlatform.SLACK:
             effective_bot_token = bot_token or f"xoxb-test-{uuid_mod.uuid4()}"
@@ -176,8 +178,69 @@ def there_is_agent_access(
 def use_org_for_auth():
     def step(context):
         org_id = context.organization.id
-        set_default_org_id(org_id)
-        return LambdaWith(lambda: None, lambda: set_default_org_id(None))
+        original_request = context.client.request
+
+        def request(method, url, *args, **kwargs):
+            if isinstance(url, str):
+                url = url.replace("{organization_id}", str(org_id))
+            return original_request(method, url, *args, **kwargs)
+
+        context.client.request = request
+
+        def cleanup():
+            context.client.request = original_request
+
+        from api.tests.core.givenpy import LambdaWith
+
+        return LambdaWith(lambda: None, cleanup)
+
+    return step
+
+
+def there_is_a_shared_credential(
+    provider: str = "jira",
+    name: str = "Shared Jira",
+    content: dict | None = None,
+):
+    def step(context):
+        from api.domains.agents.models import (
+            SecretProvider,
+            encrypt_content,
+            validate_content,
+        )
+        from api.domains.shared_credentials.models import SharedCredential
+        from api.domains.shared_credentials.repository import (
+            SharedCredentialRepository,
+        )
+
+        default_contents: dict[str, dict] = {
+            "jira": {
+                "site_url": "https://test.atlassian.net",
+                "email": "admin@test.com",
+                "api_token": "shared-jira-token",
+            },
+            "github": {
+                "token": "ghp_shared_token",
+                "owner": "shared-org",
+                "org": "shared-org",
+                "repos": [],
+            },
+        }
+        raw = content or default_contents.get(provider, {})
+        sp = SecretProvider(provider)
+        validated = validate_content(sp, raw)
+        encrypted = encrypt_content(validated, TEST_ENCRYPTION_KEY)
+
+        repo: SharedCredentialRepository = context.injector.get(SharedCredentialRepository)
+        cred = SharedCredential(
+            organization_id=context.organization.id,
+            provider=SecretProvider(provider),
+            name=name,
+            content=encrypted,
+            created_by=context.user.id,
+        )
+        repo.save(cred)
+        context.shared_credential = cred
 
     return step
 

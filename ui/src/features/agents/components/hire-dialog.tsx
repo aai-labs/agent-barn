@@ -275,10 +275,15 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
           ...requiredSkillGroups.flatMap((g) => groupChoices[g.key] ?? []),
           ...selectedSkillIds,
         ],
-        secrets: skillCredentials.map((c) => ({
-          provider: c.provider,
-          content: coerceBooleanFields(c.provider === "github" ? expandGithubContent(c.content) : c.content),
-        })),
+        secrets: skillCredentials
+          .filter((c) => !c.sharedCredentialId)
+          .map((c) => ({
+            provider: c.provider,
+            content: coerceBooleanFields(c.provider === "github" ? expandGithubContent(c.content) : c.content),
+          })),
+        sharedCredentials: skillCredentials
+          .filter((c) => !!c.sharedCredentialId)
+          .map((c) => ({ sharedCredentialId: c.sharedCredentialId! })),
         approvalMode,
         ...(platform === "telegram"
           ? { telegramBotToken, telegramGroupPolicy, telegramDmPolicy }

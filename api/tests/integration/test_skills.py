@@ -18,13 +18,13 @@ from api.tests.core.modules import (
     set_env_variable,
 )
 from api.tests.steps.agent import (
+    TEST_ENCRYPTION_KEY,
     MockK8sModule,
     MockLiteLLMModule,
-    TEST_ENCRYPTION_KEY,
     skill_is_assigned_to_agent,
-    there_is_an_agent,
     there_is_a_skill,
     there_is_a_skill_for_another_org,
+    there_is_an_agent,
     use_org_for_auth,
 )
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
@@ -35,7 +35,7 @@ from api.tests.steps.rbac import role_lacks_permission
 from api.tests.steps.template import there_is_a_template, there_is_a_template_skill
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
 
-_BASE = "/api/v1/skills"
+_BASE = "/api/v1/organizations/{organization_id}/skills"
 
 _GIVEN = [
     set_env_variable(
@@ -205,7 +205,7 @@ def test_admin_can_create_skill():
         assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
 
 
-def test_superuser_without_skill_manage_grant_can_create_skill():
+def test_platform_admin_without_skill_manage_permission_cannot_create_skill():
     super_id = uuid7()
     with given(
         [
@@ -214,18 +214,18 @@ def test_superuser_without_skill_manage_grant_can_create_skill():
                 id=super_id,
                 email="super-skills@example.com",
                 role=OrganizationRole.MEMBER,
-                is_superuser=True,
+                is_platform_admin=True,
             ),
             there_is_an_access_token_for_user(user_id=super_id),
         ]
     ) as context:
         response = context.client.post(
             _BASE,
-            json={"name": "Superuser Skill", "zip_content": _make_zip()},
+            json={"name": "Platform administrator Skill", "zip_content": _make_zip()},
             headers=_auth(context),
         )
 
-        assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
 def test_create_skill_returns_201():
@@ -340,22 +340,21 @@ def test_create_skill_with_oversized_zip_returns_400():
 def test_create_skill_with_spoofed_uncompressed_size_returns_400():
     # The zip's metadata declares 0 bytes per entry (bypassing the header check), but
     # actual extraction totals 1500 bytes — above the patched 1000-byte limit.
-    with patch("api.domains.skills.service._MAX_UNCOMPRESSED_BYTES", 1000):
-        with given(_GIVEN) as context:
-            client: TestClient = context.client
+    with patch("api.domains.skills.service._MAX_UNCOMPRESSED_BYTES", 1000), given(_GIVEN) as context:
+        client: TestClient = context.client
 
-            with when("I create a skill with a zip that has spoofed metadata but oversized content"):
-                response = client.post(
-                    _BASE,
-                    json={
-                        "name": "Spoofed Skill",
-                        "zip_content": _make_zip_spoofed_uncompressed_size(file_count=3, file_size=500),
-                    },
-                    headers=_auth(context),
-                )
+        with when("I create a skill with a zip that has spoofed metadata but oversized content"):
+            response = client.post(
+                _BASE,
+                json={
+                    "name": "Spoofed Skill",
+                    "zip_content": _make_zip_spoofed_uncompressed_size(file_count=3, file_size=500),
+                },
+                headers=_auth(context),
+            )
 
-            with then("it returns 400"):
-                assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+        with then("it returns 400"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
 
 
 def test_create_skill_without_auth_returns_401():

@@ -1,6 +1,6 @@
 """Integration tests for the per-channel Conversations API."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 from fastapi import status
@@ -30,7 +30,7 @@ from api.tests.steps.organization import (
     there_is_an_organization_with_user_and_access_token,
 )
 
-_BASE = "/api/v1/agents"
+_BASE = "/api/v1/organizations/{organization_id}/agents"
 
 _GIVEN = [
     set_env_variable(
@@ -67,7 +67,7 @@ def _seed_message(
     channel_name: str | None = None,
 ):
     repo: ConversationRepository = context.injector.get(ConversationRepository)
-    ts = occurred_at or datetime(2025, 5, 1, 12, 0, 0, tzinfo=timezone.utc)
+    ts = occurred_at or datetime(2025, 5, 1, 12, 0, 0, tzinfo=UTC)
     msg = AgentChatMessage(
         agent_id=context.agent.id,
         openclaw_msg_id=f"test-{direction}-{channel_id}-{thread_id}-{content[:8]}-{ts.isoformat()}",
@@ -158,16 +158,18 @@ def test_list_channels_idle_agent_resolves_null_channel_names_from_directory():
             content="msg2",
         )
 
-        with when("I list channels with the directory resolving CBBB"):
-            with patch.object(
+        with (
+            when("I list channels with the directory resolving CBBB"),
+            patch.object(
                 ConversationService,
                 "_platform_maps",
                 return_value=({}, {"CBBB": "ops-alerts"}, {}),
-            ):
-                response = client.get(
-                    f"{_BASE}/{context.agent.id}/conversations/channels",
-                    headers=_auth(context),
-                )
+            ),
+        ):
+            response = client.get(
+                f"{_BASE}/{context.agent.id}/conversations/channels",
+                headers=_auth(context),
+            )
 
         with then("the null-named channel gets its directory name, others untouched"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
@@ -228,7 +230,7 @@ def test_list_messages_unknown_agent_returns_404():
 def test_list_messages_returns_latest_page_first_with_default_page_size():
     with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
         client: TestClient = context.client
-        base = datetime(2025, 5, 1, 12, 0, 0, tzinfo=timezone.utc)
+        base = datetime(2025, 5, 1, 12, 0, 0, tzinfo=UTC)
         for i in range(10):
             _seed_message(
                 context,
@@ -258,7 +260,7 @@ def test_list_messages_returns_latest_page_first_with_default_page_size():
 def test_list_messages_cursor_pagination_returns_older_page():
     with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
         client: TestClient = context.client
-        base = datetime(2025, 5, 1, 12, 0, 0, tzinfo=timezone.utc)
+        base = datetime(2025, 5, 1, 12, 0, 0, tzinfo=UTC)
         for i in range(10):
             _seed_message(
                 context,
@@ -288,7 +290,7 @@ def test_list_messages_cursor_pagination_returns_older_page():
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             body = response.json()
             contents = [t["root"]["content"] for t in body["threads"]]
-            assert_that(contents, equal_to([f"msg-{i}" for i in range(0, 4)]))
+            assert_that(contents, equal_to([f"msg-{i}" for i in range(4)]))
             assert_that(body["has_more"], equal_to(False))
             assert_that(body["next_cursor"] is None, equal_to(True))
 
@@ -296,7 +298,7 @@ def test_list_messages_cursor_pagination_returns_older_page():
 def test_list_messages_date_range_filter():
     with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
         client: TestClient = context.client
-        base = datetime(2025, 5, 1, 12, 0, 0, tzinfo=timezone.utc)
+        base = datetime(2025, 5, 1, 12, 0, 0, tzinfo=UTC)
         for i in range(5):
             _seed_message(
                 context,
@@ -327,7 +329,7 @@ def test_list_messages_bundles_thread_messages_within_page_window():
         client: TestClient = context.client
         # thread_id must match root's occurred_at unix ts within 5 seconds
         root_ts = 1746100800
-        root_dt = datetime.fromtimestamp(root_ts, tz=timezone.utc)
+        root_dt = datetime.fromtimestamp(root_ts, tz=UTC)
         thread_id = f"{root_ts}.000000"
         _seed_message(
             context,

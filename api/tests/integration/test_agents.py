@@ -1,5 +1,5 @@
 import json
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import httpx
 from fastapi import status
@@ -8,16 +8,22 @@ from hamcrest import (
     contains_string,
     equal_to,
     has_key,
+    is_in,
     is_not,
     none,
 )
 from starlette.testclient import TestClient
 
-from api.domains.agents.models import AgentStatus
+from api.domains.agents.models import AgentPlatform, AgentStatus, AgentType, SecretProvider
 from api.domains.agents.repository import AgentRepository
+from api.domains.agents.service import AgentService
+from api.domains.events.catalog import AGENT_CREATED, AGENT_STARTED, AGENT_STOPPED
+from api.domains.events.models import EventDeliveryStatus, OutboxMessage
+from api.domains.organizations.repository import OrganizationRepository
 from api.domains.templates.repository import TemplateRepository
 from api.infrastructure.kubernetes.client import KubernetesClient
 from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
+from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
     create_test_client,
@@ -25,8 +31,6 @@ from api.tests.core.modules import (
     prepare_injector,
     set_env_variable,
 )
-from api.domains.agents.models import AgentPlatform, AgentType, SecretProvider
-from api.domains.agents.service import AgentService
 from api.tests.steps.agent import (
     FAKE_LITELLM_KEY,
     TEST_ENCRYPTION_KEY,
@@ -34,9 +38,9 @@ from api.tests.steps.agent import (
     MockK8sModule,
     MockLiteLLMModule,
     skill_is_assigned_to_agent,
-    there_is_an_agent,
     there_is_a_skill,
     there_is_a_skill_for_another_org,
+    there_is_an_agent,
     there_is_an_agent_in_another_org,
     use_org_for_auth,
 )
@@ -50,7 +54,7 @@ from api.tests.steps.template import (
     there_is_a_template_skill_group,
 )
 
-_BASE = "/api/v1/agents"
+_BASE = "/api/v1/organizations/{organization_id}/agents"
 
 _VALID_CREATE = {
     "name": "My Agent",
@@ -96,6 +100,10 @@ def _auth(context) -> dict:
     return {"Authorization": f"Bearer {context.access_token}"}
 
 
+def _outbox_messages(context) -> list[OutboxMessage]:
+    return context.injector.get(PostgresRepositoryDelegate).find_all(OutboxMessage)
+
+
 def test_create_slack_agent_returns_201_stopped():
     with given(_GIVEN) as context:
         client: TestClient = context.client
@@ -110,6 +118,40 @@ def test_create_slack_agent_returns_201_stopped():
             assert_that(body["status"], equal_to(AgentStatus.STOPPED.value))
             assert_that(body, is_not(has_key("slack_bot_token")))
             assert_that(body, is_not(has_key("slack_app_token")))
+
+
+def test_create_agent_rejects_model_not_in_org_allowlist():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        org_repo: OrganizationRepository = context.injector.get(OrganizationRepository)
+        org = org_repo.get(context.organization.id)
+        assert org is not None
+        org.allowed_models = []
+        org_repo.save(org)
+
+        with when("I create an agent with a model while the org allowlist is empty"):
+            payload = {**_VALID_CREATE, "model": "litellm/openrouter/openai/gpt-4o"}
+            response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("it returns 400"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], contains_string("not in the allowed model list"))
+
+
+def test_create_agent_emits_created_domain_event():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I create a Slack agent with valid data"):
+            response = client.post(_BASE, json=_VALID_CREATE, headers=_auth(context))
+
+        with then("an Agent created Domain Event is persisted"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            messages = _outbox_messages(context)
+            created_events = [message for message in messages if message.event_name == AGENT_CREATED]
+            assert_that(len(created_events), equal_to(1))
+            assert_that(created_events[0].payload["agent_name"], equal_to("My Agent"))
+            assert_that(created_events[0].payload["created_by_user_id"], equal_to(str(context.user.id)))
 
 
 def test_create_agent_missing_template_slug_returns_422():
@@ -197,7 +239,7 @@ def test_create_agent_does_not_create_template_rows():
         with then("the lineage still has only its original version"):
             assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             template_repository: TemplateRepository = context.injector.get(TemplateRepository)
-            latest = template_repository.get_latest_template(context.organization.id, "test-template")
+            latest = template_repository.get_latest_org_template(context.organization.id, "test-template")
             assert_that(latest, is_not(none()))
             assert latest is not None
             assert_that(latest.version, equal_to(1))
@@ -682,15 +724,17 @@ def test_validate_integration_with_no_repos_returns_valid():
             request=httpx.Request("GET", "https://api.github.com/user"),
         )
 
-        with when("I validate the GitHub integration"):
-            with patch(
+        with (
+            when("I validate the GitHub integration"),
+            patch(
                 "api.infrastructure.integration_validators.github.httpx.get",
                 return_value=user_resp,
-            ):
-                response = client.post(
-                    f"{_BASE}/{context.agent.id}/integrations/github/validate",
-                    headers=_auth(context),
-                )
+            ),
+        ):
+            response = client.post(
+                f"{_BASE}/{context.agent.id}/integrations/github/validate",
+                headers=_auth(context),
+            )
 
         with then("it returns a valid status, not invalid, despite no repos configured"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
@@ -700,7 +744,7 @@ def test_validate_integration_with_no_repos_returns_valid():
 def test_start_agent_sets_status_running():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
 
         with when("I start the agent"):
             response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
@@ -733,20 +777,46 @@ def test_start_telegram_agent_labels_service_with_org_and_agent_name():
     # service, so every platform labels agents consistently.
     with given([*_GIVEN, there_is_an_agent(platform=AgentPlatform.TELEGRAM)]) as context:
         client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
 
-        with when("I start a telegram agent"):
-            with patch(
+        with (
+            when("I start a telegram agent"),
+            patch(
                 "api.domains.agents.service.validate_telegram_bot_token",
                 return_value=(True, "", {"username": "test_bot"}),
-            ):
-                response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+            ),
+        ):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
 
         with then("its Service carries the monitoring identity labels"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             service = k8s.create_service.call_args.args[1]
             assert_that(service.metadata.labels["org-name"], equal_to("test-organization"))
             assert_that(service.metadata.labels["agent-name"], equal_to("test-agent"))
+
+
+def test_start_agent_emits_started_domain_event_and_delivery():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I start the agent"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("an Agent started Domain Event and pending email delivery are persisted"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            messages = _outbox_messages(context)
+            started_events = [message for message in messages if message.event_name == AGENT_STARTED]
+            assert_that(len(started_events), equal_to(1))
+            assert_that(started_events[0].payload["previous_status"], equal_to(AgentStatus.STOPPED.value))
+            assert_that(started_events[0].payload["new_status"], equal_to(AgentStatus.RUNNING.value))
+            deliveries = context.injector.get(AgentRepository).outbox_repository.list_deliveries_for_event(
+                started_events[0].event_id
+            )
+            assert_that(len(deliveries), equal_to(1))
+            # Delivery is always persisted PENDING; the immediate enqueue attempt right
+            # after is best-effort (falls back to background reconciliation on failure),
+            # so whether it's already ENQUEUED here depends on Redis being reachable.
+            assert_that(deliveries[0].status, is_in([EventDeliveryStatus.PENDING, EventDeliveryStatus.ENQUEUED]))
 
 
 def test_start_already_running_returns_409():
@@ -763,6 +833,29 @@ def test_start_already_running_returns_409():
 
         with then("it returns 409"):
             assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+
+
+def test_start_agent_rejects_model_removed_from_allowlist():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(model="litellm/openrouter/openai/gpt-4o"),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        org_repo: OrganizationRepository = context.injector.get(OrganizationRepository)
+        org = org_repo.get(context.organization.id)
+        assert org is not None
+        # Allowlist changed after the agent was created: gpt-4o is no longer permitted.
+        org.allowed_models = ["anthropic/*"]
+        org_repo.save(org)
+
+        with when("I start the agent"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("it returns 400"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], contains_string("allowed model list"))
 
 
 def test_start_agent_no_auth_returns_401():
@@ -784,7 +877,7 @@ def test_stop_agent_sets_status_stopped():
         ]
     ) as context:
         client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
 
         with when("I stop the agent"):
             response = client.post(f"{_BASE}/{context.agent.id}/stop", headers=_auth(context))
@@ -793,6 +886,35 @@ def test_stop_agent_sets_status_stopped():
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             assert_that(response.json()["status"], equal_to(AgentStatus.STOPPED.value))
             k8s.delete_deployment.assert_called_once()
+
+
+def test_stop_agent_emits_stopped_domain_event_and_delivery():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(status=AgentStatus.RUNNING),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("I stop the agent"):
+            response = client.post(f"{_BASE}/{context.agent.id}/stop", headers=_auth(context))
+
+        with then("an Agent stopped Domain Event and pending email delivery are persisted"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            messages = _outbox_messages(context)
+            stopped_events = [message for message in messages if message.event_name == AGENT_STOPPED]
+            assert_that(len(stopped_events), equal_to(1))
+            assert_that(stopped_events[0].payload["previous_status"], equal_to(AgentStatus.RUNNING.value))
+            assert_that(stopped_events[0].payload["new_status"], equal_to(AgentStatus.STOPPED.value))
+            deliveries = context.injector.get(AgentRepository).outbox_repository.list_deliveries_for_event(
+                stopped_events[0].event_id
+            )
+            assert_that(len(deliveries), equal_to(1))
+            # Delivery is always persisted PENDING; the immediate enqueue attempt right
+            # after is best-effort (falls back to background reconciliation on failure),
+            # so whether it's already ENQUEUED here depends on Redis being reachable.
+            assert_that(deliveries[0].status, is_in([EventDeliveryStatus.PENDING, EventDeliveryStatus.ENQUEUED]))
 
 
 def test_stop_non_running_agent_returns_409():
@@ -830,6 +952,7 @@ def test_delete_agent_soft_deletes():
 
             repository: AgentRepository = context.injector.get(AgentRepository)
             from sqlmodel import Session, col, select
+
             from api.domains.agents.models import Agent
 
             with Session(repository.delegate.engine) as session:
@@ -846,7 +969,7 @@ def test_delete_agent_removes_all_k8s_resources():
         ]
     ) as context:
         client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
 
         with when("I delete a running agent"):
             response = client.delete(f"{_BASE}/{context.agent.id}", headers=_auth(context))
@@ -868,7 +991,7 @@ def test_delete_stopped_agent_still_removes_deployment():
         ]
     ) as context:
         client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
 
         with when("I delete a stopped agent"):
             response = client.delete(f"{_BASE}/{context.agent.id}", headers=_auth(context))
@@ -905,7 +1028,7 @@ def test_delete_agent_no_auth_returns_401():
 def test_create_agent_calls_litellm_generate_key():
     with given(_GIVEN) as context:
         client: TestClient = context.client
-        litellm: LiteLLMClient = context.injector.get(LiteLLMClient)
+        litellm: MagicMock = context.injector.get(LiteLLMClient)
 
         with when("I create an agent"):
             response = client.post(_BASE, json=_VALID_CREATE, headers=_auth(context))
@@ -920,7 +1043,7 @@ def test_create_agent_calls_litellm_generate_key():
 def test_create_agent_litellm_failure_returns_503():
     with given(_GIVEN) as context:
         client: TestClient = context.client
-        litellm: LiteLLMClient = context.injector.get(LiteLLMClient)
+        litellm: MagicMock = context.injector.get(LiteLLMClient)
         litellm.generate_key.side_effect = LiteLLMError("down")
 
         with when("I create an agent but LiteLLM is down"):
@@ -944,7 +1067,7 @@ def test_create_agent_litellm_failure_returns_503():
 def test_start_agent_injects_per_agent_key():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
 
         with when("I start the agent"):
             response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
@@ -959,7 +1082,7 @@ def test_start_agent_injects_per_agent_key():
 def test_delete_agent_calls_litellm_block_key():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         client: TestClient = context.client
-        litellm: LiteLLMClient = context.injector.get(LiteLLMClient)
+        litellm: MagicMock = context.injector.get(LiteLLMClient)
 
         with when("I delete the agent"):
             response = client.delete(f"{_BASE}/{context.agent.id}", headers=_auth(context))
@@ -972,7 +1095,7 @@ def test_delete_agent_calls_litellm_block_key():
 def test_delete_agent_litellm_failure_still_returns_204():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         client: TestClient = context.client
-        litellm: LiteLLMClient = context.injector.get(LiteLLMClient)
+        litellm: MagicMock = context.injector.get(LiteLLMClient)
         litellm.block_key.side_effect = Exception("timeout")
 
         with when("I delete the agent but LiteLLM key revocation fails"):
@@ -1026,7 +1149,7 @@ def test_patch_agent_updates_model():
 def test_start_agent_configmap_has_overlay():
     with given([*_GIVEN, there_is_an_agent(model="litellm/gpt-5")]) as context:
         client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
 
         with when("I start the agent"):
             response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
@@ -1050,7 +1173,7 @@ def test_start_agent_configmap_has_overlay():
 def test_start_agent_configmap_has_init_script():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
 
         with when("I start the agent"):
             response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
@@ -1064,7 +1187,7 @@ def test_start_agent_configmap_has_init_script():
 def test_start_agent_init_script_does_not_copy_whole_openclaw_npm_tree():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
 
         with when("I start a Slack agent"):
             response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
@@ -1086,7 +1209,7 @@ def test_start_agent_init_script_does_not_copy_whole_openclaw_npm_tree():
 def test_start_agent_deployment_runs_init_script():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
 
         with when("I start the agent"):
             response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
@@ -1101,7 +1224,7 @@ def test_start_agent_deployment_runs_init_script():
 def test_start_agent_uses_default_model_when_empty():
     with given([*_GIVEN, there_is_an_agent(model="")]) as context:
         client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
 
         with when("I start an agent with no model set"):
             response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
@@ -1210,7 +1333,7 @@ def test_get_agent_template_no_auth_returns_401():
 def test_start_agent_configmap_and_overlay_are_correct():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
 
         with when("I start the agent"):
             response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
@@ -1285,7 +1408,7 @@ def test_start_agent_renders_template_placeholders():
         ]
     ) as context:
         client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
 
         with when("I start the agent"):
             response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
@@ -1305,11 +1428,8 @@ def test_start_agent_renders_template_placeholders():
 
         with then("the stored template keeps its raw placeholders"):
             template_repository: TemplateRepository = context.injector.get(TemplateRepository)
-            stored = template_repository.get_template_or_raise(
-                context.organization.id,
-                context.agent.template_slug,
-                context.agent.template_version,
-            )
+            stored = template_repository.get_pinned_template(context.agent)
+            assert stored is not None
             assert_that(
                 stored.soul_md,
                 equal_to("# Soul of {{ agent_display_name }} ({{agent_name}})"),
@@ -1321,18 +1441,20 @@ def test_get_agent_healthz_returns_ok_when_healthy():
         client: TestClient = context.client
         agent_id = context.agent.id
 
-        with when("the pod /healthz returns healthy"):
-            with patch.object(
+        with (
+            when("the pod /healthz returns healthy"),
+            patch.object(
                 context.injector.get(KubernetesClient),
                 "get_pod_readiness",
                 return_value=("ready", None),
-            ):
-                with patch.object(
-                    context.injector.get(KubernetesClient),
-                    "fetch_agent_healthz",
-                    return_value={"status": "ok"},
-                ):
-                    response = client.get(f"{_BASE}/{agent_id}/healthz", headers=_auth(context))
+            ),
+            patch.object(
+                context.injector.get(KubernetesClient),
+                "fetch_agent_healthz",
+                return_value={"status": "ok"},
+            ),
+        ):
+            response = client.get(f"{_BASE}/{agent_id}/healthz", headers=_auth(context))
 
         with then("the API returns 200 with status ok"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
@@ -1344,18 +1466,20 @@ def test_get_agent_healthz_returns_503_when_pod_unreachable():
         client: TestClient = context.client
         agent_id = context.agent.id
 
-        with when("the pod is unreachable"):
-            with patch.object(
+        with (
+            when("the pod is unreachable"),
+            patch.object(
                 context.injector.get(KubernetesClient),
                 "get_pod_readiness",
                 return_value=("ready", None),
-            ):
-                with patch.object(
-                    context.injector.get(KubernetesClient),
-                    "fetch_agent_healthz",
-                    side_effect=RuntimeError("connection refused"),
-                ):
-                    response = client.get(f"{_BASE}/{agent_id}/healthz", headers=_auth(context))
+            ),
+            patch.object(
+                context.injector.get(KubernetesClient),
+                "fetch_agent_healthz",
+                side_effect=RuntimeError("connection refused"),
+            ),
+        ):
+            response = client.get(f"{_BASE}/{agent_id}/healthz", headers=_auth(context))
 
         with then("the API returns 503"):
             assert_that(response.status_code, equal_to(status.HTTP_503_SERVICE_UNAVAILABLE))
@@ -1366,13 +1490,15 @@ def test_get_agent_healthz_returns_initializing_when_pod_not_ready():
         client: TestClient = context.client
         agent_id = context.agent.id
 
-        with when("the pod is running but not yet ready"):
-            with patch.object(
+        with (
+            when("the pod is running but not yet ready"),
+            patch.object(
                 context.injector.get(KubernetesClient),
                 "get_pod_readiness",
                 return_value=("initializing", None),
-            ):
-                response = client.get(f"{_BASE}/{agent_id}/healthz", headers=_auth(context))
+            ),
+        ):
+            response = client.get(f"{_BASE}/{agent_id}/healthz", headers=_auth(context))
 
         with then("the API returns 200 with status initializing"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
@@ -1384,13 +1510,15 @@ def test_get_agent_healthz_returns_crashed_when_pod_has_crashed():
         client: TestClient = context.client
         agent_id = context.agent.id
 
-        with when("the pod is in CrashLoopBackOff"):
-            with patch.object(
+        with (
+            when("the pod is in CrashLoopBackOff"),
+            patch.object(
                 context.injector.get(KubernetesClient),
                 "get_pod_readiness",
                 return_value=("crashed", "CrashLoopBackOff"),
-            ):
-                response = client.get(f"{_BASE}/{agent_id}/healthz", headers=_auth(context))
+            ),
+        ):
+            response = client.get(f"{_BASE}/{agent_id}/healthz", headers=_auth(context))
 
         with then("the API returns 200 with status crashed"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
@@ -1481,7 +1609,7 @@ def test_patch_agent_updates_slack_settings():
 def test_start_agent_overlay_uses_slack_settings():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
 
         client.patch(
             f"{_BASE}/{context.agent.id}",
@@ -1514,7 +1642,7 @@ def test_start_agent_overlay_uses_slack_settings():
 def test_start_agent_open_policy_sets_allow_from_wildcard():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
 
         client.patch(
             f"{_BASE}/{context.agent.id}",
@@ -1535,7 +1663,7 @@ def test_start_agent_open_policy_sets_allow_from_wildcard():
 def test_start_agent_off_dm_policy_sets_direct_reply_off():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
 
         client.patch(
             f"{_BASE}/{context.agent.id}",
@@ -1559,7 +1687,7 @@ def test_start_agent_off_dm_policy_sets_direct_reply_off():
 def test_start_agent_allowlist_with_no_users_sets_empty_allow_from():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
 
         client.patch(
             f"{_BASE}/{context.agent.id}",
@@ -1716,7 +1844,7 @@ def test_create_slack_agent_missing_tokens_returns_422():
 def test_start_teams_agent_creates_correct_k8s_resources():
     with given([*_GIVEN, there_is_an_agent(platform=AgentPlatform.TEAMS)]) as context:
         client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
 
         with when("I start a Teams agent"):
             response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
@@ -1756,7 +1884,7 @@ def test_teams_webhook_relay_proxies_to_pod():
         ]
     ) as context:
         client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
         k8s.proxy_to_agent.return_value = (
             200,
             b'{"status":"ok"}',
@@ -1949,7 +2077,7 @@ def test_start_hermes_agent_uses_hermes_image_and_config():
         ]
     ) as context:
         client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
 
         with when("I start a Hermes agent"):
             response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
@@ -1957,14 +2085,12 @@ def test_start_hermes_agent_uses_hermes_image_and_config():
         with then("it returns 200 with status RUNNING"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             assert_that(response.json()["status"], equal_to(AgentStatus.RUNNING.value))
-
         with then("the deployment uses the Hermes image"):
             deployment = k8s.create_deployment.call_args.args[1]
             assert_that(
                 deployment.spec.template.spec.containers[0].image,
                 equal_to("nousresearch/hermes-agent:v1.0"),
             )
-
         with then("all k8s resources were created"):
             k8s.create_config_map.assert_called_once()
             k8s.create_secret.assert_called_once()
@@ -1978,7 +2104,7 @@ def test_start_hermes_agent_configmap_has_hermes_config():
 
     with given([*_GIVEN_WITH_HERMES_IMAGE, there_is_an_agent(agent_type=AgentType.HERMES)]) as context:
         client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
 
         with when("I start a Hermes agent"):
             response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
@@ -2019,7 +2145,7 @@ def test_start_hermes_agent_configmap_concise_mode():
 
     with given([*_GIVEN_WITH_HERMES_IMAGE, there_is_an_agent(agent_type=AgentType.HERMES)]) as context:
         client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
 
         client.patch(
             f"{_BASE}/{context.agent.id}",
@@ -2047,7 +2173,7 @@ def test_start_hermes_agent_secret_has_channel_and_dm_lists():
         ]
     ) as context:
         client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
 
         client.patch(
             f"{_BASE}/{context.agent.id}",
@@ -2074,7 +2200,7 @@ def test_start_hermes_agent_secret_has_channel_and_dm_lists():
 def test_start_hermes_agent_no_channels_gives_empty_slack_channel_ids():
     with given([*_GIVEN_WITH_HERMES_IMAGE, there_is_an_agent(agent_type=AgentType.HERMES)]) as context:
         client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
 
         with when("I start a Hermes agent with no channel_ids configured"):
             response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
@@ -2088,7 +2214,7 @@ def test_start_hermes_agent_no_channels_gives_empty_slack_channel_ids():
 def test_start_hermes_agent_deployment_has_workspace_volume():
     with given([*_GIVEN_WITH_HERMES_IMAGE, there_is_an_agent(agent_type=AgentType.HERMES)]) as context:
         client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
 
         with when("I start a Hermes agent"):
             response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
@@ -2171,6 +2297,7 @@ def test_existing_agent_rows_backfill_to_openclaw():
             agent = repository.get_by_id(context.agent.id)
 
         with then("agent_type is openclaw (server_default applied)"):
+            assert agent is not None
             assert_that(agent.agent_type, equal_to(AgentType.OPENCLAW))
 
 
@@ -2183,13 +2310,15 @@ def test_create_slack_agent_rejects_invalid_tokens():
     with given(_GIVEN) as context:
         client: TestClient = context.client
 
-        with patch.object(
-            AgentService,
-            "_check_slack_tokens",
-            return_value=(False, "Slack bot token is invalid."),
+        with (
+            patch.object(
+                AgentService,
+                "_check_slack_tokens",
+                return_value=(False, "Slack bot token is invalid."),
+            ),
+            when("I create a Slack agent with invalid tokens"),
         ):
-            with when("I create a Slack agent with invalid tokens"):
-                response = client.post(_BASE, json=_VALID_CREATE, headers=_auth(context))
+            response = client.post(_BASE, json=_VALID_CREATE, headers=_auth(context))
 
         with then("it returns 400 and no agent is left in the database"):
             assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
@@ -2202,17 +2331,19 @@ def test_update_slack_agent_rejects_invalid_tokens():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         client: TestClient = context.client
 
-        with patch.object(
-            AgentService,
-            "_check_slack_tokens",
-            return_value=(False, "Slack bot token is invalid."),
+        with (
+            patch.object(
+                AgentService,
+                "_check_slack_tokens",
+                return_value=(False, "Slack bot token is invalid."),
+            ),
+            when("I patch a Slack agent with invalid tokens"),
         ):
-            with when("I patch a Slack agent with invalid tokens"):
-                response = client.patch(
-                    f"{_BASE}/{context.agent.id}",
-                    json={"slack_bot_token": "xoxb-bad"},
-                    headers=_auth(context),
-                )
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"slack_bot_token": "xoxb-bad"},
+                headers=_auth(context),
+            )
 
         with then("it returns 400"):
             assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
@@ -2222,15 +2353,17 @@ def test_update_slack_agent_rejects_invalid_tokens():
 def test_start_slack_agent_with_invalid_tokens_sets_error_status():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
 
-        with patch.object(
-            AgentService,
-            "_check_slack_tokens",
-            return_value=(False, "Slack bot token is invalid."),
+        with (
+            patch.object(
+                AgentService,
+                "_check_slack_tokens",
+                return_value=(False, "Slack bot token is invalid."),
+            ),
+            when("I start a Slack agent with invalid tokens"),
         ):
-            with when("I start a Slack agent with invalid tokens"):
-                response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
 
         with then("it returns 200 with status ERROR and no k8s resources are created"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
@@ -2496,7 +2629,7 @@ def test_start_agent_with_skill_includes_skills_json_in_configmap():
         ]
     ) as context:
         client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
 
         with when("I start an agent that has an assigned skill"):
             response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
@@ -2513,7 +2646,7 @@ def test_start_agent_with_skill_includes_skills_json_in_configmap():
 def test_start_agent_without_skills_has_no_skills_json_in_configmap():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
 
         with when("I start an agent with no assigned skills"):
             response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
@@ -2534,7 +2667,7 @@ def test_start_agent_with_skill_pointer_injects_pointer_into_tools_md():
         ]
     ) as context:
         client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
 
         with when("I start the agent"):
             response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
@@ -2569,7 +2702,7 @@ def test_start_agent_auto_attaches_aai_cli_skill_for_configured_provider():
         ]
     ) as context:
         client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
 
         with when("a jira secret is configured but the skill is not explicitly assigned"):
             client.patch(
@@ -2603,7 +2736,7 @@ def test_start_agent_does_not_auto_attach_skill_for_unconfigured_provider():
         ]
     ) as context:
         client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
 
         with when("a jira secret is configured but no github secret"):
             client.patch(
@@ -2640,7 +2773,7 @@ def test_start_agent_auto_attach_does_not_duplicate_explicitly_assigned_skill():
         ]
     ) as context:
         client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
 
         with when("the jira skill is both explicitly assigned and provider-configured"):
             client.patch(
@@ -2661,7 +2794,7 @@ def test_start_agent_auto_attach_does_not_duplicate_explicitly_assigned_skill():
 def test_start_agent_injects_profile_mapping_into_agents_md_openclaw():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
 
         with when("a jira secret is configured and the OpenClaw agent starts"):
             client.patch(
@@ -2682,7 +2815,7 @@ def test_start_agent_injects_profile_mapping_into_agents_md_openclaw():
 def test_start_agent_injects_profile_mapping_into_agents_md_hermes():
     with given([*_GIVEN_WITH_HERMES_IMAGE, there_is_an_agent(agent_type=AgentType.HERMES)]) as context:
         client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
 
         with when("a jira secret is configured and the Hermes agent starts"):
             client.patch(
@@ -2703,7 +2836,7 @@ def test_start_agent_injects_profile_mapping_into_agents_md_hermes():
 def test_start_agent_injects_chat_commands_policy_into_agents_md_openclaw():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
 
         with when("the OpenClaw agent starts"):
             response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
@@ -2719,7 +2852,7 @@ def test_start_agent_injects_chat_commands_policy_into_agents_md_openclaw():
 def test_start_agent_injects_chat_commands_policy_into_agents_md_hermes():
     with given([*_GIVEN_WITH_HERMES_IMAGE, there_is_an_agent(agent_type=AgentType.HERMES)]) as context:
         client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
 
         with when("the Hermes agent starts"):
             response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
@@ -2735,7 +2868,7 @@ def test_start_agent_injects_chat_commands_policy_into_agents_md_hermes():
 def test_start_agent_no_integrations_omits_integrations_block():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
 
         with when("the agent starts with no configured secrets"):
             response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
@@ -3176,7 +3309,7 @@ def test_update_agent_grandfathered_without_group_member_can_still_be_updated():
             there_is_a_template_skill_group(("GitHub", "Bitbucket"))(context)
             # there_is_a_template_skill_group attaches to context.template, which
             # is the same "test-template" row the agent above is pinned to.
-            assert repository.get_required_skill_map(context.template.id)
+            assert repository.get_org_required_skill_map(context.template.id)
 
         with when("I make an unrelated update (rename) without touching skills"):
             response = client.patch(
@@ -3242,7 +3375,7 @@ _GIVEN_HERMES_WITH_FIRECRAWL = [
 def test_start_openclaw_agent_with_platform_firecrawl():
     with given([*_GIVEN_WITH_FIRECRAWL, there_is_an_agent()]) as context:
         client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
 
         with when("I start an OpenClaw agent with platform firecrawl configured"):
             response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
@@ -3263,7 +3396,7 @@ def test_start_hermes_agent_with_platform_firecrawl():
 
     with given([*_GIVEN_HERMES_WITH_FIRECRAWL, there_is_an_agent(agent_type=AgentType.HERMES)]) as context:
         client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
 
         with when("I start a Hermes agent with platform firecrawl configured"):
             response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
@@ -3285,7 +3418,7 @@ def test_start_hermes_agent_with_platform_firecrawl():
 def test_start_agent_per_agent_firecrawl_overrides_platform():
     with given([*_GIVEN_WITH_FIRECRAWL, there_is_an_agent()]) as context:
         client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
 
         with when("I add a per-agent firecrawl secret and start"):
             client.patch(
@@ -3304,7 +3437,7 @@ def test_start_agent_per_agent_firecrawl_overrides_platform():
 def test_start_agent_per_agent_firecrawl_overrides_base_url():
     with given([*_GIVEN_WITH_FIRECRAWL, there_is_an_agent()]) as context:
         client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
 
         with when("I add a per-agent firecrawl secret with base_url and start"):
             client.patch(
@@ -3365,7 +3498,7 @@ _GIVEN_WITHOUT_FIRECRAWL = [
 def test_start_openclaw_agent_without_firecrawl():
     with given([*_GIVEN_WITHOUT_FIRECRAWL, there_is_an_agent()]) as context:
         client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
 
         with when("I start an agent without any firecrawl env vars"):
             response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))

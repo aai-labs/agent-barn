@@ -6,17 +6,18 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 from sqlmodel import SQLModel
 
-import api.domains.agents.models  # noqa: F401
-import api.domains.skills.models  # noqa: F401
-import api.domains.auth.models  # noqa: F401
-import api.domains.conversations.models  # noqa: F401
-import api.domains.costs.models  # noqa: F401
-import api.domains.organizations.models  # noqa: F401
-import api.domains.rbac.models  # noqa: F401
-import api.domains.templates.models  # noqa: F401
-import api.domains.tool_calls.models  # noqa: F401
+import api.domains.agents.models
+import api.domains.auth.models
+import api.domains.conversations.models
+import api.domains.costs.models
+import api.domains.events.models
+import api.domains.organizations.models
+import api.domains.rbac.models
+import api.domains.skills.models
+import api.domains.templates.models
+import api.domains.tool_calls.models
+import api.domains.users.models
 import api.domains.users.organization_users.models  # noqa: F401
-import api.domains.users.models  # noqa: F401
 from api.core.config import get_config
 
 config = context.config

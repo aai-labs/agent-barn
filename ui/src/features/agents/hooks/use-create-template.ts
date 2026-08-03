@@ -3,6 +3,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/shared/api";
+import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
 
 import { AgentTemplateRead, AgentTemplateReadSchema } from "../schemas";
 import { templatesKey } from "../utils";
@@ -25,11 +26,12 @@ export type CreateTemplateData = {
 
 export function useCreateTemplate() {
   const queryClient = useQueryClient();
+  const orgApiBase = useOrganizationApiBase();
 
   return useMutation({
     mutationFn: async (data: CreateTemplateData) => {
       const response = await api.post<AgentTemplateRead>(
-        "/api/v1/templates",
+        `${orgApiBase}/templates`,
         data,
         { schema: AgentTemplateReadSchema },
       );

@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { api } from "@/shared/api";
+import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
 
 import { PaginatedSkillsSchema, type PaginatedSkills, type SkillSource } from "../schemas";
 import { SKILLS_PAGE_SIZE, skillsKey } from "../utils";
@@ -15,6 +16,7 @@ export type SkillsFilters = {
 };
 
 export function useSkills(filters: SkillsFilters = {}) {
+  const orgApiBase = useOrganizationApiBase();
   const { search, source, page = 1, pageSize = SKILLS_PAGE_SIZE } = filters;
 
   const query = useQuery({
@@ -26,7 +28,7 @@ export function useSkills(filters: SkillsFilters = {}) {
       if (search) params.set("search", search);
       if (source) params.set("source", source);
       const response = await api.get<PaginatedSkills>(
-        `/api/v1/skills?${params.toString()}`,
+        `${orgApiBase}/skills?${params.toString()}`,
         { schema: PaginatedSkillsSchema },
       );
       return response.data;

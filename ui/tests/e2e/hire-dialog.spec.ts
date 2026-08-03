@@ -42,7 +42,7 @@ test.describe("Hire Dialog", () => {
         await route.fallback();
       }
     });
-    await page.route("**/api/v1/slack/apps", async (route) => {
+    await page.route("**/api/v1/organizations/*/slack/apps", async (route) => {
       if (route.request().method() === "POST") {
         await route.fulfill({
           status: 201,
@@ -274,7 +274,9 @@ test.describe("Hire Dialog", () => {
     await page.getByRole("button", { name: /continue/i }).click(); // details → skills
 
     const createPromise = page.waitForRequest(
-      (req) => req.url().includes("/api/v1/agents") && req.method() === "POST",
+      (req) =>
+        /\/api\/v1\/organizations\/[^/]+\/agents$/.test(new URL(req.url()).pathname) &&
+        req.method() === "POST",
     );
     await page.getByRole("button", { name: "Hire Aria" }).click();
     const createRequest = await createPromise;
@@ -305,7 +307,9 @@ test.describe("Hire Dialog", () => {
     await expect(page.getByText("Assign skills")).toBeVisible();
 
     const createPromise = page.waitForRequest(
-      (req) => req.url().includes("/api/v1/agents") && req.method() === "POST",
+      (req) =>
+        /\/api\/v1\/organizations\/[^/]+\/agents$/.test(new URL(req.url()).pathname) &&
+        req.method() === "POST",
     );
     await page.getByRole("button", { name: "Hire Aria" }).click();
     const createRequest = await createPromise;
@@ -482,7 +486,9 @@ test.describe("Hire Dialog — Skills step", () => {
     await repoInput.press("Enter");
 
     const createPromise = page.waitForRequest(
-      (req) => req.url().includes("/api/v1/agents") && req.method() === "POST",
+      (req) =>
+        /\/api\/v1\/organizations\/[^/]+\/agents$/.test(new URL(req.url()).pathname) &&
+        req.method() === "POST",
     );
     await page.getByRole("button", { name: "Hire Aria" }).click();
     const createRequest = await createPromise;

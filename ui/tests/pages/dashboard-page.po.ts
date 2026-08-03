@@ -13,11 +13,11 @@ export class DashboardPage {
   }
 
   async gotoUsers() {
-    await this.page.goto("/dashboard/users");
+    await this.page.goto("/dashboard/platform/users");
   }
 
   async gotoOrganizations() {
-    await this.page.goto("/dashboard/organizations");
+    await this.page.goto("/dashboard/platform/organizations");
   }
 
   searchInput(name: string | RegExp): Locator {

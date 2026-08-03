@@ -40,7 +40,7 @@ export function OrganizationsGrid() {
     <div className="max-w-[1200px] mx-auto px-10 pt-9 pb-24">
       <ListPageHeader
         title="Organizations"
-        description="Super admin view of all organizations."
+        description="Platform view of all organizations."
         count={total}
         noun="organization"
         onSearch={setSearch}

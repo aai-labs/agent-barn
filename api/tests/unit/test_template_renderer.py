@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid7
 
@@ -39,7 +39,7 @@ def test_renders_all_known_variables():
 
     rendered = render_template(template, "Maya Bot")
 
-    today = date.today().isoformat()
+    today = datetime.now(UTC).date().isoformat()
     assert_that(
         rendered.soul_md,
         equal_to(f"name=Maya Bot slug=maya-bot app=Maya Bot date={today}"),

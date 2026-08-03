@@ -23,6 +23,7 @@ function memberContext(
     is_default: false,
     owner_email: "owner@example.com",
     owner_name: "Owner",
+    allowed_models: ["*"],
   };
   return {
     id: userId,
@@ -30,7 +31,7 @@ function memberContext(
     updated_at: "2024-01-01T00:00:00Z",
     full_name: "Creator Member",
     email: "creator@example.com",
-    is_superuser: false,
+    is_platform_admin: false,
     email_verified_at: "2024-01-01T00:00:00Z",
     organization_users: [
       {

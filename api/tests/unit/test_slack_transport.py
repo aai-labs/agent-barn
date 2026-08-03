@@ -51,9 +51,8 @@ def test_429_is_retried_honoring_retry_after():
 
 def test_429_past_retry_budget_raises():
     mock = _mock_httpx([_rate_limited("1")] * 5)
-    with patch("httpx.request", mock), patch.object(_http_mod.time, "sleep"):
-        with pytest.raises(httpx.HTTPStatusError):
-            _request()
+    with patch("httpx.request", mock), patch.object(_http_mod.time, "sleep"), pytest.raises(httpx.HTTPStatusError):
+        _request()
 
 
 def test_transport_error_is_retried():
@@ -67,24 +66,21 @@ def test_transport_error_is_retried():
 
 def test_transport_error_past_retry_budget_reraises():
     mock = _mock_httpx([_transport_error()] * 5)
-    with patch("httpx.request", mock), patch.object(_http_mod.time, "sleep"):
-        with pytest.raises(httpx.TransportError):
-            _request()
+    with patch("httpx.request", mock), patch.object(_http_mod.time, "sleep"), pytest.raises(httpx.TransportError):
+        _request()
 
 
 def test_non_2xx_status_raises():
-    with patch("httpx.request", _mock_httpx([_resp({}, status=500)])):
-        with pytest.raises(httpx.HTTPStatusError):
-            _request()
+    with patch("httpx.request", _mock_httpx([_resp({}, status=500)])), pytest.raises(httpx.HTTPStatusError):
+        _request()
 
 
 def test_uses_configured_timeout():
     mock = _mock_httpx([_resp({"ok": True})])
     cfg = MagicMock()
     cfg.slack_request_timeout_seconds = 45
-    with patch.object(transport, "get_config", return_value=cfg):
-        with patch("httpx.request", mock):
-            _request()
+    with patch.object(transport, "get_config", return_value=cfg), patch("httpx.request", mock):
+        _request()
 
     assert mock.call_args_list[0].kwargs["timeout"] == 45
 

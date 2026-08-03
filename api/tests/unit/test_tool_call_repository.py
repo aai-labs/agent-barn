@@ -13,7 +13,7 @@ from api.domains.tool_calls.models import (
 from api.domains.tool_calls.repository import ToolCallRepository
 from api.infrastructure.shared.models import Pagination
 from api.tests.core.givenpy import given, then, when
-from api.tests.core.modules import prepare_injector
+from api.tests.core.modules import prepare_injector, set_env_variable
 from api.tests.steps.agent import (
     TEST_ENCRYPTION_KEY,
     MockK8sModule,
@@ -22,8 +22,6 @@ from api.tests.steps.agent import (
 )
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import there_is_an_organization
-from api.tests.core.modules import set_env_variable
-
 
 _GIVEN = [
     set_env_variable(
@@ -39,7 +37,7 @@ _GIVEN = [
 
 
 def _now() -> datetime.datetime:
-    return datetime.datetime.now(datetime.timezone.utc)
+    return datetime.datetime.now(datetime.UTC)
 
 
 def _find_by_agent(
@@ -374,9 +372,9 @@ def test_filter_by_date_range():
         org_id = context.organization.id
         agent_id = context.agent.id
 
-        t1 = datetime.datetime(2026, 5, 1, tzinfo=datetime.timezone.utc)
-        t2 = datetime.datetime(2026, 5, 10, tzinfo=datetime.timezone.utc)
-        t3 = datetime.datetime(2026, 5, 20, tzinfo=datetime.timezone.utc)
+        t1 = datetime.datetime(2026, 5, 1, tzinfo=datetime.UTC)
+        t2 = datetime.datetime(2026, 5, 10, tzinfo=datetime.UTC)
+        t3 = datetime.datetime(2026, 5, 20, tzinfo=datetime.UTC)
 
         _seed_pending(
             repository,
@@ -444,7 +442,7 @@ def test_pagination_returns_correct_page_and_total():
                 organization_id=org_id,
                 agent_id=agent_id,
                 external_id=f"c{i}",
-                occurred_at=datetime.datetime(2026, 5, 1 + i, tzinfo=datetime.timezone.utc),
+                occurred_at=datetime.datetime(2026, 5, 1 + i, tzinfo=datetime.UTC),
             )
 
         with when("I request page 1, size 2"):
@@ -478,8 +476,8 @@ def test_results_ordered_by_occurred_at_desc():
         org_id = context.organization.id
         agent_id = context.agent.id
 
-        t_old = datetime.datetime(2026, 5, 1, tzinfo=datetime.timezone.utc)
-        t_new = datetime.datetime(2026, 5, 20, tzinfo=datetime.timezone.utc)
+        t_old = datetime.datetime(2026, 5, 1, tzinfo=datetime.UTC)
+        t_new = datetime.datetime(2026, 5, 20, tzinfo=datetime.UTC)
 
         _seed_pending(
             repository,

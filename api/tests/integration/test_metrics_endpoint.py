@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import status
 from hamcrest import assert_that, contains_string, equal_to
@@ -55,6 +55,7 @@ def _set_ingest_key(key="test-ingest-key-abc"):
     def step(context):
         repo: AgentRepository = context.injector.get(AgentRepository)
         agent = repo.get_by_id(context.agent.id)
+        assert agent is not None
         agent.ingest_key_encrypted = encrypt_token(key, TEST_ENCRYPTION_KEY)
         repo.save(agent)
         context.agent = agent
@@ -67,6 +68,7 @@ def _mark_agent_errored():
     def step(context):
         repo: AgentRepository = context.injector.get(AgentRepository)
         agent = repo.get_by_id(context.agent.id)
+        assert agent is not None
         agent.status = AgentStatus.ERROR
         repo.save(agent)
 
@@ -121,7 +123,7 @@ def test_ingest_metrics_counts_tool_call_errors():
             prepare_ingest_server(),
         ]
     ) as context:
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         payload = {
             "tool_calls": [
                 {

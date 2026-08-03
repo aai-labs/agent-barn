@@ -4,14 +4,12 @@ Revision ID: e4f5a6b7c8d9
 Revises: a7b8c9d0e1f2
 """
 
-from typing import Union
-
 from alembic import op
 
 revision: str = "e4f5a6b7c8d9"
-down_revision: Union[str, None] = "a7b8c9d0e1f2"
-branch_labels: Union[str, None] = None
-depends_on: Union[str, None] = None
+down_revision: str | None = "a7b8c9d0e1f2"
+branch_labels: str | None = None
+depends_on: str | None = None
 
 _OLD = (
     "provider IN ('github', 'jira', 'confluence', 'bitbucket', "

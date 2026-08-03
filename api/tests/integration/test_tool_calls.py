@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import status
 from hamcrest import assert_that, equal_to, has_length
@@ -25,7 +25,7 @@ from api.tests.steps.organization import (
     there_is_an_organization_with_user_and_access_token,
 )
 
-_BASE = "/api/v1/agents"
+_BASE = "/api/v1/organizations/{organization_id}/agents"
 
 _GIVEN = [
     set_env_variable(
@@ -53,7 +53,7 @@ def _auth(context) -> dict:
 
 def _seed_tool_call(context, external_id, tool_name, arguments, status_val, result=None):
     repo: ToolCallRepository = context.injector.get(ToolCallRepository)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     with repo.get_session() as session:
         repo.upsert_pending(
             session=session,

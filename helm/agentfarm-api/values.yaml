@@ -2,7 +2,14 @@ registryPrefix: "registry.k8s.aai-labs.com"
 
 image:
   repository: agentfarm-api
+  tag: latest
   pullPolicy: Always
+
+# Stamped onto the pod templates (api + worker) as an annotation so a deploy
+# under a moving tag (e.g. `latest`) still produces a manifest diff and rolls
+# the pods — without this, Helm sees an unchanged image string and skips the
+# rollout, leaving the old code running despite a new image being pushed.
+buildSha: ""
 
 openclawImage:
   repository: agentfarm-openclaw-base
@@ -15,13 +22,13 @@ hermesImage:
 replicaCount: 1
 
 # k8s Secret: DB_CONNECTION_URL, SECRET_SIGNING_KEY,
-# SUPER_USER_CREDENTIALS, ENVIRONMENT, WEB_APP_URL
+# PLATFORM_ADMIN_CREDENTIALS, ENVIRONMENT, WEB_APP_URL
 secretName: agentfarm-api
 
 dbConnectionUrl: ""
 secretSigningKey: ""
-superUserCredentials: ""
-superUserFullName: "Super User"
+platformAdminCredentials: ""
+platformAdminFullName: "Super User"
 agentTokenEncryptionKey: ""
 environment: ""
 webAppUrl: ""
@@ -101,6 +108,26 @@ ingress:
   hosts: "api.agent-farm.k8s.aai-labs.com"
   clusterIssuer: letsencrypt-http01
   tlsSecretName: agentfarm-api-tls
+
+# Shared Redis instance (helm/redis release), not deployed by this chart.
+# Used by the general-purpose worker's dramatiq broker, not just event delivery.
+redisUrl: "redis://redis:6379/0"
+
+eventDelivery:
+  reconciliation:
+    enabled: true
+    schedule: "*/5 * * * *"
+
+worker:
+  enabled: true
+  replicaCount: 1
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 100m
+    limits:
+      memory: 512Mi
+      cpu: 500m
 
 resources:
   requests:

@@ -44,7 +44,7 @@ test.describe("Change Password", () => {
   }) => {
     await data.agents.interceptGetAgentsRequest();
     await page.goto("/dashboard");
-    await page.getByTitle("Super User").click();
+    await page.getByTitle("Grace Hopper").click();
     await page.getByRole("link", { name: /account/i }).click();
 
     await expect(page).toHaveURL(/\/dashboard\/account/);

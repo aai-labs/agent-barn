@@ -67,16 +67,17 @@ API is served under `/api/v1`; frontend requests to `/api/*` are proxied to the 
 
 - Python `>=3.14` + [uv](https://github.com/astral-sh/uv)
 - Node.js `>=20` + [pnpm](https://pnpm.io/)
-- Docker (required for Postgres)
+- Docker (required for Postgres and Redis; sufficient on its own if you run everything via `make up` instead of the native `dev-*` targets)
 
 ## Setup
 
 ```bash
-cd api && uv sync
-cd ../ui && pnpm install
+make setup
 ```
 
-Environment: API reads env from repo root `.env`. Optional test env: `.env.spec`.
+Installs API + UI dependencies and creates a local `.env` from `.env.spec` if one doesn't
+exist yet. Fill in the required values in `.env` before continuing (API reads env from
+repo root `.env`).
 
 ## First-Time Run
 
@@ -87,17 +88,28 @@ make migrate
 
 ## Running Locally
 
+Both paths below hot-reload on source changes. Pick native if you already have
+`uv`/`pnpm` set up and want faster iteration; pick Docker if you'd rather not run
+anything on the host beyond Docker itself.
+
+Native — each command watches its own source; run the ones you need in separate
+terminals alongside `make db-up` (and `make redis-up` if you need the worker):
+
 ```bash
-make dev-api    # API on :8000
-make dev-ui     # UI on :3000
+make dev-api      # API on :8000, hot reload
+make dev-ui       # UI on :3000, hot reload
+make dev-worker   # Dramatiq worker, hot reload (needs Redis: make redis-up)
 ```
 
-With Docker (db + api + ui):
+Fully dockerized (db + redis + api + worker + ui), source bind-mounted into the
+containers so api/worker/ui all hot-reload the same way. `up`/`restart` run in the
+foreground — leave the terminal open, `Ctrl+C` (or `make down` from another
+terminal) to stop:
 
 ```bash
-make up         # start all
+make up         # start all (foreground)
 make down       # stop all
-make restart    # rebuild and restart
+make restart    # recreate and restart (foreground)
 make logs       # tail all logs
 make clean      # stop and remove volumes
 ```
@@ -110,6 +122,18 @@ make db-down
 make db-logs
 make db-restart
 ```
+
+Redis + background worker only (needed alongside `make dev-api` to actually
+process Domain Events locally; `make up` starts these automatically):
+
+```bash
+make redis-up      # start Redis
+make dev-worker    # run the Dramatiq worker (non-docker)
+make reconcile     # one-shot repair pass for stuck/unpublished deliveries
+make redis-down
+```
+
+See [docs/features/domain-events.md](./docs/features/domain-events.md) for how Domain Event delivery works.
 
 ## Database Migrations
 

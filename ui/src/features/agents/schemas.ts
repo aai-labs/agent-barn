@@ -26,6 +26,8 @@ export const AgentTelegramConfigSchema = z.object({
 export const AgentSecretReadSchema = z.object({
   provider: z.string(),
   secretName: z.string(),
+  sharedCredentialId: z.string().uuid().nullable().optional(),
+  sharedCredentialName: z.string().nullable().optional(),
 });
 
 export const IntegrationValidationResultSchema = z.object({
@@ -121,10 +123,11 @@ export const AgentSchema = z.object({
 
 export const AgentTemplateReadSchema = z.object({
   id: z.string().uuid(),
-  organizationId: z.string().uuid(),
+  organizationId: z.string().uuid().nullable(),
   templateSlug: z.string(),
   templateName: z.string(),
   templateSource: z.enum(["pre-defined", "custom"]),
+  forkedFromPlatformTemplateId: z.string().uuid().nullable().optional(),
   version: z.number().int(),
   description: z.string().nullable().optional(),
   soulMd: z.string(),

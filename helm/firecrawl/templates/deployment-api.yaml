@@ -44,9 +44,9 @@ spec:
             - name: NUM_WORKERS_PER_QUEUE
               value: "8"
             - name: REDIS_URL
-              value: "redis://{{ .Release.Name }}-redis:{{ .Values.service.redisPort }}"
+              value: "redis://{{ .Values.redis.host }}:{{ .Values.redis.port }}"
             - name: REDIS_RATE_LIMIT_URL
-              value: "redis://{{ .Release.Name }}-redis:{{ .Values.service.redisPort }}"
+              value: "redis://{{ .Values.redis.host }}:{{ .Values.redis.port }}"
             - name: PLAYWRIGHT_MICROSERVICE_URL
               value: "http://{{ .Release.Name }}-playwright:{{ .Values.service.playwrightPort }}/scrape"
             - name: USE_DB_AUTHENTICATION
@@ -57,6 +57,14 @@ spec:
               value: "{{ .Values.postgres.host }}"
             - name: POSTGRES_PORT
               value: "{{ .Values.postgres.port }}"
+            - name: WORKER_PORT
+              value: "3005"
+            - name: EXTRACT_WORKER_PORT
+              value: "3004"
+            - name: NUQ_WORKER_COUNT
+              value: "2"
+            - name: HARNESS_STARTUP_TIMEOUT_MS
+              value: "120000"
           readinessProbe:
             tcpSocket:
               port: {{ .Values.service.apiPort }}
@@ -66,7 +74,7 @@ spec:
           livenessProbe:
             tcpSocket:
               port: {{ .Values.service.apiPort }}
-            initialDelaySeconds: 30
+            initialDelaySeconds: 150
             periodSeconds: 15
           resources:
             {{- toYaml .Values.resources.api | nindent 12 }}

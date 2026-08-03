@@ -5,7 +5,7 @@ import { useOrganizationContext } from "@/features/organizations/providers/organ
 
 /**
  * The current user's role in the active org and whether they can manage it (owner/admin,
- * or a superuser who transcends org roles). Single source for role-gated UI so the check
+ * or a platform admin who transcends org roles). Single source for role-gated UI so the check
  * isn't re-derived per component.
  */
 export function useActiveOrgRole() {
@@ -18,7 +18,7 @@ export function useActiveOrgRole() {
 
   const canManage =
     !!selectedOrganization &&
-    (user.isSuperuser || role === "OWNER" || role === "ADMIN");
+    (user.isPlatformAdmin || role === "OWNER" || role === "ADMIN");
 
   return { role, canManage, selectedOrganization };
 }

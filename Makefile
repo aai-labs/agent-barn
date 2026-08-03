@@ -1,8 +1,17 @@
 COMPOSE := docker compose -f compose.yml
 
 .PHONY: \
-	dev-api dev-ui migrate rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring fix-api test check fix \
-	up down restart logs build clean db-up db-down db-logs db-restart
+	setup \
+	dev-api dev-ui dev-worker reconcile migrate rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring fix-api test check fix \
+	up down restart logs build clean db-up db-down db-logs db-restart redis-up redis-down redis-logs worker-logs
+
+# One-time project bootstrap: installs deps for api + ui and creates a local
+# .env from the tracked template if one doesn't already exist.
+setup:
+	cd api && uv sync
+	cd ui && pnpm install
+	@test -f .env || cp .env.spec .env
+	@echo "Setup complete. Fill in .env, then run: make db-up && make migrate && make up"
 
 # Non-docker commands
 
@@ -11,6 +20,13 @@ dev-api:
 
 dev-ui:
 	cd ui && pnpm dev
+
+dev-worker:
+	cd api && uv run dramatiq api.worker_app --path .. --processes 1 --threads 4 --watch .
+
+# One-shot reconciliation pass; production runs this on a CronJob schedule.
+reconcile:
+	cd api && uv run python -m api.domains.events.reconciliation
 
 migrate:
 	cd api && uv run python -m alembic upgrade head
@@ -61,14 +77,14 @@ fix-api:
 # Docker commands
 
 up:
-	$(COMPOSE) up -d --build
+	$(COMPOSE) up --build
 
 down:
 	$(COMPOSE) down
 
 restart:
 	$(COMPOSE) down
-	$(COMPOSE) up -d --build
+	$(COMPOSE) up --build
 
 logs:
 	$(COMPOSE) logs -f
@@ -90,3 +106,15 @@ db-logs:
 
 db-restart:
 	$(COMPOSE) restart db
+
+redis-up:
+	$(COMPOSE) up -d redis
+
+redis-down:
+	$(COMPOSE) stop redis
+
+redis-logs:
+	$(COMPOSE) logs -f redis
+
+worker-logs:
+	$(COMPOSE) logs -f worker

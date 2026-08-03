@@ -8,6 +8,30 @@ Agent Farm manages organization-owned AI agents that operate in Slack, Microsoft
 The tenant boundary that owns agents, templates, skills, memberships, and organization-scoped activity.
 _Avoid_: workspace, tenant account
 
+**Platform Administrator**:
+A user with platform-level authority to administer Agent Farm outside any single Organization. A Platform Administrator may also have normal Memberships, but platform authority is separate from Organization Membership authority.
+_Avoid_: superuser, super admin, global role
+
+**Platform Privilege**:
+The platform-level grant that makes a user a Platform Administrator.
+_Avoid_: global Membership, Organization Role, default Organization ownership
+
+**Platform Resource**:
+A global resource owned by Agent Farm itself rather than by an Organization.
+_Avoid_: default Organization resource, shared tenant data
+
+**Platform View**:
+The product mode where a Platform Administrator manages platform-level users, organizations, and operational metadata without an Active Organization.
+_Avoid_: default Organization, admin Organization, global workspace
+
+**Organization View**:
+The product mode where a user, including a Platform Administrator with Memberships, operates through Membership authority inside an Active Organization.
+_Avoid_: tenant view, platform view
+
+**Active Organization**:
+The single Organization currently selected for organization-scoped product behavior. Platform View has no Active Organization.
+_Avoid_: default Organization, primary Organization
+
 **Membership**:
 The relationship between a user and an organization, carrying exactly one organization role.
 _Avoid_: organization user, user organization
@@ -49,7 +73,7 @@ The chat system through which an agent interacts with people. Agent Farm current
 _Avoid_: runtime
 
 **Template**:
-An organization-scoped lineage of versioned Markdown configuration used to create and run agents.
+A versioned Markdown configuration lineage used to create and run agents. Predefined templates are Platform Resources; custom templates belong to one Organization.
 _Avoid_: prompt, preset
 
 **Template Version**:
@@ -61,8 +85,12 @@ A packaged set of agent instructions or references that can be assigned to an ag
 _Avoid_: integration, tool
 
 **Agent Secret**:
-An encrypted, provider-specific credential payload assigned to one agent so its runtime can access an external service.
+An encrypted, provider-specific credential payload assigned to one agent so its runtime can access an external service. May hold its own encrypted content or reference a Shared Credential.
 _Avoid_: skill, application secret
+
+**Shared Credential**:
+An encrypted, provider-specific credential payload owned by an organization and reusable across agents. Admins manage shared credentials; any org member can attach one to an agent.
+_Avoid_: org secret, global credential
 
 **Integration**:
 An external service made available to an agent through an Agent Secret and runtime-specific configuration.
@@ -72,9 +100,49 @@ _Avoid_: credential
 An inbound or outbound chat message ingested from an agent runtime and associated with a channel, direct message, session, and optional thread.
 _Avoid_: conversation
 
+**Telemetry Event**:
+A runtime-originated operational fact received through Ingest and used to maintain product activity records such as Conversation Messages and Tool Calls.
+_Avoid_: domain event, outbox message, audit event
+
 **Tool Call**:
 An ingested record of one external tool execution by an agent, with pending, success, or error status.
 _Avoid_: integration call
+
+**Domain Event**:
+An immutable, typed business fact that occurred within an Organization and may be handled internally by Agent Farm.
+_Avoid_: outbox row, telemetry event, audit log
+
+**Outbox Message**:
+The durable PostgreSQL record of a committed Domain Event that represents publication intent without depending on a broker-specific transport.
+_Avoid_: domain event, queue message, webhook event
+
+**Actor Identity**:
+The typed principal responsible for a Domain Event, such as a Membership, User, System process, or Runtime.
+_Avoid_: user ID, owner, creator
+
+**Subject Identity**:
+The typed resource or entity that a Domain Event is about.
+_Avoid_: agent ID, target, object
+
+**Event Payload**:
+The bounded, secret-safe JSON object carrying event-specific domain data for a Domain Event.
+_Avoid_: serialized model, database row snapshot, metadata
+
+**Event Delivery**:
+A durable, handler-specific delivery record for one Domain Event and one intended Event Handler. Its lifecycle is pending, enqueued, processing, succeeded, or dead-lettered; retry attempts do not define its identity.
+_Avoid_: retry attempt, outbox message, failed event
+
+**Dead-lettered Event Delivery**:
+An Event Delivery that reached terminal failure and has no automatic retry remaining.
+_Avoid_: failed event, failed message
+
+**Event Handler**:
+A named internal consumer of one or more Domain Events, with a stable identity used for delivery tracking and idempotency. Event Handler names are durable contracts once Event Deliveries can reference them.
+_Avoid_: worker, callback, subscriber
+
+**Security Audit Record**:
+A durable compliance artifact that records a security-relevant fact, usually produced as a projection from a Domain Event.
+_Avoid_: domain event, audit event, log line
 
 **Ingest**:
 The separately served, authenticated telemetry path through which agent runtimes report conversation messages and tool-call state to Agent Farm.
@@ -82,7 +150,7 @@ _Avoid_: webhook
 
 ## Relationships
 
-- An **Organization** has many **Memberships**, **Agents**, **Templates**, and custom **Skills**.
+- An **Organization** has many **Memberships**, **Agents**, **Templates**, custom **Skills**, and **Shared Credentials**.
 - A **Membership** links one user to one **Organization** with one **Organization Role**.
 - An **Organization Role** grants **Permissions** for Organization capabilities.
 - An **Agent Access Role** grants **Permissions** for one Agent aggregate.
@@ -91,7 +159,9 @@ _Avoid_: webhook
 - An **Agent** has one **Agent General Access** setting whose Permissions combine with (never subtract from) explicit Agent Access grants.
 - A **Template Version** may require multiple **Skills**.
 - An **Agent** may have multiple **Skills** and **Agent Secrets**.
-- An Agent runtime sends **Conversation Messages** and **Tool Calls** through **Ingest**.
+- Agent runtimes send **Telemetry Events** through **Ingest**, where they become **Conversation Messages** or **Tool Calls**.
+- A committed **Domain Event** is persisted as one **Outbox Message** and may have many **Event Deliveries**, one per intended handler.
+- A **Security Audit Record** may be produced from a **Domain Event**, but it is not itself the Domain Event.
 
 ## Flagged ambiguities
 

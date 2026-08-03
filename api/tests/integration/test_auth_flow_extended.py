@@ -13,6 +13,7 @@ from hamcrest import (
 )
 from starlette.testclient import TestClient
 
+from api.domains.users.organization_users.models import OrganizationRole
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
     create_test_client,
@@ -22,12 +23,9 @@ from api.tests.core.modules import (
 from api.tests.mocks.email import MockEmailModule
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import (
-    the_default_organization_id_is,
-    there_is_a_default_organization,
     there_is_an_organization,
 )
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
-from api.domains.users.organization_users.models import OrganizationRole
 
 
 def _extract_token_from_email(email_html: str) -> str:
@@ -110,18 +108,17 @@ def test_signup_is_disabled():
         assert_that(response.status_code, equal_to(status.HTTP_410_GONE))
 
 
-def test_signup_service_seeds_predefined_templates():
-    """Signup is disabled at the route, but the service must still seed a new org's
-    per-org template catalog (templates aren't global like skills) if it's re-enabled."""
+def test_signup_org_sees_global_predefined_templates():
+    """Signup is disabled at the route, but the service must let a new org see the
+    global predefined template catalog (predefined templates are platform/global
+    resources, not per-org seeds) if signup is re-enabled."""
     from fastapi import BackgroundTasks
 
     from api.domains.auth.models import SignupRequest
     from api.domains.auth.service import AuthService
     from api.domains.templates.predefined import PREDEFINED_TEMPLATES
     from api.domains.templates.repository import TemplateRepository
-    from api.domains.users.organization_users.repository import (
-        OrganizationUserRepository,
-    )
+    from api.domains.templates.service import TemplateService
     from api.domains.users.repository import UserRepository
 
     with given(
@@ -133,6 +130,7 @@ def test_signup_service_seeds_predefined_templates():
             database_is_clean(),
         ]
     ) as context:
+        context.injector.get(TemplateService).seed_predefined_templates()
         context.injector.get(AuthService).signup(
             SignupRequest(
                 email="signup-seed@example.com",
@@ -144,12 +142,11 @@ def test_signup_service_seeds_predefined_templates():
 
         user = context.injector.get(UserRepository).get_by_email("signup-seed@example.com")
         assert_that(user, is_not(none()))
-        memberships = context.injector.get(OrganizationUserRepository).get_by_user_id(user.id)
-        org_id = memberships[0].organization_id
 
         template_repo = context.injector.get(TemplateRepository)
-        seeded = template_repo.get_latest_template(org_id, PREDEFINED_TEMPLATES[0].slug)
-        assert_that(seeded, is_not(none()))
+        visible = template_repo.get_latest_platform_template(PREDEFINED_TEMPLATES[0].slug)
+        assert_that(visible, is_not(none()))
+        # platform_template rows have no organization_id column — they are global
 
 
 def test_me_returns_safe_user_and_organizations():
@@ -191,12 +188,8 @@ def test_me_returns_safe_user_and_organizations():
         assert_that(payload, is_not(has_key("current_user_organization")))
 
 
-def test_me_works_for_user_not_in_default_org():
-    """A newly signed-up user owns their own org, not the default one. Bootstrapping
-    the account context via /me must not 403 just because the request (sent without an
-    X-Organization-Id header) falls back to the default org the user isn't a member of.
-    """
-    default_org = uuid7()
+def test_me_works_without_active_organization_header():
+    """Bootstrapping account context via /me does not require an active Organization."""
     own_org = uuid7()
     user_id = uuid7()
 
@@ -207,14 +200,12 @@ def test_me_works_for_user_not_in_default_org():
             create_test_client(),
             database_repo_is_ready(),
             database_is_clean(),
-            there_is_a_default_organization(id=default_org),
             there_is_a_user(
                 id=user_id,
                 email="fresh-signup@example.com",
                 organization_id=own_org,
                 role=OrganizationRole.OWNER,
             ),
-            the_default_organization_id_is(default_org),
             there_is_an_access_token_for_user(user_id=user_id),
         ]
     ) as context:

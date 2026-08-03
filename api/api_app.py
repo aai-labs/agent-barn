@@ -20,30 +20,24 @@ from api.core.metrics import (
     render_metrics,
     setup_http_metrics,
 )
-from api.domains.agents.service import AgentService
 from api.core.utils import create_injector
 from api.domains.agents.routes import agents_router
+from api.domains.agents.service import AgentService
 from api.domains.agents.slack_routes import slack_router
 from api.domains.agents.webhook_routes import webhook_router
 from api.domains.auth.routes import auth_router
-from api.domains.auth.utils import set_default_org_id
 from api.domains.conversations.routes import conversations_router
 from api.domains.costs.routes import costs_router
 from api.domains.integrations.google_oauth.routes import integrations_router
-from api.domains.organizations.routes import org_router
-from api.domains.organizations.service import OrganizationService
+from api.domains.organizations.routes import org_router, platform_org_router
 from api.domains.rbac.seeder import RbacSeeder
+from api.domains.shared_credentials.routes import shared_credentials_router
 from api.domains.skills.repository import SkillRepository
 from api.domains.skills.routes import skills_router
 from api.domains.skills.skill_seeder import seed_aai_cli_skills
 from api.domains.templates.routes import templates_router
 from api.domains.templates.service import TemplateService
 from api.domains.tool_calls.routes import tool_calls_router
-from api.domains.users.organization_users.models import (
-    OrganizationRole,
-    OrganizationUser,
-)
-from api.domains.users.organization_users.repository import OrganizationUserRepository
 from api.domains.users.organization_users.routes import member_router
 from api.domains.users.routes import users_router
 from api.domains.users.service import UserService
@@ -66,26 +60,10 @@ async def lifespan(_: FastAPI):
 
     try:
         injector.get(RbacSeeder).seed()
-        superuser = user_service.ensure_default_superuser()
-
-        org_service = injector.get(OrganizationService)
-        default_org = org_service.ensure_default_organization()
-        set_default_org_id(default_org.id)
+        user_service.ensure_default_platform_admin()
 
         seed_aai_cli_skills(injector.get(SkillRepository))
-
-        template_service = injector.get(TemplateService)
-        template_service.seed_predefined_templates(default_org.id)
-
-        org_user_repo = injector.get(OrganizationUserRepository)
-        if not org_user_repo.get_by_user_id_and_organization_id(superuser.id, default_org.id):
-            org_user_repo.save(
-                OrganizationUser(
-                    user_id=superuser.id,
-                    organization_id=default_org.id,
-                    role=OrganizationRole.OWNER,
-                )
-            )
+        injector.get(TemplateService).seed_predefined_templates()
     except Exception:
         logger.error("Error during startup bootstrap: %s", traceback.format_exc())
         raise HTTPException(
@@ -125,7 +103,9 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(conversations_router)
     subapi.include_router(costs_router)
     subapi.include_router(org_router)
+    subapi.include_router(platform_org_router)
     subapi.include_router(member_router)
+    subapi.include_router(shared_credentials_router)
     subapi.include_router(skills_router)
     subapi.include_router(integrations_router)
     subapi.include_router(templates_router)

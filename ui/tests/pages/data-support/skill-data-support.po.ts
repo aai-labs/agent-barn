@@ -73,13 +73,13 @@ export class SkillDataSupport {
     detail?: string;
     body?: unknown;
   } = {}) {
-    await this.page.route("**/api/v1/skills*", async (route) => {
+    await this.page.route("**/api/v1/organizations/*/skills*", async (route) => {
       if (route.request().method() !== "GET") {
         await route.fallback();
         return;
       }
       const url = new URL(route.request().url());
-      if (url.pathname !== "/api/v1/skills") {
+      if (!/\/api\/v1\/organizations\/[^/]+\/skills$/.test(url.pathname)) {
         await route.fallback();
         return;
       }
@@ -123,7 +123,7 @@ export class SkillDataSupport {
     status?: number;
     detail?: string;
   } = {}) {
-    await this.page.route(`**/api/v1/skills/${skillId}`, async (route) => {
+    await this.page.route(`**/api/v1/organizations/*/skills/${skillId}`, async (route) => {
       if (route.request().method() !== "DELETE") {
         await route.fallback();
         return;

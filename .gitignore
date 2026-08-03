@@ -145,3 +145,5 @@ lessons/
 compose.remote.yml
 .dex/
 helm/monitoring/tests/generated/
+
+.kube

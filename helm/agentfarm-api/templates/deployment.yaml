@@ -5,11 +5,13 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "agentfarm-api.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
 spec:
   replicas: {{ .Values.replicaCount }}
   selector:
     matchLabels:
       {{- include "agentfarm-api.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: api
   template:
     metadata:
       annotations:
@@ -20,15 +22,20 @@ spec:
         # litellm-api-key secret is created by a Job at runtime, so it has no
         # render-time content to checksum and is intentionally not tracked here.
         checksum/kubeconfig: {{ include (print $.Template.BasePath "/kubeconfig-secret.yaml") . | sha256sum }}
+        # Roll the pods on every deploy of a new commit even when the image
+        # tag itself is an unchanged moving tag (e.g. `latest`) — otherwise
+        # Helm sees no manifest diff and skips the rollout entirely.
+        build-sha: {{ .Values.buildSha | quote }}
       labels:
         {{- include "agentfarm-api.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: api
     spec:
       serviceAccountName: {{ .Release.Name }}
       imagePullSecrets:
         {{- toYaml .Values.imagePullSecrets | nindent 8 }}
       containers:
         - name: api
-          image: "{{ .Values.registryPrefix }}/{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          image: "{{ .Values.registryPrefix }}/{{ .Values.image.repository }}:{{ required "image.tag is required" .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: http

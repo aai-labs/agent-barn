@@ -11,7 +11,7 @@ from api.domains.auth.utils import get_current_user
 from api.infrastructure.slack.config_token import create_slack_app
 from api.infrastructure.slack.manifest import build_slack_app_manifest
 
-slack_router = APIRouter(prefix="/slack", tags=["slack"])
+slack_router = APIRouter(prefix="/organizations/{organization_id}/slack", tags=["slack"])
 
 
 class CreateSlackAppRequest(PydanticBaseModel):

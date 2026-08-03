@@ -9,15 +9,15 @@ import { useUpdateAgent } from "../hooks/use-update-agent";
 import { useDeleteAgent } from "../hooks/use-delete-agent";
 import { useValidateIntegration } from "../hooks/use-validate-integration";
 import { XIcon, LockIcon } from "@/components/icons";
-import { FormField, GoogleAuthButton, TokenInput } from "./hire-dialog-primitives";
-import { IntegrationsStep, RepoListField, TemplateSourceBadge, VersionSelect } from "./hire-dialog-steps";
+import { TokenInput } from "./hire-dialog-primitives";
+import { IntegrationsStep, TemplateSourceBadge, VersionSelect } from "./hire-dialog-steps";
+import { IntegrationFields } from "./integration-fields";
 import { ModelSelect } from "./model-select";
 import {
   coerceBooleanFields,
   expandGithubContent,
   getIntegrationProvider,
   hasIncompleteIntegration,
-  isOAuthConnected,
   type IntegrationDraft,
 } from "../integrations";
 import { SlackConfigPanel } from "./slack-config-panel";
@@ -215,7 +215,6 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
   const [errorSection, setErrorSection] = useState<"tokens" | "secrets" | "template" | null>(null);
   const [pendingSection, setPendingSection] = useState<"tokens" | "secrets" | null>(null);
   const [repinSecretDrafts, setRepinSecretDrafts] = useState<IntegrationDraft[]>([]);
-  const [repinVisible, setRepinVisible] = useState<Record<string, boolean>>({});
   // groupKey -> explicitly chosen skill id, for the re-pin target's "at least
   // one of" required skill groups. Only holds user overrides — the effective
   // default (falling back to an already-assigned member) is derived below.
@@ -385,7 +384,6 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
       setRepinSlug(null);
       setRepinVersion(null);
       setRepinSecretDrafts([]);
-      setRepinVisible({});
       setRepinGroupOverrides({});
       setSavedTemplate(true);
       setTimeout(() => setSavedTemplate(false), 2500);
@@ -436,12 +434,17 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
       // replace — the upsert wins (the backend rejects a provider in both lists).
       const draftProviders = new Set(secretDrafts.map((d) => d.provider));
       const updatedProviders = [...draftProviders];
+      const manualDrafts = secretDrafts.filter((d) => !d.sharedCredentialId);
+      const sharedDrafts = secretDrafts.filter((d) => !!d.sharedCredentialId);
       await updateAgent.mutateAsync({
         agentId: agent.id,
-        secrets: secretDrafts.map((d) => ({
+        secrets: manualDrafts.map((d) => ({
           provider: d.provider,
           content: coerceBooleanFields(d.provider === "github" ? expandGithubContent(d.content) : d.content),
         })),
+        ...(sharedDrafts.length > 0
+          ? { sharedCredentials: sharedDrafts.map((d) => ({ sharedCredentialId: d.sharedCredentialId! })) }
+          : {}),
         removedSecretProviders: removedProviders.filter(
           (p) => !draftProviders.has(p),
         ),
@@ -632,7 +635,6 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                           setRepinSlug(t.templateSlug);
                           setRepinVersion(null);
                           setRepinSecretDrafts([]);
-                          setRepinVisible({});
                         }}
                       >
                         <span className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>
@@ -663,7 +665,6 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                         onChange={(v) => {
                           setRepinVersion(v);
                           setRepinSecretDrafts([]);
-                          setRepinVisible({});
                         }}
                         disabled={isRunning}
                       />
@@ -773,95 +774,19 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                         <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
                           {providerSpec.label}
                         </div>
-                        {providerSpec.authMethod === "google_oauth" && (
-                          <GoogleAuthButton
-                            connected={isOAuthConnected(draft)}
-                            onConnected={({ refreshToken, clientId, clientSecret }) => {
-                              setRepinSecretField(providerId, "refreshToken", refreshToken);
-                              setRepinSecretField(providerId, "clientId", clientId);
-                              setRepinSecretField(providerId, "clientSecret", clientSecret);
-                            }}
-                            disabled={isRunning}
-                          />
-                        )}
-                        {providerSpec.fields.map((field) => {
-                          if (field.dependsOn && draft.content[field.dependsOn.key] !== field.dependsOn.value) {
-                            return null;
-                          }
-                          const label = field.required ? field.label : `${field.label} (optional)`;
-
-                          if (field.type === "repo-list") {
-                            const repos = Array.isArray(draft.content[field.key])
-                              ? (draft.content[field.key] as string[])
-                              : [];
-                            return (
-                              <FormField key={field.key} label={label} hint={field.hint}>
-                                <RepoListField
-                                  repos={repos}
-                                  onChange={(next) => setRepinRepos(providerId, field.key, next)}
-                                  placeholder={field.placeholder}
-                                />
-                              </FormField>
-                            );
-                          }
-
-                          const rawValue = draft.content[field.key];
-                          const value = typeof rawValue === "string" ? rawValue : "";
-                          if (field.type === "secret") {
-                            const vkey = `${providerId}:${field.key}`;
-                            return (
-                              <FormField key={field.key} label={label} hint={field.hint}>
-                                <TokenInput
-                                  value={value}
-                                  onChange={(v) => setRepinSecretField(providerId, field.key, v)}
-                                  visible={!!repinVisible[vkey]}
-                                  onToggle={() =>
-                                    setRepinVisible((s) => ({ ...s, [vkey]: !s[vkey] }))
-                                  }
-                                  placeholder={field.placeholder}
-                                  disabled={isRunning}
-                                />
-                              </FormField>
-                            );
-                          }
-                          if (field.type === "radio") {
-                            return (
-                              <FormField key={field.key} label={label} hint={field.hint}>
-                                <div className="flex flex-col gap-2 mt-1">
-                                  {field.options?.map((opt) => (
-                                    <label key={opt.value} className="flex items-center gap-2 cursor-pointer">
-                                      <input
-                                        type="radio"
-                                        name={`repin-${providerId}-${field.key}`}
-                                        value={opt.value}
-                                        checked={value === opt.value}
-                                        onChange={(e) => setRepinSecretField(providerId, field.key, e.target.value)}
-                                        disabled={isRunning}
-                                        className="accent-[var(--blue-9)]"
-                                      />
-                                      <span className="text-[13px]" style={{ color: "var(--ink-1)" }}>{opt.label}</span>
-                                    </label>
-                                  ))}
-                                </div>
-                              </FormField>
-                            );
-                          }
-
-                          return (
-                            <FormField key={field.key} label={label} hint={field.hint}>
-                              <input
-                                className="af-input"
-                                value={value}
-                                onChange={(e) =>
-                                  setRepinSecretField(providerId, field.key, e.target.value)
-                                }
-                                placeholder={field.placeholder}
-                                autoComplete="off"
-                                disabled={isRunning}
-                              />
-                            </FormField>
-                          );
-                        })}
+                        <IntegrationFields
+                          provider={providerSpec}
+                          draft={draft}
+                          namePrefix="repin-"
+                          disabled={isRunning}
+                          onFieldChange={(key, value) => setRepinSecretField(providerId, key, value)}
+                          onReposChange={(key, repos) => setRepinRepos(providerId, key, repos)}
+                          onOAuthConnected={({ refreshToken, clientId, clientSecret }) => {
+                            setRepinSecretField(providerId, "refreshToken", refreshToken);
+                            setRepinSecretField(providerId, "clientId", clientId);
+                            setRepinSecretField(providerId, "clientSecret", clientSecret);
+                          }}
+                        />
                       </div>
                     );
                   })}
@@ -1074,6 +999,7 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                   {configuredSecrets.map((s) => {
                     const label = getIntegrationProvider(s.provider)?.label ?? s.provider;
                     const isPendingRemoval = removedProviders.includes(s.provider);
+                    const isShared = !!s.sharedCredentialId;
                     return isPendingRemoval ? (
                       <div
                         key={s.provider}
@@ -1102,9 +1028,24 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                         style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
                       >
                         <div className="flex flex-col gap-0.5 min-w-0">
-                          <span className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
-                            {label}
-                          </span>
+                          <div className="flex items-center gap-2">
+                            <span className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
+                              {label}
+                            </span>
+                            {isShared && (
+                              <span
+                                className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold uppercase tracking-wide"
+                                style={{ background: "var(--bg-elev)", color: "var(--ink-3)", border: "1px solid var(--line)" }}
+                              >
+                                Shared
+                              </span>
+                            )}
+                          </div>
+                          {isShared && s.sharedCredentialName && (
+                            <span className="text-xs" style={{ color: "var(--ink-4)" }}>
+                              {s.sharedCredentialName}
+                            </span>
+                          )}
                           <ValidationBadge
                             secretName={s.secretName}
                             result={validationState[s.provider]}

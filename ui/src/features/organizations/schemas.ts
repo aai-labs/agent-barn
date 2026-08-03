@@ -6,9 +6,11 @@ export const OrganizationSchema = z.object({
   updatedAt: z.string(),
   name: z.string(),
   description: z.string().nullable().optional(),
-  isDefault: z.boolean(),
   ownerEmail: z.string().nullable().optional(),
   ownerName: z.string().nullable().optional(),
+  // Tolerate lightweight org views (e.g. the account/user-context memberships)
+  // that don't carry the allowlist; the full org endpoint always sends it.
+  allowedModels: z.array(z.string()).default([]),
 });
 
 export const OrganizationCreateSchema = z.object({

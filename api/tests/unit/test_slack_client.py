@@ -222,9 +222,8 @@ def test_validate_app_token_missing_returns_error_without_request():
 def test_validate_bot_token_unreachable_slack_returns_error():
     # A transport error is retried to the budget, then surfaces as a clean message.
     errors = [httpx.ConnectError("down", request=_REQUEST)] * 3
-    with patch("httpx.request", _mock_httpx(errors)):
-        with patch("api.infrastructure.slack.transport.time.sleep"):
-            ok, message = SlackClient("xoxb-token").validate_bot_token()
+    with patch("httpx.request", _mock_httpx(errors)), patch("api.infrastructure.slack.transport.time.sleep"):
+        ok, message = SlackClient("xoxb-token").validate_bot_token()
 
     assert ok is False
     assert "Could not reach Slack" in message
@@ -255,8 +254,7 @@ def test_get_bot_info_returns_empty_dict_on_non_ok():
 
 def test_get_bot_info_returns_empty_dict_on_network_error():
     errors = [httpx.ConnectError("down", request=_REQUEST)] * 3
-    with patch("httpx.request", _mock_httpx(errors)):
-        with patch("api.infrastructure.slack.transport.time.sleep"):
-            info = SlackClient("xoxb-token").get_bot_info()
+    with patch("httpx.request", _mock_httpx(errors)), patch("api.infrastructure.slack.transport.time.sleep"):
+        info = SlackClient("xoxb-token").get_bot_info()
 
     assert info == {}

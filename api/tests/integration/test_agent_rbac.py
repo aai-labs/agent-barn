@@ -8,6 +8,7 @@ from sqlmodel import Session, col, select
 
 from api.domains.agents.models import Agent, AgentAccess, AgentFilter
 from api.domains.agents.repository import AgentRepository
+from api.domains.events import ActorIdentity, ActorIdentityType
 from api.domains.organizations.models import Organization
 from api.domains.rbac.catalog import (
     AGENT_EDITOR_ROLE_ID,
@@ -31,8 +32,8 @@ from api.tests.steps.agent import (
     TEST_ENCRYPTION_KEY,
     MockK8sModule,
     MockLiteLLMModule,
-    there_is_an_agent,
     there_is_agent_access,
+    there_is_an_agent,
     use_org_for_auth,
 )
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
@@ -42,7 +43,7 @@ from api.tests.steps.organization import (
 from api.tests.steps.template import there_is_a_template
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
 
-_BASE = "/api/v1/agents"
+_BASE = "/api/v1/organizations/{organization_id}/agents"
 _CREATE = {
     "name": "Member Agent",
     "platform": "slack",
@@ -187,16 +188,49 @@ def test_creator_keeps_assigned_agent_after_owner_is_demoted_to_member():
 def test_agent_and_creator_access_insert_roll_back_together():
     with given(_GIVEN) as context:
         repository: AgentRepository = context.injector.get(AgentRepository)
+        from api.domains.templates.defaults import (
+            DEFAULT_AGENTS_MD,
+            DEFAULT_BOOT_MD,
+            DEFAULT_BOOTSTRAP_MD,
+            DEFAULT_HEARTBEAT_MD,
+            DEFAULT_IDENTITY_MD,
+            DEFAULT_SOUL_MD,
+            DEFAULT_TOOLS_MD,
+            DEFAULT_USER_MD,
+        )
+        from api.domains.templates.models import AgentTemplate, TemplateSource
+        from api.domains.templates.repository import TemplateRepository
+
+        template_repo = context.injector.get(TemplateRepository)
+        template = AgentTemplate(
+            organization_id=context.organization.id,
+            template_slug="rollback-template",
+            template_name="Rollback Template",
+            template_source=TemplateSource.CUSTOM,
+            version=1,
+            soul_md=DEFAULT_SOUL_MD,
+            identity_md=DEFAULT_IDENTITY_MD,
+            user_md=DEFAULT_USER_MD,
+            tools_md=DEFAULT_TOOLS_MD,
+            agents_md=DEFAULT_AGENTS_MD,
+            boot_md=DEFAULT_BOOT_MD,
+            bootstrap_md=DEFAULT_BOOTSTRAP_MD,
+            heartbeat_md=DEFAULT_HEARTBEAT_MD,
+        )
+        template_repo.save_template(template)
         agent = Agent(
             organization_id=context.organization.id,
             created_by_user_id=context.user.id,
             name="Rollback Agent",
-            template_slug="test-template",
-            template_version=1,
+            agent_template_id=template.id,
         )
 
         with pytest.raises(IntegrityError):
-            repository.create_with_creator_access(agent, uuid7())
+            repository.create_with_creator_access(
+                agent,
+                uuid7(),
+                actor=ActorIdentity(type=ActorIdentityType.USER, id=context.user.id),
+            )
 
         assert_that(repository.get_by_id(agent.id), equal_to(None))
 
@@ -268,13 +302,13 @@ def test_assigned_activity_and_cost_endpoints_cannot_be_bypassed():
             f"{_BASE}/{assigned_agent.id}/logs",
             f"{_BASE}/{assigned_agent.id}/conversations/channels",
             f"{_BASE}/{assigned_agent.id}/tool-calls",
-            f"/api/v1/costs/agents/{assigned_agent.id}",
+            f"/api/v1/organizations/{{organization_id}}/costs/agents/{assigned_agent.id}",
         )
         hidden_urls = (
             f"{_BASE}/{hidden_agent.id}/logs",
             f"{_BASE}/{hidden_agent.id}/conversations/channels",
             f"{_BASE}/{hidden_agent.id}/tool-calls",
-            f"/api/v1/costs/agents/{hidden_agent.id}",
+            f"/api/v1/organizations/{{organization_id}}/costs/agents/{hidden_agent.id}",
         )
 
         for url in assigned_urls:
@@ -627,36 +661,31 @@ def test_removed_membership_cascades_agent_access():
 
         assert_that(granted.status_code, equal_to(status.HTTP_200_OK))
         assert_that(
-            repository.find_access_membership_ids(context.agent.id, context.organization.id),
+            list(repository.find_access_membership_ids(context.agent.id, context.organization.id)),
             is_not(has_item(target_membership.id)),
         )
 
 
-def test_membershipless_superuser_can_manage_agent_share_in_explicit_org():
+def test_membershipless_platform_admin_cannot_manage_agent_share_in_org_url():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         organization = context.organization
         target, _ = _add_member(context)
         context.organization = None
         there_is_a_user(
             id=uuid7(),
-            email="rbac-superuser@example.com",
-            is_superuser=True,
+            email="rbac-platform_admin@example.com",
+            is_platform_admin=True,
         )(context)
-        superuser_id = context.user.id
+        platform_admin_id = context.user.id
         context.organization = organization
-        there_is_an_access_token_for_user(superuser_id)(context)
-        headers = {
-            **_auth(context),
-            "X-Organization-Id": str(organization.id),
-        }
-
+        there_is_an_access_token_for_user(platform_admin_id)(context)
         response = context.client.put(
             _share_url(context.agent.id),
             json={
                 "general_access_role_id": None,
                 "assignments": [_assignment(target.id, AGENT_EDITOR_ROLE_ID)],
             },
-            headers=headers,
+            headers=_auth(context),
         )
 
-        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
