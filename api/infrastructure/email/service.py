@@ -2,19 +2,18 @@ import logging
 import os
 import traceback
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 
 from injector import inject, singleton
 from jinja2 import Template
 from mjml import mjml_to_html
 
+from api.core.config import Config
+from api.infrastructure.email.client import EmailClient
 from api.infrastructure.email.exceptions import (
     EmailRenderingException,
 )
-from api.infrastructure.email.models import EmailTemplate, EmailTemplateAttribute
-from api.infrastructure.email.client import EmailClient
-from api.infrastructure.email.models import Email
-from api.core.config import Config
+from api.infrastructure.email.models import Email, EmailTemplate, EmailTemplateAttribute
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +47,7 @@ class EmailService:
         data = {}
         for attribute in email_template.attributes:
             data[attribute.name] = attribute.value
-        data["current_year"] = datetime.now().year
+        data["current_year"] = datetime.now(UTC).year
 
         mjml = template.render(data)
         html = self.render(mjml=mjml)
@@ -191,6 +190,40 @@ class EmailService:
             return True
         except Exception:
             msg = f"Unable to send verification email to {receiver_email}"
+            logger.error(f"{msg} : {traceback.format_exc()}")
+            return False
+
+    def send_agent_lifecycle_email(
+        self,
+        *,
+        receiver_email: str,
+        receiver_name: str | None,
+        agent_name: str,
+        lifecycle_action: str,
+    ) -> bool:
+        if not self._email_enabled_or_log(
+            action="send_agent_lifecycle_email",
+            receiver_email=receiver_email,
+        ):
+            return False
+
+        try:
+            email_template = EmailTemplate(
+                file_name="agent-lifecycle-template.mjml",
+                subject=f"Agent {agent_name} {lifecycle_action}",
+                receiver_name=receiver_name,
+                receiver_email=receiver_email,
+                attributes=[
+                    EmailTemplateAttribute(name="user_name", value=receiver_name or receiver_email),
+                    EmailTemplateAttribute(name="agent_name", value=agent_name),
+                    EmailTemplateAttribute(name="lifecycle_action", value=lifecycle_action),
+                ],
+            )
+            email = self.create_email(email_template)
+            self.client.send(email)
+            return True
+        except Exception:
+            msg = f"Unable to send agent lifecycle email to {receiver_email}"
             logger.error(f"{msg} : {traceback.format_exc()}")
             return False
 

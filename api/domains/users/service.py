@@ -1,20 +1,20 @@
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID, uuid7
 
 from fastapi import HTTPException, status
 from injector import inject
 
 from api.core.config import Config
-from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.hashing import check_hash, hash_text
+from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.password_validation import validate_strong_password
 from api.domains.auth.repository import RefreshTokenRepository
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.users.models import (
     AdminUserCreate,
     User,
-    UserCreateSuperAdmin,
+    UserCreatePlatformAdmin,
     UserFilter,
     UserPasswordChange,
     UserRead,
@@ -40,17 +40,17 @@ class UserService:
     refresh_token_repository: RefreshTokenRepository
     config: Config
 
-    def ensure_default_superuser(self) -> User:
-        existing = self.user_repository.get_superuser()
+    def ensure_default_platform_admin(self) -> User:
+        existing = self.user_repository.get_platform_admin()
         if existing:
             return existing
-        email, password = self.config.super_user_credentials.split(":")
-        full_name = self.config.super_user_full_name
-        return self.create_superuser(email=email, password=password, full_name=full_name)
+        email, password = self.config.platform_admin_credentials.split(":")
+        full_name = self.config.platform_admin_full_name
+        return self.create_platform_admin(email=email, password=password, full_name=full_name)
 
-    def create_superuser(self, email: str, password: str, full_name: str | None = None) -> User:
+    def create_platform_admin(self, email: str, password: str, full_name: str | None = None) -> User:
         validate_strong_password(password)
-        user_data = UserCreateSuperAdmin(email=email, full_name=full_name)
+        user_data = UserCreatePlatformAdmin(email=email, full_name=full_name)
         user = User(
             **user_data.model_dump(),
             hashed_password=hash_text(password),
@@ -70,13 +70,13 @@ class UserService:
                 detail="Organization not found",
             )
 
-        # Superuser-provisioned: the admin sets the password directly, so the account is
+        # Platform-admin provisioned: the admin sets the password directly, so the account is
         # active (verified) immediately — not a pending invite.
         user = User(
             email=data.email,
             full_name=data.full_name,
             hashed_password=hash_text(data.password),
-            email_verified_at=datetime.now(timezone.utc),
+            email_verified_at=datetime.now(UTC),
         )
         self.user_repository.save(user)
 
@@ -128,7 +128,7 @@ class UserService:
         page_size: int = 15,
     ) -> PaginatedItems[UserRead]:
         pagination = Pagination(page=page, size=page_size)
-        # Global account admin (superuser-only route): list every account. Org-level
+        # Global account admin (platform-admin-only route): list every account. Org-level
         # people management lives on the per-org Members page instead.
         del context  # scoping is intentionally global here
         paginated_users: PaginatedItems[User] = self.user_repository.find_all_paginated(

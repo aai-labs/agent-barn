@@ -3,7 +3,7 @@
 import { useCallback, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
-import { api, ORGANIZATION_HEADER } from "@/shared/api";
+import { api } from "@/shared/api";
 
 import { useAuthStore } from "../providers/auth-store";
 
@@ -19,9 +19,6 @@ export function useLogout() {
     } catch {
       // Best-effort logout; local cleanup still runs.
     } finally {
-      // Clear the active-org header off the shared axios singleton so it can't leak into
-      // the next session's requests before a new org is selected.
-      api.removeHeader(ORGANIZATION_HEADER);
       queryClient.clear();
       setToken(null);
       setIsLoggingOut(false);

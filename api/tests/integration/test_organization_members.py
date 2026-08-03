@@ -1,6 +1,6 @@
 """Phase 4a/b (AF-147): org-scoped member management under /organizations/{id}/members.
 
-Owners/admins (and superusers) can list, add, change roles, remove members, resend
+Owners/admins (and platform_admins) can list, add, change roles, remove members, resend
 invites, and transfer ownership; plain members and cross-org actors are forbidden.
 """
 
@@ -18,6 +18,7 @@ from hamcrest import (
     not_none,
 )
 
+from api.domains.events.models import OutboxMessage
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.users.organization_users.models import OrganizationRole
 from api.domains.users.organization_users.repository import OrganizationUserRepository
@@ -44,10 +45,7 @@ _GIVEN = [
 
 
 def _auth(context) -> dict:
-    return {
-        "Authorization": f"Bearer {context.access_token}",
-        "X-Organization-Id": str(ORG),
-    }
+    return {"Authorization": f"Bearer {context.access_token}"}
 
 
 def _members_url(org_id=ORG) -> str:
@@ -72,32 +70,41 @@ def _there_is_an_owner():
 
 def _role_of(context, user_id, org_id=ORG) -> OrganizationRole:
     repo: OrganizationUserRepository = context.injector.get(OrganizationUserRepository)
-    return repo.get_by_user_id_and_organization_id(user_id, org_id).role
+    org_user = repo.get_by_user_id_and_organization_id(user_id, org_id)
+    assert org_user is not None
+    return org_user.role
+
+
+def _outbox_messages(context) -> list[OutboxMessage]:
+    repo: OrganizationUserRepository = context.injector.get(OrganizationUserRepository)
+    return repo.delegate.find_all(OutboxMessage)
 
 
 def test_owner_lists_members():
     member_id = uuid7()
-    with given(
-        [
-            *_GIVEN,
-            _there_is_an_owner(),
-            there_is_a_user(
-                id=member_id,
-                email="member@example.com",
-                organization_id=ORG,
-                role=OrganizationRole.MEMBER,
-            ),
-        ]
-    ) as context:
-        with when("the owner lists members"):
-            response = context.client.get(_members_url(), headers=_auth(context))
+    with (
+        given(
+            [
+                *_GIVEN,
+                _there_is_an_owner(),
+                there_is_a_user(
+                    id=member_id,
+                    email="member@example.com",
+                    organization_id=ORG,
+                    role=OrganizationRole.MEMBER,
+                ),
+            ]
+        ) as context,
+        when("the owner lists members"),
+    ):
+        response = context.client.get(_members_url(), headers=_auth(context))
 
-            with then("both members are returned with roles"):
-                assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-                assert_that(response.json(), has_length(2))
-                by_email = {m["email"]: m for m in response.json()}
-                assert_that(by_email["owner@example.com"]["role"], equal_to("OWNER"))
-                assert_that(by_email["member@example.com"]["role"], equal_to("MEMBER"))
+        with then("both members are returned with roles"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json(), has_length(2))
+            by_email = {m["email"]: m for m in response.json()}
+            assert_that(by_email["owner@example.com"]["role"], equal_to("OWNER"))
+            assert_that(by_email["member@example.com"]["role"], equal_to("MEMBER"))
 
 
 def test_member_search_filters_by_name_and_email():
@@ -166,7 +173,7 @@ def test_member_list_respects_limit_and_defaults_to_unbounded():
         assert_that(unbounded.json(), has_length(3))
 
 
-def test_superuser_without_membership_read_grant_can_list_members():
+def test_platform_admin_without_membership_read_permission_cannot_list_members():
     super_id = uuid7()
     with given(
         [
@@ -177,14 +184,14 @@ def test_superuser_without_membership_read_grant_can_list_members():
                 email="super-members@example.com",
                 organization_id=ORG,
                 role=OrganizationRole.MEMBER,
-                is_superuser=True,
+                is_platform_admin=True,
             ),
             there_is_an_access_token_for_user(user_id=super_id),
         ]
     ) as context:
         response = context.client.get(_members_url(), headers=_auth(context))
 
-        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
 def test_owner_cannot_list_members_in_another_active_organization():
@@ -238,24 +245,26 @@ def test_admin_with_assigned_membership_read_cannot_list_members():
 
 def test_plain_member_cannot_manage_members():
     member_id = uuid7()
-    with given(
-        [
-            *_GIVEN,
-            _there_is_an_owner(),
-            there_is_a_user(
-                id=member_id,
-                email="member@example.com",
-                organization_id=ORG,
-                role=OrganizationRole.MEMBER,
-            ),
-            there_is_an_access_token_for_user(user_id=member_id),
-        ]
-    ) as context:
-        with when("a plain member lists members"):
-            response = context.client.get(_members_url(), headers=_auth(context))
+    with (
+        given(
+            [
+                *_GIVEN,
+                _there_is_an_owner(),
+                there_is_a_user(
+                    id=member_id,
+                    email="member@example.com",
+                    organization_id=ORG,
+                    role=OrganizationRole.MEMBER,
+                ),
+                there_is_an_access_token_for_user(user_id=member_id),
+            ]
+        ) as context,
+        when("a plain member lists members"),
+    ):
+        response = context.client.get(_members_url(), headers=_auth(context))
 
-            with then("it is forbidden"):
-                assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+        with then("it is forbidden"):
+            assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
 def test_admin_without_membership_invite_cannot_add_member():
@@ -335,27 +344,29 @@ def test_add_existing_active_member_sends_no_invite():
 
 def test_add_duplicate_member_conflicts():
     member_id = uuid7()
-    with given(
-        [
-            *_GIVEN,
-            _there_is_an_owner(),
-            there_is_a_user(
-                id=member_id,
-                email="dupe@example.com",
-                organization_id=ORG,
-                role=OrganizationRole.MEMBER,
-            ),
-        ]
-    ) as context:
-        with when("the owner adds a user already in the org"):
-            response = context.client.post(
-                _members_url(),
-                json={"email": "dupe@example.com", "role": "MEMBER"},
-                headers=_auth(context),
-            )
+    with (
+        given(
+            [
+                *_GIVEN,
+                _there_is_an_owner(),
+                there_is_a_user(
+                    id=member_id,
+                    email="dupe@example.com",
+                    organization_id=ORG,
+                    role=OrganizationRole.MEMBER,
+                ),
+            ]
+        ) as context,
+        when("the owner adds a user already in the org"),
+    ):
+        response = context.client.post(
+            _members_url(),
+            json={"email": "dupe@example.com", "role": "MEMBER"},
+            headers=_auth(context),
+        )
 
-            with then("it conflicts"):
-                assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+        with then("it conflicts"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
 
 
 def test_admin_without_membership_role_update_cannot_change_member_role():
@@ -385,29 +396,38 @@ def test_admin_without_membership_role_update_cannot_change_member_role():
 
 def test_owner_changes_member_role():
     member_id = uuid7()
-    with given(
-        [
-            *_GIVEN,
-            _there_is_an_owner(),
-            there_is_a_user(
-                id=member_id,
-                email="member@example.com",
-                organization_id=ORG,
-                role=OrganizationRole.MEMBER,
-            ),
-        ]
-    ) as context:
-        with when("the owner promotes the member to ADMIN"):
-            response = context.client.patch(
-                f"{_members_url()}/{member_id}",
-                json={"role": "ADMIN"},
-                headers=_auth(context),
-            )
+    with (
+        given(
+            [
+                *_GIVEN,
+                _there_is_an_owner(),
+                there_is_a_user(
+                    id=member_id,
+                    email="member@example.com",
+                    organization_id=ORG,
+                    role=OrganizationRole.MEMBER,
+                ),
+            ]
+        ) as context,
+        when("the owner promotes the member to ADMIN"),
+    ):
+        response = context.client.patch(
+            f"{_members_url()}/{member_id}",
+            json={"role": "ADMIN"},
+            headers=_auth(context),
+        )
 
-            with then("role is updated"):
-                assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-                assert_that(response.json()["role"], equal_to("ADMIN"))
-                assert_that(_role_of(context, member_id), equal_to(OrganizationRole.ADMIN))
+        with then("role is updated and an audit Domain Event is staged"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["role"], equal_to("ADMIN"))
+            assert_that(_role_of(context, member_id), equal_to(OrganizationRole.ADMIN))
+            messages = _outbox_messages(context)
+            assert_that(len(messages), equal_to(1))
+            assert_that(messages[0].event_name, equal_to("organization.role.changed"))
+            assert_that(messages[0].organization_id, equal_to(ORG))
+            assert_that(messages[0].payload["previous_role"], equal_to("MEMBER"))
+            assert_that(messages[0].payload["new_role"], equal_to("ADMIN"))
+            assert_that(messages[0].payload["user_id"], equal_to(str(member_id)))
 
 
 def _there_is_an_admin_actor(admin_id):
@@ -520,28 +540,30 @@ def test_admin_without_membership_remove_cannot_remove_member():
 
 def test_owner_removes_member():
     member_id = uuid7()
-    with given(
-        [
-            *_GIVEN,
-            _there_is_an_owner(),
-            there_is_a_user(
-                id=member_id,
-                email="member@example.com",
-                organization_id=ORG,
-                role=OrganizationRole.MEMBER,
-            ),
-        ]
-    ) as context:
-        with when("the owner removes the member"):
-            response = context.client.delete(f"{_members_url()}/{member_id}", headers=_auth(context))
+    with (
+        given(
+            [
+                *_GIVEN,
+                _there_is_an_owner(),
+                there_is_a_user(
+                    id=member_id,
+                    email="member@example.com",
+                    organization_id=ORG,
+                    role=OrganizationRole.MEMBER,
+                ),
+            ]
+        ) as context,
+        when("the owner removes the member"),
+    ):
+        response = context.client.delete(f"{_members_url()}/{member_id}", headers=_auth(context))
 
-            with then("the member is gone"):
-                assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
-                repo: OrganizationUserRepository = context.injector.get(OrganizationUserRepository)
-                assert_that(
-                    repo.get_by_user_id_and_organization_id(member_id, ORG),
-                    is_(none()),
-                )
+        with then("the member is gone"):
+            assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+            repo: OrganizationUserRepository = context.injector.get(OrganizationUserRepository)
+            assert_that(
+                repo.get_by_user_id_and_organization_id(member_id, ORG),
+                is_(none()),
+            )
 
 
 def test_admin_cannot_remove_another_admin():
@@ -667,55 +689,59 @@ def test_cannot_remove_owner():
 
 def test_owner_transfers_ownership():
     member_id = uuid7()
-    with given(
-        [
-            *_GIVEN,
-            _there_is_an_owner(),
-            there_is_a_user(
-                id=member_id,
-                email="member@example.com",
-                organization_id=ORG,
-                role=OrganizationRole.ADMIN,
-            ),
-        ]
-    ) as context:
-        with when("the owner transfers ownership to the admin"):
-            response = context.client.post(
-                f"/api/v1/organizations/{ORG}/transfer-ownership",
-                json={"user_id": str(member_id)},
-                headers=_auth(context),
-            )
+    with (
+        given(
+            [
+                *_GIVEN,
+                _there_is_an_owner(),
+                there_is_a_user(
+                    id=member_id,
+                    email="member@example.com",
+                    organization_id=ORG,
+                    role=OrganizationRole.ADMIN,
+                ),
+            ]
+        ) as context,
+        when("the owner transfers ownership to the admin"),
+    ):
+        response = context.client.post(
+            f"/api/v1/organizations/{ORG}/transfer-ownership",
+            json={"user_id": str(member_id)},
+            headers=_auth(context),
+        )
 
-            with then("ownership swaps atomically"):
-                assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
-                assert_that(_role_of(context, member_id), equal_to(OrganizationRole.OWNER))
-                assert_that(_role_of(context, OWNER_ID), equal_to(OrganizationRole.ADMIN))
+        with then("ownership swaps atomically"):
+            assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+            assert_that(_role_of(context, member_id), equal_to(OrganizationRole.OWNER))
+            assert_that(_role_of(context, OWNER_ID), equal_to(OrganizationRole.ADMIN))
 
 
 def test_admin_cannot_transfer_ownership():
     admin_id = uuid7()
-    with given(
-        [
-            *_GIVEN,
-            _there_is_an_owner(),
-            there_is_a_user(
-                id=admin_id,
-                email="admin@example.com",
-                organization_id=ORG,
-                role=OrganizationRole.ADMIN,
-            ),
-            there_is_an_access_token_for_user(user_id=admin_id),
-        ]
-    ) as context:
-        with when("a non-owner admin tries to transfer ownership"):
-            response = context.client.post(
-                f"/api/v1/organizations/{ORG}/transfer-ownership",
-                json={"user_id": str(admin_id)},
-                headers=_auth(context),
-            )
+    with (
+        given(
+            [
+                *_GIVEN,
+                _there_is_an_owner(),
+                there_is_a_user(
+                    id=admin_id,
+                    email="admin@example.com",
+                    organization_id=ORG,
+                    role=OrganizationRole.ADMIN,
+                ),
+                there_is_an_access_token_for_user(user_id=admin_id),
+            ]
+        ) as context,
+        when("a non-owner admin tries to transfer ownership"),
+    ):
+        response = context.client.post(
+            f"/api/v1/organizations/{ORG}/transfer-ownership",
+            json={"user_id": str(admin_id)},
+            headers=_auth(context),
+        )
 
-            with then("it is forbidden"):
-                assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+        with then("it is forbidden"):
+            assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
 def test_admin_without_membership_invite_cannot_resend_invite():

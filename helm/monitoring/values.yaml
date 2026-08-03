@@ -1,0 +1,462 @@
+# Namespace-scoped observability stack. Everything here lives in the release
+# namespace — the chart renders no CRDs, no cluster-scoped resources, and no
+# RBAC at all: the shared cluster's tenant deployer may not create
+# Roles/RoleBindings, so the two components that need Kubernetes API read
+# (Prometheus service discovery, kube-state-metrics) run under the existing
+# tenant ServiceAccount that already has namespaced read (agent-farm-user /
+# <ns>-user from the cluster's tenant chart). Neither of those pods is
+# exposed by ingress; the one exposed pod (Grafana) runs with no API access
+# and no token mounted.
+
+# Slack incoming-webhook URL for #alerts. Injected by helmfile from
+# SLACK_ALERTS_WEBHOOK_URL; rendered into a Secret and mounted into
+# Alertmanager (slack_api_url_file) so it never lands in a ConfigMap.
+slackWebhookUrl: ""
+
+prometheus:
+  # No Role/RoleBinding/ClusterRole rendered anywhere (tenant SA can't create
+  # them); see serviceAccounts below.
+  rbac:
+    create: false
+
+  serviceAccounts:
+    server:
+      # Reuse the tenant deploy SA: it already holds get/list/watch on
+      # pods/services/endpoints in this namespace, which is exactly what
+      # own-namespace service discovery needs. Cluster-internal pod only.
+      # helmfile overrides the name per environment (<namespace>-user, the
+      # tenant-chart convention: agent-farm-user / agent-farm-staging-user).
+      create: false
+      name: agent-farm-user
+
+  server:
+    # Single replica everywhere (also pinned for Grafana and Alertmanager):
+    # lean single-cluster setup, and it keeps upstream default changes from
+    # silently scaling the stack on a dependency bump.
+    replicaCount: 1
+    retention: 15d
+
+    # The tenant SA is created with automountServiceAccountToken: false;
+    # opt this pod back in (pod-level setting wins) so service discovery
+    # can talk to the API server.
+    automountServiceAccountToken: true
+
+    global:
+      scrape_interval: 30s
+      evaluation_interval: 1m
+
+    # Alertmanager lives at a fixed Service name in the same namespace
+    # (release "monitoring" + subchart "alertmanager"); static wiring avoids
+    # the chart's default cluster-wide pod discovery.
+    alertmanagers:
+      - static_configs:
+          - targets: ["monitoring-alertmanager:9093"]
+
+    persistentVolume:
+      enabled: true
+      size: 10Gi
+      # storageClass is set by helmfile from STORAGE_CLASS only when
+      # non-empty; omitting it here lets the cluster default apply.
+
+    resources:
+      requests:
+        memory: 512Mi
+        cpu: 100m
+      limits:
+        memory: 1Gi
+
+  # The chart's default jobs (kubelet/cAdvisor/apiserver/annotation-based
+  # discovery) need node- and cluster-level read we don't have on a shared
+  # cluster; consequence: no container CPU/memory metrics, dashboards stick
+  # to app-level and kube-state-metrics series. Only the localhost
+  # self-scrape stays on.
+  scrapeConfigs:
+    kubernetes-api-servers:
+      enabled: false
+    kubernetes-nodes:
+      enabled: false
+    kubernetes-nodes-cadvisor:
+      enabled: false
+    kubernetes-service-endpoints:
+      enabled: false
+    kubernetes-service-endpoints-slow:
+      enabled: false
+    prometheus-pushgateway:
+      enabled: false
+    kubernetes-services:
+      enabled: false
+    kubernetes-pods:
+      enabled: false
+    kubernetes-pods-slow:
+      enabled: false
+
+  serverFiles:
+    prometheus.yml:
+      # Our jobs. All discovery is own-namespace only, matching the `view`
+      # RoleBinding above.
+      scrape_configs:
+        # The API container runs two processes; each exposes its own
+        # /metrics. The endpoint label ("http" vs "ingest") tells the two
+        # targets apart — alerts rely on it.
+        - job_name: agentfarm-api
+          kubernetes_sd_configs:
+            - role: endpoints
+              namespaces:
+                own_namespace: true
+          relabel_configs:
+            - source_labels:
+                [
+                  __meta_kubernetes_service_label_app_kubernetes_io_name,
+                  __meta_kubernetes_endpoint_port_name,
+                ]
+              regex: agentfarm-api;(http|ingest)
+              action: keep
+            - source_labels: [__meta_kubernetes_endpoint_port_name]
+              target_label: endpoint
+
+        - job_name: litellm
+          kubernetes_sd_configs:
+            - role: endpoints
+              namespaces:
+                own_namespace: true
+          relabel_configs:
+            - source_labels:
+                [
+                  __meta_kubernetes_service_label_app_kubernetes_io_name,
+                  __meta_kubernetes_endpoint_port_name,
+                ]
+              regex: litellm;http
+              action: keep
+
+        # One Service per agent is created dynamically by the API; all of
+        # them carry the stable component label (builders/common.py::_labels).
+        # app/agent_name/org_id/org_name come from the Service, so they stay
+        # stable across pod generations (dashes sanitize to underscores).
+        - job_name: agent
+          kubernetes_sd_configs:
+            - role: endpoints
+              namespaces:
+                own_namespace: true
+          relabel_configs:
+            - source_labels:
+                [
+                  __meta_kubernetes_service_label_agentfarm_io_component,
+                  __meta_kubernetes_endpoint_port_name,
+                ]
+              regex: agent;healthz
+              action: keep
+            - source_labels: [__meta_kubernetes_service_label_app]
+              target_label: app
+            - source_labels: [__meta_kubernetes_service_label_agent_name]
+              target_label: agent_name
+            - source_labels: [__meta_kubernetes_service_label_org_id]
+              target_label: org_id
+            - source_labels: [__meta_kubernetes_service_label_org_name]
+              target_label: org_name
+
+        # Powers the restart/pod-label panels (kube_pod_* series).
+        - job_name: kube-state-metrics
+          kubernetes_sd_configs:
+            - role: endpoints
+              namespaces:
+                own_namespace: true
+          relabel_configs:
+            - source_labels:
+                [__meta_kubernetes_service_label_app_kubernetes_io_name]
+              regex: kube-state-metrics
+              action: keep
+
+    # Rendered into the server ConfigMap (plain toYaml — the {{ }} below are
+    # Prometheus alert templating, untouched by helm) and hot-reloaded.
+    # promtool unit tests in tests/alerts_test.yaml assert these rules,
+    # annotations included, verbatim.
+    alerting_rules.yml:
+      groups:
+        - name: agent-farm.rules
+          rules:
+            # --- system up (API + DB) ---
+            - alert: APIDown
+              expr: up{job="agentfarm-api", endpoint="http"} == 0
+              for: 2m
+              labels:
+                severity: critical
+              annotations:
+                summary: The agent-farm API is not responding to scrapes.
+                description: Prometheus cannot scrape the main API process on :8000.
+
+            - alert: APIAbsent
+              expr: absent(up{job="agentfarm-api", endpoint="http"})
+              for: 5m
+              labels:
+                severity: critical
+              annotations:
+                summary: The agent-farm API target has disappeared entirely.
+                description: No scrape target exists for the API — the Service is gone or discovery is broken.
+
+            - alert: IngestAPIDown
+              expr: up{job="agentfarm-api", endpoint="ingest"} == 0
+              for: 5m
+              labels:
+                severity: warning
+              annotations:
+                summary: The ingest API process is not responding to scrapes.
+                description: Agent telemetry (messages, tool calls) is not being recorded while this fires.
+
+            - alert: DatabaseDown
+              # min() drops the pod/instance labels so the alert identity
+              # survives API redeploys instead of resolving + re-firing on
+              # every rollout; keep_firing_for bridges the series gap while
+              # pods are swapped.
+              expr: min(agentfarm_database_up) == 0
+              for: 2m
+              keep_firing_for: 5m
+              labels:
+                severity: critical
+              annotations:
+                summary: The API cannot reach Postgres.
+                description: The database probe on the API /metrics endpoint is failing.
+
+            # --- error rates ---
+            # Two tiers: early warning at 5%, critical at the spec's 20%.
+            - alert: HighAPI5xxRate
+              expr: >-
+                (
+                  sum(rate(http_requests_total{job="agentfarm-api", status="5xx"}[5m]))
+                  /
+                  clamp_min(sum(rate(http_requests_total{job="agentfarm-api"}[5m])), 1e-9)
+                ) > 0.05
+                and sum(rate(http_requests_total{job="agentfarm-api"}[5m])) > 0.1
+              for: 5m
+              labels:
+                severity: warning
+              annotations:
+                summary: More than 5% of API requests are failing with 5xx.
+                description: Sustained server-error ratio over the last 5 minutes with non-trivial traffic.
+
+            - alert: HighAPI5xxRate
+              expr: >-
+                (
+                  sum(rate(http_requests_total{job="agentfarm-api", status="5xx"}[5m]))
+                  /
+                  clamp_min(sum(rate(http_requests_total{job="agentfarm-api"}[5m])), 1e-9)
+                ) > 0.2
+                and sum(rate(http_requests_total{job="agentfarm-api"}[5m])) > 0.1
+              for: 5m
+              labels:
+                severity: critical
+              annotations:
+                summary: More than 20% of API requests are failing with 5xx.
+                description: Sustained server-error ratio over the last 5 minutes with non-trivial traffic.
+
+            - alert: HighToolCallErrorRate
+              expr: >-
+                (
+                  sum(rate(agentfarm_tool_calls_total{status="error"}[15m]))
+                  /
+                  clamp_min(sum(rate(agentfarm_tool_calls_total[15m])), 1e-9)
+                ) > 0.25
+                and sum(rate(agentfarm_tool_calls_total[15m])) > 0.01
+              for: 10m
+              labels:
+                severity: warning
+              annotations:
+                summary: More than 25% of agent tool calls are failing.
+                description: Error ratio of ingested tool-call results over the last 15 minutes.
+
+            # --- agents running ---
+            - alert: AgentTargetDown
+              expr: up{job="agent"} == 0
+              for: 2m
+              labels:
+                severity: critical
+              annotations:
+                summary: Agent {{ $labels.agent_name }} (org {{ $labels.org_name }}) is not responding to scrapes.
+                description: The healthz server of agent {{ $labels.agent_name }} ({{ $labels.app }}) in org {{ $labels.org_name }} is unreachable.
+
+            - alert: AgentUnhealthy
+              expr: agent_healthz_ok{job="agent"} == 0 and agent_healthz_ever_connected{job="agent"} == 1
+              for: 10m
+              labels:
+                severity: warning
+              annotations:
+                summary: Agent {{ $labels.agent_name }} (org {{ $labels.org_name }}) lost its runtime connection.
+                description: The runtime of agent {{ $labels.agent_name }} ({{ $labels.app }}) in org {{ $labels.org_name }} was connected before and is now unhealthy.
+
+            - alert: AgentSlackTokensInvalid
+              expr: agent_slack_tokens_ok{job="agent"} == 0
+              for: 10m
+              labels:
+                severity: warning
+              annotations:
+                summary: Agent {{ $labels.agent_name }} (org {{ $labels.org_name }}) has invalid Slack tokens.
+                description: Slack token validation is failing for agent {{ $labels.agent_name }} ({{ $labels.app }}) in org {{ $labels.org_name }}; the agent cannot serve its workspace.
+
+            - alert: AgentsInErrorState
+              # max() drops pod/instance labels: stable identity across API
+              # redeploys, and a fresh replica's default-0 gauge can't mask
+              # the real count.
+              expr: max(agentfarm_agents_in_error) > 0
+              for: 5m
+              keep_firing_for: 5m
+              labels:
+                severity: warning
+              annotations:
+                summary: "{{ $value }} agent(s) are in ERROR state."
+                description: The control plane has marked agents as ERROR (see the agents table / UI for last_error).
+
+            # --- LLM health ---
+            - alert: LiteLLMDown
+              expr: up{job="litellm"} == 0 or absent(up{job="litellm"})
+              for: 3m
+              labels:
+                severity: critical
+              annotations:
+                summary: LiteLLM is not responding to scrapes.
+                description: The LiteLLM proxy is unreachable — agents cannot make LLM calls.
+
+            - alert: OpenRouterCreditsLow
+              # Gate on scrape_ok so a never-polled gauge (defaults to 0)
+              # cannot page "credits low" when the real problem is
+              # CreditsUnknown. max() drops pod/instance labels (stable
+              # identity across API redeploys) and ignores fresh replicas
+              # that still export default 0.
+              expr: >-
+                max(agentfarm_openrouter_credits_remaining) < 5
+                and max(agentfarm_openrouter_credits_scrape_ok) == 1
+              for: 15m
+              keep_firing_for: 5m
+              labels:
+                severity: critical
+              annotations:
+                summary: OpenRouter key credits below $5.
+                description: The API key's remaining credit limit is {{ $value | printf "%.2f" }} USD — raise the key limit or top up before requests start failing.
+
+            - alert: OpenRouterCreditsUnknown
+              # max(): healthy if any replica polls successfully; drops
+              # pod/instance labels so redeploys don't resolve + re-fire it.
+              expr: max(agentfarm_openrouter_credits_scrape_ok) == 0
+              for: 30m
+              keep_firing_for: 5m
+              labels:
+                severity: warning
+              annotations:
+                summary: OpenRouter credits cannot be polled.
+                description: The credits probe is failing — OPENROUTER_API_KEY missing/invalid on the API or the OpenRouter API is unreachable.
+
+  alertmanager:
+    enabled: true
+    replicaCount: 1
+    # The route/receivers merge over the subchart defaults; the receivers
+    # array replaces the default "default-receiver" entirely.
+    config:
+      global:
+        resolve_timeout: 5m
+        # Mounted from the alertmanager-slack-webhook Secret
+        # (templates/alertmanager-slack-secret.yaml) via extraSecretMounts —
+        # keeps the webhook out of the rendered ConfigMap.
+        slack_api_url_file: /etc/alertmanager-secrets/slack-webhook-url
+      route:
+        receiver: slack-alerts
+        # org_name keeps different organizations' incidents in separate
+        # Slack messages (alerts without the label group under one key).
+        group_by: ["alertname", "org_name"]
+        group_wait: 30s
+        group_interval: 5m
+        repeat_interval: 4h
+      receivers:
+        - name: slack-alerts
+          slack_configs:
+            - channel: "#alerts"
+              send_resolved: true
+              # environment comes from Prometheus external_labels (helmfile
+              # sets it from ENVIRONMENT) so staging and production are
+              # distinguishable in a shared channel.
+              title: >-
+                [{{ .Status | toUpper }}{{ if eq .Status "firing" }}:{{ .Alerts.Firing | len }}{{ end }}][{{ .CommonLabels.environment }}] {{ .CommonLabels.alertname }}
+              text: >-
+                {{ range .Alerts }}*{{ .Labels.alertname }}* ({{ .Labels.severity }}): {{ .Annotations.summary }}
+                {{ end }}
+    extraSecretMounts:
+      - name: slack-webhook
+        mountPath: /etc/alertmanager-secrets
+        secretName: alertmanager-slack-webhook
+        readOnly: true
+
+  kube-state-metrics:
+    enabled: true
+    # Namespace-scoped: watch only the release namespace, no RBAC rendered.
+    # Runs under the tenant deploy SA for pod read (same rationale as the
+    # prometheus server above; helmfile overrides the name per environment).
+    # Cluster-internal pod only.
+    releaseNamespace: true
+    rbac:
+      create: false
+    serviceAccount:
+      create: false
+      name: agent-farm-user
+    # Only kube_pod_* series are used (restart counts + label joins).
+    collectors:
+      - pods
+    # Expose the agent pods' stable `app` label as kube_pod_labels{label_app}
+    # so dashboards can group restarts by agent identity instead of
+    # per-generation pod names (an agent keeps its `app` across every pod).
+    metricLabelsAllowlist:
+      - pods=[app]
+
+  prometheus-node-exporter:
+    enabled: false
+  prometheus-pushgateway:
+    enabled: false
+
+grafana:
+  replicas: 1
+  # adminPassword is injected by helmfile from GRAFANA_ADMIN_PASSWORD.
+  adminPassword: ""
+  # The only ingress-exposed pod in the stack, so it gets the opposite
+  # treatment of prometheus/ksm: no RBAC, no sidecar, and no ServiceAccount
+  # token mounted — dashboards are mounted from the ConfigMap below instead
+  # of discovered via the Kubernetes API, so a Grafana compromise yields no
+  # cluster credentials.
+  rbac:
+    create: false
+  automountServiceAccountToken: false
+  testFramework:
+    enabled: false
+  # templates/dashboards-configmap.yaml renders every dashboards/*.json into
+  # this ConfigMap. Deliberately NOT labeled grafana_dashboard: the cluster's
+  # central Grafana runs a sidecar watching that label across ALL namespaces,
+  # and these dashboards are ours, not shared. Updates land on deploy (no
+  # hot-reload without the sidecar).
+  dashboardsConfigMaps:
+    default: grafana-dashboards
+  dashboardProviders:
+    dashboardproviders.yaml:
+      apiVersion: 1
+      providers:
+        - name: default
+          orgId: 1
+          folder: ""
+          type: file
+          options:
+            path: /var/lib/grafana/dashboards/default
+  datasources:
+    datasources.yaml:
+      apiVersion: 1
+      datasources:
+        - name: Prometheus
+          type: prometheus
+          access: proxy
+          url: http://monitoring-prometheus-server
+          isDefault: true
+  ingress:
+    enabled: true
+    ingressClassName: traefik
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt-http01
+      traefik.ingress.kubernetes.io/router.entrypoints: websecure
+      traefik.ingress.kubernetes.io/router.tls: "true"
+    # hosts and tls hosts are injected by helmfile from GRAFANA_HOST.
+    hosts: []
+    tls:
+      - secretName: grafana-tls
+        hosts: []

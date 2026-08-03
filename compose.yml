@@ -1,3 +1,17 @@
+# Local dev stack only — prod runs via Helm (see helm/, helmfile.yaml.gotmpl).
+# api/worker/ui run with source bind-mounted and dev servers in watch mode, so
+# `make up` gives you the same hot reload as `make dev-api`/`dev-ui`/`dev-worker`,
+# just fully containerized.
+
+x-api-env: &api-env
+  # Container-network hostnames override the localhost defaults in .env.
+  DB_CONNECTION_URL: postgresql://${POSTGRES_USER:?POSTGRES_USER is required}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@db:5432/${POSTGRES_DB:?POSTGRES_DB is required}
+  REDIS_URL: redis://redis:6379/0
+  SECRET_SIGNING_KEY: ${SECRET_SIGNING_KEY:?SECRET_SIGNING_KEY is required}
+  PLATFORM_ADMIN_CREDENTIALS: ${PLATFORM_ADMIN_CREDENTIALS:?PLATFORM_ADMIN_CREDENTIALS is required}
+  ENVIRONMENT: ${ENVIRONMENT:?ENVIRONMENT is required}
+  UI_APP_URL: ${UI_APP_URL:?UI_APP_URL is required}
+
 services:
   db:
     image: postgres:16
@@ -10,9 +24,23 @@ services:
     ports:
       - "${POSTGRES_PORT:?POSTGRES_PORT is required}:5432"
     volumes:
-      - aai_db_postgres_data:/var/lib/postgresql
+      - aai_db_postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:?POSTGRES_USER is required} -d ${POSTGRES_DB:?POSTGRES_DB is required}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    container_name: aai_redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - aai_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 5s
       retries: 20
@@ -23,38 +51,69 @@ services:
       dockerfile: api/Dockerfile
     container_name: aai_api
     restart: unless-stopped
+    command: >
+      sh -c "uvicorn api.ingest_main:app --host 0.0.0.0 --port 8001 --reload &
+             exec fastapi dev api/main.py --host 0.0.0.0 --port 8000"
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Pulls in everything else defined in .env (AGENT_*, LITELLM_*, OPENROUTER_*,
+    # EMAIL_*, GOOGLE_CLOUD_*, ...); `environment:` below overrides only the
+    # values that must point at in-network container hostnames.
+    env_file:
+      - .env
     environment:
-      DB_CONNECTION_URL: postgresql://${POSTGRES_USER:?POSTGRES_USER is required}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@db:5432/${POSTGRES_DB:?POSTGRES_DB is required}
-      SECRET_SIGNING_KEY: ${SECRET_SIGNING_KEY:?SECRET_SIGNING_KEY is required}
-      SUPER_USER_CREDENTIALS: ${SUPER_USER_CREDENTIALS:?SUPER_USER_CREDENTIALS is required}
-      EMAIL_SERVER_CREDENTIAL: ${EMAIL_SERVER_CREDENTIAL-}
-      EMAIL_SMTP_SERVER: ${EMAIL_SMTP_SERVER-}
-      # Gmail "Authenticate with Google" OAuth client (optional; empty disables the flow).
-      GOOGLE_CLOUD_CLIENT_ID: ${GOOGLE_CLOUD_CLIENT_ID-}
-      GOOGLE_CLOUD_CLIENT_SECRET: ${GOOGLE_CLOUD_CLIENT_SECRET-}
-      ENVIRONMENT: ${ENVIRONMENT:?ENVIRONMENT is required}
-      UI_APP_URL: ${UI_APP_URL:?UI_APP_URL is required}
+      <<: *api-env
+    volumes:
+      - ./api:/app/api
     ports:
       - "${API_PORT:?API_PORT is required}:8000"
+      - "8001:8001"
+
+  worker:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    container_name: aai_worker
+    restart: unless-stopped
+    command: ["dramatiq", "api.worker_app", "--processes", "1", "--threads", "4", "--watch", "/app/api"]
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      <<: *api-env
+    volumes:
+      - ./api:/app/api
 
   ui:
     build:
       context: ./ui
       dockerfile: Dockerfile
-      args:
-        NEXT_PUBLIC_BACKEND_URL: http://api:8000
+      target: deps
     container_name: aai_ui
     restart: unless-stopped
+    command: sh -c "pnpm install && pnpm exec next dev --hostname 0.0.0.0 --port 3000"
     depends_on:
       api:
         condition: service_started
     environment:
       NEXT_PUBLIC_BACKEND_URL: http://api:8000
+      # Non-interactive: without this, pnpm prompts before pruning node_modules
+      # when the lockfile changes, which hangs forever with no TTY in the container.
+      CI: "true"
+    volumes:
+      - ./ui:/app
+      - aai_ui_node_modules:/app/node_modules
     ports:
       - "3000:3000"
 
 volumes:
   aai_db_postgres_data:
+  aai_redis_data:
+  aai_ui_node_modules:

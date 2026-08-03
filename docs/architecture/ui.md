@@ -10,7 +10,7 @@ The root layout composes `NuqsAdapter`, `QueryProvider`, `TooltipProvider`, and 
 
 App Router pages are composition points. Feature behavior belongs under `../../ui/src/features/`; authentication behavior belongs in `../../ui/src/auth/`; shared transport and query infrastructure belongs in `../../ui/src/shared/`.
 
-The active organization comes from `/dashboard/[orgId]` when present, otherwise from remembered/default organization state. `OrganizationProvider` applies `X-Organization-Id` to the shared API client before child queries execute and redirects inaccessible organization URLs to an available fallback.
+The active organization comes from `/dashboard/[orgId]`. Platform View lives under `/dashboard/platform` and has no active Organization. `OrganizationProvider` keeps remembered organization state only so `/dashboard` and the switcher can return to Organization View; org-scoped API hooks build `/api/v1/organizations/{organization_id}/...` URLs instead of mutating shared request headers. Inaccessible organization URLs redirect to an available fallback.
 
 ## API and query invariants
 
@@ -43,7 +43,7 @@ Use `make lint-ui`, `make check-ui`, and relevant Playwright tests for changed b
 | API client and interceptors                | `../../ui/src/shared/api/`                                                                                              |
 | Query-key factory                          | `../../ui/src/shared/query-keys.ts`                                                                                     |
 | Route boundaries                           | `../../ui/src/app/error.tsx`, `../../ui/src/app/dashboard/loading.tsx`, `../../ui/src/app/dashboard/error.tsx`                      |
-| SSE proxy and client                       | `../../ui/src/app/api/v1/agents/[agentId]/logs/stream/route.ts`, `../../ui/src/features/agents/hooks/use-agent-log-stream.ts` |
+| SSE proxy and client                       | `../../ui/src/app/api/v1/organizations/[organizationId]/agents/[agentId]/logs/stream/route.ts`, `../../ui/src/features/agents/hooks/use-agent-log-stream.ts` |
 | Playwright configuration and support       | `../../ui/playwright.config.ts`, `../../ui/tests/`                                                                            |
 
 ## Change impact

@@ -24,9 +24,9 @@ Nearby domains are the implementation template. Costs and Ingest intentionally d
 
 ## Tenancy and authorization
 
-Authentication builds `CurrentUserContext`; organization-scoped services derive the active organization from it. `X-Organization-Id` selects the active organization, with the configured default organization as fallback. Normal users require membership. Tenant resolution synthesizes owner-level organization context for superusers, and authorization helpers explicitly preserve the superuser bypass.
+Authentication builds `CurrentUserContext`; organization-scoped services derive the active organization from it. Organization-scoped routes carry the organization ID in the URL, generally as `/api/v1/organizations/{organization_id}/...`. Routes without an `organization_id` path parameter have no active Organization. Org-scoped access always requires a real persisted Membership — Platform Administrators receive no synthesized or implicit organization role, and an org-scoped request from a Platform Administrator without a Membership in that Organization is rejected the same as for any other user. Platform-only routes use the platform-admin dependency without resolving an active Organization. Platform administration routes live under `/api/v1/platform/...`.
 
-The active Membership's fixed Organization Role is resolved through an immutable code-owned Permission mapping on each request. Organization Roles govern Organization, Membership, Template, Skill, and Organization-summary capabilities; protected Organization Owner recovery actions remain explicit governance invariants. Database-backed Agent Access Roles separately govern one Agent aggregate, while Organization Owner/Admin and superuser in explicit Organization context have implicit Agent Owner authority. Agent user-facing queries apply visibility in repositories before count and pagination, and Agent services use the shared authorization module for effective operations and action checks. Runtime Ingest and Teams webhook authentication remain separate non-user boundaries.
+The active Membership's fixed Organization Role is resolved through an immutable code-owned Permission mapping on each request. Organization Roles govern Organization, Membership, Template, Skill, and Organization-summary capabilities; protected Organization Owner recovery actions remain explicit governance invariants. Platform Administrators use platform routes and do not receive implicit Organization authority. Database-backed Agent Access Roles separately govern one Agent aggregate, while Organization Owner/Admin have implicit Agent Owner authority. Agent user-facing queries apply visibility in repositories before count and pagination, and Agent services use the shared authorization module for effective operations and action checks. Runtime Ingest and Teams webhook authentication remain separate non-user boundaries.
 
 Tenant-sensitive reads generally return 404 when a resource is absent, belongs to another Organization, or is outside the caller's Agent Access visibility. A visible resource with a missing action Permission returns 403. Organization administration retains its documented 403 behavior. The integration contract is exercised in `../../api/tests/integration/test_cross_org_isolation.py`, `../../api/tests/integration/test_tenant_resolution.py`, and `../../api/tests/integration/test_agent_rbac.py`.
 
@@ -34,11 +34,13 @@ Tenant-sensitive reads generally return 404 when a resource is absent, belongs t
 
 Most repositories reuse `../../api/infrastructure/postgres/repository.py`. Delegate operations open and commit a session per operation. A service workflow spanning several repository calls is therefore not automatically atomic; workflows requiring all-or-nothing behavior need an explicit repository transaction boundary.
 
+Event-producing workflows use the Domain Events outbox boundary instead of extending the generic delegate. A domain-specific repository operation owns one SQLModel session and one commit for business state, one immutable `event_outbox_message` row, and one `event_delivery` row per intended Event Handler. The session-aware outbox staging interface stages rows inside that repository-owned session without committing or opening another session; routes must not receive database sessions.
+
 Database records generally inherit UUID and timestamp fields from `../../api/infrastructure/postgres/models.py`. Schema evolution belongs in `../../api/migrations/versions/`; integration setup applies Alembic heads to a PostgreSQL test container.
 
 ## Startup data
 
-The application lifespan ensures the default superuser and organization, records their owner membership, seeds built-in aai-cli skills, and seeds predefined templates. Changes to bootstrap entities can affect startup, tests, and predefined catalog behavior simultaneously.
+The application lifespan ensures a bootstrap Platform Administrator, seeds built-in aai-cli skills, and seeds the global predefined template catalogue into the `platform_template` table. The system has no default Organization. Platform-owned resources are global resources, not Organization-owned rows: built-in skills use `organization_id = NULL` in the `skill` table, and predefined templates live in a dedicated `platform_template` table with no `organization_id` column. Agents pin a template via one of two mutually-exclusive FKs (`platform_template_id` or `agent_template_id`), enforced by a CHECK constraint. Platform-admin behavior must use the platform-admin seam rather than adding dependencies on an Organization. Changes to bootstrap entities can affect startup, tests, and predefined catalog behavior simultaneously.
 
 ## Testing
 
@@ -55,12 +57,14 @@ The application lifespan ensures the default superuser and organization, records
 | Ingest API composition and process entry | `../../api/ingest_app.py`, `../../api/ingest_main.py`, `../../api/start.sh` |
 | Injector configuration | `../../api/core/utils.py`, `../../api/infrastructure/app.py` |
 | Auth and tenant resolution | `../../api/domains/auth/utils.py`, `../../api/domains/auth/models.py` |
+| Platform administration authority | `../../api/domains/platform_admin/service.py` |
 | Permission and Agent authorization | `../../api/domains/rbac/catalog.py`, `../../api/domains/rbac/policy.py`, `../../api/domains/agents/authorization.py` |
 | Shared persistence delegate | `../../api/infrastructure/postgres/repository.py` |
+| Domain Event outbox persistence | `../../api/domains/events/`, `../features/domain-events.md` |
 | Base database model | `../../api/infrastructure/postgres/models.py` |
 | Migrations | `../../api/migrations/versions/` |
 | Test app and database setup | `../../api/tests/conftest.py`, `../../api/tests/core/` |
 
 ## Change impact
 
-When adding or moving a product router, update `../../api/api_app.py`; ingest routes are registered through `../../api/ingest_app.py`. When a schema changes, update the database model, API DTO where required, migration, integration tests, and corresponding UI Zod schema. When a workflow spans repositories, verify whether partial persistence is acceptable before relying on the default session-per-operation behavior.
+When adding or moving a product router, update `../../api/api_app.py`; ingest routes are registered through `../../api/ingest_app.py`. When a schema changes, update the database model, API DTO where required, migration, integration tests, and corresponding UI Zod schema. When a workflow spans repositories, verify whether partial persistence is acceptable before relying on the default session-per-operation behavior. When a mutation produces a Domain Event, use a domain-specific transaction boundary and update the Domain Events feature guide if the envelope, delivery lifecycle, privacy rules, or excluded scope changes.

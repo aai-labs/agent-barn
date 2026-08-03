@@ -78,4 +78,4 @@ def parse_jsonl(raw: str, session_id: str) -> tuple[list[ParsedToolCall], list[P
 
 
 def _ms_to_utc(ts_ms: int) -> datetime.datetime:
-    return datetime.datetime.fromtimestamp(ts_ms / 1000.0, tz=datetime.timezone.utc)
+    return datetime.datetime.fromtimestamp(ts_ms / 1000.0, tz=datetime.UTC)

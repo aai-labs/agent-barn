@@ -34,9 +34,7 @@ def _cleanup_reaction(event, gateway) -> None:
     if remove_reaction is None:
         return
     try:
-        asyncio.get_running_loop().create_task(
-            remove_reaction(channel_id, message_id, "eyes")
-        )
+        asyncio.get_running_loop().create_task(remove_reaction(channel_id, message_id, "eyes"))
     except RuntimeError:
         return
 

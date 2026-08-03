@@ -34,6 +34,7 @@ export interface IntegrationProvider {
 export interface IntegrationDraft {
   provider: string;
   content: Record<string, string | string[]>;
+  sharedCredentialId?: string;
 }
 
 export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
@@ -128,6 +129,15 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
       { key: "refreshToken", label: "Refresh token", type: "secret", required: true, hint: "OAuth 2.0 refresh token for the Zoho Mail account" },
     ],
   },
+  {
+    id: "firecrawl",
+    label: "Firecrawl",
+    scopeNote: "Optional — agents use the platform Firecrawl by default. Provide your own API key and URL to use Firecrawl Cloud or another instance.",
+    fields: [
+      { key: "apiKey", label: "API key", type: "secret", required: true, placeholder: "fc-…" },
+      { key: "baseUrl", label: "Base URL", type: "text", required: false, placeholder: "https://api.firecrawl.dev", hint: "Leave empty to use the platform's self-hosted Firecrawl." },
+    ],
+  },
   // zoho_calendar disabled: not currently offered as an integration. Re-enable by
   // uncommenting if needed again.
   // {
@@ -182,6 +192,7 @@ export function isOAuthConnected(draft: IntegrationDraft): boolean {
 // True if any added integration is missing a required field — used to gate "Hire".
 export function hasIncompleteIntegration(integrations: IntegrationDraft[]): boolean {
   return integrations.some((draft) => {
+    if (draft.sharedCredentialId) return false;
     const provider = getIntegrationProvider(draft.provider);
     if (!provider) return true;
     // OAuth providers have no manual fields; they're complete once connected.

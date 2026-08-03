@@ -1,0 +1,37 @@
+# Staging cluster prerequisite for agent-farm, applied outside helm.
+#
+# Same purpose as k8s/agent-farm-user.yaml (the agent-farm-user ServiceAccount +
+# RBAC the API's litellm-key pre-install Job runs as), but scoped to the
+# agent-farm-staging namespace. The Namespace object is intentionally omitted:
+# agent-farm-staging is created out-of-band, and a namespace-scoped kubeconfig
+# can't GET/create a cluster-scoped Namespace — including it would make
+# `kubectl apply` fail. Applying this is idempotent — a no-op where it exists.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: agent-farm-user
+  namespace: agent-farm-staging
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: agent-farm-user
+  namespace: agent-farm-staging
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: agent-farm-user
+  namespace: agent-farm-staging
+subjects:
+  - kind: ServiceAccount
+    name: agent-farm-user
+    namespace: agent-farm-staging
+roleRef:
+  kind: Role
+  name: agent-farm-user
+  apiGroup: rbac.authorization.k8s.io

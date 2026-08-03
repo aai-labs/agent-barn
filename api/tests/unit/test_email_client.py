@@ -1,7 +1,7 @@
 from email.message import Message
 from unittest.mock import MagicMock
 
-from api.infrastructure.email.client import EmailClient, LOGO_CONTENT_ID
+from api.infrastructure.email.client import LOGO_CONTENT_ID, EmailClient
 from api.infrastructure.email.models import Email
 
 

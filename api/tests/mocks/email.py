@@ -1,5 +1,6 @@
-from injector import Module, provider, singleton
 from typing import cast
+
+from injector import Module, provider, singleton
 
 from api.infrastructure.email.client import EmailClient
 from api.infrastructure.email.models import Email

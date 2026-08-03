@@ -1,13 +1,16 @@
 import enum
 from datetime import datetime
 from uuid import UUID
+
 import sqlalchemy as sa
 from fastapi import Query
-from sqlmodel import Column, Field as SqlField
+from pydantic import Base64Bytes, ConfigDict, Field
+from pydantic import BaseModel as PydanticBaseModel
+from sqlmodel import Column
+from sqlmodel import Field as SqlField
+
 from api.domains.agents.models import SecretProvider
 from api.infrastructure.postgres.models import BaseModel
-from pydantic import Base64Bytes, BaseModel as PydanticBaseModel
-from pydantic import ConfigDict, Field
 
 
 class SkillSource(str, enum.Enum):

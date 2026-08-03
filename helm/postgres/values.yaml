@@ -27,3 +27,6 @@ resources:
   limits:
     memory: 512Mi
     cpu: 500m
+
+# Extra flags passed to the postgres process (e.g. "-c key=value").
+args: []

@@ -57,8 +57,25 @@ class _FakeCoreApi:
         self._log_text = log_text
         self._raises_on = raises_on or {}
 
+    def _maybe_raise(self, key):
+        if key in self._raises_on:
+            raise self._raises_on[key]
+
     def list_namespaced_service(self, *_, label_selector=""):
         return SimpleNamespace(items=[self._resource] if self._resource else [])
+
+    def create_namespaced_service(self, _, body):
+        self._maybe_raise("create")
+        return body
+
+    def read_namespaced_service(self, *_):
+        self._maybe_raise("read")
+        return self._resource
+
+    def patch_namespaced_service(self, name, namespace, body):
+        self._maybe_raise("patch")
+        self.patched_service = (name, namespace, body)
+        return self._resource
 
     def list_namespaced_pod(self, namespace, label_selector=""):
         return SimpleNamespace(items=self._pods)
@@ -262,3 +279,43 @@ def test_stream_pod_logs_returns_empty_when_no_pod():
 
         with then("no lines are yielded"):
             assert_that(lines, equal_to([]))
+
+
+def test_create_service_returns_created_resource():
+    from kubernetes.client import V1Service
+
+    manifest = V1Service(metadata=V1ObjectMeta(name="agent-x"))
+    k8s = _make_client(core_api=_FakeCoreApi())
+    result = k8s.create_service("agent-farm", manifest)
+    assert_that(result.metadata.name, equal_to("agent-x"))
+
+
+def test_create_service_refreshes_labels_on_conflict():
+    """A restart must propagate new monitoring labels (org-name, component)
+    onto the pre-existing Service instead of silently keeping stale ones."""
+    from kubernetes.client import V1Service
+
+    existing = V1Service(metadata=V1ObjectMeta(name="agent-x", labels={"app": "agent-x"}))
+    core = _FakeCoreApi(resource=existing, raises_on={"create": ApiException(status=409)})
+    k8s = _make_client(core_api=core)
+    desired_labels = {"app": "agent-x", "org-name": "acme", "org-id": "o1"}
+    manifest = V1Service(metadata=V1ObjectMeta(name="agent-x", labels=desired_labels))
+
+    result = k8s.create_service("agent-farm", manifest)
+
+    name, namespace, body = core.patched_service
+    assert_that(name, equal_to("agent-x"))
+    assert_that(namespace, equal_to("agent-farm"))
+    assert_that(body["metadata"]["labels"], equal_to(desired_labels))
+    assert_that(result, equal_to(existing))
+
+
+def test_create_service_propagates_non_conflict_errors():
+    from kubernetes.client import V1Service
+
+    core = _FakeCoreApi(raises_on={"create": ApiException(status=500)})
+    k8s = _make_client(core_api=core)
+    assert_that(
+        calling(k8s.create_service).with_args("agent-farm", V1Service(metadata=V1ObjectMeta(name="agent-x"))),
+        raises(ApiException),
+    )

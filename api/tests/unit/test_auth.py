@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from uuid import uuid7
 
 from fastapi import HTTPException
@@ -27,13 +27,13 @@ def test_i_can_save_and_get_refresh_token():
 
         with when("I save a refresh token"):
             token = "sample_refresh_token"
-            expires_at = datetime.now(timezone.utc) + timedelta(days=15)
+            expires_at = datetime.now(UTC) + timedelta(days=15)
             refresh_token = RefreshToken(token=token, user_id=user_id, expires_at=expires_at, stamp="stamp")
             repository.save(refresh_token)
 
             with then("it should be retrievable"):
                 saved = repository.get(token)
-                assert_that(saved, is_not(none()))
+                assert saved is not None
                 assert_that(saved.user_id, equal_to(user_id))
 
 
@@ -71,7 +71,7 @@ def test_i_cannot_verify_expired_refresh_token():
 
         with when("I verify an expired token"):
             token = "expired_refresh_token"
-            expired = datetime.now(timezone.utc) - timedelta(days=1)
+            expired = datetime.now(UTC) - timedelta(days=1)
             repository.save(RefreshToken(token=token, user_id=user_id, expires_at=expired, stamp="stamp"))
 
             with then("it should raise HTTPException"):

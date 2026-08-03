@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/shared/api";
+import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
 
 import {
   AgentAccessSettingsRead,
@@ -13,7 +14,8 @@ import { agentsKey } from "../utils";
 
 export function useAgentShareSettings(agentId: string | undefined, enabled = true) {
   const queryClient = useQueryClient();
-  const url = `/api/v1/agents/${agentId}/share`;
+  const orgApiBase = useOrganizationApiBase();
+  const url = `${orgApiBase}/agents/${agentId}/share`;
 
   const query = useQuery({
     queryKey: agentsKey.shareSettings(agentId ?? ""),

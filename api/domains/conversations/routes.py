@@ -9,13 +9,13 @@ from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.routes import get_current_user
 from api.domains.conversations.models import (
     ConversationChannelRead,
-    ConversationThreadsPage,
     ConversationsCursor,
     ConversationsFilter,
+    ConversationThreadsPage,
 )
 from api.domains.conversations.service import ConversationService
 
-conversations_router = APIRouter(prefix="/agents", tags=["conversations"])
+conversations_router = APIRouter(prefix="/organizations/{organization_id}/agents", tags=["conversations"])
 
 
 def get_conversations_filter(

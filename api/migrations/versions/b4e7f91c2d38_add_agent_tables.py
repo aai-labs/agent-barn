@@ -6,16 +6,16 @@ Create Date: 2026-05-14 00:00:00.000000
 
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "b4e7f91c2d38"
-down_revision: Union[str, None] = "8f3c2a7d9b10"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "8f3c2a7d9b10"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 agent_status_enum = postgresql.ENUM("STOPPED", "RUNNING", "ERROR", name="agentstatus", create_type=False)
 

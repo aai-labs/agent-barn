@@ -276,10 +276,10 @@ test.describe("Settings — Skills panel (pagination)", () => {
     }));
     const page2Skills = [{ ...mockCustomSkill, name: "skill-page2-0" }];
 
-    await page.route("**/api/v1/skills*", async (route) => {
+    await page.route("**/api/v1/organizations/*/skills*", async (route) => {
       if (route.request().method() !== "GET") { await route.fallback(); return; }
       const url = new URL(route.request().url());
-      if (url.pathname !== "/api/v1/skills") { await route.fallback(); return; }
+      if (!/\/api\/v1\/organizations\/[^/]+\/skills$/.test(url.pathname)) { await route.fallback(); return; }
       const pageNum = Number(url.searchParams.get("page") ?? "1");
       await route.fulfill({
         status: 200,
@@ -311,10 +311,10 @@ test.describe("Settings — Skills panel (pagination)", () => {
       name: `skill-${i}`,
     }));
 
-    await page.route("**/api/v1/skills*", async (route) => {
+    await page.route("**/api/v1/organizations/*/skills*", async (route) => {
       if (route.request().method() !== "GET") { await route.fallback(); return; }
       const url = new URL(route.request().url());
-      if (url.pathname !== "/api/v1/skills") { await route.fallback(); return; }
+      if (!/\/api\/v1\/organizations\/[^/]+\/skills$/.test(url.pathname)) { await route.fallback(); return; }
       const search = url.searchParams.get("search")?.toLowerCase();
       const pageNum = Number(url.searchParams.get("page") ?? "1");
       const items = search

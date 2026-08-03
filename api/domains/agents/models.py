@@ -8,7 +8,8 @@ import sqlalchemy as sa
 from fastapi import Query
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic import ConfigDict, Field, model_validator
-from sqlmodel import Column, Enum, Field as SqlField, Index
+from sqlmodel import Column, Enum, Index
+from sqlmodel import Field as SqlField
 
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.users.organization_users.models import OrganizationRole
@@ -73,6 +74,7 @@ class SecretProvider(str, enum.Enum):
     GOOGLE_CALENDAR = "google_calendar"
     ZOHO_MAIL = "zoho_mail"
     ZOHO_CALENDAR = "zoho_calendar"
+    FIRECRAWL = "firecrawl"
 
 
 # Predefined display labels — NOT user-entered; the backend stamps these by provider.
@@ -85,6 +87,7 @@ PROVIDER_DISPLAY_NAMES: dict[SecretProvider, str] = {
     SecretProvider.GOOGLE_CALENDAR: "Google Calendar credential",
     SecretProvider.ZOHO_MAIL: "Zoho Mail credential",
     SecretProvider.ZOHO_CALENDAR: "Zoho Calendar credential",
+    SecretProvider.FIRECRAWL: "Firecrawl credential",
 }
 
 
@@ -172,6 +175,11 @@ class ZohoCalendarContent(SecretContent):
     caldav_url: str
 
 
+class FirecrawlContent(SecretContent):
+    api_key: str
+    base_url: str = ""
+
+
 PROVIDER_CONTENT_MODELS: dict[SecretProvider, type[SecretContent]] = {
     SecretProvider.GITHUB: GithubContent,
     SecretProvider.JIRA: JiraContent,
@@ -181,6 +189,7 @@ PROVIDER_CONTENT_MODELS: dict[SecretProvider, type[SecretContent]] = {
     SecretProvider.GOOGLE_CALENDAR: GoogleCalendarContent,
     SecretProvider.ZOHO_MAIL: ZohoMailContent,
     SecretProvider.ZOHO_CALENDAR: ZohoCalendarContent,
+    SecretProvider.FIRECRAWL: FirecrawlContent,
 }
 
 
@@ -210,15 +219,15 @@ class Agent(BaseModel, table=True):
             "organization_id",
             name="uq_agent_id_organization",
         ),
-        sa.ForeignKeyConstraint(
-            ["organization_id", "template_slug", "template_version"],
-            [
-                "agent_template.organization_id",
-                "agent_template.template_slug",
-                "agent_template.version",
-            ],
-            name="fk_agent_template_slug_version",
-            ondelete="RESTRICT",
+        # An active agent pins exactly one template version via one of two
+        # mutually-exclusive FKs: platform_template_id for a global predefined
+        # template, or agent_template_id for an org-scoped custom/fork template.
+        # Soft-deleted agents may be detached when their old template lineage is
+        # purged.
+        sa.CheckConstraint(
+            "((deleted_at IS NOT NULL) AND platform_template_id IS NULL AND agent_template_id IS NULL) "
+            "OR ((platform_template_id IS NULL) <> (agent_template_id IS NULL))",
+            name="ck_agent_template_pin_state",
         ),
     )
 
@@ -247,8 +256,21 @@ class Agent(BaseModel, table=True):
         nullable=True,
         sa_type=sa.DateTime(timezone=True),  # type: ignore
     )
-    template_slug: str = SqlField(nullable=False, max_length=255)
-    template_version: int = SqlField(nullable=False)
+    # Template pin: active agents set exactly one of platform_template_id /
+    # agent_template_id (enforced by ck_agent_template_pin_state). Soft-deleted
+    # agents may be detached by template deletion.
+    platform_template_id: UUID | None = SqlField(
+        default=None,
+        foreign_key="platform_template.id",
+        nullable=True,
+        ondelete="RESTRICT",
+    )
+    agent_template_id: UUID | None = SqlField(
+        default=None,
+        foreign_key="agent_template.id",
+        nullable=True,
+        ondelete="RESTRICT",
+    )
     model: str = SqlField(nullable=False, default="")
     platform: AgentPlatform = SqlField(
         default=AgentPlatform.SLACK,
@@ -388,12 +410,30 @@ class AgentTelegramConfig(BaseModel, table=True):
 class AgentSecret(BaseModel, table=True):
     __tablename__: str = "agent_secret"
 
-    __table_args__ = (sa.UniqueConstraint("agent_id", "provider", name="uq_agent_secret_agent_provider"),)
+    __table_args__ = (
+        sa.UniqueConstraint("agent_id", "provider", name="uq_agent_secret_agent_provider"),
+        sa.CheckConstraint(
+            "(shared_credential_id IS NULL AND content IS NOT NULL) OR "
+            "(shared_credential_id IS NOT NULL AND content IS NULL)",
+            name="ck_agent_secret_content_xor_shared",
+        ),
+        # Postgres does not index the referencing side of an FK; without this,
+        # reference counts and RESTRICT enforcement both scan the table.
+        sa.Index("ix_agent_secret_shared_credential_id", "shared_credential_id"),
+    )
 
     agent_id: UUID = SqlField(foreign_key="agent.id", nullable=False, ondelete="CASCADE")
     provider: SecretProvider = SqlField(sa_column=Column(sa.String(), nullable=False))
     secret_name: str = SqlField(nullable=False, max_length=255)  # predefined label
-    content: str = SqlField(sa_column=Column(sa.Text(), nullable=False))  # Fernet-encrypted JSON blob
+    content: str | None = SqlField(
+        sa_column=Column(sa.Text(), nullable=True)
+    )  # Fernet-encrypted JSON blob; NULL when shared_credential_id is set
+    shared_credential_id: UUID | None = SqlField(
+        default=None,
+        foreign_key="shared_credential.id",
+        nullable=True,
+        ondelete="RESTRICT",
+    )
 
 
 class AgentSkill(BaseModel, table=True):
@@ -429,6 +469,26 @@ class AgentLogSnapshot(BaseModel, table=True):
     byte_size: int = SqlField(nullable=False)
 
 
+class AgentLifecycleEmailReceipt(BaseModel, table=True):
+    """Idempotency record: a recipient has already been emailed for an Event Delivery.
+
+    Keyed by (delivery_id, recipient_email) rather than event_id alone because a single
+    delivery attempt can fan out to several recipients, and a retry must only re-notify
+    the recipients that failed last time.
+    """
+
+    __tablename__: str = "agent_lifecycle_email_receipt"
+
+    __table_args__ = (
+        sa.UniqueConstraint(
+            "delivery_id", "recipient_email", name="uq_agent_lifecycle_email_receipt_delivery_recipient"
+        ),
+    )
+
+    delivery_id: UUID = SqlField(foreign_key="event_delivery.id", nullable=False, ondelete="CASCADE")
+    recipient_email: str = SqlField(nullable=False, max_length=320)
+
+
 class AgentTemplateSkill(BaseModel, table=True):
     __tablename__: str = "agent_template_skill"
 
@@ -441,14 +501,30 @@ class AgentTemplateSkill(BaseModel, table=True):
     skill_id: UUID = SqlField(foreign_key="skill.id", nullable=False, ondelete="RESTRICT")
 
 
+class PlatformTemplateSkill(BaseModel, table=True):
+    __tablename__: str = "platform_template_skill"
+
+    __table_args__ = (
+        sa.UniqueConstraint("template_id", "skill_id", name="uq_platform_template_skill"),
+        sa.Index("ix_platform_template_skill_template", "template_id"),
+    )
+
+    template_id: UUID = SqlField(foreign_key="platform_template.id", nullable=False, ondelete="CASCADE")
+    skill_id: UUID = SqlField(foreign_key="skill.id", nullable=False, ondelete="RESTRICT")
+
+
 class AgentSecretCreate(PydanticBaseModel):  # no secret_name — backend stamps it
     provider: SecretProvider
     content: dict
 
     @model_validator(mode="after")
-    def validate_provider_content(self) -> "AgentSecretCreate":
+    def validate_provider_content(self) -> AgentSecretCreate:
         validate_content(self.provider, self.content)
         return self
+
+
+class AgentSharedCredentialAttach(PydanticBaseModel):
+    shared_credential_id: UUID
 
 
 class AgentCreate(PydanticBaseModel):
@@ -480,27 +556,26 @@ class AgentCreate(PydanticBaseModel):
     model: str | None = None
     # Integration credentials (optional)
     secrets: list[AgentSecretCreate] = Field(default_factory=list)
+    shared_credentials: list[AgentSharedCredentialAttach] = Field(default_factory=list)
     # Custom org skills to assign on creation (optional)
     skill_ids: list[UUID] = Field(default_factory=list)
     approval_mode: CommandApprovalMode = CommandApprovalMode.AUTO
 
     @model_validator(mode="after")
-    def validate_platform_credentials(self) -> "AgentCreate":
+    def validate_platform_credentials(self) -> AgentCreate:
         if self.agent_type == AgentType.HERMES and self.platform == AgentPlatform.TEAMS:
             raise ValueError("Hermes agents do not support the Teams platform")
-        if self.platform == AgentPlatform.SLACK:
-            if not self.slack_bot_token or not self.slack_app_token:
-                raise ValueError("slack_bot_token and slack_app_token are required for Slack agents")
+        if self.platform == AgentPlatform.SLACK and (not self.slack_bot_token or not self.slack_app_token):
+            raise ValueError("slack_bot_token and slack_app_token are required for Slack agents")
         elif self.platform == AgentPlatform.TEAMS:
             if not self.teams_app_id or not self.teams_app_password or not self.teams_tenant_id:
                 raise ValueError("teams_app_id, teams_app_password, and teams_tenant_id are required for Teams agents")
-        elif self.platform == AgentPlatform.TELEGRAM:
-            if not self.telegram_bot_token:
-                raise ValueError("telegram_bot_token is required for Telegram agents")
+        elif self.platform == AgentPlatform.TELEGRAM and not self.telegram_bot_token:
+            raise ValueError("telegram_bot_token is required for Telegram agents")
         return self
 
     @model_validator(mode="after")
-    def validate_unique_secret_providers(self) -> "AgentCreate":
+    def validate_unique_secret_providers(self) -> AgentCreate:
         providers = [s.provider for s in self.secrets]
         if len(providers) != len(set(providers)):
             raise ValueError("Duplicate secret providers are not allowed")
@@ -538,11 +613,12 @@ class AgentUpdate(PydanticBaseModel):
     # Integration credentials: upsert (add/replace) + explicit removal.
     # Providers not mentioned in either list are left untouched.
     secrets: list[AgentSecretCreate] | None = None
+    shared_credentials: list[AgentSharedCredentialAttach] | None = None
     removed_secret_providers: list[SecretProvider] | None = None
     approval_mode: CommandApprovalMode | None = None
 
     @model_validator(mode="after")
-    def validate_skill_operations(self) -> "AgentUpdate":
+    def validate_skill_operations(self) -> AgentUpdate:
         overlap = set(self.skill_ids) & set(self.removed_skill_ids)
         if overlap:
             ids = ", ".join(str(i) for i in overlap)
@@ -550,13 +626,13 @@ class AgentUpdate(PydanticBaseModel):
         return self
 
     @model_validator(mode="after")
-    def validate_template_repin(self) -> "AgentUpdate":
+    def validate_template_repin(self) -> AgentUpdate:
         if (self.template_slug is None) != (self.template_version is None):
             raise ValueError("template_slug and template_version must be provided together")
         return self
 
     @model_validator(mode="after")
-    def validate_secret_operations(self) -> "AgentUpdate":
+    def validate_secret_operations(self) -> AgentUpdate:
         upserts = [s.provider for s in self.secrets or []]
         if len(upserts) != len(set(upserts)):
             raise ValueError("Duplicate secret providers are not allowed")
@@ -600,6 +676,8 @@ class AgentSecretRead(PydanticBaseModel):  # label + provider only — no secret
 
     provider: SecretProvider
     secret_name: str
+    shared_credential_id: UUID | None = None
+    shared_credential_name: str | None = None
 
 
 class AgentAccessRoleRead(PydanticBaseModel):

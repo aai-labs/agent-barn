@@ -1,9 +1,20 @@
+repositories:
+  - name: prometheus-community
+    url: https://prometheus-community.github.io/helm-charts
+  - name: grafana
+    url: https://grafana.github.io/helm-charts
+
 helmDefaults:
-  createNamespace: true
+  # Every environment pre-creates its namespace out-of-band (staging ahead of
+  # time; prod via deploy.sh's `kubectl apply -f k8s/agent-farm-user.yaml`), and
+  # the deploy identities are namespace-scoped and can't create cluster-scoped
+  # namespaces. So helm must never attempt to create it — the target namespace
+  # always already exists.
+  createNamespace: false
 
 releases:
   - name: postgres-app
-    namespace: agent-farm
+    namespace: {{ env "NAMESPACE" | default "agent-farm" }}
     chart: ./helm/postgres
     labels:
       name: postgres-app
@@ -22,7 +33,7 @@ releases:
         value: {{ env "POSTGRES_APP_DB" | required "POSTGRES_APP_DB is required" | quote }}
 
   - name: postgres-litellm
-    namespace: agent-farm
+    namespace: {{ env "NAMESPACE" | default "agent-farm" }}
     chart: ./helm/postgres
     labels:
       name: postgres-litellm
@@ -40,8 +51,43 @@ releases:
       - name: db.name
         value: {{ env "POSTGRES_LITELLM_DB" | required "POSTGRES_LITELLM_DB is required" | quote }}
 
+  - name: postgres-firecrawl
+    namespace: {{ env "NAMESPACE" | default "agent-farm" }}
+    chart: ./helm/postgres
+    labels:
+      name: postgres-firecrawl
+    values:
+      - secretName: postgres-firecrawl
+        storage:
+          size: 2Gi
+    set:
+      - name: image.repository
+        value: "ghcr.io/firecrawl/nuq-postgres"
+      - name: image.tag
+        value: "latest"
+      - name: "args[0]"
+        value: "postgres"
+      - name: "args[1]"
+        value: "-c"
+      - name: "args[2]"
+        value: "cron.database_name={{ env "POSTGRES_FIRECRAWL_DB" }}"
+      - name: storage.storageClass
+        value: {{ env "STORAGE_CLASS" | default "" | quote }}
+      - name: db.user
+        value: {{ env "POSTGRES_FIRECRAWL_USER" | required "POSTGRES_FIRECRAWL_USER is required" | quote }}
+      - name: db.password
+        value: {{ env "POSTGRES_FIRECRAWL_PASSWORD" | required "POSTGRES_FIRECRAWL_PASSWORD is required" | quote }}
+      - name: db.name
+        value: {{ env "POSTGRES_FIRECRAWL_DB" | required "POSTGRES_FIRECRAWL_DB is required" | quote }}
+
+  - name: redis
+    namespace: {{ env "NAMESPACE" | default "agent-farm" }}
+    chart: ./helm/redis
+    labels:
+      name: redis
+
   - name: litellm
-    namespace: agent-farm
+    namespace: {{ env "NAMESPACE" | default "agent-farm" }}
     chart: ./helm/litellm
     labels:
       name: litellm
@@ -53,11 +99,31 @@ releases:
       - name: databaseUrl
         value: {{ printf "postgresql://%s:%s@postgres-litellm:5432/%s" (env "POSTGRES_LITELLM_USER") (env "POSTGRES_LITELLM_PASSWORD") (env "POSTGRES_LITELLM_DB") | quote }}
     needs:
-      - agent-farm/postgres-app
-      - agent-farm/postgres-litellm
+      - {{ env "NAMESPACE" | default "agent-farm" }}/postgres-app
+      - {{ env "NAMESPACE" | default "agent-farm" }}/postgres-litellm
+
+  - name: firecrawl
+    namespace: {{ env "NAMESPACE" | default "agent-farm" }}
+    chart: ./helm/firecrawl
+    labels:
+      name: firecrawl
+    set:
+      - name: testApiKey
+        value: {{ env "FIRECRAWL_API_KEY" | required "FIRECRAWL_API_KEY is required" | quote }}
+      - name: bullAuthKey
+        value: {{ env "FIRECRAWL_BULL_AUTH_KEY" | default "" | quote }}
+      - name: postgres.user
+        value: {{ env "POSTGRES_FIRECRAWL_USER" | required "POSTGRES_FIRECRAWL_USER is required" | quote }}
+      - name: postgres.password
+        value: {{ env "POSTGRES_FIRECRAWL_PASSWORD" | required "POSTGRES_FIRECRAWL_PASSWORD is required" | quote }}
+      - name: postgres.db
+        value: {{ env "POSTGRES_FIRECRAWL_DB" | required "POSTGRES_FIRECRAWL_DB is required" | quote }}
+    needs:
+      - {{ env "NAMESPACE" | default "agent-farm" }}/postgres-firecrawl
+      - {{ env "NAMESPACE" | default "agent-farm" }}/redis
 
   - name: agentfarm-api
-    namespace: agent-farm
+    namespace: {{ env "NAMESPACE" | default "agent-farm" }}
     chart: ./helm/agentfarm-api
     labels:
       name: agentfarm-api
@@ -66,6 +132,15 @@ releases:
         value: {{ env "REGISTRY_PREFIX" | default "registry.k8s.aai-labs.com" | quote }}
       - name: image.repository
         value: {{ env "API_IMAGE_REPOSITORY" | default "agentfarm-api" | quote }}
+      # Local k8s dev: set IfNotPresent to run images imported via `k3d image import`.
+      - name: image.pullPolicy
+        value: {{ env "API_IMAGE_PULL_POLICY" | default "Always" | quote }}
+      - name: image.tag
+        value: {{ env "API_IMAGE_TAG" | default "" | quote }}
+      - name: buildSha
+        value: {{ env "GIT_SHA" | default "" | quote }}
+      - name: litellmKeyServiceAccountName
+        value: {{ env "LITELLM_KEY_SERVICE_ACCOUNT" | default "agent-farm-user" | quote }}
       - name: openclawImage.repository
         value: {{ env "OPENCLAW_IMAGE_REPOSITORY" | default "agentfarm-openclaw-base" | quote }}
       - name: openclawImage.tag
@@ -78,8 +153,8 @@ releases:
         value: {{ printf "postgresql://%s:%s@postgres-app:5432/%s" (env "POSTGRES_APP_USER") (env "POSTGRES_APP_PASSWORD") (env "POSTGRES_APP_DB") | quote }}
       - name: secretSigningKey
         value: {{ env "SECRET_SIGNING_KEY" | required "SECRET_SIGNING_KEY is required" | quote }}
-      - name: superUserCredentials
-        value: {{ env "SUPER_USER_CREDENTIALS" | required "SUPER_USER_CREDENTIALS is required" | quote }}
+      - name: platformAdminCredentials
+        value: {{ env "PLATFORM_ADMIN_CREDENTIALS" | required "PLATFORM_ADMIN_CREDENTIALS is required" | quote }}
       - name: agentTokenEncryptionKey
         value: {{ env "AGENT_TOKEN_ENCRYPTION_KEY" | required "AGENT_TOKEN_ENCRYPTION_KEY is required" | quote }}
       - name: environment
@@ -96,6 +171,8 @@ releases:
         value: {{ env "GOOGLE_CLOUD_CLIENT_ID" | default "" | quote }}
       - name: googleCloudClientSecret
         value: {{ env "GOOGLE_CLOUD_CLIENT_SECRET" | default "" | quote }}
+      - name: agentFirecrawlApiKey
+        value: {{ env "FIRECRAWL_API_KEY" | default "" | quote }}
       - name: apiExternalUrl
         value: {{ printf "https://%s" (env "API_HOST" | required "API_HOST is required" | splitList "," | first | trim) | quote }}
       - name: kubeconfigB64
@@ -114,12 +191,18 @@ releases:
         value: {{ env "REGISTRY_PASSWORD" | required "REGISTRY_PASSWORD is required" | quote }}
       - name: ingress.hosts
         value: {{ env "API_HOST" | required "API_HOST is required" | quote }}
+      # Same inference key the litellm release uses; the API polls GET /key
+      # with it for the remaining-credit-limit metric.
+      - name: openrouterApiKey
+        value: {{ env "OPENROUTER_API_KEY" | default "" | quote }}
     needs:
-      - agent-farm/postgres-app
-      - agent-farm/litellm
+      - {{ env "NAMESPACE" | default "agent-farm" }}/postgres-app
+      - {{ env "NAMESPACE" | default "agent-farm" }}/litellm
+      - {{ env "NAMESPACE" | default "agent-farm" }}/firecrawl
+      - {{ env "NAMESPACE" | default "agent-farm" }}/redis
 
   - name: agentfarm-ui
-    namespace: agent-farm
+    namespace: {{ env "NAMESPACE" | default "agent-farm" }}
     chart: ./helm/agentfarm-ui
     labels:
       name: agentfarm-ui
@@ -128,7 +211,50 @@ releases:
         value: {{ env "REGISTRY_PREFIX" | default "registry.k8s.aai-labs.com" | quote }}
       - name: image.repository
         value: {{ env "UI_IMAGE_REPOSITORY" | default "agentfarm-ui" | quote }}
+      # Local k8s dev: set IfNotPresent to run images imported via `k3d image import`.
+      - name: image.pullPolicy
+        value: {{ env "UI_IMAGE_PULL_POLICY" | default "Always" | quote }}
+      - name: image.tag
+        value: {{ env "UI_IMAGE_TAG" | default "" | quote }}
+      - name: buildSha
+        value: {{ env "GIT_SHA" | default "" | quote }}
       - name: ingress.hosts
         value: {{ env "UI_HOST" | required "UI_HOST is required" | quote }}
     needs:
-      - agent-farm/agentfarm-api
+      - {{ env "NAMESPACE" | default "agent-farm" }}/agentfarm-api
+
+  # Prometheus + Grafana + Alertmanager, fully namespace-scoped (no CRDs, no
+  # cluster RBAC — the shared cluster only grants us a namespace); the release
+  # follows the stack into agent-farm-staging when deployed from there.
+  - name: monitoring
+    namespace: {{ env "NAMESPACE" | default "agent-farm" }}
+    chart: ./helm/monitoring
+    labels:
+      name: monitoring
+    set:
+      # Prometheus/kube-state-metrics reuse the tenant deploy SA (they may
+      # not create their own RBAC); the tenant chart names it <namespace>-user.
+      - name: prometheus.serviceAccounts.server.name
+        value: {{ printf "%s-user" (env "NAMESPACE" | default "agent-farm") | quote }}
+      - name: prometheus.kube-state-metrics.serviceAccount.name
+        value: {{ printf "%s-user" (env "NAMESPACE" | default "agent-farm") | quote }}
+      # Stamped on every alert so a shared Slack channel can tell staging
+      # and production incidents apart.
+      - name: prometheus.server.global.external_labels.environment
+        value: {{ env "ENVIRONMENT" | required "ENVIRONMENT is required" | quote }}
+      - name: slackWebhookUrl
+        value: {{ env "SLACK_ALERTS_WEBHOOK_URL" | required "SLACK_ALERTS_WEBHOOK_URL is required" | quote }}
+      - name: grafana.adminPassword
+        value: {{ env "GRAFANA_ADMIN_PASSWORD" | required "GRAFANA_ADMIN_PASSWORD is required" | quote }}
+      - name: grafana.ingress.hosts[0]
+        value: {{ env "GRAFANA_HOST" | required "GRAFANA_HOST is required" | quote }}
+      - name: grafana.ingress.tls[0].secretName
+        value: grafana-tls
+      - name: grafana.ingress.tls[0].hosts[0]
+        value: {{ env "GRAFANA_HOST" | required "GRAFANA_HOST is required" | quote }}
+{{ if env "STORAGE_CLASS" }}
+      - name: prometheus.server.persistentVolume.storageClass
+        value: {{ env "STORAGE_CLASS" | quote }}
+{{ end }}
+    needs:
+      - {{ env "NAMESPACE" | default "agent-farm" }}/agentfarm-api

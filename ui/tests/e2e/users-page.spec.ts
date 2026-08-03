@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 
 import { DataSupport } from "../pages/data-support/data-support.po";
 
-const USERS_URL = "/dashboard/users";
+const USERS_URL = "/dashboard/platform/users";
 
 test.describe("Users Page — Create & Delete", () => {
   let data: DataSupport;
@@ -57,7 +57,7 @@ test.describe("Users Page — Create & Delete", () => {
             updated_at: "2024-01-01T00:00:00Z",
             full_name: "Super User",
             email: "admin@aai-labs.com",
-            is_superuser: true,
+            is_platform_admin: true,
             email_verified_at: null,
           },
         ],

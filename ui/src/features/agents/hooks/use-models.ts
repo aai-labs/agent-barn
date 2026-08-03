@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { z } from "zod";
 
 import { api } from "@/shared/api";
+import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
 
 import { ModelOption, ModelOptionSchema } from "../schemas";
 import { agentsKey } from "../utils";
@@ -15,13 +16,17 @@ export const FALLBACK_MODELS: ModelOption[] = [
   { value: "litellm/openrouter/openai/gpt-5-mini", label: "GPT-5 mini" },
 ];
 
-export function useModels() {
+export function useModels({ catalog = false }: { catalog?: boolean } = {}) {
+  const orgApiBase = useOrganizationApiBase();
   const query = useQuery({
-    queryKey: agentsKey.models(),
+    queryKey: [...agentsKey.models(), { catalog }],
     queryFn: async () => {
-      const response = await api.get<ModelOption[]>("/api/v1/agents/models", {
-        schema: z.array(ModelOptionSchema),
-      });
+      const response = await api.get<ModelOption[]>(
+        `${orgApiBase}/agents/models${catalog ? "?catalog=true" : ""}`,
+        {
+          schema: z.array(ModelOptionSchema),
+        },
+      );
       return response.data;
     },
     staleTime: 60 * 60_000,

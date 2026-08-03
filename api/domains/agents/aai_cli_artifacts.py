@@ -4,8 +4,7 @@ These are pure string/dict builders (no k8s types) consumed by ``start_agent`` t
 agent's integration secrets into its pod so the baked-in ``aai-cli`` can use them.
 """
 
-from collections.abc import Callable
-from typing import Mapping
+from collections.abc import Callable, Mapping
 
 from api.domains.agents.models import (
     BitbucketContent,
@@ -216,20 +215,30 @@ _PROFILE_BUILDERS: dict[SecretProvider, Callable[..., str]] = {
 }
 
 
+_TOOL_CONTEXT_PROVIDERS = {
+    SecretProvider.GITHUB,
+    SecretProvider.JIRA,
+    SecretProvider.CONFLUENCE,
+    SecretProvider.BITBUCKET,
+}
+
+
 def build_tool_context_md(decrypted: Mapping[SecretProvider, SecretContent]) -> str:
     """Render a markdown section listing each configured integration's key metadata.
 
     Injected into tools_md at start_agent time so the agent knows what is already
     set up and doesn't ask the user for credentials that are already configured.
     """
-    if not decrypted:
+    if not decrypted or not (decrypted.keys() & _TOOL_CONTEXT_PROVIDERS):
         return ""
 
     lines: list[str] = [
         "\n## Configured Integrations\n",
-        "The following integrations are pre-configured via aai-cli. "
-        "Use aai-cli to interact with them — credentials are already in place. "
-        "Do not ask the user to re-provide them.\n",
+        (
+            "The following integrations are pre-configured via aai-cli. "
+            "Use aai-cli to interact with them — credentials are already in place. "
+            "Do not ask the user to re-provide them.\n"
+        ),
     ]
     for provider in SecretProvider:
         content = decrypted.get(provider)
@@ -320,17 +329,21 @@ def build_integrations_policy_md(
 
     lines: list[str] = [
         "\n## Integrations (aai-cli)\n",
-        "These integrations are pre-configured. **aai-cli is the only way to reach "
-        "them** — always pass `--profile <slug>`. Never fall back to a browser, "
-        "`curl`, or raw HTTP, and never invent URLs or tokens.\n",
-        "Commands nest as `aai-cli --profile <slug> <service> <resource> <verb>` "
-        "(e.g. `aai-cli --profile jira-work jira issues get AF-147`). Don't guess "
-        "subcommands — **Read** the matching `./skills/aai-cli/<service>_skill.md` "
-        "file first (they are plain files, not lookup-by-name skills).\n",
+        (
+            "These integrations are pre-configured. **aai-cli is the only way to reach "
+            "them** — always pass `--profile <slug>`. Never fall back to a browser, "
+            "`curl`, or raw HTTP, and never invent URLs or tokens.\n"
+        ),
+        (
+            "Commands nest as `aai-cli --profile <slug> <service> <resource> <verb>` "
+            "(e.g. `aai-cli --profile jira-work jira issues get AF-147`). Don't guess "
+            "subcommands — **Read** the matching `./skills/aai-cli/<service>_skill.md` "
+            "file first (they are plain files, not lookup-by-name skills).\n"
+        ),
     ]
     for provider in SecretProvider:  # fixed enum order for deterministic output
         content = decrypted.get(provider)
-        if content is None:
+        if content is None or provider not in PROFILE_SLUGS:
             continue
         base = PROFILE_SLUGS[provider]
         if isinstance(content, GithubContent):
@@ -355,7 +368,7 @@ def build_config_toml(
     blocks = [_header(secrets_dir)]
     for provider in SecretProvider:
         content = decrypted.get(provider)
-        if content is not None:
+        if content is not None and provider in _PROFILE_BUILDERS:
             blocks.append(_PROFILE_BUILDERS[provider](content))
     return "\n".join(blocks)
 

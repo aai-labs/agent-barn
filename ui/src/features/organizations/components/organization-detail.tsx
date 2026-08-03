@@ -28,6 +28,7 @@ import { useOrganization } from "../hooks/use-organization";
 import { useOrganizationMembers } from "../hooks/use-organization-members";
 import { useRequireOrgManager } from "../hooks/use-require-org-manager";
 import { MembersSection } from "./members-section";
+import { AllowedModelsSection } from "./allowed-models-section";
 
 function orgInitials(name: string) {
   const letters = name
@@ -82,17 +83,14 @@ export function OrganizationDetail({ organizationId }: { organizationId: string 
   const currentRole = userContext.organizationUsers?.find(
     (m) => m.organizationId === organizationId,
   )?.role;
-  const canDelete =
-    !!organization &&
-    !organization.isDefault &&
-    (user.isSuperuser || currentRole === "OWNER");
+  const canDelete = !!organization && (user.isPlatformAdmin || currentRole === "OWNER");
 
   const onDelete = () => {
     deleteOrganization.mutate(organizationId, {
       onSuccess: () => {
         toast.success("Organization deleted.");
         setDeleteOpen(false);
-        router.push(user.isSuperuser ? "/dashboard/organizations" : "/");
+        router.push(user.isPlatformAdmin ? "/dashboard/platform/organizations" : "/");
       },
       onError: (e) => toast.error(e.message || "Failed to delete organization"),
     });
@@ -131,9 +129,9 @@ export function OrganizationDetail({ organizationId }: { organizationId: string 
 
   return (
     <div className="max-w-[1000px] mx-auto px-10 pt-9 pb-24">
-      {user.isSuperuser && (
+      {user.isPlatformAdmin && (
         <Link
-          href="/dashboard/organizations"
+          href="/dashboard/platform/organizations"
           className="inline-flex items-center gap-1 text-[13px] mb-4"
           style={{ color: "var(--ink-3)" }}
         >
@@ -159,14 +157,6 @@ export function OrganizationDetail({ organizationId }: { organizationId: string 
             >
               {organization.name}
             </h1>
-            {organization.isDefault && (
-              <span
-                className="flex-shrink-0 rounded-md px-1.5 py-0.5 text-[11px] font-medium"
-                style={{ background: "var(--bg-sunken)", color: "var(--ink-3)" }}
-              >
-                Default
-              </span>
-            )}
           </div>
           <p className="m-0 mt-1 text-[14px]" style={{ color: "var(--ink-3)" }}>
             {organization.description || "No description"}
@@ -213,6 +203,10 @@ export function OrganizationDetail({ organizationId }: { organizationId: string 
           organizationId={organizationId}
           organizationName={organization.name}
         />
+      </div>
+
+      <div style={{ borderTop: "1px solid var(--line)" }} className="mt-8 pt-8">
+        <AllowedModelsSection organization={organization} />
       </div>
 
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>

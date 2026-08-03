@@ -2,49 +2,173 @@ name: Deploy to k3s
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - staging
+      - main
+
+concurrency:
+  group: deploy-${{ github.ref_name }}
+  cancel-in-progress: false
 
 jobs:
+  # ═══════════════════════════════════════════════════════════════
+  # Phase 1: Detect changed components
+  # ═══════════════════════════════════════════════════════════════
+
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      api: ${{ steps.changes.outputs.api }}
+      ui: ${{ steps.changes.outputs.ui }}
+      hermes: ${{ steps.changes.outputs.hermes }}
+      openclaw: ${{ steps.changes.outputs.openclaw }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 2
+      - name: Detect changed components
+        id: changes
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "api=true" >> "$GITHUB_OUTPUT"
+            echo "ui=true" >> "$GITHUB_OUTPUT"
+            echo "hermes=true" >> "$GITHUB_OUTPUT"
+            echo "openclaw=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          api=false; ui=false; hermes=false; openclaw=false
+
+          if ! git diff --name-only HEAD~1 HEAD > /tmp/changed.txt 2>/dev/null; then
+            api=true; ui=true; hermes=true; openclaw=true
+          else
+            if grep -qE '^(api/|Makefile$)' /tmp/changed.txt; then api=true; fi
+            if grep -qE '^(ui/|Makefile$)' /tmp/changed.txt; then ui=true; fi
+            if grep -q '^hermes-base/' /tmp/changed.txt; then hermes=true; fi
+            if grep -q '^openclaw-base/' /tmp/changed.txt; then openclaw=true; fi
+          fi
+
+          echo "api=$api" >> "$GITHUB_OUTPUT"
+          echo "ui=$ui" >> "$GITHUB_OUTPUT"
+          echo "hermes=$hermes" >> "$GITHUB_OUTPUT"
+          echo "openclaw=$openclaw" >> "$GITHUB_OUTPUT"
+
+  # ═══════════════════════════════════════════════════════════════
+  # Phase 2: Lint, test, build + push each changed component (parallel)
+  # ═══════════════════════════════════════════════════════════════
+
+  push-api:
+    needs: [detect-changes]
+    if: ${{ needs.detect-changes.outputs.api == 'true' }}
+    uses: ./.github/workflows/api.yml
+    secrets: inherit
+    with:
+      push_image: true
+
+  push-ui:
+    needs: [detect-changes]
+    if: ${{ needs.detect-changes.outputs.ui == 'true' }}
+    uses: ./.github/workflows/ui.yml
+    secrets: inherit
+    with:
+      push_image: true
+
+  push-hermes:
+    needs: [detect-changes]
+    if: ${{ needs.detect-changes.outputs.hermes == 'true' }}
+    uses: ./.github/workflows/hermes-base.yml
+    secrets: inherit
+    with:
+      push_image: true
+
+  push-openclaw:
+    needs: [detect-changes]
+    if: ${{ needs.detect-changes.outputs.openclaw == 'true' }}
+    uses: ./.github/workflows/openclaw-base.yml
+    secrets: inherit
+    with:
+      push_image: true
+
+  # ═══════════════════════════════════════════════════════════════
+  # Phase 3: Resolve environment config
+  # ═══════════════════════════════════════════════════════════════
+
+  resolve-env:
+    needs: [push-api, push-ui, push-hermes, push-openclaw]
+    if: ${{ always() && !cancelled() }}
+    runs-on: ubuntu-latest
+    outputs:
+      namespace: ${{ steps.resolve.outputs.namespace }}
+      environment: ${{ steps.resolve.outputs.environment }}
+      litellm_key_service_account: ${{ steps.resolve.outputs.litellm_key_service_account }}
+      api_host: ${{ steps.resolve.outputs.api_host }}
+      ui_host: ${{ steps.resolve.outputs.ui_host }}
+      web_app_url: ${{ steps.resolve.outputs.web_app_url }}
+      api_image_tag: ${{ steps.image-versions.outputs.api_image_tag }}
+      ui_image_tag: ${{ steps.image-versions.outputs.ui_image_tag }}
+      openclaw_image_tag: ${{ steps.image-versions.outputs.openclaw_image_tag }}
+      hermes_image_tag: ${{ steps.image-versions.outputs.hermes_image_tag }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Resolve environment
+        id: resolve
+        run: |
+          case "${{ github.ref_name }}" in
+            staging)
+              {
+                echo "namespace=agent-farm-staging"
+                echo "environment=staging"
+                echo "image_suffix=-staging"
+                echo "service_image_tag=latest-staging"
+                echo "litellm_key_service_account=agent-farm-staging-user"
+                echo "api_host=${{ vars.STAGING_API_HOST }}"
+                echo "ui_host=${{ vars.STAGING_UI_HOST }}"
+                echo "web_app_url=${{ vars.STAGING_WEB_APP_URL }}"
+              } >> "$GITHUB_OUTPUT"
+              ;;
+            main)
+              {
+                echo "namespace=agent-farm"
+                echo "environment=production"
+                echo "image_suffix="
+                echo "service_image_tag=latest"
+                echo "litellm_key_service_account=agent-farm-user"
+                echo "api_host=${{ vars.API_HOST }}"
+                echo "ui_host=${{ vars.UI_HOST }}"
+                echo "web_app_url=${{ vars.WEB_APP_URL }}"
+              } >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::error::Deploy is only allowed from 'staging' or 'main' (got '${{ github.ref_name }}')."
+              exit 1
+              ;;
+          esac
+      - name: Read image versions
+        id: image-versions
+        env:
+          IMAGE_SUFFIX: ${{ steps.resolve.outputs.image_suffix }}
+          SERVICE_IMAGE_TAG: ${{ steps.resolve.outputs.service_image_tag }}
+        run: |
+          echo "api_image_tag=${SERVICE_IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "ui_image_tag=${SERVICE_IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "openclaw_image_tag=$(cat openclaw-base/VERSION)${IMAGE_SUFFIX}" >> "$GITHUB_OUTPUT"
+          echo "hermes_image_tag=$(cat hermes-base/VERSION)${IMAGE_SUFFIX}" >> "$GITHUB_OUTPUT"
+
+  # ═══════════════════════════════════════════════════════════════
+  # Phase 4: Deploy
+  # ═══════════════════════════════════════════════════════════════
+
   deploy:
+    needs: [resolve-env]
+    if: ${{ always() && needs.resolve-env.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      actions: read
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Verify component workflows are green
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          REPO="${{ github.repository }}"
-          SHA="${{ github.sha }}"
-
-          check_workflow() {
-            local workflow=$1
-            local conclusion
-            conclusion=$(gh api "repos/$REPO/actions/workflows/$workflow/runs?head_sha=$SHA&per_page=1" \
-              --jq '.workflow_runs[0].conclusion // "not_found"')
-
-            if [ "$conclusion" != "success" ] && [ "$conclusion" != "not_found" ]; then
-              echo "::error::$workflow failed on $SHA (got: $conclusion)"
-              return 1
-            fi
-            echo "$workflow: success"
-          }
-
-          check_workflow "api.yml"
-          check_workflow "ui.yml"
-          check_workflow "openclaw-base.yml"
-          check_workflow "hermes-base.yml"
-
-      - name: Read image versions
-        run: |
-          echo "API_IMAGE_TAG=$(grep '^\s*appVersion:' helm/agentfarm-api/Chart.yaml | awk '{print $2}' | tr -d '"')" >> $GITHUB_ENV
-          echo "UI_IMAGE_TAG=$(grep '^\s*appVersion:' helm/agentfarm-ui/Chart.yaml | awk '{print $2}' | tr -d '"')" >> $GITHUB_ENV
-          echo "OPENCLAW_IMAGE_TAG=$(cat openclaw-base/VERSION)" >> $GITHUB_ENV
-          echo "HERMES_IMAGE_TAG=$(cat hermes-base/VERSION)" >> $GITHUB_ENV
+        uses: actions/checkout@v5
 
       - name: Install Helm
         run: |
@@ -59,75 +183,6 @@ jobs:
 
       - name: Install helm-diff plugin
         run: helm plugin install https://github.com/databus23/helm-diff
-
-      - name: Log in to registry
-        run: |
-          printf '%s' '${{ secrets.REGISTRY_PASSWORD }}' \
-            | docker login '${{ vars.REGISTRY_URL }}' \
-              --username '${{ vars.REGISTRY_USERNAME }}' \
-              --password-stdin
-
-      - name: Build and push API image
-        run: |
-          docker build \
-            -t '${{ vars.REGISTRY_URL }}/agentfarm-api:${{ env.API_IMAGE_TAG }}' \
-            -t '${{ vars.REGISTRY_URL }}/agentfarm-api:latest' \
-            -f api/Dockerfile \
-            .
-          docker push '${{ vars.REGISTRY_URL }}/agentfarm-api:${{ env.API_IMAGE_TAG }}'
-          docker push '${{ vars.REGISTRY_URL }}/agentfarm-api:latest'
-
-      - name: Extract primary API host
-        run: echo "PRIMARY_API_HOST=$(echo '${{ vars.API_HOST }}' | cut -d',' -f1 | tr -d ' ')" >> $GITHUB_ENV
-
-      - name: Build and push UI image
-        run: |
-          docker build \
-            --build-arg NEXT_PUBLIC_BACKEND_URL=https://${{ env.PRIMARY_API_HOST }} \
-            -t '${{ vars.REGISTRY_URL }}/agentfarm-ui:${{ env.UI_IMAGE_TAG }}' \
-            -t '${{ vars.REGISTRY_URL }}/agentfarm-ui:latest' \
-            -f ui/Dockerfile \
-            ui/
-          docker push '${{ vars.REGISTRY_URL }}/agentfarm-ui:${{ env.UI_IMAGE_TAG }}'
-          docker push '${{ vars.REGISTRY_URL }}/agentfarm-ui:latest'
-
-      - name: Build, smoke test, and push hermes-base image
-        env:
-          DOCKER_BUILDKIT: "1"
-        run: |
-          printf '%s' '${{ secrets.AAI_CLI_REPO_ACCESS_TOKEN }}' > /tmp/gh_token
-          docker build \
-            --secret id=gh_token,src=/tmp/gh_token \
-            -t '${{ vars.REGISTRY_URL }}/agentfarm-hermes-base:${{ env.HERMES_IMAGE_TAG }}' \
-            -t '${{ vars.REGISTRY_URL }}/agentfarm-hermes-base:latest' \
-            -f hermes-base/Dockerfile \
-            hermes-base/
-          rm -f /tmp/gh_token
-          docker run --rm \
-            -v "${{ github.workspace }}/hermes-base/smoke-test.sh:/smoke-test.sh:ro" \
-            '${{ vars.REGISTRY_URL }}/agentfarm-hermes-base:${{ env.HERMES_IMAGE_TAG }}' \
-            /bin/sh /smoke-test.sh
-          docker push '${{ vars.REGISTRY_URL }}/agentfarm-hermes-base:${{ env.HERMES_IMAGE_TAG }}'
-          docker push '${{ vars.REGISTRY_URL }}/agentfarm-hermes-base:latest'
-
-      - name: Build, smoke test, and push openclaw-base image
-        env:
-          DOCKER_BUILDKIT: "1"
-        run: |
-          printf '%s' '${{ secrets.AAI_CLI_REPO_ACCESS_TOKEN }}' > /tmp/gh_token
-          docker build \
-            --secret id=gh_token,src=/tmp/gh_token \
-            -t '${{ vars.REGISTRY_URL }}/agentfarm-openclaw-base:${{ env.OPENCLAW_IMAGE_TAG }}' \
-            -t '${{ vars.REGISTRY_URL }}/agentfarm-openclaw-base:latest' \
-            -f openclaw-base/Dockerfile \
-            openclaw-base/
-          rm -f /tmp/gh_token
-          docker run --rm \
-            -v "${{ github.workspace }}/openclaw-base/smoke-test.sh:/smoke-test.sh:ro" \
-            '${{ vars.REGISTRY_URL }}/agentfarm-openclaw-base:${{ env.OPENCLAW_IMAGE_TAG }}' \
-            /bin/sh /smoke-test.sh
-          docker push '${{ vars.REGISTRY_URL }}/agentfarm-openclaw-base:${{ env.OPENCLAW_IMAGE_TAG }}'
-          docker push '${{ vars.REGISTRY_URL }}/agentfarm-openclaw-base:latest'
 
       - name: Set up SSH tunnel to k3s
         run: |
@@ -147,42 +202,52 @@ jobs:
       - name: Set up kubeconfig
         run: |
           mkdir -p ~/.kube
-          printf '%s' '${{ secrets.KUBECONFIG_B64 }}' | base64 -d > ~/.kube/config
+          printf '%s' '${{ github.ref_name == 'staging' && secrets.STAGING_KUBECONFIG_B64 || secrets.KUBECONFIG_B64 }}' | base64 -d > ~/.kube/config
           chmod 600 ~/.kube/config
 
       - name: Helmfile sync
         env:
           KUBECONFIG: /home/runner/.kube/config
-          API_IMAGE_TAG: ${{ env.API_IMAGE_TAG }}
-          UI_IMAGE_TAG: ${{ env.UI_IMAGE_TAG }}
-          OPENCLAW_IMAGE_TAG: ${{ env.OPENCLAW_IMAGE_TAG }}
-          HERMES_IMAGE_TAG: ${{ env.HERMES_IMAGE_TAG }}
+          NAMESPACE: ${{ needs.resolve-env.outputs.namespace }}
+          LITELLM_KEY_SERVICE_ACCOUNT: ${{ needs.resolve-env.outputs.litellm_key_service_account }}
+          API_IMAGE_TAG: ${{ needs.resolve-env.outputs.api_image_tag }}
+          UI_IMAGE_TAG: ${{ needs.resolve-env.outputs.ui_image_tag }}
+          GIT_SHA: ${{ github.sha }}
+          OPENCLAW_IMAGE_TAG: ${{ needs.resolve-env.outputs.openclaw_image_tag }}
+          HERMES_IMAGE_TAG: ${{ needs.resolve-env.outputs.hermes_image_tag }}
           POSTGRES_APP_USER: ${{ vars.POSTGRES_APP_USER }}
-          POSTGRES_APP_PASSWORD: ${{ secrets.POSTGRES_APP_PASSWORD }}
+          POSTGRES_APP_PASSWORD: ${{ github.ref_name == 'staging' && secrets.STAGING_POSTGRES_APP_PASSWORD || secrets.POSTGRES_APP_PASSWORD }}
           POSTGRES_APP_DB: ${{ vars.POSTGRES_APP_DB }}
           POSTGRES_LITELLM_USER: ${{ vars.POSTGRES_LITELLM_USER }}
-          POSTGRES_LITELLM_PASSWORD: ${{ secrets.POSTGRES_LITELLM_PASSWORD }}
+          POSTGRES_LITELLM_PASSWORD: ${{ github.ref_name == 'staging' && secrets.STAGING_POSTGRES_LITELLM_PASSWORD || secrets.POSTGRES_LITELLM_PASSWORD }}
           POSTGRES_LITELLM_DB: ${{ vars.POSTGRES_LITELLM_DB }}
-          LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY }}
+          POSTGRES_FIRECRAWL_USER: ${{ vars.POSTGRES_FIRECRAWL_USER }}
+          POSTGRES_FIRECRAWL_PASSWORD: ${{ secrets.POSTGRES_FIRECRAWL_PASSWORD }}
+          POSTGRES_FIRECRAWL_DB: ${{ vars.POSTGRES_FIRECRAWL_DB }}
+          FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
+          LITELLM_MASTER_KEY: ${{ github.ref_name == 'staging' && secrets.STAGING_LITELLM_MASTER_KEY || secrets.LITELLM_MASTER_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           AGENT_DEFAULT_MODEL: ${{ vars.AGENT_DEFAULT_MODEL }}
           AGENT_MODEL_ALLOWLIST: ${{ vars.AGENT_MODEL_ALLOWLIST }}
           STORAGE_CLASS: ${{ vars.STORAGE_CLASS }}
-          SECRET_SIGNING_KEY: ${{ secrets.SECRET_SIGNING_KEY }}
-          SUPER_USER_CREDENTIALS: ${{ secrets.SUPER_USER_CREDENTIALS }}
-          AGENT_TOKEN_ENCRYPTION_KEY: ${{ secrets.AGENT_TOKEN_ENCRYPTION_KEY }}
-          ENVIRONMENT: production
-          WEB_APP_URL: ${{ vars.WEB_APP_URL }}
+          SECRET_SIGNING_KEY: ${{ github.ref_name == 'staging' && secrets.STAGING_SECRET_SIGNING_KEY || secrets.SECRET_SIGNING_KEY }}
+          PLATFORM_ADMIN_CREDENTIALS: ${{ github.ref_name == 'staging' && secrets.STAGING_PLATFORM_ADMIN_CREDENTIALS || secrets.PLATFORM_ADMIN_CREDENTIALS }}
+          AGENT_TOKEN_ENCRYPTION_KEY: ${{ github.ref_name == 'staging' && secrets.STAGING_AGENT_TOKEN_ENCRYPTION_KEY || secrets.AGENT_TOKEN_ENCRYPTION_KEY }}
+          ENVIRONMENT: ${{ needs.resolve-env.outputs.environment }}
+          WEB_APP_URL: ${{ needs.resolve-env.outputs.web_app_url }}
           GOOGLE_CLOUD_CLIENT_ID: ${{ vars.GOOGLE_CLOUD_CLIENT_ID }}
           GOOGLE_CLOUD_CLIENT_SECRET: ${{ secrets.GOOGLE_CLOUD_CLIENT_SECRET }}
-          EMAIL_SERVER_CREDENTIAL: ${{ secrets.EMAIL_SERVER_CREDENTIAL }}
-          EMAIL_SMTP_SERVER: ${{ vars.EMAIL_SMTP_SERVER }}
-          EMAIL_FROM_ADDRESS: ${{ vars.EMAIL_FROM_ADDRESS }}
-          API_HOST: ${{ vars.API_HOST }}
-          UI_HOST: ${{ vars.UI_HOST }}
-          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_B64 }}
-          POD_KUBECONFIG_B64: ${{ secrets.POD_KUBECONFIG_B64 }}
+          EMAIL_SERVER_CREDENTIAL: ${{ github.ref_name == 'main' && secrets.EMAIL_SERVER_CREDENTIAL || '' }}
+          EMAIL_SMTP_SERVER: ${{ github.ref_name == 'main' && vars.EMAIL_SMTP_SERVER || '' }}
+          EMAIL_FROM_ADDRESS: ${{ github.ref_name == 'main' && vars.EMAIL_FROM_ADDRESS || '' }}
+          API_HOST: ${{ needs.resolve-env.outputs.api_host }}
+          UI_HOST: ${{ needs.resolve-env.outputs.ui_host }}
+          KUBECONFIG_B64: ${{ github.ref_name == 'staging' && secrets.STAGING_KUBECONFIG_B64 || secrets.KUBECONFIG_B64 }}
+          POD_KUBECONFIG_B64: ${{ github.ref_name == 'staging' && secrets.STAGING_POD_KUBECONFIG_B64 || secrets.POD_KUBECONFIG_B64 }}
           REGISTRY_SERVER: ${{ vars.REGISTRY_URL }}
           REGISTRY_USERNAME: ${{ vars.REGISTRY_USERNAME }}
           REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+          SLACK_ALERTS_WEBHOOK_URL: ${{ secrets.SLACK_ALERTS_WEBHOOK_URL }}
+          GRAFANA_ADMIN_PASSWORD: ${{ github.ref_name == 'staging' && secrets.STAGING_GRAFANA_ADMIN_PASSWORD || secrets.GRAFANA_ADMIN_PASSWORD }}
+          GRAFANA_HOST: ${{ github.ref_name == 'staging' && vars.STAGING_GRAFANA_HOST || vars.GRAFANA_HOST }}
         run: helmfile -f helmfile.yaml.gotmpl sync --wait

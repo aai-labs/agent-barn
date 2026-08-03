@@ -1,0 +1,80 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "firecrawl.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "firecrawl.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      annotations:
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+      labels:
+        {{- include "firecrawl.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: api
+    spec:
+      initContainers:
+        - name: wait-rabbitmq
+          image: busybox
+          command: ['sh', '-c', 'until nc -z {{ .Release.Name }}-rabbitmq {{ .Values.service.rabbitmqPort }}; do echo "waiting for rabbitmq..."; sleep 2; done']
+      containers:
+        - name: firecrawl
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["node"]
+          args: ["dist/src/harness.js", "--start-docker"]
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.apiPort }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.secretName }}
+          env:
+            - name: PORT
+              value: "{{ .Values.service.apiPort }}"
+            - name: HOST
+              value: "0.0.0.0"
+            - name: NUM_WORKERS_PER_QUEUE
+              value: "8"
+            - name: REDIS_URL
+              value: "redis://{{ .Values.redis.host }}:{{ .Values.redis.port }}"
+            - name: REDIS_RATE_LIMIT_URL
+              value: "redis://{{ .Values.redis.host }}:{{ .Values.redis.port }}"
+            - name: PLAYWRIGHT_MICROSERVICE_URL
+              value: "http://{{ .Release.Name }}-playwright:{{ .Values.service.playwrightPort }}/scrape"
+            - name: USE_DB_AUTHENTICATION
+              value: "false"
+            - name: NUQ_RABBITMQ_URL
+              value: "amqp://{{ .Release.Name }}-rabbitmq:{{ .Values.service.rabbitmqPort }}"
+            - name: POSTGRES_HOST
+              value: "{{ .Values.postgres.host }}"
+            - name: POSTGRES_PORT
+              value: "{{ .Values.postgres.port }}"
+            - name: WORKER_PORT
+              value: "3005"
+            - name: EXTRACT_WORKER_PORT
+              value: "3004"
+            - name: NUQ_WORKER_COUNT
+              value: "2"
+            - name: HARNESS_STARTUP_TIMEOUT_MS
+              value: "120000"
+          readinessProbe:
+            tcpSocket:
+              port: {{ .Values.service.apiPort }}
+            initialDelaySeconds: 15
+            periodSeconds: 5
+            failureThreshold: 12
+          livenessProbe:
+            tcpSocket:
+              port: {{ .Values.service.apiPort }}
+            initialDelaySeconds: 150
+            periodSeconds: 15
+          resources:
+            {{- toYaml .Values.resources.api | nindent 12 }}

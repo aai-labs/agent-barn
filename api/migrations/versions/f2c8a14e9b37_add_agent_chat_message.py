@@ -6,16 +6,16 @@ Create Date: 2026-05-21
 
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "f2c8a14e9b37"
-down_revision: Union[str, None] = "f0c9d4a5e1b2"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "f0c9d4a5e1b2"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 message_direction_enum = postgresql.ENUM("INBOUND", "OUTBOUND", name="messagedirection", create_type=False)
 

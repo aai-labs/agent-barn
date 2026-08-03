@@ -8,8 +8,8 @@ session UUID, returns AgentChatMessage objects ready for upsert.
 import json
 import logging
 import re
-from datetime import datetime, timezone
-from typing import Callable
+from collections.abc import Callable
+from datetime import UTC, datetime
 from uuid import UUID
 
 from api.domains.conversations.models import (
@@ -56,11 +56,11 @@ _SESSION_PREFIXES = (
 
 
 def _parse_occurred_at(ts_str: str) -> datetime:
-    return datetime.strptime(ts_str, _TS_FMT).replace(tzinfo=timezone.utc)
+    return datetime.strptime(ts_str, _TS_FMT).replace(tzinfo=UTC)
 
 
 def _parse_iso(ts_str: str) -> datetime:
-    return datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+    return datetime.fromisoformat(ts_str)
 
 
 def _resolve_mentions(text: str, user_map: dict[str, str]) -> str:

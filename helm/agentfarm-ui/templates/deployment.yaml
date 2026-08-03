@@ -12,6 +12,8 @@ spec:
       {{- include "agentfarm-ui.selectorLabels" . | nindent 6 }}
   template:
     metadata:
+      annotations:
+        build-sha: {{ .Values.buildSha | quote }}
       labels:
         {{- include "agentfarm-ui.selectorLabels" . | nindent 8 }}
     spec:
@@ -19,7 +21,7 @@ spec:
         {{- toYaml .Values.imagePullSecrets | nindent 8 }}
       containers:
         - name: ui
-          image: "{{ .Values.registryPrefix }}/{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          image: "{{ .Values.registryPrefix }}/{{ .Values.image.repository }}:{{ required "image.tag is required" .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: http

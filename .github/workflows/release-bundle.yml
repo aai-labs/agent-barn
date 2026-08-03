@@ -20,15 +20,14 @@ jobs:
     name: Build and publish deploy bundle
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Resolve image versions
         id: ver
         run: |
-          chart_version() { grep '^appVersion:' "$1" | awk '{print $2}' | tr -d '"'; }
           {
-            echo "api=$(chart_version helm/agentfarm-api/Chart.yaml)"
-            echo "ui=$(chart_version helm/agentfarm-ui/Chart.yaml)"
+            echo "api=${{ inputs.tag }}"
+            echo "ui=${{ inputs.tag }}"
             echo "hermes=$(tr -d '[:space:]' < hermes-base/VERSION)"
             echo "openclaw=$(tr -d '[:space:]' < openclaw-base/VERSION)"
           } >> "$GITHUB_OUTPUT"
@@ -59,7 +58,7 @@ jobs:
           tar -czf "agent-farm-deploy-${{ inputs.tag }}.tar.gz" "$root"
 
       - name: Create release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ inputs.tag }}
           name: ${{ inputs.tag }}

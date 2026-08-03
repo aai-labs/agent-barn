@@ -1,8 +1,8 @@
 import re
 from dataclasses import dataclass
-from datetime import date
+from datetime import UTC, datetime
 
-from api.domains.templates.models import AgentTemplate
+from api.domains.templates.models import AgentTemplate, PlatformTemplate
 from api.domains.templates.slug import slugify
 
 _PLACEHOLDER = re.compile(r"\{\{\s*(\w+)\s*\}\}")
@@ -25,14 +25,14 @@ def _fill(text: str, variables: dict[str, str]) -> str:
     return _PLACEHOLDER.sub(lambda m: variables.get(m.group(1), m.group(0)), text)
 
 
-def render_template(template: AgentTemplate, agent_name: str) -> RenderedTemplate:
+def render_template(template: AgentTemplate | PlatformTemplate, agent_name: str) -> RenderedTemplate:
     variables = {
         "agent_display_name": agent_name,
         "agent_name": slugify(agent_name) or "agent",
         # The Slack app display name is not persisted; the hire wizard keeps it
         # in sync with the agent name.
         "slack_app_display_name": agent_name,
-        "deploy_date": date.today().isoformat(),
+        "deploy_date": datetime.now(UTC).date().isoformat(),
     }
     tools_md = _fill(template.tools_md, variables)
     return RenderedTemplate(

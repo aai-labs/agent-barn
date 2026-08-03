@@ -3,6 +3,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/shared/api";
+import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
 
 import { Agent, AgentSchema } from "../schemas";
 import { agentsKey } from "../utils";
@@ -33,16 +34,19 @@ export type UpdateAgentData = {
   removedSkillIds?: string[];
   // Integration credentials: upsert (add/replace) + explicit removal.
   secrets?: Array<{ provider: string; content: Record<string, string | string[] | boolean> }>;
+  // Shared credentials to attach (by ID)
+  sharedCredentials?: Array<{ sharedCredentialId: string }>;
   removedSecretProviders?: string[];
   approvalMode?: "manual" | "auto" | "off";
 };
 
 export function useUpdateAgent() {
   const queryClient = useQueryClient();
+  const orgApiBase = useOrganizationApiBase();
 
   return useMutation({
     mutationFn: async ({ agentId, ...data }: UpdateAgentData) => {
-      const response = await api.patch<Agent>(`/api/v1/agents/${agentId}`, data, {
+      const response = await api.patch<Agent>(`${orgApiBase}/agents/${agentId}`, data, {
         schema: AgentSchema,
       });
       return response.data;
