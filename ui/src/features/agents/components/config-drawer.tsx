@@ -215,10 +215,12 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
   const [errorSection, setErrorSection] = useState<"tokens" | "secrets" | "template" | null>(null);
   const [pendingSection, setPendingSection] = useState<"tokens" | "secrets" | null>(null);
   const [repinSecretDrafts, setRepinSecretDrafts] = useState<IntegrationDraft[]>([]);
-  // groupKey -> explicitly chosen skill id, for the re-pin target's "at least
-  // one of" required skill groups. Only holds user overrides — the effective
-  // default (falling back to an already-assigned member) is derived below.
-  const [repinGroupOverrides, setRepinGroupOverrides] = useState<Record<string, string>>({});
+  // groupKey -> explicitly chosen skill ids, for the re-pin target's "at least
+  // one of" required skill groups. Multi-select, mirroring the hire dialog —
+  // an agent can have both GitHub and Bitbucket assigned. Only holds user
+  // overrides — the effective default (falling back to already-assigned
+  // members) is derived below.
+  const [repinGroupOverrides, setRepinGroupOverrides] = useState<Record<string, string[]>>({});
 
   const tabs = getTabs(agent);
   // Clamp the URL-provided tab to one that's actually reachable for this agent
@@ -291,26 +293,37 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
   const { standalone: newStandaloneRequiredSkills, groups: newRequiredGroups } =
     splitRequiredSkills(newTemplateRequiredSkills);
 
-  // Each group's effective choice: an explicit user override if it's still a
-  // valid member of that group, else a member the agent is already assigned,
-  // else unset so the user must pick explicitly. Derived (not effect-driven)
-  // so it's always in sync with the currently resolved re-pin target — a
-  // stale override for a group that no longer exists is simply never read.
+  // Each group's effective choice: an explicit user override (once the user
+  // has touched that group, even down to an empty selection) else every
+  // member the agent is already assigned, else unset so the user must pick
+  // explicitly. Derived (not effect-driven) so it's always in sync with the
+  // currently resolved re-pin target — a stale override for a group that no
+  // longer exists is simply never read.
   const assignedSkillIds = new Set(agent.skills.map((s) => s.id));
-  const repinGroupChoices: Record<string, string> = {};
+  const repinGroupChoices: Record<string, string[]> = {};
   for (const group of newRequiredGroups) {
     const override = repinGroupOverrides[group.key];
-    if (override && group.members.some((m) => m.id === override)) {
-      repinGroupChoices[group.key] = override;
+    if (override !== undefined) {
+      repinGroupChoices[group.key] = override.filter((id) => group.members.some((m) => m.id === id));
       continue;
     }
-    const assigned = group.members.find((m) => assignedSkillIds.has(m.id));
-    if (assigned) repinGroupChoices[group.key] = assigned.id;
+    const assigned = group.members.filter((m) => assignedSkillIds.has(m.id)).map((m) => m.id);
+    if (assigned.length > 0) repinGroupChoices[group.key] = assigned;
   }
 
-  const chosenGroupSkills: TemplateRequiredSkill[] = newRequiredGroups
-    .map((g) => g.members.find((m) => m.id === repinGroupChoices[g.key]))
-    .filter((s): s is TemplateRequiredSkill => !!s);
+  function toggleRepinGroupMember(groupKey: string, memberId: string) {
+    const current = repinGroupChoices[groupKey] ?? [];
+    const next = current.includes(memberId)
+      ? current.filter((id) => id !== memberId)
+      : [...current, memberId];
+    setRepinGroupOverrides((prev) => ({ ...prev, [groupKey]: next }));
+  }
+
+  const chosenGroupSkills: TemplateRequiredSkill[] = newRequiredGroups.flatMap((g) =>
+    (repinGroupChoices[g.key] ?? [])
+      .map((id) => g.members.find((m) => m.id === id))
+      .filter((s): s is TemplateRequiredSkill => !!s),
+  );
 
   const existingSecretProviders = new Set((agent.secrets ?? []).map((s) => s.provider));
 
@@ -707,7 +720,7 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                   {newRequiredGroups.map((group) => (
                     <div key={group.key} className="flex flex-col gap-1.5">
                       <div className="text-[0.75rem] font-medium" style={{ color: "var(--ink-3)" }}>
-                        Choose one:
+                        Choose at least one:
                       </div>
                       {group.members.map((member) => {
                         const missingProviders = member.requiredProviders.filter(
@@ -720,12 +733,9 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                             style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
                           >
                             <input
-                              type="radio"
-                              name={`repin-group-${group.key}`}
-                              checked={repinGroupChoices[group.key] === member.id}
-                              onChange={() =>
-                                setRepinGroupOverrides((prev) => ({ ...prev, [group.key]: member.id }))
-                              }
+                              type="checkbox"
+                              checked={(repinGroupChoices[group.key] ?? []).includes(member.id)}
+                              onChange={() => toggleRepinGroupMember(group.key, member.id)}
                               disabled={isRunning}
                               className="accent-[var(--blue-9)]"
                             />
@@ -802,7 +812,7 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                     !repinSlug ||
                     repinIsNoop ||
                     hasIncompleteIntegration(effectiveRepinSecretDrafts) ||
-                    newRequiredGroups.some((g) => !repinGroupChoices[g.key])
+                    newRequiredGroups.some((g) => !repinGroupChoices[g.key]?.length)
                   }
                   title={isRunning ? "Stop the agent before changing its template" : undefined}
                   onClick={() => { void handleApplyTemplate(); }}

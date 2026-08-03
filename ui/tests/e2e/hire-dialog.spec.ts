@@ -775,7 +775,9 @@ test.describe("Hire Dialog — Skills step required skill group", () => {
     await page.locator('input[type="password"]').fill("bb-token");
 
     const createPromise = page.waitForRequest(
-      (req) => req.url().includes("/api/v1/agents") && req.method() === "POST",
+      (req) =>
+        /\/api\/v1\/organizations\/[^/]+\/agents$/.test(new URL(req.url()).pathname) &&
+        req.method() === "POST",
     );
     await page.getByRole("button", { name: "Hire Aria" }).click();
     const createRequest = await createPromise;

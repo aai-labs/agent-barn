@@ -207,7 +207,7 @@ test.describe("Settings · Templates", () => {
     await expect(page.getByTestId("required-skill-group-bitbucket-or-github")).toBeVisible();
 
     const patchPromise = page.waitForRequest(
-      (req) => req.url().includes("/api/v1/templates/my-custom") && req.method() === "PATCH",
+      (req) => req.url().includes("/templates/my-custom") && req.method() === "PATCH",
     );
     await page.getByRole("button", { name: "Save", exact: true }).click();
     const patchRequest = await patchPromise;
@@ -244,7 +244,7 @@ test.describe("Settings · Templates", () => {
     await groupCard.getByRole("button", { name: "Add" }).click();
 
     const patchPromise = page.waitForRequest(
-      (req) => req.url().includes("/api/v1/templates/my-custom") && req.method() === "PATCH",
+      (req) => req.url().includes("/templates/my-custom") && req.method() === "PATCH",
     );
     await page.getByRole("button", { name: "Save", exact: true }).click();
     const patchRequest = await patchPromise;
@@ -286,7 +286,7 @@ test.describe("Settings · Templates", () => {
     await expect(page.getByTestId("required-skill-group-vcs-group")).toHaveCount(0);
 
     const patchPromise = page.waitForRequest(
-      (req) => req.url().includes("/api/v1/templates/my-custom") && req.method() === "PATCH",
+      (req) => req.url().includes("/templates/my-custom") && req.method() === "PATCH",
     );
     await page.getByRole("button", { name: "Save", exact: true }).click();
     const patchRequest = await patchPromise;
@@ -314,7 +314,7 @@ test.describe("Settings · Templates", () => {
     await expect(page.getByTestId("required-skill-group-vcs-group")).toHaveCount(0);
 
     const patchPromise = page.waitForRequest(
-      (req) => req.url().includes("/api/v1/templates/my-custom") && req.method() === "PATCH",
+      (req) => req.url().includes("/templates/my-custom") && req.method() === "PATCH",
     );
     await page.getByRole("button", { name: "Save", exact: true }).click();
     const patchRequest = await patchPromise;
