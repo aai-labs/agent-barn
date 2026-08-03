@@ -231,6 +231,18 @@ make reconcile    # uv run python -m api.domains.events.reconciliation
 
 Both `make dev-worker` and `make reconcile` read `REDIS_URL` from the repo-root `.env` (defaults to `redis://localhost:6379/0`, matching `REDIS_PORT`).
 
+## Platform Event Delivery Monitor
+
+AF-247 adds the first read API and UI over this domain: a Platform Administrator–only, global Platform View surface for inspecting Event Delivery pipeline health. It is strictly read-only and monitors **Event Deliveries**, not Outbox Messages — an Outbox Message is immutable publication intent with no lifecycle status, and an event with no intended handlers has zero Event Deliveries and never appears here.
+
+- Endpoints (Platform Administrator only, `401` unauthenticated / `403` non-admin, no Active Organization resolved or accepted):
+  - `GET /api/v1/platform/event-deliveries/summary` — global counts for all five lifecycle statuses (including zero) plus, for each active state (`PENDING`, `ENQUEUED`, `PROCESSING`), oldest age, stale count, unknown-age count, and the configured stale threshold.
+  - `GET /api/v1/platform/event-deliveries` — page/offset explorer, default and max page size 50/100, deterministic `(created_at, id)` ordering (newest-first default, oldest-first optional), filterable by status/Organization/event name/created-at range, with free-text search (exact match on Delivery ID or Event ID; case-insensitive prefix match on Organization name, event name, or handler name; `last_error` is never searched).
+  - `GET /api/v1/platform/event-deliveries/event-types` — the registry catalogue as event name plus schema versions, limited to definitions with at least one intended Event Handler (a handler-less event, e.g. `agent.created`, can never produce a delivery and is excluded).
+- State age semantics reuse the domain's own clocks — `PENDING` → `created_at`, `ENQUEUED` → `enqueued_at`, `PROCESSING` → `claimed_at` — and the reconciler's configured thresholds (`EVENT_DELIVERY_RECONCILIATION_PENDING_GRACE_SECONDS`, `EVENT_DELIVERY_RECONCILIATION_ENQUEUED_STALE_SECONDS`, `EVENT_DELIVERY_PROCESSING_STALE_SECONDS`) as the single source of truth for "stale." A missing required state timestamp is surfaced as unknown age, never backfilled from `created_at`.
+- The delivery response is safe operational metadata only (identity, status, timing, attempt count, dead-letter reason, bounded/redacted `last_error`, derived `status_since`) and never includes Event Payload, Actor/Subject Identity, or correlation/causation data. `last_error` is re-bounded/redacted at this read boundary as defense in depth, independent of the write-time bounding in `repository.py`.
+- The UI (`../../ui/src/features/event-deliveries/`) renders this at `/dashboard/platform/event-deliveries` with URL-backed filters/sort, a manual **Refresh** action (no polling), `useInfiniteQuery` + TanStack Virtual for the explorer, and one expandable inline row at a time.
+
 ## Boundaries
 
 The event domain owns envelope types, payload validation, event registry, handler registry contract, outbox persistence, delivery persistence, and delivery processing state machine. Business domains decide when their own mutations produce Domain Events and should expose domain-specific repository operations for those all-or-nothing writes. Routes must not manage sessions, stage events, or publish deliveries directly. Services may orchestrate post-commit enqueue, but SQL and transaction mechanics stay in repositories and Dramatiq remains hidden behind the transport adapter.
@@ -248,9 +260,13 @@ This foundation deliberately excludes event sourcing, public webhooks, replay ad
 | Event Handler registry and delivery processor | `../../api/domains/events/handlers.py`, `../../api/domains/events/processor.py` |
 | Dramatiq transport adapter and worker actors | `../../api/domains/events/transport.py`, `../../api/domains/events/worker.py`, `../../api/worker_app.py` |
 | Event Delivery reconciler | `../../api/domains/events/reconciliation.py` |
-| Schema migrations | `../../api/migrations/versions/b4c7e2a19d34_add_outbox_message.py`, `../../api/migrations/versions/c9d8e7f6a5b4_add_event_delivery.py` |
+| Platform Event Delivery Monitor service and routes | `../../api/domains/events/service.py`, `../../api/domains/events/routes.py` |
+| Platform Event Delivery Monitor UI | `../../ui/src/features/event-deliveries/` |
+| Schema migrations | `../../api/migrations/versions/b4c7e2a19d34_add_outbox_message.py`, `../../api/migrations/versions/c9d8e7f6a5b4_add_event_delivery.py`, `../../api/migrations/versions/b7f3d8e1c4a9_add_event_delivery_monitor_indexes.py` |
 | Unit validation tests | `../../api/tests/unit/test_domain_events.py` |
 | PostgreSQL persistence and transaction tests | `../../api/tests/integration/test_outbox_messages.py` |
+| Platform Event Delivery Monitor API tests | `../../api/tests/integration/test_event_delivery_monitor.py` |
+| Platform Event Delivery Monitor UI tests | `../../ui/tests/e2e/event-deliveries.spec.ts` |
 
 ## Related decisions
 
@@ -260,3 +276,5 @@ This foundation deliberately excludes event sourcing, public webhooks, replay ad
 ## Change impact
 
 Adding a Domain Event requires a registered event name/version, payload schema, intended handler mapping, payload safety tests, and repository/integration coverage for any event-producing mutation. Adding an event-producing business mutation requires a domain-specific repository transaction boundary that commits business state and staged event rows together, plus service-layer post-commit enqueue if low-latency delivery is required. Adding an Event Handler requires static registry wiring, idempotency design, success/retry/terminal-failure tests, and metrics/logging coverage. Changes to event envelope fields, delivery identity, lifecycle states, dead-letter reasons, handler registry semantics, reconciliation thresholds, or privacy rules require model, migration, registry/processor tests, this document, and ADR review when the decision changes.
+
+Changes to the Platform Event Delivery Monitor's summary/explorer response contract, stale-threshold semantics, redaction behavior, or supported filters require updating `api/domains/events/models.py` (DTOs), `repository.py` (query composition), `service.py`/`routes.py`, the matching UI schemas/hooks/components under `ui/src/features/event-deliveries/`, this document, and both test suites listed in the source map. A new index needed for a monitor query requires an Alembic migration under `api/migrations/versions/`.
