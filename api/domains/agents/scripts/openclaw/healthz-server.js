@@ -236,7 +236,7 @@ if (LITELLM_PROXY_TARGET) {
     });
 
     upstreamReq.on('error', () => {
-      if (!clientRes.headersSent) {
+      if (!clientRes.headersSent && !clientRes.destroyed) {
         const body = JSON.stringify({
           error: { message: 'LLM proxy upstream unreachable', type: null, param: null, code: '502' }
         });

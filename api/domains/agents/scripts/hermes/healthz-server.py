@@ -265,7 +265,9 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             if not headers_sent:
                 self.send_response(502)
                 self.send_header("Content-Type", "application/json")
-                err = json.dumps({"error": {"message": "LLM proxy upstream unreachable", "type": None, "param": None, "code": "502"}}).encode()
+                err = json.dumps(
+                    {"error": {"message": "LLM proxy upstream unreachable", "type": None, "param": None, "code": "502"}}
+                ).encode()
                 self.send_header("Content-Length", str(len(err)))
                 self.end_headers()
                 self.wfile.write(err)
