@@ -173,7 +173,12 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         self._forward()
 
     def _forward(self) -> None:
-        assert _target_parsed is not None
+        if _target_parsed is None:
+            self.send_error(500, "LLM proxy not configured")
+            return
+
+        conn = None
+        headers_sent = False
         try:
             content_length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(content_length) if content_length > 0 else None
@@ -207,6 +212,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                         self.send_header(key, val)
                 self.send_header("Content-Length", str(len(clean_body)))
                 self.end_headers()
+                headers_sent = True
                 self.wfile.write(clean_body)
             else:
                 self.send_response(upstream.status)
@@ -214,20 +220,23 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     if key.lower() not in ("transfer-encoding",):
                         self.send_header(key, val)
                 self.end_headers()
+                headers_sent = True
                 while True:
                     chunk = upstream.read(8192)
                     if not chunk:
                         break
                     self.wfile.write(chunk)
-
-            conn.close()
         except Exception:
-            self.send_response(502)
-            self.send_header("Content-Type", "application/json")
-            err = json.dumps({"error": {"message": "LLM proxy upstream unreachable", "type": None, "param": None, "code": "502"}}).encode()
-            self.send_header("Content-Length", str(len(err)))
-            self.end_headers()
-            self.wfile.write(err)
+            if not headers_sent:
+                self.send_response(502)
+                self.send_header("Content-Type", "application/json")
+                err = json.dumps({"error": {"message": "LLM proxy upstream unreachable", "type": None, "param": None, "code": "502"}}).encode()
+                self.send_header("Content-Length", str(len(err)))
+                self.end_headers()
+                self.wfile.write(err)
+        finally:
+            if conn:
+                conn.close()
 
 
 if LITELLM_PROXY_TARGET:
