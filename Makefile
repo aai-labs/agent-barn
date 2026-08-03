@@ -2,7 +2,7 @@ COMPOSE := docker compose -f compose.yml
 
 .PHONY: \
 	setup \
-	dev-api dev-ui dev-worker reconcile migrate rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring fix-api test check fix \
+	dev-api dev-ui dev-worker reconcile seed-event-deliveries migrate rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring fix-api test check fix \
 	up down restart logs build clean db-up db-down db-logs db-restart redis-up redis-down redis-logs worker-logs
 
 # One-time project bootstrap: installs deps for api + ui and creates a local
@@ -27,6 +27,11 @@ dev-worker:
 # One-shot reconciliation pass; production runs this on a CronJob schedule.
 reconcile:
 	cd api && uv run python -m api.domains.events.reconciliation
+
+# Local-only: populate the dev database with realistic Event Deliveries for
+# manually exercising the Platform Event Delivery Monitor UI. Safe to re-run.
+seed-event-deliveries:
+	api/.venv/bin/python -m api.scripts.seed_event_delivery_monitor_fixtures --count 200
 
 migrate:
 	cd api && uv run python -m alembic upgrade head

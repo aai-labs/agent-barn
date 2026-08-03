@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { BuildingIcon, UsersIcon } from "@/components/icons";
+import { BuildingIcon, ServerIcon, UsersIcon } from "@/components/icons";
 import { PlatformAdminOnly } from "@/auth/components/platform-admin-only";
 
 const platformLinks = [
@@ -16,6 +16,12 @@ const platformLinks = [
     description:
       "Manage customer organizations and jump into organization view.",
     Icon: BuildingIcon,
+  },
+  {
+    href: "/dashboard/platform/event-deliveries",
+    title: "Event Deliveries",
+    description: "Inspect delivery pipeline health and diagnose handler failures.",
+    Icon: ServerIcon,
   },
 ];
 

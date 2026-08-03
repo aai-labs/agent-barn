@@ -63,6 +63,9 @@ class DomainEventRegistry:
     def handler_names_for(self, event_name: str, schema_version: int) -> tuple[str, ...]:
         return self.get(event_name, schema_version).handler_names
 
+    def list_definitions(self) -> tuple[DomainEventDefinition, ...]:
+        return tuple(self._definitions.values())
+
     def build_event(
         self,
         *,
