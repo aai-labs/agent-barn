@@ -540,6 +540,42 @@ const SLACK_EXAMPLE_MANIFEST = JSON.stringify(
   2,
 );
 
+// Read-only bot manifest for the aai-cli Slack integration (channel data access) —
+// unrelated to SLACK_EXAMPLE_MANIFEST above, which configures the separate OpenClaw/
+// Hermes Slack gateway bot used for agent-to-user DMs. Do not merge these.
+const SLACK_INTEGRATION_MANIFEST = JSON.stringify(
+  {
+    display_information: {
+      name: "Your Bot Name",
+      description: "Read-only Slack channel data access for an AgentBarn agent.",
+    },
+    oauth_config: {
+      scopes: {
+        bot: ["channels:read", "channels:history", "groups:read", "groups:history", "files:read", "bookmarks:read"],
+      },
+    },
+  },
+  null,
+  2,
+);
+
+function CopySlackManifestButton({ manifest }: { manifest: string }) {
+  const [copied, setCopied] = useState(false);
+
+  function copy() {
+    void navigator.clipboard.writeText(manifest).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }
+
+  return (
+    <button type="button" className="af-btn af-btn-sm" onClick={copy}>
+      {copied ? "Copied!" : "Copy bot manifest"}
+    </button>
+  );
+}
+
 export function SlackTokensStep({
   slackAppToken,
   onAppTokenChange,
@@ -1630,6 +1666,7 @@ export function SkillsStep({
                     {providerSpec.scopeNote}
                   </p>
                 )}
+                {providerSpec.id === "slack" && <CopySlackManifestButton manifest={SLACK_INTEGRATION_MANIFEST} />}
                 {providerSpec.authMethod === "google_oauth" && (
                   <GoogleAuthButton
                     connected={isOAuthConnected(draft)}
@@ -1789,6 +1826,7 @@ export function IntegrationsStep({
                 {provider.scopeNote}
               </p>
             )}
+            {provider.id === "slack" && <CopySlackManifestButton manifest={SLACK_INTEGRATION_MANIFEST} />}
 
             {provider.authMethod === "google_oauth" && (
               <GoogleAuthButton

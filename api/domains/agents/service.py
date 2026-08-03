@@ -97,6 +97,7 @@ from api.infrastructure.integration_validators import (
     validate_github,
     validate_gmail,
     validate_jira,
+    validate_slack,
 )
 from api.infrastructure.integration_validators.atlassian_utils import (
     get_atlassian_cloud_id,
@@ -173,6 +174,7 @@ _VALIDATORS: dict[SecretProvider, Any] = {
     SecretProvider.CONFLUENCE: validate_confluence,
     SecretProvider.BITBUCKET: validate_bitbucket,
     SecretProvider.GMAIL: validate_gmail,
+    SecretProvider.SLACK: validate_slack,
 }
 
 

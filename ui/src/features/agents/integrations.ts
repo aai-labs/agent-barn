@@ -99,6 +99,14 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
     ],
   },
   {
+    id: "slack",
+    label: "Slack",
+    scopeNote: "Bot token scopes: channels:read, channels:history, groups:read, groups:history, files:read, bookmarks:read",
+    fields: [
+      { key: "token", label: "Bot token", type: "secret", required: true, placeholder: "xoxb-…" },
+    ],
+  },
+  {
     id: "gmail",
     label: "Gmail",
     authMethod: "google_oauth",

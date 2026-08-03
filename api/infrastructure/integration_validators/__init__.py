@@ -4,6 +4,7 @@ from api.infrastructure.integration_validators.github import validate_github
 from api.infrastructure.integration_validators.gmail import validate_gmail
 from api.infrastructure.integration_validators.jira import validate_jira
 from api.infrastructure.integration_validators.result import IntegrationValidationResult
+from api.infrastructure.integration_validators.slack import validate_slack
 
 __all__ = [
     "IntegrationValidationResult",
@@ -12,4 +13,5 @@ __all__ = [
     "validate_github",
     "validate_gmail",
     "validate_jira",
+    "validate_slack",
 ]

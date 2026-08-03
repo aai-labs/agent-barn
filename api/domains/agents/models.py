@@ -75,6 +75,7 @@ class SecretProvider(str, enum.Enum):
     ZOHO_MAIL = "zoho_mail"
     ZOHO_CALENDAR = "zoho_calendar"
     FIRECRAWL = "firecrawl"
+    SLACK = "slack"
 
 
 # Predefined display labels — NOT user-entered; the backend stamps these by provider.
@@ -88,6 +89,7 @@ PROVIDER_DISPLAY_NAMES: dict[SecretProvider, str] = {
     SecretProvider.ZOHO_MAIL: "Zoho Mail credential",
     SecretProvider.ZOHO_CALENDAR: "Zoho Calendar credential",
     SecretProvider.FIRECRAWL: "Firecrawl credential",
+    SecretProvider.SLACK: "Slack credential",
 }
 
 
@@ -180,6 +182,10 @@ class FirecrawlContent(SecretContent):
     base_url: str = ""
 
 
+class SlackContent(SecretContent):
+    token: str
+
+
 PROVIDER_CONTENT_MODELS: dict[SecretProvider, type[SecretContent]] = {
     SecretProvider.GITHUB: GithubContent,
     SecretProvider.JIRA: JiraContent,
@@ -190,6 +196,7 @@ PROVIDER_CONTENT_MODELS: dict[SecretProvider, type[SecretContent]] = {
     SecretProvider.ZOHO_MAIL: ZohoMailContent,
     SecretProvider.ZOHO_CALENDAR: ZohoCalendarContent,
     SecretProvider.FIRECRAWL: FirecrawlContent,
+    SecretProvider.SLACK: SlackContent,
 }
 
 

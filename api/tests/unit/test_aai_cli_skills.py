@@ -15,6 +15,7 @@ _EXPECTED_PROVIDER_NAMES = {
     "Bitbucket",
     "Gmail",
     "Zoho Mail",
+    "Slack",
 }
 
 
