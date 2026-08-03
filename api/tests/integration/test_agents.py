@@ -3379,7 +3379,7 @@ def test_create_agent_duplicate_token_does_not_leave_orphan():
 def test_start_agent_secret_has_litellm_proxy_target():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
 
         with when("I start the agent"):
             response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
