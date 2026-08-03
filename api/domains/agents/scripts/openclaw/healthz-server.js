@@ -223,14 +223,18 @@ if (LITELLM_PROXY_TARGET) {
     });
 
     upstreamReq.on('error', () => {
-      const body = JSON.stringify({
-        error: { message: 'LLM proxy upstream unreachable', type: null, param: null, code: '502' }
-      });
-      clientRes.writeHead(502, {
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(body),
-      });
-      clientRes.end(body);
+      if (!clientRes.headersSent) {
+        const body = JSON.stringify({
+          error: { message: 'LLM proxy upstream unreachable', type: null, param: null, code: '502' }
+        });
+        clientRes.writeHead(502, {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(body),
+        });
+        clientRes.end(body);
+      } else {
+        clientRes.destroy();
+      }
     });
 
     clientReq.pipe(upstreamReq);
