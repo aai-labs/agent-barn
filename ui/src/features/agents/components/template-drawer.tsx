@@ -109,7 +109,7 @@ export function TemplateDrawer({
   const forkBaselineVersion = current?.forkBaselinePlatformVersion;
   const hasPlatformUpdate =
     !platformUpdateApplied &&
-    (platformUpdateAvailable === true || versions.some((version) => version.platformUpdateAvailable));
+    (current ? current.platformUpdateAvailable : platformUpdateAvailable === true);
 
   // A skill is always in exactly one of: selectedSkillDetails (standalone),
   // one groupDrafts entry's members, or unselected — every "add" action below

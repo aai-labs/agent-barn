@@ -95,6 +95,38 @@ test.describe("Settings · Templates", () => {
     await expect(page.getByText("Saved as v3")).toBeVisible();
   });
 
+  test("does not show an update for the current version when only an older fork version is stale", async ({ page }) => {
+    const current = {
+      ...mockAgentTemplate,
+      id: "55555555-5555-4555-8555-555555555563",
+      template_key: "my-custom",
+      template_name: "My Custom",
+      template_source: "pre-defined",
+      version: 3,
+      forked_from_platform_template_id: "11111111-1111-4111-8111-111111111111",
+      fork_baseline_platform_template_id: "33333333-3333-4333-8333-333333333333",
+      fork_baseline_platform_version: 3,
+      platform_update_available: false,
+    };
+    const staleHistory = {
+      ...current,
+      id: "55555555-5555-4555-8555-555555555562",
+      version: 2,
+      fork_baseline_platform_template_id: "22222222-2222-4222-8222-222222222222",
+      fork_baseline_platform_version: 1,
+      platform_update_available: true,
+    };
+    await dataSupport.agents.interceptGetTemplatesRequest({
+      body: { page: 1, page_size: 50, total: 1, items: [current] },
+    });
+    await dataSupport.agents.interceptGetTemplateVersionsRequest({ body: [current, staleHistory] });
+
+    await page.reload();
+    await page.getByText("My Custom", { exact: true }).click();
+    await expect(page.getByText("Organization fork · Platform baseline v3", { exact: true })).toBeVisible();
+    await expect(page.getByTestId("template-update-available")).not.toBeVisible();
+  });
+
   test("search filters the list", async ({ page }) => {
     await page.getByLabel("Search templates").fill("scrum");
 
