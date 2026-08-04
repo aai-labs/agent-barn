@@ -189,7 +189,7 @@ class EventDeliveryRead(BaseModel):
     event_name: str
     schema_version: int
     handler_name: str
-    organization_id: UUID
+    organization_id: UUID | None
     organization_name: str
     status: EventDeliveryStatus
     attempt_count: int
