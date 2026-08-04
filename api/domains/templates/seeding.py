@@ -12,7 +12,7 @@ def build_predefined_templates() -> list[PlatformTemplate]:
     """
     return [
         PlatformTemplate(
-            template_slug=predefined.slug,
+            template_key=predefined.key,
             template_name=predefined.name,
             version=1,
             description=predefined.description,

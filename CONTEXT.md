@@ -100,6 +100,10 @@ _Avoid_: runtime
 A versioned Markdown configuration lineage used to create and run agents. Predefined templates are Platform Resources; custom templates belong to one Organization.
 _Avoid_: prompt, preset
 
+**Template Key**:
+An immutable, server-generated opaque identifier for a Template lineage, normally formatted as `tpl-` plus 12 lowercase hexadecimal characters. The key is used in URLs and API lookups; it is not derived from or managed through the display name.
+_Avoid_: template slug, editable identifier
+
 **Template Version**:
 A numbered configuration within a template lineage. An agent pins a specific version rather than following the latest automatically.
 _Avoid_: template revision

@@ -3,8 +3,9 @@
 Each template lineage is a subdirectory of `seeds/` (e.g. `seeds/code-reviewer/`)
 containing a `settings.yaml` (name, description, required_skills) and up to eight
 Markdown artifacts (soul.md, identity.md, user.md, tools.md, agents.md, boot.md,
-bootstrap.md, heartbeat.md). Any artifact a template omits falls back to the
-shared file of the same name in `seeds/_defaults/`.
+bootstrap.md, heartbeat.md). The directory name is the stable key for the
+predefined lineage. Any artifact a template omits falls back to the shared file
+of the same name in `seeds/_defaults/`.
 
 This directory only feeds the one-time bootstrap seeder (see
 `docs/adr/2026-08-03-platform-template-file-based-bootstrap.md`) — once a
@@ -34,7 +35,7 @@ _ARTIFACT_FILES: tuple[str, ...] = (
 
 @dataclass(frozen=True)
 class PredefinedTemplate:
-    slug: str
+    key: str
     name: str
     description: str
     soul_md: str
@@ -74,7 +75,7 @@ def _load_template(template_dir: Path) -> PredefinedTemplate:
     settings = yaml.safe_load((template_dir / "settings.yaml").read_text())
     artifacts = {filename[:-3]: _read_artifact(template_dir, filename) for filename in _ARTIFACT_FILES}
     return PredefinedTemplate(
-        slug=template_dir.name,
+        key=template_dir.name,
         name=settings["name"],
         description=settings["description"],
         soul_md=artifacts["soul"],
@@ -90,6 +91,6 @@ def _load_template(template_dir: Path) -> PredefinedTemplate:
 
 
 def load_predefined_templates() -> tuple[PredefinedTemplate, ...]:
-    """Loads every predefined template lineage from `seeds/`, sorted by slug for stable ordering."""
+    """Loads every predefined template lineage from `seeds/`, sorted by key for stable ordering."""
     template_dirs = sorted(d for d in SEEDS_DIR.iterdir() if d.is_dir() and d.name != "_defaults")
     return tuple(_load_template(d) for d in template_dirs)

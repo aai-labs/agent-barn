@@ -377,7 +377,7 @@ class AgentService:
         skills: list[Skill] | None = None,
         required_skill_map: dict[UUID, str | None] | None = None,
         allowed_actions: list[PermissionKey] | None = None,
-        template_slug: str = "",
+        template_key: str = "",
         template_version: int = 0,
     ) -> AgentRead:
         slack_config_read = AgentSlackConfigRead.model_validate(slack_config) if slack_config else None
@@ -416,7 +416,7 @@ class AgentService:
             platform=agent.platform,
             agent_type=agent.agent_type,
             organization_id=agent.organization_id,
-            template_slug=template_slug,
+            template_key=template_key,
             template_version=template_version,
             model=agent.model,
             approval_mode=agent.approval_mode,
@@ -455,7 +455,7 @@ class AgentService:
             skills,
             required_map,
             allowed_actions,
-            template_slug=template.template_slug if template else "",
+            template_key=template.template_key if template else "",
             template_version=template.version if template else 0,
         )
 
@@ -500,11 +500,11 @@ class AgentService:
 
         # Pin to the requested version, or the lineage's latest if unspecified.
         if data.template_version is not None:
-            template = self.template_repository.resolve_template(org_id, data.template_slug, data.template_version)
-            missing_detail = f"Template {data.template_slug} v{data.template_version} not found"
+            template = self.template_repository.resolve_template(org_id, data.template_key, data.template_version)
+            missing_detail = f"Template {data.template_key} v{data.template_version} not found"
         else:
-            template = self.template_repository.resolve_latest_template(org_id, data.template_slug)
-            missing_detail = f"Template {data.template_slug} not found"
+            template = self.template_repository.resolve_latest_template(org_id, data.template_key)
+            missing_detail = f"Template {data.template_key} not found"
         if template is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=missing_detail)
 
@@ -688,7 +688,7 @@ class AgentService:
             skills_to_assign,
             required_map,
             allowed_actions,
-            template_slug=template.template_slug,
+            template_key=template.template_key,
             template_version=template.version,
         )
 
@@ -705,7 +705,7 @@ class AgentService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Agent {agent_id} has no pinned template",
             )
-        template = self.template_repository.resolve_template(org_id, pinned.template_slug, version)
+        template = self.template_repository.resolve_template(org_id, pinned.template_key, version)
         if not template:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -743,7 +743,7 @@ class AgentService:
                 skills_by_agent.get(agent.id, []),
                 req_maps_by_agent.get(agent.id, {}),
                 allowed_actions.get(agent.id, []),
-                template_slug=pin_info.get(agent.id, ("", 0))[0],
+                template_key=pin_info.get(agent.id, ("", 0))[0],
                 template_version=pin_info.get(agent.id, ("", 0))[1],
             )
             for agent in agents
@@ -790,17 +790,17 @@ class AgentService:
                     detail=f"Cannot set {label} fields on a {agent.platform.title()} agent",
                 )
 
-        # Re-pin the agent to a different template (slug, version). The model
+        # Re-pin the agent to a different template (key, version). The model
         # validator guarantees both keys appear together.
         effective_template = None
-        if "template_slug" in updated:
+        if "template_key" in updated:
             effective_template = self.template_repository.resolve_template(
-                org_id, updated["template_slug"], updated["template_version"]
+                org_id, updated["template_key"], updated["template_version"]
             )
             if effective_template is None:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail=(f"Template {updated['template_slug']} v{updated['template_version']} not found"),
+                    detail=(f"Template {updated['template_key']} v{updated['template_version']} not found"),
                 )
             self._set_pin(agent, effective_template)
 
@@ -850,7 +850,7 @@ class AgentService:
                             detail=("At least one of these template-required skills must remain: " + ", ".join(names)),
                         )
             # When re-pinning, validate that required skills will be present.
-            if "template_slug" in updated:
+            if "template_key" in updated:
                 if standalone_ids - effective_skill_ids:
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,

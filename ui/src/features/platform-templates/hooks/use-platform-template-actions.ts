@@ -30,7 +30,7 @@ export function useCreatePlatformTemplateDraft() {
       return response.data;
     },
     onSuccess: (data) => {
-      queryClient.setQueryData(platformTemplatesKey.detail(data.templateSlug), data);
+      queryClient.setQueryData(platformTemplatesKey.detail(data.templateKey), data);
       void queryClient.invalidateQueries({ queryKey: platformTemplatesKey.lists() });
     },
   });
@@ -40,17 +40,17 @@ export function useStartPlatformTemplateDraft() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ slug, sourceVersion }: { slug: string; sourceVersion?: number }) => {
+    mutationFn: async ({ templateKey, sourceVersion }: { templateKey: string; sourceVersion?: number }) => {
       const query = sourceVersion === undefined ? "" : `?source_version=${sourceVersion}`;
       const response = await api.post<PlatformTemplateDraft>(
-        `/api/v1/platform/templates/${slug}/draft${query}`,
+        `/api/v1/platform/templates/${templateKey}/draft${query}`,
         undefined,
         { schema: PlatformTemplateDraftReadSchema },
       );
       return response.data;
     },
     onSuccess: (data) => {
-      queryClient.setQueryData(platformTemplatesKey.detail(data.templateSlug), data);
+      queryClient.setQueryData(platformTemplatesKey.detail(data.templateKey), data);
       void queryClient.invalidateQueries({ queryKey: platformTemplatesKey.lists() });
     },
   });
@@ -60,16 +60,16 @@ export function useUpdatePlatformTemplateDraft() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ slug, ...data }: PlatformTemplateDraftFields & { slug: string }) => {
+    mutationFn: async ({ templateKey, ...data }: PlatformTemplateDraftFields & { templateKey: string }) => {
       const response = await api.patch<PlatformTemplateDraft>(
-        `/api/v1/platform/templates/${slug}/draft`,
+        `/api/v1/platform/templates/${templateKey}/draft`,
         data,
         { schema: PlatformTemplateDraftReadSchema },
       );
       return response.data;
     },
     onSuccess: (data) => {
-      queryClient.setQueryData(platformTemplatesKey.detail(data.templateSlug), data);
+      queryClient.setQueryData(platformTemplatesKey.detail(data.templateKey), data);
       void queryClient.invalidateQueries({ queryKey: platformTemplatesKey.lists() });
     },
   });
@@ -79,12 +79,12 @@ export function useDiscardPlatformTemplateDraft() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (slug: string) => {
-      await api.delete(`/api/v1/platform/templates/${slug}/draft`);
-      return slug;
+    mutationFn: async (templateKey: string) => {
+      await api.delete(`/api/v1/platform/templates/${templateKey}/draft`);
+      return templateKey;
     },
-    onSuccess: (slug) => {
-      queryClient.removeQueries({ queryKey: platformTemplatesKey.detail(slug) });
+    onSuccess: (templateKey) => {
+      queryClient.removeQueries({ queryKey: platformTemplatesKey.detail(templateKey) });
       void queryClient.invalidateQueries({ queryKey: platformTemplatesKey.lists() });
     },
   });
@@ -94,18 +94,18 @@ export function usePublishPlatformTemplateDraft() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (slug: string) => {
-      const response = await api.post<{ id: string; templateSlug: string; version: number }>(
-        `/api/v1/platform/templates/${slug}/draft/publish`,
+    mutationFn: async (templateKey: string) => {
+      const response = await api.post<{ id: string; templateKey: string; version: number }>(
+        `/api/v1/platform/templates/${templateKey}/draft/publish`,
         undefined,
         { schema: PlatformTemplatePublishedReadSchema },
       );
       return response.data;
     },
     onSuccess: (data) => {
-      queryClient.removeQueries({ queryKey: platformTemplatesKey.detail(data.templateSlug) });
-      void queryClient.invalidateQueries({ queryKey: platformTemplatePublishedKey.detail(data.templateSlug) });
-      void queryClient.invalidateQueries({ queryKey: platformTemplateVersionsKey.detail(data.templateSlug) });
+      queryClient.removeQueries({ queryKey: platformTemplatesKey.detail(data.templateKey) });
+      void queryClient.invalidateQueries({ queryKey: platformTemplatePublishedKey.detail(data.templateKey) });
+      void queryClient.invalidateQueries({ queryKey: platformTemplateVersionsKey.detail(data.templateKey) });
       void queryClient.invalidateQueries({ queryKey: platformTemplatesKey.lists() });
     },
   });

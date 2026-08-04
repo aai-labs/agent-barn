@@ -50,7 +50,7 @@ Creation requires `agent.create`, resolves the requested template version or the
 
 ### Update
 
-Update is allowed only while not running. It can change runtime-relevant configuration, repin to an existing template version, add/remove allowed skills, and upsert/remove Agent Secrets. Repinning requires both slug and version and revalidates required skills.
+Update is allowed only while not running. It can change runtime-relevant configuration, repin to an existing template version, add/remove allowed skills, and upsert/remove Agent Secrets. Repinning requires both template_key and version and revalidates required skills.
 
 ### Start
 

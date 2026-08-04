@@ -865,9 +865,9 @@ def test_delete_skill_no_longer_required_by_latest_template_returns_204():
         [
             *_GIVEN,
             there_is_a_skill(),
-            there_is_a_template(slug="test-template", version=1),
+            there_is_a_template(template_key="test-template", version=1),
             there_is_a_template_skill(),
-            there_is_a_template(slug="test-template", version=2),
+            there_is_a_template(template_key="test-template", version=2),
         ]
     ) as context:
         client: TestClient = context.client

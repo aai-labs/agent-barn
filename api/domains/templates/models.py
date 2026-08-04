@@ -30,9 +30,9 @@ class AgentTemplate(BaseModel, table=True):
         sa.Index("ix_agent_template_organization_id", "organization_id"),
         sa.UniqueConstraint(
             "organization_id",
-            "template_slug",
+            "template_key",
             "version",
-            name="uq_agent_template_org_slug_version",
+            name="uq_agent_template_org_key_version",
         ),
     )
 
@@ -49,7 +49,7 @@ class AgentTemplate(BaseModel, table=True):
         nullable=True,
         ondelete="SET NULL",
     )
-    template_slug: str = SqlField(nullable=False, max_length=255)
+    template_key: str = SqlField(nullable=False, max_length=255)
     template_name: str = SqlField(nullable=False, max_length=255)
     template_source: TemplateSource = SqlField(
         default=TemplateSource.CUSTOM,
@@ -108,13 +108,13 @@ class PlatformTemplate(BaseModel, table=True):
     # skills. Always template_source = pre-defined (implicit; not stored).
     __table_args__ = (
         sa.UniqueConstraint(
-            "template_slug",
+            "template_key",
             "version",
-            name="uq_platform_template_slug_version",
+            name="uq_platform_template_key_version",
         ),
     )
 
-    template_slug: str = SqlField(nullable=False, max_length=255)
+    template_key: str = SqlField(nullable=False, max_length=255)
     template_name: str = SqlField(nullable=False, max_length=255)
     version: int = SqlField(nullable=False)
     description: str | None = SqlField(default=None, nullable=True, max_length=500)
@@ -134,12 +134,12 @@ class PlatformTemplateDraft(BaseModel, table=True):
     # An unpublished, in-progress next version of a Platform Template lineage.
     # Authored only by a Platform Administrator and invisible to every
     # Organization. Unversioned and mutated in place while drafting; the
-    # unique constraint on template_slug enforces at most one Draft Template
+    # unique constraint on template_key enforces at most one Draft Template
     # Version per lineage. Publishing turns it into the next immutable
     # platform_template row and deletes this row.
-    __table_args__ = (sa.UniqueConstraint("template_slug", name="uq_platform_template_draft_slug"),)
+    __table_args__ = (sa.UniqueConstraint("template_key", name="uq_platform_template_draft_key"),)
 
-    template_slug: str = SqlField(nullable=False, max_length=255)
+    template_key: str = SqlField(nullable=False, max_length=255)
     template_name: str = SqlField(nullable=False, max_length=255)
     description: str | None = SqlField(default=None, nullable=True, max_length=500)
     soul_md: str = SqlField(nullable=False)
@@ -157,7 +157,7 @@ class TemplateRead(PydanticBaseModel):
 
     id: UUID
     organization_id: UUID | None
-    template_slug: str
+    template_key: str
     template_name: str
     template_source: TemplateSource
     # Set only for org forks of a platform predefined template; NULL for custom
@@ -186,7 +186,7 @@ class PlatformTemplateDraftRead(PydanticBaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
-    template_slug: str
+    template_key: str
     template_name: str
     description: str | None
     soul_md: str
@@ -304,7 +304,7 @@ class PlatformTemplateDraftUpdate(PydanticBaseModel):
 class PlatformTemplateAdminSummary(PydanticBaseModel):
     """One row of the Platform Admin authoring catalogue: a lineage plus its draft status."""
 
-    template_slug: str
+    template_key: str
     template_name: str
     latest_published_version: int | None
     has_draft: bool

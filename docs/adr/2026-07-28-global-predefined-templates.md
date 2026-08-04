@@ -8,8 +8,8 @@ Predefined templates were per-Organization rows cloned by a seeder on every org 
 
 ## Decision
 
-- `platform_template` is a global table with uniqueness on `(template_slug, version)`. `platform_template_skill` holds its required-skill associations. No `organization_id`.
-- `agent_template` is strictly organization-scoped (`organization_id` NOT NULL, unique on `(organization_id, template_slug, version)`). It holds custom templates and org forks of predefined templates. `forked_from_platform_template_id` (nullable FK → `platform_template.id`) records fork lineage so "update available" detection is possible later.
+- `platform_template` is a global table with uniqueness on `(template_key, version)`. `platform_template_skill` holds its required-skill associations. No `organization_id`.
+- `agent_template` is strictly organization-scoped (`organization_id` NOT NULL, unique on `(organization_id, template_key, version)`). It holds custom templates and org forks of predefined templates. `forked_from_platform_template_id` (nullable FK → `platform_template.id`) records fork lineage so "update available" detection is possible later.
 - Agents pin a template via exactly one of `platform_template_id` or `agent_template_id` (both nullable FKs with `ON DELETE RESTRICT`), enforced by a CHECK constraint `(platform_template_id IS NULL) <> (agent_template_id IS NULL)`. This restores DB-level referential integrity that the earlier nullable-org_id approach could not provide.
 - The predefined seeder writes to `platform_template` at startup. Organization creation and signup no longer seed templates.
 - Editing a platform predefined template forks it: the PATCH creates an `agent_template` row at `version = platform_v + 1` with `forked_from_platform_template_id` set. The seeder only ever refreshes the platform v1 in place; org forks are never clobbered.

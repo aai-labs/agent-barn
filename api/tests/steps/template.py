@@ -15,7 +15,7 @@ from api.domains.templates.repository import TemplateRepository
 
 
 def there_is_a_template(
-    slug: str = "test-template",
+    template_key: str = "test-template",
     name: str = "Test Template",
     version: int = 1,
     source: TemplateSource = TemplateSource.CUSTOM,
@@ -34,7 +34,7 @@ def there_is_a_template(
         repository: TemplateRepository = context.injector.get(TemplateRepository)
         template = AgentTemplate(
             organization_id=org_id,
-            template_slug=slug,
+            template_key=template_key,
             template_name=name,
             template_source=source,
             version=version,

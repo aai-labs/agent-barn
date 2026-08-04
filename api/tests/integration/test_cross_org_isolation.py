@@ -2,7 +2,7 @@
 
 List-level scoping is covered per-domain elsewhere; this suite pins the object-level
 (IDOR) guarantees: authenticating as a member of org A and using org A's URL scope,
-you must not be able to read or mutate org B's resources *by id/slug*.
+you must not be able to read or mutate org B's resources *by id/key*.
 
 Isolation contract:
 - Resources (agents, skills, templates) return **404** cross-org — existence is never
@@ -238,10 +238,10 @@ def test_cannot_delete_skill_from_another_org():
 
 
 # --------------------------------------------------------------------------- #
-# Templates — a slug that exists only in org B must 404 for org A
+# Templates — a key that exists only in org B must 404 for org A
 # --------------------------------------------------------------------------- #
 
-_ORG_B_SLUG = "orgb-secret-template"
+_ORG_B_TEMPLATE_KEY = "orgb-secret-template"
 
 
 def _member_a_with_org_b_template():
@@ -255,20 +255,20 @@ def _member_a_with_org_b_template():
         ),
         there_is_an_access_token_for_user(),
         _there_is_a_bare_org(ORG_B, "Org B"),
-        there_is_a_template(slug=_ORG_B_SLUG, name="Org B Secret", organization_id=ORG_B),
+        there_is_a_template(template_key=_ORG_B_TEMPLATE_KEY, name="Org B Secret", organization_id=ORG_B),
     ]
 
 
 def test_cannot_read_template_from_another_org():
     with given(_member_a_with_org_b_template()) as context:
-        response = context.client.get(f"{_templates(ORG_A)}/{_ORG_B_SLUG}", headers=_headers(context))
+        response = context.client.get(f"{_templates(ORG_A)}/{_ORG_B_TEMPLATE_KEY}", headers=_headers(context))
         assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
 def test_cannot_update_template_from_another_org():
     with given(_member_a_with_org_b_template()) as context:
         response = context.client.patch(
-            f"{_templates(ORG_A)}/{_ORG_B_SLUG}",
+            f"{_templates(ORG_A)}/{_ORG_B_TEMPLATE_KEY}",
             json={"soul_md": "# Hijacked"},
             headers=_headers(context),
         )
@@ -278,7 +278,7 @@ def test_cannot_update_template_from_another_org():
 def test_cannot_list_template_versions_from_another_org():
     with given(_member_a_with_org_b_template()) as context:
         response = context.client.get(
-            f"{_templates(ORG_A)}/{_ORG_B_SLUG}/versions",
+            f"{_templates(ORG_A)}/{_ORG_B_TEMPLATE_KEY}/versions",
             headers=_headers(context),
         )
         assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))

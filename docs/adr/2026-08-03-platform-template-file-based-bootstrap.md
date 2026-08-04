@@ -8,7 +8,7 @@ Platform Templates are currently authored as Python (`api/domains/templates/pred
 
 ## Decision
 
-- The Python-defined predefined templates are replaced by a structured directory of Markdown files (one per template artifact: soul, identity, user, tools, agents, boot, bootstrap, heartbeat) plus an optional YAML settings file per template for non-content metadata (slug, required skills).
+- The Python-defined predefined templates are replaced by a structured directory of Markdown files (one per template artifact: soul, identity, user, tools, agents, boot, bootstrap, heartbeat) plus an optional YAML settings file per template for non-content metadata (display name, description, required skills); the directory name supplies the stable template key.
 - The seeder reads this directory and writes `platform_template` rows only as a **one-time bootstrap** — it seeds a lineage's v1 if that lineage doesn't already exist in the database, and never overwrites an existing row on subsequent startups.
 - Once a lineage exists in the database, the code/file directory stops being its source of truth. All further versions are authored and published through the admin Draft Template Version UI.
 

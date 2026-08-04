@@ -577,7 +577,7 @@ class AgentCreate(PydanticBaseModel):
     telegram_dm_policy: TelegramDmPolicy = TelegramDmPolicy.OFF
     # Template reference. The agent pins to template_version if given, else to
     # the lineage's latest version.
-    template_slug: str = Field(min_length=1, max_length=255)
+    template_key: str = Field(min_length=1, max_length=255)
     template_version: int | None = None
     model: str | None = None
     # Integration credentials (optional)
@@ -586,6 +586,13 @@ class AgentCreate(PydanticBaseModel):
     # Custom org skills to assign on creation (optional)
     skill_ids: list[UUID] = Field(default_factory=list)
     approval_mode: CommandApprovalMode = CommandApprovalMode.AUTO
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_legacy_template_slug(cls, values: object) -> object:
+        if isinstance(values, dict) and "template_slug" in values:
+            raise ValueError("template_slug is no longer supported; use template_key")
+        return values
 
     @model_validator(mode="after")
     def validate_platform_credentials(self) -> AgentCreate:
@@ -628,10 +635,10 @@ class AgentUpdate(PydanticBaseModel):
     telegram_allowed_chat_ids: list[str] | None = None
     telegram_group_policy: TelegramGroupPolicy | None = None
     telegram_dm_policy: TelegramDmPolicy | None = None
-    # Template re-pin: point the agent at a different (slug, version). Both must
+    # Template re-pin: point the agent at a different (key, version). Both must
     # be provided together. Per-agent markdown editing is no longer supported —
     # persona changes happen by editing templates in the catalog.
-    template_slug: str | None = Field(default=None, min_length=1, max_length=255)
+    template_key: str | None = Field(default=None, min_length=1, max_length=255)
     template_version: int | None = None
     model: str | None = None
     skill_ids: list[UUID] = Field(default_factory=list)
@@ -643,6 +650,13 @@ class AgentUpdate(PydanticBaseModel):
     removed_secret_providers: list[SecretProvider] | None = None
     approval_mode: CommandApprovalMode | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def reject_legacy_template_slug(cls, values: object) -> object:
+        if isinstance(values, dict) and "template_slug" in values:
+            raise ValueError("template_slug is no longer supported; use template_key")
+        return values
+
     @model_validator(mode="after")
     def validate_skill_operations(self) -> AgentUpdate:
         overlap = set(self.skill_ids) & set(self.removed_skill_ids)
@@ -653,8 +667,8 @@ class AgentUpdate(PydanticBaseModel):
 
     @model_validator(mode="after")
     def validate_template_repin(self) -> AgentUpdate:
-        if (self.template_slug is None) != (self.template_version is None):
-            raise ValueError("template_slug and template_version must be provided together")
+        if (self.template_key is None) != (self.template_version is None):
+            raise ValueError("template_key and template_version must be provided together")
         return self
 
     @model_validator(mode="after")
@@ -767,7 +781,7 @@ class AgentRead(PydanticBaseModel):
     platform: AgentPlatform
     agent_type: AgentType
     organization_id: UUID
-    template_slug: str
+    template_key: str
     template_version: int
     model: str
     slack_config: AgentSlackConfigRead | None = None

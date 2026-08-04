@@ -52,23 +52,19 @@ function filesFrom(template: AgentTemplateRead): TemplateFiles {
 type SkillEntry = { id: string; name: string; source: string; requiredProviders: string[] };
 type GroupDraft = { key: string; members: SkillEntry[] };
 
-function deriveSlug(name: string): string {
-  return name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
-}
-
 export function TemplateDrawer({
   mode,
-  slug,
+  templateKey,
   canManage,
   onClose,
 }: {
   mode: "view" | "create";
-  slug?: string;
+  templateKey?: string;
   canManage: boolean;
   onClose: () => void;
 }) {
   const { versions, isLoading, refetch } = useTemplateVersions(
-    mode === "view" ? slug : null,
+    mode === "view" ? templateKey : null,
   );
   const createTemplate = useCreateTemplate();
   const updateTemplate = useUpdateTemplate();
@@ -201,7 +197,7 @@ export function TemplateDrawer({
         return;
       }
       // Saving publishes a new immutable version; the name is inherited.
-      const updated = await updateTemplate.mutateAsync({ slug: slug!, description: description || null, ...files, requiredSkillIds, requiredSkillGroups });
+      const updated = await updateTemplate.mutateAsync({ templateKey: templateKey!, description: description || null, ...files, requiredSkillIds, requiredSkillGroups });
       await refetch();
       setSelectedVersion(updated.version);
       setEditing(false);
@@ -220,10 +216,8 @@ export function TemplateDrawer({
     setEditing(false);
   }
 
-  const headerSlug =
-    mode === "create"
-      ? deriveSlug(name) || "—"
-      : `${slug}@v${current?.version ?? "…"}`;
+  const headerLabel =
+    mode === "create" ? "New template" : `Version v${current?.version ?? "…"}`;
   const showDeleteAction = !editing && mode === "view" && canManage && !!current;
   const deleteBlockedReason =
     current?.templateSource === "pre-defined"
@@ -275,8 +269,7 @@ export function TemplateDrawer({
               className="text-xs uppercase tracking-[0.08em] font-semibold mb-1"
               style={{ color: "var(--ink-3)" }}
             >
-              {mode === "create" ? "New template" : "Template"} ·{" "}
-              <span className="font-mono normal-case">{headerSlug}</span>
+              {headerLabel}
             </div>
             <div className="flex items-center gap-2">
               <h2 className="text-lg font-semibold tracking-tight m-0" style={{ color: "var(--ink)" }}>
@@ -312,11 +305,6 @@ export function TemplateDrawer({
                 ) : (
                   // Names are immutable; new versions inherit the v1 name.
                   <div className="text-[14px]" style={{ color: "var(--ink)" }}>{displayName}</div>
-                )}
-                {mode === "create" && (
-                  <div className="text-[12px]" style={{ color: "var(--ink-4)" }}>
-                    Slug: <span className="font-mono">{deriveSlug(name) || "—"}</span> (derived from the name, fixed after creation)
-                  </div>
                 )}
               </div>
 

@@ -10,7 +10,7 @@ import { templatesKey } from "../utils";
 
 export type UpdateTemplateData = {
   // template_name is immutable — new versions inherit the v1 name.
-  slug: string;
+  templateKey: string;
   description?: string | null;
   soulMd?: string;
   identityMd?: string;
@@ -31,16 +31,16 @@ export function useUpdateTemplate() {
   const orgApiBase = useOrganizationApiBase();
 
   return useMutation({
-    mutationFn: async ({ slug, ...data }: UpdateTemplateData) => {
+    mutationFn: async ({ templateKey, ...data }: UpdateTemplateData) => {
       const response = await api.patch<AgentTemplateRead>(
-        `${orgApiBase}/templates/${slug}`,
+        `${orgApiBase}/templates/${templateKey}`,
         data,
         { schema: AgentTemplateReadSchema },
       );
       return response.data;
     },
     onSuccess: (data) => {
-      queryClient.setQueryData(templatesKey.detail(data.templateSlug), data);
+      queryClient.setQueryData(templatesKey.detail(data.templateKey), data);
       void queryClient.invalidateQueries({ queryKey: templatesKey.lists() });
     },
   });

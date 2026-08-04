@@ -10,17 +10,17 @@ import {
 } from "../schemas";
 import { platformTemplatePublishedKey } from "../utils";
 
-export function usePlatformTemplate(slug: string | null, enabled = true) {
+export function usePlatformTemplate(templateKey: string | null, enabled = true) {
   const query = useQuery({
-    queryKey: platformTemplatePublishedKey.detail(slug ?? ""),
+    queryKey: platformTemplatePublishedKey.detail(templateKey ?? ""),
     queryFn: async () => {
       const response = await api.get<PlatformTemplate>(
-        `/api/v1/platform/templates/${slug}`,
+        `/api/v1/platform/templates/${templateKey}`,
         { schema: PlatformTemplateReadSchema },
       );
       return response.data;
     },
-    enabled: Boolean(slug) && enabled,
+    enabled: Boolean(templateKey) && enabled,
   });
 
   return {

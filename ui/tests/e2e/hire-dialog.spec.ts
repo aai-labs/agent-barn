@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { mockAgent, mockVersionsForSlug } from "../pages/data-support/agent-data-support.po";
+import { mockAgent, mockVersionsForKey } from "../pages/data-support/agent-data-support.po";
 import { DataSupport } from "../pages/data-support/data-support.po";
 import { DashboardPage } from "../pages/dashboard-page.po";
 import {
@@ -285,7 +285,7 @@ test.describe("Hire Dialog", () => {
     expect(body.approval_mode).toBe("manual");
   });
 
-  test("hire posts template_slug + selected version, not markdown", async ({ page }) => {
+  test("hire posts template_key + selected version, not markdown", async ({ page }) => {
     await dataSupportPage.agents.interceptCreateAgentRequest({ body: { ...mockAgent, status: "STOPPED" } });
     await dataSupportPage.agents.interceptSlackChannelsRequest({ agentId: mockAgent.id });
     await dataSupportPage.agents.interceptSlackUsersRequest({ agentId: mockAgent.id });
@@ -316,7 +316,7 @@ test.describe("Hire Dialog", () => {
     const body = createRequest.postDataJSON() as Record<string, unknown>;
 
     // Markdown never leaves the backend — only slug + version are submitted.
-    expect(body.template_slug).toBe("general-purpose");
+    expect(body.template_key).toBe("general-purpose");
     expect(body.template_version).toBe(1);
     expect(body.soul_md).toBeUndefined();
     expect(body.identity_md).toBeUndefined();
@@ -542,7 +542,7 @@ test.describe("Hire Dialog — Skills step", () => {
 
   test("required skill card is shown as locked-selected with 'Required by template' label", async ({ page }) => {
     await dataSupportPage.agents.interceptGetTemplateVersionsRequest({
-      body: mockVersionsForSlug("general-purpose").map((v) => ({
+      body: mockVersionsForKey("general-purpose").map((v) => ({
         ...v,
         required_skills: [{
           id: MOCK_PLATFORM_SKILL_ID,
@@ -565,7 +565,7 @@ test.describe("Hire Dialog — Skills step", () => {
 
   test("clicking a required skill card does not deselect it", async ({ page }) => {
     await dataSupportPage.agents.interceptGetTemplateVersionsRequest({
-      body: mockVersionsForSlug("general-purpose").map((v) => ({
+      body: mockVersionsForKey("general-purpose").map((v) => ({
         ...v,
         required_skills: [{
           id: MOCK_PLATFORM_SKILL_ID,
@@ -589,7 +589,7 @@ test.describe("Hire Dialog — Skills step", () => {
 
   test("credential form appears for required skill provider without selecting the skill", async ({ page }) => {
     await dataSupportPage.agents.interceptGetTemplateVersionsRequest({
-      body: mockVersionsForSlug("general-purpose").map((v) => ({
+      body: mockVersionsForKey("general-purpose").map((v) => ({
         ...v,
         required_skills: [{
           id: MOCK_PLATFORM_SKILL_ID,
@@ -612,7 +612,7 @@ test.describe("Hire Dialog — Skills step", () => {
 
   test("hire button is disabled when required skill credentials are incomplete", async ({ page }) => {
     await dataSupportPage.agents.interceptGetTemplateVersionsRequest({
-      body: mockVersionsForSlug("general-purpose").map((v) => ({
+      body: mockVersionsForKey("general-purpose").map((v) => ({
         ...v,
         required_skills: [{
           id: MOCK_PLATFORM_SKILL_ID,
@@ -668,7 +668,7 @@ test.describe("Hire Dialog — Skills step required skill group", () => {
     await dataSupportPage.agents.interceptGetModelsRequest();
     await dataSupportPage.skills.interceptGetSkillsRequest();
     await dataSupportPage.agents.interceptGetTemplateVersionsRequest({
-      body: mockVersionsForSlug("general-purpose").map((v) => ({
+      body: mockVersionsForKey("general-purpose").map((v) => ({
         ...v,
         required_skills: [
           {

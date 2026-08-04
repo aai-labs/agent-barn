@@ -48,17 +48,17 @@ function emptyForm(): PlatformTemplateForm {
 
 export function PlatformTemplateEditor({
   isNew,
-  slug,
+  templateKey,
   lineage,
   onClose,
   onCreated,
   onChanged,
 }: {
   isNew: boolean;
-  slug: string | null;
+  templateKey: string | null;
   lineage: PlatformTemplateAdminSummary | null;
   onClose: () => void;
-  onCreated: (slug: string) => void;
+  onCreated: (templateKey: string) => void;
   onChanged: () => void;
 }) {
   const hasPublishedVersion =
@@ -76,12 +76,12 @@ export function PlatformTemplateEditor({
     isLoading: isPublishedLoading,
     error: publishedError,
     refetch: refetchPublishedVersions,
-  } = usePlatformTemplateVersions(slug, hasPublishedVersion);
+  } = usePlatformTemplateVersions(templateKey, hasPublishedVersion);
   const {
     draft,
     isLoading: isDraftLoading,
     error: draftError,
-  } = usePlatformTemplateDraft(slug, shouldLoadDraft);
+  } = usePlatformTemplateDraft(templateKey, shouldLoadDraft);
   const {
     skills,
     isLoading: isSkillsLoading,
@@ -183,9 +183,9 @@ export function PlatformTemplateEditor({
   }
 
   async function handleStartDraft() {
-    if (isNew || !slug) return;
+    if (isNew || !templateKey) return;
     try {
-      const result = await startDraft.mutateAsync({ slug });
+      const result = await startDraft.mutateAsync({ templateKey });
       setStarted(true);
       initializedDraftId.current = result.id;
       setForm(formFromDraft(result));
@@ -216,12 +216,12 @@ export function PlatformTemplateEditor({
         });
         toast.success(`${created.templateName} draft created.`);
         onChanged();
-        onCreated(created.templateSlug);
+        onCreated(created.templateKey);
         return;
       }
 
       const updated = await updateDraft.mutateAsync({
-        slug: slug!,
+        templateKey: templateKey!,
         ...payload,
       });
       initializedDraftId.current = updated.id;
@@ -235,7 +235,7 @@ export function PlatformTemplateEditor({
   }
 
   async function handleDiscard() {
-    if (!slug || !currentDraft) return;
+    if (!templateKey || !currentDraft) return;
     if (
       !window.confirm(
         "Discard this unpublished draft? The last published version will remain unchanged.",
@@ -243,7 +243,7 @@ export function PlatformTemplateEditor({
     )
       return;
     try {
-      await discardDraft.mutateAsync(slug);
+      await discardDraft.mutateAsync(templateKey);
       toast.success("Draft discarded.");
       onChanged();
       onClose();
@@ -253,7 +253,7 @@ export function PlatformTemplateEditor({
   }
 
   async function handlePublish() {
-    if (!slug || !currentDraft || dirty) return;
+    if (!templateKey || !currentDraft || dirty) return;
     if (
       !window.confirm(
         "Publish this draft? Organizations will be able to use the new platform version.",
@@ -261,9 +261,9 @@ export function PlatformTemplateEditor({
     )
       return;
     try {
-      const published = await publishDraft.mutateAsync(slug);
+      const published = await publishDraft.mutateAsync(templateKey);
       toast.success(
-        `${published.templateSlug} v${published.version} published.`,
+        `${currentDraft.templateName} v${published.version} published.`,
       );
       onChanged();
       onClose();
@@ -313,10 +313,12 @@ export function PlatformTemplateEditor({
       "Platform template");
   const templateMeta = isNew
     ? "Create an unpublished template draft. It becomes visible to organizations only after publishing."
-    : `${lineage?.templateSlug ?? slug ?? ""} · ${lineage?.latestPublishedVersion ? `published v${lineage.latestPublishedVersion}` : "not published"}`;
+    : lineage?.latestPublishedVersion
+      ? `Published v${lineage.latestPublishedVersion}`
+      : "Not published";
 
   async function handleStartEditing() {
-    if (!slug) return;
+    if (!templateKey) return;
     if (lineage?.hasDraft) {
       setIsEditing(true);
       return;
@@ -324,7 +326,7 @@ export function PlatformTemplateEditor({
 
     try {
       const result = await startDraft.mutateAsync({
-        slug,
+        templateKey,
         sourceVersion: publishedTemplate?.version,
       });
       setStarted(true);
@@ -497,8 +499,8 @@ export function PlatformTemplateEditor({
                     className="text-[12.5px] mt-1"
                     style={{ color: "var(--ink-3)" }}
                   >
-                    The name becomes the stable template slug when a new lineage
-                    is created.
+                    The name is a display label; the system assigns the lineage key
+                    automatically when it is saved.
                   </p>
                 </div>
                 <label

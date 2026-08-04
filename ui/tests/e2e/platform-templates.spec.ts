@@ -91,7 +91,7 @@ test.describe("Platform Template Admin", () => {
     await data.platformTemplates.interceptGetLineages({
       body: [
         {
-          template_slug: "general-purpose",
+          template_key: "general-purpose",
           template_name: "General Purpose",
           latest_published_version: 1,
           has_draft: false,
@@ -99,17 +99,17 @@ test.describe("Platform Template Admin", () => {
       ],
     });
     await data.platformTemplates.interceptGetVersions({
-      slug: "general-purpose",
+      templateKey: "general-purpose",
       body: [
         {
         ...mockPlatformTemplatePublished,
-        template_slug: "general-purpose",
+        template_key: "general-purpose",
         template_name: "General Purpose",
         version: 2,
         },
         {
           ...mockPlatformTemplatePublishedV1,
-          template_slug: "general-purpose",
+          template_key: "general-purpose",
           template_name: "General Purpose",
         },
       ],
@@ -117,16 +117,16 @@ test.describe("Platform Template Admin", () => {
     await data.platformTemplates.interceptGetDraft({
       body: {
         ...mockPlatformTemplateDraft,
-        template_slug: "general-purpose",
+        template_key: "general-purpose",
         template_name: "General Purpose",
         soul_md: "You are a careful code reviewer from version one.",
       },
     });
     await data.platformTemplates.interceptStartDraft({
-      slug: "general-purpose",
+      templateKey: "general-purpose",
       body: {
         ...mockPlatformTemplateDraft,
-        template_slug: "general-purpose",
+        template_key: "general-purpose",
         template_name: "General Purpose",
         soul_md: "You are a careful code reviewer from version one.",
       },

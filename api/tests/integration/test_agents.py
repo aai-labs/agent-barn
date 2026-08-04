@@ -61,7 +61,7 @@ _VALID_CREATE = {
     "platform": "slack",
     "slack_bot_token": "xoxb-real-bot-token",
     "slack_app_token": "xapp-1-real-app-token",
-    "template_slug": "test-template",
+    "template_key": "test-template",
 }
 
 _VALID_CREATE_TEAMS = {
@@ -70,7 +70,7 @@ _VALID_CREATE_TEAMS = {
     "teams_app_id": "test-app-id-000",
     "teams_app_password": "test-app-password-000",
     "teams_tenant_id": "test-tenant-000",
-    "template_slug": "test-template",
+    "template_key": "test-template",
 }
 
 _GIVEN = [
@@ -154,23 +154,36 @@ def test_create_agent_emits_created_domain_event():
             assert_that(created_events[0].payload["created_by_user_id"], equal_to(str(context.user.id)))
 
 
-def test_create_agent_missing_template_slug_returns_422():
+def test_create_agent_missing_template_key_returns_422():
     with given(_GIVEN) as context:
         client: TestClient = context.client
         payload = {**_VALID_CREATE}
-        del payload["template_slug"]
+        del payload["template_key"]
 
-        with when("I create an agent without template_slug"):
+        with when("I create an agent without template_key"):
             response = client.post(_BASE, json=payload, headers=_auth(context))
 
         with then("it returns 422"):
             assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
 
 
-def test_create_agent_unknown_template_slug_returns_404():
+def test_create_agent_rejects_template_slug_after_key_migration():
     with given(_GIVEN) as context:
         client: TestClient = context.client
-        payload = {**_VALID_CREATE, "template_slug": "no-such-template"}
+        payload = {**_VALID_CREATE, "template_slug": _VALID_CREATE["template_key"]}
+        del payload["template_key"]
+
+        with when("I create an agent using the removed template_slug field"):
+            response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("it returns 422"):
+            assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
+
+
+def test_create_agent_unknown_template_key_returns_404():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        payload = {**_VALID_CREATE, "template_key": "no-such-template"}
 
         with when("I create an agent referencing a non-existent template"):
             response = client.post(_BASE, json=payload, headers=_auth(context))
@@ -200,7 +213,7 @@ def test_create_agent_pins_latest_template_version():
         with then("it returns 201 pinned to the latest version"):
             assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             body = response.json()
-            assert_that(body["template_slug"], equal_to("test-template"))
+            assert_that(body["template_key"], equal_to("test-template"))
             assert_that(body["template_version"], equal_to(2))
 
 
@@ -383,14 +396,14 @@ def test_patch_agent_repins_template():
         with when("I re-pin the agent to a different template version"):
             response = client.patch(
                 f"{_BASE}/{context.agent.id}",
-                json={"template_slug": "test-template", "template_version": 1},
+                json={"template_key": "test-template", "template_version": 1},
                 headers=_auth(context),
             )
 
         with then("it returns 200 pinned to the requested template"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             body = response.json()
-            assert_that(body["template_slug"], equal_to("test-template"))
+            assert_that(body["template_key"], equal_to("test-template"))
             assert_that(body["template_version"], equal_to(1))
 
 
@@ -401,7 +414,7 @@ def test_patch_agent_repin_unknown_version_returns_404():
         with when("I re-pin to a non-existent version"):
             response = client.patch(
                 f"{_BASE}/{context.agent.id}",
-                json={"template_slug": "test-template", "template_version": 99},
+                json={"template_key": "test-template", "template_version": 99},
                 headers=_auth(context),
             )
 
@@ -409,14 +422,29 @@ def test_patch_agent_repin_unknown_version_returns_404():
             assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
-def test_patch_agent_repin_requires_both_slug_and_version():
+def test_patch_agent_repin_requires_both_template_key_and_version():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         client: TestClient = context.client
 
-        with when("I send only template_slug without a version"):
+        with when("I send only template_key without a version"):
             response = client.patch(
                 f"{_BASE}/{context.agent.id}",
-                json={"template_slug": "test-template"},
+                json={"template_key": "test-template"},
+                headers=_auth(context),
+            )
+
+        with then("it returns 422"):
+            assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
+
+
+def test_patch_agent_repin_rejects_template_slug_after_key_migration():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I re-pin using the removed template_slug field"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"template_slug": "test-template", "template_version": 1},
                 headers=_auth(context),
             )
 
@@ -1983,7 +2011,7 @@ _VALID_CREATE_HERMES = {
     "agent_type": "hermes",
     "slack_bot_token": "xoxb-hermes-bot-token",
     "slack_app_token": "xapp-1-hermes-app-token",
-    "template_slug": "test-template",
+    "template_key": "test-template",
 }
 
 _GIVEN_WITH_HERMES_IMAGE = [
@@ -2959,7 +2987,7 @@ def test_update_agent_repin_missing_required_skill_returns_400():
         [
             *_GIVEN,
             there_is_a_skill(name="Jira"),
-            there_is_a_template(slug="with-skill", name="With Skill"),
+            there_is_a_template(template_key="with-skill", name="With Skill"),
             there_is_a_template_skill(),
         ]
     ) as context:
@@ -2968,14 +2996,14 @@ def test_update_agent_repin_missing_required_skill_returns_400():
         with when("I create an agent using a template with no required skills"):
             agent = client.post(
                 _BASE,
-                json={**_VALID_CREATE, "template_slug": "test-template"},
+                json={**_VALID_CREATE, "template_key": "test-template"},
                 headers=_auth(context),
             ).json()
 
         with when("I repin to a template that requires a skill I haven't provided"):
             response = client.patch(
                 f"{_BASE}/{agent['id']}",
-                json={"template_slug": "with-skill", "template_version": 1},
+                json={"template_key": "with-skill", "template_version": 1},
                 headers=_auth(context),
             )
 
@@ -2988,7 +3016,7 @@ def test_update_agent_repin_with_required_skill_marks_it_required():
         [
             *_GIVEN,
             there_is_a_skill(name="Jira"),
-            there_is_a_template(slug="with-skill", name="With Skill"),
+            there_is_a_template(template_key="with-skill", name="With Skill"),
             there_is_a_template_skill(),
         ]
     ) as context:
@@ -2998,7 +3026,7 @@ def test_update_agent_repin_with_required_skill_marks_it_required():
         with when("I create an agent using a template with no required skills"):
             agent = client.post(
                 _BASE,
-                json={**_VALID_CREATE, "template_slug": "test-template"},
+                json={**_VALID_CREATE, "template_key": "test-template"},
                 headers=_auth(context),
             ).json()
 
@@ -3006,7 +3034,7 @@ def test_update_agent_repin_with_required_skill_marks_it_required():
             response = client.patch(
                 f"{_BASE}/{agent['id']}",
                 json={
-                    "template_slug": "with-skill",
+                    "template_key": "with-skill",
                     "template_version": 1,
                     "skill_ids": [skill_id],
                 },
@@ -3211,7 +3239,7 @@ def test_update_agent_repin_to_grouped_template_without_member_returns_400():
     with given(
         [
             *_GIVEN,
-            there_is_a_template(slug="with-group", name="With Group"),
+            there_is_a_template(template_key="with-group", name="With Group"),
             there_is_a_template_skill_group(("GitHub", "Bitbucket")),
         ]
     ) as context:
@@ -3220,14 +3248,14 @@ def test_update_agent_repin_to_grouped_template_without_member_returns_400():
         with when("I create an agent using a template with no required skills"):
             agent = client.post(
                 _BASE,
-                json={**_VALID_CREATE, "template_slug": "test-template"},
+                json={**_VALID_CREATE, "template_key": "test-template"},
                 headers=_auth(context),
             ).json()
 
         with when("I repin to the grouped template without a member"):
             response = client.patch(
                 f"{_BASE}/{agent['id']}",
-                json={"template_slug": "with-group", "template_version": 1},
+                json={"template_key": "with-group", "template_version": 1},
                 headers=_auth(context),
             )
 
@@ -3239,7 +3267,7 @@ def test_update_agent_repin_to_grouped_template_with_member_succeeds_and_marks_r
     with given(
         [
             *_GIVEN,
-            there_is_a_template(slug="with-group", name="With Group"),
+            there_is_a_template(template_key="with-group", name="With Group"),
             there_is_a_template_skill_group(("GitHub", "Bitbucket")),
         ]
     ) as context:
@@ -3249,7 +3277,7 @@ def test_update_agent_repin_to_grouped_template_with_member_succeeds_and_marks_r
         with when("I create an agent using a template with no required skills"):
             agent = client.post(
                 _BASE,
-                json={**_VALID_CREATE, "template_slug": "test-template"},
+                json={**_VALID_CREATE, "template_key": "test-template"},
                 headers=_auth(context),
             ).json()
 
@@ -3257,7 +3285,7 @@ def test_update_agent_repin_to_grouped_template_with_member_succeeds_and_marks_r
             response = client.patch(
                 f"{_BASE}/{agent['id']}",
                 json={
-                    "template_slug": "with-group",
+                    "template_key": "with-group",
                     "template_version": 1,
                     "skill_ids": [ids["Bitbucket"]],
                 },

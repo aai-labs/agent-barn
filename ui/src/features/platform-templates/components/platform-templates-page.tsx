@@ -118,11 +118,11 @@ export function PlatformTemplatesPage() {
         >
           {lineages.map((lineage) => (
             <button
-              key={lineage.templateSlug}
+              key={lineage.templateKey}
               type="button"
               className="af-card af-card-hover px-5 py-5 text-left w-full"
               onClick={() =>
-                router.push(`/dashboard/platform/templates/${lineage.templateSlug}`)
+                router.push(`/dashboard/platform/templates/${lineage.templateKey}`)
               }
             >
               <div className="flex items-start justify-between gap-3 mb-3">
@@ -153,12 +153,6 @@ export function PlatformTemplatesPage() {
                     Published
                   </span>
                 )}
-              </div>
-              <div
-                className="font-mono text-[12px] mb-4 truncate"
-                style={{ color: "var(--ink-4)" }}
-              >
-                {lineage.templateSlug}
               </div>
               <div
                 className="flex items-center justify-between text-[12.5px]"

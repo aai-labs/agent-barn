@@ -90,7 +90,7 @@ export function PlatformTemplatePublishedView({
                 {template.templateName}
               </h1>
               <p className="text-[14px] m-0" style={{ color: "var(--ink-3)" }}>
-                {template.templateSlug} · Version v{template.version}
+                Version v{template.version}
               </p>
             </div>
             <div className="flex items-center gap-2">

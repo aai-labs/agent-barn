@@ -8,18 +8,18 @@ import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organ
 import { AgentTemplateRead, AgentTemplateReadSchema } from "../schemas";
 import { templatesKey } from "../utils";
 
-export function useTemplate(slug: string) {
+export function useTemplate(templateKey: string) {
   const orgApiBase = useOrganizationApiBase();
   const query = useQuery({
-    queryKey: templatesKey.detail(slug),
+    queryKey: templatesKey.detail(templateKey),
     queryFn: async () => {
       const response = await api.get<AgentTemplateRead>(
-        `${orgApiBase}/templates/${slug}`,
+        `${orgApiBase}/templates/${templateKey}`,
         { schema: AgentTemplateReadSchema },
       );
       return response.data;
     },
-    enabled: !!slug,
+    enabled: !!templateKey,
   });
 
   return {

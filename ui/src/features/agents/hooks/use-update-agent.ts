@@ -15,7 +15,7 @@ export type UpdateAgentData = {
   slackBotToken?: string;
   slackAppToken?: string;
   // Re-pin the agent to a different template version (both required together).
-  templateSlug?: string;
+  templateKey?: string;
   templateVersion?: number;
   slackChannelIds?: string[];
   slackDmUserIds?: string[];

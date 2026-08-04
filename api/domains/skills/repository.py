@@ -100,44 +100,44 @@ class SkillRepository:
             )
             return session.exec(query).first() is not None
 
-    def get_latest_template_slugs_requiring_skill(self, skill_id: UUID, org_id: UUID) -> list[str]:
-        """Return template slugs whose *latest* version lists this skill as required.
+    def get_latest_template_keys_requiring_skill(self, skill_id: UUID, org_id: UUID) -> list[str]:
+        """Return template keys whose *latest* version lists this skill as required.
 
         Considers org-scoped agent_template versions (custom + forks) and global
         platform_template versions, so a skill required by any template visible
         to the org blocks deletion.
         """
-        slugs: set[str] = set()
+        template_keys: set[str] = set()
         with Session(self.delegate.engine) as session:
             latest_org = (
                 select(AgentTemplate.id)
-                .distinct(col(AgentTemplate.template_slug))
+                .distinct(col(AgentTemplate.template_key))
                 .where(col(AgentTemplate.organization_id) == org_id)
                 .order_by(
-                    col(AgentTemplate.template_slug).asc(),
+                    col(AgentTemplate.template_key).asc(),
                     col(AgentTemplate.version).desc(),
                 )
                 .subquery()
             )
             org_q = (
-                select(AgentTemplate.template_slug)
+                select(AgentTemplate.template_key)
                 .join(AgentTemplateSkill, col(AgentTemplate.id) == col(AgentTemplateSkill.template_id))
                 .where(col(AgentTemplate.id).in_(select(latest_org.c.id)))
                 .where(col(AgentTemplateSkill.skill_id) == skill_id)
             )
-            slugs.update(session.exec(org_q).all())
+            template_keys.update(session.exec(org_q).all())
 
             latest_platform = (
                 select(PlatformTemplate.id)
-                .distinct(col(PlatformTemplate.template_slug))
+                .distinct(col(PlatformTemplate.template_key))
                 .order_by(
-                    col(PlatformTemplate.template_slug).asc(),
+                    col(PlatformTemplate.template_key).asc(),
                     col(PlatformTemplate.version).desc(),
                 )
                 .subquery()
             )
             platform_q = (
-                select(PlatformTemplate.template_slug)
+                select(PlatformTemplate.template_key)
                 .join(
                     PlatformTemplateSkill,
                     col(PlatformTemplate.id) == col(PlatformTemplateSkill.template_id),
@@ -145,8 +145,8 @@ class SkillRepository:
                 .where(col(PlatformTemplate.id).in_(select(latest_platform.c.id)))
                 .where(col(PlatformTemplateSkill.skill_id) == skill_id)
             )
-            slugs.update(session.exec(platform_q).all())
-        return list(slugs)
+            template_keys.update(session.exec(platform_q).all())
+        return list(template_keys)
 
     def delete_stale_template_skill_refs(self, skill_id: UUID, org_id: UUID) -> None:
         """Delete template-skill join rows for non-latest template versions.
@@ -159,10 +159,10 @@ class SkillRepository:
         with Session(self.delegate.engine) as session:
             latest_org = (
                 select(AgentTemplate.id)
-                .distinct(col(AgentTemplate.template_slug))
+                .distinct(col(AgentTemplate.template_key))
                 .where(col(AgentTemplate.organization_id) == org_id)
                 .order_by(
-                    col(AgentTemplate.template_slug).asc(),
+                    col(AgentTemplate.template_key).asc(),
                     col(AgentTemplate.version).desc(),
                 )
                 .subquery()
@@ -175,9 +175,9 @@ class SkillRepository:
 
             latest_platform = (
                 select(PlatformTemplate.id)
-                .distinct(col(PlatformTemplate.template_slug))
+                .distinct(col(PlatformTemplate.template_key))
                 .order_by(
-                    col(PlatformTemplate.template_slug).asc(),
+                    col(PlatformTemplate.template_key).asc(),
                     col(PlatformTemplate.version).desc(),
                 )
                 .subquery()

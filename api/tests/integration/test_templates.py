@@ -7,6 +7,7 @@ from hamcrest import (
     equal_to,
     has_items,
     is_not,
+    matches_regexp,
     none,
 )
 from starlette.testclient import TestClient
@@ -79,9 +80,9 @@ def _auth(context) -> dict:
     return {"Authorization": f"Bearer {context.access_token}"}
 
 
-def _platform_version(slug: str, version: int, **overrides: str) -> PlatformTemplate:
+def _platform_version(template_key: str, version: int, **overrides: str) -> PlatformTemplate:
     return PlatformTemplate(
-        template_slug=slug,
+        template_key=template_key,
         template_name="Manual Platform Template",
         version=version,
         description=overrides.get("description", f"platform description {version}"),
@@ -147,23 +148,23 @@ def test_member_can_list_shared_templates():
     with given(
         [
             *_GIVEN,
-            there_is_a_template(slug="shared", name="Shared"),
+            there_is_a_template(template_key="shared", name="Shared"),
             _there_is_a_member_actor(),
         ]
     ) as context:
         response = context.client.get(_BASE, headers=_auth(context))
 
         assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-        assert_that(response.json()["items"][0]["template_slug"], equal_to("shared"))
+        assert_that(response.json()["items"][0]["template_key"], equal_to("shared"))
 
 
-def test_list_templates_returns_latest_version_per_slug():
+def test_list_templates_returns_latest_version_per_key():
     with given(
         [
             *_GIVEN,
-            there_is_a_template(slug="alpha", name="Alpha", version=1),
-            there_is_a_template(slug="alpha", name="Alpha", version=2),
-            there_is_a_template(slug="beta", name="Beta", version=1),
+            there_is_a_template(template_key="alpha", name="Alpha", version=1),
+            there_is_a_template(template_key="alpha", name="Alpha", version=2),
+            there_is_a_template(template_key="beta", name="Beta", version=1),
         ]
     ) as context:
         client: TestClient = context.client
@@ -171,38 +172,38 @@ def test_list_templates_returns_latest_version_per_slug():
         with when("I list templates"):
             response = client.get(_BASE, headers=_auth(context))
 
-        with then("each slug appears once at its latest version"):
+        with then("each template_key appears once at its latest version"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             body = response.json()
             assert_that(body["total"], equal_to(2))
-            by_slug = {item["template_slug"]: item for item in body["items"]}
-            assert_that(by_slug["alpha"]["version"], equal_to(2))
-            assert_that(by_slug["beta"]["version"], equal_to(1))
+            by_key = {item["template_key"]: item for item in body["items"]}
+            assert_that(by_key["alpha"]["version"], equal_to(2))
+            assert_that(by_key["beta"]["version"], equal_to(1))
 
 
 def test_list_templates_is_org_scoped():
-    with given([*_GIVEN, there_is_a_template(slug="mine", name="Mine")]) as context:
+    with given([*_GIVEN, there_is_a_template(template_key="mine", name="Mine")]) as context:
         client: TestClient = context.client
         org_repository: OrganizationRepository = context.injector.get(OrganizationRepository)
         other_org = Organization(name="Other Org")
         org_repository.save(other_org)
-        there_is_a_template(slug="theirs", name="Theirs", organization_id=other_org.id)(context)
+        there_is_a_template(template_key="theirs", name="Theirs", organization_id=other_org.id)(context)
 
         with when("I list templates"):
             response = client.get(_BASE, headers=_auth(context))
 
         with then("only my org's templates are returned"):
             body = response.json()
-            slugs = [item["template_slug"] for item in body["items"]]
-            assert_that(slugs, equal_to(["mine"]))
+            template_keys = [item["template_key"] for item in body["items"]]
+            assert_that(template_keys, equal_to(["mine"]))
 
 
-def test_list_templates_search_filters_by_name_and_slug():
+def test_list_templates_search_filters_by_name_and_key():
     with given(
         [
             *_GIVEN,
-            there_is_a_template(slug="scrum-master", name="Scrum Master"),
-            there_is_a_template(slug="code-reviewer", name="PR Reviewer"),
+            there_is_a_template(template_key="scrum-master", name="Scrum Master"),
+            there_is_a_template(template_key="code-reviewer", name="PR Reviewer"),
         ]
     ) as context:
         client: TestClient = context.client
@@ -213,12 +214,12 @@ def test_list_templates_search_filters_by_name_and_slug():
         with then("only matching templates are returned"):
             body = response.json()
             assert_that(body["total"], equal_to(1))
-            assert_that(body["items"][0]["template_slug"], equal_to("scrum-master"))
+            assert_that(body["items"][0]["template_key"], equal_to("scrum-master"))
 
-        with when("I search by a slug substring matching the other"):
+        with when("I search by a template_key substring matching the other"):
             response = client.get(f"{_BASE}?search=reviewer", headers=_auth(context))
 
-        with then("the slug match is returned"):
+        with then("the template_key match is returned"):
             body = response.json()
             assert_that(body["total"], equal_to(1))
             assert_that(body["items"][0]["template_name"], equal_to("PR Reviewer"))
@@ -228,8 +229,8 @@ def test_list_templates_filters_by_source():
     with given(
         [
             *_GIVEN,
-            there_is_a_template(slug="seeded", name="Seeded", source=TemplateSource.PRE_DEFINED),
-            there_is_a_template(slug="own", name="Own"),
+            there_is_a_template(template_key="seeded", name="Seeded", source=TemplateSource.PRE_DEFINED),
+            there_is_a_template(template_key="own", name="Own"),
         ]
     ) as context:
         client: TestClient = context.client
@@ -240,16 +241,16 @@ def test_list_templates_filters_by_source():
         with then("only pre-defined templates are returned"):
             body = response.json()
             assert_that(body["total"], equal_to(1))
-            assert_that(body["items"][0]["template_slug"], equal_to("seeded"))
+            assert_that(body["items"][0]["template_key"], equal_to("seeded"))
 
 
 def test_list_templates_paginates():
     with given(
         [
             *_GIVEN,
-            there_is_a_template(slug="t-a", name="A"),
-            there_is_a_template(slug="t-b", name="B"),
-            there_is_a_template(slug="t-c", name="C"),
+            there_is_a_template(template_key="t-a", name="A"),
+            there_is_a_template(template_key="t-b", name="B"),
+            there_is_a_template(template_key="t-c", name="C"),
         ]
     ) as context:
         client: TestClient = context.client
@@ -284,7 +285,7 @@ def test_platform_admin_can_read_latest_published_platform_template():
 
         assert_that(response.status_code, equal_to(status.HTTP_200_OK))
         body = response.json()
-        assert_that(body["template_slug"], equal_to("manual"))
+        assert_that(body["template_key"], equal_to("manual"))
         assert_that(body["version"], equal_to(1))
         assert_that(body["soul_md"], equal_to("platform soul 1"))
         assert_that(body["template_source"], equal_to("pre-defined"))
@@ -320,6 +321,30 @@ def test_platform_admin_can_start_a_draft_from_a_selected_published_version():
         assert_that(response.json()["soul_md"], equal_to("platform soul 1"))
 
 
+def test_platform_admin_new_template_draft_gets_generated_key_and_allows_duplicate_names():
+    with given([*_GIVEN, _there_is_a_platform_admin_actor()]) as context:
+        client: TestClient = context.client
+
+        first = client.post(
+            _PLATFORM_TEMPLATES_BASE,
+            json={"template_name": "Code Reviewer"},
+            headers=_auth(context),
+        )
+        second = client.post(
+            _PLATFORM_TEMPLATES_BASE,
+            json={"template_name": "Code Reviewer"},
+            headers=_auth(context),
+        )
+
+        assert_that(first.status_code, equal_to(status.HTTP_201_CREATED))
+        assert_that(second.status_code, equal_to(status.HTTP_201_CREATED))
+        first_key = first.json()["template_key"]
+        second_key = second.json()["template_key"]
+        assert_that(first_key, matches_regexp(r"^tpl-[0-9a-f]{12}$"))
+        assert_that(second_key, matches_regexp(r"^tpl-[0-9a-f]{12}$"))
+        assert_that(second_key, is_not(equal_to(first_key)))
+
+
 def test_non_platform_admin_cannot_read_published_platform_template():
     with given(_GIVEN) as context:
         repository: TemplateRepository = context.injector.get(TemplateRepository)
@@ -335,7 +360,7 @@ def test_list_templates_includes_required_skills():
         [
             *_GIVEN,
             there_is_a_skill(name="Jira"),
-            there_is_a_template(slug="alpha", name="Alpha"),
+            there_is_a_template(template_key="alpha", name="Alpha"),
             there_is_a_template_skill(),
         ]
     ) as context:
@@ -359,7 +384,7 @@ def test_member_without_template_read_cannot_get_template():
     with given(
         [
             *_GIVEN,
-            there_is_a_template(slug="alpha", name="Alpha"),
+            there_is_a_template(template_key="alpha", name="Alpha"),
             _there_is_a_member_actor(),
             role_lacks_permission(OrganizationRole.MEMBER, PermissionKey.TEMPLATE_READ),
         ]
@@ -373,13 +398,13 @@ def test_get_template_returns_latest_with_metadata():
     with given(
         [
             *_GIVEN,
-            there_is_a_template(slug="alpha", name="Alpha", version=1),
-            there_is_a_template(slug="alpha", name="Alpha v2", version=2),
+            there_is_a_template(template_key="alpha", name="Alpha", version=1),
+            there_is_a_template(template_key="alpha", name="Alpha v2", version=2),
         ]
     ) as context:
         client: TestClient = context.client
 
-        with when("I get the template by slug"):
+        with when("I get the template by template_key"):
             response = client.get(f"{_BASE}/alpha", headers=_auth(context))
 
         with then("the latest version with name and source is returned"):
@@ -390,7 +415,7 @@ def test_get_template_returns_latest_with_metadata():
             assert_that(body["template_source"], equal_to("custom"))
 
 
-def test_get_template_unknown_slug_returns_404():
+def test_get_template_unknown_key_returns_404():
     with given(_GIVEN) as context:
         client: TestClient = context.client
 
@@ -409,7 +434,7 @@ def test_get_template_reports_in_use():
         assert template is not None
 
         with when("I get the template the agent is pinned to"):
-            response = client.get(f"{_BASE}/{template.template_slug}", headers=_auth(context))
+            response = client.get(f"{_BASE}/{template.template_key}", headers=_auth(context))
 
         with then("it is flagged in_use"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
@@ -417,7 +442,7 @@ def test_get_template_reports_in_use():
 
 
 def test_get_template_reports_not_in_use():
-    with given([*_GIVEN, there_is_a_template(slug="idle", name="Idle")]) as context:
+    with given([*_GIVEN, there_is_a_template(template_key="idle", name="Idle")]) as context:
         client: TestClient = context.client
 
         with when("I get a template no agent uses"):
@@ -435,7 +460,7 @@ def test_member_without_template_read_cannot_list_template_versions():
     with given(
         [
             *_GIVEN,
-            there_is_a_template(slug="alpha", name="Alpha"),
+            there_is_a_template(template_key="alpha", name="Alpha"),
             _there_is_a_member_actor(),
             role_lacks_permission(OrganizationRole.MEMBER, PermissionKey.TEMPLATE_READ),
         ]
@@ -449,9 +474,9 @@ def test_list_template_versions_returns_all_desc():
     with given(
         [
             *_GIVEN,
-            there_is_a_template(slug="alpha", name="Alpha", version=1),
-            there_is_a_template(slug="alpha", name="Alpha", version=2),
-            there_is_a_template(slug="alpha", name="Alpha", version=3),
+            there_is_a_template(template_key="alpha", name="Alpha", version=1),
+            there_is_a_template(template_key="alpha", name="Alpha", version=2),
+            there_is_a_template(template_key="alpha", name="Alpha", version=3),
         ]
     ) as context:
         client: TestClient = context.client
@@ -465,7 +490,7 @@ def test_list_template_versions_returns_all_desc():
             assert_that(versions, equal_to([3, 2, 1]))
 
 
-def test_list_template_versions_unknown_slug_returns_404():
+def test_list_template_versions_unknown_key_returns_404():
     with given(_GIVEN) as context:
         client: TestClient = context.client
 
@@ -477,7 +502,7 @@ def test_list_template_versions_unknown_slug_returns_404():
 
 
 def test_list_template_versions_no_auth_returns_401():
-    with given([*_GIVEN, there_is_a_template(slug="alpha", name="Alpha")]) as context:
+    with given([*_GIVEN, there_is_a_template(template_key="alpha", name="Alpha")]) as context:
         client: TestClient = context.client
 
         with when("I list versions without a token"):
@@ -492,9 +517,9 @@ def test_list_template_versions_includes_required_skills():
         [
             *_GIVEN,
             there_is_a_skill(name="Jira"),
-            there_is_a_template(slug="alpha", name="Alpha", version=1),
+            there_is_a_template(template_key="alpha", name="Alpha", version=1),
             there_is_a_template_skill(),
-            there_is_a_template(slug="alpha", name="Alpha", version=2),
+            there_is_a_template(template_key="alpha", name="Alpha", version=2),
         ]
     ) as context:
         client: TestClient = context.client
@@ -516,10 +541,10 @@ def test_list_template_versions_reports_in_use_for_every_version():
         repository: TemplateRepository = context.injector.get(TemplateRepository)
         template = repository.get_pinned_template(context.agent)
         assert template is not None
-        there_is_a_template(slug=template.template_slug, name="Pinned", version=2)(context)
+        there_is_a_template(template_key=template.template_key, name="Pinned", version=2)(context)
 
         with when("I list the lineage's versions"):
-            response = client.get(f"{_BASE}/{template.template_slug}/versions", headers=_auth(context))
+            response = client.get(f"{_BASE}/{template.template_key}/versions", headers=_auth(context))
 
         with then("every version is flagged in_use, even ones the agent isn't pinned to"):
             versions = {v["version"]: v for v in response.json()}
@@ -623,10 +648,10 @@ def test_create_template_returns_201_v1_custom():
                 headers=_auth(context),
             )
 
-        with then("it returns 201 with a slugified slug, v1, custom source"):
+        with then("it returns 201 with a generated template_key, v1, custom source"):
             assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             body = response.json()
-            assert_that(body["template_slug"], equal_to("my-helper"))
+            assert_that(body["template_key"], matches_regexp(r"^tpl-[0-9a-f]{12}$"))
             assert_that(body["template_name"], equal_to("My Helper!"))
             assert_that(body["version"], equal_to(1))
             assert_that(body["template_source"], equal_to("custom"))
@@ -637,19 +662,20 @@ def test_create_template_returns_201_v1_custom():
             assert_that(body["tools_md"], is_not(equal_to("")))
 
 
-def test_create_template_duplicate_slug_returns_409():
-    with given([*_GIVEN, there_is_a_template(slug="my-helper", name="My Helper")]) as context:
+def test_create_template_duplicate_name_gets_a_distinct_generated_key():
+    with given([*_GIVEN, there_is_a_template(template_key="my-helper", name="My Helper")]) as context:
         client: TestClient = context.client
 
-        with when("I create a template whose name slugifies to an existing slug"):
+        with when("I create a template with an existing display name"):
             response = client.post(
                 _BASE,
                 json={"template_name": "My helper"},
                 headers=_auth(context),
             )
 
-        with then("it returns 409"):
-            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+        with then("it returns 201 with a different generated key"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(response.json()["template_key"], matches_regexp(r"^tpl-[0-9a-f]{12}$"))
 
 
 def test_create_template_same_name_in_other_org_is_allowed():
@@ -657,7 +683,7 @@ def test_create_template_same_name_in_other_org_is_allowed():
         client: TestClient = context.client
         other_org = Organization(name="Other Org")
         context.injector.get(OrganizationRepository).save(other_org)
-        there_is_a_template(slug="my-helper", name="My Helper", organization_id=other_org.id)(context)
+        there_is_a_template(template_key="my-helper", name="My Helper", organization_id=other_org.id)(context)
 
         with when("I create a template with the same name in my org"):
             response = client.post(
@@ -670,19 +696,20 @@ def test_create_template_same_name_in_other_org_is_allowed():
             assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
 
 
-def test_create_template_symbol_only_name_returns_422():
+def test_create_template_symbol_only_name_gets_a_generated_key():
     with given(_GIVEN) as context:
         client: TestClient = context.client
 
-        with when("I create a template whose name has no alphanumerics"):
+        with when("I create a template whose display name has no alphanumerics"):
             response = client.post(
                 _BASE,
                 json={"template_name": "!!!"},
                 headers=_auth(context),
             )
 
-        with then("it returns 422"):
-            assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
+        with then("it returns 201 with a generated key"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(response.json()["template_key"], matches_regexp(r"^tpl-[0-9a-f]{12}$"))
 
 
 def test_create_template_empty_name_returns_422():
@@ -718,7 +745,7 @@ def test_create_template_with_required_skills_stores_them():
             assert_that(body["required_skills"][0]["name"], equal_to("Jira"))
 
         with then("GET also returns the required skill"):
-            get_resp = client.get(f"{_BASE}/my-template", headers=_auth(context))
+            get_resp = client.get(f"{_BASE}/{body['template_key']}", headers=_auth(context))
             assert_that(len(get_resp.json()["required_skills"]), equal_to(1))
 
 
@@ -847,7 +874,7 @@ def test_member_cannot_update_template():
     with given(
         [
             *_GIVEN,
-            there_is_a_template(slug="alpha", name="Alpha"),
+            there_is_a_template(template_key="alpha", name="Alpha"),
             _there_is_a_member_actor(),
         ]
     ) as context:
@@ -864,7 +891,7 @@ def test_update_template_creates_new_version_with_merge():
     with given(
         [
             *_GIVEN,
-            there_is_a_template(slug="alpha", name="Alpha", soul_md="# Old Soul", tools_md="# Tools"),
+            there_is_a_template(template_key="alpha", name="Alpha", soul_md="# Old Soul", tools_md="# Tools"),
         ]
     ) as context:
         client: TestClient = context.client
@@ -882,11 +909,11 @@ def test_update_template_creates_new_version_with_merge():
             assert_that(body["version"], equal_to(2))
             assert_that(body["soul_md"], equal_to("# New Soul"))
             assert_that(body["tools_md"], equal_to("# Tools"))
-            assert_that(body["template_slug"], equal_to("alpha"))
+            assert_that(body["template_key"], equal_to("alpha"))
 
 
 def test_update_template_name_is_inherited_not_editable():
-    with given([*_GIVEN, there_is_a_template(slug="alpha", name="Alpha")]) as context:
+    with given([*_GIVEN, there_is_a_template(template_key="alpha", name="Alpha")]) as context:
         client: TestClient = context.client
 
         with when("I edit content and attempt to rename in the same request"):
@@ -899,7 +926,7 @@ def test_update_template_name_is_inherited_not_editable():
         with then("the new version inherits the v1 name; the rename is ignored"):
             body = response.json()
             assert_that(body["template_name"], equal_to("Alpha"))
-            assert_that(body["template_slug"], equal_to("alpha"))
+            assert_that(body["template_key"], equal_to("alpha"))
             assert_that(body["version"], equal_to(2))
             assert_that(body["soul_md"], equal_to("# New"))
 
@@ -908,7 +935,7 @@ def test_update_predefined_template_keeps_source():
     with given(
         [
             *_GIVEN,
-            there_is_a_template(slug="seeded", name="Seeded", source=TemplateSource.PRE_DEFINED),
+            there_is_a_template(template_key="seeded", name="Seeded", source=TemplateSource.PRE_DEFINED),
         ]
     ) as context:
         client: TestClient = context.client
@@ -927,7 +954,7 @@ def test_update_predefined_template_keeps_source():
 
 
 def test_update_template_does_not_touch_agent_pins():
-    with given([*_GIVEN, there_is_a_template(slug="test-template", name="Test Template")]) as context:
+    with given([*_GIVEN, there_is_a_template(template_key="test-template", name="Test Template")]) as context:
         client: TestClient = context.client
 
         with when("an agent is hired from the lineage"):
@@ -938,7 +965,7 @@ def test_update_template_does_not_touch_agent_pins():
                     "platform": "slack",
                     "slack_bot_token": "xoxb-token",
                     "slack_app_token": "xapp-1-token",
-                    "template_slug": "test-template",
+                    "template_key": "test-template",
                 },
                 headers=_auth(context),
             ).json()
@@ -958,7 +985,7 @@ def test_update_template_does_not_touch_agent_pins():
             assert_that(agent_response.json()["template_version"], equal_to(1))
 
 
-def test_update_template_unknown_slug_returns_404():
+def test_update_template_unknown_key_returns_404():
     with given(_GIVEN) as context:
         client: TestClient = context.client
 
@@ -970,7 +997,7 @@ def test_update_template_unknown_slug_returns_404():
 
 
 def test_update_template_empty_body_returns_422():
-    with given([*_GIVEN, there_is_a_template(slug="alpha", name="Alpha")]) as context:
+    with given([*_GIVEN, there_is_a_template(template_key="alpha", name="Alpha")]) as context:
         client: TestClient = context.client
 
         with when("I send an empty update"):
@@ -985,7 +1012,7 @@ def test_update_template_inherits_skills_by_default():
         [
             *_GIVEN,
             there_is_a_skill(name="Jira"),
-            there_is_a_template(slug="alpha", name="Alpha"),
+            there_is_a_template(template_key="alpha", name="Alpha"),
             there_is_a_template_skill(),
         ]
     ) as context:
@@ -1011,7 +1038,7 @@ def test_update_template_replaces_skills():
         [
             *_GIVEN,
             there_is_a_skill(name="Jira"),
-            there_is_a_template(slug="alpha", name="Alpha"),
+            there_is_a_template(template_key="alpha", name="Alpha"),
             there_is_a_template_skill(),
             there_is_a_skill(name="Confluence"),
         ]
@@ -1039,7 +1066,7 @@ def test_update_template_clears_skills():
         [
             *_GIVEN,
             there_is_a_skill(name="Jira"),
-            there_is_a_template(slug="alpha", name="Alpha"),
+            there_is_a_template(template_key="alpha", name="Alpha"),
             there_is_a_template_skill(),
         ]
     ) as context:
@@ -1063,7 +1090,7 @@ def test_update_template_inherits_groups_when_field_unset():
     with given(
         [
             *_GIVEN,
-            there_is_a_template(slug="alpha", name="Alpha"),
+            there_is_a_template(template_key="alpha", name="Alpha"),
             there_is_a_template_skill_group(("GitHub", "Bitbucket"), group_key="github-or-bitbucket"),
         ]
     ) as context:
@@ -1089,7 +1116,7 @@ def test_update_template_replaces_groups():
     with given(
         [
             *_GIVEN,
-            there_is_a_template(slug="alpha", name="Alpha"),
+            there_is_a_template(template_key="alpha", name="Alpha"),
             there_is_a_template_skill_group(("GitHub", "Bitbucket"), group_key="github-or-bitbucket"),
             there_is_a_skill(name="Jira"),
         ]
@@ -1119,7 +1146,7 @@ def test_update_template_clears_groups():
     with given(
         [
             *_GIVEN,
-            there_is_a_template(slug="alpha", name="Alpha"),
+            there_is_a_template(template_key="alpha", name="Alpha"),
             there_is_a_template_skill_group(("GitHub", "Bitbucket"), group_key="github-or-bitbucket"),
         ]
     ) as context:
@@ -1141,7 +1168,7 @@ def test_update_template_rejects_overlap_with_inherited_group():
     with given(
         [
             *_GIVEN,
-            there_is_a_template(slug="alpha", name="Alpha"),
+            there_is_a_template(template_key="alpha", name="Alpha"),
             there_is_a_template_skill_group(("GitHub", "Bitbucket"), group_key="github-or-bitbucket"),
         ]
     ) as context:
@@ -1167,9 +1194,9 @@ def test_delete_template_returns_204_and_purges_all_org_versions():
         [
             *_GIVEN,
             there_is_a_skill(name="Jira"),
-            there_is_a_template(slug="doomed", name="Doomed", version=1),
+            there_is_a_template(template_key="doomed", name="Doomed", version=1),
             there_is_a_template_skill(),
-            there_is_a_template(slug="doomed", name="Doomed", version=2),
+            there_is_a_template(template_key="doomed", name="Doomed", version=2),
         ]
     ) as context:
         client: TestClient = context.client
@@ -1187,19 +1214,19 @@ def test_delete_template_returns_204_and_purges_all_org_versions():
             )
 
 
-def test_delete_template_unknown_slug_returns_404():
+def test_delete_template_unknown_key_returns_404():
     with given(_GIVEN) as context:
         client: TestClient = context.client
 
         with when("I delete a template that does not exist"):
-            response = client.delete(f"{_BASE}/no-such-slug", headers=_auth(context))
+            response = client.delete(f"{_BASE}/no-such-template_key", headers=_auth(context))
 
         with then("I get 404"):
             assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
 def test_delete_template_requires_auth():
-    with given([*_GIVEN, there_is_a_template(slug="doomed", name="Doomed")]) as context:
+    with given([*_GIVEN, there_is_a_template(template_key="doomed", name="Doomed")]) as context:
         client: TestClient = context.client
 
         with when("I delete without auth"):
@@ -1210,7 +1237,9 @@ def test_delete_template_requires_auth():
 
 
 def test_member_cannot_delete_template():
-    with given([*_GIVEN, there_is_a_template(slug="doomed", name="Doomed"), _there_is_a_member_actor()]) as context:
+    with given(
+        [*_GIVEN, there_is_a_template(template_key="doomed", name="Doomed"), _there_is_a_member_actor()]
+    ) as context:
         response = context.client.delete(f"{_BASE}/doomed", headers=_auth(context))
 
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
@@ -1220,7 +1249,7 @@ def test_delete_predefined_template_returns_403():
     with given(
         [
             *_GIVEN,
-            there_is_a_template(slug="builtin", name="Built In", source=TemplateSource.PRE_DEFINED),
+            there_is_a_template(template_key="builtin", name="Built In", source=TemplateSource.PRE_DEFINED),
         ]
     ) as context:
         client: TestClient = context.client
@@ -1253,14 +1282,14 @@ def test_delete_template_used_by_live_agent_returns_409():
         repository: TemplateRepository = context.injector.get(TemplateRepository)
         template = repository.get_pinned_template(context.agent)
         assert template is not None
-        there_is_a_template(slug=template.template_slug, name="Pinned", version=2)(context)
+        there_is_a_template(template_key=template.template_key, name="Pinned", version=2)(context)
 
         with when("I try to delete the template the agent uses"):
-            response = client.delete(f"{_BASE}/{template.template_slug}", headers=_auth(context))
+            response = client.delete(f"{_BASE}/{template.template_key}", headers=_auth(context))
 
         with then("I get 409 and every version survives"):
             assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
-            assert_that(len(repository.find_org_versions(context.organization.id, template.template_slug)), equal_to(2))
+            assert_that(len(repository.find_org_versions(context.organization.id, template.template_key)), equal_to(2))
 
 
 def test_delete_template_referenced_by_soft_deleted_agent_returns_204():
@@ -1271,12 +1300,12 @@ def test_delete_template_referenced_by_soft_deleted_agent_returns_204():
         assert template is not None
 
         with when("I delete the template only a soft-deleted agent references"):
-            response = client.delete(f"{_BASE}/{template.template_slug}", headers=_auth(context))
+            response = client.delete(f"{_BASE}/{template.template_key}", headers=_auth(context))
 
         with then("the template is purged and the agent's pin is cleared"):
             assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
             assert_that(
-                client.get(f"{_BASE}/{template.template_slug}", headers=_auth(context)).status_code,
+                client.get(f"{_BASE}/{template.template_key}", headers=_auth(context)).status_code,
                 equal_to(status.HTTP_404_NOT_FOUND),
             )
             agent_repository: AgentRepository = context.injector.get(AgentRepository)
@@ -1297,7 +1326,7 @@ def test_delete_template_of_another_org_returns_404():
         repository: TemplateRepository = context.injector.get(TemplateRepository)
         other_org = Organization(name="Other Org")
         org_repository.save(other_org)
-        there_is_a_template(slug="theirs", name="Theirs", organization_id=other_org.id)(context)
+        there_is_a_template(template_key="theirs", name="Theirs", organization_id=other_org.id)(context)
 
         with when("I delete another org's template"):
             response = client.delete(f"{_BASE}/theirs", headers=_auth(context))
@@ -1311,7 +1340,7 @@ def test_list_templates_reports_in_use():
     with given(
         [
             *_GIVEN,
-            there_is_a_template(slug="idle", name="Idle"),
+            there_is_a_template(template_key="idle", name="Idle"),
             there_is_an_agent(name="Busy"),
         ]
     ) as context:
@@ -1324,9 +1353,9 @@ def test_list_templates_reports_in_use():
             response = client.get(_BASE, headers=_auth(context))
 
         with then("only the agent's template is marked in use"):
-            by_slug = {item["template_slug"]: item for item in response.json()["items"]}
-            assert_that(by_slug[template.template_slug]["in_use"], equal_to(True))
-            assert_that(by_slug["idle"]["in_use"], equal_to(False))
+            by_key = {item["template_key"]: item for item in response.json()["items"]}
+            assert_that(by_key[template.template_key]["in_use"], equal_to(True))
+            assert_that(by_key["idle"]["in_use"], equal_to(False))
 
 
 # --- seeding ---
@@ -1341,7 +1370,7 @@ def test_seed_predefined_templates_creates_three_lineages():
             service.seed_predefined_templates()
 
         with then("all pre-defined lineages exist at v1"):
-            for slug in (
+            for template_key in (
                 "general-purpose",
                 "scrum-master",
                 "code-reviewer",
@@ -1349,7 +1378,7 @@ def test_seed_predefined_templates_creates_three_lineages():
                 "jira-task-helper",
                 "documentation-agent",
             ):
-                template = repository.get_latest_platform_template(slug)
+                template = repository.get_latest_platform_template(template_key)
                 assert_that(template, is_not(none()))
                 assert template is not None
                 assert_that(template.version, equal_to(1))
@@ -1484,7 +1513,7 @@ def test_platform_template_update_rebases_org_overrides_and_preserves_agent_pins
                     "platform": "slack",
                     "slack_bot_token": "xoxb-token",
                     "slack_app_token": "xapp-1-token",
-                    "template_slug": "manual",
+                    "template_key": "manual",
                     "skill_ids": [str(baseline_skill.id)],
                 },
                 headers=_auth(context),
@@ -1561,7 +1590,7 @@ def test_platform_template_update_requires_a_newer_platform_version():
 
 
 def test_platform_template_update_rejects_non_fork_templates():
-    with given([*_GIVEN, there_is_a_template(slug="custom", name="Custom")]) as context:
+    with given([*_GIVEN, there_is_a_template(template_key="custom", name="Custom")]) as context:
         response = context.client.post(f"{_BASE}/custom/platform-update", headers=_auth(context))
 
         assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
@@ -1571,7 +1600,7 @@ def test_platform_template_update_requires_template_manage_permission():
     with given(
         [
             *_GIVEN,
-            there_is_a_template(slug="custom", name="Custom"),
+            there_is_a_template(template_key="custom", name="Custom"),
             _there_is_a_member_actor(),
             role_lacks_permission(OrganizationRole.MEMBER, PermissionKey.TEMPLATE_MANAGE),
         ]
@@ -1740,8 +1769,8 @@ def test_agent_repin_moves_only_that_agent():
     with given(
         [
             *_GIVEN,
-            there_is_a_template(slug="shared", name="Shared", version=1),
-            there_is_a_template(slug="shared", name="Shared", version=2),
+            there_is_a_template(template_key="shared", name="Shared", version=1),
+            there_is_a_template(template_key="shared", name="Shared", version=2),
         ]
     ) as context:
         client: TestClient = context.client
@@ -1749,7 +1778,7 @@ def test_agent_repin_moves_only_that_agent():
             "platform": "slack",
             "slack_bot_token": "xoxb-token",
             "slack_app_token": "xapp-1-token",
-            "template_slug": "shared",
+            "template_key": "shared",
         }
 
         with when("two agents are hired from the same lineage (latest = v2)"):
@@ -1774,7 +1803,7 @@ def test_agent_repin_moves_only_that_agent():
         with when("the first agent is re-pinned to v1"):
             response = client.patch(
                 f"{_AGENTS_BASE}/{first['id']}",
-                json={"template_slug": "shared", "template_version": 1},
+                json={"template_key": "shared", "template_version": 1},
                 headers=_auth(context),
             )
 

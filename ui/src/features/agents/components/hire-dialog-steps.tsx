@@ -197,14 +197,14 @@ function ClampedDescription({ text }: { text: string }) {
 }
 
 export function TemplateStep({
-  selectedSlug,
+  selectedKey,
   onPick,
   versions,
   versionsLoading,
   selectedVersion,
   onVersionChange,
 }: {
-  selectedSlug: string | null;
+  selectedKey: string | null;
   onPick: (template: AgentTemplateRead) => void;
   versions: AgentTemplateRead[];
   versionsLoading: boolean;
@@ -265,11 +265,11 @@ export function TemplateStep({
         <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
           {templates.map((t) => (
             <div
-              key={t.templateSlug}
+              key={t.templateKey}
               className="flex flex-col gap-1.5 p-4 rounded-2xl cursor-default transition-colors min-h-[4.5rem]"
               style={{
-                border: selectedSlug === t.templateSlug ? "1.5px solid var(--ink)" : "1.5px solid var(--line)",
-                background: selectedSlug === t.templateSlug ? "var(--bg-soft)" : "var(--bg-elev)",
+                border: selectedKey === t.templateKey ? "1.5px solid var(--ink)" : "1.5px solid var(--line)",
+                background: selectedKey === t.templateKey ? "var(--bg-soft)" : "var(--bg-elev)",
               }}
               onClick={() => onPick(t)}
             >
@@ -279,7 +279,7 @@ export function TemplateStep({
               </div>
               {t.description && <ClampedDescription text={t.description} />}
               <div className="mt-1">
-                {selectedSlug === t.templateSlug ? (
+                {selectedKey === t.templateKey ? (
                   <div onClick={(e) => e.stopPropagation()}>
                     {versionsLoading ? (
                       <span className="text-[0.75rem]" style={{ color: "var(--ink-3)" }}>Loading…</span>

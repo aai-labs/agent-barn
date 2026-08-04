@@ -106,7 +106,7 @@ export const AgentSchema = z.object({
   platform: z.enum(["slack", "teams", "telegram"]),
   agentType: z.enum(["openclaw", "hermes"]).default("openclaw"),
   organizationId: z.string().uuid(),
-  templateSlug: z.string(),
+  templateKey: z.string(),
   templateVersion: z.number().int(),
   model: z.string(),
   approvalMode: z.enum(["manual", "auto", "off"]).default("auto"),
@@ -124,7 +124,7 @@ export const AgentSchema = z.object({
 export const AgentTemplateReadSchema = z.object({
   id: z.string().uuid(),
   organizationId: z.string().uuid().nullable(),
-  templateSlug: z.string(),
+  templateKey: z.string(),
   templateName: z.string(),
   templateSource: z.enum(["pre-defined", "custom"]),
   forkedFromPlatformTemplateId: z.string().uuid().nullable().optional(),

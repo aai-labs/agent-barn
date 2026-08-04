@@ -10,17 +10,17 @@ import {
 } from "../schemas";
 import { platformTemplatesKey } from "../utils";
 
-export function usePlatformTemplateDraft(slug: string | null, enabled = true) {
+export function usePlatformTemplateDraft(templateKey: string | null, enabled = true) {
   const query = useQuery({
-    queryKey: platformTemplatesKey.detail(slug ?? ""),
+    queryKey: platformTemplatesKey.detail(templateKey ?? ""),
     queryFn: async () => {
       const response = await api.get<PlatformTemplateDraft>(
-        `/api/v1/platform/templates/${slug}/draft`,
+        `/api/v1/platform/templates/${templateKey}/draft`,
         { schema: PlatformTemplateDraftReadSchema },
       );
       return response.data;
     },
-    enabled: Boolean(slug) && enabled,
+    enabled: Boolean(templateKey) && enabled,
   });
 
   return {

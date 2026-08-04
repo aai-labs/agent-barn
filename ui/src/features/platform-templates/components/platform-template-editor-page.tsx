@@ -9,10 +9,10 @@ import { usePlatformTemplateLineages } from "../hooks/use-platform-template-line
 import { PlatformTemplateEditor } from "./platform-template-editor";
 
 export function PlatformTemplateEditorPage({
-  slug,
+  templateKey,
   isNew = false,
 }: {
-  slug?: string;
+  templateKey?: string;
   isNew?: boolean;
 }) {
   const router = useRouter();
@@ -20,7 +20,7 @@ export function PlatformTemplateEditorPage({
     usePlatformTemplateLineages(!isNew);
   const lineage = isNew
     ? null
-    : (lineages.find((candidate) => candidate.templateSlug === slug) ?? null);
+    : (lineages.find((candidate) => candidate.templateKey === templateKey) ?? null);
 
   if (!isNew && isLoading) {
     return (
@@ -79,11 +79,11 @@ export function PlatformTemplateEditorPage({
   return (
     <PlatformTemplateEditor
       isNew={isNew}
-      slug={isNew ? null : (slug ?? null)}
+      templateKey={isNew ? null : (templateKey ?? null)}
       lineage={lineage}
       onClose={() => router.push("/dashboard/platform/templates")}
-      onCreated={(createdSlug) =>
-        router.replace(`/dashboard/platform/templates/${createdSlug}`)
+      onCreated={(createdTemplateKey) =>
+        router.replace(`/dashboard/platform/templates/${createdTemplateKey}`)
       }
       onChanged={() => void refetch()}
     />

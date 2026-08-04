@@ -13,7 +13,7 @@ const PlatformTemplateSkillSchema = z.object({
 });
 
 export const PlatformTemplateAdminSummarySchema = z.object({
-  templateSlug: z.string(),
+  templateKey: z.string(),
   templateName: z.string(),
   latestPublishedVersion: z.number().int().nullable(),
   hasDraft: z.boolean(),
@@ -25,7 +25,7 @@ export const PlatformTemplateAdminSummariesSchema = z.array(
 
 export const PlatformTemplateDraftReadSchema = z.object({
   id: z.string().uuid(),
-  templateSlug: z.string(),
+  templateKey: z.string(),
   templateName: z.string(),
   description: z.string().nullable(),
   soulMd: z.string(),
@@ -44,7 +44,7 @@ export const PlatformTemplateDraftReadSchema = z.object({
 export const PlatformTemplateReadSchema = z.object({
   id: z.string().uuid(),
   organizationId: z.string().uuid().nullable(),
-  templateSlug: z.string(),
+  templateKey: z.string(),
   templateName: z.string(),
   templateSource: z.literal("pre-defined"),
   forkedFromPlatformTemplateId: z.string().uuid().nullable().optional(),
@@ -67,7 +67,7 @@ export const PlatformTemplateReadSchema = z.object({
 
 export const PlatformTemplatePublishedReadSchema = z.object({
   id: z.string().uuid(),
-  templateSlug: z.string(),
+  templateKey: z.string(),
   version: z.number().int(),
 });
 

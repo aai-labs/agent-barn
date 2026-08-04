@@ -2,18 +2,18 @@ import { Page } from "@playwright/test";
 
 export const MOCK_PLATFORM_TEMPLATE_ID = "11111111-1111-4111-8111-111111111111";
 export const MOCK_PLATFORM_TEMPLATE_V1_ID = "22222222-2222-4222-8222-222222222222";
-export const MOCK_PLATFORM_TEMPLATE_SLUG = "code-reviewer";
+export const MOCK_PLATFORM_TEMPLATE_KEY = "code-reviewer";
 export const MOCK_PLATFORM_TEMPLATE_SKILL_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 
 export const mockPlatformTemplateLineages = [
   {
-    template_slug: MOCK_PLATFORM_TEMPLATE_SLUG,
+    template_key: MOCK_PLATFORM_TEMPLATE_KEY,
     template_name: "Code Reviewer",
     latest_published_version: 2,
     has_draft: true,
   },
   {
-    template_slug: "general-purpose",
+    template_key: "general-purpose",
     template_name: "General Purpose",
     latest_published_version: 1,
     has_draft: false,
@@ -22,7 +22,7 @@ export const mockPlatformTemplateLineages = [
 
 export const mockPlatformTemplateDraft = {
   id: MOCK_PLATFORM_TEMPLATE_ID,
-  template_slug: MOCK_PLATFORM_TEMPLATE_SLUG,
+  template_key: MOCK_PLATFORM_TEMPLATE_KEY,
   template_name: "Code Reviewer",
   description: "Reviews changes for correctness and maintainability.",
   soul_md: "You are a careful code reviewer.",
@@ -53,7 +53,7 @@ export const mockPlatformTemplateDraft = {
 export const mockPlatformTemplatePublished = {
   id: MOCK_PLATFORM_TEMPLATE_ID,
   organization_id: null,
-  template_slug: MOCK_PLATFORM_TEMPLATE_SLUG,
+  template_key: MOCK_PLATFORM_TEMPLATE_KEY,
   template_name: "Code Reviewer",
   template_source: "pre-defined",
   forked_from_platform_template_id: null,
@@ -131,11 +131,11 @@ export class PlatformTemplateDataSupport {
   }
 
   async interceptGetPublished({
-    slug = MOCK_PLATFORM_TEMPLATE_SLUG,
+    templateKey = MOCK_PLATFORM_TEMPLATE_KEY,
     body = mockPlatformTemplatePublished,
-  }: { slug?: string; body?: unknown } = {}) {
+  }: { templateKey?: string; body?: unknown } = {}) {
     await this.page.route(
-      `**/api/v1/platform/templates/${slug}`,
+      `**/api/v1/platform/templates/${templateKey}`,
       async (route) => {
         if (route.request().method() !== "GET") {
           await route.fallback();
@@ -147,11 +147,11 @@ export class PlatformTemplateDataSupport {
   }
 
   async interceptGetVersions({
-    slug = MOCK_PLATFORM_TEMPLATE_SLUG,
+    templateKey = MOCK_PLATFORM_TEMPLATE_KEY,
     body = mockPlatformTemplateVersions,
-  }: { slug?: string; body?: unknown } = {}) {
+  }: { templateKey?: string; body?: unknown } = {}) {
     await this.page.route(
-      `**/api/v1/platform/templates/${slug}/versions`,
+      `**/api/v1/platform/templates/${templateKey}/versions`,
       async (route) => {
         if (route.request().method() !== "GET") {
           await route.fallback();
@@ -164,7 +164,7 @@ export class PlatformTemplateDataSupport {
 
   async interceptGetDraft({ body = mockPlatformTemplateDraft }: { body?: unknown } = {}) {
     await this.page.route(
-      `**/api/v1/platform/templates/${MOCK_PLATFORM_TEMPLATE_SLUG}/draft`,
+      `**/api/v1/platform/templates/${MOCK_PLATFORM_TEMPLATE_KEY}/draft`,
       async (route) => {
         if (route.request().method() !== "GET") {
           await route.fallback();
@@ -177,7 +177,7 @@ export class PlatformTemplateDataSupport {
 
   async interceptUpdateDraft() {
     await this.page.route(
-      `**/api/v1/platform/templates/${MOCK_PLATFORM_TEMPLATE_SLUG}/draft`,
+      `**/api/v1/platform/templates/${MOCK_PLATFORM_TEMPLATE_KEY}/draft`,
       async (route) => {
         if (route.request().method() !== "PATCH") {
           await route.fallback();
@@ -189,11 +189,11 @@ export class PlatformTemplateDataSupport {
   }
 
   async interceptStartDraft({
-    slug = MOCK_PLATFORM_TEMPLATE_SLUG,
+    templateKey = MOCK_PLATFORM_TEMPLATE_KEY,
     body = mockPlatformTemplateDraft,
-  }: { slug?: string; body?: unknown } = {}) {
+  }: { templateKey?: string; body?: unknown } = {}) {
     await this.page.route(
-      `**/api/v1/platform/templates/${slug}/draft*`,
+      `**/api/v1/platform/templates/${templateKey}/draft*`,
       async (route) => {
         if (route.request().method() !== "POST") {
           await route.fallback();
