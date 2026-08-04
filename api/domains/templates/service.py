@@ -179,25 +179,27 @@ class TemplateService:
         old = self._get_latest_or_404(org_id, template_key)
         self.permission_policy.require_organization(context, org_id, PermissionKey.TEMPLATE_MANAGE)
         updated = data.model_dump(exclude_unset=True)
-        # Every update publishes a new immutable org-scoped version of the
-        # lineage; the template_key never changes and agent pins are left untouched.
-        # Editing a platform predefined template forks it into the org's
-        # agent_template table (version = platform v + 1, forked_from set).
+        # Every update publishes a new immutable organization version of the
+        # lineage; the template_key never changes and agent pins are left
+        # untouched. Organization-owned version numbers start at 1, separately
+        # from the platform version sequence.
         forked_from = old.id if isinstance(old, PlatformTemplate) else old.forked_from_platform_template_id
         fork_baseline = (
             old.id
             if isinstance(old, PlatformTemplate)
             else (old.fork_baseline_platform_template_id or old.forked_from_platform_template_id)
         )
+        fork_baseline_version = old.version if isinstance(old, PlatformTemplate) else old.fork_baseline_platform_version
         source = TemplateSource.PRE_DEFINED if isinstance(old, PlatformTemplate) else old.template_source
         new_template = AgentTemplate(
             organization_id=org_id,
             forked_from_platform_template_id=forked_from,
             fork_baseline_platform_template_id=fork_baseline,
+            fork_baseline_platform_version=fork_baseline_version,
             template_key=old.template_key,
             template_name=updated.get("template_name", old.template_name),
             template_source=source,
-            version=old.version + 1,
+            version=self.repository.get_next_org_template_version(org_id, old.template_key),
             description=updated.get("description", old.description),
             soul_md=updated.get("soul_md", old.soul_md),
             identity_md=updated.get("identity_md", old.identity_md),
@@ -235,13 +237,11 @@ class TemplateService:
         return self._to_read_with_skills(new_template)
 
     def update_from_platform(self, template_key: str, context: CurrentUserContext) -> TemplateRead:
-        """Rebase an organization fork onto its origin's newest platform version.
+        """Clone the newest platform snapshot into the next org version.
 
-        A field is considered an organization override when it differs from the
-        fork's baseline. Those overrides win; every other field comes from the
-        newly published platform version. Required skills use the same
-        three-way rule as one aggregate field so an org's skill customization
-        is preserved without silently combining incompatible requirements.
+        Platform updates intentionally replace the organization's current
+        content and required skills. Existing agent pins remain on their
+        previous immutable organization version.
         """
         org_id = self._org_id(context)
         current = self.repository.get_latest_org_template(org_id, template_key)
@@ -255,50 +255,32 @@ class TemplateService:
                 detail="Template Update is only available for organization forks of Platform Templates",
             )
 
-        baseline_id = current.fork_baseline_platform_template_id or current.forked_from_platform_template_id
-        baseline = self.repository.get_platform_template_by_id(baseline_id) if baseline_id is not None else None
+        baseline_version = current.fork_baseline_platform_version
         latest_platform = self.repository.get_latest_platform_template(template_key)
-        if baseline is None or baseline.template_key != template_key or latest_platform is None:
+        if baseline_version is None or latest_platform is None:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="The fork's Platform Template baseline is no longer available",
             )
-        if latest_platform.version <= baseline.version:
+        if latest_platform.version <= baseline_version:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="No newer Platform Template Version is available",
             )
 
-        merged_values = {
-            field: getattr(current, field)
-            if getattr(current, field) != getattr(baseline, field)
-            else getattr(latest_platform, field)
-            for field in _TEMPLATE_CONTENT_FIELDS
-        }
-        current_skill_map = self.repository.get_org_required_skill_map(current.id)
-        baseline_skill_map = self.repository.get_platform_required_skill_map(baseline.id)
-        latest_skill_map = self.repository.get_platform_required_skill_map(latest_platform.id)
-        merged_skill_map = current_skill_map if current_skill_map != baseline_skill_map else latest_skill_map
-
         updated = AgentTemplate(
             organization_id=org_id,
             forked_from_platform_template_id=current.forked_from_platform_template_id,
             fork_baseline_platform_template_id=latest_platform.id,
-            template_key=current.template_key,
-            template_name=current.template_name,
-            template_source=current.template_source,
-            version=current.version + 1,
-            description=merged_values["description"],
-            soul_md=merged_values["soul_md"],
-            identity_md=merged_values["identity_md"],
-            user_md=merged_values["user_md"],
-            tools_md=merged_values["tools_md"],
-            agents_md=merged_values["agents_md"],
-            boot_md=merged_values["boot_md"],
-            bootstrap_md=merged_values["bootstrap_md"],
-            heartbeat_md=merged_values["heartbeat_md"],
+            fork_baseline_platform_version=latest_platform.version,
+            template_key=latest_platform.template_key,
+            template_name=latest_platform.template_name,
+            template_source=TemplateSource.PRE_DEFINED,
+            version=self.repository.get_next_org_template_version(org_id, current.template_key),
+            **{field: getattr(latest_platform, field) for field in _TEMPLATE_CONTENT_FIELDS},
         )
-        self.repository.save_org_template_version_with_skills(updated, merged_skill_map)
+        latest_skill_map = self.repository.get_platform_required_skill_map(latest_platform.id)
+        self.repository.save_org_template_version_with_skills(updated, latest_skill_map)
         return self._to_read_with_skills(updated)
 
     def delete_template(self, template_key: str, context: CurrentUserContext) -> None:

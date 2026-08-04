@@ -59,6 +59,7 @@ class TemplateRepository:
                 template_name=template.template_name,
                 template_source=TemplateSource.PRE_DEFINED,
                 forked_from_platform_template_id=None,
+                fork_baseline_platform_version=None,
                 version=template.version,
                 description=template.description,
                 soul_md=template.soul_md,
@@ -81,6 +82,7 @@ class TemplateRepository:
             template_source=template.template_source,
             forked_from_platform_template_id=template.forked_from_platform_template_id,
             fork_baseline_platform_template_id=template.fork_baseline_platform_template_id,
+            fork_baseline_platform_version=template.fork_baseline_platform_version,
             version=template.version,
             description=template.description,
             soul_md=template.soul_md,
@@ -535,6 +537,16 @@ class TemplateRepository:
             return org_latest
         return platform_latest
 
+    def get_next_org_template_version(self, org_id: UUID, template_key: str) -> int:
+        """Return the next version in an organization-owned template lineage."""
+        with Session(self.delegate.engine) as session:
+            latest = session.exec(
+                select(func.max(col(AgentTemplate.version)))
+                .where(col(AgentTemplate.organization_id) == org_id)
+                .where(col(AgentTemplate.template_key) == template_key)
+            ).one()
+        return (latest or 0) + 1
+
     def resolve_versions(self, org_id: UUID, template_key: str) -> list[AgentTemplate | PlatformTemplate]:
         org_versions = self.find_org_versions(org_id, template_key)
         platform_versions = self.find_platform_versions(template_key)
@@ -613,21 +625,13 @@ class TemplateRepository:
             for template in templates
             if template.template_source == TemplateSource.PRE_DEFINED
             and template.organization_id is not None
-            and template.fork_baseline_platform_template_id is not None
+            and template.fork_baseline_platform_version is not None
         ]
         if not candidates:
             return {}
 
-        baseline_ids = {template.fork_baseline_platform_template_id for template in candidates}
         template_keys = {template.template_key for template in candidates}
         with Session(self.delegate.engine) as session:
-            baseline_versions = dict(
-                session.exec(
-                    select(col(PlatformTemplate.id), col(PlatformTemplate.version)).where(
-                        col(PlatformTemplate.id).in_(baseline_ids)
-                    )
-                ).all()
-            )
             latest_versions = dict(
                 session.exec(
                     select(col(PlatformTemplate.template_key), func.max(col(PlatformTemplate.version)))
@@ -638,7 +642,7 @@ class TemplateRepository:
 
         return {
             template.id: latest_versions.get(template.template_key, -1)
-            > baseline_versions.get(template.fork_baseline_platform_template_id, -1)
+            > (template.fork_baseline_platform_version or -1)
             for template in candidates
         }
 

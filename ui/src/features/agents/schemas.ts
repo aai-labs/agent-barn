@@ -129,6 +129,7 @@ export const AgentTemplateReadSchema = z.object({
   templateSource: z.enum(["pre-defined", "custom"]),
   forkedFromPlatformTemplateId: z.string().uuid().nullable().optional(),
   forkBaselinePlatformTemplateId: z.string().uuid().nullable().optional(),
+  forkBaselinePlatformVersion: z.number().int().nullable().optional(),
   platformUpdateAvailable: z.boolean().default(false),
   version: z.number().int(),
   description: z.string().nullable().optional(),

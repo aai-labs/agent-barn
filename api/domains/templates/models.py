@@ -49,6 +49,9 @@ class AgentTemplate(BaseModel, table=True):
         nullable=True,
         ondelete="SET NULL",
     )
+    # Denormalized version of the platform snapshot this organization version
+    # copied. It avoids resolving the baseline row just to display its version.
+    fork_baseline_platform_version: int | None = SqlField(default=None, nullable=True)
     template_key: str = SqlField(nullable=False, max_length=255)
     template_name: str = SqlField(nullable=False, max_length=255)
     template_source: TemplateSource = SqlField(
@@ -163,9 +166,10 @@ class TemplateRead(PydanticBaseModel):
     # Set only for org forks of a platform predefined template; NULL for custom
     # templates and for platform templates themselves.
     forked_from_platform_template_id: UUID | None = None
-    # The platform version this org fork was last synced to. Unlike the origin
-    # pointer above, this advances after a Template Update.
+    # The platform row and version this org fork was last synced to. Unlike
+    # the origin pointer above, these advance after a Template Update.
     fork_baseline_platform_template_id: UUID | None = None
+    fork_baseline_platform_version: int | None = None
     # True when this organization fork's baseline is behind the latest
     # published Platform Template Version for the same lineage.
     platform_update_available: bool = False

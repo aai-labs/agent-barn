@@ -158,10 +158,12 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   const { versions, isLoading: versionsLoading } = useTemplateVersions(
     effectiveTemplate?.templateKey,
   );
-  // The chosen version (defaults to latest = versions[0]). The full row for the
-  // resolved version drives the preview + submit.
-  const resolvedVersion =
-    selectedVersion ?? versions[0]?.version ?? effectiveTemplate?.version ?? null;
+  // Forks default to the organization's effective version; built-ins and
+  // custom lineages default to their newest available version.
+  const defaultVersion = effectiveTemplate?.forkedFromPlatformTemplateId
+    ? effectiveTemplate.version
+    : versions[0]?.version ?? effectiveTemplate?.version ?? null;
+  const resolvedVersion = selectedVersion ?? defaultVersion;
   const versionTemplate =
     versions.find((v) => v.version === resolvedVersion) ?? effectiveTemplate;
   const roleLabel = effectiveTemplate?.templateName ?? "Agent";

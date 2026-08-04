@@ -645,7 +645,7 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                         }}
                         onClick={() => {
                           setRepinKey(t.templateKey);
-                          setRepinVersion(null);
+                          setRepinVersion(t.version);
                           setRepinSecretDrafts([]);
                         }}
                       >

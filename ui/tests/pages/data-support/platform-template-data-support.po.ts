@@ -58,6 +58,7 @@ export const mockPlatformTemplatePublished = {
   template_source: "pre-defined",
   forked_from_platform_template_id: null,
   fork_baseline_platform_template_id: null,
+  fork_baseline_platform_version: null,
   version: 2,
   description: "Reviews changes for correctness and maintainability.",
   soul_md: "You are a careful code reviewer.",

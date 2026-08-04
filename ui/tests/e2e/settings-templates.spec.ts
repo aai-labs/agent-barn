@@ -53,6 +53,7 @@ test.describe("Settings · Templates", () => {
       template_source: "pre-defined",
       forked_from_platform_template_id: "11111111-1111-4111-8111-111111111111",
       fork_baseline_platform_template_id: "22222222-2222-4222-8222-222222222222",
+      fork_baseline_platform_version: 2,
       platform_update_available: true,
     };
     const versions = mockVersionsForKey("my-custom").map((version) => ({
@@ -67,7 +68,12 @@ test.describe("Settings · Templates", () => {
     await dataSupport.agents.interceptGetTemplateVersionsRequest({ body: versions });
     await dataSupport.agents.interceptUpdateTemplateFromPlatformRequest({
       templateKey: "my-custom",
-      body: { ...fork, version: 3, platform_update_available: false },
+      body: {
+        ...fork,
+        version: 3,
+        fork_baseline_platform_version: 3,
+        platform_update_available: false,
+      },
     });
 
     await page.reload();
@@ -75,11 +81,12 @@ test.describe("Settings · Templates", () => {
     await expect(page.getByText("Org fork", { exact: true })).toHaveCount(1);
     await page.getByText("My Custom", { exact: true }).click();
     await expect(page.getByTestId("template-update-available")).toBeVisible();
-    await expect(page.getByText(/Organization fork/)).toBeVisible();
+    await expect(page.getByText("Organization fork · Platform baseline v2", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Apply platform update" }).click();
 
     const dialog = page.getByRole("dialog");
     await expect(dialog.getByRole("heading", { name: "Apply platform template update?" })).toBeVisible();
+    await expect(dialog).toContainText("clones the latest Platform Template content and required skills");
     const updatePromise = page.waitForRequest(
       (request) => request.url().includes("/templates/my-custom/platform-update") && request.method() === "POST",
     );

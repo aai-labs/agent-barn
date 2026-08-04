@@ -106,9 +106,7 @@ export function TemplateDrawer({
     versions.find((version) => version.version === resolvedVersion) ??
     versions[0];
   const isFork = Boolean(current?.forkedFromPlatformTemplateId);
-  const forkBaselineVersion = current?.forkBaselinePlatformTemplateId
-    ? versions.find((version) => version.id === current.forkBaselinePlatformTemplateId)?.version
-    : undefined;
+  const forkBaselineVersion = current?.forkBaselinePlatformVersion;
   const hasPlatformUpdate =
     !platformUpdateApplied &&
     (platformUpdateAvailable === true || versions.some((version) => version.platformUpdateAvailable));
@@ -406,7 +404,7 @@ export function TemplateDrawer({
                   </span>
                   <span className="text-[12.5px]" style={{ color: "var(--ink-2)" }}>
                     A newer Platform Template Version is ready. Apply it to create a new organization version;
-                    your local overrides and existing Agent pins stay unchanged.
+                    the new version will clone the platform content and required skills. Existing Agent pins stay unchanged.
                   </span>
                 </div>
               )}
@@ -810,7 +808,7 @@ export function TemplateDrawer({
         open={applyingPlatformUpdate}
         onOpenChange={setApplyingPlatformUpdate}
         title="Apply platform template update?"
-        description="This creates a new organization template version. Your local overrides are preserved, and existing Agents remain pinned to their current versions."
+        description="This clones the latest Platform Template content and required skills into a new organization version. Existing Agents remain pinned to their current versions."
         confirmLabel="Apply update"
         pendingLabel="Applying update…"
         onConfirm={handleApplyPlatformUpdate}
