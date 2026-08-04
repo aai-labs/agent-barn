@@ -104,7 +104,7 @@ export function TemplateSourceBadge({ source }: { source: AgentTemplateRead["tem
       className="text-[0.6875rem] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full"
       style={{ color: "var(--ink-3)", background: "var(--line)" }}
     >
-      Pre-defined
+      Built-in
     </span>
   );
 }

@@ -209,12 +209,12 @@ test.describe("Hire Dialog", () => {
     await expect(page.getByText("What kind of teammate do you need?")).not.toBeVisible();
   });
 
-  test("template step renders catalog templates with pre-defined badges and a version dropdown", async ({ page }) => {
+  test("template step renders catalog templates with built-in badges and a version dropdown", async ({ page }) => {
     await expect(page.getByText("General Purpose", { exact: true })).toBeVisible();
     await expect(page.getByText("Scrum Master", { exact: true })).toBeVisible();
     await expect(page.getByText("My Custom", { exact: true })).toBeVisible();
     // Badge spans only (source filter options are not spans).
-    await expect(page.locator('span:text-is("Pre-defined")')).toHaveCount(2);
+    await expect(page.locator('span:text-is("Built-in")')).toHaveCount(2);
     // Select a template to reveal the version dropdown.
     await page.getByText("General Purpose", { exact: true }).click();
     const version = page.getByLabel("Version");

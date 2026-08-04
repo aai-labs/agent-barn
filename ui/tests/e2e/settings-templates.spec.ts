@@ -40,8 +40,8 @@ test.describe("Settings · Templates", () => {
   test("lists templates with slug, version, and source badges", async ({ page }) => {
     await expect(page.getByText("General Purpose", { exact: true })).toBeVisible();
     await expect(page.getByText("· general-purpose@v1")).toBeVisible();
-    // Badge spans only — the source filter <option> also says "Pre-defined".
-    await expect(page.locator('span:text-is("Pre-defined")')).toHaveCount(2);
+    // Badge spans only — the source filter option also says "Built-in".
+    await expect(page.locator('span:text-is("Built-in")')).toHaveCount(2);
     await expect(page.getByText("My Custom", { exact: true })).toBeVisible();
   });
 

@@ -227,7 +227,7 @@ export function TemplateDrawer({
   const showDeleteAction = !editing && mode === "view" && canManage && !!current;
   const deleteBlockedReason =
     current?.templateSource === "pre-defined"
-      ? "Pre-defined templates cannot be deleted"
+      ? "Built-in templates cannot be deleted"
       : current?.inUse
         ? "This template is being used by an agent"
         : null;

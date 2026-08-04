@@ -19,7 +19,7 @@ import { Pagination } from "./pagination";
 
 const SOURCE_FILTERS: Array<{ value: TemplateSource | ""; label: string }> = [
   { value: "", label: "All sources" },
-  { value: "pre-defined", label: "Pre-defined" },
+  { value: "pre-defined", label: "Built-in" },
   { value: "custom", label: "Custom" },
 ];
 
