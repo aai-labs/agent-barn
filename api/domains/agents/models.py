@@ -587,13 +587,6 @@ class AgentCreate(PydanticBaseModel):
     skill_ids: list[UUID] = Field(default_factory=list)
     approval_mode: CommandApprovalMode = CommandApprovalMode.AUTO
 
-    @model_validator(mode="before")
-    @classmethod
-    def reject_legacy_template_slug(cls, values: object) -> object:
-        if isinstance(values, dict) and "template_slug" in values:
-            raise ValueError("template_slug is no longer supported; use template_key")
-        return values
-
     @model_validator(mode="after")
     def validate_platform_credentials(self) -> AgentCreate:
         if self.agent_type == AgentType.HERMES and self.platform == AgentPlatform.TEAMS:
