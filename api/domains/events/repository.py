@@ -412,7 +412,7 @@ class OutboxMessageRepository:
     def _delivery_explorer_joins(query):
         # Shared join chain for the explorer row and count queries so the
         # OutboxMessage/Organization wiring lives in exactly one place.
-        return query.join(OutboxMessage, col(OutboxMessage.id) == col(EventDelivery.outbox_message_id)).join(
+        return query.join(OutboxMessage, col(OutboxMessage.id) == col(EventDelivery.outbox_message_id)).outerjoin(
             Organization, col(Organization.id) == col(EventDelivery.organization_id)
         )
 
@@ -465,7 +465,7 @@ class OutboxMessageRepository:
         *,
         event_name: str,
         schema_version: int,
-        organization_name: str,
+        organization_name: str | None,
         observed_at: datetime,
     ) -> EventDeliveryRead:
         return EventDeliveryRead(

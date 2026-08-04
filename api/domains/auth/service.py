@@ -13,6 +13,7 @@ from api.core.config import Config
 from api.domains.auth.hashing import hash_text
 from api.domains.auth.models import (
     AcceptInviteRequest,
+    CredentialClass,
     ForgotPasswordRequest,
     PasswordResetRequest,
     PasswordResetToken,
@@ -157,7 +158,9 @@ class AuthService:
         except EmailTakenHTTPException:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already in use")
 
-        return self.create_token_pair(TokenData(user_id=str(user.id), stamp=user.security_stamp))
+        return self.create_token_pair(
+            TokenData(user_id=str(user.id), stamp=user.security_stamp, credential_class=CredentialClass.USER_SESSION)
+        )
 
     def verify_refresh_token(self, token: str) -> RefreshToken:
         refresh_token = self.refresh_token_repository.get(token)

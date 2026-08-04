@@ -56,6 +56,28 @@ test.describe("Event Delivery Monitor (platform_admin)", () => {
     await expect(page.getByText("AAI Labs")).toBeVisible();
   });
 
+  test("renders platform deliveries without an organization", async ({ page }) => {
+    await data.eventDeliveries.interceptSummary({ summary: emptySummary() });
+    await data.eventDeliveries.interceptList({
+      items: [
+        delivery({
+          event_name: "platform.user_privilege.granted",
+          organization_id: null,
+          organization_name: null,
+        }),
+      ],
+    });
+
+    await page.goto(MONITOR_URL);
+
+    const platformDelivery = page.getByRole("button", { name: /platform\.user_privilege\.granted/i });
+    await expect(platformDelivery).toBeVisible();
+    await expect(platformDelivery.getByText("Platform", { exact: true })).toBeVisible();
+
+    await platformDelivery.click();
+    await expect(page.getByText("Platform", { exact: true }).last()).toBeVisible();
+  });
+
   test("shows loading skeletons before data resolves, then the real content", async ({ page }) => {
     await data.eventDeliveries.interceptSummary({ summary: summaryWithCounts(), delayMs: 400 });
     await data.eventDeliveries.interceptList({ items: [delivery()], delayMs: 400 });

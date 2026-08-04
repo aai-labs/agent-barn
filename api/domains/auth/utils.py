@@ -59,7 +59,7 @@ def get_authenticated_user(
         payload = jwt.decode(token, config.secret_signing_key, algorithms=[JWT_ENCODING_ALGORITHM])
         current_user_id: str | None = payload.get("user_id")
         token_type: str | None = payload.get("token_type")
-        credential_class = CredentialClass(payload.get("credential_class", CredentialClass.USER_SESSION))
+        credential_class = CredentialClass(payload.get("credential_class"))
 
         if current_user_id is None or token_type != "access":
             raise CredentialsException()

@@ -34,7 +34,7 @@ class CredentialClass(str, enum.Enum):
 class TokenData(PydanticBaseModel):
     user_id: str
     stamp: str
-    credential_class: CredentialClass = CredentialClass.USER_SESSION
+    credential_class: CredentialClass
 
 
 class RefreshTokenRequest(PydanticBaseModel):
