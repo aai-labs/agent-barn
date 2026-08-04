@@ -9,7 +9,7 @@ from api.domains.events.constants import (
     EVENT_DELIVERY_RECONCILIATION_ENQUEUED_STALE_SECONDS,
     EVENT_DELIVERY_RECONCILIATION_PENDING_GRACE_SECONDS,
 )
-from api.domains.events.models import EventDelivery, EventDeliveryStatus
+from api.domains.events.models import EventDelivery, EventDeliveryStatus, EventScope
 from api.domains.events.reconciliation import EventDeliveryReconciler
 from api.domains.events.repository import PendingDeliveryStats
 
@@ -56,6 +56,7 @@ def _delivery(status=EventDeliveryStatus.PENDING) -> EventDelivery:
     return EventDelivery(
         outbox_message_id=uuid4(),
         event_id=uuid4(),
+        event_scope=EventScope.ORGANIZATION,
         organization_id=uuid4(),
         handler_name="audit.projection",
         status=status,

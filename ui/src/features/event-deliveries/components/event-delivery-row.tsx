@@ -39,7 +39,7 @@ export function EventDeliveryRow({
           <span style={{ color: "var(--ink-4)" }}> · v{delivery.schemaVersion}</span>
         </span>
         <span className="truncate" style={{ color: "var(--ink-2)" }}>
-          {delivery.organizationName}
+          {delivery.organizationName ?? "Platform"}
         </span>
         <span className="truncate" style={{ color: "var(--ink-3)" }}>
           {delivery.handlerName}

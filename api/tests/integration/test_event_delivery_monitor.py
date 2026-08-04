@@ -24,6 +24,7 @@ from api.domains.events.models import (
     ActorIdentity,
     ActorIdentityType,
     EventDeliveryDeadLetterReason,
+    EventScope,
     SubjectIdentity,
     SubjectIdentityType,
 )
@@ -48,6 +49,12 @@ class _SamplePayload(BaseModel):
     organization_id: str
 
 
+class _PlatformSamplePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    marker: str
+
+
 def _registry(handler_names: tuple[str, ...] = ("handler.one", "handler.two")) -> DomainEventRegistry:
     registry = DomainEventRegistry()
     registry.register(
@@ -56,6 +63,20 @@ def _registry(handler_names: tuple[str, ...] = ("handler.one", "handler.two")) -
             schema_version=1,
             payload_model=_SamplePayload,
             handler_names=handler_names,
+        )
+    )
+    return registry
+
+
+def _platform_registry() -> DomainEventRegistry:
+    registry = DomainEventRegistry()
+    registry.register(
+        DomainEventDefinition(
+            event_name="monitor.platform.sampled",
+            schema_version=1,
+            payload_model=_PlatformSamplePayload,
+            handler_names=("handler.platform",),
+            event_scope=EventScope.PLATFORM,
         )
     )
     return registry
@@ -80,6 +101,22 @@ def _create_deliveries(
     )
     repository.create(event, registry)
     return sorted(repository.list_deliveries_for_event(event.event_id), key=lambda delivery: delivery.handler_name)
+
+
+def _create_platform_delivery(repository: OutboxMessageRepository):
+    registry = _platform_registry()
+    event = registry.build_event(
+        event_name="monitor.platform.sampled",
+        schema_version=1,
+        occurred_at=datetime.now(UTC),
+        organization_id=None,
+        actor=ActorIdentity(type=ActorIdentityType.USER, id=uuid4()),
+        subject=SubjectIdentity(type=SubjectIdentityType.USER, id=uuid4()),
+        correlation_id=uuid4(),
+        payload={"marker": "platform"},
+    )
+    repository.create(event, registry)
+    return repository.list_deliveries_for_event(event.event_id)[0]
 
 
 def _set_created_at(delegate: PostgresRepositoryDelegate, delivery_id, created_at: datetime) -> None:
@@ -360,6 +397,23 @@ def test_explorer_filters_by_status_organization_and_event_name():
 
         by_missing_event_name = client.get(f"{MONITOR_BASE}?event_name=does.not.exist", headers=_auth_headers(context))
         assert_that(by_missing_event_name.json()["total"], equal_to(0))
+
+
+def test_explorer_includes_platform_deliveries_without_an_organization():
+    with given(_base_given()) as context:
+        client: TestClient = context.client
+        repository: OutboxMessageRepository = context.injector.get(OutboxMessageRepository)
+
+        delivery = _create_platform_delivery(repository)
+
+        response = client.get(MONITOR_BASE, headers=_auth_headers(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        body = response.json()
+        assert_that(body["total"], equal_to(1))
+        assert_that(body["items"][0]["id"], equal_to(str(delivery.id)))
+        assert_that(body["items"][0]["organization_id"], none())
+        assert_that(body["items"][0]["organization_name"], none())
 
 
 def test_explorer_created_at_range_filter():

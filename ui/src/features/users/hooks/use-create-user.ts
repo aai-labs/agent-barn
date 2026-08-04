@@ -3,26 +3,47 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/shared/api";
+import { platformOrganizationsKey } from "@/features/organizations/utils";
 
-import type { CreateUserData } from "../schemas";
+import {
+  type PlatformUserCreateForm,
+  PlatformUserCreateResultSchema,
+  PlatformUserInviteResultSchema,
+} from "../schemas";
 import { usersKey } from "../utils";
 
 export function useCreateUser() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (data: CreateUserData) => {
-      const response = await api.post("/api/v1/platform/users", {
-        email: data.email,
-        password: data.password,
-        full_name: data.fullName || undefined,
-        organization_id: data.organizationId,
-        role: data.role,
-      });
+    mutationFn: async (data: PlatformUserCreateForm) => {
+      const response = await api.post(
+        "/api/v1/platform/users",
+        {
+          email: data.email,
+          fullName: data.fullName || undefined,
+          organizationName: data.organizationName || undefined,
+        },
+        { schema: PlatformUserCreateResultSchema },
+      );
       return response.data;
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: usersKey.lists() });
+      void queryClient.invalidateQueries({ queryKey: platformOrganizationsKey.lists() });
+    },
+  });
+}
+
+export function useResendUserInvite() {
+  return useMutation({
+    mutationFn: async (userId: string) => {
+      const response = await api.post(
+        `/api/v1/platform/users/${userId}/resend-invite`,
+        undefined,
+        { schema: PlatformUserInviteResultSchema },
+      );
+      return response.data;
     },
   });
 }

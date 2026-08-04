@@ -94,6 +94,7 @@ class OutboxMessageRepository:
             event_name=event.event_name,
             schema_version=event.schema_version,
             occurred_at=event.occurred_at,
+            event_scope=event.event_scope,
             organization_id=event.organization_id,
             actor=event.actor.model_dump(mode="json"),
             subject=event.subject.model_dump(mode="json"),
@@ -107,6 +108,7 @@ class OutboxMessageRepository:
             EventDelivery(
                 outbox_message_id=message.id,
                 event_id=message.event_id,
+                event_scope=message.event_scope,
                 organization_id=message.organization_id,
                 handler_name=handler_name,
             )
@@ -116,6 +118,10 @@ class OutboxMessageRepository:
     def get_by_event_id(self, event_id: UUID) -> OutboxMessage | None:
         with Session(self.delegate.engine) as session:
             return session.exec(select(OutboxMessage).where(OutboxMessage.event_id == event_id)).one_or_none()
+
+    def get_latest(self) -> OutboxMessage | None:
+        with Session(self.delegate.engine) as session:
+            return session.exec(select(OutboxMessage).order_by(col(OutboxMessage.created_at).desc())).first()
 
     def list_deliveries_for_event(self, event_id: UUID) -> list[EventDelivery]:
         with Session(self.delegate.engine) as session:
@@ -406,7 +412,7 @@ class OutboxMessageRepository:
     def _delivery_explorer_joins(query):
         # Shared join chain for the explorer row and count queries so the
         # OutboxMessage/Organization wiring lives in exactly one place.
-        return query.join(OutboxMessage, col(OutboxMessage.id) == col(EventDelivery.outbox_message_id)).join(
+        return query.join(OutboxMessage, col(OutboxMessage.id) == col(EventDelivery.outbox_message_id)).outerjoin(
             Organization, col(Organization.id) == col(EventDelivery.organization_id)
         )
 
@@ -459,7 +465,7 @@ class OutboxMessageRepository:
         *,
         event_name: str,
         schema_version: int,
-        organization_name: str,
+        organization_name: str | None,
         observed_at: datetime,
     ) -> EventDeliveryRead:
         return EventDeliveryRead(

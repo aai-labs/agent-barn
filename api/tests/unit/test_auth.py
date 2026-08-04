@@ -4,7 +4,7 @@ from uuid import uuid7
 from fastapi import HTTPException
 from hamcrest import assert_that, calling, equal_to, is_not, none, raises
 
-from api.domains.auth.models import RefreshToken, TokenData
+from api.domains.auth.models import CredentialClass, RefreshToken, TokenData
 from api.domains.auth.repository import RefreshTokenRepository
 from api.domains.auth.service import AuthService
 from api.tests.core.givenpy import given, then, when
@@ -50,7 +50,9 @@ def test_i_can_create_access_token():
         service: AuthService = context.injector.get(AuthService)
 
         with when("I create an access token"):
-            access_token = service.create_access_token(TokenData(user_id=str(user_id), stamp="stamp"))
+            access_token = service.create_access_token(
+                TokenData(user_id=str(user_id), stamp="stamp", credential_class=CredentialClass.USER_SESSION)
+            )
 
             with then("token should be generated"):
                 assert_that(access_token, is_not(none()))

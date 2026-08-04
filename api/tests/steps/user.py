@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 from uuid import UUID, uuid7
 
 from api.domains.auth.hashing import hash_text
-from api.domains.auth.models import CurrentUserContext, TokenData
+from api.domains.auth.models import CredentialClass, CurrentUserContext, TokenData
 from api.domains.auth.service import AuthService
 from api.domains.organizations.models import Organization
 from api.domains.organizations.repository import OrganizationRepository
@@ -24,7 +24,9 @@ def there_is_an_access_token_for_user(user_id: UUID | None = None):
         if not user:
             raise RuntimeError("No user found for token generation")
 
-        token_data = TokenData(user_id=str(user.id), stamp=user.security_stamp)
+        token_data = TokenData(
+            user_id=str(user.id), stamp=user.security_stamp, credential_class=CredentialClass.USER_SESSION
+        )
         context.access_token = auth_service.create_access_token(data=token_data)
 
     return step
