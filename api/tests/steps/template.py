@@ -53,8 +53,11 @@ def there_is_a_template(
     return step
 
 
-def there_is_a_template_skill():
-    """Attach context.skill to context.template as a required skill."""
+def there_is_a_template_skill(group_key: str | None = None):
+    """Attach context.skill to context.template as a required skill.
+
+    A None group_key (the default) makes it a standalone AND-required skill,
+    matching the original pre-OR-group behavior."""
 
     def step(context):
         from sqlmodel import Session
@@ -68,9 +71,58 @@ def there_is_a_template_skill():
                 AgentTemplateSkill(
                     template_id=context.template.id,
                     skill_id=context.skill.id,
+                    group_key=group_key,
                 )
             )
             session.commit()
         context.template_skill = (context.template.id, context.skill.id)
+
+    return step
+
+
+def there_is_a_template_skill_group(skill_names: tuple[str, ...], group_key: str = "test-group"):
+    """Create one org-scoped skill per name and attach all of them to
+    context.template as members of the same "at least one of" group."""
+
+    def step(context):
+        import io
+        import zipfile
+
+        from sqlmodel import Session
+
+        from api.domains.agents.models import AgentTemplateSkill
+        from api.domains.skills.models import Skill, SkillSource
+        from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
+
+        delegate: PostgresRepositoryDelegate = context.injector.get(PostgresRepositoryDelegate)
+        skills = []
+        with Session(delegate.engine) as session:
+            for name in skill_names:
+                buf = io.BytesIO()
+                with zipfile.ZipFile(buf, "w") as zf:
+                    zf.writestr("skill.md", f"# {name}")
+                skill = Skill(
+                    organization_id=context.organization.id,
+                    name=name,
+                    source=SkillSource.CUSTOM,
+                    required_providers=[],
+                    zip_content=buf.getvalue(),
+                    tools_pointer=f'You can use "{name}" skill in the ./skills folder',
+                )
+                session.add(skill)
+                session.flush()
+                session.add(
+                    AgentTemplateSkill(
+                        template_id=context.template.id,
+                        skill_id=skill.id,
+                        group_key=group_key,
+                    )
+                )
+                skills.append(skill)
+            session.commit()
+            for skill in skills:
+                session.refresh(skill)
+                session.expunge(skill)
+        context.template_skill_group = {"group_key": group_key, "skills": skills}
 
     return step

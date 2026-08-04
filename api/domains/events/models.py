@@ -4,6 +4,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import sqlalchemy as sa
+from fastapi import Query
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Column, Index, UniqueConstraint
@@ -143,6 +144,11 @@ class EventDelivery(DatabaseBaseModel, table=True):
             "OR (event_scope = 'PLATFORM' AND organization_id IS NULL)",
             name="ck_event_delivery_scope_organization",
         ),
+        Index("ix_event_delivery_status_created_at", "status", "created_at"),
+        Index("ix_event_delivery_status_enqueued_at", "status", "enqueued_at"),
+        Index("ix_event_delivery_status_claimed_at", "status", "claimed_at"),
+        Index("ix_event_delivery_created_at_id", "created_at", "id"),
+        Index("ix_event_delivery_organization_created_at", "organization_id", "created_at"),
     )
 
     outbox_message_id: UUID = SqlField(foreign_key="event_outbox_message.id", nullable=False, ondelete="CASCADE")
@@ -168,3 +174,90 @@ class EventDelivery(DatabaseBaseModel, table=True):
     enqueued_at: datetime | None = SqlField(default=None, nullable=True, sa_type=sa.DateTime(timezone=True))  # type: ignore
     claimed_at: datetime | None = SqlField(default=None, nullable=True, sa_type=sa.DateTime(timezone=True))  # type: ignore
     completed_at: datetime | None = SqlField(default=None, nullable=True, sa_type=sa.DateTime(timezone=True))  # type: ignore
+
+
+class EventDeliverySortDirection(str, enum.Enum):
+    NEWEST_FIRST = "NEWEST_FIRST"
+    OLDEST_FIRST = "OLDEST_FIRST"
+
+
+class EventDeliveryRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    event_id: UUID
+    event_name: str
+    schema_version: int
+    handler_name: str
+    organization_id: UUID
+    organization_name: str
+    status: EventDeliveryStatus
+    attempt_count: int
+    dead_letter_reason: EventDeliveryDeadLetterReason | None = None
+    last_error: str | None = None
+    created_at: datetime
+    enqueued_at: datetime | None = None
+    claimed_at: datetime | None = None
+    completed_at: datetime | None = None
+    status_since: datetime | None = None
+    observed_at: datetime
+
+
+class EventDeliveryFilter(BaseModel):
+    search: str | None = None
+    status: EventDeliveryStatus | None = None
+    organization_id: UUID | None = None
+    event_name: str | None = None
+    created_from: datetime | None = None
+    created_to: datetime | None = None
+    sort: EventDeliverySortDirection = EventDeliverySortDirection.NEWEST_FIRST
+
+
+def get_event_delivery_filter(
+    search: str | None = Query(default=None),
+    status: EventDeliveryStatus | None = Query(default=None),
+    organization_id: UUID | None = Query(default=None),
+    event_name: str | None = Query(default=None),
+    created_from: datetime | None = Query(default=None),
+    created_to: datetime | None = Query(default=None),
+    sort: EventDeliverySortDirection = Query(default=EventDeliverySortDirection.NEWEST_FIRST),
+) -> EventDeliveryFilter:
+    return EventDeliveryFilter(
+        search=search,
+        status=status,
+        organization_id=organization_id,
+        event_name=event_name,
+        created_from=created_from,
+        created_to=created_to,
+        sort=sort,
+    )
+
+
+class EventDeliveryStatusCounts(BaseModel):
+    pending: int
+    enqueued: int
+    processing: int
+    succeeded: int
+    dead_lettered: int
+
+
+class EventDeliveryActiveStateStats(BaseModel):
+    count: int
+    oldest_age_seconds: float | None = None
+    stale_threshold_seconds: int
+    stale_count: int
+    unknown_age_count: int
+
+
+class EventDeliverySummaryRead(BaseModel):
+    observed_at: datetime
+    total_count: int
+    status_counts: EventDeliveryStatusCounts
+    pending: EventDeliveryActiveStateStats
+    enqueued: EventDeliveryActiveStateStats
+    processing: EventDeliveryActiveStateStats
+
+
+class SupportedEventTypeRead(BaseModel):
+    event_name: str
+    schema_versions: list[int]

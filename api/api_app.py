@@ -28,6 +28,7 @@ from api.domains.agents.webhook_routes import webhook_router
 from api.domains.auth.routes import auth_router
 from api.domains.conversations.routes import conversations_router
 from api.domains.costs.routes import costs_router
+from api.domains.events.routes import event_delivery_monitor_router
 from api.domains.integrations.google_oauth.routes import integrations_router
 from api.domains.organizations.routes import org_router, platform_org_router
 from api.domains.rbac.seeder import RbacSeeder
@@ -102,6 +103,7 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(auth_router)
     subapi.include_router(conversations_router)
     subapi.include_router(costs_router)
+    subapi.include_router(event_delivery_monitor_router)
     subapi.include_router(org_router)
     subapi.include_router(platform_org_router)
     subapi.include_router(member_router)

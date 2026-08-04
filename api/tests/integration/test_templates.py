@@ -16,6 +16,7 @@ from api.domains.organizations.models import Organization
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import AuthorizationScope
+from api.domains.skills.repository import SkillRepository
 from api.domains.templates.defaults import DEFAULT_SOUL_MD
 from api.domains.templates.models import TemplateSource
 from api.domains.templates.predefined import PREDEFINED_TEMPLATES
@@ -42,7 +43,11 @@ from api.tests.steps.organization import (
     there_is_an_organization_with_user_and_access_token,
 )
 from api.tests.steps.rbac import role_lacks_permission
-from api.tests.steps.template import there_is_a_template, there_is_a_template_skill
+from api.tests.steps.template import (
+    there_is_a_template,
+    there_is_a_template_skill,
+    there_is_a_template_skill_group,
+)
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
 
 _BASE = "/api/v1/organizations/{organization_id}/templates"
@@ -650,6 +655,104 @@ def test_create_template_with_unknown_skill_returns_404():
             assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
+def test_create_template_with_required_skill_group_stores_group_key():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="GitHub"),
+            there_is_a_skill(name="Bitbucket"),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        skill_repository: SkillRepository = context.injector.get(SkillRepository)
+        skills_by_name = {s.name: s for s in skill_repository.find_accessible_for_org(context.organization.id)}
+        github_id = str(skills_by_name["GitHub"].id)
+        bitbucket_id = str(skills_by_name["Bitbucket"].id)
+
+        with when("I create a template with an at-least-one-of skill group"):
+            response = client.post(
+                _BASE,
+                json={
+                    "template_name": "My Template",
+                    "required_skill_groups": [
+                        {"group_key": "github-or-bitbucket", "skill_ids": [github_id, bitbucket_id]}
+                    ],
+                },
+                headers=_auth(context),
+            )
+
+        with then("it returns 201 with both skills sharing the group_key"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            body = response.json()
+            assert_that(len(body["required_skills"]), equal_to(2))
+            group_keys = {s["group_key"] for s in body["required_skills"]}
+            assert_that(group_keys, equal_to({"github-or-bitbucket"}))
+
+
+def test_create_template_rejects_skill_in_both_standalone_and_group():
+    with given([*_GIVEN, there_is_a_skill(name="GitHub")]) as context:
+        client: TestClient = context.client
+        skill_id = str(context.skill.id)
+
+        with when("the same skill is both standalone-required and in a group"):
+            response = client.post(
+                _BASE,
+                json={
+                    "template_name": "My Template",
+                    "required_skill_ids": [skill_id],
+                    "required_skill_groups": [{"group_key": "grp", "skill_ids": [skill_id]}],
+                },
+                headers=_auth(context),
+            )
+
+        with then("it returns 422"):
+            assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
+
+
+def test_create_template_rejects_skill_in_two_groups():
+    with given([*_GIVEN, there_is_a_skill(name="GitHub")]) as context:
+        client: TestClient = context.client
+        skill_id = str(context.skill.id)
+
+        with when("the same skill appears in two different groups"):
+            response = client.post(
+                _BASE,
+                json={
+                    "template_name": "My Template",
+                    "required_skill_groups": [
+                        {"group_key": "grp-a", "skill_ids": [skill_id]},
+                        {"group_key": "grp-b", "skill_ids": [skill_id]},
+                    ],
+                },
+                headers=_auth(context),
+            )
+
+        with then("it returns 422"):
+            assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
+
+
+def test_create_template_rejects_duplicate_group_keys():
+    with given([*_GIVEN, there_is_a_skill(name="GitHub")]) as context:
+        client: TestClient = context.client
+        skill_id = str(context.skill.id)
+
+        with when("two groups share the same group_key"):
+            response = client.post(
+                _BASE,
+                json={
+                    "template_name": "My Template",
+                    "required_skill_groups": [
+                        {"group_key": "dup", "skill_ids": [skill_id]},
+                        {"group_key": "dup", "skill_ids": [skill_id]},
+                    ],
+                },
+                headers=_auth(context),
+            )
+
+        with then("it returns 422"):
+            assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
+
+
 # --- update ---
 
 
@@ -867,6 +970,106 @@ def test_update_template_clears_skills():
             body = response.json()
             assert_that(body["version"], equal_to(2))
             assert_that(body["required_skills"], equal_to([]))
+
+
+def test_update_template_inherits_groups_when_field_unset():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_template(slug="alpha", name="Alpha"),
+            there_is_a_template_skill_group(("GitHub", "Bitbucket"), group_key="github-or-bitbucket"),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("I update other fields without touching required_skill_groups"):
+            response = client.patch(
+                f"{_BASE}/alpha",
+                json={"soul_md": "# Updated"},
+                headers=_auth(context),
+            )
+
+        with then("the new version keeps the inherited group"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            body = response.json()
+            assert_that(body["version"], equal_to(2))
+            assert_that(len(body["required_skills"]), equal_to(2))
+            group_keys = {s["group_key"] for s in body["required_skills"]}
+            assert_that(group_keys, equal_to({"github-or-bitbucket"}))
+
+
+def test_update_template_replaces_groups():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_template(slug="alpha", name="Alpha"),
+            there_is_a_template_skill_group(("GitHub", "Bitbucket"), group_key="github-or-bitbucket"),
+            there_is_a_skill(name="Jira"),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        jira_id = str(context.skill.id)
+
+        with when("I replace the required_skill_groups with a different group"):
+            response = client.patch(
+                f"{_BASE}/alpha",
+                json={
+                    "soul_md": "# Updated",
+                    "required_skill_groups": [{"group_key": "solo-jira", "skill_ids": [jira_id]}],
+                },
+                headers=_auth(context),
+            )
+
+        with then("the new version only has the replacement group"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            body = response.json()
+            assert_that(len(body["required_skills"]), equal_to(1))
+            assert_that(body["required_skills"][0]["name"], equal_to("Jira"))
+            assert_that(body["required_skills"][0]["group_key"], equal_to("solo-jira"))
+
+
+def test_update_template_clears_groups():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_template(slug="alpha", name="Alpha"),
+            there_is_a_template_skill_group(("GitHub", "Bitbucket"), group_key="github-or-bitbucket"),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("I clear required_skill_groups explicitly"):
+            response = client.patch(
+                f"{_BASE}/alpha",
+                json={"soul_md": "# Updated", "required_skill_groups": []},
+                headers=_auth(context),
+            )
+
+        with then("the new version has no required skills"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["required_skills"], equal_to([]))
+
+
+def test_update_template_rejects_overlap_with_inherited_group():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_template(slug="alpha", name="Alpha"),
+            there_is_a_template_skill_group(("GitHub", "Bitbucket"), group_key="github-or-bitbucket"),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        github_skill = context.template_skill_group["skills"][0]
+
+        with when("required_skill_ids is set to a skill already inherited as a group member"):
+            response = client.patch(
+                f"{_BASE}/alpha",
+                json={"soul_md": "# Updated", "required_skill_ids": [str(github_skill.id)]},
+                headers=_auth(context),
+            )
+
+        with then("it returns 422"):
+            assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
 
 
 # --- delete ---
@@ -1176,11 +1379,11 @@ def test_seed_predefined_templates_does_not_duplicate_skill_rows():
         with then("scrum-master still has exactly two required skills"):
             template = repository.get_latest_platform_template("scrum-master")
             assert template is not None
-            skill_ids = repository.get_platform_required_skill_ids(template.id)
-            assert_that(len(skill_ids), equal_to(2))
+            skill_map = repository.get_platform_required_skill_map(template.id)
+            assert_that(len(skill_map), equal_to(2))
 
 
-def test_seed_predefined_templates_code_reviewer_requires_no_host_skill():
+def test_seed_predefined_templates_code_reviewer_requires_github_or_bitbucket():
     with given(
         [
             *_GIVEN,
@@ -1194,11 +1397,36 @@ def test_seed_predefined_templates_code_reviewer_requires_no_host_skill():
         with when("I seed the global predefined catalogue"):
             service.seed_predefined_templates()
 
-        with then("code-reviewer pins no host skill — GitHub or Bitbucket is enforced at runtime"):
+        with then("code-reviewer requires GitHub or Bitbucket as an 'at least one of' group"):
             response = client.get(f"{_BASE}/code-reviewer", headers=_auth(context))
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            skill_names = [s["name"] for s in response.json()["required_skills"]]
-            assert_that(skill_names, equal_to([]))
+            required_skills = response.json()["required_skills"]
+            skill_names = {s["name"] for s in required_skills}
+            assert_that(skill_names, equal_to({"GitHub", "Bitbucket"}))
+            group_keys = {s["group_key"] for s in required_skills}
+            assert_that(group_keys, equal_to({"github-or-bitbucket"}))
+
+
+def test_seed_predefined_templates_code_reviewer_seeds_partial_group_when_only_one_host_skill_exists():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="GitHub", global_skill=True),
+        ]
+    ) as context:
+        service: TemplateService = context.injector.get(TemplateService)
+        client: TestClient = context.client
+
+        with when("I seed the global predefined catalogue without a Bitbucket skill present"):
+            service.seed_predefined_templates()
+
+        with then("code-reviewer requires only the available host skill, as a 1-member group"):
+            response = client.get(f"{_BASE}/code-reviewer", headers=_auth(context))
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            required_skills = response.json()["required_skills"]
+            assert_that(len(required_skills), equal_to(1))
+            assert_that(required_skills[0]["name"], equal_to("GitHub"))
+            assert_that(required_skills[0]["group_key"], equal_to("github-or-bitbucket"))
 
 
 def test_seed_predefined_templates_refreshes_stale_skills():
@@ -1215,14 +1443,37 @@ def test_seed_predefined_templates_refreshes_stale_skills():
         with when("the seeded skills are cleared from the DB then we reseed"):
             template = repository.get_latest_platform_template("jira-task-helper")
             assert template is not None
-            repository.save_platform_template_skills(template.id, [])
+            repository.save_platform_template_skills(template.id, {})
             service.seed_predefined_templates()
 
         with then("the required skills are restored to match the code declaration"):
             template = repository.get_latest_platform_template("jira-task-helper")
             assert template is not None
-            skill_ids = repository.get_platform_required_skill_ids(template.id)
-            assert_that(len(skill_ids), equal_to(1))
+            skill_map = repository.get_platform_required_skill_map(template.id)
+            assert_that(len(skill_map), equal_to(1))
+
+
+def test_seed_predefined_templates_is_idempotent_for_group_keys():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="GitHub", global_skill=True),
+            there_is_a_skill(name="Bitbucket", global_skill=True),
+        ]
+    ) as context:
+        service: TemplateService = context.injector.get(TemplateService)
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+
+        with when("I seed twice"):
+            service.seed_predefined_templates()
+            service.seed_predefined_templates()
+
+        with then("code-reviewer still has exactly two required skills in the same group"):
+            template = repository.get_latest_platform_template("code-reviewer")
+            assert template is not None
+            skill_map = repository.get_platform_required_skill_map(template.id)
+            assert_that(len(skill_map), equal_to(2))
+            assert_that(set(skill_map.values()), equal_to({"github-or-bitbucket"}))
 
 
 def test_predefined_content_keeps_raw_placeholders():
