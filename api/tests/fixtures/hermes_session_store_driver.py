@@ -18,16 +18,20 @@ from unittest.mock import MagicMock
 
 sys.path.insert(0, "/opt/hermes")
 
-from gateway.config import GatewayConfig, Platform
-from gateway.session import SessionSource, SessionStore
+# Only resolvable inside the Hermes image, which is the only place this runs.
+from gateway.config import GatewayConfig, Platform  # ty: ignore[unresolved-import]
+from gateway.session import SessionSource, SessionStore  # ty: ignore[unresolved-import]
 
 PLUGIN_PATH = "/plugin/__init__.py"
 
 
 def load_plugin():
     spec = importlib.util.spec_from_file_location("telemetry_push", PLUGIN_PATH)
+    loader = spec.loader if spec else None
+    if spec is None or loader is None:
+        raise SystemExit(f"could not load the plugin from {PLUGIN_PATH}")
     mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    loader.exec_module(mod)
     hooks = {}
     ctx = MagicMock()
     ctx.register_hook.side_effect = lambda name, fn: hooks.update({name: fn})

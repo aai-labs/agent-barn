@@ -17,11 +17,13 @@ HERMES_PLUGIN_PATH = (
 
 
 def load_hermes_plugin():
-    spec = importlib.util.spec_from_file_location("telemetry_push", os.path.abspath(HERMES_PLUGIN_PATH))
-    assert spec is not None
+    path = os.path.abspath(HERMES_PLUGIN_PATH)
+    spec = importlib.util.spec_from_file_location("telemetry_push", path)
+    loader = spec.loader if spec else None
+    if spec is None or loader is None:
+        raise RuntimeError(f"could not load the Hermes telemetry plugin from {path}")
     mod = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(mod)
+    loader.exec_module(mod)
     return mod
 
 

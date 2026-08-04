@@ -8,6 +8,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from typing import Any, cast
 
 from hamcrest import assert_that, contains_string, empty, equal_to, has_key, has_length, is_
 
@@ -26,22 +27,30 @@ def _free_port():
         return s.getsockname()[1]
 
 
+class _CollectorServer(HTTPServer):
+    """Collects the batches the plugin posts, so tests assert on the wire format."""
+
+    payloads: list[dict]
+
+
 class _IngestCollector(BaseHTTPRequestHandler):
     def do_POST(self):
         length = int(self.headers.get("Content-Length", 0))
-        self.server.payloads.append(json.loads(self.rfile.read(length)))
+        server = cast(_CollectorServer, self.server)
+        server.payloads.append(json.loads(self.rfile.read(length)))
         self.send_response(204)
         self.end_headers()
 
-    def log_message(self, *args):
+    def log_message(self, format: str, *args: Any) -> None:
         pass
 
 
 def _run_driver(steps, timeout=20):
     node = shutil.which("node")
-    assert node is not None, "node is required to exercise the OpenClaw plugin"
+    if node is None:
+        raise RuntimeError("node is required to exercise the OpenClaw plugin")
 
-    server = HTTPServer(("127.0.0.1", _free_port()), _IngestCollector)
+    server = _CollectorServer(("127.0.0.1", _free_port()), _IngestCollector)
     server.payloads = []
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
@@ -66,7 +75,8 @@ def _run_driver(steps, timeout=20):
         deadline = time.monotonic() + timeout
         while not server.payloads and time.monotonic() < deadline:
             if proc.poll() is not None and proc.returncode != 0:
-                raise AssertionError(f"driver exited {proc.returncode}: {proc.stderr.read()}")
+                stderr = proc.stderr.read() if proc.stderr else ""
+                raise AssertionError(f"driver exited {proc.returncode}: {stderr}")
             time.sleep(0.05)
         time.sleep(0.3)  # let any straggling flush arrive
     finally:
