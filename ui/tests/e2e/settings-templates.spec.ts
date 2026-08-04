@@ -72,8 +72,10 @@ test.describe("Settings · Templates", () => {
 
     await page.reload();
     await expect(page.getByTestId("template-update-available-my-custom")).toBeVisible();
+    await expect(page.getByText("Org fork", { exact: true })).toHaveCount(1);
     await page.getByText("My Custom", { exact: true }).click();
     await expect(page.getByTestId("template-update-available")).toBeVisible();
+    await expect(page.getByText(/Organization fork/)).toBeVisible();
     await page.getByRole("button", { name: "Apply platform update" }).click();
 
     const dialog = page.getByRole("dialog");

@@ -105,6 +105,10 @@ export function TemplateDrawer({
     versions.find((version) => version.version === resolvedVersion && version.organizationId !== null) ??
     versions.find((version) => version.version === resolvedVersion) ??
     versions[0];
+  const isFork = Boolean(current?.forkedFromPlatformTemplateId);
+  const forkBaselineVersion = current?.forkBaselinePlatformTemplateId
+    ? versions.find((version) => version.id === current.forkBaselinePlatformTemplateId)?.version
+    : undefined;
   const hasPlatformUpdate =
     !platformUpdateApplied &&
     (platformUpdateAvailable === true || versions.some((version) => version.platformUpdateAvailable));
@@ -310,8 +314,19 @@ export function TemplateDrawer({
               <h2 className="text-lg font-semibold tracking-tight m-0" style={{ color: "var(--ink)" }}>
                 {mode === "create" ? (name || "Untitled template") : (current?.templateName ?? "…")}
               </h2>
-              {current && <TemplateSourceBadge source={current.templateSource} />}
+              {current && (
+                <TemplateSourceBadge
+                  source={current.templateSource}
+                  isFork={isFork}
+                />
+              )}
             </div>
+            {isFork && (
+              <div className="text-[12px] mt-1" style={{ color: "var(--ink-3)" }}>
+                Organization fork
+                {forkBaselineVersion != null ? ` · Platform baseline v${forkBaselineVersion}` : " of a Platform Template"}
+              </div>
+            )}
           </div>
           <button className="af-btn af-btn-ghost af-btn-icon" onClick={onClose} aria-label="Close">
             <XIcon />
@@ -387,7 +402,7 @@ export function TemplateDrawer({
                   style={{ border: "1px solid var(--accent)", background: "var(--accent-soft)" }}
                 >
                   <span className="text-[13px] font-semibold" style={{ color: "var(--accent-ink)" }}>
-                    Update available
+                    Platform update available
                   </span>
                   <span className="text-[12.5px]" style={{ color: "var(--ink-2)" }}>
                     A newer Platform Template Version is ready. Apply it to create a new organization version;

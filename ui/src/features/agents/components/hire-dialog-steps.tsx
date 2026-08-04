@@ -97,14 +97,25 @@ export async function downloadTeamsAppPackage(manifest: string, botName: string)
   URL.revokeObjectURL(url);
 }
 
-export function TemplateSourceBadge({ source }: { source: AgentTemplateRead["templateSource"] }) {
+export function TemplateSourceBadge({
+  source,
+  isFork = false,
+}: {
+  source: AgentTemplateRead["templateSource"];
+  isFork?: boolean;
+}) {
   if (source !== "pre-defined") return null;
   return (
     <span
       className="text-[0.6875rem] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full"
-      style={{ color: "var(--ink-3)", background: "var(--line)" }}
+      style={
+        isFork
+          ? { color: "var(--accent-ink)", background: "var(--accent-soft)" }
+          : { color: "var(--ink-3)", background: "var(--line)" }
+      }
+      title={isFork ? "Organization fork of a Platform Template" : "Platform Template"}
     >
-      Built-in
+      {isFork ? "Org fork" : "Built-in"}
     </span>
   );
 }
@@ -275,7 +286,10 @@ export function TemplateStep({
             >
               <div className="flex items-center justify-between gap-2">
                 <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>{t.templateName}</div>
-                <TemplateSourceBadge source={t.templateSource} />
+                <TemplateSourceBadge
+                  source={t.templateSource}
+                  isFork={Boolean(t.forkedFromPlatformTemplateId)}
+                />
               </div>
               {t.description && <ClampedDescription text={t.description} />}
               <div className="mt-1">
@@ -1199,7 +1213,10 @@ export function DetailsStep({
         <div className="flex-1">
           <div className="flex items-center gap-2">
             <div className="font-semibold text-sm" style={{ color: "var(--ink)" }}>{template.templateName}</div>
-            <TemplateSourceBadge source={template.templateSource} />
+            <TemplateSourceBadge
+              source={template.templateSource}
+              isFork={Boolean(template.forkedFromPlatformTemplateId)}
+            />
           </div>
           <div className="text-[0.8125rem] font-mono" style={{ color: "var(--ink-3)" }}>
             v{template.version}

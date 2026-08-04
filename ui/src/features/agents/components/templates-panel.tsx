@@ -124,14 +124,17 @@ export function TemplatesPanel() {
               <span className="font-mono text-[12px] font-normal" style={{ color: "var(--ink-4)" }}>
                 · v{t.version}
               </span>
-              <TemplateSourceBadge source={t.templateSource} />
+              <TemplateSourceBadge
+                source={t.templateSource}
+                isFork={Boolean(t.forkedFromPlatformTemplateId)}
+              />
               {t.platformUpdateAvailable && (
                 <span
                   data-testid={`template-update-available-${t.templateKey}`}
                   className="text-[11.5px] font-semibold px-2 py-0.5 rounded-full"
                   style={{ color: "var(--accent-ink)", background: "var(--accent-soft)" }}
                 >
-                  Update available
+                  Platform update available
                 </span>
               )}
             </div>

@@ -652,7 +652,10 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                         <span className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>
                           {t.templateName}
                         </span>
-                        <TemplateSourceBadge source={t.templateSource} />
+                        <TemplateSourceBadge
+                  source={t.templateSource}
+                  isFork={Boolean(t.forkedFromPlatformTemplateId)}
+                />
                       </button>
                     );
                   })
