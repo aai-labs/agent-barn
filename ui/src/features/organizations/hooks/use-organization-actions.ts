@@ -2,6 +2,7 @@
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
+import { agentsKey } from "@/features/agents/utils";
 import { api } from "@/shared/api";
 import { toastError } from "@/shared/toast";
 
@@ -66,6 +67,11 @@ export function useUpdateOrganization() {
       void queryClient.invalidateQueries({
         queryKey: organizationsKey.detail(variables.organizationId),
       });
+      // The Hire Agent model picker (useModels) caches its result for an hour;
+      // an allowlist change must be reflected immediately, not after a reload.
+      if (variables.data.allowedModels !== undefined) {
+        void queryClient.invalidateQueries({ queryKey: agentsKey.models() });
+      }
     },
     onError: (error: Error) => {
       toastError(error, "Failed to save changes. Please try again.");
