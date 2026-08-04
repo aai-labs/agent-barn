@@ -251,7 +251,7 @@ if (LITELLM_PROXY_TARGET) {
     });
 
     clientReq.pipe(upstreamReq);
-    clientReq.on('close', () => upstreamReq.destroy());
+    clientReq.on('close', () => { if (!clientReq.complete) upstreamReq.destroy(); });
   });
 
   proxyServer.listen(PROXY_PORT, () => console.log('[llm-proxy] listening on :' + PROXY_PORT));
