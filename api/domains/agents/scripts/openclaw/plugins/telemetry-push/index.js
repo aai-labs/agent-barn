@@ -6,6 +6,7 @@ const INGEST_API_KEY = process.env.INGEST_API_KEY || "";
 
 const MAX_BUFFER_SIZE = 500;
 const MAX_RETRIES = 3;
+const MAX_CHAT_CONTEXTS = 200;
 
 let buffer = [];
 let flushTimer = null;
@@ -96,8 +97,26 @@ function extractText(msg) {
 }
 
 let counter = 0;
-let lastConversationId = "";
-let lastThreadId = null;
+const chatContexts = new Map();
+const pendingToolCalls = new Map();
+
+// sessionKey is the runtime's correlation value across message_received and
+// agent_end; runId is the per-turn fallback. Both are optional, so an event
+// carrying neither is dropped rather than attributed to another chat.
+function correlationKey(ctx) {
+  return (ctx && (ctx.sessionKey || ctx.runId)) || "";
+}
+
+function rememberChat(key, record) {
+  if (chatContexts.size >= MAX_CHAT_CONTEXTS) {
+    chatContexts.delete(chatContexts.keys().next().value);
+  }
+  chatContexts.set(key, record);
+}
+
+function toolKey(event, ctx) {
+  return `${event.runId || (ctx && ctx.runId) || ""}:${event.toolName || ""}`;
+}
 
 export default {
   id: "telemetry-push",
@@ -110,8 +129,14 @@ export default {
 
     api.on("message_received", (event, ctx) => {
       const conversationId = (ctx.conversationId || "").toUpperCase();
-      lastConversationId = conversationId;
-      lastThreadId = event.threadId || null;
+      const key = correlationKey(ctx);
+      if (key) {
+        rememberChat(key, {
+          conversationId,
+          threadId: event.threadId || null,
+          sessionKey: ctx.sessionKey || "",
+        });
+      }
       const msgId =
         event.messageId || `oc:in:${conversationId}:${Date.now()}:${++counter}`;
       bufferPush({
@@ -134,9 +159,16 @@ export default {
 
     api.on("agent_end", (event, ctx) => {
       if (ctx.trigger !== "user") return;
+      const key = correlationKey(ctx);
+      const chat = chatContexts.get(key);
+      if (!chat) {
+        console.error(
+          `[telemetry-push] dropping outbound message: no chat for session ${key || "<none>"}`,
+        );
+        return;
+      }
       const msgs = event.messages || [];
-      const conversationId =
-        lastConversationId || (ctx.channelId || "").toUpperCase();
+      const conversationId = chat.conversationId;
 
       for (let i = msgs.length - 1; i >= 0; i--) {
         if (msgs[i].role !== "assistant") continue;
@@ -147,11 +179,11 @@ export default {
           type: "message",
           data: {
             msg_id: msgId,
-            session_key: ctx.sessionKey || "",
+            session_key: chat.sessionKey,
             channel_id: conversationId,
-            thread_id: lastThreadId,
+            thread_id: chat.threadId,
             direction: "OUTBOUND",
-            conversation_type: convType(conversationId, ctx.sessionKey || ""),
+            conversation_type: convType(conversationId, chat.sessionKey),
             sender_id: null,
             sender_name: null,
             channel_name: null,
@@ -166,6 +198,11 @@ export default {
     api.on("before_tool_call", (event, ctx) => {
       const externalId =
         event.toolCallId || `oc:tc:${Date.now()}:${++counter}`;
+      // Without a runtime call id, after_tool_call cannot recompute this id, so
+      // hold it for the matching result rather than minting a second one.
+      if (!event.toolCallId) {
+        pendingToolCalls.set(toolKey(event, ctx), externalId);
+      }
       bufferPush({
         type: "tool_call",
         data: {
@@ -179,8 +216,13 @@ export default {
     });
 
     api.on("after_tool_call", (event, ctx) => {
-      const externalId =
-        event.toolCallId || `oc:tr:${Date.now()}:${++counter}`;
+      let externalId = event.toolCallId;
+      if (!externalId) {
+        const key = toolKey(event, ctx);
+        externalId = pendingToolCalls.get(key);
+        pendingToolCalls.delete(key);
+      }
+      if (!externalId) externalId = `oc:tr:${Date.now()}:${++counter}`;
       bufferPush({
         type: "tool_result",
         data: {
@@ -192,7 +234,9 @@ export default {
       });
     });
 
-    api.on("session_end", () => {
+    api.on("session_end", (event, ctx) => {
+      const key = correlationKey(ctx);
+      if (key) chatContexts.delete(key);
       flush();
     });
   },
