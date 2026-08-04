@@ -1,5 +1,7 @@
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TypeVar
 from uuid import UUID
 
 from fastapi import HTTPException, status
@@ -55,6 +57,9 @@ _TEMPLATE_CONTENT_FIELDS = (
     "heartbeat_md",
 )
 _MAX_KEY_GENERATION_ATTEMPTS = 5
+_KEY_COLLISION_ERRORS = (TemplateKeyCollisionError, IntegrityError)
+
+_T = TypeVar("_T")
 
 
 @inject
@@ -85,6 +90,21 @@ class TemplateService:
         skills = self.repository.get_required_skills_for(template)
         read = self.repository.to_read(template, skills)
         return self._mark_platform_updates([read])[0]
+
+    def _allocate_unique_key(self, build: Callable[[str], _T], save: Callable[[_T], object]) -> _T:
+        for _ in range(_MAX_KEY_GENERATION_ATTEMPTS):
+            entity = build(generate_template_key())
+            try:
+                save(entity)
+            except _KEY_COLLISION_ERRORS:
+                # A concurrent request may have won the same random key.
+                continue
+            return entity
+
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Could not allocate a unique template key; please try again",
+        )
 
     def _get_latest_or_404(self, org_id: UUID, template_key: str) -> AgentTemplate | PlatformTemplate:
         template = self.repository.resolve_latest_template(org_id, template_key)
@@ -144,9 +164,8 @@ class TemplateService:
         for group in data.required_skill_groups:
             skills_map.update(dict.fromkeys(group.skill_ids, group.group_key))
 
-        for _ in range(_MAX_KEY_GENERATION_ATTEMPTS):
-            template_key = generate_template_key()
-            template = AgentTemplate(
+        def build(template_key: str) -> AgentTemplate:
+            return AgentTemplate(
                 organization_id=org_id,
                 template_key=template_key,
                 template_name=data.template_name,
@@ -162,17 +181,11 @@ class TemplateService:
                 bootstrap_md=data.bootstrap_md or DEFAULT_BOOTSTRAP_MD,
                 heartbeat_md=data.heartbeat_md or DEFAULT_HEARTBEAT_MD,
             )
-            try:
-                self.repository.save_new_org_template_with_skills(template, skills_map)
-            except TemplateKeyCollisionError, IntegrityError:
-                # A concurrent request may have won the same random key.
-                continue
-            return self._to_read_with_skills(template)
 
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Could not allocate a unique template key; please try again",
+        template = self._allocate_unique_key(
+            build, lambda t: self.repository.save_new_org_template_with_skills(t, skills_map)
         )
+        return self._to_read_with_skills(template)
 
     def update_template(self, template_key: str, data: TemplateUpdate, context: CurrentUserContext) -> TemplateRead:
         org_id = self._org_id(context)
@@ -438,9 +451,8 @@ class TemplateService:
         if data.required_skill_ids or group_skill_ids:
             self._validate_global_skill_ids(data.required_skill_ids + group_skill_ids)
 
-        for _ in range(_MAX_KEY_GENERATION_ATTEMPTS):
-            template_key = generate_template_key()
-            draft = PlatformTemplateDraft(
+        def build(template_key: str) -> PlatformTemplateDraft:
+            return PlatformTemplateDraft(
                 template_key=template_key,
                 template_name=data.template_name,
                 description=data.description,
@@ -453,20 +465,12 @@ class TemplateService:
                 bootstrap_md=data.bootstrap_md or DEFAULT_BOOTSTRAP_MD,
                 heartbeat_md=data.heartbeat_md or DEFAULT_HEARTBEAT_MD,
             )
-            try:
-                self.repository.save_new_draft(draft)
-            except TemplateKeyCollisionError, IntegrityError:
-                # A concurrent request may have won the same random key.
-                continue
-            skills_map = self._skills_map(data.required_skill_ids, data.required_skill_groups)
-            if skills_map:
-                self.repository.save_draft_skills(draft.id, skills_map)
-            return self.get_draft(template_key)
 
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Could not allocate a unique template key; please try again",
-        )
+        draft = self._allocate_unique_key(build, self.repository.save_new_draft)
+        skills_map = self._skills_map(data.required_skill_ids, data.required_skill_groups)
+        if skills_map:
+            self.repository.save_draft_skills(draft.id, skills_map)
+        return self.get_draft(draft.template_key)
 
     def update_draft(self, template_key: str, data: PlatformTemplateDraftUpdate) -> PlatformTemplateDraftRead:
         draft = self.repository.get_draft(template_key)

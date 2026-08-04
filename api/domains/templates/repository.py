@@ -1,4 +1,6 @@
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from typing import Protocol
 from uuid import UUID
 
 from injector import inject, singleton
@@ -32,6 +34,32 @@ class TemplateKeyCollisionError(RuntimeError):
 
 
 _TEMPLATE_KEY_ALLOCATION_LOCK = "agent-farm.template-key-allocation"
+
+
+class _RequiredSkillRow(Protocol):
+    skill_id: UUID
+    group_key: str | None
+
+
+def _diff_sync_skill_rows(
+    session: Session,
+    existing_rows: Sequence[_RequiredSkillRow],
+    group_keys_by_skill_id: dict[UUID, str | None],
+    make_row: Callable[[UUID, str | None], _RequiredSkillRow],
+) -> None:
+    """Reconcile a parent's required-skill rows with the desired group_key per
+    skill (None = standalone AND-required; shared non-None keys form an
+    "at least one of" group)."""
+    existing_by_id = {row.skill_id: row for row in existing_rows}
+    for skill_id, row in existing_by_id.items():
+        if skill_id not in group_keys_by_skill_id:
+            session.delete(row)
+        elif row.group_key != group_keys_by_skill_id[skill_id]:
+            row.group_key = group_keys_by_skill_id[skill_id]
+            session.add(row)
+    for skill_id, group_key in group_keys_by_skill_id.items():
+        if skill_id not in existing_by_id:
+            session.add(make_row(skill_id, group_key))
 
 
 @inject
@@ -251,23 +279,19 @@ class TemplateRepository:
         return template
 
     def save_org_template_skills(self, template_id: UUID, group_keys_by_skill_id: dict[UUID, str | None]) -> None:
-        """Diff-sync a template's required-skill rows, including each row's
-        group_key (None = standalone AND-required; shared non-None keys form
-        an "at least one of" group)."""
+        """Diff-sync a template's required-skill rows (see _diff_sync_skill_rows)."""
         with Session(self.delegate.engine) as session:
             existing_rows = session.exec(
                 select(AgentTemplateSkill).where(col(AgentTemplateSkill.template_id) == template_id)
             ).all()
-            existing_by_id = {row.skill_id: row for row in existing_rows}
-            for skill_id, row in existing_by_id.items():
-                if skill_id not in group_keys_by_skill_id:
-                    session.delete(row)
-                elif row.group_key != group_keys_by_skill_id[skill_id]:
-                    row.group_key = group_keys_by_skill_id[skill_id]
-                    session.add(row)
-            for skill_id, group_key in group_keys_by_skill_id.items():
-                if skill_id not in existing_by_id:
-                    session.add(AgentTemplateSkill(template_id=template_id, skill_id=skill_id, group_key=group_key))
+            _diff_sync_skill_rows(
+                session,
+                existing_rows,
+                group_keys_by_skill_id,
+                lambda skill_id, group_key: AgentTemplateSkill(
+                    template_id=template_id, skill_id=skill_id, group_key=group_key
+                ),
+            )
             session.commit()
 
     def get_org_required_skills(self, template_id: UUID) -> list[tuple[Skill, str | None]]:
@@ -368,22 +392,19 @@ class TemplateRepository:
         return template
 
     def save_platform_template_skills(self, template_id: UUID, group_keys_by_skill_id: dict[UUID, str | None]) -> None:
-        """Diff-sync a platform template's required-skill rows, group-aware
-        (see save_org_template_skills)."""
+        """Diff-sync a platform template's required-skill rows (see _diff_sync_skill_rows)."""
         with Session(self.delegate.engine) as session:
             existing_rows = session.exec(
                 select(PlatformTemplateSkill).where(col(PlatformTemplateSkill.template_id) == template_id)
             ).all()
-            existing_by_id = {row.skill_id: row for row in existing_rows}
-            for skill_id, row in existing_by_id.items():
-                if skill_id not in group_keys_by_skill_id:
-                    session.delete(row)
-                elif row.group_key != group_keys_by_skill_id[skill_id]:
-                    row.group_key = group_keys_by_skill_id[skill_id]
-                    session.add(row)
-            for skill_id, group_key in group_keys_by_skill_id.items():
-                if skill_id not in existing_by_id:
-                    session.add(PlatformTemplateSkill(template_id=template_id, skill_id=skill_id, group_key=group_key))
+            _diff_sync_skill_rows(
+                session,
+                existing_rows,
+                group_keys_by_skill_id,
+                lambda skill_id, group_key: PlatformTemplateSkill(
+                    template_id=template_id, skill_id=skill_id, group_key=group_key
+                ),
+            )
             session.commit()
 
     def get_platform_required_skills(self, template_id: UUID) -> list[tuple[Skill, str | None]]:
@@ -438,21 +459,19 @@ class TemplateRepository:
             session.commit()
 
     def save_draft_skills(self, draft_id: UUID, group_keys_by_skill_id: dict[UUID, str | None]) -> None:
-        """Diff-sync a draft's required-skill rows, group-aware (see save_platform_template_skills)."""
+        """Diff-sync a draft's required-skill rows (see _diff_sync_skill_rows)."""
         with Session(self.delegate.engine) as session:
             existing_rows = session.exec(
                 select(PlatformTemplateDraftSkill).where(col(PlatformTemplateDraftSkill.draft_id) == draft_id)
             ).all()
-            existing_by_id = {row.skill_id: row for row in existing_rows}
-            for skill_id, row in existing_by_id.items():
-                if skill_id not in group_keys_by_skill_id:
-                    session.delete(row)
-                elif row.group_key != group_keys_by_skill_id[skill_id]:
-                    row.group_key = group_keys_by_skill_id[skill_id]
-                    session.add(row)
-            for skill_id, group_key in group_keys_by_skill_id.items():
-                if skill_id not in existing_by_id:
-                    session.add(PlatformTemplateDraftSkill(draft_id=draft_id, skill_id=skill_id, group_key=group_key))
+            _diff_sync_skill_rows(
+                session,
+                existing_rows,
+                group_keys_by_skill_id,
+                lambda skill_id, group_key: PlatformTemplateDraftSkill(
+                    draft_id=draft_id, skill_id=skill_id, group_key=group_key
+                ),
+            )
             session.commit()
 
     def get_draft_required_skills(self, draft_id: UUID) -> list[tuple[Skill, str | None]]:

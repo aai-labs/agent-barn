@@ -11,11 +11,7 @@ import {
   type PlatformTemplateDraft,
   type PlatformTemplateDraftFields,
 } from "../schemas";
-import {
-  platformTemplatePublishedKey,
-  platformTemplateVersionsKey,
-  platformTemplatesKey,
-} from "../utils";
+import { platformTemplateVersionsKey, platformTemplatesKey } from "../utils";
 
 export function useCreatePlatformTemplateDraft() {
   const queryClient = useQueryClient();
@@ -104,7 +100,6 @@ export function usePublishPlatformTemplateDraft() {
     },
     onSuccess: (data) => {
       queryClient.removeQueries({ queryKey: platformTemplatesKey.detail(data.templateKey) });
-      void queryClient.invalidateQueries({ queryKey: platformTemplatePublishedKey.detail(data.templateKey) });
       void queryClient.invalidateQueries({ queryKey: platformTemplateVersionsKey.detail(data.templateKey) });
       void queryClient.invalidateQueries({ queryKey: platformTemplatesKey.lists() });
     },

@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 
 import { DataSupport } from "../pages/data-support/data-support.po";
 import {
+  MOCK_PLATFORM_TEMPLATE_SKILL_ID,
   mockPlatformTemplateDraft,
   mockPlatformTemplatePublished,
   mockPlatformTemplatePublishedV1,
@@ -21,7 +22,7 @@ test.describe("Platform Template Admin", () => {
     await data.platformTemplates.interceptGetGlobalSkills({
       body: [
         {
-          id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          id: MOCK_PLATFORM_TEMPLATE_SKILL_ID,
           organization_id: null,
           name: "github",
           source: "aai_cli",

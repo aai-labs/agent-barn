@@ -1,7 +1,6 @@
 import { createQueryKeyStructure } from "@/shared/query-keys";
 
 export const platformTemplatesKey = createQueryKeyStructure("platform-templates");
-export const platformTemplatePublishedKey = createQueryKeyStructure("platform-template-published");
 export const platformTemplateVersionsKey = createQueryKeyStructure("platform-template-versions");
 
 export const PLATFORM_TEMPLATE_FILES = [
