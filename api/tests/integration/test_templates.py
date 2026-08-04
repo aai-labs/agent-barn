@@ -18,7 +18,7 @@ from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import AuthorizationScope
 from api.domains.skills.repository import SkillRepository
 from api.domains.templates.defaults import DEFAULT_SOUL_MD
-from api.domains.templates.models import TemplateSource
+from api.domains.templates.models import PlatformTemplate, TemplateSource
 from api.domains.templates.predefined import PREDEFINED_TEMPLATES
 from api.domains.templates.repository import TemplateRepository
 from api.domains.templates.service import TemplateService
@@ -51,6 +51,7 @@ from api.tests.steps.template import (
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
 
 _BASE = "/api/v1/organizations/{organization_id}/templates"
+_PLATFORM_TEMPLATES_BASE = "/api/v1/platform/templates"
 _AGENTS_BASE = "/api/v1/organizations/{organization_id}/agents"
 
 _GIVEN = [
@@ -78,6 +79,23 @@ def _auth(context) -> dict:
     return {"Authorization": f"Bearer {context.access_token}"}
 
 
+def _platform_version(slug: str, version: int, **overrides: str) -> PlatformTemplate:
+    return PlatformTemplate(
+        template_slug=slug,
+        template_name="Manual Platform Template",
+        version=version,
+        description=overrides.get("description", f"platform description {version}"),
+        soul_md=overrides.get("soul_md", f"platform soul {version}"),
+        identity_md=overrides.get("identity_md", f"platform identity {version}"),
+        user_md=overrides.get("user_md", f"platform user {version}"),
+        tools_md=overrides.get("tools_md", f"platform tools {version}"),
+        agents_md=overrides.get("agents_md", f"platform agents {version}"),
+        boot_md=overrides.get("boot_md", f"platform boot {version}"),
+        bootstrap_md=overrides.get("bootstrap_md", f"platform bootstrap {version}"),
+        heartbeat_md=overrides.get("heartbeat_md", f"platform heartbeat {version}"),
+    )
+
+
 def _there_is_a_role_actor(role: OrganizationRole):
     def step(context):
         user_id = uuid7()
@@ -93,6 +111,20 @@ def _there_is_a_role_actor(role: OrganizationRole):
 
 def _there_is_a_member_actor():
     return _there_is_a_role_actor(OrganizationRole.MEMBER)
+
+
+def _there_is_a_platform_admin_actor():
+    def step(context):
+        user_id = uuid7()
+        there_is_a_user(
+            id=user_id,
+            email="platform-template-admin@example.com",
+            is_platform_admin=True,
+            organization_id=uuid7(),
+        )(context)
+        there_is_an_access_token_for_user(user_id=user_id)(context)
+
+    return step
 
 
 # --- list ---
@@ -241,6 +273,61 @@ def test_list_templates_no_auth_returns_401():
 
         with then("it returns 401"):
             assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
+
+
+def test_platform_admin_can_read_latest_published_platform_template():
+    with given([*_GIVEN, _there_is_a_platform_admin_actor()]) as context:
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+        repository.save_platform_template(_platform_version("manual", 1))
+
+        response = context.client.get(f"{_PLATFORM_TEMPLATES_BASE}/manual", headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        body = response.json()
+        assert_that(body["template_slug"], equal_to("manual"))
+        assert_that(body["version"], equal_to(1))
+        assert_that(body["soul_md"], equal_to("platform soul 1"))
+        assert_that(body["template_source"], equal_to("pre-defined"))
+
+
+def test_platform_admin_can_list_all_published_platform_template_versions():
+    with given([*_GIVEN, _there_is_a_platform_admin_actor()]) as context:
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+        repository.save_platform_template(_platform_version("manual", 1))
+        repository.save_platform_template(_platform_version("manual", 2, soul_md="platform soul 2"))
+
+        response = context.client.get(f"{_PLATFORM_TEMPLATES_BASE}/manual/versions", headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        body = response.json()
+        assert_that([version["version"] for version in body], equal_to([2, 1]))
+        assert_that(body[0]["soul_md"], equal_to("platform soul 2"))
+        assert_that(body[1]["soul_md"], equal_to("platform soul 1"))
+
+
+def test_platform_admin_can_start_a_draft_from_a_selected_published_version():
+    with given([*_GIVEN, _there_is_a_platform_admin_actor()]) as context:
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+        repository.save_platform_template(_platform_version("manual", 1))
+        repository.save_platform_template(_platform_version("manual", 2, soul_md="platform soul 2"))
+
+        response = context.client.post(
+            f"{_PLATFORM_TEMPLATES_BASE}/manual/draft?source_version=1",
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+        assert_that(response.json()["soul_md"], equal_to("platform soul 1"))
+
+
+def test_non_platform_admin_cannot_read_published_platform_template():
+    with given(_GIVEN) as context:
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+        repository.save_platform_template(_platform_version("manual", 1))
+
+        response = context.client.get(f"{_PLATFORM_TEMPLATES_BASE}/manual", headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
 def test_list_templates_includes_required_skills():
@@ -1312,6 +1399,28 @@ def test_seed_does_not_clobber_edited_predefined_template():
             assert_that(latest.soul_md, equal_to("# Edited Soul"))
             assert_that(latest.template_source, equal_to(TemplateSource.PRE_DEFINED))
             assert_that(latest.forked_from_platform_template_id, is_not(none()))
+            assert_that(latest.fork_baseline_platform_template_id, equal_to(latest.forked_from_platform_template_id))
+
+        with when("the organization edits the fork again"):
+            response = client.patch(
+                f"{_BASE}/scrum-master",
+                json={"tools_md": "# Edited Tools"},
+                headers=_auth(context),
+            )
+
+        with then("the new org version preserves the original fork and its baseline"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            latest_again = repository.get_latest_org_template(org_id, "scrum-master")
+            assert latest_again is not None
+            assert_that(latest_again.version, equal_to(3))
+            assert_that(
+                latest_again.forked_from_platform_template_id,
+                equal_to(latest.forked_from_platform_template_id),
+            )
+            assert_that(
+                latest_again.fork_baseline_platform_template_id,
+                equal_to(latest.fork_baseline_platform_template_id),
+            )
 
         with then("the platform v1 seed is untouched"):
             platform = repository.get_latest_platform_template("scrum-master")
@@ -1319,25 +1428,157 @@ def test_seed_does_not_clobber_edited_predefined_template():
             assert_that(platform.version, equal_to(1))
 
 
-def test_seed_refreshes_stale_predefined_v1_in_place():
+def test_seed_does_not_refresh_existing_platform_v1():
+    """Bootstrap only inserts a lineage once; a published/edited v1 row is never touched again.
+
+    See docs/adr/2026-08-03-platform-template-file-based-bootstrap.md — ownership of an
+    existing lineage's content passes to the Draft Template Version admin flow.
+    """
     with given(_GIVEN) as context:
         service: TemplateService = context.injector.get(TemplateService)
         repository: TemplateRepository = context.injector.get(TemplateRepository)
         service.seed_predefined_templates()
 
-        with when("the seeded v1 drifts from the code (an old seed) then we reseed"):
+        with when("the seeded v1 diverges from the seed files then we reseed"):
             seeded = repository.get_latest_platform_template("scrum-master")
             assert seeded is not None
-            seeded.user_md = "# STALE - asks for credentials"
+            seeded.user_md = "# Admin-edited content"
             repository.save_platform_template(seeded)
             service.seed_predefined_templates()
 
-        with then("the v1 row is refreshed in place to the current code content"):
+        with then("the v1 row is left exactly as it was, not reset to the seed files"):
             latest = repository.get_latest_platform_template("scrum-master")
             assert latest is not None
             assert_that(latest.version, equal_to(1))
-            assert_that(latest.user_md, is_not(contains_string("STALE")))
-            # platform_template rows are inherently pre-defined (no source column)
+            assert_that(latest.user_md, equal_to("# Admin-edited content"))
+
+
+def test_platform_template_update_rebases_org_overrides_and_preserves_agent_pins():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Baseline Skill", global_skill=True),
+            there_is_a_skill(name="Organization Override Skill", global_skill=True),
+            there_is_a_skill(name="New Platform Skill", global_skill=True),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+        skill_repository: SkillRepository = context.injector.get(SkillRepository)
+        baseline_skill = skill_repository.get_by_name_global("Baseline Skill")
+        override_skill = skill_repository.get_by_name_global("Organization Override Skill")
+        new_platform_skill = skill_repository.get_by_name_global("New Platform Skill")
+        assert baseline_skill is not None
+        assert override_skill is not None
+        assert new_platform_skill is not None
+
+        platform_v1 = _platform_version("manual", 1)
+        repository.save_platform_template(platform_v1)
+        repository.save_platform_template_skills(platform_v1.id, {baseline_skill.id: None})
+
+        with when("an agent is pinned to the original platform version"):
+            agent_response = client.post(
+                _AGENTS_BASE,
+                json={
+                    "name": "Pinned Manual Agent",
+                    "platform": "slack",
+                    "slack_bot_token": "xoxb-token",
+                    "slack_app_token": "xapp-1-token",
+                    "template_slug": "manual",
+                    "skill_ids": [str(baseline_skill.id)],
+                },
+                headers=_auth(context),
+            )
+
+        with then("the agent starts on platform v1"):
+            assert_that(agent_response.status_code, equal_to(status.HTTP_201_CREATED))
+            agent_id = agent_response.json()["id"]
+            assert_that(agent_response.json()["template_version"], equal_to(1))
+
+        with when("the organization creates a fork with a soul and skill override"):
+            fork_response = client.patch(
+                f"{_BASE}/manual",
+                json={
+                    "soul_md": "organization soul",
+                    "required_skill_ids": [str(override_skill.id)],
+                },
+                headers=_auth(context),
+            )
+
+        with then("the fork is created at org version 2"):
+            assert_that(fork_response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(fork_response.json()["version"], equal_to(2))
+
+        platform_v2 = _platform_version(
+            "manual",
+            2,
+            soul_md="platform soul 2",
+            tools_md="platform tools 2",
+            description="platform description 2",
+        )
+        repository.save_platform_template(platform_v2)
+        repository.save_platform_template_skills(platform_v2.id, {new_platform_skill.id: None})
+
+        with when("the organization applies the available platform update"):
+            response = client.post(f"{_BASE}/manual/platform-update", headers=_auth(context))
+
+        with then("changed org fields and skills win over the new platform version"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            body = response.json()
+            assert_that(body["version"], equal_to(3))
+            assert_that(body["soul_md"], equal_to("organization soul"))
+            assert_that(body["tools_md"], equal_to("platform tools 2"))
+            assert_that(body["description"], equal_to("platform description 2"))
+            assert_that(body["forked_from_platform_template_id"], equal_to(str(platform_v1.id)))
+            assert_that(body["fork_baseline_platform_template_id"], equal_to(str(platform_v2.id)))
+            assert_that([skill["name"] for skill in body["required_skills"]], equal_to(["Organization Override Skill"]))
+
+        with then("the existing agent pin is unchanged"):
+            refreshed_agent = client.get(f"{_AGENTS_BASE}/{agent_id}", headers=_auth(context))
+            assert_that(refreshed_agent.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(refreshed_agent.json()["template_version"], equal_to(1))
+
+
+def test_platform_template_update_requires_a_newer_platform_version():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+        repository.save_platform_template(_platform_version("manual", 1))
+
+        fork_response = client.patch(
+            f"{_BASE}/manual",
+            json={"soul_md": "organization soul"},
+            headers=_auth(context),
+        )
+        assert_that(fork_response.status_code, equal_to(status.HTTP_200_OK))
+
+        with when("the organization applies an update while the platform is still at the baseline"):
+            response = client.post(f"{_BASE}/manual/platform-update", headers=_auth(context))
+
+        with then("the action returns a conflict and creates no new version"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+            assert_that(len(repository.find_org_versions(context.organization.id, "manual")), equal_to(1))
+
+
+def test_platform_template_update_rejects_non_fork_templates():
+    with given([*_GIVEN, there_is_a_template(slug="custom", name="Custom")]) as context:
+        response = context.client.post(f"{_BASE}/custom/platform-update", headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+
+
+def test_platform_template_update_requires_template_manage_permission():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_template(slug="custom", name="Custom"),
+            _there_is_a_member_actor(),
+            role_lacks_permission(OrganizationRole.MEMBER, PermissionKey.TEMPLATE_MANAGE),
+        ]
+    ) as context:
+        response = context.client.post(f"{_BASE}/custom/platform-update", headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
 def test_seed_predefined_templates_seeds_scrum_master_skills():
@@ -1429,7 +1670,9 @@ def test_seed_predefined_templates_code_reviewer_seeds_partial_group_when_only_o
             assert_that(required_skills[0]["group_key"], equal_to("github-or-bitbucket"))
 
 
-def test_seed_predefined_templates_refreshes_stale_skills():
+def test_seed_predefined_templates_does_not_restore_cleared_skills_on_existing_lineage():
+    """Required-skill sync only runs the moment a lineage is first inserted; an existing
+    lineage's skills are left alone on subsequent reseeds, same as its content."""
     with given(
         [
             *_GIVEN,
@@ -1446,11 +1689,11 @@ def test_seed_predefined_templates_refreshes_stale_skills():
             repository.save_platform_template_skills(template.id, {})
             service.seed_predefined_templates()
 
-        with then("the required skills are restored to match the code declaration"):
+        with then("the required skills stay cleared"):
             template = repository.get_latest_platform_template("jira-task-helper")
             assert template is not None
             skill_map = repository.get_platform_required_skill_map(template.id)
-            assert_that(len(skill_map), equal_to(1))
+            assert_that(len(skill_map), equal_to(0))
 
 
 def test_seed_predefined_templates_is_idempotent_for_group_keys():

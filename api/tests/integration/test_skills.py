@@ -36,6 +36,7 @@ from api.tests.steps.template import there_is_a_template, there_is_a_template_sk
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
 
 _BASE = "/api/v1/organizations/{organization_id}/skills"
+_PLATFORM_BASE = "/api/v1/platform/skills"
 
 _GIVEN = [
     set_env_variable(
@@ -518,6 +519,34 @@ def test_list_skills_requires_auth():
 
         with then("request is rejected with 401"):
             assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
+
+
+def test_platform_admin_can_list_global_skills():
+    platform_admin_id = uuid7()
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Global Platform Skill", global_skill=True),
+            there_is_a_user(
+                id=platform_admin_id,
+                email="platform-skill-reader@example.com",
+                role=OrganizationRole.MEMBER,
+                is_platform_admin=True,
+            ),
+            there_is_an_access_token_for_user(user_id=platform_admin_id),
+        ]
+    ) as context:
+        response = context.client.get(_PLATFORM_BASE, headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that([skill["name"] for skill in response.json()], has_item("Global Platform Skill"))
+
+
+def test_non_platform_admin_cannot_list_global_skills():
+    with given([*_GIVEN, there_is_a_skill(name="Global Platform Skill", global_skill=True)]) as context:
+        response = context.client.get(_PLATFORM_BASE, headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
 def test_member_without_skill_read_cannot_get_skill():

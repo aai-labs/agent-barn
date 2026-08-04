@@ -23,23 +23,37 @@ from api.domains.templates.defaults import (
 from api.domains.templates.models import (
     AgentTemplate,
     PlatformTemplate,
+    PlatformTemplateAdminSummary,
+    PlatformTemplateDraft,
+    PlatformTemplateDraftCreate,
+    PlatformTemplateDraftRead,
+    PlatformTemplateDraftUpdate,
     TemplateCreate,
     TemplateFilter,
     TemplateRead,
+    TemplateSkillGroup,
     TemplateSource,
     TemplateUpdate,
 )
 from api.domains.templates.predefined import PREDEFINED_TEMPLATES
 from api.domains.templates.repository import TemplateRepository
-from api.domains.templates.seeding import (
-    build_predefined_templates,
-    copy_predefined_content,
-    predefined_content_differs,
-)
+from api.domains.templates.seeding import build_predefined_templates
 from api.domains.templates.slug import slugify
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 logger = logging.getLogger(__name__)
+
+_TEMPLATE_CONTENT_FIELDS = (
+    "description",
+    "soul_md",
+    "identity_md",
+    "user_md",
+    "tools_md",
+    "agents_md",
+    "boot_md",
+    "bootstrap_md",
+    "heartbeat_md",
+)
 
 
 @inject
@@ -163,10 +177,16 @@ class TemplateService:
         # Editing a platform predefined template forks it into the org's
         # agent_template table (version = platform v + 1, forked_from set).
         forked_from = old.id if isinstance(old, PlatformTemplate) else old.forked_from_platform_template_id
+        fork_baseline = (
+            old.id
+            if isinstance(old, PlatformTemplate)
+            else (old.fork_baseline_platform_template_id or old.forked_from_platform_template_id)
+        )
         source = TemplateSource.PRE_DEFINED if isinstance(old, PlatformTemplate) else old.template_source
         new_template = AgentTemplate(
             organization_id=org_id,
             forked_from_platform_template_id=forked_from,
+            fork_baseline_platform_template_id=fork_baseline,
             template_slug=old.template_slug,
             template_name=updated.get("template_name", old.template_name),
             template_source=source,
@@ -207,6 +227,73 @@ class TemplateService:
         self.repository.save_org_template_skills(new_template.id, {sid: None for sid in standalone_ids} | groups_map)
         return self._to_read_with_skills(new_template)
 
+    def update_from_platform(self, slug: str, context: CurrentUserContext) -> TemplateRead:
+        """Rebase an organization fork onto its origin's newest platform version.
+
+        A field is considered an organization override when it differs from the
+        fork's baseline. Those overrides win; every other field comes from the
+        newly published platform version. Required skills use the same
+        three-way rule as one aggregate field so an org's skill customization
+        is preserved without silently combining incompatible requirements.
+        """
+        org_id = self._org_id(context)
+        current = self.repository.get_latest_org_template(org_id, slug)
+        if current is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Template {slug} not found")
+        self.permission_policy.require_organization(context, org_id, PermissionKey.TEMPLATE_MANAGE)
+
+        if current.forked_from_platform_template_id is None or current.template_source != TemplateSource.PRE_DEFINED:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Template Update is only available for organization forks of Platform Templates",
+            )
+
+        baseline_id = current.fork_baseline_platform_template_id or current.forked_from_platform_template_id
+        baseline = self.repository.get_platform_template_by_id(baseline_id) if baseline_id is not None else None
+        latest_platform = self.repository.get_latest_platform_template(slug)
+        if baseline is None or baseline.template_slug != slug or latest_platform is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="The fork's Platform Template baseline is no longer available",
+            )
+        if latest_platform.version <= baseline.version:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="No newer Platform Template Version is available",
+            )
+
+        merged_values = {
+            field: getattr(current, field)
+            if getattr(current, field) != getattr(baseline, field)
+            else getattr(latest_platform, field)
+            for field in _TEMPLATE_CONTENT_FIELDS
+        }
+        current_skill_map = self.repository.get_org_required_skill_map(current.id)
+        baseline_skill_map = self.repository.get_platform_required_skill_map(baseline.id)
+        latest_skill_map = self.repository.get_platform_required_skill_map(latest_platform.id)
+        merged_skill_map = current_skill_map if current_skill_map != baseline_skill_map else latest_skill_map
+
+        updated = AgentTemplate(
+            organization_id=org_id,
+            forked_from_platform_template_id=current.forked_from_platform_template_id,
+            fork_baseline_platform_template_id=latest_platform.id,
+            template_slug=current.template_slug,
+            template_name=current.template_name,
+            template_source=current.template_source,
+            version=current.version + 1,
+            description=merged_values["description"],
+            soul_md=merged_values["soul_md"],
+            identity_md=merged_values["identity_md"],
+            user_md=merged_values["user_md"],
+            tools_md=merged_values["tools_md"],
+            agents_md=merged_values["agents_md"],
+            boot_md=merged_values["boot_md"],
+            bootstrap_md=merged_values["bootstrap_md"],
+            heartbeat_md=merged_values["heartbeat_md"],
+        )
+        self.repository.save_org_template_version_with_skills(updated, merged_skill_map)
+        return self._to_read_with_skills(updated)
+
     def delete_template(self, slug: str, context: CurrentUserContext) -> None:
         org_id = self._org_id(context)
         latest = self._get_latest_or_404(org_id, slug)
@@ -235,31 +322,27 @@ class TemplateService:
             ) from None
 
     def seed_predefined_templates(self) -> None:
-        """Insert missing global pre-defined templates and refresh stale ones in place.
+        """One-time bootstrap: insert a lineage's v1 row from the seed files if it doesn't exist yet.
 
         Pre-defined templates are system-managed platform/global resources
-        living in the platform_template table (no organization_id), seeded
-        once for the whole platform. When the code's content changes, the
-        platform v1 seed is overwritten in place so both new agents (created
-        from the latest version) and existing agents (which re-render their
-        pinned template on every start) pick up the change. Org forks
-        (org-scoped agent_template rows with version > 1) are left untouched so
-        customizations are never clobbered; the seeder only ever touches the
-        platform v1 row.
+        living in the platform_template table (no organization_id). This
+        bootstrap only ever inserts a lineage's v1 row the first time it is
+        seen (new environment or brand-new lineage); it never overwrites an
+        existing row. Once a lineage exists, its content is owned by the
+        Draft Template Version admin authoring flow, not these seed files —
+        see docs/adr/2026-08-03-platform-template-file-based-bootstrap.md.
+        Org forks (org-scoped agent_template rows) are untouched either way.
         """
         for predefined, template in zip(PREDEFINED_TEMPLATES, build_predefined_templates()):
             existing = self.repository.get_latest_platform_template(template.template_slug)
-            if existing is None:
-                self.repository.save_platform_template(template)
-                existing = template
-                logger.warning("Seeded platform predefined template: %s v1", template.template_slug)
-            elif predefined_content_differs(existing, template):
-                copy_predefined_content(existing, template)
-                self.repository.save_platform_template(existing)
-                logger.warning(
-                    "Refreshed platform predefined template in place: %s v1",
-                    template.template_slug,
-                )
+            if existing is not None:
+                # Lineage already exists — ownership has passed to the admin
+                # authoring flow, so the bootstrap leaves it untouched.
+                continue
+
+            self.repository.save_platform_template(template)
+            existing = template
+            logger.warning("Seeded platform predefined template: %s v1", template.template_slug)
 
             desired_map: dict[UUID, str | None] = {}
             for entry in predefined.required_skill_names:
@@ -271,5 +354,202 @@ class TemplateService:
                 for name in names:
                     if skill := self.skill_repository.get_by_name_global(name):
                         desired_map[skill.id] = group_key
-            if desired_map != self.repository.get_platform_required_skill_map(existing.id):
+            if desired_map:
                 self.repository.save_platform_template_skills(existing.id, desired_map)
+
+    # --- Draft Template Version (Platform Administrator authoring) ---
+    #
+    # Callers are gated on Platform Administrator authority at the route layer
+    # (require_platform_admin); these methods assume that check already passed.
+
+    def _validate_global_skill_ids(self, skill_ids: list[UUID]) -> None:
+        for skill_id in skill_ids:
+            skill = self.skill_repository.get_by_id(skill_id)
+            if skill is None or skill.organization_id is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Skill {skill_id} not found",
+                )
+
+    def _skills_map(
+        self, required_skill_ids: list[UUID], required_skill_groups: list[TemplateSkillGroup]
+    ) -> dict[UUID, str | None]:
+        skills_map: dict[UUID, str | None] = {sid: None for sid in required_skill_ids}
+        for group in required_skill_groups:
+            skills_map.update(dict.fromkeys(group.skill_ids, group.group_key))
+        return skills_map
+
+    def list_platform_lineages_for_admin(self) -> list[PlatformTemplateAdminSummary]:
+        return self.repository.list_platform_lineages_for_admin()
+
+    def get_published_platform_template_for_admin(self, slug: str) -> TemplateRead:
+        template = self.repository.get_latest_platform_template(slug)
+        if template is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Template {slug} not found")
+        return self._to_read_with_skills(template)
+
+    def list_published_platform_template_versions_for_admin(self, slug: str) -> list[TemplateRead]:
+        versions = self.repository.find_platform_versions(slug)
+        if not versions:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Template {slug} not found")
+        return [self._to_read_with_skills(version) for version in versions]
+
+    def get_draft(self, slug: str) -> PlatformTemplateDraftRead:
+        draft = self.repository.get_draft(slug)
+        if draft is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"No draft for {slug}")
+        skills = self.repository.get_draft_required_skills(draft.id)
+        return self.repository.to_draft_read(draft, skills)
+
+    def start_draft_for_existing_lineage(
+        self, slug: str, source_version: int | None = None
+    ) -> PlatformTemplateDraftRead:
+        """Get-or-create the single in-flight draft for an already-published lineage,
+        seeded from a selected published version or, by default, the latest version."""
+        existing_draft = self.repository.get_draft(slug)
+        if existing_draft is not None:
+            if source_version is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="A draft already exists; discard it before restoring another published version",
+                )
+            skills = self.repository.get_draft_required_skills(existing_draft.id)
+            return self.repository.to_draft_read(existing_draft, skills)
+
+        source = (
+            self.repository.get_platform_template_by_slug_version(slug, source_version)
+            if source_version is not None
+            else self.repository.get_latest_platform_template(slug)
+        )
+        if source is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Template {slug} not found")
+
+        draft = PlatformTemplateDraft(
+            template_slug=source.template_slug,
+            template_name=source.template_name,
+            description=source.description,
+            soul_md=source.soul_md,
+            identity_md=source.identity_md,
+            user_md=source.user_md,
+            tools_md=source.tools_md,
+            agents_md=source.agents_md,
+            boot_md=source.boot_md,
+            bootstrap_md=source.bootstrap_md,
+            heartbeat_md=source.heartbeat_md,
+        )
+        self.repository.save_draft(draft)
+        skill_map = self.repository.get_platform_required_skill_map(source.id)
+        if skill_map:
+            self.repository.save_draft_skills(draft.id, skill_map)
+        return self.get_draft(slug)
+
+    def create_new_template_draft(self, data: PlatformTemplateDraftCreate) -> PlatformTemplateDraftRead:
+        """Starts a draft for a lineage that has never been published."""
+        slug = slugify(data.template_name)
+        if not slug:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="template_name must contain at least one alphanumeric character",
+            )
+        if (
+            self.repository.get_latest_platform_template(slug) is not None
+            or self.repository.get_draft(slug) is not None
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"A platform template with slug {slug} already exists",
+            )
+        group_skill_ids = [sid for group in data.required_skill_groups for sid in group.skill_ids]
+        if data.required_skill_ids or group_skill_ids:
+            self._validate_global_skill_ids(data.required_skill_ids + group_skill_ids)
+        draft = PlatformTemplateDraft(
+            template_slug=slug,
+            template_name=data.template_name,
+            description=data.description,
+            soul_md=data.soul_md or DEFAULT_SOUL_MD,
+            identity_md=data.identity_md or DEFAULT_IDENTITY_MD,
+            user_md=data.user_md or DEFAULT_USER_MD,
+            tools_md=data.tools_md or DEFAULT_TOOLS_MD,
+            agents_md=data.agents_md or DEFAULT_AGENTS_MD,
+            boot_md=data.boot_md or DEFAULT_BOOT_MD,
+            bootstrap_md=data.bootstrap_md or DEFAULT_BOOTSTRAP_MD,
+            heartbeat_md=data.heartbeat_md or DEFAULT_HEARTBEAT_MD,
+        )
+        self.repository.save_draft(draft)
+        skills_map = self._skills_map(data.required_skill_ids, data.required_skill_groups)
+        if skills_map:
+            self.repository.save_draft_skills(draft.id, skills_map)
+        return self.get_draft(slug)
+
+    def update_draft(self, slug: str, data: PlatformTemplateDraftUpdate) -> PlatformTemplateDraftRead:
+        draft = self.repository.get_draft(slug)
+        if draft is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"No draft for {slug}")
+        updated = data.model_dump(exclude_unset=True)
+        for field in (
+            "description",
+            "soul_md",
+            "identity_md",
+            "user_md",
+            "tools_md",
+            "agents_md",
+            "boot_md",
+            "bootstrap_md",
+            "heartbeat_md",
+        ):
+            if field in updated:
+                setattr(draft, field, updated[field])
+        self.repository.save_draft(draft)
+
+        old_map = self.repository.get_draft_required_skill_map(draft.id)
+        if data.required_skill_ids is None:
+            standalone_ids = {sid for sid, group_key in old_map.items() if group_key is None}
+        else:
+            if data.required_skill_ids:
+                self._validate_global_skill_ids(data.required_skill_ids)
+            standalone_ids = set(data.required_skill_ids)
+        if data.required_skill_groups is None:
+            groups_map = {sid: group_key for sid, group_key in old_map.items() if group_key is not None}
+        else:
+            group_skill_ids = [sid for group in data.required_skill_groups for sid in group.skill_ids]
+            if group_skill_ids:
+                self._validate_global_skill_ids(group_skill_ids)
+            groups_map = {sid: group.group_key for group in data.required_skill_groups for sid in group.skill_ids}
+        self.repository.save_draft_skills(draft.id, {sid: None for sid in standalone_ids} | groups_map)
+        return self.get_draft(slug)
+
+    def discard_draft(self, slug: str) -> None:
+        draft = self.repository.get_draft(slug)
+        if draft is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"No draft for {slug}")
+        self.repository.delete_draft(draft.id)
+
+    def publish_draft(self, slug: str) -> TemplateRead:
+        """Converts a lineage's Draft Template Version into the next immutable
+        platform_template row, carries over its required-skill selection, then
+        clears the draft slot so a new draft can start."""
+        draft = self.repository.get_draft(slug)
+        if draft is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"No draft for {slug}")
+        latest = self.repository.get_latest_platform_template(slug)
+        published = PlatformTemplate(
+            template_slug=draft.template_slug,
+            template_name=draft.template_name,
+            version=(latest.version + 1) if latest is not None else 1,
+            description=draft.description,
+            soul_md=draft.soul_md,
+            identity_md=draft.identity_md,
+            user_md=draft.user_md,
+            tools_md=draft.tools_md,
+            agents_md=draft.agents_md,
+            boot_md=draft.boot_md,
+            bootstrap_md=draft.bootstrap_md,
+            heartbeat_md=draft.heartbeat_md,
+        )
+        self.repository.save_platform_template(published)
+        skill_map = self.repository.get_draft_required_skill_map(draft.id)
+        if skill_map:
+            self.repository.save_platform_template_skills(published.id, skill_map)
+        self.repository.delete_draft(draft.id)
+        skills = self.repository.get_platform_required_skills(published.id)
+        return self.repository.to_read(published, skills)

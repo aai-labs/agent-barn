@@ -23,9 +23,9 @@ class AgentTemplate(BaseModel, table=True):
 
     # agent_template is strictly organization-scoped: custom templates created
     # by an org and org forks of platform predefined templates. Global
-    # predefined templates live in platform_template. A fork records its origin
-    # via forked_from_platform_template_id so "update available" detection is
-    # possible later.
+    # predefined templates live in platform_template. A fork keeps both its
+    # immutable origin and the platform version it last synced to; the latter
+    # advances when a Template Update is applied.
     __table_args__ = (
         sa.Index("ix_agent_template_organization_id", "organization_id"),
         sa.UniqueConstraint(
@@ -38,6 +38,12 @@ class AgentTemplate(BaseModel, table=True):
 
     organization_id: UUID = SqlField(foreign_key="organization.id", nullable=False, ondelete="CASCADE")
     forked_from_platform_template_id: UUID | None = SqlField(
+        default=None,
+        foreign_key="platform_template.id",
+        nullable=True,
+        ondelete="SET NULL",
+    )
+    fork_baseline_platform_template_id: UUID | None = SqlField(
         default=None,
         foreign_key="platform_template.id",
         nullable=True,
@@ -122,6 +128,30 @@ class PlatformTemplate(BaseModel, table=True):
     heartbeat_md: str = SqlField(nullable=False)
 
 
+class PlatformTemplateDraft(BaseModel, table=True):
+    __tablename__: str = "platform_template_draft"
+
+    # An unpublished, in-progress next version of a Platform Template lineage.
+    # Authored only by a Platform Administrator and invisible to every
+    # Organization. Unversioned and mutated in place while drafting; the
+    # unique constraint on template_slug enforces at most one Draft Template
+    # Version per lineage. Publishing turns it into the next immutable
+    # platform_template row and deletes this row.
+    __table_args__ = (sa.UniqueConstraint("template_slug", name="uq_platform_template_draft_slug"),)
+
+    template_slug: str = SqlField(nullable=False, max_length=255)
+    template_name: str = SqlField(nullable=False, max_length=255)
+    description: str | None = SqlField(default=None, nullable=True, max_length=500)
+    soul_md: str = SqlField(nullable=False)
+    identity_md: str = SqlField(nullable=False)
+    user_md: str = SqlField(nullable=False)
+    tools_md: str = SqlField(nullable=False)
+    agents_md: str = SqlField(nullable=False)
+    boot_md: str = SqlField(nullable=False)
+    bootstrap_md: str = SqlField(nullable=False)
+    heartbeat_md: str = SqlField(nullable=False)
+
+
 class TemplateRead(PydanticBaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -133,6 +163,9 @@ class TemplateRead(PydanticBaseModel):
     # Set only for org forks of a platform predefined template; NULL for custom
     # templates and for platform templates themselves.
     forked_from_platform_template_id: UUID | None = None
+    # The platform version this org fork was last synced to. Unlike the origin
+    # pointer above, this advances after a Template Update.
+    fork_baseline_platform_template_id: UUID | None = None
     version: int
     description: str | None
     soul_md: str
@@ -147,6 +180,26 @@ class TemplateRead(PydanticBaseModel):
     updated_at: datetime
     required_skills: list[TemplateRequiredSkillRead] = Field(default_factory=list)
     in_use: bool = False
+
+
+class PlatformTemplateDraftRead(PydanticBaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    template_slug: str
+    template_name: str
+    description: str | None
+    soul_md: str
+    identity_md: str
+    user_md: str
+    tools_md: str
+    agents_md: str
+    boot_md: str
+    bootstrap_md: str
+    heartbeat_md: str
+    created_at: datetime
+    updated_at: datetime
+    required_skills: list[TemplateRequiredSkillRead] = Field(default_factory=list)
 
 
 class TemplateCreate(PydanticBaseModel):
@@ -198,6 +251,63 @@ class TemplateUpdate(PydanticBaseModel):
         if self.required_skill_ids is not None and self.required_skill_groups is not None:
             _validate_no_skill_overlap(self.required_skill_ids, self.required_skill_groups)
         return self
+
+
+class PlatformTemplateDraftCreate(PydanticBaseModel):
+    """Starts a Draft Template Version for a brand-new lineage (no published version yet)."""
+
+    template_name: str = Field(min_length=1, max_length=255)
+    description: str | None = None
+    soul_md: str | None = None
+    identity_md: str | None = None
+    user_md: str | None = None
+    tools_md: str | None = None
+    agents_md: str | None = None
+    boot_md: str | None = None
+    bootstrap_md: str | None = None
+    heartbeat_md: str | None = None
+    required_skill_ids: list[UUID] = Field(default_factory=list)
+    required_skill_groups: list[TemplateSkillGroup] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_skill_groups(self) -> PlatformTemplateDraftCreate:
+        _validate_no_skill_overlap(self.required_skill_ids, self.required_skill_groups)
+        return self
+
+
+class PlatformTemplateDraftUpdate(PydanticBaseModel):
+    description: str | None = None
+    soul_md: str | None = None
+    identity_md: str | None = None
+    user_md: str | None = None
+    tools_md: str | None = None
+    agents_md: str | None = None
+    boot_md: str | None = None
+    bootstrap_md: str | None = None
+    heartbeat_md: str | None = None
+    required_skill_ids: list[UUID] | None = None
+    required_skill_groups: list[TemplateSkillGroup] | None = None
+
+    @model_validator(mode="after")
+    def validate_not_empty(self) -> PlatformTemplateDraftUpdate:
+        if not self.model_fields_set:
+            raise ValueError("At least one field must be provided")
+        return self
+
+    @model_validator(mode="after")
+    def validate_skill_groups(self) -> PlatformTemplateDraftUpdate:
+        if self.required_skill_ids is not None and self.required_skill_groups is not None:
+            _validate_no_skill_overlap(self.required_skill_ids, self.required_skill_groups)
+        return self
+
+
+class PlatformTemplateAdminSummary(PydanticBaseModel):
+    """One row of the Platform Admin authoring catalogue: a lineage plus its draft status."""
+
+    template_slug: str
+    template_name: str
+    latest_published_version: int | None
+    has_draft: bool
 
 
 class TemplateFilter(PydanticBaseModel):

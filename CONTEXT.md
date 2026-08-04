@@ -101,8 +101,24 @@ A versioned Markdown configuration lineage used to create and run agents. Predef
 _Avoid_: prompt, preset
 
 **Template Version**:
-A numbered configuration within a template lineage. An agent pins a specific version rather than following the latest automatically; system-managed predefined version 1 can be refreshed in place during startup seeding.
+A numbered configuration within a template lineage. An agent pins a specific version rather than following the latest automatically.
 _Avoid_: template revision
+
+**Draft Template Version**:
+An unpublished, in-progress next version of a Platform Template lineage, editable only by a Platform Administrator and invisible to every Organization. A lineage has at most one Draft Template Version at a time; publishing it produces the next immutable Platform Template Version.
+_Avoid_: unpublished template, WIP template
+
+**Template Restore**:
+A Platform Administrator action that seeds the Draft Template Version from any selected immutable Platform Template Version. Publishing the restored draft creates the next version in the lineage; it never mutates or removes the selected historical version.
+_Avoid_: version pointer switch, destructive rollback
+
+**Fork Baseline Version**:
+The Platform Template Version an Organization Template fork was last synced to. Set when the fork is created and advanced each time a Template Update is applied; distinct from the fork's original creation point once updates have happened.
+_Avoid_: forked-from version, origin template
+
+**Template Update**:
+The manual, all-or-nothing action that rebases an Organization Template fork onto its Fork Baseline's newer Platform Template Version, reapplying the fork's previously-diverged fields on top of the new baseline as a new Organization Template Version.
+_Avoid_: template merge, template sync
 
 **Skill**:
 A packaged set of agent instructions or references that can be assigned to an agent and required by a template.
@@ -189,6 +205,10 @@ _Avoid_: webhook
 - A **Membership** may have **Agent Access** to many Agents, and each relationship carries one **Agent Access Role**; creating an Agent grants its creator explicit Agent Owner access without transferring Organization ownership.
 - An **Agent** has one **Agent General Access** setting whose Permissions combine with (never subtract from) explicit Agent Access grants.
 - A **Template Version** may require multiple **Skills**.
+- A Platform Template lineage has at most one **Draft Template Version**, authored only by a **Platform Administrator**; publishing it exposes the next Platform Template Version to every Organization.
+- A **Platform Administrator** can inspect any immutable Platform Template Version and use a **Template Restore** to seed a new Draft Template Version from it; the restore leaves version history and existing Agent pins unchanged.
+- An Organization Template fork tracks a **Fork Baseline Version**; a **Template Update** rebases the fork onto its origin's newer Platform Template Version while preserving the fork's diverged fields.
+- Editing an Agent's configuration from the Agent's own screen forks (or updates the existing fork of) its pinned Platform Template and repins that one Agent to the resulting Organization Template Version; other Agents still pinned to the prior version are unaffected. Running agents reject configuration updates, so the Agent must be stopped first.
 - An **Agent** may have multiple **Skills** and **Agent Secrets**.
 - Agent runtimes send **Telemetry Events** through **Ingest**, where they become **Conversation Messages** or **Tool Calls**.
 - A **Domain Event** has one **Event Scope**. A committed Domain Event is persisted as one **Outbox Message** and may have many **Event Deliveries**, one per intended handler.

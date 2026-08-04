@@ -26,6 +26,12 @@ class SkillRepository:
             query = select(Skill).where(col(Skill.source) == SkillSource.AAI_CLI)
             return list(session.exec(query).all())
 
+    def find_all_global(self) -> list[Skill]:
+        """Return every global Skill available to platform-owned resources."""
+        with Session(self.delegate.engine) as session:
+            query = select(Skill).where(col(Skill.organization_id).is_(None)).order_by(col(Skill.name).asc())
+            return list(session.exec(query).all())
+
     def get_by_name_global(self, name: str) -> Skill | None:
         """Find a global (org_id=None) skill by name — used for seeder dedup."""
         with Session(self.delegate.engine) as session:

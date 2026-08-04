@@ -198,3 +198,6 @@ class SkillService:
             total=total,
             items=[SkillRead.model_validate(s) for s in skills],
         )
+
+    def list_global_skills_for_platform_admin(self) -> list[SkillRead]:
+        return [SkillRead.model_validate(skill) for skill in self.repository.find_all_global()]
