@@ -124,7 +124,13 @@ test.describe("Settings · Templates", () => {
     await page.reload();
     await page.getByText("My Custom", { exact: true }).click();
     await expect(page.getByText("Organization fork · Platform baseline v3", { exact: true })).toBeVisible();
+
+    // Selecting historical content must not change lineage-level update status.
+    await page.getByLabel("Version").click();
+    await page.getByRole("menuitemradio", { name: "v2" }).click();
+    await expect(page.getByText("Organization fork · Platform baseline v1", { exact: true })).toBeVisible();
     await expect(page.getByTestId("template-update-available")).not.toBeVisible();
+    await expect(page.getByRole("button", { name: "Apply platform update" })).not.toBeVisible();
   });
 
   test("search filters the list", async ({ page }) => {

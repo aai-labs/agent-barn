@@ -619,7 +619,14 @@ class TemplateRepository:
         return items, total
 
     def get_platform_update_flags(self, templates: list[TemplateRead]) -> dict[UUID, bool]:
-        """Return whether each organization fork has a newer platform version available."""
+        """Return one update status for each organization fork lineage.
+
+        Version history can contain older organization rows whose baselines are
+        behind the platform even after the latest organization row has caught
+        up. Update availability is a lineage-level decision, so every row for
+        a lineage receives the comparison between the latest platform version
+        and the latest organization version's baseline.
+        """
         candidates = [
             template
             for template in templates
@@ -631,6 +638,14 @@ class TemplateRepository:
             return {}
 
         template_keys = {template.template_key for template in candidates}
+        latest_org_by_lineage: dict[tuple[UUID, str], TemplateRead] = {}
+        for template in candidates:
+            assert template.organization_id is not None
+            lineage = (template.organization_id, template.template_key)
+            latest = latest_org_by_lineage.get(lineage)
+            if latest is None or template.version > latest.version:
+                latest_org_by_lineage[lineage] = template
+
         with Session(self.delegate.engine) as session:
             latest_versions = dict(
                 session.exec(
@@ -640,11 +655,15 @@ class TemplateRepository:
                 ).all()
             )
 
-        return {
-            template.id: latest_versions.get(template.template_key, -1)
-            > (template.fork_baseline_platform_version or -1)
-            for template in candidates
+        lineage_flags = {
+            lineage: latest_versions.get(latest.template_key, -1) > (latest.fork_baseline_platform_version or -1)
+            for lineage, latest in latest_org_by_lineage.items()
         }
+        flags: dict[UUID, bool] = {}
+        for template in candidates:
+            assert template.organization_id is not None
+            flags[template.id] = lineage_flags[(template.organization_id, template.template_key)]
+        return flags
 
     def get_keys_used_by_live_agents(self, org_id: UUID, template_keys: list[str]) -> set[str]:
         if not template_keys:

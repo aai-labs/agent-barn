@@ -105,11 +105,18 @@ export function TemplateDrawer({
     versions.find((version) => version.version === resolvedVersion && version.organizationId !== null) ??
     versions.find((version) => version.version === resolvedVersion) ??
     versions[0];
+  const latestOrganizationVersion = versions
+    .filter((version) => version.organizationId !== null)
+    .reduce<AgentTemplateRead | undefined>(
+      (latest, version) => (!latest || version.version > latest.version ? version : latest),
+      undefined,
+    );
   const isFork = Boolean(current?.forkedFromPlatformTemplateId);
   const forkBaselineVersion = current?.forkBaselinePlatformVersion;
   const hasPlatformUpdate =
     !platformUpdateApplied &&
-    (current ? current.platformUpdateAvailable : platformUpdateAvailable === true);
+    (latestOrganizationVersion?.platformUpdateAvailable === true ||
+      (versions.length === 0 && platformUpdateAvailable === true));
 
   // A skill is always in exactly one of: selectedSkillDetails (standalone),
   // one groupDrafts entry's members, or unselected — every "add" action below

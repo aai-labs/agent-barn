@@ -1669,6 +1669,40 @@ def test_platform_template_update_clones_the_new_platform_snapshot_and_preserves
             assert_that(refreshed_agent.json()["template_version"], equal_to(1))
 
 
+def test_platform_update_availability_uses_latest_org_version_not_history():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+        repository.save_platform_template(_platform_version("manual", 1))
+
+        fork_response = client.patch(
+            f"{_BASE}/manual",
+            json={"soul_md": "organization soul"},
+            headers=_auth(context),
+        )
+        assert_that(fork_response.status_code, equal_to(status.HTTP_200_OK))
+
+        repository.save_platform_template(_platform_version("manual", 2, soul_md="platform soul 2"))
+        update_v2 = client.post(f"{_BASE}/manual/platform-update", headers=_auth(context))
+        assert_that(update_v2.status_code, equal_to(status.HTTP_201_CREATED))
+
+        repository.save_platform_template(_platform_version("manual", 3, soul_md="platform soul 3"))
+        update_v3 = client.post(f"{_BASE}/manual/platform-update", headers=_auth(context))
+        assert_that(update_v3.status_code, equal_to(status.HTTP_201_CREATED))
+
+        with when("the organization opens version history after applying the latest platform update"):
+            versions_response = client.get(f"{_BASE}/manual/versions", headers=_auth(context))
+
+        with then("update availability reflects the latest org baseline for every historical row"):
+            assert_that(versions_response.status_code, equal_to(status.HTTP_200_OK))
+            versions = versions_response.json()
+            assert_that([version["version"] for version in versions], equal_to([3, 2, 1]))
+            assert_that(
+                [version["platform_update_available"] for version in versions],
+                equal_to([False, False, False]),
+            )
+
+
 def test_newer_platform_version_does_not_replace_an_org_fork_in_the_catalog():
     with given(_GIVEN) as context:
         client: TestClient = context.client

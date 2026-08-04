@@ -170,8 +170,10 @@ class TemplateRead(PydanticBaseModel):
     # the origin pointer above, these advance after a Template Update.
     fork_baseline_platform_template_id: UUID | None = None
     fork_baseline_platform_version: int | None = None
-    # True when this organization fork's baseline is behind the latest
-    # published Platform Template Version for the same lineage.
+    # True when the latest organization version's baseline is behind the
+    # latest published Platform Template Version for the same lineage. For
+    # version-history responses this lineage-level value is repeated on every
+    # organization row, so selecting history cannot change update availability.
     platform_update_available: bool = False
     version: int
     description: str | None
