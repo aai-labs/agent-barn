@@ -4,6 +4,14 @@ import { useState } from "react";
 import { ArrowLeft, Loader2, Pencil } from "lucide-react";
 
 import { AppErrorState } from "@/components/app-error-state";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 import type {
   PlatformTemplateAdminSummary,
@@ -94,20 +102,28 @@ export function PlatformTemplatePublishedView({
               </p>
             </div>
             <div className="flex items-center gap-2">
-              <select
-                className="af-select"
-                aria-label="Published version"
-                value={selectedVersion === null ? "" : String(selectedVersion)}
-                onChange={(event) =>
-                  onVersionChange(Number(event.target.value))
+              <Select
+                value={
+                  selectedVersion === null ? undefined : String(selectedVersion)
                 }
+                onValueChange={(value) => onVersionChange(Number(value))}
               >
-                {versions.map((version) => (
-                  <option key={version.id} value={version.version}>
-                    Version v{version.version}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger
+                  className="w-auto min-w-32"
+                  aria-label="Published version"
+                >
+                  <SelectValue placeholder="Select version" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    {versions.map((version) => (
+                      <SelectItem key={version.id} value={String(version.version)}>
+                        Version v{version.version}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
               <span
                 className="flex-shrink-0 text-[11.5px] font-semibold px-2.5 py-1 rounded-full"
                 style={

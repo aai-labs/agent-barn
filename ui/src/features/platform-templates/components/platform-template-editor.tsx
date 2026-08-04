@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ArrowLeft,
   CircleDashed,
@@ -12,6 +12,8 @@ import {
   Upload,
 } from "lucide-react";
 import { toast } from "sonner";
+
+import { ConfirmationDialog } from "@/components/confirmation-dialog";
 
 import {
   useCreatePlatformTemplateDraft,
@@ -35,6 +37,20 @@ import { PlatformTemplateArtifactTabs } from "./platform-template-artifact-tabs"
 import { PlatformTemplatePublishedView } from "./platform-template-published-view";
 import { PlatformTemplateSkillCheckbox } from "./platform-template-skill-checkbox";
 import { PlatformTemplateSkillGroup } from "./platform-template-skill-group";
+
+type ConfirmationKind = "publish" | "discard" | "close" | "view-published";
+
+type ConfirmationConfig = {
+  title: ReactNode;
+  description: ReactNode;
+  confirmLabel: string;
+  pendingLabel: string;
+  onConfirm: () => void | Promise<void>;
+  isPending?: boolean;
+  variant?: "default" | "destructive";
+  icon: ReactNode;
+  children?: ReactNode;
+};
 
 function emptyForm(): PlatformTemplateForm {
   return {
@@ -97,6 +113,9 @@ export function PlatformTemplateEditor({
     useState<PlatformTemplateFileKey>("soulMd");
   const [skillSearch, setSkillSearch] = useState("");
   const [dirty, setDirty] = useState(false);
+  const [confirmation, setConfirmation] = useState<ConfirmationKind | null>(
+    null,
+  );
   const initializedDraftId = useRef<string | null>(null);
 
   const currentDraft = draft ?? startDraft.data;
@@ -234,14 +253,14 @@ export function PlatformTemplateEditor({
     }
   }
 
-  async function handleDiscard() {
+  function handleDiscard() {
     if (!templateKey || !currentDraft) return;
-    if (
-      !window.confirm(
-        "Discard this unpublished draft? The last published version will remain unchanged.",
-      )
-    )
-      return;
+    setConfirmation("discard");
+  }
+
+  async function confirmDiscard() {
+    if (!templateKey || !currentDraft) return;
+    setConfirmation(null);
     try {
       await discardDraft.mutateAsync(templateKey);
       toast.success("Draft discarded.");
@@ -252,14 +271,14 @@ export function PlatformTemplateEditor({
     }
   }
 
-  async function handlePublish() {
+  function handlePublish() {
     if (!templateKey || !currentDraft || dirty) return;
-    if (
-      !window.confirm(
-        "Publish this draft? Organizations will be able to use the new platform version.",
-      )
-    )
-      return;
+    setConfirmation("publish");
+  }
+
+  async function confirmPublish() {
+    if (!templateKey || !currentDraft || dirty) return;
+    setConfirmation(null);
     try {
       const published = await publishDraft.mutateAsync(templateKey);
       toast.success(
@@ -273,27 +292,32 @@ export function PlatformTemplateEditor({
   }
 
   function requestClose() {
-    if (
-      dirty &&
-      !window.confirm("You have unsaved changes. Close without saving?")
-    )
+    if (dirty) {
+      setConfirmation("close");
       return;
+    }
+    onClose();
+  }
+
+  function confirmClose() {
+    setConfirmation(null);
     onClose();
   }
 
   function viewPublishedVersion() {
-    if (
-      dirty &&
-      !window.confirm(
-        "You have unsaved changes. Leave draft editing? Your unsaved changes will be discarded.",
-      )
-    ) {
+    if (dirty) {
+      setConfirmation("view-published");
       return;
     }
+    confirmViewPublishedVersion();
+  }
+
+  function confirmViewPublishedVersion() {
     if (currentDraft) {
       setForm(formFromDraft(currentDraft));
       setDirty(false);
     }
+    setConfirmation(null);
     setIsEditing(false);
   }
 
@@ -316,6 +340,106 @@ export function PlatformTemplateEditor({
     : lineage?.latestPublishedVersion
       ? `Published v${lineage.latestPublishedVersion}`
       : "Not published";
+
+  const confirmationConfig: ConfirmationConfig | null =
+    confirmation === "publish"
+      ? {
+          title: "Publish platform template?",
+          description: (
+            <>
+              Publish {currentDraft?.templateName ?? "this template"} as a new
+              version? Organizations will be able to use the new platform
+              version.
+            </>
+          ),
+          confirmLabel: "Publish template",
+          pendingLabel: "Publishing…",
+          onConfirm: confirmPublish,
+          isPending: publishDraft.isPending,
+          icon: <Upload size={18} />,
+          children: (
+            <div
+              className="mt-5 rounded-xl px-4 py-3"
+              style={{
+                background: "var(--bg-soft)",
+                border: "1px solid var(--line)",
+              }}
+            >
+              <div
+                className="text-[12.5px] font-semibold"
+                style={{ color: "var(--ink-2)" }}
+              >
+                What happens next
+              </div>
+              <div
+                className="mt-1 text-[12.5px] leading-[1.5]"
+                style={{ color: "var(--ink-3)" }}
+              >
+                A new immutable version will be created and this draft will be
+                cleared. Existing agents stay on their current versions.
+              </div>
+            </div>
+          ),
+        }
+      : confirmation === "discard"
+        ? {
+            title: "Discard draft?",
+            description: (
+              <>
+                Discard the unpublished draft for {currentDraft?.templateName ?? "this template"}?
+                The last published version will remain unchanged.
+              </>
+            ),
+            confirmLabel: "Discard draft",
+            pendingLabel: "Discarding…",
+            onConfirm: confirmDiscard,
+            isPending: discardDraft.isPending,
+            variant: "destructive",
+            icon: <Trash2 size={18} />,
+            children: (
+              <div
+                className="mt-5 rounded-xl px-4 py-3"
+                style={{
+                  background: "var(--err-soft)",
+                  border: "1px solid color-mix(in srgb, var(--err) 25%, transparent)",
+                }}
+              >
+                <div
+                  className="text-[12.5px] font-semibold"
+                  style={{ color: "var(--err)" }}
+                >
+                  Published versions are safe
+                </div>
+                <div
+                  className="mt-1 text-[12.5px] leading-[1.5]"
+                  style={{ color: "var(--ink-3)" }}
+                >
+                  Only the unpublished draft will be removed.
+                </div>
+              </div>
+            ),
+          }
+        : confirmation === "close"
+          ? {
+              title: "Close without saving?",
+              description:
+                "You have unsaved changes. Close this editor without saving them?",
+              confirmLabel: "Close without saving",
+              pendingLabel: "Closing…",
+              onConfirm: confirmClose,
+              icon: <ArrowLeft size={18} />,
+            }
+          : confirmation === "view-published"
+            ? {
+                title: "Leave draft editing?",
+                description:
+                  "You have unsaved changes. Leave draft editing? Your unsaved changes will be discarded.",
+                confirmLabel: "Leave editing",
+                pendingLabel: "Leaving…",
+                onConfirm: confirmViewPublishedVersion,
+                icon: <Eye size={18} />,
+              }
+            : null;
 
   async function handleStartEditing() {
     if (!templateKey) return;
@@ -668,7 +792,7 @@ export function PlatformTemplateEditor({
               {!isNew && currentDraft && (
                 <button
                   className="af-btn af-btn-danger"
-                  onClick={() => void handleDiscard()}
+                  onClick={handleDiscard}
                   disabled={pending}
                 >
                   <Trash2 size={14} /> Discard
@@ -700,7 +824,7 @@ export function PlatformTemplateEditor({
                   {!isNew && currentDraft && (
                     <button
                       className="af-btn af-btn-primary"
-                      onClick={() => void handlePublish()}
+                      onClick={handlePublish}
                       disabled={pending || dirty}
                       title={
                         dirty ? "Save the draft before publishing" : undefined
@@ -720,6 +844,16 @@ export function PlatformTemplateEditor({
           </div>
         </div>
       </div>
+
+      {confirmationConfig && (
+        <ConfirmationDialog
+          open={confirmation !== null}
+          onOpenChange={(open) => {
+            if (!open) setConfirmation(null);
+          }}
+          {...confirmationConfig}
+        />
+      )}
     </div>
   );
 }

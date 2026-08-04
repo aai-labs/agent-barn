@@ -10,7 +10,7 @@ import {
 test.describe("Platform Template Admin", () => {
   test.use({ storageState: { cookies: [], origins: [] } });
 
-  test("lists platform templates and saves an existing draft", async ({ page }) => {
+  test("lists platform templates, saves, and publishes an existing draft", async ({ page }) => {
     const data = new DataSupport(page);
     await data.auth.interceptRefreshRequest();
     await data.users.interceptGetUserContextRequest();
@@ -33,6 +33,7 @@ test.describe("Platform Template Admin", () => {
       ],
     });
     await data.platformTemplates.interceptUpdateDraft();
+    await data.platformTemplates.interceptPublishDraft();
 
     await page.goto("/dashboard/platform/templates");
 
@@ -49,12 +50,17 @@ test.describe("Platform Template Admin", () => {
     await page.getByRole("tab", { name: "IDENTITY.md", exact: true }).click();
     await expect(page.getByLabel("IDENTITY.md content")).toHaveText(/# Identity/);
     await page.getByRole("tab", { name: "SOUL.md", exact: true }).click();
-    await expect(page.getByLabel("Published version")).toHaveValue("2");
-    await expect(page.getByLabel("Published version").locator("option:checked")).toHaveText("Version v2");
-    await page.getByLabel("Published version").selectOption("1");
+    const publishedVersion = page.getByRole("combobox", {
+      name: "Published version",
+    });
+    await expect(publishedVersion).toHaveText("Version v2");
+    await publishedVersion.click();
+    await page.getByRole("option", { name: "Version v1", exact: true }).click();
+    await expect(publishedVersion).toHaveText("Version v1");
     await expect(page.getByText("Historical", { exact: true })).toBeVisible();
     await expect(page.getByLabel("SOUL.md content")).toHaveText(/version one/);
-    await page.getByLabel("Published version").selectOption("2");
+    await publishedVersion.click();
+    await page.getByRole("option", { name: "Version v2", exact: true }).click();
     await expect(page.getByText("Current", { exact: true })).toBeVisible();
 
     await page.getByRole("button", { name: /continue editing draft/i }).click();
@@ -71,11 +77,43 @@ test.describe("Platform Template Admin", () => {
     await expect(page.getByLabel("SOUL.md content")).toHaveValue(/careful code reviewer/);
 
     await page.getByLabel("Description").fill("Updated from the Platform Admin UI.");
+
+    await page.getByRole("button", { name: /view published version/i }).click();
+    const leaveDraftDialog = page.getByRole("dialog");
+    await expect(
+      leaveDraftDialog.getByRole("heading", { name: "Leave draft editing?" }),
+    ).toBeVisible();
+    await leaveDraftDialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(leaveDraftDialog).not.toBeVisible();
+
+    await page.getByRole("button", { name: "Platform templates" }).click();
+    const closeDialog = page.getByRole("dialog");
+    await expect(
+      closeDialog.getByRole("heading", { name: "Close without saving?" }),
+    ).toBeVisible();
+    await closeDialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(closeDialog).not.toBeVisible();
+
     await page.getByRole("button", { name: /save draft/i }).click();
     await expect(page.getByText("Draft saved.")).toBeVisible();
     await expect(page.getByRole("button", { name: "Publish", exact: true })).toBeVisible();
 
-    await page.getByRole("button", { name: "Platform templates" }).click();
+    await page.getByRole("button", { name: "Discard", exact: true }).click();
+    const discardDialog = page.getByRole("dialog");
+    await expect(
+      discardDialog.getByRole("heading", { name: "Discard draft?" }),
+    ).toBeVisible();
+    await discardDialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(discardDialog).not.toBeVisible();
+
+    await page.getByRole("button", { name: "Publish", exact: true }).click();
+    const publishDialog = page.getByRole("dialog");
+    await expect(publishDialog).toBeVisible();
+    await expect(
+      publishDialog.getByRole("heading", { name: "Publish platform template?" }),
+    ).toBeVisible();
+    await expect(publishDialog.getByText(/new immutable version/)).toBeVisible();
+    await publishDialog.getByRole("button", { name: "Publish template" }).click();
     await expect(page).toHaveURL(/\/dashboard\/platform\/templates$/);
     await page.getByRole("button", { name: "New template" }).click();
     await expect(page).toHaveURL(/\/dashboard\/platform\/templates\/new$/);
@@ -144,7 +182,11 @@ test.describe("Platform Template Admin", () => {
 
     await expect(page.getByRole("heading", { name: "General Purpose" })).toBeVisible();
     await expect(page.getByText("Current", { exact: true })).toBeVisible();
-    await page.getByLabel("Published version").selectOption("1");
+    const publishedVersion = page.getByRole("combobox", {
+      name: "Published version",
+    });
+    await publishedVersion.click();
+    await page.getByRole("option", { name: "Version v1", exact: true }).click();
     await expect(page.getByText("Historical", { exact: true })).toBeVisible();
     await expect(page.getByLabel("SOUL.md content")).toHaveText(/version one/);
     await expect(page.getByRole("button", { name: "Restore v1 as draft" })).toBeVisible();

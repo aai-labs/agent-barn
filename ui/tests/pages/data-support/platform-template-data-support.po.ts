@@ -188,6 +188,26 @@ export class PlatformTemplateDataSupport {
     );
   }
 
+  async interceptPublishDraft({
+    templateKey = MOCK_PLATFORM_TEMPLATE_KEY,
+    body = mockPlatformTemplatePublished,
+  }: { templateKey?: string; body?: unknown } = {}) {
+    await this.page.route(
+      `**/api/v1/platform/templates/${templateKey}/draft/publish`,
+      async (route) => {
+        if (route.request().method() !== "POST") {
+          await route.fallback();
+          return;
+        }
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(body),
+        });
+      },
+    );
+  }
+
   async interceptStartDraft({
     templateKey = MOCK_PLATFORM_TEMPLATE_KEY,
     body = mockPlatformTemplateDraft,
