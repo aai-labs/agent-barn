@@ -139,6 +139,7 @@ See [docs/features/domain-events.md](./docs/features/domain-events.md) for how D
 
 ```bash
 make migrate         # apply latest
+make merge-heads     # merge multiple Alembic heads
 make rollback        # roll back one
 make makemigrations  # create new migration (prompts for message)
 ```
