@@ -1068,6 +1068,7 @@ class AgentService:
             else ""
         )
         effective_model = agent.model or self.config.agent_default_model
+        llm_proxy_url = "http://localhost:8090"
 
         # Re-check the allowlist at start time, not just create/update: the org's
         # allowlist can change after the agent was created, and a model that was
@@ -1106,7 +1107,7 @@ class AgentService:
                 api_server_key = secrets.token_urlsafe(32)
                 hermes_cfg = build_hermes_config(
                     effective_model,
-                    self.config.agent_litellm_base_url,
+                    llm_proxy_url,
                     dm_policy=str(slack_config.dm_policy),
                     group_policy=str(slack_config.group_policy),
                     verbose_mode=slack_config.verbose_mode,
@@ -1120,7 +1121,7 @@ class AgentService:
                     slack_bot_token=bot_token,
                     slack_app_token=app_token,
                     litellm_api_key=litellm_key,
-                    litellm_base_url=self.config.agent_litellm_base_url,
+                    litellm_base_url=llm_proxy_url,
                     api_server_key=api_server_key,
                     channel_ids=slack_config.channel_ids,
                     dm_user_ids=slack_config.dm_user_ids,
@@ -1136,7 +1137,7 @@ class AgentService:
             else:
                 overlay = build_openclaw_config_overlay(
                     effective_model,
-                    self.config.agent_litellm_base_url,
+                    llm_proxy_url,
                     slack_channel_ids=slack_config.channel_ids,
                     slack_dm_user_ids=slack_config.dm_user_ids,
                     slack_group_policy=str(slack_config.group_policy),
@@ -1150,7 +1151,7 @@ class AgentService:
                     slack_bot_token=bot_token,
                     slack_app_token=app_token,
                     litellm_api_key=litellm_key,
-                    litellm_base_url=self.config.agent_litellm_base_url,
+                    litellm_base_url=llm_proxy_url,
                 )
                 deployment = build_deployment(
                     agent.id,
@@ -1173,7 +1174,7 @@ class AgentService:
             )
             overlay = build_openclaw_config_overlay_teams(
                 effective_model,
-                self.config.agent_litellm_base_url,
+                llm_proxy_url,
                 approval_mode=str(agent.approval_mode),
             )
             secret = build_secret_teams(
@@ -1184,7 +1185,7 @@ class AgentService:
                 msteams_app_password=app_password,
                 msteams_tenant_id=teams_config.tenant_id,
                 litellm_api_key=litellm_key,
-                litellm_base_url=self.config.agent_litellm_base_url,
+                litellm_base_url=llm_proxy_url,
             )
             service = build_service(
                 agent.id,
@@ -1225,7 +1226,7 @@ class AgentService:
                 api_server_key = secrets.token_urlsafe(32)
                 hermes_cfg = build_hermes_config_telegram(
                     effective_model,
-                    self.config.agent_litellm_base_url,
+                    llm_proxy_url,
                     dm_policy=str(telegram_config.dm_policy),
                     group_policy=str(telegram_config.group_policy),
                     approval_mode=str(agent.approval_mode),
@@ -1237,7 +1238,7 @@ class AgentService:
                     agent_name=agent.name,
                     telegram_bot_token=bot_token,
                     litellm_api_key=litellm_key,
-                    litellm_base_url=self.config.agent_litellm_base_url,
+                    litellm_base_url=llm_proxy_url,
                     api_server_key=api_server_key,
                     dm_policy=str(telegram_config.dm_policy),
                     allowed_user_ids=telegram_config.allowed_user_ids,
@@ -1253,7 +1254,7 @@ class AgentService:
             else:
                 overlay = build_openclaw_config_overlay_telegram(
                     effective_model,
-                    self.config.agent_litellm_base_url,
+                    llm_proxy_url,
                     dm_policy=str(telegram_config.dm_policy),
                     group_policy=str(telegram_config.group_policy),
                     allowed_user_ids=telegram_config.allowed_user_ids,
@@ -1266,7 +1267,7 @@ class AgentService:
                     namespace=ns,
                     telegram_bot_token=bot_token,
                     litellm_api_key=litellm_key,
-                    litellm_base_url=self.config.agent_litellm_base_url,
+                    litellm_base_url=llm_proxy_url,
                 )
                 deployment = build_deployment(
                     agent.id,
@@ -1361,6 +1362,7 @@ class AgentService:
                 "AGENT_ID": str(agent.id),
                 "INGEST_URL": self.config.ingest_base_url,
                 "INGEST_API_KEY": ingest_key,
+                "LITELLM_PROXY_TARGET": self.config.agent_litellm_base_url,
             }
         )
 
