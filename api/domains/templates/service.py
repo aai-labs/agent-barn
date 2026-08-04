@@ -77,9 +77,14 @@ class TemplateService:
                     detail=f"Skill {skill_id} not found",
                 )
 
+    def _mark_platform_updates(self, reads: list[TemplateRead]) -> list[TemplateRead]:
+        flags = self.repository.get_platform_update_flags(reads)
+        return [read.model_copy(update={"platform_update_available": flags.get(read.id, False)}) for read in reads]
+
     def _to_read_with_skills(self, template: AgentTemplate | PlatformTemplate) -> TemplateRead:
         skills = self.repository.get_required_skills_for(template)
-        return self.repository.to_read(template, skills)
+        read = self.repository.to_read(template, skills)
+        return self._mark_platform_updates([read])[0]
 
     def _get_latest_or_404(self, org_id: UUID, template_key: str) -> AgentTemplate | PlatformTemplate:
         template = self.repository.resolve_latest_template(org_id, template_key)
@@ -100,11 +105,12 @@ class TemplateService:
         self.permission_policy.require_organization(context, org_id, PermissionKey.TEMPLATE_READ)
         items, total = self.repository.find_latest_templates(org_id, template_filter, pagination)
         used_keys = self.repository.get_keys_used_by_live_agents(org_id, [item.template_key for item in items])
+        reads = [item.model_copy(update={"in_use": item.template_key in used_keys}) for item in items]
         return PaginatedItems(
             page=pagination.page,
             page_size=pagination.size,
             total=total,
-            items=[item.model_copy(update={"in_use": item.template_key in used_keys}) for item in items],
+            items=self._mark_platform_updates(reads),
         )
 
     def get_template(self, template_key: str, context: CurrentUserContext) -> TemplateRead:
@@ -125,7 +131,8 @@ class TemplateService:
             )
         self.permission_policy.require_organization(context, org_id, PermissionKey.TEMPLATE_READ)
         in_use = template_key in self.repository.get_keys_used_by_live_agents(org_id, [template_key])
-        return [self._to_read_with_skills(v).model_copy(update={"in_use": in_use}) for v in versions]
+        reads = [self._to_read_with_skills(v).model_copy(update={"in_use": in_use}) for v in versions]
+        return self._mark_platform_updates(reads)
 
     def create_template(self, data: TemplateCreate, context: CurrentUserContext) -> TemplateRead:
         org_id = self._org_id(context)

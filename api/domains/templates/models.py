@@ -166,6 +166,9 @@ class TemplateRead(PydanticBaseModel):
     # The platform version this org fork was last synced to. Unlike the origin
     # pointer above, this advances after a Template Update.
     fork_baseline_platform_template_id: UUID | None = None
+    # True when this organization fork's baseline is behind the latest
+    # published Platform Template Version for the same lineage.
+    platform_update_available: bool = False
     version: int
     description: str | None
     soul_md: str

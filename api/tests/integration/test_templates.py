@@ -321,6 +321,97 @@ def test_platform_admin_can_start_a_draft_from_a_selected_published_version():
         assert_that(response.json()["soul_md"], equal_to("platform soul 1"))
 
 
+def test_platform_admin_can_create_edit_and_discard_a_new_draft():
+    with given([*_GIVEN, _there_is_a_platform_admin_actor()]) as context:
+        client: TestClient = context.client
+
+        with when("a platform admin starts a new template draft"):
+            create_response = client.post(
+                _PLATFORM_TEMPLATES_BASE,
+                json={
+                    "template_name": "Draft Template",
+                    "description": "Initial draft",
+                    "soul_md": "draft soul",
+                },
+                headers=_auth(context),
+            )
+
+        with then("the draft receives a generated key and is readable"):
+            assert_that(create_response.status_code, equal_to(status.HTTP_201_CREATED))
+            draft = create_response.json()
+            assert_that(draft["template_key"], matches_regexp(r"^tpl-[0-9a-f]{12}$"))
+            assert_that(draft["soul_md"], equal_to("draft soul"))
+            template_key = draft["template_key"]
+            get_response = client.get(f"{_PLATFORM_TEMPLATES_BASE}/{template_key}/draft", headers=_auth(context))
+            assert_that(get_response.status_code, equal_to(status.HTTP_200_OK))
+
+        with when("the platform admin edits the draft"):
+            update_response = client.patch(
+                f"{_PLATFORM_TEMPLATES_BASE}/{template_key}/draft",
+                json={"description": "Edited draft", "soul_md": "edited soul"},
+                headers=_auth(context),
+            )
+
+        with then("the draft changes are persisted without publishing"):
+            assert_that(update_response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(update_response.json()["description"], equal_to("Edited draft"))
+            assert_that(update_response.json()["soul_md"], equal_to("edited soul"))
+
+        with when("the platform admin discards the draft"):
+            discard_response = client.delete(
+                f"{_PLATFORM_TEMPLATES_BASE}/{template_key}/draft",
+                headers=_auth(context),
+            )
+
+        with then("the draft is no longer available"):
+            assert_that(discard_response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+            assert_that(
+                client.get(f"{_PLATFORM_TEMPLATES_BASE}/{template_key}/draft", headers=_auth(context)).status_code,
+                equal_to(status.HTTP_404_NOT_FOUND),
+            )
+
+
+def test_platform_admin_can_publish_a_draft_as_the_next_immutable_version():
+    with given([*_GIVEN, _there_is_a_platform_admin_actor()]) as context:
+        client: TestClient = context.client
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+        repository.save_platform_template(_platform_version("manual", 1))
+
+        with when("the platform admin starts and edits a draft"):
+            start_response = client.post(f"{_PLATFORM_TEMPLATES_BASE}/manual/draft", headers=_auth(context))
+            edit_response = client.patch(
+                f"{_PLATFORM_TEMPLATES_BASE}/manual/draft",
+                json={"description": "Published description", "soul_md": "published soul"},
+                headers=_auth(context),
+            )
+
+        with then("the draft edits are accepted"):
+            assert_that(start_response.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(edit_response.status_code, equal_to(status.HTTP_200_OK))
+
+        with when("the platform admin publishes the draft"):
+            publish_response = client.post(
+                f"{_PLATFORM_TEMPLATES_BASE}/manual/draft/publish",
+                headers=_auth(context),
+            )
+
+        with then("publishing creates v2 and clears the draft slot"):
+            assert_that(publish_response.status_code, equal_to(status.HTTP_201_CREATED))
+            published = publish_response.json()
+            assert_that(published["version"], equal_to(2))
+            assert_that(published["description"], equal_to("Published description"))
+            assert_that(published["soul_md"], equal_to("published soul"))
+            assert_that(
+                client.get(f"{_PLATFORM_TEMPLATES_BASE}/manual/draft", headers=_auth(context)).status_code,
+                equal_to(status.HTTP_404_NOT_FOUND),
+            )
+
+        with then("the published history retains both immutable versions"):
+            versions_response = client.get(f"{_PLATFORM_TEMPLATES_BASE}/manual/versions", headers=_auth(context))
+            assert_that(versions_response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that([version["version"] for version in versions_response.json()], equal_to([2, 1]))
+
+
 def test_platform_admin_new_template_draft_gets_generated_key_and_allows_duplicate_names():
     with given([*_GIVEN, _there_is_a_platform_admin_actor()]) as context:
         client: TestClient = context.client
@@ -1548,6 +1639,12 @@ def test_platform_template_update_rebases_org_overrides_and_preserves_agent_pins
         repository.save_platform_template(platform_v2)
         repository.save_platform_template_skills(platform_v2.id, {new_platform_skill.id: None})
 
+        with then("the organization template catalog surfaces the available update"):
+            list_response = client.get(_BASE, headers=_auth(context))
+            assert_that(list_response.status_code, equal_to(status.HTTP_200_OK))
+            manual = next(item for item in list_response.json()["items"] if item["template_key"] == "manual")
+            assert_that(manual["platform_update_available"], equal_to(True))
+
         with when("the organization applies the available platform update"):
             response = client.post(f"{_BASE}/manual/platform-update", headers=_auth(context))
 
@@ -1560,12 +1657,46 @@ def test_platform_template_update_rebases_org_overrides_and_preserves_agent_pins
             assert_that(body["description"], equal_to("platform description 2"))
             assert_that(body["forked_from_platform_template_id"], equal_to(str(platform_v1.id)))
             assert_that(body["fork_baseline_platform_template_id"], equal_to(str(platform_v2.id)))
+            assert_that(body["platform_update_available"], equal_to(False))
             assert_that([skill["name"] for skill in body["required_skills"]], equal_to(["Organization Override Skill"]))
 
         with then("the existing agent pin is unchanged"):
             refreshed_agent = client.get(f"{_AGENTS_BASE}/{agent_id}", headers=_auth(context))
             assert_that(refreshed_agent.status_code, equal_to(status.HTTP_200_OK))
             assert_that(refreshed_agent.json()["template_version"], equal_to(1))
+
+
+def test_newer_platform_version_does_not_replace_an_org_fork_in_the_catalog():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+        repository.save_platform_template(_platform_version("manual", 1))
+
+        fork_response = client.patch(
+            f"{_BASE}/manual",
+            json={"soul_md": "organization soul"},
+            headers=_auth(context),
+        )
+        assert_that(fork_response.status_code, equal_to(status.HTTP_200_OK))
+        repository.save_platform_template(_platform_version("manual", 3, soul_md="platform soul 3"))
+
+        with when("the organization lists its templates after a newer platform publish"):
+            list_response = client.get(_BASE, headers=_auth(context))
+            get_response = client.get(f"{_BASE}/manual", headers=_auth(context))
+
+        with then("the org fork remains visible and reports the pending update"):
+            assert_that(list_response.status_code, equal_to(status.HTTP_200_OK))
+            item = next(item for item in list_response.json()["items"] if item["template_key"] == "manual")
+            assert_that(item["version"], equal_to(2))
+            assert_that(item["template_source"], equal_to("pre-defined"))
+            assert_that(item["platform_update_available"], equal_to(True))
+            assert_that(get_response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(get_response.json()["soul_md"], equal_to("organization soul"))
+
+        with then("version history prefers the org row when a version number is shared"):
+            versions_response = client.get(f"{_BASE}/manual/versions", headers=_auth(context))
+            assert_that([version["version"] for version in versions_response.json()], equal_to([3, 2, 1]))
+            assert_that(versions_response.json()[1]["soul_md"], equal_to("organization soul"))
 
 
 def test_platform_template_update_requires_a_newer_platform_version():

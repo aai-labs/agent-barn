@@ -830,6 +830,39 @@ export class AgentDataSupport {
     });
   }
 
+  async interceptUpdateTemplateFromPlatformRequest({
+    templateKey = MOCK_TEMPLATE_KEY,
+    status = 201,
+    detail = "Unable to apply platform template update",
+    body,
+  }: {
+    templateKey?: string;
+    status?: number;
+    detail?: string;
+    body?: unknown;
+  } = {}) {
+    await this.page.route(
+      `**/api/v1/organizations/*/templates/${templateKey}/platform-update`,
+      async (route) => {
+        if (route.request().method() !== "POST") {
+          await route.fallback();
+          return;
+        }
+        const fallback =
+          mockTemplates.find((t) => t.template_key === templateKey) ?? mockAgentTemplate;
+        await route.fulfill({
+          status,
+          contentType: "application/json",
+          body: JSON.stringify(
+            status >= 400
+              ? { detail }
+              : (body ?? { ...fallback, version: fallback.version + 1, platform_update_available: false }),
+          ),
+        });
+      },
+    );
+  }
+
   async interceptGetToolCallsRequest({
     agentId = MOCK_AGENT_ID,
     status = 200,

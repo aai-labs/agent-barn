@@ -44,6 +44,48 @@ test.describe("Settings · Templates", () => {
     await expect(page.getByText("My Custom", { exact: true })).toBeVisible();
   });
 
+  test("surfaces and applies an available platform template update", async ({ page }) => {
+    const fork = {
+      ...mockAgentTemplate,
+      id: "55555555-5555-4555-8555-555555555553",
+      template_key: "my-custom",
+      template_name: "My Custom",
+      template_source: "pre-defined",
+      forked_from_platform_template_id: "11111111-1111-4111-8111-111111111111",
+      fork_baseline_platform_template_id: "22222222-2222-4222-8222-222222222222",
+      platform_update_available: true,
+    };
+    const versions = mockVersionsForKey("my-custom").map((version) => ({
+      ...version,
+      ...fork,
+      id: version.id,
+      version: version.version,
+    }));
+    await dataSupport.agents.interceptGetTemplatesRequest({
+      body: { page: 1, page_size: 50, total: 1, items: [fork] },
+    });
+    await dataSupport.agents.interceptGetTemplateVersionsRequest({ body: versions });
+    await dataSupport.agents.interceptUpdateTemplateFromPlatformRequest({
+      templateKey: "my-custom",
+      body: { ...fork, version: 3, platform_update_available: false },
+    });
+
+    await page.reload();
+    await expect(page.getByTestId("template-update-available-my-custom")).toBeVisible();
+    await page.getByText("My Custom", { exact: true }).click();
+    await expect(page.getByTestId("template-update-available")).toBeVisible();
+    await page.getByRole("button", { name: "Apply platform update" }).click();
+
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.getByRole("heading", { name: "Apply platform template update?" })).toBeVisible();
+    const updatePromise = page.waitForRequest(
+      (request) => request.url().includes("/templates/my-custom/platform-update") && request.method() === "POST",
+    );
+    await dialog.getByRole("button", { name: "Apply update" }).click();
+    await updatePromise;
+    await expect(page.getByText("Saved as v3")).toBeVisible();
+  });
+
   test("search filters the list", async ({ page }) => {
     await page.getByLabel("Search templates").fill("scrum");
 

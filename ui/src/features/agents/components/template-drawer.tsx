@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useDebouncedValue } from "@tanstack/react-pacer";
 import { SearchIcon, XIcon } from "@/components/icons";
+import { ConfirmationDialog } from "@/components/confirmation-dialog";
 import { useSkills } from "@/features/skills/hooks/use-skills";
 import { SkillSourceBadge } from "@/features/skills/components/skill-drawer";
 import { SKILL_PROVIDER_LABELS } from "@/features/skills/utils";
@@ -14,6 +15,7 @@ import {
 import { useTemplateVersions } from "../hooks/use-template-versions";
 import { useCreateTemplate } from "../hooks/use-create-template";
 import { useUpdateTemplate } from "../hooks/use-update-template";
+import { useUpdateTemplateFromPlatform } from "../hooks/use-update-template-from-platform";
 import type { AgentTemplateRead } from "../schemas";
 import { generateGroupKey, splitRequiredSkills } from "../utils";
 import { DeleteTemplateDialog } from "./delete-template-dialog";
@@ -56,11 +58,13 @@ export function TemplateDrawer({
   mode,
   templateKey,
   canManage,
+  platformUpdateAvailable,
   onClose,
 }: {
   mode: "view" | "create";
   templateKey?: string;
   canManage: boolean;
+  platformUpdateAvailable?: boolean;
   onClose: () => void;
 }) {
   const { versions, isLoading, refetch } = useTemplateVersions(
@@ -68,9 +72,12 @@ export function TemplateDrawer({
   );
   const createTemplate = useCreateTemplate();
   const updateTemplate = useUpdateTemplate();
+  const updateTemplateFromPlatform = useUpdateTemplateFromPlatform();
 
   const [editing, setEditing] = useState(mode === "create" && canManage);
   const [deleting, setDeleting] = useState(false);
+  const [applyingPlatformUpdate, setApplyingPlatformUpdate] = useState(false);
+  const [platformUpdateApplied, setPlatformUpdateApplied] = useState(false);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [files, setFiles] = useState<TemplateFiles>(EMPTY_FILES);
@@ -88,9 +95,19 @@ export function TemplateDrawer({
   const { skills, isLoading: skillsLoading } = useSkills({ search: debouncedSkillSearch || undefined, pageSize: 100 });
   const requiredSkillIds = selectedSkillDetails.map((s) => s.id);
 
-  // The version currently being displayed/edited (defaults to latest).
-  const resolvedVersion = selectedVersion ?? versions[0]?.version ?? null;
-  const current = versions.find((v) => v.version === resolvedVersion) ?? versions[0];
+  // The version currently being displayed/edited defaults to the latest
+  // organization version when a fork exists. A newer platform version is an
+  // available update, not the organization's current template.
+  const defaultVersion =
+    versions.find((version) => version.organizationId !== null)?.version ?? versions[0]?.version ?? null;
+  const resolvedVersion = selectedVersion ?? defaultVersion;
+  const current =
+    versions.find((version) => version.version === resolvedVersion && version.organizationId !== null) ??
+    versions.find((version) => version.version === resolvedVersion) ??
+    versions[0];
+  const hasPlatformUpdate =
+    !platformUpdateApplied &&
+    (platformUpdateAvailable === true || versions.some((version) => version.platformUpdateAvailable));
 
   // A skill is always in exactly one of: selectedSkillDetails (standalone),
   // one groupDrafts entry's members, or unselected — every "add" action below
@@ -105,7 +122,8 @@ export function TemplateDrawer({
   const displayName = mode === "create" ? name : (current?.templateName ?? "");
   const displayFiles = editing ? files : current ? filesFrom(current) : EMPTY_FILES;
 
-  const mutationError = createTemplate.error ?? updateTemplate.error;
+  const mutationError =
+    createTemplate.error ?? updateTemplate.error ?? updateTemplateFromPlatform.error;
   const pending = createTemplate.isPending || updateTemplate.isPending;
 
   function handleStartEdit() {
@@ -205,6 +223,23 @@ export function TemplateDrawer({
       setTimeout(() => setSavedVersion(null), 2500);
     } catch {
       // error displayed via mutationError
+    }
+  }
+
+  async function handleApplyPlatformUpdate() {
+    if (!templateKey) return;
+    updateTemplateFromPlatform.reset();
+    try {
+      const updated = await updateTemplateFromPlatform.mutateAsync(templateKey);
+      await refetch();
+      setSelectedVersion(updated.version);
+      setEditing(false);
+      setApplyingPlatformUpdate(false);
+      setPlatformUpdateApplied(true);
+      setSavedVersion(updated.version);
+      setTimeout(() => setSavedVersion(null), 2500);
+    } catch {
+      // Error is displayed in the drawer while the confirmation remains open.
     }
   }
 
@@ -341,6 +376,23 @@ export function TemplateDrawer({
                       onChange={setSelectedVersion}
                     />
                   </div>
+                </div>
+              )}
+
+              {mode === "view" && !editing && hasPlatformUpdate && (
+                <div
+                  role="status"
+                  data-testid="template-update-available"
+                  className="flex flex-col gap-1 rounded-xl px-3.5 py-3"
+                  style={{ border: "1px solid var(--accent)", background: "var(--accent-soft)" }}
+                >
+                  <span className="text-[13px] font-semibold" style={{ color: "var(--accent-ink)" }}>
+                    Update available
+                  </span>
+                  <span className="text-[12.5px]" style={{ color: "var(--ink-2)" }}>
+                    A newer Platform Template Version is ready. Apply it to create a new organization version;
+                    your local overrides and existing Agent pins stay unchanged.
+                  </span>
                 </div>
               )}
 
@@ -703,13 +755,24 @@ export function TemplateDrawer({
                   </span>
                 )}
                 {canManage ? (
-                  <button
-                    className="af-btn af-btn-primary"
-                    disabled={!current}
-                    onClick={handleStartEdit}
-                  >
-                    Edit template
-                  </button>
+                  <>
+                    {hasPlatformUpdate && (
+                      <button
+                        className="af-btn"
+                        disabled={!current}
+                        onClick={() => setApplyingPlatformUpdate(true)}
+                      >
+                        Apply platform update
+                      </button>
+                    )}
+                    <button
+                      className="af-btn af-btn-primary"
+                      disabled={!current}
+                      onClick={handleStartEdit}
+                    >
+                      Edit template
+                    </button>
+                  </>
                 ) : (
                   <button className="af-btn af-btn-ghost" onClick={onClose}>
                     Close
@@ -728,6 +791,16 @@ export function TemplateDrawer({
           onDeleted={onClose}
         />
       )}
+      <ConfirmationDialog
+        open={applyingPlatformUpdate}
+        onOpenChange={setApplyingPlatformUpdate}
+        title="Apply platform template update?"
+        description="This creates a new organization template version. Your local overrides are preserved, and existing Agents remain pinned to their current versions."
+        confirmLabel="Apply update"
+        pendingLabel="Applying update…"
+        onConfirm={handleApplyPlatformUpdate}
+        isPending={updateTemplateFromPlatform.isPending}
+      />
     </div>
   );
 }

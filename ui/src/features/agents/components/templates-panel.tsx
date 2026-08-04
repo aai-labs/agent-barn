@@ -125,6 +125,15 @@ export function TemplatesPanel() {
                 · v{t.version}
               </span>
               <TemplateSourceBadge source={t.templateSource} />
+              {t.platformUpdateAvailable && (
+                <span
+                  data-testid={`template-update-available-${t.templateKey}`}
+                  className="text-[11.5px] font-semibold px-2 py-0.5 rounded-full"
+                  style={{ color: "var(--accent-ink)", background: "var(--accent-soft)" }}
+                >
+                  Update available
+                </span>
+              )}
             </div>
           </div>
           <button
@@ -145,6 +154,7 @@ export function TemplatesPanel() {
           mode="view"
           templateKey={openTemplate.templateKey}
           canManage={canManage}
+          platformUpdateAvailable={openTemplate.platformUpdateAvailable}
           onClose={() => setOpenTemplate(null)}
         />
       )}

@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from injector import inject, singleton
-from sqlalchemy import or_, text
+from sqlalchemy import func, or_, text
 from sqlmodel import Session, col, delete, select, update
 
 from api.domains.agents.models import (
@@ -527,21 +527,25 @@ class TemplateRepository:
     def resolve_latest_template(self, org_id: UUID, template_key: str) -> AgentTemplate | PlatformTemplate | None:
         org_latest = self.get_latest_org_template(org_id, template_key)
         platform_latest = self.get_latest_platform_template(template_key)
-        if org_latest is None:
-            return platform_latest
-        if platform_latest is None:
+        # An organization fork shadows the global lineage until an explicit
+        # Template Update advances its Fork Baseline Version. A custom template
+        # cannot share a template_key with a platform template (enforced at
+        # create time).
+        if org_latest is not None:
             return org_latest
-        # An org fork continues the platform lineage at a higher version, so the
-        # higher version is the lineage's latest. A custom template cannot share
-        # a template_key with a platform template (enforced at create time).
-        return org_latest if org_latest.version >= platform_latest.version else platform_latest
+        return platform_latest
 
     def resolve_versions(self, org_id: UUID, template_key: str) -> list[AgentTemplate | PlatformTemplate]:
         org_versions = self.find_org_versions(org_id, template_key)
         platform_versions = self.find_platform_versions(template_key)
-        combined: list[AgentTemplate | PlatformTemplate] = list(org_versions) + list(platform_versions)
-        combined.sort(key=lambda t: t.version, reverse=True)
-        return combined
+        # Version numbers are shared across the platform lineage and an org
+        # fork. When both tables contain a number, the org version shadows the
+        # platform row just as it does for latest-template resolution.
+        by_version: dict[int, AgentTemplate | PlatformTemplate] = {
+            template.version: template for template in platform_versions
+        }
+        by_version.update({template.version: template for template in org_versions})
+        return sorted(by_version.values(), key=lambda template: template.version, reverse=True)
 
     def find_latest_templates(
         self,
@@ -552,16 +556,20 @@ class TemplateRepository:
         org_keys = self._latest_org_template_keys(org_id, template_filter)
         platform_keys = self._latest_platform_template_keys(template_filter)
 
-        # Merge: a template_key present in both resolves to the higher version (the org
-        # fork shadows the platform template). Custom template_keys never collide with
-        # platform template_keys (enforced at create time). Only identity columns are
+        # Merge: a template_key present in both resolves to the organization fork.
+        # Custom template_keys never collide with platform template_keys (enforced
+        # at create time). Only identity columns are
         # touched here so this stays cheap regardless of markdown body size.
         by_key: dict[str, tuple[UUID, str, str, int, TemplateSource, bool]] = {}
         for id_, template_key, name, version, source in platform_keys:
             by_key[template_key] = (id_, template_key, name, version, source, True)
         for id_, template_key, name, version, source in org_keys:
+            # Once an organization has forked a Platform Template lineage, its
+            # local fork remains the organization's visible template until the
+            # organization explicitly applies a Template Update. A later
+            # platform version must not replace the fork in the catalog.
             existing = by_key.get(template_key)
-            if existing is None or version >= existing[3]:
+            if existing is None or existing[5]:
                 by_key[template_key] = (id_, template_key, name, version, source, False)
 
         merged = list(by_key.values())
@@ -597,6 +605,42 @@ class TemplateRepository:
             for t in page
         ]
         return items, total
+
+    def get_platform_update_flags(self, templates: list[TemplateRead]) -> dict[UUID, bool]:
+        """Return whether each organization fork has a newer platform version available."""
+        candidates = [
+            template
+            for template in templates
+            if template.template_source == TemplateSource.PRE_DEFINED
+            and template.organization_id is not None
+            and template.fork_baseline_platform_template_id is not None
+        ]
+        if not candidates:
+            return {}
+
+        baseline_ids = {template.fork_baseline_platform_template_id for template in candidates}
+        template_keys = {template.template_key for template in candidates}
+        with Session(self.delegate.engine) as session:
+            baseline_versions = dict(
+                session.exec(
+                    select(col(PlatformTemplate.id), col(PlatformTemplate.version)).where(
+                        col(PlatformTemplate.id).in_(baseline_ids)
+                    )
+                ).all()
+            )
+            latest_versions = dict(
+                session.exec(
+                    select(col(PlatformTemplate.template_key), func.max(col(PlatformTemplate.version)))
+                    .where(col(PlatformTemplate.template_key).in_(template_keys))
+                    .group_by(col(PlatformTemplate.template_key))
+                ).all()
+            )
+
+        return {
+            template.id: latest_versions.get(template.template_key, -1)
+            > baseline_versions.get(template.fork_baseline_platform_template_id, -1)
+            for template in candidates
+        }
 
     def get_keys_used_by_live_agents(self, org_id: UUID, template_keys: list[str]) -> set[str]:
         if not template_keys:
