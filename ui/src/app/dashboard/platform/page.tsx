@@ -28,7 +28,7 @@ const platformLinks = [
 export default function PlatformPage() {
   return (
     <PlatformAdminOnly>
-      <div className="max-w-[980px] mx-auto px-10 pt-9 pb-24">
+      <div className="af-page">
         <div className="mb-8">
           <h1
             className="text-[28px] font-semibold tracking-tight"

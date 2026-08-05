@@ -227,6 +227,7 @@ class AgentRepository:
         general_access_role_id: UUID | None,
         assignment_roles: dict[UUID, UUID],
         actor: ActorIdentity | None = None,
+        actor_display: str | None = None,
         correlation_id: UUID | None = None,
     ) -> bool:
         """Replace General Access and explicit assignments atomically."""
@@ -292,6 +293,7 @@ class AgentRepository:
             existing_by_membership = {access.membership_id: access for access in existing_access}
             desired_membership_ids = set(assignment_roles)
             audit_actor = actor or ActorIdentity(type=ActorIdentityType.SYSTEM, id="system")
+            audit_actor_display = actor_display or audit_actor.type.value
             audit_correlation_id = correlation_id or uuid4()
 
             if previous_general_access_role_id != general_access_role_id:
@@ -313,6 +315,8 @@ class AgentRepository:
                             "agent_id": agent_id,
                             "previous_access_role_id": previous_general_access_role_id,
                             "new_access_role_id": general_access_role_id,
+                            "actor_display": audit_actor_display,
+                            "subject_display": agent.name,
                         },
                     ),
                 )
@@ -337,6 +341,8 @@ class AgentRepository:
                                 "agent_id": agent_id,
                                 "membership_id": membership_id,
                                 "previous_access_role_id": access.access_role_id,
+                                "actor_display": audit_actor_display,
+                                "subject_display": agent.name,
                             },
                         ),
                     )
@@ -371,6 +377,8 @@ class AgentRepository:
                                 "agent_id": agent_id,
                                 "membership_id": membership_id,
                                 "access_role_id": access_role_id,
+                                "actor_display": audit_actor_display,
+                                "subject_display": agent.name,
                             },
                         ),
                     )

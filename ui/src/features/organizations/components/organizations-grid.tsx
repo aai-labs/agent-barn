@@ -2,13 +2,12 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { Building, Loader2, PlusIcon, UserRound } from "lucide-react";
+import { Building, Loader2, UserRound } from "lucide-react";
 
 import { AppErrorState } from "@/components/app-error-state";
 import { ListPageHeader } from "@/components/list-page-header";
 
 import { useInfiniteOrganizations } from "../hooks/use-infinite-organizations";
-import { CreateOrganizationDialog } from "./create-organization-dialog";
 
 function LoadingCard() {
   return (
@@ -24,7 +23,6 @@ function LoadingCard() {
 
 export function OrganizationsGrid() {
   const [search, setSearch] = useState("");
-  const [createOpen, setCreateOpen] = useState(false);
   const {
     organizations,
     total,
@@ -37,7 +35,7 @@ export function OrganizationsGrid() {
   } = useInfiniteOrganizations({ search });
 
   return (
-    <div className="max-w-[1200px] mx-auto px-10 pt-9 pb-24">
+    <div className="af-page">
       <ListPageHeader
         title="Organizations"
         description="Platform view of all organizations."
@@ -45,17 +43,7 @@ export function OrganizationsGrid() {
         noun="organization"
         onSearch={setSearch}
         searchPlaceholder="Search by name, owner, or description"
-        action={
-          <button
-            className="af-btn af-btn-primary flex-shrink-0"
-            onClick={() => setCreateOpen(true)}
-          >
-            <PlusIcon width={15} height={15} /> Create organization
-          </button>
-        }
       />
-
-      <CreateOrganizationDialog open={createOpen} onOpenChange={setCreateOpen} />
 
       {isLoading ? (
         <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))" }}>
@@ -73,34 +61,38 @@ export function OrganizationsGrid() {
       ) : (
         <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))" }}>
           {organizations.map((org) => (
-            <Link
-              key={org.id}
-              href={`/dashboard/${org.id}/members`}
-              className="af-card af-card-hover block px-5 py-[18px]"
-            >
-              <div className="flex items-center gap-2 mb-1">
-                <Building width={14} height={14} style={{ color: "var(--ink-4)", flexShrink: 0 }} />
-                <span className="font-semibold text-[14.5px] truncate" style={{ color: "var(--ink)" }}>
-                  {org.name}
-                </span>
-              </div>
-              <div className="text-[13px] mb-4 leading-[1.45]" style={{ color: "var(--ink-3)" }}>
-                {org.description || "No description"}
-              </div>
-              <div className="flex items-center gap-1.5 text-[12.5px] mb-1" style={{ color: "var(--ink-3)" }}>
-                <UserRound width={12} height={12} style={{ flexShrink: 0 }} />
-                {org.ownerName || "No owner name"}
-              </div>
-              <div className="text-[12.5px] mb-3.5" style={{ color: "var(--ink-3)" }}>
-                {org.ownerEmail || "No owner email"}
-              </div>
+            <div key={org.id} className="af-card h-full flex flex-col overflow-hidden">
+              <Link
+                href={`/dashboard/platform/organizations/${org.id}`}
+                className="flex-1 block px-5 pt-[18px] pb-4 transition-colors hover:bg-[var(--bg-soft)]"
+              >
+                <div className="flex items-center gap-2 mb-1">
+                  <Building width={14} height={14} style={{ color: "var(--ink-4)", flexShrink: 0 }} />
+                  <span className="font-semibold text-[14.5px] truncate" style={{ color: "var(--ink)" }}>
+                    {org.name}
+                  </span>
+                </div>
+                <div className="text-[13px] mb-4 leading-[1.45]" style={{ color: "var(--ink-3)" }}>
+                  {org.description || "No description"}
+                </div>
+                <div className="mb-2 truncate font-mono text-[11.5px]" style={{ color: "var(--ink-4)" }}>
+                  ID: {org.id}
+                </div>
+                <div className="flex items-center gap-1.5 text-[12.5px] mb-1" style={{ color: "var(--ink-3)" }}>
+                  <UserRound width={12} height={12} style={{ flexShrink: 0 }} />
+                  {org.ownerName || "No owner name"}
+                </div>
+                <div className="text-[12.5px]" style={{ color: "var(--ink-3)" }}>
+                  {org.ownerEmail || "No owner email"}
+                </div>
+              </Link>
               <div
-                className="text-[12px] pt-3"
+                className="text-[12px] px-5 py-3 mt-auto"
                 style={{ borderTop: "1px solid var(--line)", color: "var(--ink-4)" }}
               >
                 Created: {new Date(org.createdAt).toLocaleDateString()}
               </div>
-            </Link>
+            </div>
           ))}
         </div>
       )}

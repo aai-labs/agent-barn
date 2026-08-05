@@ -13,6 +13,7 @@ from api.domains.events.models import (
     ActorIdentity,
     ActorIdentityType,
     DomainEventEnvelope,
+    EventScope,
     SubjectIdentity,
     SubjectIdentityType,
 )
@@ -62,6 +63,7 @@ def _start_agent_and_get_delivery_id(context) -> tuple[DomainEventEnvelope, Even
     event = DomainEventEnvelope(
         event_name=AGENT_STARTED,
         schema_version=1,
+        event_scope=EventScope.ORGANIZATION,
         organization_id=context.organization.id,
         occurred_at=datetime.now(UTC),
         actor=ActorIdentity(type=ActorIdentityType.USER, id=context.user.id, organization_id=context.organization.id),

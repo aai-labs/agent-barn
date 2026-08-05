@@ -5,7 +5,7 @@ import { SlackTokenSection } from "./slack-token-section";
 
 export function AccountPage() {
   return (
-    <div className="max-w-[720px] mx-auto px-10 pt-9 pb-24">
+    <div className="af-page">
       <h1
         className="text-[28px] font-semibold tracking-tight m-0 mb-1"
         style={{ color: "var(--ink)" }}

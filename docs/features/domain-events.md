@@ -6,15 +6,16 @@ Read before adding or changing internal Domain Events, Outbox Messages, Event De
 
 ## Role in the system
 
-Agent Farm uses internal Domain Events to record immutable, typed business facts that occurred inside one Organization. A committed Domain Event is persisted as one PostgreSQL `event_outbox_message` row and one `event_delivery` row per currently registered Event Handler. PostgreSQL is the durable source for event intent and intended handler delivery state; Dramatiq/Redis is the low-latency, at-least-once transport for committed Event Deliveries.
+Agent Farm uses internal Domain Events to record immutable, typed business facts at either Organization or Platform scope. A committed Domain Event is persisted as one PostgreSQL `event_outbox_message` row and one `event_delivery` row per currently registered Event Handler. PostgreSQL is the durable source for event intent and intended handler delivery state; Dramatiq/Redis is the low-latency, at-least-once transport for committed Event Deliveries.
 
 ## Invariants
 
 - Domain Events are internal business facts, not runtime Telemetry Events, public webhooks, audit records, queue messages, or event-sourced entity history.
 - Event names and schema versions are registered in code through a typed registry. Unsupported names or versions fail before persistence.
-- Event envelopes include event ID, event name, schema version, occurred-at time, Organization ID, typed Actor Identity, typed Subject Identity, required correlation ID, optional causation ID, and bounded Event Payload.
+- Event envelopes include event ID, event name, schema version, occurred-at time, explicit Event Scope, optional Organization ID, typed Actor Identity, typed Subject Identity, required correlation ID, optional causation ID, and bounded Event Payload.
 - Event Payloads are JSON objects validated by their event schema and by recursive safety checks. Secrets, credentials, unsupported values, oversized content, and sensitive key names are rejected.
-- Organization ID is authoritative. Known actor, subject, and validated payload references that belong to a different Organization are rejected before commit.
+- Organization-scoped events require exactly one Organization ID. Known actor, subject, and validated payload references that belong to a different Organization are rejected before commit.
+- Platform-scoped events prohibit an Organization ID and prohibit Organization references in Actor, Subject, and payload data. User is a valid Platform event subject.
 - A domain-specific repository operation that produces an event owns the transaction boundary. It writes business state, the Outbox Message, and intended Event Deliveries with one SQLModel session and one commit.
 - The session-aware outbox staging interface stages rows in an existing repository-owned session. It does not commit, open another session, or belong in routes.
 - `PostgresRepositoryDelegate` remains the default session-per-operation helper for ordinary persistence and does not accept optional event parameters.
@@ -29,7 +30,7 @@ Agent Farm uses internal Domain Events to record immutable, typed business facts
 - `DEAD_LETTERED` is the only automatic terminal failure state. Its reason is stored separately from lifecycle state, and the reason is required whenever the status is `DEAD_LETTERED`.
 - PostgreSQL `attempt_count` records observed handler execution attempts and remains historical metadata after success. `last_error` stores only the current unresolved bounded/redacted error and is cleared when a retry later succeeds.
 - The delivery framework supports at-least-once delivery to each intended Event Handler. Exactly-once handler side effects, strict global ordering, and distributed transactions with handler side effects are not promised.
-- Security Audit Records are projections from selected Domain Events. Audit retention and redaction rules do not redefine the internal Domain Event contract.
+- Security Audit Records are idempotent projections from selected Domain Events, keyed by Event ID. They store stable actor/subject identity and display snapshots without foreign keys so deletion of product entities does not erase security evidence. Event payload safety checks remain the first redaction boundary.
 - Runtime Ingest remains separate: Telemetry Events from Hermes/OpenClaw become Conversation Messages or Tool Calls and are not automatically written to the Domain Event outbox.
 
 ## Data flow
@@ -60,8 +61,10 @@ AF-219 ships the first concrete events as RBAC audit inputs and usage examples:
 - `agent.created` — emitted after an Agent is successfully created.
 - `agent.started` — emitted after an Agent transitions to `RUNNING`.
 - `agent.stopped` — emitted after an Agent transitions to `STOPPED`.
+- `platform.user_privilege.granted` — emitted atomically when Platform Privilege is granted.
+- `platform.user_privilege.revoked` — emitted atomically when Platform Privilege is revoked.
 
-RBAC events are intended for the `security_audit.projection` Event Handler. Agent start/stop events are intended for the `agent.lifecycle_email.notification` Event Handler, which emails the Agent Creator and users with Agent Owner access, de-duplicated by email. The Security Audit Record projection is implemented by a later slice; the events themselves are persisted by the business mutation transaction.
+RBAC and Platform Privilege events are intended for the `security_audit.projection` Event Handler, which persists deletion-independent Security Audit Records. Agent start/stop events are intended for the `agent.lifecycle_email.notification` Event Handler, which emails the Agent Creator and users with Agent Owner access, de-duplicated by email.
 
 ## Delivery worker contract
 
@@ -131,6 +134,7 @@ with Session(self.delegate.engine, expire_on_commit=False) as session:
         event_name=AGENT_RENAMED,
         schema_version=1,
         occurred_at=datetime.now(UTC),
+        event_scope=EventScope.ORGANIZATION,
         organization_id=agent.organization_id,
         actor=actor,
         subject=SubjectIdentity(
@@ -237,7 +241,7 @@ AF-247 adds the first read API and UI over this domain: a Platform Administrator
 
 - Endpoints (Platform Administrator only, `401` unauthenticated / `403` non-admin, no Active Organization resolved or accepted):
   - `GET /api/v1/platform/event-deliveries/summary` — global counts for all five lifecycle statuses (including zero) plus, for each active state (`PENDING`, `ENQUEUED`, `PROCESSING`), oldest age, stale count, unknown-age count, and the configured stale threshold.
-  - `GET /api/v1/platform/event-deliveries` — page/offset explorer, default and max page size 50/100, deterministic `(created_at, id)` ordering (newest-first default, oldest-first optional), filterable by status/Organization/event name/created-at range, with free-text search (exact match on Delivery ID or Event ID; case-insensitive prefix match on Organization name, event name, or handler name; `last_error` is never searched).
+  - `GET /api/v1/platform/event-deliveries` — page/offset explorer, default and max page size 50/100, deterministic `(created_at, id)` ordering (newest-first default, oldest-first optional), covering both Organization- and Platform-scoped deliveries. It is filterable by status/Organization/event name/created-at range, with free-text search (exact match on Delivery ID or Event ID; case-insensitive prefix match on Organization name, event name, or handler name; `last_error` is never searched). Platform-scoped rows return `organization_id` and `organization_name` as `null`.
   - `GET /api/v1/platform/event-deliveries/event-types` — the registry catalogue as event name plus schema versions, limited to definitions with at least one intended Event Handler (a handler-less event, e.g. `agent.created`, can never produce a delivery and is excluded).
 - State age semantics reuse the domain's own clocks — `PENDING` → `created_at`, `ENQUEUED` → `enqueued_at`, `PROCESSING` → `claimed_at` — and the reconciler's configured thresholds (`EVENT_DELIVERY_RECONCILIATION_PENDING_GRACE_SECONDS`, `EVENT_DELIVERY_RECONCILIATION_ENQUEUED_STALE_SECONDS`, `EVENT_DELIVERY_PROCESSING_STALE_SECONDS`) as the single source of truth for "stale." A missing required state timestamp is surfaced as unknown age, never backfilled from `created_at`.
 - The delivery response is safe operational metadata only (identity, status, timing, attempt count, dead-letter reason, bounded/redacted `last_error`, derived `status_since`) and never includes Event Payload, Actor/Subject Identity, or correlation/causation data. `last_error` is re-bounded/redacted at this read boundary as defense in depth, independent of the write-time bounding in `repository.py`.
@@ -258,11 +262,12 @@ This foundation deliberately excludes event sourcing, public webhooks, replay ad
 | Event registry and payload validation | `../../api/domains/events/registry.py` |
 | Session-aware outbox staging and persistence reads | `../../api/domains/events/repository.py` |
 | Event Handler registry and delivery processor | `../../api/domains/events/handlers.py`, `../../api/domains/events/processor.py` |
+| Security Audit Record model and projection | `../../api/domains/events/security_audit.py` |
 | Dramatiq transport adapter and worker actors | `../../api/domains/events/transport.py`, `../../api/domains/events/worker.py`, `../../api/worker_app.py` |
 | Event Delivery reconciler | `../../api/domains/events/reconciliation.py` |
 | Platform Event Delivery Monitor service and routes | `../../api/domains/events/service.py`, `../../api/domains/events/routes.py` |
 | Platform Event Delivery Monitor UI | `../../ui/src/features/event-deliveries/` |
-| Schema migrations | `../../api/migrations/versions/b4c7e2a19d34_add_outbox_message.py`, `../../api/migrations/versions/c9d8e7f6a5b4_add_event_delivery.py`, `../../api/migrations/versions/b7f3d8e1c4a9_add_event_delivery_monitor_indexes.py` |
+| Schema migrations | `../../api/migrations/versions/b4c7e2a19d34_add_outbox_message.py`, `../../api/migrations/versions/c9d8e7f6a5b4_add_event_delivery.py`, `../../api/migrations/versions/2a4f6c8e1b30_add_organization_creator.py`, `../../api/migrations/versions/b7f3d8e1c4a9_add_event_delivery_monitor_indexes.py` |
 | Unit validation tests | `../../api/tests/unit/test_domain_events.py` |
 | PostgreSQL persistence and transaction tests | `../../api/tests/integration/test_outbox_messages.py` |
 | Platform Event Delivery Monitor API tests | `../../api/tests/integration/test_event_delivery_monitor.py` |
@@ -272,6 +277,8 @@ This foundation deliberately excludes event sourcing, public webhooks, replay ad
 
 - [`2026-07-25-transactional-domain-event-outbox.md`](../adr/2026-07-25-transactional-domain-event-outbox.md)
 - [`2026-07-26-dramatiq-event-delivery.md`](../adr/2026-07-26-dramatiq-event-delivery.md)
+- [`2026-07-30-explicit-platform-and-organization-event-scopes.md`](../adr/2026-07-30-explicit-platform-and-organization-event-scopes.md)
+- [`2026-07-31-retain-security-audit-records-across-product-deletion.md`](../adr/2026-07-31-retain-security-audit-records-across-product-deletion.md)
 
 ## Change impact
 

@@ -15,6 +15,7 @@ from api.core.config import Config
 from api.domains.auth.hashing import check_hash
 from api.domains.auth.models import (
     AcceptInviteRequest,
+    CredentialClass,
     CurrentUserContext,
     ForgotPasswordRequest,
     PasswordResetRequest,
@@ -68,7 +69,9 @@ def login_for_access_token(
     if not user or not check_hash(form_data.password, user.hashed_password):
         raise credential_exception
 
-    token_data = TokenData(user_id=str(user.id), stamp=user.security_stamp)
+    token_data = TokenData(
+        user_id=str(user.id), stamp=user.security_stamp, credential_class=CredentialClass.USER_SESSION
+    )
     token_pair = auth_service.create_token_pair(token_data)
     _set_refresh_token_cookie(response, token_pair.refresh_token, config)
     return token_pair
@@ -104,7 +107,9 @@ def refresh_access_token(
 
     auth_service.revoke_refresh_token(token)
 
-    token_data = TokenData(user_id=str(user.id), stamp=user.security_stamp)
+    token_data = TokenData(
+        user_id=str(user.id), stamp=user.security_stamp, credential_class=CredentialClass.USER_SESSION
+    )
     new_access_token = auth_service.create_access_token(token_data)
     new_refresh_token = auth_service.create_refresh_token(token_data)
 
@@ -148,7 +153,9 @@ def change_current_user_password(
 ):
     user_service.change_password(context.user.id, password_data)
     user = user_service.get_user(context.user.id)
-    token_data = TokenData(user_id=str(user.id), stamp=user.security_stamp)
+    token_data = TokenData(
+        user_id=str(user.id), stamp=user.security_stamp, credential_class=CredentialClass.USER_SESSION
+    )
     token_pair = auth_service.create_token_pair(token_data)
     _set_refresh_token_cookie(response, token_pair.refresh_token, config)
     return token_pair

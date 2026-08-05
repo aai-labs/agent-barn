@@ -27,6 +27,12 @@ class SubjectIdentityType(str, enum.Enum):
     TEMPLATE = "TEMPLATE"
     SKILL = "SKILL"
     SYSTEM = "SYSTEM"
+    USER = "USER"
+
+
+class EventScope(str, enum.Enum):
+    ORGANIZATION = "ORGANIZATION"
+    PLATFORM = "PLATFORM"
 
 
 class EventDeliveryStatus(str, enum.Enum):
@@ -73,7 +79,8 @@ class DomainEventEnvelope(BaseModel):
     event_name: str = Field(min_length=1, max_length=255)
     schema_version: int = Field(ge=1)
     occurred_at: datetime
-    organization_id: UUID
+    event_scope: EventScope
+    organization_id: UUID | None
     actor: ActorIdentity
     subject: SubjectIdentity
     correlation_id: UUID
@@ -88,7 +95,13 @@ class OutboxMessage(DatabaseBaseModel, table=True):
     __table_args__ = (
         UniqueConstraint("event_id", name="uq_event_outbox_message_event_id"),
         Index("ix_event_outbox_message_organization_occurred", "organization_id", "occurred_at"),
+        Index("ix_event_outbox_message_scope_occurred", "event_scope", "occurred_at"),
         Index("ix_event_outbox_message_name_version", "event_name", "schema_version"),
+        sa.CheckConstraint(
+            "(event_scope = 'ORGANIZATION' AND organization_id IS NOT NULL) "
+            "OR (event_scope = 'PLATFORM' AND organization_id IS NULL)",
+            name="ck_event_outbox_message_scope_organization",
+        ),
     )
 
     event_id: UUID = SqlField(nullable=False)
@@ -98,7 +111,13 @@ class OutboxMessage(DatabaseBaseModel, table=True):
         sa_type=sa.DateTime(timezone=True),  # type: ignore
         nullable=False,
     )
-    organization_id: UUID = SqlField(foreign_key="organization.id", nullable=False, ondelete="CASCADE")
+    event_scope: EventScope = SqlField(
+        sa_column=Column(sa.String(32), nullable=False),
+    )
+    organization_id: UUID | None = SqlField(
+        default=None,
+        nullable=True,
+    )
     actor: dict[str, Any] = SqlField(sa_column=Column(JSONB, nullable=False))
     subject: dict[str, Any] = SqlField(sa_column=Column(JSONB, nullable=False))
     correlation_id: UUID = SqlField(nullable=False)
@@ -119,6 +138,12 @@ class EventDelivery(DatabaseBaseModel, table=True):
         ),
         Index("ix_event_delivery_outbox_message", "outbox_message_id"),
         Index("ix_event_delivery_organization_status", "organization_id", "status"),
+        Index("ix_event_delivery_scope_status", "event_scope", "status"),
+        sa.CheckConstraint(
+            "(event_scope = 'ORGANIZATION' AND organization_id IS NOT NULL) "
+            "OR (event_scope = 'PLATFORM' AND organization_id IS NULL)",
+            name="ck_event_delivery_scope_organization",
+        ),
         Index("ix_event_delivery_status_created_at", "status", "created_at"),
         Index("ix_event_delivery_status_enqueued_at", "status", "enqueued_at"),
         Index("ix_event_delivery_status_claimed_at", "status", "claimed_at"),
@@ -128,7 +153,13 @@ class EventDelivery(DatabaseBaseModel, table=True):
 
     outbox_message_id: UUID = SqlField(foreign_key="event_outbox_message.id", nullable=False, ondelete="CASCADE")
     event_id: UUID = SqlField(nullable=False)
-    organization_id: UUID = SqlField(foreign_key="organization.id", nullable=False, ondelete="CASCADE")
+    event_scope: EventScope = SqlField(
+        sa_column=Column(sa.String(32), nullable=False),
+    )
+    organization_id: UUID | None = SqlField(
+        default=None,
+        nullable=True,
+    )
     handler_name: str = SqlField(nullable=False, max_length=255)
     status: EventDeliveryStatus = SqlField(
         default=EventDeliveryStatus.PENDING,
@@ -158,8 +189,8 @@ class EventDeliveryRead(BaseModel):
     event_name: str
     schema_version: int
     handler_name: str
-    organization_id: UUID
-    organization_name: str
+    organization_id: UUID | None
+    organization_name: str | None
     status: EventDeliveryStatus
     attempt_count: int
     dead_letter_reason: EventDeliveryDeadLetterReason | None = None

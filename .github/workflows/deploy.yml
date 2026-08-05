@@ -96,7 +96,12 @@ jobs:
 
   resolve-env:
     needs: [push-api, push-ui, push-hermes, push-openclaw]
-    if: ${{ always() && !cancelled() }}
+    if: |
+      always() && !cancelled() &&
+      (needs.push-api.result == 'success' || needs.push-api.result == 'skipped') &&
+      (needs.push-ui.result == 'success' || needs.push-ui.result == 'skipped') &&
+      (needs.push-hermes.result == 'success' || needs.push-hermes.result == 'skipped') &&
+      (needs.push-openclaw.result == 'success' || needs.push-openclaw.result == 'skipped')
     runs-on: ubuntu-latest
     outputs:
       namespace: ${{ steps.resolve.outputs.namespace }}

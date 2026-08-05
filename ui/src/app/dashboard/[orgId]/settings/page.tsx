@@ -43,7 +43,7 @@ export default function SettingsPage() {
   const current = visibleSections.find((s) => s[0] === tab) ?? visibleSections[0];
 
   return (
-    <div className="max-w-[1320px] mx-auto px-10 pt-9 pb-24">
+    <div className="af-page">
       <div className="flex gap-8 items-start">
         <aside className="w-48 flex-shrink-0 sticky top-[77px]">
           {visibleSections.map(([k, l]) => (

@@ -6,6 +6,9 @@ import { EventDeliveryDetailRow } from "./event-delivery-detail-row";
 
 export function EventDeliveryDetail({ delivery }: { delivery: EventDelivery }) {
   const hasFailure = !!delivery.lastError || !!delivery.deadLetterReason;
+  const organizationLabel = delivery.organizationId
+    ? `${delivery.organizationName ?? "Unknown organization"} (${delivery.organizationId})`
+    : "Platform";
 
   return (
     <div className="space-y-4 px-10 py-4" style={{ background: "var(--bg-soft)" }}>
@@ -19,7 +22,7 @@ export function EventDeliveryDetail({ delivery }: { delivery: EventDelivery }) {
         <EventDeliveryDetailRow label="Handler" value={delivery.handlerName} />
         <EventDeliveryDetailRow
           label="Organization"
-          value={`${delivery.organizationName} (${delivery.organizationId})`}
+          value={organizationLabel}
         />
         <EventDeliveryDetailRow label="Attempt count" value={delivery.attemptCount} />
       </Section>
