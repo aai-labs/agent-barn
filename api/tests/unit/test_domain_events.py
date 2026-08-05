@@ -16,6 +16,11 @@ from api.domains.events import (
     SubjectIdentityType,
     UnsupportedDomainEventError,
 )
+from api.domains.events.catalog import (
+    AGENT_SECRET_ADDED,
+    EVENT_REGISTRY,
+    ORGANIZATION_MODEL_ALLOWLIST_CHANGED,
+)
 
 
 class SamplePayload(BaseModel):
@@ -342,3 +347,99 @@ def test_register_rejects_duplicate_event_definition():
                 payload_model=SamplePayload,
             )
         )
+
+
+def test_agent_secret_added_payload_builds_without_sensitive_field_names():
+    """Regression guard (AF-167): AgentSecretChangedPayload's fields were
+    deliberately renamed away from secret_id/secret_name/shared_credential_id
+    (all of which the sensitive-key filter above would reject) to
+    record_id/label/shared_reference_id. This proves the real production
+    payload model still builds successfully and never carries a literal
+    `content` key, which is the actual secret-safety property that matters."""
+    organization_id = uuid4()
+    agent_id = uuid4()
+
+    event = EVENT_REGISTRY.build_event(
+        event_name=AGENT_SECRET_ADDED,
+        schema_version=1,
+        occurred_at=datetime.now(UTC),
+        organization_id=organization_id,
+        actor=_actor(organization_id),
+        subject=SubjectIdentity(type=SubjectIdentityType.AGENT, id=agent_id, organization_id=organization_id),
+        correlation_id=uuid4(),
+        payload={
+            "organization_id": str(organization_id),
+            "agent_id": str(agent_id),
+            "record_id": str(uuid4()),
+            "provider": "jira",
+            "label": "Jira credential",
+            "shared_reference_id": None,
+            "actor_display": "USER",
+            "subject_display": "My Agent",
+        },
+    )
+
+    assert "content" not in event.payload
+    assert "secret_name" not in event.payload
+    assert "shared_credential_id" not in event.payload
+    assert event.payload["provider"] == "jira"
+
+
+def test_agent_secret_added_payload_rejects_content_field():
+    """The payload model is `extra="forbid"`, so even a buggy caller that tried
+    to smuggle the encrypted secret blob into the payload as `content` would be
+    rejected outright, independent of the registry's sensitive-key filter."""
+    organization_id = uuid4()
+    agent_id = uuid4()
+
+    with pytest.raises(DomainEventValidationError):
+        EVENT_REGISTRY.build_event(
+            event_name=AGENT_SECRET_ADDED,
+            schema_version=1,
+            occurred_at=datetime.now(UTC),
+            organization_id=organization_id,
+            actor=_actor(organization_id),
+            subject=SubjectIdentity(type=SubjectIdentityType.AGENT, id=agent_id, organization_id=organization_id),
+            correlation_id=uuid4(),
+            payload={
+                "organization_id": str(organization_id),
+                "agent_id": str(agent_id),
+                "record_id": str(uuid4()),
+                "provider": "jira",
+                "label": "Jira credential",
+                "shared_reference_id": None,
+                "actor_display": "USER",
+                "subject_display": "My Agent",
+                "content": "should-never-be-accepted",
+            },
+        )
+
+
+def test_organization_model_allowlist_changed_payload_handles_realistic_large_list():
+    """Regression guard against the 16KB payload size bound: a large-but-realistic
+    allowlist (hundreds of glob patterns) must still fit, since truncating an
+    audit record's before/after state would defeat its purpose."""
+    organization_id = uuid4()
+    previous_models = [f"openai/gpt-{i}" for i in range(150)]
+    new_models = [f"anthropic/claude-{i}" for i in range(150)]
+
+    event = EVENT_REGISTRY.build_event(
+        event_name=ORGANIZATION_MODEL_ALLOWLIST_CHANGED,
+        schema_version=1,
+        occurred_at=datetime.now(UTC),
+        organization_id=organization_id,
+        actor=_actor(organization_id),
+        subject=SubjectIdentity(
+            type=SubjectIdentityType.ORGANIZATION, id=organization_id, organization_id=organization_id
+        ),
+        correlation_id=uuid4(),
+        payload={
+            "organization_id": str(organization_id),
+            "previous_models": previous_models,
+            "new_models": new_models,
+            "actor_display": "USER",
+            "subject_display": "My Org",
+        },
+    )
+
+    assert event.payload["new_models"] == new_models

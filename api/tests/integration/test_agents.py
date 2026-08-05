@@ -17,8 +17,20 @@ from starlette.testclient import TestClient
 from api.domains.agents.models import AgentPlatform, AgentStatus, AgentType, SecretProvider
 from api.domains.agents.repository import AgentRepository
 from api.domains.agents.service import AgentService
-from api.domains.events.catalog import AGENT_CREATED, AGENT_STARTED, AGENT_STOPPED
+from api.domains.events.catalog import (
+    AGENT_CREATED,
+    AGENT_DELETED,
+    AGENT_SECRET_ADDED,
+    AGENT_SECRET_REMOVED,
+    AGENT_SECRET_UPDATED,
+    AGENT_STARTED,
+    AGENT_STOPPED,
+    AGENT_UPDATED,
+)
 from api.domains.events.models import EventDeliveryStatus, OutboxMessage
+from api.domains.events.processor import EventDeliveryProcessor
+from api.domains.events.repository import OutboxMessageRepository
+from api.domains.events.security_audit import SecurityAuditRepository
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.templates.repository import TemplateRepository
 from api.infrastructure.kubernetes.client import KubernetesClient
@@ -915,6 +927,155 @@ def test_stop_agent_emits_stopped_domain_event_and_delivery():
             # after is best-effort (falls back to background reconciliation on failure),
             # so whether it's already ENQUEUED here depends on Redis being reachable.
             assert_that(deliveries[0].status, is_in([EventDeliveryStatus.PENDING, EventDeliveryStatus.ENQUEUED]))
+
+
+def test_update_agent_emits_updated_domain_event_with_field_changes():
+    with given([*_GIVEN, there_is_an_agent(name="Old Name")]) as context:
+        client: TestClient = context.client
+
+        with when("I rename the agent"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"name": "New Name"},
+                headers=_auth(context),
+            )
+
+        with then("an agent.updated Domain Event carries the before/after name"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            messages = _outbox_messages(context)
+            updated_events = [message for message in messages if message.event_name == AGENT_UPDATED]
+            assert_that(len(updated_events), equal_to(1))
+            field_changes = updated_events[0].payload["field_changes"]
+            assert_that(field_changes["name"]["previous"], equal_to("Old Name"))
+            assert_that(field_changes["name"]["new"], equal_to("New Name"))
+
+
+def test_update_agent_with_no_tracked_field_change_emits_no_updated_event():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I patch the agent with only a secret, no tracked scalar field"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"secrets": [{"provider": "jira", "content": _JIRA_CONTENT}]},
+                headers=_auth(context),
+            )
+
+        with then("no agent.updated Domain Event is staged"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            messages = _outbox_messages(context)
+            updated_events = [message for message in messages if message.event_name == AGENT_UPDATED]
+            assert_that(len(updated_events), equal_to(0))
+
+
+def test_delete_agent_emits_deleted_domain_event():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I delete the agent"):
+            response = client.delete(f"{_BASE}/{context.agent.id}", headers=_auth(context))
+
+        with then("an agent.deleted Domain Event is persisted"):
+            assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+            messages = _outbox_messages(context)
+            deleted_events = [message for message in messages if message.event_name == AGENT_DELETED]
+            assert_that(len(deleted_events), equal_to(1))
+            assert_that(deleted_events[0].payload["agent_id"], equal_to(str(context.agent.id)))
+
+
+def test_patch_agent_add_secret_emits_secret_added_domain_event():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I add a jira secret"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"secrets": [{"provider": "jira", "content": _JIRA_CONTENT}]},
+                headers=_auth(context),
+            )
+
+        with then("an agent.secret.added Domain Event is persisted without secret content"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            messages = _outbox_messages(context)
+            added_events = [message for message in messages if message.event_name == AGENT_SECRET_ADDED]
+            assert_that(len(added_events), equal_to(1))
+            assert_that(added_events[0].payload["provider"], equal_to("jira"))
+            assert_that(added_events[0].payload, is_not(has_key("content")))
+
+
+def test_patch_agent_update_secret_emits_secret_updated_domain_event():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I patch the same provider twice with different content"):
+            client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"secrets": [{"provider": "jira", "content": _JIRA_CONTENT}]},
+                headers=_auth(context),
+            )
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"secrets": [{"provider": "jira", "content": {**_JIRA_CONTENT, "api_token": "new-tok"}}]},
+                headers=_auth(context),
+            )
+
+        with then("an agent.secret.updated Domain Event is persisted"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            messages = _outbox_messages(context)
+            updated_events = [message for message in messages if message.event_name == AGENT_SECRET_UPDATED]
+            assert_that(len(updated_events), equal_to(1))
+            assert_that(updated_events[0].payload["provider"], equal_to("jira"))
+
+
+def test_patch_agent_remove_secret_emits_secret_removed_domain_event():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I add then remove a jira secret"):
+            client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"secrets": [{"provider": "jira", "content": _JIRA_CONTENT}]},
+                headers=_auth(context),
+            )
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"removed_secret_providers": ["jira"]},
+                headers=_auth(context),
+            )
+
+        with then("an agent.secret.removed Domain Event is persisted"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            messages = _outbox_messages(context)
+            removed_events = [message for message in messages if message.event_name == AGENT_SECRET_REMOVED]
+            assert_that(len(removed_events), equal_to(1))
+            assert_that(removed_events[0].payload["provider"], equal_to("jira"))
+
+
+def test_agent_updated_event_projects_to_durable_security_audit_record():
+    with given([*_GIVEN, there_is_an_agent(name="Old Name")]) as context:
+        client: TestClient = context.client
+
+        with when("I rename the agent and the delivery is processed"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"name": "New Name"},
+                headers=_auth(context),
+            )
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            outbox_repository = context.injector.get(OutboxMessageRepository)
+            messages = _outbox_messages(context)
+            updated_event = next(m for m in messages if m.event_name == AGENT_UPDATED)
+            delivery = outbox_repository.list_deliveries_for_event(updated_event.event_id)[0]
+            outbox_repository.mark_delivery_enqueued(delivery.id)
+            processed = context.injector.get(EventDeliveryProcessor).process(delivery.id)
+
+        with then("a durable Security Audit Record is projected"):
+            assert_that(processed, equal_to(True))
+            audit_record = context.injector.get(SecurityAuditRepository).get_by_event_id(updated_event.event_id)
+            assert_that(audit_record, is_not(none()))
+            assert audit_record is not None
+            assert_that(audit_record.action, equal_to(AGENT_UPDATED))
+            assert_that(audit_record.subject_id, equal_to(str(context.agent.id)))
 
 
 def test_stop_non_running_agent_returns_409():

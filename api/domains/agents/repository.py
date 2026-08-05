@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, ClassVar
 from uuid import UUID, uuid4
 
 from injector import inject, singleton
@@ -28,7 +28,10 @@ from api.domains.events.catalog import (
     AGENT_ACCESS_GRANTED,
     AGENT_ACCESS_REVOKED,
     AGENT_CREATED,
+    AGENT_DELETED,
     AGENT_GENERAL_ACCESS_CHANGED,
+    AGENT_SECRET_REMOVED,
+    AGENT_UPDATED,
     EVENT_REGISTRY,
 )
 from api.domains.events.repository import OutboxMessageRepository
@@ -513,6 +516,212 @@ class AgentRepository:
             session.commit()
             return AgentLifecycleEventResult(agent=persisted, delivery_ids=delivery_ids)
 
+    _UPDATE_TRACKED_FIELDS: ClassVar[tuple[str, ...]] = (
+        "name",
+        "model",
+        "approval_mode",
+        "agent_template_id",
+        "platform_template_id",
+    )
+
+    def update_scalar_fields_with_event(
+        self,
+        agent: Agent,
+        *,
+        actor: ActorIdentity,
+        correlation_id: UUID | None = None,
+    ) -> AgentLifecycleEventResult:
+        """Persist the scalar identity/config fields `update_agent` mutates directly
+        on the Agent row (name, model, approval_mode, template pin), diffing against
+        the currently-persisted row and staging an `agent.updated` event only when a
+        tracked field actually changed. Skills, secrets, and nested platform config
+        (Slack/Teams/Telegram) are covered by their own events elsewhere and are
+        deliberately excluded from this diff."""
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            persisted = session.exec(
+                select(Agent)
+                .where(
+                    col(Agent.id) == agent.id,
+                    col(Agent.organization_id) == agent.organization_id,
+                )
+                .with_for_update()
+            ).first()
+            if persisted is None:
+                return AgentLifecycleEventResult(agent=agent, delivery_ids=[])
+            field_changes: dict[str, dict[str, Any]] = {}
+            for field in self._UPDATE_TRACKED_FIELDS:
+                previous_value = getattr(persisted, field)
+                new_value = getattr(agent, field)
+                if previous_value != new_value:
+                    field_changes[field] = {"previous": previous_value, "new": new_value}
+                    setattr(persisted, field, new_value)
+            session.add(persisted)
+            session.flush()
+            if not field_changes:
+                session.commit()
+                return AgentLifecycleEventResult(agent=persisted, delivery_ids=[])
+            event = EVENT_REGISTRY.build_event(
+                event_name=AGENT_UPDATED,
+                schema_version=1,
+                occurred_at=datetime.now(UTC),
+                organization_id=persisted.organization_id,
+                actor=actor,
+                subject=SubjectIdentity(
+                    type=SubjectIdentityType.AGENT,
+                    id=persisted.id,
+                    organization_id=persisted.organization_id,
+                ),
+                correlation_id=correlation_id or uuid4(),
+                payload={
+                    "organization_id": persisted.organization_id,
+                    "agent_id": persisted.id,
+                    "field_changes": field_changes,
+                    "actor_display": actor.type.value,
+                    "subject_display": persisted.name,
+                },
+            )
+            self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
+            delivery_ids = list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
+            session.commit()
+            return AgentLifecycleEventResult(agent=persisted, delivery_ids=delivery_ids)
+
+    def soft_delete_with_event(
+        self,
+        agent: Agent,
+        *,
+        actor: ActorIdentity,
+        correlation_id: UUID | None = None,
+    ) -> AgentLifecycleEventResult:
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            persisted = session.exec(select(Agent).where(col(Agent.id) == agent.id).with_for_update()).first()
+            if persisted is None:
+                return AgentLifecycleEventResult(agent=agent, delivery_ids=[])
+            persisted.deleted_at = datetime.now(UTC)
+            session.add(persisted)
+            session.flush()
+            event = EVENT_REGISTRY.build_event(
+                event_name=AGENT_DELETED,
+                schema_version=1,
+                occurred_at=datetime.now(UTC),
+                organization_id=persisted.organization_id,
+                actor=actor,
+                subject=SubjectIdentity(
+                    type=SubjectIdentityType.AGENT,
+                    id=persisted.id,
+                    organization_id=persisted.organization_id,
+                ),
+                correlation_id=correlation_id or uuid4(),
+                payload={
+                    "organization_id": persisted.organization_id,
+                    "agent_id": persisted.id,
+                    "agent_name": persisted.name,
+                    "platform": persisted.platform,
+                    "runtime": persisted.agent_type,
+                    "actor_display": actor.type.value,
+                    "subject_display": persisted.name,
+                },
+            )
+            self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
+            delivery_ids = list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
+            session.commit()
+            return AgentLifecycleEventResult(agent=persisted, delivery_ids=delivery_ids)
+
+    def save_secret_with_event(
+        self,
+        secret: AgentSecret,
+        *,
+        event_name: str,
+        organization_id: UUID,
+        agent_name: str,
+        actor: ActorIdentity,
+        correlation_id: UUID | None = None,
+    ) -> list[UUID]:
+        """Save an AgentSecret row and stage an agent.secret.added/.updated event in
+        one transaction. `organization_id`/`agent_name` are required explicitly since
+        AgentSecret carries neither. The payload never includes `secret.content`.
+        `secret` is the same object the caller holds, so it picks up any DB-assigned
+        fields (e.g. `id`) in place; no need to return it."""
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            session.add(secret)
+            session.flush()
+            event = EVENT_REGISTRY.build_event(
+                event_name=event_name,
+                schema_version=1,
+                occurred_at=datetime.now(UTC),
+                organization_id=organization_id,
+                actor=actor,
+                subject=SubjectIdentity(
+                    type=SubjectIdentityType.AGENT,
+                    id=secret.agent_id,
+                    organization_id=organization_id,
+                ),
+                correlation_id=correlation_id or uuid4(),
+                payload={
+                    "organization_id": organization_id,
+                    "agent_id": secret.agent_id,
+                    "record_id": secret.id,
+                    "provider": SecretProvider(secret.provider).value,
+                    "label": secret.secret_name,
+                    "shared_reference_id": secret.shared_credential_id,
+                    "actor_display": actor.type.value,
+                    "subject_display": agent_name,
+                },
+            )
+            self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
+            delivery_ids = list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
+            session.commit()
+            return delivery_ids
+
+    def delete_secret_with_event(
+        self,
+        agent_id: UUID,
+        provider: SecretProvider,
+        *,
+        organization_id: UUID,
+        agent_name: str,
+        actor: ActorIdentity,
+        correlation_id: UUID | None = None,
+    ) -> list[UUID]:
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            query = (
+                select(AgentSecret)
+                .where(col(AgentSecret.agent_id) == agent_id)
+                .where(col(AgentSecret.provider) == provider)
+            )
+            secret = session.exec(query).first()
+            if secret is None:
+                return []
+            record_id, label, shared_reference_id = secret.id, secret.secret_name, secret.shared_credential_id
+            session.delete(secret)
+            session.flush()
+            event = EVENT_REGISTRY.build_event(
+                event_name=AGENT_SECRET_REMOVED,
+                schema_version=1,
+                occurred_at=datetime.now(UTC),
+                organization_id=organization_id,
+                actor=actor,
+                subject=SubjectIdentity(
+                    type=SubjectIdentityType.AGENT,
+                    id=agent_id,
+                    organization_id=organization_id,
+                ),
+                correlation_id=correlation_id or uuid4(),
+                payload={
+                    "organization_id": organization_id,
+                    "agent_id": agent_id,
+                    "record_id": record_id,
+                    "provider": SecretProvider(provider).value,
+                    "label": label,
+                    "shared_reference_id": shared_reference_id,
+                    "actor_display": actor.type.value,
+                    "subject_display": agent_name,
+                },
+            )
+            self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
+            delivery_ids = list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
+            session.commit()
+            return delivery_ids
+
     def find_lifecycle_email_recipients(
         self, agent_id: UUID, organization_id: UUID
     ) -> list[AgentLifecycleEmailRecipient]:
@@ -675,10 +884,6 @@ class AgentRepository:
 
     # --- Integration secrets ---
 
-    def save_secret(self, secret: AgentSecret) -> AgentSecret:
-        self.delegate.save(secret)
-        return secret
-
     def get_secret(self, agent_id: UUID, provider: SecretProvider) -> AgentSecret | None:
         with Session(self.delegate.engine) as session:
             query = (
@@ -702,18 +907,6 @@ class AgentRepository:
             for secret in session.exec(query).all():
                 result.setdefault(secret.agent_id, []).append(secret)
             return result
-
-    def delete_secret(self, agent_id: UUID, provider: SecretProvider) -> None:
-        with Session(self.delegate.engine) as session:
-            query = (
-                select(AgentSecret)
-                .where(col(AgentSecret.agent_id) == agent_id)
-                .where(col(AgentSecret.provider) == provider)
-            )
-            secret = session.exec(query).first()
-            if secret is not None:
-                session.delete(secret)
-                session.commit()
 
     # --- Skills ---
 

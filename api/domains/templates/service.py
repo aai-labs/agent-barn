@@ -1,5 +1,6 @@
 import logging
 from dataclasses import dataclass
+from typing import Any
 from uuid import UUID
 
 from fastapi import HTTPException, status
@@ -7,6 +8,7 @@ from injector import inject, singleton
 from sqlalchemy.exc import IntegrityError
 
 from api.domains.auth.models import CurrentUserContext
+from api.domains.events import EventDeliveryDispatcher, resolve_actor_identity
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import PermissionPolicy
 from api.domains.skills.repository import SkillRepository
@@ -49,6 +51,7 @@ class TemplateService:
     repository: TemplateRepository
     skill_repository: SkillRepository
     permission_policy: PermissionPolicy
+    event_delivery_dispatcher: EventDeliveryDispatcher
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
@@ -145,13 +148,14 @@ class TemplateService:
             bootstrap_md=data.bootstrap_md or DEFAULT_BOOTSTRAP_MD,
             heartbeat_md=data.heartbeat_md or DEFAULT_HEARTBEAT_MD,
         )
-        self.repository.save_template(template)
         skills_map: dict[UUID, str | None] = {sid: None for sid in data.required_skill_ids}
         for group in data.required_skill_groups:
             skills_map.update(dict.fromkeys(group.skill_ids, group.group_key))
-        if skills_map:
-            self.repository.save_org_template_skills(template.id, skills_map)
-        return self._to_read_with_skills(template)
+        result = self.repository.save_template_with_created_event(
+            template, skills_map, actor=resolve_actor_identity(context, org_id)
+        )
+        self.event_delivery_dispatcher.enqueue_immediate(result.delivery_ids)
+        return self._to_read_with_skills(result.template)
 
     def update_template(self, slug: str, data: TemplateUpdate, context: CurrentUserContext) -> TemplateRead:
         org_id = self._org_id(context)
@@ -203,9 +207,21 @@ class TemplateService:
                     f"Skills cannot be both standalone required and part of a group: {sorted(str(s) for s in overlap)}"
                 ),
             )
-        self.repository.save_template(new_template)
-        self.repository.save_org_template_skills(new_template.id, {sid: None for sid in standalone_ids} | groups_map)
-        return self._to_read_with_skills(new_template)
+        field_changes: dict[str, dict[str, Any]] = {}
+        for field in ("template_name", "description"):
+            previous_value = getattr(old, field)
+            new_value = getattr(new_template, field)
+            if previous_value != new_value:
+                field_changes[field] = {"previous": previous_value, "new": new_value}
+        result = self.repository.save_template_with_updated_event(
+            new_template,
+            {sid: None for sid in standalone_ids} | groups_map,
+            previous_version=old.version,
+            field_changes=field_changes,
+            actor=resolve_actor_identity(context, org_id),
+        )
+        self.event_delivery_dispatcher.enqueue_immediate(result.delivery_ids)
+        return self._to_read_with_skills(result.template)
 
     def delete_template(self, slug: str, context: CurrentUserContext) -> None:
         org_id = self._org_id(context)
@@ -227,12 +243,15 @@ class TemplateService:
                 detail="Template is being used by one or more agents",
             )
         try:
-            self.repository.purge_org_template_lineage(org_id, slug)
+            delivery_ids = self.repository.purge_org_template_lineage_with_event(
+                org_id, slug, actor=resolve_actor_identity(context, org_id)
+            )
         except IntegrityError:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Template is being used by one or more agents",
             ) from None
+        self.event_delivery_dispatcher.enqueue_immediate(delivery_ids)
 
     def seed_predefined_templates(self) -> None:
         """Insert missing global pre-defined templates and refresh stale ones in place.

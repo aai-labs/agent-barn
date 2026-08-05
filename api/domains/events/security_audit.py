@@ -12,11 +12,23 @@ from sqlmodel import Column, Field, Session, select
 from api.domains.events.catalog import (
     AGENT_ACCESS_GRANTED,
     AGENT_ACCESS_REVOKED,
+    AGENT_DELETED,
     AGENT_GENERAL_ACCESS_CHANGED,
+    AGENT_SECRET_ADDED,
+    AGENT_SECRET_REMOVED,
+    AGENT_SECRET_UPDATED,
+    AGENT_UPDATED,
+    ORGANIZATION_MEMBER_ADDED,
+    ORGANIZATION_MEMBER_REMOVED,
+    ORGANIZATION_MODEL_ALLOWLIST_CHANGED,
+    ORGANIZATION_OWNERSHIP_TRANSFERRED,
     ORGANIZATION_ROLE_CHANGED,
     PLATFORM_USER_PRIVILEGE_GRANTED,
     PLATFORM_USER_PRIVILEGE_REVOKED,
     SECURITY_AUDIT_HANDLER,
+    TEMPLATE_CREATED,
+    TEMPLATE_DELETED,
+    TEMPLATE_UPDATED,
 )
 from api.domains.events.handlers import EventDeliveryContext, SupportedEvent
 from api.domains.events.models import DomainEventEnvelope, EventScope
@@ -87,6 +99,18 @@ class SecurityAuditProjection:
         SupportedEvent(AGENT_GENERAL_ACCESS_CHANGED, 1),
         SupportedEvent(PLATFORM_USER_PRIVILEGE_GRANTED, 1),
         SupportedEvent(PLATFORM_USER_PRIVILEGE_REVOKED, 1),
+        SupportedEvent(AGENT_UPDATED, 1),
+        SupportedEvent(AGENT_DELETED, 1),
+        SupportedEvent(AGENT_SECRET_ADDED, 1),
+        SupportedEvent(AGENT_SECRET_UPDATED, 1),
+        SupportedEvent(AGENT_SECRET_REMOVED, 1),
+        SupportedEvent(TEMPLATE_CREATED, 1),
+        SupportedEvent(TEMPLATE_UPDATED, 1),
+        SupportedEvent(TEMPLATE_DELETED, 1),
+        SupportedEvent(ORGANIZATION_MODEL_ALLOWLIST_CHANGED, 1),
+        SupportedEvent(ORGANIZATION_MEMBER_ADDED, 1),
+        SupportedEvent(ORGANIZATION_MEMBER_REMOVED, 1),
+        SupportedEvent(ORGANIZATION_OWNERSHIP_TRANSFERRED, 1),
     )
 
     def handle(self, event: DomainEventEnvelope, context: EventDeliveryContext) -> None:

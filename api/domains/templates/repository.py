@@ -1,5 +1,7 @@
 from dataclasses import dataclass
-from uuid import UUID
+from datetime import UTC, datetime
+from typing import Any
+from uuid import UUID, uuid4
 
 from injector import inject, singleton
 from sqlalchemy import or_
@@ -10,6 +12,14 @@ from api.domains.agents.models import (
     AgentTemplateSkill,
     PlatformTemplateSkill,
 )
+from api.domains.events import ActorIdentity, EventDelivery, SubjectIdentity, SubjectIdentityType
+from api.domains.events.catalog import (
+    EVENT_REGISTRY,
+    TEMPLATE_CREATED,
+    TEMPLATE_DELETED,
+    TEMPLATE_UPDATED,
+)
+from api.domains.events.repository import OutboxMessageRepository
 from api.domains.skills.models import Skill
 from api.domains.templates.models import (
     AgentTemplate,
@@ -23,11 +33,18 @@ from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.infrastructure.shared.models import Pagination
 
 
+@dataclass(frozen=True)
+class TemplateLifecycleEventResult:
+    template: AgentTemplate
+    delivery_ids: list[UUID]
+
+
 @inject
 @singleton
 @dataclass
 class TemplateRepository:
     delegate: PostgresRepositoryDelegate
+    outbox_repository: OutboxMessageRepository
 
     @staticmethod
     def to_read(
@@ -156,25 +173,104 @@ class TemplateRepository:
         self.delegate.save(template)
         return template
 
-    def save_org_template_skills(self, template_id: UUID, group_keys_by_skill_id: dict[UUID, str | None]) -> None:
-        """Diff-sync a template's required-skill rows, including each row's
-        group_key (None = standalone AND-required; shared non-None keys form
-        an "at least one of" group)."""
-        with Session(self.delegate.engine) as session:
-            existing_rows = session.exec(
-                select(AgentTemplateSkill).where(col(AgentTemplateSkill.template_id) == template_id)
-            ).all()
-            existing_by_id = {row.skill_id: row for row in existing_rows}
-            for skill_id, row in existing_by_id.items():
-                if skill_id not in group_keys_by_skill_id:
-                    session.delete(row)
-                elif row.group_key != group_keys_by_skill_id[skill_id]:
-                    row.group_key = group_keys_by_skill_id[skill_id]
-                    session.add(row)
-            for skill_id, group_key in group_keys_by_skill_id.items():
-                if skill_id not in existing_by_id:
-                    session.add(AgentTemplateSkill(template_id=template_id, skill_id=skill_id, group_key=group_key))
+    def save_template_with_created_event(
+        self,
+        template: AgentTemplate,
+        skills_map: dict[UUID, str | None],
+        *,
+        actor: ActorIdentity,
+        correlation_id: UUID | None = None,
+    ) -> TemplateLifecycleEventResult:
+        """Insert a new org template row, its required-skill rows, and a
+        template.created event in one transaction. `template` is always a brand
+        new row (fresh id) with no pre-existing required-skill rows, so this is
+        a plain insert rather than a diff against an existing skill set."""
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            session.add(template)
+            session.flush()
+            for skill_id, group_key in skills_map.items():
+                session.add(AgentTemplateSkill(template_id=template.id, skill_id=skill_id, group_key=group_key))
+            event = EVENT_REGISTRY.build_event(
+                event_name=TEMPLATE_CREATED,
+                schema_version=1,
+                occurred_at=datetime.now(UTC),
+                organization_id=template.organization_id,
+                actor=actor,
+                subject=SubjectIdentity(
+                    type=SubjectIdentityType.TEMPLATE,
+                    id=template.id,
+                    organization_id=template.organization_id,
+                ),
+                correlation_id=correlation_id or uuid4(),
+                payload={
+                    "organization_id": template.organization_id,
+                    "template_id": template.id,
+                    "template_slug": template.template_slug,
+                    "template_name": template.template_name,
+                    "version": template.version,
+                    "actor_display": actor.type.value,
+                    "subject_display": template.template_name,
+                },
+            )
+            self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
+            delivery_ids = list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
             session.commit()
+            session.refresh(template)
+            return TemplateLifecycleEventResult(template=template, delivery_ids=delivery_ids)
+
+    def save_template_with_updated_event(
+        self,
+        template: AgentTemplate,
+        skills_map: dict[UUID, str | None],
+        *,
+        previous_version: int,
+        field_changes: dict[str, dict[str, Any]],
+        actor: ActorIdentity,
+        correlation_id: UUID | None = None,
+    ) -> TemplateLifecycleEventResult:
+        """Insert the new immutable version row, its required-skill rows, and a
+        template.updated event in one transaction. `field_changes` is caller-supplied
+        (scoped to template_name/description only — see TemplateService.update_template)
+        rather than diffed here, since which fields count as audit-worthy is a product
+        decision, not a repository concern. No event is staged when field_changes is
+        empty (skills/markdown-only edits are covered elsewhere or excluded by design)."""
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            session.add(template)
+            session.flush()
+            for skill_id, group_key in skills_map.items():
+                session.add(AgentTemplateSkill(template_id=template.id, skill_id=skill_id, group_key=group_key))
+            if not field_changes:
+                session.commit()
+                session.refresh(template)
+                return TemplateLifecycleEventResult(template=template, delivery_ids=[])
+            event = EVENT_REGISTRY.build_event(
+                event_name=TEMPLATE_UPDATED,
+                schema_version=1,
+                occurred_at=datetime.now(UTC),
+                organization_id=template.organization_id,
+                actor=actor,
+                subject=SubjectIdentity(
+                    type=SubjectIdentityType.TEMPLATE,
+                    id=template.id,
+                    organization_id=template.organization_id,
+                ),
+                correlation_id=correlation_id or uuid4(),
+                payload={
+                    "organization_id": template.organization_id,
+                    "template_id": template.id,
+                    "template_slug": template.template_slug,
+                    "previous_version": previous_version,
+                    "new_version": template.version,
+                    "field_changes": field_changes,
+                    "actor_display": actor.type.value,
+                    "subject_display": template.template_name,
+                },
+            )
+            self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
+            delivery_ids = list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
+            session.commit()
+            session.refresh(template)
+            return TemplateLifecycleEventResult(template=template, delivery_ids=delivery_ids)
 
     def get_org_required_skills(self, template_id: UUID) -> list[tuple[Skill, str | None]]:
         with Session(self.delegate.engine) as session:
@@ -272,7 +368,8 @@ class TemplateRepository:
 
     def save_platform_template_skills(self, template_id: UUID, group_keys_by_skill_id: dict[UUID, str | None]) -> None:
         """Diff-sync a platform template's required-skill rows, group-aware
-        (see save_org_template_skills)."""
+        (None = standalone AND-required; shared non-None keys form an "at
+        least one of" group)."""
         with Session(self.delegate.engine) as session:
             existing_rows = session.exec(
                 select(PlatformTemplateSkill).where(col(PlatformTemplateSkill.template_id) == template_id)
@@ -433,21 +530,32 @@ class TemplateRepository:
             )
             return session.exec(query).first() is not None
 
-    def purge_org_template_lineage(self, org_id: UUID, slug: str) -> None:
-        """Delete every org-scoped version, detaching soft-deleted agents first.
+    def purge_org_template_lineage_with_event(
+        self,
+        org_id: UUID,
+        slug: str,
+        *,
+        actor: ActorIdentity,
+        correlation_id: UUID | None = None,
+    ) -> list[UUID]:
+        """Delete every org-scoped version, detaching soft-deleted agents first,
+        and stage a template.deleted event in the same transaction.
 
         Live agents retain their RESTRICT pin and are checked before purge.
         Soft-deleted agents keep their row for audit/history, but no longer
         block deleting the template lineage they used to pin.
         """
         with Session(self.delegate.engine) as session:
-            template_ids = session.exec(
-                select(AgentTemplate.id)
+            rows = session.exec(
+                select(AgentTemplate.id, AgentTemplate.version, AgentTemplate.template_name)
                 .where(col(AgentTemplate.organization_id) == org_id)
                 .where(col(AgentTemplate.template_slug) == slug)
             ).all()
-            if not template_ids:
-                return
+            if not rows:
+                return []
+            template_ids = [row[0] for row in rows]
+            versions_deleted = sorted(row[1] for row in rows)
+            latest_id, _, latest_name = max(rows, key=lambda row: row[1])
             detach = (
                 update(Agent)
                 .where(col(Agent.organization_id) == org_id)
@@ -458,7 +566,30 @@ class TemplateRepository:
             session.exec(detach)  # type: ignore[call-overload]
             purge = delete(AgentTemplate).where(col(AgentTemplate.id).in_(template_ids))
             session.exec(purge)  # type: ignore[call-overload]
+            event = EVENT_REGISTRY.build_event(
+                event_name=TEMPLATE_DELETED,
+                schema_version=1,
+                occurred_at=datetime.now(UTC),
+                organization_id=org_id,
+                actor=actor,
+                subject=SubjectIdentity(
+                    type=SubjectIdentityType.TEMPLATE,
+                    id=latest_id,
+                    organization_id=org_id,
+                ),
+                correlation_id=correlation_id or uuid4(),
+                payload={
+                    "organization_id": org_id,
+                    "template_slug": slug,
+                    "versions_deleted": versions_deleted,
+                    "actor_display": actor.type.value,
+                    "subject_display": latest_name,
+                },
+            )
+            self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
+            delivery_ids = list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
             session.commit()
+            return delivery_ids
 
     def get_required_skills_for(self, template: AgentTemplate | PlatformTemplate) -> list[tuple[Skill, str | None]]:
         if isinstance(template, PlatformTemplate):

@@ -18,7 +18,15 @@ from hamcrest import (
     not_none,
 )
 
+from api.domains.events.catalog import (
+    ORGANIZATION_MEMBER_ADDED,
+    ORGANIZATION_MEMBER_REMOVED,
+    ORGANIZATION_OWNERSHIP_TRANSFERRED,
+)
 from api.domains.events.models import OutboxMessage
+from api.domains.events.processor import EventDeliveryProcessor
+from api.domains.events.repository import OutboxMessageRepository
+from api.domains.events.security_audit import SecurityAuditRepository
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.users.organization_users.models import OrganizationRole
 from api.domains.users.organization_users.repository import OrganizationUserRepository
@@ -813,3 +821,111 @@ def test_resend_invite_for_pending_and_active_member():
             )
             with then("it conflicts"):
                 assert_that(conflict.status_code, equal_to(status.HTTP_409_CONFLICT))
+
+
+# --- domain events (AF-167) ---
+
+
+def test_add_member_emits_member_added_domain_event():
+    with given([*_GIVEN, _there_is_an_owner()]) as context:
+        with when("the owner adds a brand-new member"):
+            response = context.client.post(
+                _members_url(),
+                json={"email": "added-event@example.com", "role": "MEMBER"},
+                headers=_auth(context),
+            )
+
+        with then("an organization.member.added Domain Event is persisted"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            messages = _outbox_messages(context)
+            added_events = [m for m in messages if m.event_name == ORGANIZATION_MEMBER_ADDED]
+            assert_that(len(added_events), equal_to(1))
+            assert_that(added_events[0].payload["role"], equal_to("MEMBER"))
+
+
+def test_owner_removes_member_emits_member_removed_domain_event():
+    member_id = uuid7()
+    with given(
+        [
+            *_GIVEN,
+            _there_is_an_owner(),
+            there_is_a_user(
+                id=member_id,
+                email="removed-event@example.com",
+                organization_id=ORG,
+                role=OrganizationRole.MEMBER,
+            ),
+        ]
+    ) as context:
+        with when("the owner removes the member"):
+            response = context.client.delete(f"{_members_url()}/{member_id}", headers=_auth(context))
+
+        with then("an organization.member.removed Domain Event is persisted"):
+            assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+            messages = _outbox_messages(context)
+            removed_events = [m for m in messages if m.event_name == ORGANIZATION_MEMBER_REMOVED]
+            assert_that(len(removed_events), equal_to(1))
+            assert_that(removed_events[0].payload["user_id"], equal_to(str(member_id)))
+            assert_that(removed_events[0].payload["role"], equal_to("MEMBER"))
+
+
+def test_owner_transfers_ownership_emits_ownership_transferred_domain_event():
+    member_id = uuid7()
+    with given(
+        [
+            *_GIVEN,
+            _there_is_an_owner(),
+            there_is_a_user(
+                id=member_id,
+                email="transfer-event@example.com",
+                organization_id=ORG,
+                role=OrganizationRole.ADMIN,
+            ),
+        ]
+    ) as context:
+        with when("the owner transfers ownership to the admin"):
+            response = context.client.post(
+                f"/api/v1/organizations/{ORG}/transfer-ownership",
+                json={"user_id": str(member_id)},
+                headers=_auth(context),
+            )
+
+        with then("an organization.ownership_transferred Domain Event is persisted"):
+            assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+            messages = _outbox_messages(context)
+            transferred_events = [m for m in messages if m.event_name == ORGANIZATION_OWNERSHIP_TRANSFERRED]
+            assert_that(len(transferred_events), equal_to(1))
+            assert_that(transferred_events[0].payload["previous_owner_user_id"], equal_to(str(OWNER_ID)))
+            assert_that(transferred_events[0].payload["new_owner_user_id"], equal_to(str(member_id)))
+
+
+def test_member_removed_event_projects_to_durable_security_audit_record():
+    member_id = uuid7()
+    with given(
+        [
+            *_GIVEN,
+            _there_is_an_owner(),
+            there_is_a_user(
+                id=member_id,
+                email="removed-projection@example.com",
+                organization_id=ORG,
+                role=OrganizationRole.MEMBER,
+            ),
+        ]
+    ) as context:
+        with when("the owner removes the member and the delivery is processed"):
+            response = context.client.delete(f"{_members_url()}/{member_id}", headers=_auth(context))
+            assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+            outbox_repository = context.injector.get(OutboxMessageRepository)
+            messages = _outbox_messages(context)
+            removed_event = next(m for m in messages if m.event_name == ORGANIZATION_MEMBER_REMOVED)
+            delivery = outbox_repository.list_deliveries_for_event(removed_event.event_id)[0]
+            outbox_repository.mark_delivery_enqueued(delivery.id)
+            processed = context.injector.get(EventDeliveryProcessor).process(delivery.id)
+
+        with then("a durable Security Audit Record is projected"):
+            assert_that(processed, equal_to(True))
+            audit_record = context.injector.get(SecurityAuditRepository).get_by_event_id(removed_event.event_id)
+            assert_that(audit_record, not_none())
+            assert audit_record is not None
+            assert_that(audit_record.action, equal_to(ORGANIZATION_MEMBER_REMOVED))
