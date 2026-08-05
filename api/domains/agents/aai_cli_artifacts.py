@@ -12,6 +12,7 @@ from api.domains.agents.models import (
     GithubContent,
     GmailContent,
     GoogleCalendarContent,
+    GoogleSheetsContent,
     JiraContent,
     PipedriveContent,
     SecretContent,
@@ -33,6 +34,13 @@ provider_secrets_map: dict[str, list[tuple[str, str]]] = {
         ("google.client_secret", "client_secret"),
         ("google.gmail_refresh_token", "refresh_token"),
     ],
+    # Deliberately not sharing gmail's "google.client_secret": a user may bring their own
+    # Google client for one provider and use the app-owned one for the other, and these
+    # names are flat keys in the same store — sharing would let one clobber the other.
+    "google_sheets": [
+        ("google.sheets_client_secret", "client_secret"),
+        ("google.sheets_refresh_token", "refresh_token"),
+    ],
     "zoho_mail": [
         ("zoho.client_secret", "client_secret"),
         ("zoho.mail_refresh_token", "refresh_token"),
@@ -52,6 +60,7 @@ PROFILE_SLUGS: dict[SecretProvider, str] = {
     SecretProvider.BITBUCKET: "bitbucket-work",
     SecretProvider.GMAIL: "gmail-work",
     SecretProvider.GOOGLE_CALENDAR: "google-calendar-work",
+    SecretProvider.GOOGLE_SHEETS: "google-sheets-work",
     SecretProvider.ZOHO_MAIL: "zoho-mail-rest",
     SecretProvider.ZOHO_CALENDAR: "zoho-calendar-work",
     SecretProvider.SLACK: "slack-work",
@@ -173,6 +182,17 @@ def _gmail_block(c: GmailContent) -> str:
     )
 
 
+def _google_sheets_block(c: GoogleSheetsContent) -> str:
+    return (
+        f"[profiles.{PROFILE_SLUGS[SecretProvider.GOOGLE_SHEETS]}]\n"
+        'provider = "google"\n'
+        'auth_type = "bearer_token"\n'
+        f"client_id = {_q(c.client_id)}\n"
+        'client_secret_secret = "google.sheets_client_secret"\n'
+        'refresh_token_secret = "google.sheets_refresh_token"\n'
+    )
+
+
 def _google_calendar_block(c: GoogleCalendarContent) -> str:
     return (
         f"[profiles.{PROFILE_SLUGS[SecretProvider.GOOGLE_CALENDAR]}]\n"
@@ -235,6 +255,7 @@ _PROFILE_BUILDERS: dict[SecretProvider, Callable[..., str]] = {
     SecretProvider.CONFLUENCE: _confluence_block,
     SecretProvider.BITBUCKET: _bitbucket_block,
     SecretProvider.GMAIL: _gmail_block,
+    SecretProvider.GOOGLE_SHEETS: _google_sheets_block,
     SecretProvider.GOOGLE_CALENDAR: _google_calendar_block,
     SecretProvider.ZOHO_MAIL: _zoho_mail_block,
     SecretProvider.ZOHO_CALENDAR: _zoho_calendar_block,
@@ -313,6 +334,7 @@ _INTEGRATION_LABELS: dict[SecretProvider, str] = {
     SecretProvider.BITBUCKET: "Bitbucket",
     SecretProvider.GMAIL: "Gmail",
     SecretProvider.GOOGLE_CALENDAR: "Google Calendar",
+    SecretProvider.GOOGLE_SHEETS: "Google Sheets",
     SecretProvider.ZOHO_MAIL: "Zoho Mail",
     SecretProvider.ZOHO_CALENDAR: "Zoho Calendar",
     SecretProvider.SLACK: "Slack",

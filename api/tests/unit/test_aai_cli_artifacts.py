@@ -13,6 +13,7 @@ from api.domains.agents.aai_cli_artifacts import (
 from api.domains.agents.models import (
     FirecrawlContent,
     GmailContent,
+    GoogleSheetsContent,
     PipedriveContent,
     SecretProvider,
     ZohoMailContent,
@@ -56,6 +57,17 @@ _GMAIL = cast(
             "client_id": "132806748841-abc.apps.googleusercontent.com",
             "client_secret": "g_client_secret",
             "refresh_token": "g_refresh_tok",
+        },
+    ),
+)
+_GOOGLE_SHEETS = cast(
+    GoogleSheetsContent,
+    validate_content(
+        SecretProvider.GOOGLE_SHEETS,
+        {
+            "client_id": "132806748841-sheets.apps.googleusercontent.com",
+            "client_secret": "xyz_sheet_client_sec",
+            "refresh_token": "xyz_sheet_refresh_tok",
         },
     ),
 )
@@ -188,6 +200,31 @@ def test_config_toml_gmail_uses_secret_store():
     assert "token_env" not in toml
 
 
+def test_config_toml_google_sheets_uses_secret_store():
+    toml = build_config_toml({SecretProvider.GOOGLE_SHEETS: _GOOGLE_SHEETS})
+    assert "[profiles.google-sheets-work]" in toml
+    assert 'provider = "google"' in toml
+    assert 'auth_type = "bearer_token"' in toml
+    assert f'client_id = "{_GOOGLE_SHEETS.client_id}"' in toml
+    assert 'client_secret_secret = "google.sheets_client_secret"' in toml
+    assert 'refresh_token_secret = "google.sheets_refresh_token"' in toml
+    # secret values must not appear in the config
+    assert "xyz_sheet_client_sec" not in toml
+    assert "xyz_sheet_refresh_tok" not in toml
+
+
+def test_gmail_and_sheets_secrets_do_not_collide():
+    """Each Google provider owns its secret names, so a user-supplied client for one
+    can't overwrite the other's credentials in the flat secret store."""
+    env = build_env({SecretProvider.GMAIL: _GMAIL, SecretProvider.GOOGLE_SHEETS: _GOOGLE_SHEETS})
+    assert env == {
+        "AAI_SECRET_GOOGLE_CLIENT_SECRET": "g_client_secret",
+        "AAI_SECRET_GOOGLE_GMAIL_REFRESH_TOKEN": "g_refresh_tok",
+        "AAI_SECRET_GOOGLE_SHEETS_CLIENT_SECRET": "xyz_sheet_client_sec",
+        "AAI_SECRET_GOOGLE_SHEETS_REFRESH_TOKEN": "xyz_sheet_refresh_tok",
+    }
+
+
 def test_config_toml_zoho_mail_uses_oauth_rest_profile():
     toml = build_config_toml({SecretProvider.ZOHO_MAIL: _ZOHO_MAIL})
     assert "[profiles.zoho-mail-rest]" in toml
@@ -241,6 +278,18 @@ def test_setup_sh_gmail_sets_both_secrets():
     assert (
         f"printf '%s' \"$AAI_SECRET_GOOGLE_GMAIL_REFRESH_TOKEN\" | "
         f"aai-cli --config {CONFIG_PATH} secrets set google.gmail_refresh_token" in setup
+    )
+
+
+def test_setup_sh_google_sheets_sets_both_secrets():
+    setup = build_setup_sh([SecretProvider.GOOGLE_SHEETS])
+    assert (
+        f"printf '%s' \"$AAI_SECRET_GOOGLE_SHEETS_CLIENT_SECRET\" | "
+        f"aai-cli --config {CONFIG_PATH} secrets set google.sheets_client_secret" in setup
+    )
+    assert (
+        f"printf '%s' \"$AAI_SECRET_GOOGLE_SHEETS_REFRESH_TOKEN\" | "
+        f"aai-cli --config {CONFIG_PATH} secrets set google.sheets_refresh_token" in setup
     )
 
 
@@ -543,10 +592,12 @@ def test_integrations_policy_md_covers_non_store_providers():
     md = build_integrations_policy_md(
         {
             SecretProvider.GMAIL: _GMAIL,
+            SecretProvider.GOOGLE_SHEETS: _GOOGLE_SHEETS,
             SecretProvider.ZOHO_MAIL: _ZOHO_MAIL,
         }
     )
     assert "--profile gmail-work" in md
+    assert "--profile google-sheets-work" in md
     assert "--profile zoho-mail-rest" in md
 
 

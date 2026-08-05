@@ -10,13 +10,13 @@ Integrations make external services available to an Agent. Agent Secrets hold en
 
 ## Supported providers
 
-Provider credential contracts are defined by `SecretProvider` and its content models in `../../api/domains/agents/models.py`. Current providers cover GitHub, Jira, Confluence, Bitbucket, Gmail, Google Calendar, Zoho Mail, Zoho Calendar, Firecrawl, and Pipedrive.
+Provider credential contracts are defined by `SecretProvider` and its content models in `../../api/domains/agents/models.py`. Current providers cover GitHub, Jira, Confluence, Bitbucket, Gmail, Google Calendar, Google Sheets, Zoho Mail, Zoho Calendar, Firecrawl, Slack, and Pipedrive.
 
 ## Shared credentials
 
 Shared Credentials are org-scoped, admin-managed credential payloads that any member can attach to an agent. They use the same encryption and provider content models as Agent Secrets.
 
-- Only manual-entry providers are supported for shared credentials (v1): GitHub, Jira, Confluence, Bitbucket, Zoho Mail. OAuth-based providers (Gmail, Google Calendar) are excluded.
+- Only manual-entry providers are supported for shared credentials (v1): GitHub, Jira, Confluence, Bitbucket, Zoho Mail. OAuth-based providers (Gmail, Google Calendar, Google Sheets) are excluded.
 - An agent gets either a shared credential or a per-agent secret for a given provider, not both.
 - Any org member can list and attach shared credentials; only admins (owner/admin roles) can create, update, or delete them.
 - Multiple shared credentials per provider per org are allowed (e.g. "Production GitHub" and "Staging GitHub").
@@ -32,6 +32,7 @@ Shared Credentials are org-scoped, admin-managed credential payloads that any me
 - Read APIs return provider and display label, not credential contents.
 - Agent updates validate that remaining skill provider requirements are satisfied. Updating a Skill's provider metadata later does not revalidate existing agents.
 - Eligible built-in aai-cli skills are mounted at start when their provider credential is configured.
+- A built-in skill may declare no required providers when it needs no credential (Excel operates on local `.xlsx` files). Such a skill is never auto-mounted — an empty requirement list is trivially satisfied, so it would otherwise attach to every agent — and is mounted only when explicitly assigned.
 - Application deployment secrets, per-user Slack configuration tokens, per-agent Agent Secrets, and Shared Credentials are distinct credential classes with different ownership and lifecycles.
 - Firecrawl is an infrastructure-level capability: when `AGENT_FIRECRAWL_BASE_URL` and `AGENT_FIRECRAWL_API_KEY` are configured, all agents receive web-fetch/search by default (analogous to LiteLLM). Agents with a per-agent Firecrawl Agent Secret override the platform key.
 
@@ -41,9 +42,11 @@ Per-user Slack configuration tokens support automated Slack app creation. They a
 
 ## Google OAuth
 
-The Gmail OAuth authorize and exchange operations require an authenticated user. The provider callback accepts a signed, typed, short-lived state and forwards the authorization code to the web application; authenticated exchange returns a refresh token. Persistence then occurs through the normal Agent Secret create/update flow.
+One flow serves every Google-backed provider. The authorize and exchange operations require an authenticated user. The caller names the provider it is connecting; that choice selects the requested scopes and is carried inside the signed state, because the provider callback receives nothing from Google but the code and state. The callback accepts a signed, typed, short-lived state and forwards the authorization code to the web application; authenticated exchange returns a refresh token. Persistence then occurs through the normal Agent Secret create/update flow.
 
-Server-owned Google client credentials are the default. User-supplied client identity is also supported by the route contract. Gmail requests offline, read-only access.
+Server-owned Google client credentials are the default. User-supplied client identity is also supported by the route contract. All Google providers request offline access. Gmail requests read-only mail access; Google Sheets requests read/write on spreadsheet values plus metadata-only Drive access, which is what spreadsheet discovery needs.
+
+Each Google provider owns its own secret-store names rather than sharing one entry. The store is a flat namespace, so a user who supplies their own Google client for one provider while using the server-owned client for another would otherwise overwrite one set of credentials with the other.
 
 ## Runtime materialization
 
@@ -59,7 +62,7 @@ At start, Agent Service decrypts provider payloads, backfills configured Google 
 | aai-cli runtime materialization                    | `../../api/domains/agents/aai_cli_artifacts.py`, `../../api/domains/agents/aai_cli_skills/`                                                         |
 | Built-in skill definitions                         | `../../api/domains/agents/aai_cli_skills/`                                                                                                          |
 | Slack configuration token lifecycle                | `../../api/domains/auth/token_service.py`, `../../api/domains/auth/routes.py`                                                                       |
-| Gmail OAuth                                        | `../../api/domains/integrations/google_oauth/routes.py`                                                                                             |
+| Google OAuth (Gmail, Google Sheets)                | `../../api/domains/integrations/google_oauth/routes.py`                                                                                             |
 | Firecrawl runtime wiring                           | `../../api/domains/agents/service.py` (platform-default + per-agent override)                                                                       |
 | UI credential forms                                | `../../ui/src/features/agents/`, `../../ui/src/features/account/`                                                                                   |
 | Tests                                              | `../../api/tests/integration/test_agents.py`, `../../api/tests/integration/test_shared_credentials.py`, `../../api/tests/integration/test_slack_config_token.py`, `../../api/tests/unit/test_google_oauth.py` |

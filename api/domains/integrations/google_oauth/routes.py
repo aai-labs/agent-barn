@@ -1,4 +1,7 @@
-"""Google OAuth 2.0 authorization-code flow for the Gmail skill.
+"""Google OAuth 2.0 authorization-code flow for the Google-backed skills.
+
+Serves every Google provider (see ``PROVIDER_SCOPES``); the caller picks one with the
+``provider`` query parameter and the only thing that varies is the requested scope.
 
 Replaces the old hand-pasted client_id/client_secret/refresh_token fields with a
 single "Authenticate with Google" button. The frontend opens a popup, fetches the
@@ -16,8 +19,8 @@ instead bring their own Google client: the frontend passes ``client_id`` to
 in an authenticated request body — never through Google's authorize endpoint, the
 redirect URL, browser history, or our access logs.
 
-The refresh token is persisted as a ``gmail`` AgentSecret via the normal agent
-create/update path. For the app-owned client, the client id/secret stay in config and
+The refresh token is persisted as an AgentSecret for the requested provider via the
+normal agent create/update path. For the app-owned client, the client id/secret stay in config and
 are injected into the agent's aai-cli profile at start time; for a user's own client,
 the frontend also persists that client id/secret alongside the refresh token (a refresh
 token is bound to the client that issued it).
@@ -38,20 +41,31 @@ from jwt.exceptions import InvalidTokenError
 from pydantic import BaseModel
 
 from api.core.config import Config
+from api.domains.agents.models import SecretProvider
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.service import JWT_ENCODING_ALGORITHM
 from api.domains.auth.utils import get_current_user
 
 integrations_router = APIRouter(prefix="/integrations", tags=["integrations"])
 
-# Read-only Gmail access — the scope the aai-cli gmail-work profile needs to list mail.
-GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
+# Scopes requested per provider — exactly what that provider's aai-cli profile needs.
+# Gmail is read-only (listing mail); Sheets is read/write on spreadsheet values, plus
+# metadata-only Drive access because `sheets spreadsheets list` discovers spreadsheets
+# through drive/v3/files.
+PROVIDER_SCOPES: dict[str, tuple[str, ...]] = {
+    SecretProvider.GMAIL.value: ("https://www.googleapis.com/auth/gmail.readonly",),
+    SecretProvider.GOOGLE_SHEETS.value: (
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive.metadata.readonly",
+    ),
+}
+DEFAULT_PROVIDER = SecretProvider.GMAIL.value
+
 GOOGLE_AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
 
 # Client-side message contract (see use-google-oauth.ts).
 MESSAGE_TYPE = "google-oauth"
-PROVIDER = "gmail"
 
 _STATE_TTL_SECONDS = 600
 _STATE_TYPE = "google_oauth_state"
@@ -64,26 +78,37 @@ def _redirect_uri(config: Config) -> str:
     return f"{config.web_app_url}/api/v1/integrations/google/callback"
 
 
-def _encode_state(config: Config) -> str:
+def _encode_state(config: Config, provider: str) -> str:
     payload = {
         "typ": _STATE_TYPE,
+        "provider": provider,
         "nonce": uuid.uuid4().hex,
         "exp": int(time.time()) + _STATE_TTL_SECONDS,
     }
     return jwt.encode(payload, config.secret_signing_key, algorithm=JWT_ENCODING_ALGORITHM)
 
 
-def _state_is_valid(state: str, config: Config) -> bool:
+def _provider_from_state(state: str, config: Config) -> str | None:
+    """Return the provider the state was signed for, or None if the state isn't valid.
+
+    Google hands the callback nothing but ``code`` and ``state``, so the provider has to
+    ride along inside the signed state to be echoed back to the opener.
+    """
     try:
         payload = jwt.decode(state, config.secret_signing_key, algorithms=[JWT_ENCODING_ALGORITHM])
     except InvalidTokenError:
-        return False
-    return payload.get("typ") == _STATE_TYPE
+        return None
+    if payload.get("typ") != _STATE_TYPE:
+        return None
+    # States signed before the provider claim existed were all gmail.
+    provider = payload.get("provider", DEFAULT_PROVIDER)
+    return provider if provider in PROVIDER_SCOPES else None
 
 
 def _post_message_html(
     config: Config,
     *,
+    provider: str,
     code: str | None = None,
     error: str | None = None,
 ) -> HTMLResponse:
@@ -95,12 +120,12 @@ def _post_message_html(
     the opener's origin check matches.
     """
     if error is not None:
-        message: dict = {"type": MESSAGE_TYPE, "provider": PROVIDER, "error": error}
+        message: dict = {"type": MESSAGE_TYPE, "provider": provider, "error": error}
         blurb = "Authentication failed. You can close this window."
     else:
         message = {
             "type": MESSAGE_TYPE,
-            "provider": PROVIDER,
+            "provider": provider,
             "code": code,
         }
         blurb = "Authentication complete. You can close this window."
@@ -134,18 +159,28 @@ def _post_message_html(
 @integrations_router.get("/google/authorize-url")
 def google_authorize_url(
     _context: Annotated[CurrentUserContext, Depends(get_current_user(require_organization=False))],
-    # Plain default (not Query(...)) so a direct call resolves to None rather than the
-    # Query sentinel; FastAPI still parses it as an optional query parameter.
+    # Plain defaults (not Query(...)) so a direct call resolves to the value rather than
+    # the Query sentinel; FastAPI still parses these as optional query parameters.
     client_id: str | None = None,
+    provider: str = DEFAULT_PROVIDER,
     config: Config = Injected(Config),
 ):
     """Return the Google OAuth authorize URL for the popup to navigate to.
+
+    ``provider`` selects which Google integration is being connected, and so which scopes
+    are requested; it defaults to gmail for callers predating the other providers.
 
     ``client_id`` (optional) selects a user-supplied Google client; when omitted the
     app-owned client from config is used. Only the client id is needed here — it is
     public and travels in the authorize URL — while the matching secret is supplied
     later, to ``/token``.
     """
+    scopes = PROVIDER_SCOPES.get(provider)
+    if scopes is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported Google provider: {provider}",
+        )
     resolved_client_id = client_id or config.google_cloud_client_id
     # For the app-owned client, also require its secret to be configured so we fail
     # before opening consent. A custom client carries its own secret to /token.
@@ -158,11 +193,11 @@ def google_authorize_url(
         "client_id": resolved_client_id,
         "redirect_uri": _redirect_uri(config),
         "response_type": "code",
-        "scope": GMAIL_SCOPE,
+        "scope": " ".join(scopes),
         "access_type": "offline",
         "prompt": "consent",
         "include_granted_scopes": "true",
-        "state": _encode_state(config),
+        "state": _encode_state(config, provider),
     }
     return {"authorize_url": f"{GOOGLE_AUTH_ENDPOINT}?{urllib.parse.urlencode(params)}"}
 
@@ -179,13 +214,24 @@ def google_callback(
     The code→token exchange happens in ``/token`` (authenticated), so the client secret
     never has to transit this unauthenticated redirect.
     """
+    # The provider only exists inside a valid state, so error responses that fire before
+    # (or instead of) that validation fall back to the default.
+    provider = _provider_from_state(state, config) if state else None
     if error:
-        return _post_message_html(config, error=f"Google authorization was denied or failed ({error}).")
-    if not state or not _state_is_valid(state, config):
-        return _post_message_html(config, error="Invalid or expired authorization state. Please try again.")
+        return _post_message_html(
+            config,
+            provider=provider or DEFAULT_PROVIDER,
+            error=f"Google authorization was denied or failed ({error}).",
+        )
+    if provider is None:
+        return _post_message_html(
+            config,
+            provider=DEFAULT_PROVIDER,
+            error="Invalid or expired authorization state. Please try again.",
+        )
     if not code:
-        return _post_message_html(config, error="Missing authorization code from Google.")
-    return _post_message_html(config, code=code)
+        return _post_message_html(config, provider=provider, error="Missing authorization code from Google.")
+    return _post_message_html(config, provider=provider, code=code)
 
 
 class GoogleTokenExchangeRequest(BaseModel):

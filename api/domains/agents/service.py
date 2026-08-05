@@ -69,6 +69,7 @@ from api.domains.agents.models import (
     ConfluenceContent,
     FirecrawlContent,
     GmailContent,
+    GoogleSheetsContent,
     JiraContent,
     PairRequest,
     SecretProvider,
@@ -1404,17 +1405,20 @@ class AgentService:
                 ciphertext = s.content
             assert ciphertext is not None
             decrypted[provider] = decrypt_content(provider, ciphertext, key)
-        self._backfill_gmail_client_credentials(decrypted)
-        gmail = decrypted.get(SecretProvider.GMAIL)
-        if isinstance(gmail, GmailContent) and (not gmail.client_id or not gmail.client_secret):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    "Gmail credential is missing a client id/secret and Google OAuth is "
-                    "not configured on this server. Reconnect via Authenticate with "
-                    "Google, or configure google_cloud_client_id/secret."
-                ),
-            )
+        self._backfill_google_client_credentials(decrypted)
+        for google_provider in (SecretProvider.GMAIL, SecretProvider.GOOGLE_SHEETS):
+            content = decrypted.get(google_provider)
+            if not isinstance(content, (GmailContent, GoogleSheetsContent)):
+                continue
+            if not content.client_id or not content.client_secret:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        f"{PROVIDER_DISPLAY_NAMES[google_provider]} is missing a client id/secret "
+                        "and Google OAuth is not configured on this server. Reconnect via "
+                        "Authenticate with Google, or configure google_cloud_client_id/secret."
+                    ),
+                )
         store = {p: c for p, c in decrypted.items() if p.value in provider_secrets_map}
         aai_home = "/opt/data" if agent.agent_type == AgentType.HERMES else "/home/node"
         aai_config_toml = build_config_toml(decrypted, home_dir=aai_home) if decrypted else None
@@ -1887,17 +1891,19 @@ class AgentService:
                 detail="Could not load Slack users right now. Please try again.",
             ) from exc
 
-    def _backfill_gmail_client_credentials(self, decrypted: dict[SecretProvider, Any]) -> None:
-        """Gmail secrets created via the OAuth flow store only the refresh token; inject
+    def _backfill_google_client_credentials(self, decrypted: dict[SecretProvider, Any]) -> None:
+        """Secrets created via the Google OAuth flow store only the refresh token; inject
         the app-owned client id/secret from config. Backfill only when empty so legacy
         secrets (which carry their own client the refresh token was issued under) keep
         working."""
-        gmail = decrypted.get(SecretProvider.GMAIL)
-        if isinstance(gmail, GmailContent):
-            if not gmail.client_id:
-                gmail.client_id = self.config.google_cloud_client_id
-            if not gmail.client_secret:
-                gmail.client_secret = self.config.google_cloud_client_secret
+        for provider in (SecretProvider.GMAIL, SecretProvider.GOOGLE_SHEETS):
+            content = decrypted.get(provider)
+            if not isinstance(content, (GmailContent, GoogleSheetsContent)):
+                continue
+            if not content.client_id:
+                content.client_id = self.config.google_cloud_client_id
+            if not content.client_secret:
+                content.client_secret = self.config.google_cloud_client_secret
 
     def validate_integration(self, agent_id: UUID, provider: SecretProvider, context: CurrentUserContext) -> dict:
         """Validate an existing secret on demand. Never persists — returns result directly."""
@@ -1927,7 +1933,7 @@ class AgentService:
             ciphertext = secret.content
         assert ciphertext is not None
         content = decrypt_content(provider, ciphertext, self.config.agent_token_encryption_key)
-        self._backfill_gmail_client_credentials({provider: content})
+        self._backfill_google_client_credentials({provider: content})
         result = validator(content)  # type: ignore[arg-type]
         return format_validation_result(result)
 
