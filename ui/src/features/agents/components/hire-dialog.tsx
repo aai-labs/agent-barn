@@ -573,6 +573,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
             onSkillIdsChange={setSelectedSkillIds}
             onSkillCredentialsChange={setSkillCredentials}
             templateRequiredSkills={versionTemplate?.requiredSkills ?? []}
+            platform={platform}
           />
         )}
       </div>

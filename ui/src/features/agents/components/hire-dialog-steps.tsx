@@ -540,42 +540,6 @@ const SLACK_EXAMPLE_MANIFEST = JSON.stringify(
   2,
 );
 
-// Read-only bot manifest for the aai-cli Slack integration (channel data access) —
-// unrelated to SLACK_EXAMPLE_MANIFEST above, which configures the separate OpenClaw/
-// Hermes Slack gateway bot used for agent-to-user DMs. Do not merge these.
-const SLACK_INTEGRATION_MANIFEST = JSON.stringify(
-  {
-    display_information: {
-      name: "Your Bot Name",
-      description: "Read-only Slack channel data access for an AgentBarn agent.",
-    },
-    oauth_config: {
-      scopes: {
-        bot: ["channels:read", "channels:history", "groups:read", "groups:history", "files:read", "bookmarks:read"],
-      },
-    },
-  },
-  null,
-  2,
-);
-
-function CopySlackManifestButton({ manifest }: { manifest: string }) {
-  const [copied, setCopied] = useState(false);
-
-  function copy() {
-    void navigator.clipboard.writeText(manifest).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
-  }
-
-  return (
-    <button type="button" className="af-btn af-btn-sm" onClick={copy}>
-      {copied ? "Copied!" : "Copy bot manifest"}
-    </button>
-  );
-}
-
 export function SlackTokensStep({
   slackAppToken,
   onAppTokenChange,
@@ -1456,12 +1420,14 @@ export function SkillsStep({
   onSkillIdsChange,
   onSkillCredentialsChange,
   templateRequiredSkills = [],
+  platform,
 }: {
   selectedSkillIds: string[];
   skillCredentials: IntegrationDraft[];
   onSkillIdsChange: (ids: string[]) => void;
   onSkillCredentialsChange: (drafts: IntegrationDraft[]) => void;
   templateRequiredSkills?: AgentAssignedSkill[];
+  platform: "slack" | "telegram";
 }) {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
@@ -1511,7 +1477,9 @@ export function SkillsStep({
     ]);
     const newCreds = skillCredentials.filter((c) => newRequired.has(c.provider));
     for (const p of newRequired) {
-      if (!newCreds.find((c) => c.provider === p)) {
+      // Slack is never manually configured — the API derives it from the agent's
+      // gateway bot token, so it must never appear in the secrets payload.
+      if (p !== "slack" && !newCreds.find((c) => c.provider === p)) {
         newCreds.push({ provider: p, content: {} });
       }
     }
@@ -1584,17 +1552,20 @@ export function SkillsStep({
           <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
             {orderedSkills.map((skill) => {
               const isRequired = requiredSkillIds.has(skill.id);
+              const needsSlackPlatform = skill.requiredProviders.includes("slack") && platform !== "slack";
               const selected = isRequired || selectedSkillIds.includes(skill.id);
+              const disabled = !isRequired && needsSlackPlatform;
               return (
                 <div
                   key={skill.id}
                   className="flex flex-col gap-1.5 p-4 rounded-2xl transition-colors min-h-[4.5rem]"
                   style={{
-                    cursor: isRequired ? "default" : "pointer",
+                    cursor: isRequired || disabled ? "default" : "pointer",
                     border: selected ? "1.5px solid var(--ink)" : "1.5px solid var(--line)",
                     background: selected ? "var(--bg-soft)" : "var(--bg-elev)",
+                    opacity: disabled ? 0.5 : 1,
                   }}
-                  onClick={() => { if (!isRequired) toggleSkill(skill); }}
+                  onClick={() => { if (!isRequired && !disabled) toggleSkill(skill); }}
                 >
                   <div className="flex items-center justify-between gap-2">
                     <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
@@ -1607,10 +1578,16 @@ export function SkillsStep({
                       Required by template
                     </div>
                   )}
-                  {skill.requiredProviders.length > 0 && (
+                  {needsSlackPlatform ? (
                     <div className="text-[0.75rem]" style={{ color: "var(--ink-4)" }}>
-                      {skill.requiredProviders.map((p) => SKILL_PROVIDER_LABELS[p] ?? p).join(", ")}
+                      Requires Slack platform
                     </div>
+                  ) : (
+                    skill.requiredProviders.length > 0 && (
+                      <div className="text-[0.75rem]" style={{ color: "var(--ink-4)" }}>
+                        {skill.requiredProviders.map((p) => SKILL_PROVIDER_LABELS[p] ?? p).join(", ")}
+                      </div>
+                    )
                   )}
                 </div>
               );
@@ -1627,6 +1604,21 @@ export function SkillsStep({
             Required credentials
           </div>
           {requiredProviderIds.map((providerId) => {
+            if (providerId === "slack") {
+              return (
+                <div
+                  key={providerId}
+                  className="px-4 py-3 rounded-2xl text-[0.8125rem]"
+                  style={{ border: "1px solid var(--line)", background: "var(--bg-soft)", color: "var(--ink-3)" }}
+                >
+                  <span className="font-medium" style={{ color: "var(--ink)" }}>
+                    Slack
+                  </span>{" "}
+                  — uses this agent's existing Slack bot token automatically. No credentials needed here.
+                </div>
+              );
+            }
+
             const providerSpec = getIntegrationProvider(providerId);
             const draft = skillCredentials.find((c) => c.provider === providerId);
             if (!draft) return null;
@@ -1666,7 +1658,6 @@ export function SkillsStep({
                     {providerSpec.scopeNote}
                   </p>
                 )}
-                {providerSpec.id === "slack" && <CopySlackManifestButton manifest={SLACK_INTEGRATION_MANIFEST} />}
                 {providerSpec.authMethod === "google_oauth" && (
                   <GoogleAuthButton
                     connected={isOAuthConnected(draft)}
@@ -1826,8 +1817,6 @@ export function IntegrationsStep({
                 {provider.scopeNote}
               </p>
             )}
-            {provider.id === "slack" && <CopySlackManifestButton manifest={SLACK_INTEGRATION_MANIFEST} />}
-
             {provider.authMethod === "google_oauth" && (
               <GoogleAuthButton
                 connected={isOAuthConnected(draft)}

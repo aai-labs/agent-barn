@@ -1,5 +1,6 @@
 BOT_SCOPES: list[str] = [
     "app_mentions:read",
+    "bookmarks:read",
     "canvases:read",
     "canvases:write",
     "channels:history",
