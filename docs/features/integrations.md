@@ -10,7 +10,7 @@ Integrations make external services available to an Agent. Agent Secrets hold en
 
 ## Supported providers
 
-Provider credential contracts are defined by `SecretProvider` and its content models in `../../api/domains/agents/models.py`. Current providers cover GitHub, Jira, Confluence, Bitbucket, Gmail, Google Calendar, Zoho Mail, Zoho Calendar, and Firecrawl.
+Provider credential contracts are defined by `SecretProvider` and its content models in `../../api/domains/agents/models.py`. Current providers cover GitHub, Jira, Confluence, Bitbucket, Gmail, Google Calendar, Zoho Mail, Zoho Calendar, Firecrawl, and Pipedrive.
 
 ## Shared credentials
 

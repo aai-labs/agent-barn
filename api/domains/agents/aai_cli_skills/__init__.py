@@ -17,6 +17,7 @@ from .confluence import CONFLUENCE_SKILLS
 from .github import GITHUB_SKILLS
 from .gmail import GMAIL_SKILLS
 from .jira import JIRA_SKILLS
+from .pipedrive import PIPEDRIVE_SKILLS
 from .zoho_mail import ZOHO_MAIL_SKILLS
 
 # One entry per aai-cli provider skill seeded into the DB on startup.
@@ -56,6 +57,12 @@ AAI_CLI_PROVIDER_SKILLS: list[dict] = [
         "required_providers": [SecretProvider.ZOHO_MAIL],
         "files": ZOHO_MAIL_SKILLS,
         "tools_pointer": "\nFor Zoho Mail, use the aai-cli tool. See ./skills/aai-cli/zoho_mail_skill.md\n",
+    },
+    {
+        "name": "Pipedrive",
+        "required_providers": [SecretProvider.PIPEDRIVE],
+        "files": PIPEDRIVE_SKILLS,
+        "tools_pointer": "\nFor Pipedrive, use the aai-cli tool. See ./skills/aai-cli/pipedrive_skill.md\n",
     },
 ]
 
