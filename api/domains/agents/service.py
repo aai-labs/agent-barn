@@ -78,7 +78,7 @@ from api.domains.agents.models import (
     validate_content,
 )
 from api.domains.agents.repository import AgentRepository
-from api.domains.agents.runtime_policy import build_chat_commands_policy_md
+from api.domains.agents.runtime_policy import build_chat_commands_policy_md, build_role_scope_policy_md
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.token_service import SlackConfigTokenService
 from api.domains.events import EventDeliveryDispatcher, resolve_actor_identity
@@ -1251,9 +1251,15 @@ class AgentService:
         tools_md = rendered.tools_md + self._build_skill_pointers(mounted_skills) + build_tool_context_md(decrypted)
         # AGENTS.md is auto-loaded into the startup prompt by both runtimes, so the
         # --profile mapping + no-fallback policy is appended here (not just to TOOLS.md).
-        # The chat-commands policy rides along unconditionally — it applies to every
-        # agent, integrations or not, and to custom templates we don't control.
-        agents_md = rendered.agents_md + build_integrations_policy_md(decrypted) + build_chat_commands_policy_md()
+        # The chat-commands and role-scope policies ride along unconditionally — they
+        # apply to every agent, integrations or not, and to custom templates we don't
+        # control.
+        agents_md = (
+            rendered.agents_md
+            + build_integrations_policy_md(decrypted)
+            + build_chat_commands_policy_md()
+            + build_role_scope_policy_md()
+        )
 
         if agent.agent_type == AgentType.HERMES:
             assert hermes_cfg is not None

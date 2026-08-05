@@ -13,10 +13,12 @@ Starting an agent is an API-orchestrated deployment flow:
 3. Decrypt platform and provider credentials.
 4. Select runtime-specific configuration and deployment builders.
 5. Combine explicitly assigned skills with eligible built-in provider skills.
-6. Append tool pointers and integration policy to rendered Markdown.
+6. Append tool pointers, integration policy, and the unconditional runtime behaviour policies (chat commands, role scope) to rendered Markdown.
 7. Generate a fresh ingest key and runtime environment.
 8. Build ConfigMap, Secret, PVC, Service, and Deployment resources.
 9. Apply resources through the Kubernetes client and mark the agent running.
+
+Runtime behaviour policies are appended to `AGENTS.md` rather than stored in a template, because both runtimes auto-load `AGENTS.md` into the startup system prompt. They are unconditional and carry no role-specific wording, so custom and forked templates inherit them and the role-scope policy defers to whatever role the agent's own template defines.
 
 A failed Slack or Telegram credential check or Kubernetes start can place the agent in `ERROR`; successful start clears the prior error.
 

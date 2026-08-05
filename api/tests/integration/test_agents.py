@@ -2861,6 +2861,38 @@ def test_start_agent_injects_chat_commands_policy_into_agents_md_hermes():
             assert_that(agents_md, contains_string("/help"))
 
 
+def test_start_agent_injects_role_scope_policy_into_agents_md_openclaw():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("the OpenClaw agent starts"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("AGENTS.md tells the agent to stay inside its defined role"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            agents_md = config_map.data["AGENTS.md"]
+            assert_that(agents_md, contains_string("## Role Scope"))
+            assert_that(agents_md, contains_string("out of scope"))
+
+
+def test_start_agent_injects_role_scope_policy_into_agents_md_hermes():
+    with given([*_GIVEN_WITH_HERMES_IMAGE, there_is_an_agent(agent_type=AgentType.HERMES)]) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("the Hermes agent starts"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("AGENTS.md tells the agent to stay inside its defined role"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            agents_md = config_map.data["AGENTS.md"]
+            assert_that(agents_md, contains_string("## Role Scope"))
+            assert_that(agents_md, contains_string("out of scope"))
+
+
 def test_start_agent_no_integrations_omits_integrations_block():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         client: TestClient = context.client
