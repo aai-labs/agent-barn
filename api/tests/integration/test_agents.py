@@ -48,7 +48,11 @@ from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import (
     there_is_an_organization_with_user_and_access_token,
 )
-from api.tests.steps.template import there_is_a_template, there_is_a_template_skill
+from api.tests.steps.template import (
+    there_is_a_template,
+    there_is_a_template_skill,
+    there_is_a_template_skill_group,
+)
 
 _BASE = "/api/v1/organizations/{organization_id}/agents"
 
@@ -1162,7 +1166,7 @@ def test_start_agent_configmap_has_overlay():
             )
             assert_that(
                 overlay["models"]["providers"]["litellm"]["baseUrl"],
-                equal_to("http://litellm:4000"),
+                equal_to("http://localhost:8090"),
             )
 
 
@@ -2110,7 +2114,7 @@ def test_start_hermes_agent_configmap_has_hermes_config():
             config_map = k8s.create_config_map.call_args.args[1]
             assert_that(config_map.data, has_key("hermes-config.yaml"))
             cfg = _yaml.safe_load(config_map.data["hermes-config.yaml"])
-            assert_that(cfg["model"]["base_url"], equal_to("http://litellm:4000"))
+            assert_that(cfg["model"]["base_url"], equal_to("http://localhost:8090"))
             assert_that(cfg["slack"]["unauthorized_dm_behavior"], equal_to("ignore"))
             assert_that(
                 cfg["display"]["platforms"]["slack"]["interim_assistant_messages"],
@@ -3045,6 +3049,280 @@ def test_list_agents_marks_required_skills():
             assert_that(jira["required"], equal_to(True))
 
 
+# --- template required skill groups ("at least one of") ---
+
+
+def _group_skill_ids(context) -> dict[str, str]:
+    return {s.name: str(s.id) for s in context.template_skill_group["skills"]}
+
+
+def test_create_agent_with_no_group_member_returns_400():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_template_skill_group(("GitHub", "Bitbucket")),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("I create an agent without any group member in skill_ids"):
+            response = client.post(_BASE, json=_VALID_CREATE, headers=_auth(context))
+
+        with then("it returns 400"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+
+
+def test_create_agent_with_one_group_member_succeeds_and_marks_it_required():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_template_skill_group(("GitHub", "Bitbucket")),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        github_id = _group_skill_ids(context)["GitHub"]
+
+        with when("I create an agent including one group member"):
+            response = client.post(
+                _BASE,
+                json={**_VALID_CREATE, "skill_ids": [github_id]},
+                headers=_auth(context),
+            )
+
+        with then("it returns 201 and that skill is marked required=true"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            skills = response.json()["skills"]
+            github = next(s for s in skills if s["id"] == github_id)
+            assert_that(github["required"], equal_to(True))
+
+
+def test_create_agent_with_both_group_members_marks_neither_required():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_template_skill_group(("GitHub", "Bitbucket")),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        ids = _group_skill_ids(context)
+
+        with when("I create an agent including both group members"):
+            response = client.post(
+                _BASE,
+                json={**_VALID_CREATE, "skill_ids": [ids["GitHub"], ids["Bitbucket"]]},
+                headers=_auth(context),
+            )
+
+        with then("it returns 201 and neither is marked required, since either is removable"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            skills = response.json()["skills"]
+            assert_that(all(not s["required"] for s in skills), equal_to(True))
+
+
+def test_update_agent_can_remove_one_group_member_while_other_remains():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_template_skill_group(("GitHub", "Bitbucket")),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        ids = _group_skill_ids(context)
+
+        with when("I create an agent with both group members"):
+            agent = client.post(
+                _BASE,
+                json={**_VALID_CREATE, "skill_ids": [ids["GitHub"], ids["Bitbucket"]]},
+                headers=_auth(context),
+            ).json()
+
+        with when("I remove one member via PATCH"):
+            response = client.patch(
+                f"{_BASE}/{agent['id']}",
+                json={"removed_skill_ids": [ids["GitHub"]]},
+                headers=_auth(context),
+            )
+
+        with then("it returns 200 and the survivor becomes required=true"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            bitbucket = next(s for s in response.json()["skills"] if s["id"] == ids["Bitbucket"])
+            assert_that(bitbucket["required"], equal_to(True))
+
+
+def test_update_agent_cannot_remove_last_group_member():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_template_skill_group(("GitHub", "Bitbucket")),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        ids = _group_skill_ids(context)
+
+        with when("I create an agent with a single group member"):
+            agent = client.post(
+                _BASE,
+                json={**_VALID_CREATE, "skill_ids": [ids["GitHub"]]},
+                headers=_auth(context),
+            ).json()
+
+        with when("I try to remove that sole group member via PATCH"):
+            response = client.patch(
+                f"{_BASE}/{agent['id']}",
+                json={"removed_skill_ids": [ids["GitHub"]]},
+                headers=_auth(context),
+            )
+
+        with then("it returns 409"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+
+
+def test_update_agent_can_swap_group_members_in_one_call():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_template_skill_group(("GitHub", "Bitbucket")),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        ids = _group_skill_ids(context)
+
+        with when("I create an agent with the GitHub member"):
+            agent = client.post(
+                _BASE,
+                json={**_VALID_CREATE, "skill_ids": [ids["GitHub"]]},
+                headers=_auth(context),
+            ).json()
+
+        with when("I swap GitHub for Bitbucket in the same PATCH"):
+            response = client.patch(
+                f"{_BASE}/{agent['id']}",
+                json={"skill_ids": [ids["Bitbucket"]], "removed_skill_ids": [ids["GitHub"]]},
+                headers=_auth(context),
+            )
+
+        with then("it returns 200 and Bitbucket is now required=true"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            bitbucket = next(s for s in response.json()["skills"] if s["id"] == ids["Bitbucket"])
+            assert_that(bitbucket["required"], equal_to(True))
+
+
+def test_update_agent_repin_to_grouped_template_without_member_returns_400():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_template(slug="with-group", name="With Group"),
+            there_is_a_template_skill_group(("GitHub", "Bitbucket")),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("I create an agent using a template with no required skills"):
+            agent = client.post(
+                _BASE,
+                json={**_VALID_CREATE, "template_slug": "test-template"},
+                headers=_auth(context),
+            ).json()
+
+        with when("I repin to the grouped template without a member"):
+            response = client.patch(
+                f"{_BASE}/{agent['id']}",
+                json={"template_slug": "with-group", "template_version": 1},
+                headers=_auth(context),
+            )
+
+        with then("it returns 400"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+
+
+def test_update_agent_repin_to_grouped_template_with_member_succeeds_and_marks_required():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_template(slug="with-group", name="With Group"),
+            there_is_a_template_skill_group(("GitHub", "Bitbucket")),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        ids = _group_skill_ids(context)
+
+        with when("I create an agent using a template with no required skills"):
+            agent = client.post(
+                _BASE,
+                json={**_VALID_CREATE, "template_slug": "test-template"},
+                headers=_auth(context),
+            ).json()
+
+        with when("I repin providing a group member in skill_ids"):
+            response = client.patch(
+                f"{_BASE}/{agent['id']}",
+                json={
+                    "template_slug": "with-group",
+                    "template_version": 1,
+                    "skill_ids": [ids["Bitbucket"]],
+                },
+                headers=_auth(context),
+            )
+
+        with then("it returns 200 and the provided member is marked required=true"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            bitbucket = next(s for s in response.json()["skills"] if s["id"] == ids["Bitbucket"])
+            assert_that(bitbucket["required"], equal_to(True))
+
+
+def test_list_agents_marks_sole_group_member_required():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_template_skill_group(("GitHub", "Bitbucket")),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        github_id = _group_skill_ids(context)["GitHub"]
+
+        with when("I create an agent with a single group member"):
+            client.post(
+                _BASE,
+                json={**_VALID_CREATE, "skill_ids": [github_id]},
+                headers=_auth(context),
+            )
+
+        with when("I list agents"):
+            response = client.get(_BASE, headers=_auth(context))
+
+        with then("the sole group member appears with required=true in the list response"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            agents = response.json()["items"]
+            github = next(s for s in agents[0]["skills"] if s["id"] == github_id)
+            assert_that(github["required"], equal_to(True))
+
+
+def test_update_agent_grandfathered_without_group_member_can_still_be_updated():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+
+        with when("I create an agent on a template with no required skills yet"):
+            agent = client.post(_BASE, json=_VALID_CREATE, headers=_auth(context)).json()
+
+        with when("the template is later given a GitHub-or-Bitbucket group (e.g. via reseed)"):
+            there_is_a_template_skill_group(("GitHub", "Bitbucket"))(context)
+            # there_is_a_template_skill_group attaches to context.template, which
+            # is the same "test-template" row the agent above is pinned to.
+            assert repository.get_org_required_skill_map(context.template.id)
+
+        with when("I make an unrelated update (rename) without touching skills"):
+            response = client.patch(
+                f"{_BASE}/{agent['id']}",
+                json={"name": "Renamed Agent"},
+                headers=_auth(context),
+            )
+
+        with then("it succeeds — the agent is grandfathered in without a group member"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["name"], equal_to("Renamed Agent"))
+
+
 _GIVEN_WITH_FIRECRAWL = [
     set_env_variable(
         {
@@ -3374,3 +3652,43 @@ def test_create_agent_duplicate_token_does_not_leave_orphan():
         with then("no orphaned agent row is left behind"):
             agents = client.get(_BASE, headers=_auth(context)).json()["items"]
             assert_that(len(agents), equal_to(1))
+
+
+def test_start_agent_secret_has_litellm_proxy_target():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("I start the agent"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the secret contains LITELLM_PROXY_TARGET pointing to the real LiteLLM URL"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            secret = k8s.create_secret.call_args.args[1]
+            assert_that(secret.string_data["LITELLM_PROXY_TARGET"], equal_to("http://litellm:4000"))
+
+        with then("the secret routes LLM traffic through the local proxy"):
+            assert_that(secret.string_data["LITELLM_BASE_URL"], equal_to("http://localhost:8090"))
+
+
+def test_start_hermes_agent_secret_has_litellm_proxy_target():
+    with given(
+        [
+            *_GIVEN_WITH_HERMES_IMAGE,
+            there_is_an_agent(agent_type=AgentType.HERMES),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("I start the Hermes agent"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the secret contains LITELLM_PROXY_TARGET pointing to the real LiteLLM URL"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            secret = k8s.create_secret.call_args.args[1]
+            assert_that(secret.string_data["LITELLM_PROXY_TARGET"], equal_to("http://litellm:4000"))
+
+        with then("the secret routes LLM traffic through the local proxy"):
+            assert_that(secret.string_data["OPENAI_BASE_URL"], equal_to("http://localhost:8090"))
+            assert_that(secret.string_data["OPENROUTER_BASE_URL"], equal_to("http://localhost:8090"))

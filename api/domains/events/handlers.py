@@ -26,7 +26,7 @@ class EventDeliveryContext:
     handler_name: str
     attempt_count: int
     correlation_id: UUID
-    organization_id: UUID
+    organization_id: UUID | None
 
 
 @dataclass(frozen=True)

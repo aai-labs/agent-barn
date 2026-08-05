@@ -12,6 +12,7 @@ from api.domains.agents.models import (
     GithubContent,
     GmailContent,
     JiraContent,
+    PipedriveContent,
     SecretProvider,
     ZohoMailContent,
     decrypt_content,
@@ -246,6 +247,51 @@ def test_firecrawl_encrypt_decrypt_round_trip_with_base_url():
     assert decrypted == original
     assert isinstance(decrypted, FirecrawlContent)
     assert decrypted.base_url == "https://api.firecrawl.dev"
+
+
+# --- Pipedrive (AF-245) ---
+
+_PIPEDRIVE_BASE = {"api_token": "test-token"}
+
+
+def test_pipedrive_content_validates_without_domain():
+    content = validate_content(SecretProvider.PIPEDRIVE, _PIPEDRIVE_BASE)
+    assert isinstance(content, PipedriveContent)
+    assert content.api_token == "test-token"
+    assert content.domain == ""
+
+
+def test_pipedrive_content_validates_with_domain():
+    content = validate_content(SecretProvider.PIPEDRIVE, {**_PIPEDRIVE_BASE, "domain": "aai-labs"})
+    assert isinstance(content, PipedriveContent)
+    assert content.api_token == "test-token"
+    assert content.domain == "aai-labs"
+
+
+def test_pipedrive_content_rejects_missing_api_token():
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.PIPEDRIVE, {})
+
+
+def test_pipedrive_content_rejects_extra_fields():
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.PIPEDRIVE, {**_PIPEDRIVE_BASE, "extra": "nope"})
+
+
+def test_pipedrive_encrypt_decrypt_round_trip():
+    original = validate_content(SecretProvider.PIPEDRIVE, _PIPEDRIVE_BASE)
+    blob = encrypt_content(original, _KEY)
+    assert "test-token" not in blob
+    assert decrypt_content(SecretProvider.PIPEDRIVE, blob, _KEY) == original
+
+
+def test_pipedrive_encrypt_decrypt_round_trip_with_domain():
+    original = validate_content(SecretProvider.PIPEDRIVE, {**_PIPEDRIVE_BASE, "domain": "aai-labs"})
+    blob = encrypt_content(original, _KEY)
+    decrypted = decrypt_content(SecretProvider.PIPEDRIVE, blob, _KEY)
+    assert decrypted == original
+    assert isinstance(decrypted, PipedriveContent)
+    assert decrypted.domain == "aai-labs"
 
 
 def test_decrypt_content_reads_legacy_gmail_blob():

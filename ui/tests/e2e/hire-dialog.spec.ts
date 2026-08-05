@@ -3,7 +3,14 @@ import { expect, test, type Page } from "@playwright/test";
 import { mockAgent, mockVersionsForSlug } from "../pages/data-support/agent-data-support.po";
 import { DataSupport } from "../pages/data-support/data-support.po";
 import { DashboardPage } from "../pages/dashboard-page.po";
-import { mockPlatformSkill, mockCustomSkill, mockJiraSkill, mockGmailSkill, MOCK_PLATFORM_SKILL_ID } from "../pages/data-support/skill-data-support.po";
+import {
+  mockPlatformSkill,
+  mockCustomSkill,
+  mockJiraSkill,
+  mockGmailSkill,
+  MOCK_PLATFORM_SKILL_ID,
+  MOCK_BITBUCKET_SKILL_ID,
+} from "../pages/data-support/skill-data-support.po";
 
 test.describe("Hire Dialog", () => {
   test.describe.configure({ mode: "serial" });
@@ -623,5 +630,160 @@ test.describe("Hire Dialog — Skills step", () => {
     await navigateToSkillsStep(page);
 
     await expect(page.getByRole("button", { name: /hire aria/i })).toBeDisabled();
+  });
+});
+
+test.describe("Hire Dialog — Skills step required skill group", () => {
+  test.describe.configure({ mode: "serial" });
+  let dataSupportPage: DataSupport;
+  let dashboardPage: DashboardPage;
+
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  const GROUP_KEY = "github-or-bitbucket";
+
+  async function navigateToSkillsStep(page: Page) {
+    await page.getByText("General Purpose", { exact: true }).click();
+    await page.getByRole("button", { name: /continue/i }).click(); // template → agent-type
+    await page.getByRole("button", { name: /continue/i }).click(); // agent-type → platform-choice
+    await page.getByRole("button", { name: /continue/i }).click(); // platform-choice → slack-choice
+    await page.getByText("I already have a Slack app").click();
+    await page.getByRole("button", { name: /continue/i }).click(); // slack-choice → tokens
+    await page.getByPlaceholder(/xapp-/i).fill("xapp-1-test");
+    await page.getByPlaceholder(/xoxb-/i).fill("xoxb-test");
+    await page.getByRole("button", { name: /continue/i }).click(); // tokens → details
+    await page.getByRole("button", { name: /continue/i }).click(); // details → skills
+  }
+
+  test.beforeEach(async ({ page }) => {
+    dashboardPage = new DashboardPage(page);
+    dataSupportPage = new DataSupport(page);
+
+    await dataSupportPage.auth.interceptRefreshRequest();
+    await dataSupportPage.users.interceptGetUserContextRequest();
+    await dataSupportPage.users.interceptGetOrganizationsRequest();
+    await dataSupportPage.agents.interceptGetAgentsRequest();
+    await dataSupportPage.agents.interceptGetAgentHealthRequest();
+    await dataSupportPage.agents.interceptGetTemplatesRequest();
+    await dataSupportPage.agents.interceptGetModelsRequest();
+    await dataSupportPage.skills.interceptGetSkillsRequest();
+    await dataSupportPage.agents.interceptGetTemplateVersionsRequest({
+      body: mockVersionsForSlug("general-purpose").map((v) => ({
+        ...v,
+        required_skills: [
+          {
+            id: MOCK_PLATFORM_SKILL_ID,
+            name: "github",
+            source: "aai_cli",
+            required_providers: ["github"],
+            tools_pointer: null,
+            required: false,
+            group_key: GROUP_KEY,
+            created_at: "2026-01-01T00:00:00Z",
+            updated_at: "2026-01-01T00:00:00Z",
+          },
+          {
+            id: MOCK_BITBUCKET_SKILL_ID,
+            name: "bitbucket",
+            source: "aai_cli",
+            required_providers: ["bitbucket"],
+            tools_pointer: null,
+            required: false,
+            group_key: GROUP_KEY,
+            created_at: "2026-01-01T00:00:00Z",
+            updated_at: "2026-01-01T00:00:00Z",
+          },
+        ],
+      })),
+    });
+    await page.route("**/api/v1/auth/me/slack-config-token", async (route) => {
+      if (route.request().method() === "GET") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ has_token: true, token_preview: "xoxe.****test" }),
+        });
+      } else {
+        await route.fallback();
+      }
+    });
+
+    await dashboardPage.goto();
+    await page.getByRole("button", { name: /hire agent/i }).click();
+  });
+
+  test("renders a choose-at-least-one section with both group members", async ({ page }) => {
+    await navigateToSkillsStep(page);
+
+    await expect(page.getByText(/Required by template — choose at least one/i)).toBeVisible();
+    await expect(page.getByText("github", { exact: true })).toBeVisible();
+    await expect(page.getByText("bitbucket", { exact: true })).toBeVisible();
+  });
+
+  test("hire button stays disabled until a group choice is made", async ({ page }) => {
+    await navigateToSkillsStep(page);
+
+    await expect(page.getByRole("button", { name: /hire aria/i })).toBeDisabled();
+
+    await page.getByText("github", { exact: true }).click();
+
+    await expect(page.getByPlaceholder(/github_pat_/)).toBeVisible();
+  });
+
+  test("choosing GitHub shows only the GitHub credential form", async ({ page }) => {
+    await navigateToSkillsStep(page);
+
+    await page.getByText("github", { exact: true }).click();
+
+    await expect(page.getByPlaceholder(/github_pat_/)).toBeVisible();
+    await expect(page.getByPlaceholder("owner-or-org")).toBeVisible();
+  });
+
+  test("selecting a second group member adds its credential form alongside the first", async ({ page }) => {
+    await navigateToSkillsStep(page);
+
+    await page.getByText("github", { exact: true }).click();
+    await expect(page.getByPlaceholder(/github_pat_/)).toBeVisible();
+
+    await page.getByText("bitbucket", { exact: true }).click();
+
+    // Both hosts chosen — both credential forms render.
+    await expect(page.getByPlaceholder(/github_pat_/)).toBeVisible();
+    await expect(page.getByPlaceholder("workspace id")).toBeVisible();
+  });
+
+  test("clicking a chosen group member again deselects it and removes its credential form", async ({ page }) => {
+    await navigateToSkillsStep(page);
+
+    await page.getByText("github", { exact: true }).click();
+    await expect(page.getByPlaceholder(/github_pat_/)).toBeVisible();
+
+    await page.getByText("github", { exact: true }).click();
+
+    await expect(page.getByPlaceholder(/github_pat_/)).not.toBeVisible();
+  });
+
+  test("created agent request includes only the chosen group member in skill_ids", async ({ page }) => {
+    await dataSupportPage.agents.interceptCreateAgentRequest({ body: { ...mockAgent, status: "STOPPED" } });
+
+    await navigateToSkillsStep(page);
+    await page.getByText("bitbucket", { exact: true }).click();
+
+    await page.getByPlaceholder("workspace id").fill("acme-workspace");
+    await page.getByPlaceholder("you@example.com").fill("me@example.com");
+    // apiToken is the only password-type field once Bitbucket (not GitHub) is chosen.
+    await page.locator('input[type="password"]').fill("bb-token");
+
+    const createPromise = page.waitForRequest(
+      (req) =>
+        /\/api\/v1\/organizations\/[^/]+\/agents$/.test(new URL(req.url()).pathname) &&
+        req.method() === "POST",
+    );
+    await page.getByRole("button", { name: "Hire Aria" }).click();
+    const createRequest = await createPromise;
+    const body = createRequest.postDataJSON() as { skill_ids: string[] };
+
+    expect(body.skill_ids).toContain(MOCK_BITBUCKET_SKILL_ID);
+    expect(body.skill_ids).not.toContain(MOCK_PLATFORM_SKILL_ID);
   });
 });

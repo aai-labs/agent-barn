@@ -23,6 +23,7 @@ import {
   type IntegrationDraft,
 } from "../integrations";
 import type { Agent, AgentTemplateRead } from "../schemas";
+import { splitRequiredSkills } from "../utils";
 
 const DEFAULT_AGENT_NAME = "Aria";
 const DEFAULT_BOT_DESCRIPTION = "Handles tasks and reduces day-to-day friction.";
@@ -139,6 +140,10 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   const [createAppError, setCreateAppError] = useState<string | null>(null);
   const [selectedSkillIds, setSelectedSkillIds] = useState<string[]>([]);
   const [skillCredentials, setSkillCredentials] = useState<IntegrationDraft[]>([]);
+  // groupKey -> chosen skill ids, for the template's "at least one of"
+  // required skill groups (e.g. GitHub OR Bitbucket). No default choice — the
+  // user must pick at least one, but may pick more than one member.
+  const [groupChoices, setGroupChoices] = useState<Record<string, string[]>>({});
   const [provisioning, setProvisioning] = useState(false);
   const [progress, setProgress] = useState(0);
   const [provisionError, setProvisionError] = useState<string | null>(null);
@@ -160,10 +165,14 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   const versionTemplate =
     versions.find((v) => v.version === resolvedVersion) ?? effectiveTemplate;
   const roleLabel = effectiveTemplate?.templateName ?? "Agent";
+  const { standalone: standaloneRequiredSkills, groups: requiredSkillGroups } = splitRequiredSkills(
+    versionTemplate?.requiredSkills ?? [],
+  );
 
   function handlePickTemplate(template: AgentTemplateRead) {
     setSelectedTemplate(template);
     setSelectedVersion(null); // reset to the new lineage's latest
+    setGroupChoices({});
   }
 
 
@@ -262,13 +271,19 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
         templateSlug: effectiveTemplate.templateSlug,
         ...(resolvedVersion != null ? { templateVersion: resolvedVersion } : {}),
         skillIds: [
-          ...(versionTemplate?.requiredSkills?.map((s) => s.id) ?? []),
+          ...standaloneRequiredSkills.map((s) => s.id),
+          ...requiredSkillGroups.flatMap((g) => groupChoices[g.key] ?? []),
           ...selectedSkillIds,
         ],
-        secrets: skillCredentials.map((c) => ({
-          provider: c.provider,
-          content: coerceBooleanFields(c.provider === "github" ? expandGithubContent(c.content) : c.content),
-        })),
+        secrets: skillCredentials
+          .filter((c) => !c.sharedCredentialId)
+          .map((c) => ({
+            provider: c.provider,
+            content: coerceBooleanFields(c.provider === "github" ? expandGithubContent(c.content) : c.content),
+          })),
+        sharedCredentials: skillCredentials
+          .filter((c) => !!c.sharedCredentialId)
+          .map((c) => ({ sharedCredentialId: c.sharedCredentialId! })),
         approvalMode,
         ...(platform === "telegram"
           ? { telegramBotToken, telegramGroupPolicy, telegramDmPolicy }
@@ -493,7 +508,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
             versions={versions}
             versionsLoading={versionsLoading}
             selectedVersion={resolvedVersion}
-            onVersionChange={setSelectedVersion}
+            onVersionChange={(v) => { setSelectedVersion(v); setGroupChoices({}); }}
           />
         )}
         {step === "agent-type" && <AgentTypeStep agentType={agentType} onChange={handleAgentTypeChange} />}
@@ -572,7 +587,18 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
             skillCredentials={skillCredentials}
             onSkillIdsChange={setSelectedSkillIds}
             onSkillCredentialsChange={setSkillCredentials}
-            templateRequiredSkills={versionTemplate?.requiredSkills ?? []}
+            templateRequiredSkills={standaloneRequiredSkills}
+            requiredGroups={requiredSkillGroups}
+            groupChoices={groupChoices}
+            onGroupChoiceChange={(groupKey, skillId) =>
+              setGroupChoices((prev) => {
+                const current = prev[groupKey] ?? [];
+                const next = current.includes(skillId)
+                  ? current.filter((id) => id !== skillId)
+                  : [...current, skillId];
+                return { ...prev, [groupKey]: next };
+              })
+            }
           />
         )}
       </div>
@@ -658,11 +684,10 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
             className="af-btn af-btn-primary af-btn-lg"
             disabled={!name.trim()}
             onClick={() => {
-              // Pre-populate credential drafts for template required skills.
+              // Pre-populate credential drafts for standalone required skills
+              // only; group providers appear once the user picks a member.
               const requiredProviders = [
-                ...new Set(
-                  (versionTemplate?.requiredSkills ?? []).flatMap((s) => s.requiredProviders),
-                ),
+                ...new Set(standaloneRequiredSkills.flatMap((s) => s.requiredProviders)),
               ];
               setSkillCredentials((prev) => {
                 const existing = new Set(prev.map((c) => c.provider));
@@ -679,7 +704,11 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
         {step === "skills" && (
           <button
             className="af-btn af-btn-primary af-btn-lg"
-            disabled={!name.trim() || hasIncompleteIntegration(skillCredentials)}
+            disabled={
+              !name.trim() ||
+              hasIncompleteIntegration(skillCredentials) ||
+              requiredSkillGroups.some((g) => !groupChoices[g.key]?.length)
+            }
             onClick={() => { void startHiring(); }}
           >
             Hire {name}

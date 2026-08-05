@@ -147,3 +147,4 @@ compose.remote.yml
 helm/monitoring/tests/generated/
 
 .kube
+.pi*

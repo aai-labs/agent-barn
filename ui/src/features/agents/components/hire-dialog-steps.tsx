@@ -12,22 +12,27 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { SharedManualToggle } from "@/features/shared-credentials/components/shared-manual-toggle";
+import { useSharedManualSwitch } from "@/features/shared-credentials/hooks/use-shared-manual-switch";
+import { SHARED_CREDENTIAL_PROVIDER_LABELS } from "@/features/shared-credentials/utils";
 import { useSkills } from "@/features/skills/hooks/use-skills";
 import { SKILL_PROVIDER_LABELS } from "@/features/skills/utils";
 import type { Skill } from "@/features/skills/schemas";
 import { SkillSourceBadge } from "@/features/skills/components/skill-drawer";
+
 import {
   INTEGRATION_PROVIDERS,
   getIntegrationProvider,
-  isOAuthConnected,
   type IntegrationDraft,
 } from "../integrations";
-import type { AgentAssignedSkill, AgentTemplateRead } from "../schemas";
+import type { AgentAssignedSkill, AgentTemplateRead, TemplateRequiredSkill } from "../schemas";
 import { useTemplates } from "../hooks/use-templates";
-import { ChoiceCard, FormField, GoogleAuthButton, NextStep, TokenInput } from "./hire-dialog-primitives";
+import type { RequiredSkillGroup } from "../utils";
+import { ChoiceCard, FormField, NextStep, TokenInput } from "./hire-dialog-primitives";
+import { IntegrationFields } from "./integration-fields";
 import { ModelSelect } from "./model-select";
 import { Pagination } from "./pagination";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 const HIRE_DIALOG_PAGE_SIZE = 6;
 
@@ -1344,92 +1349,32 @@ export function DetailsStep({
 }
 
 // Free-text repeatable list of repo names — Enter/Add appends a chip, X removes one.
-export function RepoListField({
-  repos,
-  onChange,
-  placeholder,
-}: {
-  repos: string[];
-  onChange: (repos: string[]) => void;
-  placeholder?: string;
-}) {
-  const [draft, setDraft] = useState("");
-
-  function addRepo() {
-    const trimmed = draft.trim();
-    if (trimmed && !repos.includes(trimmed)) {
-      onChange([...repos, trimmed]);
-    }
-    setDraft("");
-  }
-
-  return (
-    <div className="flex flex-col gap-2">
-      {repos.length > 0 && (
-        <div className="flex flex-wrap gap-1.5">
-          {repos.map((repo) => (
-            <span
-              key={repo}
-              className="inline-flex items-center gap-1 text-[0.781rem] px-2.5 py-1 rounded-full"
-              style={{ background: "var(--bg-elev)", border: "1px solid var(--line)", color: "var(--ink-2)" }}
-            >
-              {repo}
-              <button
-                type="button"
-                className="ml-0.5 rounded-full flex items-center"
-                style={{ color: "var(--ink-4)" }}
-                onClick={() => onChange(repos.filter((r) => r !== repo))}
-                aria-label={`Remove ${repo}`}
-              >
-                <XIcon style={{ width: 12, height: 12 }} />
-              </button>
-            </span>
-          ))}
-        </div>
-      )}
-      <div className="flex items-stretch gap-2">
-        <input
-          className="af-input flex-1"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              addRepo();
-            }
-          }}
-          placeholder={placeholder}
-          autoComplete="off"
-        />
-        <button
-          type="button"
-          className="af-btn flex items-center gap-1"
-          onClick={addRepo}
-          disabled={!draft.trim()}
-        >
-          <PlusIcon size={14} /> Add
-        </button>
-      </div>
-    </div>
-  );
-}
-
 export function SkillsStep({
   selectedSkillIds,
   skillCredentials,
   onSkillIdsChange,
   onSkillCredentialsChange,
   templateRequiredSkills = [],
+  requiredGroups = [],
+  groupChoices = {},
+  onGroupChoiceChange,
 }: {
   selectedSkillIds: string[];
   skillCredentials: IntegrationDraft[];
   onSkillIdsChange: (ids: string[]) => void;
   onSkillCredentialsChange: (drafts: IntegrationDraft[]) => void;
   templateRequiredSkills?: AgentAssignedSkill[];
+  requiredGroups?: RequiredSkillGroup[];
+  groupChoices?: Record<string, string[]>;
+  onGroupChoiceChange?: (groupKey: string, skillId: string) => void;
 }) {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
-  const [visible, setVisible] = useState<Record<string, boolean>>({});
+
+  const { switchToShared, switchToManual, handlePickShared } = useSharedManualSwitch(
+    skillCredentials,
+    onSkillCredentialsChange,
+  );
 
   const { skills, total, isLoading } = useSkills({
     search: search || undefined,
@@ -1440,10 +1385,17 @@ export function SkillsStep({
   const totalPages = Math.max(1, Math.ceil(total / HIRE_DIALOG_PAGE_SIZE));
 
   const requiredSkillIds = new Set(templateRequiredSkills.map((s) => s.id));
+  const groupMemberIds = new Set(requiredGroups.flatMap((g) => g.members.map((m) => m.id)));
   const orderedSkills = [
     ...skills.filter((s) => requiredSkillIds.has(s.id)),
-    ...skills.filter((s) => !requiredSkillIds.has(s.id)),
+    ...skills.filter((s) => !requiredSkillIds.has(s.id) && !groupMemberIds.has(s.id)),
   ];
+
+  const chosenGroupSkills: TemplateRequiredSkill[] = requiredGroups.flatMap((g) =>
+    (groupChoices[g.key] ?? [])
+      .map((id) => g.members.find((m) => m.id === id))
+      .filter((s): s is TemplateRequiredSkill => !!s),
+  );
 
   // Track full Skill objects for selected skills so we can compute requiredProviders
   // across pages. Users can only toggle visible skills, so this stays in sync.
@@ -1451,6 +1403,7 @@ export function SkillsStep({
   const requiredProviderIds: string[] = [
     ...new Set([
       ...templateRequiredSkills.flatMap((s) => s.requiredProviders),
+      ...chosenGroupSkills.flatMap((s) => s.requiredProviders),
       ...selectedSkillObjects.flatMap((s) => s.requiredProviders),
     ]),
   ];
@@ -1458,6 +1411,20 @@ export function SkillsStep({
   function handleSearchChange(value: string) {
     setSearch(value);
     setPage(1);
+  }
+
+  // Rebuilds skillCredentials to hold exactly one draft per currently-required
+  // provider, preserving existing drafts for providers still required and
+  // dropping ones that no longer are (e.g. switching a group's choice from
+  // GitHub to Bitbucket drops the stale GitHub draft).
+  function syncCredentialDrafts(requiredProviders: Set<string>) {
+    const newCreds = skillCredentials.filter((c) => requiredProviders.has(c.provider));
+    for (const p of requiredProviders) {
+      if (!newCreds.find((c) => c.provider === p)) {
+        newCreds.push({ provider: p, content: {} });
+      }
+    }
+    onSkillCredentialsChange(newCreds);
   }
 
   function toggleSkill(skill: Skill) {
@@ -1471,18 +1438,32 @@ export function SkillsStep({
 
     const newRequired = new Set([
       ...templateRequiredSkills.flatMap((s) => s.requiredProviders),
+      ...chosenGroupSkills.flatMap((s) => s.requiredProviders),
       ...newObjects.flatMap((s) => s.requiredProviders),
     ]);
-    const newCreds = skillCredentials.filter((c) => newRequired.has(c.provider));
-    for (const p of newRequired) {
-      if (!newCreds.find((c) => c.provider === p)) {
-        newCreds.push({ provider: p, content: {} });
-      }
-    }
+    syncCredentialDrafts(newRequired);
 
     onSkillIdsChange(newIds);
-    onSkillCredentialsChange(newCreds);
     setSelectedSkillObjects(newObjects);
+  }
+
+  function toggleGroupMember(groupKey: string, member: TemplateRequiredSkill) {
+    const current = groupChoices[groupKey] ?? [];
+    const nextIdsForGroup = current.includes(member.id)
+      ? current.filter((id) => id !== member.id)
+      : [...current, member.id];
+    const newChosen = requiredGroups.flatMap((g) =>
+      (g.key === groupKey ? nextIdsForGroup : groupChoices[g.key] ?? [])
+        .map((id) => g.members.find((m) => m.id === id))
+        .filter((s): s is TemplateRequiredSkill => !!s),
+    );
+    const newRequired = new Set([
+      ...templateRequiredSkills.flatMap((s) => s.requiredProviders),
+      ...newChosen.flatMap((s) => s.requiredProviders),
+      ...selectedSkillObjects.flatMap((s) => s.requiredProviders),
+    ]);
+    syncCredentialDrafts(newRequired);
+    onGroupChoiceChange?.(groupKey, member.id);
   }
 
   function setField(providerId: string, key: string, value: string) {
@@ -1510,6 +1491,48 @@ export function SkillsStep({
       <p className="text-[0.8125rem] leading-[1.5]" style={{ color: "var(--ink-3)" }}>
         Choose skills to assign to this agent. Required credentials will appear below as you select skills.
       </p>
+
+      {requiredGroups.map((group) => (
+        <div key={group.key} className="flex flex-col gap-2">
+          <div className="text-[0.8125rem] font-medium" style={{ color: "var(--ink)" }}>
+            Required by template — choose at least one
+          </div>
+          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+            {group.members.map((member) => {
+              const chosen = (groupChoices[group.key] ?? []).includes(member.id);
+              return (
+                <div
+                  key={member.id}
+                  role="checkbox"
+                  aria-checked={chosen}
+                  className="flex flex-col gap-1.5 p-4 rounded-2xl transition-colors min-h-[4.5rem]"
+                  style={{
+                    cursor: "pointer",
+                    border: chosen ? "1.5px solid var(--ink)" : "1.5px solid var(--line)",
+                    background: chosen ? "var(--bg-soft)" : "var(--bg-elev)",
+                  }}
+                  onClick={() => toggleGroupMember(group.key, member)}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
+                      {member.name}
+                    </div>
+                    <SkillSourceBadge source={member.source} />
+                  </div>
+                  <div className="text-[0.6875rem]" style={{ color: "var(--ink-3)" }}>
+                    {chosen ? "Selected" : "Required by template"}
+                  </div>
+                  {member.requiredProviders.length > 0 && (
+                    <div className="text-[0.75rem]" style={{ color: "var(--ink-4)" }}>
+                      {member.requiredProviders.map((p) => SKILL_PROVIDER_LABELS[p] ?? p).join(", ")}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
 
       <div
         className="flex items-center gap-2 px-3 py-2 rounded-xl"
@@ -1610,6 +1633,9 @@ export function SkillsStep({
               );
             }
 
+            const isSharedEligible = !!SHARED_CREDENTIAL_PROVIDER_LABELS[providerId];
+            const useShared = draft.sharedCredentialId !== undefined;
+
             return (
               <div
                 key={providerId}
@@ -1625,89 +1651,32 @@ export function SkillsStep({
                     Required
                   </span>
                 </div>
-                {providerSpec.scopeNote && (
-                  <p className="text-[0.75rem] leading-[1.4]" style={{ color: "var(--ink-3)" }}>
-                    {providerSpec.scopeNote}
-                  </p>
+
+                {isSharedEligible && (
+                  <SharedManualToggle
+                    provider={providerId}
+                    useShared={useShared}
+                    selectedId={draft.sharedCredentialId || undefined}
+                    onSwitchToManual={() => switchToManual(providerId)}
+                    onSwitchToShared={() => switchToShared(providerId)}
+                    onPickShared={(brief) => handlePickShared(providerId, brief)}
+                  />
                 )}
-                {providerSpec.authMethod === "google_oauth" && (
-                  <GoogleAuthButton
-                    connected={isOAuthConnected(draft)}
-                    onConnected={({ refreshToken, clientId, clientSecret }) => {
+
+                {!useShared && (
+                  <IntegrationFields
+                    provider={providerSpec}
+                    draft={draft}
+                    showScopeNote
+                    onFieldChange={(key, value) => setField(providerId, key, value)}
+                    onReposChange={(key, repos) => setRepos(providerId, key, repos)}
+                    onOAuthConnected={({ refreshToken, clientId, clientSecret }) => {
                       setField(providerId, "refreshToken", refreshToken);
                       setField(providerId, "clientId", clientId);
                       setField(providerId, "clientSecret", clientSecret);
                     }}
                   />
                 )}
-                {providerSpec.fields.map((field) => {
-                  if (field.dependsOn && draft.content[field.dependsOn.key] !== field.dependsOn.value) {
-                    return null;
-                  }
-                  const label = field.required ? field.label : `${field.label} (optional)`;
-                  if (field.type === "repo-list") {
-                    const repos = Array.isArray(draft.content[field.key])
-                      ? (draft.content[field.key] as string[])
-                      : [];
-                    return (
-                      <FormField key={field.key} label={label} hint={field.hint}>
-                        <RepoListField
-                          repos={repos}
-                          onChange={(next) => setRepos(providerId, field.key, next)}
-                          placeholder={field.placeholder}
-                        />
-                      </FormField>
-                    );
-                  }
-                  const rawValue = draft.content[field.key];
-                  const value = typeof rawValue === "string" ? rawValue : "";
-                  if (field.type === "secret") {
-                    const vkey = `${providerId}:${field.key}`;
-                    return (
-                      <FormField key={field.key} label={label} hint={field.hint}>
-                        <TokenInput
-                          value={value}
-                          onChange={(v) => setField(providerId, field.key, v)}
-                          visible={!!visible[vkey]}
-                          onToggle={() => setVisible((s) => ({ ...s, [vkey]: !s[vkey] }))}
-                          placeholder={field.placeholder}
-                        />
-                      </FormField>
-                    );
-                  }
-                  if (field.type === "radio") {
-                    return (
-                      <FormField key={field.key} label={label} hint={field.hint}>
-                        <div className="flex flex-col gap-2 mt-1">
-                          {field.options?.map((opt) => (
-                            <label key={opt.value} className="flex items-center gap-2 cursor-pointer">
-                              <input
-                                type="radio"
-                                name={`${providerId}-${field.key}`}
-                                value={opt.value}
-                                checked={value === opt.value}
-                                onChange={(e) => setField(providerId, field.key, e.target.value)}
-                                className="accent-[var(--blue-9)]"
-                              />
-                              <span className="text-[13px]" style={{ color: "var(--ink-1)" }}>{opt.label}</span>
-                            </label>
-                          ))}
-                        </div>
-                      </FormField>
-                    );
-                  }
-                  return (
-                    <FormField key={field.key} label={label} hint={field.hint}>
-                      <input
-                        className="af-input"
-                        value={value}
-                        onChange={(e) => setField(providerId, field.key, e.target.value)}
-                        placeholder={field.placeholder}
-                        autoComplete="off"
-                      />
-                    </FormField>
-                  );
-                })}
               </div>
             );
           })}
@@ -1724,7 +1693,11 @@ export function IntegrationsStep({
   integrations: IntegrationDraft[];
   onChange: (next: IntegrationDraft[]) => void;
 }) {
-  const [visible, setVisible] = useState<Record<string, boolean>>({});
+
+  const { switchToShared, switchToManual, handlePickShared } = useSharedManualSwitch(
+    integrations,
+    onChange,
+  );
 
   const usedProviders = new Set(integrations.map((i) => i.provider));
   const available = INTEGRATION_PROVIDERS.filter((p) => !usedProviders.has(p.id));
@@ -1761,10 +1734,12 @@ export function IntegrationsStep({
         {" This step is optional — you can hire without any."}
       </p>
 
-      {/* Connected integrations. */}
       {integrations.map((draft) => {
         const provider = getIntegrationProvider(draft.provider);
         if (!provider) return null;
+        const isSharedEligible = !!SHARED_CREDENTIAL_PROVIDER_LABELS[draft.provider];
+        const useShared = draft.sharedCredentialId !== undefined;
+
         return (
           <div
             key={draft.provider}
@@ -1784,91 +1759,32 @@ export function IntegrationsStep({
                 <XIcon size={15} />
               </button>
             </div>
-            {provider.scopeNote && (
-              <p className="text-[0.75rem] leading-[1.4]" style={{ color: "var(--ink-3)" }}>
-                {provider.scopeNote}
-              </p>
+
+            {isSharedEligible && (
+              <SharedManualToggle
+                provider={draft.provider}
+                useShared={useShared}
+                selectedId={draft.sharedCredentialId || undefined}
+                onSwitchToManual={() => switchToManual(draft.provider)}
+                onSwitchToShared={() => switchToShared(draft.provider)}
+                onPickShared={(brief) => handlePickShared(draft.provider, brief)}
+              />
             )}
 
-            {provider.authMethod === "google_oauth" && (
-              <GoogleAuthButton
-                connected={isOAuthConnected(draft)}
-                onConnected={({ refreshToken, clientId, clientSecret }) => {
+            {!useShared && (
+              <IntegrationFields
+                provider={provider}
+                draft={draft}
+                showScopeNote
+                onFieldChange={(key, value) => setField(draft.provider, key, value)}
+                onReposChange={(key, repos) => setRepos(draft.provider, key, repos)}
+                onOAuthConnected={({ refreshToken, clientId, clientSecret }) => {
                   setField(draft.provider, "refreshToken", refreshToken);
                   setField(draft.provider, "clientId", clientId);
                   setField(draft.provider, "clientSecret", clientSecret);
                 }}
               />
             )}
-
-            {provider.fields.map((field) => {
-              if (field.dependsOn && draft.content[field.dependsOn.key] !== field.dependsOn.value) {
-                return null;
-              }
-              const label = field.required ? field.label : `${field.label} (optional)`;
-              if (field.type === "repo-list") {
-                const repos = Array.isArray(draft.content[field.key])
-                  ? (draft.content[field.key] as string[])
-                  : [];
-                return (
-                  <FormField key={field.key} label={label} hint={field.hint}>
-                    <RepoListField
-                      repos={repos}
-                      onChange={(next) => setRepos(draft.provider, field.key, next)}
-                      placeholder={field.placeholder}
-                    />
-                  </FormField>
-                );
-              }
-              const rawValue = draft.content[field.key];
-              const value = typeof rawValue === "string" ? rawValue : "";
-              if (field.type === "secret") {
-                const vkey = `${draft.provider}:${field.key}`;
-                return (
-                  <FormField key={field.key} label={label} hint={field.hint}>
-                    <TokenInput
-                      value={value}
-                      onChange={(v) => setField(draft.provider, field.key, v)}
-                      visible={!!visible[vkey]}
-                      onToggle={() => setVisible((s) => ({ ...s, [vkey]: !s[vkey] }))}
-                      placeholder={field.placeholder}
-                    />
-                  </FormField>
-                );
-              }
-              if (field.type === "radio") {
-                return (
-                  <FormField key={field.key} label={label} hint={field.hint}>
-                    <div className="flex flex-col gap-2 mt-1">
-                      {field.options?.map((opt) => (
-                        <label key={opt.value} className="flex items-center gap-2 cursor-pointer">
-                          <input
-                            type="radio"
-                            name={`${draft.provider}-${field.key}`}
-                            value={opt.value}
-                            checked={value === opt.value}
-                            onChange={(e) => setField(draft.provider, field.key, e.target.value)}
-                            className="accent-[var(--blue-9)]"
-                          />
-                          <span className="text-[13px]" style={{ color: "var(--ink-1)" }}>{opt.label}</span>
-                        </label>
-                      ))}
-                    </div>
-                  </FormField>
-                );
-              }
-              return (
-                <FormField key={field.key} label={label} hint={field.hint}>
-                  <input
-                    className="af-input"
-                    value={value}
-                    onChange={(e) => setField(draft.provider, field.key, e.target.value)}
-                    placeholder={field.placeholder}
-                    autoComplete="off"
-                  />
-                </FormField>
-              );
-            })}
           </div>
         );
       })}

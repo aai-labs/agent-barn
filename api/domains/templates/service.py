@@ -126,8 +126,9 @@ class TemplateService:
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"A template with slug {slug} already exists",
             )
-        if data.required_skill_ids:
-            self._validate_skill_ids(data.required_skill_ids, org_id)
+        group_skill_ids = [sid for group in data.required_skill_groups for sid in group.skill_ids]
+        if data.required_skill_ids or group_skill_ids:
+            self._validate_skill_ids(data.required_skill_ids + group_skill_ids, org_id)
         template = AgentTemplate(
             organization_id=org_id,
             template_slug=slug,
@@ -145,8 +146,11 @@ class TemplateService:
             heartbeat_md=data.heartbeat_md or DEFAULT_HEARTBEAT_MD,
         )
         self.repository.save_template(template)
-        if data.required_skill_ids:
-            self.repository.save_org_template_skills(template.id, data.required_skill_ids)
+        skills_map: dict[UUID, str | None] = {sid: None for sid in data.required_skill_ids}
+        for group in data.required_skill_groups:
+            skills_map.update(dict.fromkeys(group.skill_ids, group.group_key))
+        if skills_map:
+            self.repository.save_org_template_skills(template.id, skills_map)
         return self._to_read_with_skills(template)
 
     def update_template(self, slug: str, data: TemplateUpdate, context: CurrentUserContext) -> TemplateRead:
@@ -177,14 +181,30 @@ class TemplateService:
             bootstrap_md=updated.get("bootstrap_md", old.bootstrap_md),
             heartbeat_md=updated.get("heartbeat_md", old.heartbeat_md),
         )
+        old_map = self.repository.get_required_skill_map_for(old)
         if data.required_skill_ids is None:
-            resolved_ids = list(self.repository.get_required_skill_ids_for(old))
+            standalone_ids = {sid for sid, group_key in old_map.items() if group_key is None}
         else:
             if data.required_skill_ids:
                 self._validate_skill_ids(data.required_skill_ids, org_id)
-            resolved_ids = data.required_skill_ids
+            standalone_ids = set(data.required_skill_ids)
+        if data.required_skill_groups is None:
+            groups_map = {sid: group_key for sid, group_key in old_map.items() if group_key is not None}
+        else:
+            group_skill_ids = [sid for group in data.required_skill_groups for sid in group.skill_ids]
+            if group_skill_ids:
+                self._validate_skill_ids(group_skill_ids, org_id)
+            groups_map = {sid: group.group_key for group in data.required_skill_groups for sid in group.skill_ids}
+        overlap = standalone_ids & groups_map.keys()
+        if overlap:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Skills cannot be both standalone required and part of a group: {sorted(str(s) for s in overlap)}"
+                ),
+            )
         self.repository.save_template(new_template)
-        self.repository.save_org_template_skills(new_template.id, resolved_ids)
+        self.repository.save_org_template_skills(new_template.id, {sid: None for sid in standalone_ids} | groups_map)
         return self._to_read_with_skills(new_template)
 
     def delete_template(self, slug: str, context: CurrentUserContext) -> None:
@@ -241,13 +261,15 @@ class TemplateService:
                     template.template_slug,
                 )
 
-            # Platform templates are always v1 (the seeder refreshes in place
-            # rather than publishing new versions).
-            desired_ids = [
-                skill.id
-                for name in predefined.required_skill_names
-                if (skill := self.skill_repository.get_by_name_global(name))
-            ]
-            existing_ids = self.repository.get_platform_required_skill_ids(existing.id)
-            if set(desired_ids) != existing_ids:
-                self.repository.save_platform_template_skills(existing.id, desired_ids)
+            desired_map: dict[UUID, str | None] = {}
+            for entry in predefined.required_skill_names:
+                names = (entry,) if isinstance(entry, str) else entry
+                # A tuple entry is an "at least one of" group; its key is
+                # derived from the member names so it's stable across
+                # re-seeds. A single name is a standalone AND requirement.
+                group_key = None if isinstance(entry, str) else "-or-".join(slugify(n) for n in names)
+                for name in names:
+                    if skill := self.skill_repository.get_by_name_global(name):
+                        desired_map[skill.id] = group_key
+            if desired_map != self.repository.get_platform_required_skill_map(existing.id):
+                self.repository.save_platform_template_skills(existing.id, desired_map)

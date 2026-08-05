@@ -61,6 +61,39 @@ class AgentTemplate(BaseModel, table=True):
     heartbeat_md: str = SqlField(nullable=False)
 
 
+class TemplateRequiredSkillRead(SkillRead):
+    # None for a standalone (AND-required) skill; otherwise the key of the
+    # "at least one of" group this skill belongs to on this template.
+    group_key: str | None = None
+
+
+class TemplateSkillGroup(PydanticBaseModel):
+    """An "at least one of" requirement group: the agent must be assigned at
+    least one skill from `skill_ids` at creation, and cannot drop below one
+    thereafter."""
+
+    group_key: str = Field(min_length=1, max_length=100)
+    skill_ids: list[UUID] = Field(min_length=1)
+
+
+def _validate_no_skill_overlap(standalone_ids: list[UUID], groups: list[TemplateSkillGroup]) -> None:
+    seen_group_keys: set[str] = set()
+    seen_in_groups: set[UUID] = set()
+    for group in groups:
+        if group.group_key in seen_group_keys:
+            raise ValueError(f"Duplicate required-skill group_key: {group.group_key}")
+        seen_group_keys.add(group.group_key)
+        for skill_id in group.skill_ids:
+            if skill_id in seen_in_groups:
+                raise ValueError(f"Skill {skill_id} cannot belong to more than one required-skill group")
+            seen_in_groups.add(skill_id)
+    overlap = set(standalone_ids) & seen_in_groups
+    if overlap:
+        raise ValueError(
+            f"Skills cannot be both standalone required and part of a group: {sorted(str(s) for s in overlap)}"
+        )
+
+
 class PlatformTemplate(BaseModel, table=True):
     __tablename__: str = "platform_template"
 
@@ -112,7 +145,7 @@ class TemplateRead(PydanticBaseModel):
     heartbeat_md: str
     created_at: datetime
     updated_at: datetime
-    required_skills: list[SkillRead] = Field(default_factory=list)
+    required_skills: list[TemplateRequiredSkillRead] = Field(default_factory=list)
     in_use: bool = False
 
 
@@ -128,6 +161,12 @@ class TemplateCreate(PydanticBaseModel):
     bootstrap_md: str | None = None
     heartbeat_md: str | None = None
     required_skill_ids: list[UUID] = Field(default_factory=list)
+    required_skill_groups: list[TemplateSkillGroup] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_skill_groups(self) -> TemplateCreate:
+        _validate_no_skill_overlap(self.required_skill_ids, self.required_skill_groups)
+        return self
 
 
 class TemplateUpdate(PydanticBaseModel):
@@ -143,11 +182,21 @@ class TemplateUpdate(PydanticBaseModel):
     bootstrap_md: str | None = None
     heartbeat_md: str | None = None
     required_skill_ids: list[UUID] | None = None
+    required_skill_groups: list[TemplateSkillGroup] | None = None
 
     @model_validator(mode="after")
     def validate_not_empty(self) -> TemplateUpdate:
         if not self.model_fields_set:
             raise ValueError("At least one field must be provided")
+        return self
+
+    @model_validator(mode="after")
+    def validate_skill_groups(self) -> TemplateUpdate:
+        # Only cross-validate the two fields when both are explicitly provided
+        # together in this request; when one is omitted it inherits from the
+        # prior version, so the service layer re-checks the resolved overlap.
+        if self.required_skill_ids is not None and self.required_skill_groups is not None:
+            _validate_no_skill_overlap(self.required_skill_ids, self.required_skill_groups)
         return self
 
 

@@ -83,7 +83,7 @@ export default function ActivityPage() {
   const groups = groupEvents(filtered);
 
   return (
-    <div className="max-w-[75rem] mx-auto px-10 pt-9 pb-24">
+    <div className="af-page">
       <div className="flex items-start justify-between mb-8">
         <div>
           <h1 className="text-4xl font-semibold tracking-[-0.028em] m-0 leading-[1.15]" style={{ color: "var(--ink)" }}>
