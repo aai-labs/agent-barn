@@ -77,11 +77,11 @@ does **not** scan `message.text` — Slack truncates display text there and HTML
 `message_permalink` field — use `message_ts` with `slack request` (`chat.getPermalink`) if
 a permalink is needed for a specific message.
 
-**`canvas download`** returns JSON metadata only, never file content to stdout:
-`{ "output": "<path>", "bytes": N, "canvas_id": "<file-id>", "title": "<canvas title>" }`.
-The downloaded file itself is written to `--output` as an HTML fragment (Slack's internal
-canvas format), not markdown. Ordinary (non-canvas) files use the exact same download
-mechanism, but return their native bytes/content-type instead.
+**`files download`** and **`canvas download`** return JSON metadata only, never file
+content to stdout: `{ "output": "<path>", "bytes": N, "file_id"|"canvas_id": "<id>",
+"title": "<title>" }`. The downloaded file itself is written to `--output` — an HTML
+fragment for canvases (Slack's internal canvas format, not markdown), native bytes for
+everything else.
 
 ## Error response shape
 
@@ -260,6 +260,24 @@ aai-cli --profile slack-work slack files list C0BLNH0K26B
   "paging": { "count": 50, "page": 1, "pages": 1, "total": 2 }
 }
 ```
+
+---
+
+## files download
+
+```
+aai-cli slack files download <file-id> --output PATH --profile slack-work
+```
+
+Takes a file `id` from `files list`, resolves its `url_private_download` via `files.info`,
+and writes the raw bytes to `--output`. Returns JSON metadata only, never file content to
+stdout: `{ "output": "<path>", "bytes": N, "file_id": "<id>", "title": "<file title>" }`.
+Shares the exact same download mechanism as `canvas download` (below) — the only
+difference between the two commands is how each resolves which file ID to download.
+
+> Pending a live-captured example (bot token was rotated after the last verification
+> pass) — response shape confirmed by code review against the identical,
+> already-live-verified `canvas download` path.
 
 # Slack Bookmarks Skill
 
