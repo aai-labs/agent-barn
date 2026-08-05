@@ -6,7 +6,7 @@ from pydantic import BaseModel as PydanticBaseModel
 from pydantic import EmailStr
 from sqlmodel import Column, Enum, Field, Index
 
-from api.domains.organizations.models import OrganizationRead
+from api.domains.organizations.models import OrganizationRead, PlatformOrganizationRead
 from api.domains.rbac.catalog import OrganizationRole
 from api.infrastructure.postgres.models import BaseModel
 
@@ -46,8 +46,32 @@ class OrganizationUserRead(PydanticBaseModel):
     organization: OrganizationRead
 
 
+class PlatformOrganizationUserRead(PydanticBaseModel):
+    """Platform View membership read model with an allowlisted organization shape."""
+
+    id: UUID
+    created_at: datetime
+    updated_at: datetime
+    user_id: UUID
+    organization_id: UUID
+    role: OrganizationRole
+    organization: PlatformOrganizationRead
+
+
 class OrganizationMemberRead(PydanticBaseModel):
     """A user's membership within one organization, for member-management UIs."""
+
+    user_id: UUID
+    email: str
+    full_name: str | None = None
+    role: OrganizationRole
+    is_pending: bool  # invite not yet accepted (email unverified)
+
+
+class PlatformOrganizationMemberRead(PydanticBaseModel):
+    """Dedicated read model for Platform View oversight of an Organization's members,
+    kept separate from OrganizationMemberRead per the Platform Oversight ADR (no reuse
+    of Organization-scoped DTOs)."""
 
     user_id: UUID
     email: str

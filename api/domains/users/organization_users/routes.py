@@ -5,18 +5,33 @@ from fastapi import APIRouter, Depends, Query, Response, status
 from fastapi_injector import Injected
 
 from api.domains.auth.models import CurrentUserContext
-from api.domains.auth.utils import get_current_user
+from api.domains.auth.utils import get_current_user, require_platform_admin
 from api.domains.users.organization_users.models import (
     AddMemberRequest,
     ChangeMemberRoleRequest,
     InviteLinkResult,
     MemberInviteResult,
     OrganizationMemberRead,
+    PlatformOrganizationMemberRead,
     TransferOwnershipRequest,
 )
 from api.domains.users.organization_users.service import OrganizationUserService
+from api.infrastructure.shared.models import PaginatedItems
 
 member_router = APIRouter(prefix="/organizations", tags=["organization-members"])
+platform_member_router = APIRouter(prefix="/platform/organizations", tags=["platform-organization-members"])
+
+
+@platform_member_router.get("/{organization_id}/members", response_model=PaginatedItems[PlatformOrganizationMemberRead])
+def list_platform_members(
+    organization_id: UUID,
+    _: Annotated[CurrentUserContext, Depends(require_platform_admin())],
+    service: Annotated[OrganizationUserService, Injected(OrganizationUserService)],
+    search: Annotated[str | None, Query()] = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=200)] = 15,
+):
+    return service.list_platform_members(organization_id, search=search, page=page, page_size=page_size)
 
 
 @member_router.get("/{organization_id}/members", response_model=list[OrganizationMemberRead])

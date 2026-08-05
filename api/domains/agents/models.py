@@ -417,12 +417,30 @@ class AgentTelegramConfig(BaseModel, table=True):
 class AgentSecret(BaseModel, table=True):
     __tablename__: str = "agent_secret"
 
-    __table_args__ = (sa.UniqueConstraint("agent_id", "provider", name="uq_agent_secret_agent_provider"),)
+    __table_args__ = (
+        sa.UniqueConstraint("agent_id", "provider", name="uq_agent_secret_agent_provider"),
+        sa.CheckConstraint(
+            "(shared_credential_id IS NULL AND content IS NOT NULL) OR "
+            "(shared_credential_id IS NOT NULL AND content IS NULL)",
+            name="ck_agent_secret_content_xor_shared",
+        ),
+        # Postgres does not index the referencing side of an FK; without this,
+        # reference counts and RESTRICT enforcement both scan the table.
+        sa.Index("ix_agent_secret_shared_credential_id", "shared_credential_id"),
+    )
 
     agent_id: UUID = SqlField(foreign_key="agent.id", nullable=False, ondelete="CASCADE")
     provider: SecretProvider = SqlField(sa_column=Column(sa.String(), nullable=False))
     secret_name: str = SqlField(nullable=False, max_length=255)  # predefined label
-    content: str = SqlField(sa_column=Column(sa.Text(), nullable=False))  # Fernet-encrypted JSON blob
+    content: str | None = SqlField(
+        sa_column=Column(sa.Text(), nullable=True)
+    )  # Fernet-encrypted JSON blob; NULL when shared_credential_id is set
+    shared_credential_id: UUID | None = SqlField(
+        default=None,
+        foreign_key="shared_credential.id",
+        nullable=True,
+        ondelete="RESTRICT",
+    )
 
 
 class AgentSkill(BaseModel, table=True):
@@ -488,6 +506,10 @@ class AgentTemplateSkill(BaseModel, table=True):
 
     template_id: UUID = SqlField(foreign_key="agent_template.id", nullable=False, ondelete="CASCADE")
     skill_id: UUID = SqlField(foreign_key="skill.id", nullable=False, ondelete="RESTRICT")
+    # Rows on the same template sharing a non-NULL group_key form an "at least
+    # one of" requirement group (e.g. GitHub OR Bitbucket). NULL means the
+    # skill is a standalone AND-required skill, as it always was before groups.
+    group_key: str | None = SqlField(default=None, nullable=True, max_length=100)
 
 
 class PlatformTemplateSkill(BaseModel, table=True):
@@ -500,6 +522,10 @@ class PlatformTemplateSkill(BaseModel, table=True):
 
     template_id: UUID = SqlField(foreign_key="platform_template.id", nullable=False, ondelete="CASCADE")
     skill_id: UUID = SqlField(foreign_key="skill.id", nullable=False, ondelete="RESTRICT")
+    # Rows on the same template sharing a non-NULL group_key form an "at least
+    # one of" requirement group (e.g. GitHub OR Bitbucket). NULL means the
+    # skill is a standalone AND-required skill, as it always was before groups.
+    group_key: str | None = SqlField(default=None, nullable=True, max_length=100)
 
 
 class AgentSecretCreate(PydanticBaseModel):  # no secret_name — backend stamps it
@@ -510,6 +536,10 @@ class AgentSecretCreate(PydanticBaseModel):  # no secret_name — backend stamps
     def validate_provider_content(self) -> AgentSecretCreate:
         validate_content(self.provider, self.content)
         return self
+
+
+class AgentSharedCredentialAttach(PydanticBaseModel):
+    shared_credential_id: UUID
 
 
 class AgentCreate(PydanticBaseModel):
@@ -541,6 +571,7 @@ class AgentCreate(PydanticBaseModel):
     model: str | None = None
     # Integration credentials (optional)
     secrets: list[AgentSecretCreate] = Field(default_factory=list)
+    shared_credentials: list[AgentSharedCredentialAttach] = Field(default_factory=list)
     # Custom org skills to assign on creation (optional)
     skill_ids: list[UUID] = Field(default_factory=list)
     approval_mode: CommandApprovalMode = CommandApprovalMode.AUTO
@@ -597,6 +628,7 @@ class AgentUpdate(PydanticBaseModel):
     # Integration credentials: upsert (add/replace) + explicit removal.
     # Providers not mentioned in either list are left untouched.
     secrets: list[AgentSecretCreate] | None = None
+    shared_credentials: list[AgentSharedCredentialAttach] | None = None
     removed_secret_providers: list[SecretProvider] | None = None
     approval_mode: CommandApprovalMode | None = None
 
@@ -659,6 +691,8 @@ class AgentSecretRead(PydanticBaseModel):  # label + provider only — no secret
 
     provider: SecretProvider
     secret_name: str
+    shared_credential_id: UUID | None = None
+    shared_credential_name: str | None = None
 
 
 class AgentAccessRoleRead(PydanticBaseModel):

@@ -7,7 +7,12 @@ from injector import inject
 
 from api.domains.agents.repository import AgentRepository
 from api.domains.events.catalog import AGENT_LIFECYCLE_EMAIL_HANDLER, AGENT_STARTED, AGENT_STOPPED
-from api.domains.events.handlers import EventDeliveryContext, RetryableEventHandlerError, SupportedEvent
+from api.domains.events.handlers import (
+    EventDeliveryContext,
+    RetryableEventHandlerError,
+    SupportedEvent,
+    TerminalEventHandlerError,
+)
 from api.domains.events.models import DomainEventEnvelope
 from api.infrastructure.email.service import EmailService
 
@@ -26,6 +31,8 @@ class AgentLifecycleEmailHandler:
 
     def handle(self, event: DomainEventEnvelope, context: EventDeliveryContext) -> None:
         agent_id = UUID(str(event.payload["agent_id"]))
+        if event.organization_id is None:
+            raise TerminalEventHandlerError("Agent lifecycle event requires an Organization")
         agent_name = str(event.payload["agent_name"])
         action = "started" if event.event_name == AGENT_STARTED else "stopped"
         recipients = self.repository.find_lifecycle_email_recipients(agent_id, event.organization_id)

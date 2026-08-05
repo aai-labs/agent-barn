@@ -2,22 +2,22 @@
 
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import type { Agent, IntegrationValidationResult, AgentAssignedSkill } from "../schemas";
-import { canAgent } from "../utils";
+import type { Agent, IntegrationValidationResult, TemplateRequiredSkill } from "../schemas";
+import { canAgent, splitRequiredSkills } from "../utils";
 import { useAgentTemplate } from "../hooks/use-agent-template";
 import { useUpdateAgent } from "../hooks/use-update-agent";
 import { useDeleteAgent } from "../hooks/use-delete-agent";
 import { useValidateIntegration } from "../hooks/use-validate-integration";
 import { XIcon, LockIcon } from "@/components/icons";
-import { FormField, GoogleAuthButton, TokenInput } from "./hire-dialog-primitives";
-import { IntegrationsStep, RepoListField, TemplateSourceBadge, VersionSelect } from "./hire-dialog-steps";
+import { TokenInput } from "./hire-dialog-primitives";
+import { IntegrationsStep, TemplateSourceBadge, VersionSelect } from "./hire-dialog-steps";
+import { IntegrationFields } from "./integration-fields";
 import { ModelSelect } from "./model-select";
 import {
   coerceBooleanFields,
   expandGithubContent,
   getIntegrationProvider,
   hasIncompleteIntegration,
-  isOAuthConnected,
   type IntegrationDraft,
 } from "../integrations";
 import { SlackConfigPanel } from "./slack-config-panel";
@@ -215,7 +215,12 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
   const [errorSection, setErrorSection] = useState<"tokens" | "secrets" | "template" | null>(null);
   const [pendingSection, setPendingSection] = useState<"tokens" | "secrets" | null>(null);
   const [repinSecretDrafts, setRepinSecretDrafts] = useState<IntegrationDraft[]>([]);
-  const [repinVisible, setRepinVisible] = useState<Record<string, boolean>>({});
+  // groupKey -> explicitly chosen skill ids, for the re-pin target's "at least
+  // one of" required skill groups. Multi-select, mirroring the hire dialog —
+  // an agent can have both GitHub and Bitbucket assigned. Only holds user
+  // overrides — the effective default (falling back to already-assigned
+  // members) is derived below.
+  const [repinGroupOverrides, setRepinGroupOverrides] = useState<Record<string, string[]>>({});
 
   const tabs = getTabs(agent);
   // Clamp the URL-provided tab to one that's actually reachable for this agent
@@ -284,17 +289,51 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
     resolvedRepinVersion === agent.templateVersion;
 
   // Required skills for the currently selected re-pin version.
-  const newTemplateRequiredSkills: AgentAssignedSkill[] =
+  const newTemplateRequiredSkills =
     repinSlug != null && resolvedRepinVersion != null
       ? (repinVersions.find((v) => v.version === resolvedRepinVersion)?.requiredSkills ?? [])
       : [];
+  const { standalone: newStandaloneRequiredSkills, groups: newRequiredGroups } =
+    splitRequiredSkills(newTemplateRequiredSkills);
+
+  // Each group's effective choice: an explicit user override (once the user
+  // has touched that group, even down to an empty selection) else every
+  // member the agent is already assigned, else unset so the user must pick
+  // explicitly. Derived (not effect-driven) so it's always in sync with the
+  // currently resolved re-pin target — a stale override for a group that no
+  // longer exists is simply never read.
+  const assignedSkillIds = new Set(agent.skills.map((s) => s.id));
+  const repinGroupChoices: Record<string, string[]> = {};
+  for (const group of newRequiredGroups) {
+    const override = repinGroupOverrides[group.key];
+    if (override !== undefined) {
+      repinGroupChoices[group.key] = override.filter((id) => group.members.some((m) => m.id === id));
+      continue;
+    }
+    const assigned = group.members.filter((m) => assignedSkillIds.has(m.id)).map((m) => m.id);
+    if (assigned.length > 0) repinGroupChoices[group.key] = assigned;
+  }
+
+  function toggleRepinGroupMember(groupKey: string, memberId: string) {
+    const current = repinGroupChoices[groupKey] ?? [];
+    const next = current.includes(memberId)
+      ? current.filter((id) => id !== memberId)
+      : [...current, memberId];
+    setRepinGroupOverrides((prev) => ({ ...prev, [groupKey]: next }));
+  }
+
+  const chosenGroupSkills: TemplateRequiredSkill[] = newRequiredGroups.flatMap((g) =>
+    (repinGroupChoices[g.key] ?? [])
+      .map((id) => g.members.find((m) => m.id === id))
+      .filter((s): s is TemplateRequiredSkill => !!s),
+  );
 
   const existingSecretProviders = new Set((agent.secrets ?? []).map((s) => s.provider));
 
   // Required providers not already covered by the agent's existing secrets.
   const newRequiredProviderIds = [
     ...new Set(
-      newTemplateRequiredSkills
+      [...newStandaloneRequiredSkills, ...chosenGroupSkills]
         .flatMap((s) => s.requiredProviders)
         .filter((p) => !existingSecretProviders.has(p)),
     ),
@@ -350,7 +389,7 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
         agentId: agent.id,
         templateSlug: repinSlug,
         templateVersion: resolvedRepinVersion,
-        skillIds: newTemplateRequiredSkills.map((s) => s.id),
+        skillIds: [...newStandaloneRequiredSkills, ...chosenGroupSkills].map((s) => s.id),
         ...(effectiveRepinSecretDrafts.length > 0
           ? {
               secrets: effectiveRepinSecretDrafts.map((d) => ({
@@ -363,7 +402,7 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
       setRepinSlug(null);
       setRepinVersion(null);
       setRepinSecretDrafts([]);
-      setRepinVisible({});
+      setRepinGroupOverrides({});
       setSavedTemplate(true);
       setTimeout(() => setSavedTemplate(false), 2500);
     } catch {
@@ -413,12 +452,17 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
       // replace — the upsert wins (the backend rejects a provider in both lists).
       const draftProviders = new Set(secretDrafts.map((d) => d.provider));
       const updatedProviders = [...draftProviders];
+      const manualDrafts = secretDrafts.filter((d) => !d.sharedCredentialId);
+      const sharedDrafts = secretDrafts.filter((d) => !!d.sharedCredentialId);
       await updateAgent.mutateAsync({
         agentId: agent.id,
-        secrets: secretDrafts.map((d) => ({
+        secrets: manualDrafts.map((d) => ({
           provider: d.provider,
           content: coerceBooleanFields(d.provider === "github" ? expandGithubContent(d.content) : d.content),
         })),
+        ...(sharedDrafts.length > 0
+          ? { sharedCredentials: sharedDrafts.map((d) => ({ sharedCredentialId: d.sharedCredentialId! })) }
+          : {}),
         removedSecretProviders: removedProviders.filter(
           (p) => !draftProviders.has(p),
         ),
@@ -609,7 +653,6 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                           setRepinSlug(t.templateSlug);
                           setRepinVersion(null);
                           setRepinSecretDrafts([]);
-                          setRepinVisible({});
                         }}
                       >
                         <span className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>
@@ -640,7 +683,6 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                         onChange={(v) => {
                           setRepinVersion(v);
                           setRepinSecretDrafts([]);
-                          setRepinVisible({});
                         }}
                         disabled={isRunning}
                       />
@@ -655,7 +697,7 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                     Required skills
                   </div>
                   <div className="flex flex-col gap-1.5">
-                    {newTemplateRequiredSkills.map((skill) => {
+                    {newStandaloneRequiredSkills.map((skill) => {
                       // Slack is never "missing" — the API derives it automatically.
                       const missingProviders = skill.requiredProviders.filter(
                         (p) => p !== "slack" && !existingSecretProviders.has(p),
@@ -680,6 +722,45 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                       );
                     })}
                   </div>
+
+                  {newRequiredGroups.map((group) => (
+                    <div key={group.key} className="flex flex-col gap-1.5">
+                      <div className="text-[0.75rem] font-medium" style={{ color: "var(--ink-3)" }}>
+                        Choose at least one:
+                      </div>
+                      {group.members.map((member) => {
+                        // Slack is never "missing" — the API derives it automatically.
+                        const missingProviders = member.requiredProviders.filter(
+                          (p) => p !== "slack" && !existingSecretProviders.has(p),
+                        );
+                        return (
+                          <label
+                            key={member.id}
+                            className="flex items-center gap-2 px-3.5 py-2.5 rounded-2xl text-[0.8125rem] cursor-pointer"
+                            style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={(repinGroupChoices[group.key] ?? []).includes(member.id)}
+                              onChange={() => toggleRepinGroupMember(group.key, member.id)}
+                              disabled={isRunning}
+                              className="accent-[var(--blue-9)]"
+                            />
+                            <span className="font-medium flex-1" style={{ color: "var(--ink)" }}>
+                              {member.name}
+                            </span>
+                            {missingProviders.length > 0 && (
+                              <span style={{ color: "var(--ink-4)" }}>
+                                · needs {missingProviders
+                                  .map((p) => getIntegrationProvider(p)?.label ?? p)
+                                  .join(", ")} credential
+                              </span>
+                            )}
+                          </label>
+                        );
+                      })}
+                    </div>
+                  ))}
 
                   {newRequiredProviderIds.map((providerId) => {
                     if (providerId === "slack") {
@@ -725,95 +806,19 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                         <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
                           {providerSpec.label}
                         </div>
-                        {providerSpec.authMethod === "google_oauth" && (
-                          <GoogleAuthButton
-                            connected={isOAuthConnected(draft)}
-                            onConnected={({ refreshToken, clientId, clientSecret }) => {
-                              setRepinSecretField(providerId, "refreshToken", refreshToken);
-                              setRepinSecretField(providerId, "clientId", clientId);
-                              setRepinSecretField(providerId, "clientSecret", clientSecret);
-                            }}
-                            disabled={isRunning}
-                          />
-                        )}
-                        {providerSpec.fields.map((field) => {
-                          if (field.dependsOn && draft.content[field.dependsOn.key] !== field.dependsOn.value) {
-                            return null;
-                          }
-                          const label = field.required ? field.label : `${field.label} (optional)`;
-
-                          if (field.type === "repo-list") {
-                            const repos = Array.isArray(draft.content[field.key])
-                              ? (draft.content[field.key] as string[])
-                              : [];
-                            return (
-                              <FormField key={field.key} label={label} hint={field.hint}>
-                                <RepoListField
-                                  repos={repos}
-                                  onChange={(next) => setRepinRepos(providerId, field.key, next)}
-                                  placeholder={field.placeholder}
-                                />
-                              </FormField>
-                            );
-                          }
-
-                          const rawValue = draft.content[field.key];
-                          const value = typeof rawValue === "string" ? rawValue : "";
-                          if (field.type === "secret") {
-                            const vkey = `${providerId}:${field.key}`;
-                            return (
-                              <FormField key={field.key} label={label} hint={field.hint}>
-                                <TokenInput
-                                  value={value}
-                                  onChange={(v) => setRepinSecretField(providerId, field.key, v)}
-                                  visible={!!repinVisible[vkey]}
-                                  onToggle={() =>
-                                    setRepinVisible((s) => ({ ...s, [vkey]: !s[vkey] }))
-                                  }
-                                  placeholder={field.placeholder}
-                                  disabled={isRunning}
-                                />
-                              </FormField>
-                            );
-                          }
-                          if (field.type === "radio") {
-                            return (
-                              <FormField key={field.key} label={label} hint={field.hint}>
-                                <div className="flex flex-col gap-2 mt-1">
-                                  {field.options?.map((opt) => (
-                                    <label key={opt.value} className="flex items-center gap-2 cursor-pointer">
-                                      <input
-                                        type="radio"
-                                        name={`repin-${providerId}-${field.key}`}
-                                        value={opt.value}
-                                        checked={value === opt.value}
-                                        onChange={(e) => setRepinSecretField(providerId, field.key, e.target.value)}
-                                        disabled={isRunning}
-                                        className="accent-[var(--blue-9)]"
-                                      />
-                                      <span className="text-[13px]" style={{ color: "var(--ink-1)" }}>{opt.label}</span>
-                                    </label>
-                                  ))}
-                                </div>
-                              </FormField>
-                            );
-                          }
-
-                          return (
-                            <FormField key={field.key} label={label} hint={field.hint}>
-                              <input
-                                className="af-input"
-                                value={value}
-                                onChange={(e) =>
-                                  setRepinSecretField(providerId, field.key, e.target.value)
-                                }
-                                placeholder={field.placeholder}
-                                autoComplete="off"
-                                disabled={isRunning}
-                              />
-                            </FormField>
-                          );
-                        })}
+                        <IntegrationFields
+                          provider={providerSpec}
+                          draft={draft}
+                          namePrefix="repin-"
+                          disabled={isRunning}
+                          onFieldChange={(key, value) => setRepinSecretField(providerId, key, value)}
+                          onReposChange={(key, repos) => setRepinRepos(providerId, key, repos)}
+                          onOAuthConnected={({ refreshToken, clientId, clientSecret }) => {
+                            setRepinSecretField(providerId, "refreshToken", refreshToken);
+                            setRepinSecretField(providerId, "clientId", clientId);
+                            setRepinSecretField(providerId, "clientSecret", clientSecret);
+                          }}
+                        />
                       </div>
                     );
                   })}
@@ -828,7 +833,8 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                     updateAgent.isPending ||
                     !repinSlug ||
                     repinIsNoop ||
-                    hasIncompleteIntegration(effectiveRepinSecretDrafts)
+                    hasIncompleteIntegration(effectiveRepinSecretDrafts) ||
+                    newRequiredGroups.some((g) => !repinGroupChoices[g.key]?.length)
                   }
                   title={isRunning ? "Stop the agent before changing its template" : undefined}
                   onClick={() => { void handleApplyTemplate(); }}
@@ -1025,6 +1031,7 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                   {manuallyManagedSecrets.map((s) => {
                     const label = getIntegrationProvider(s.provider)?.label ?? s.provider;
                     const isPendingRemoval = removedProviders.includes(s.provider);
+                    const isShared = !!s.sharedCredentialId;
                     return isPendingRemoval ? (
                       <div
                         key={s.provider}
@@ -1053,9 +1060,24 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                         style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
                       >
                         <div className="flex flex-col gap-0.5 min-w-0">
-                          <span className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
-                            {label}
-                          </span>
+                          <div className="flex items-center gap-2">
+                            <span className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
+                              {label}
+                            </span>
+                            {isShared && (
+                              <span
+                                className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold uppercase tracking-wide"
+                                style={{ background: "var(--bg-elev)", color: "var(--ink-3)", border: "1px solid var(--line)" }}
+                              >
+                                Shared
+                              </span>
+                            )}
+                          </div>
+                          {isShared && s.sharedCredentialName && (
+                            <span className="text-xs" style={{ color: "var(--ink-4)" }}>
+                              {s.sharedCredentialName}
+                            </span>
+                          )}
                           <ValidationBadge
                             secretName={s.secretName}
                             result={validationState[s.provider]}

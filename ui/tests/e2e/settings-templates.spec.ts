@@ -8,7 +8,14 @@ import {
   mockVersionsForSlug,
 } from "../pages/data-support/agent-data-support.po";
 import { DataSupport } from "../pages/data-support/data-support.po";
-import { MOCK_PLATFORM_SKILL_ID } from "../pages/data-support/skill-data-support.po";
+import {
+  MOCK_BITBUCKET_SKILL_ID,
+  MOCK_JIRA_SKILL_ID,
+  MOCK_PLATFORM_SKILL_ID,
+  mockBitbucketSkill,
+  mockJiraSkill,
+  mockPlatformSkill,
+} from "../pages/data-support/skill-data-support.po";
 
 test.describe("Settings · Templates", () => {
   test.describe.configure({ mode: "serial" });
@@ -168,5 +175,153 @@ test.describe("Settings · Templates", () => {
     const patchRequest = await patchPromise;
     const body = patchRequest.postDataJSON() as Record<string, unknown>;
     expect(body.required_skill_ids).toEqual([MOCK_PLATFORM_SKILL_ID]);
+  });
+
+  test("grouping action is hidden until at least two skills are selected", async ({ page }) => {
+    await dataSupport.skills.interceptGetSkillsRequest({ body: [mockPlatformSkill, mockBitbucketSkill] });
+
+    await page.getByText("My Custom", { exact: true }).click();
+    await page.getByRole("button", { name: "Edit template" }).click();
+    await page.getByRole("button", { name: "Group skills" }).click();
+
+    await expect(page.getByRole("button", { name: /Group as/ })).toHaveCount(0);
+    await page.getByRole("checkbox", { name: "Select", exact: true }).first().click();
+    await expect(page.getByRole("button", { name: /Group as/ })).toHaveCount(0);
+    await page.getByRole("checkbox", { name: "Select", exact: true }).first().click();
+    await expect(page.getByRole("button", { name: /Group as/ })).toBeVisible();
+  });
+
+  test("creating a group from two selected skills sends required_skill_groups in PATCH body", async ({ page }) => {
+    await dataSupport.skills.interceptGetSkillsRequest({ body: [mockPlatformSkill, mockBitbucketSkill] });
+    await dataSupport.agents.interceptUpdateTemplateRequest({ slug: "my-custom" });
+
+    await page.getByText("My Custom", { exact: true }).click();
+    await page.getByRole("button", { name: "Edit template" }).click();
+    await page.getByRole("button", { name: "Group skills" }).click();
+
+    const selectCheckbox = page.getByRole("checkbox", { name: "Select", exact: true });
+    await selectCheckbox.first().click();
+    await selectCheckbox.first().click();
+    await page.getByRole("button", { name: /Group as/ }).click();
+
+    await expect(page.getByTestId("required-skill-group-bitbucket-or-github")).toBeVisible();
+
+    const patchPromise = page.waitForRequest(
+      (req) => req.url().includes("/templates/my-custom") && req.method() === "PATCH",
+    );
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    const patchRequest = await patchPromise;
+    const body = patchRequest.postDataJSON() as Record<string, unknown>;
+    const groups = body.required_skill_groups as { group_key: string; skill_ids: string[] }[];
+    expect(groups).toHaveLength(1);
+    expect([...groups[0].skill_ids].sort()).toEqual(
+      [MOCK_PLATFORM_SKILL_ID, MOCK_BITBUCKET_SKILL_ID].sort(),
+    );
+    expect(groups[0].group_key.length).toBeGreaterThan(0);
+    expect(groups[0].group_key.length).toBeLessThanOrEqual(100);
+    expect(body.required_skill_ids).toEqual([]);
+  });
+
+  test("adding a member to an existing group sends the expanded member list, preserving group_key", async ({ page }) => {
+    const base = { ...mockAssignedSkill, group_key: "vcs-group" };
+    const githubReq = { ...base, id: MOCK_PLATFORM_SKILL_ID, name: "github", required_providers: ["github"] };
+    const bitbucketReq = { ...base, id: MOCK_BITBUCKET_SKILL_ID, name: "bitbucket", required_providers: ["bitbucket"] };
+    const versions = mockVersionsForSlug("my-custom").map((v) => ({
+      ...v,
+      required_skills: [githubReq, bitbucketReq],
+    }));
+    await dataSupport.agents.interceptGetTemplateVersionsRequest({ body: versions });
+    await dataSupport.skills.interceptGetSkillsRequest({
+      body: [mockPlatformSkill, mockBitbucketSkill, mockJiraSkill],
+    });
+    await dataSupport.agents.interceptUpdateTemplateRequest({ slug: "my-custom" });
+
+    await page.getByText("My Custom", { exact: true }).click();
+    await page.getByRole("button", { name: "Edit template" }).click();
+
+    const groupCard = page.getByTestId("required-skill-group-vcs-group");
+    await expect(groupCard).toBeVisible();
+    await groupCard.getByRole("button", { name: "Add" }).click();
+
+    const patchPromise = page.waitForRequest(
+      (req) => req.url().includes("/templates/my-custom") && req.method() === "PATCH",
+    );
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    const patchRequest = await patchPromise;
+    const body = patchRequest.postDataJSON() as Record<string, unknown>;
+    const groups = body.required_skill_groups as { group_key: string; skill_ids: string[] }[];
+    expect(groups).toHaveLength(1);
+    expect(groups[0].group_key).toBe("vcs-group");
+    expect([...groups[0].skill_ids].sort()).toEqual(
+      [MOCK_PLATFORM_SKILL_ID, MOCK_BITBUCKET_SKILL_ID, MOCK_JIRA_SKILL_ID].sort(),
+    );
+  });
+
+  test("removing a group member down to 2 keeps the group; down to 0 removes it", async ({ page }) => {
+    const base = { ...mockAssignedSkill, group_key: "vcs-group" };
+    const githubReq = { ...base, id: MOCK_PLATFORM_SKILL_ID, name: "github", required_providers: ["github"] };
+    const bitbucketReq = { ...base, id: MOCK_BITBUCKET_SKILL_ID, name: "bitbucket", required_providers: ["bitbucket"] };
+    const jiraReq = { ...base, id: MOCK_JIRA_SKILL_ID, name: "jira", required_providers: ["jira"] };
+    const versions = mockVersionsForSlug("my-custom").map((v) => ({
+      ...v,
+      required_skills: [githubReq, bitbucketReq, jiraReq],
+    }));
+    await dataSupport.agents.interceptGetTemplateVersionsRequest({ body: versions });
+    await dataSupport.skills.interceptGetSkillsRequest({
+      body: [mockPlatformSkill, mockBitbucketSkill, mockJiraSkill],
+    });
+    await dataSupport.agents.interceptUpdateTemplateRequest({ slug: "my-custom" });
+
+    await page.getByText("My Custom", { exact: true }).click();
+    await page.getByRole("button", { name: "Edit template" }).click();
+
+    const groupCard = page.getByTestId("required-skill-group-vcs-group");
+    await expect(groupCard).toBeVisible();
+
+    await groupCard.getByRole("button", { name: "Remove" }).first().click();
+    await expect(groupCard).toBeVisible();
+    await groupCard.getByRole("button", { name: "Remove" }).first().click();
+    await expect(groupCard).toBeVisible();
+    await groupCard.getByRole("button", { name: "Remove" }).first().click();
+    await expect(page.getByTestId("required-skill-group-vcs-group")).toHaveCount(0);
+
+    const patchPromise = page.waitForRequest(
+      (req) => req.url().includes("/templates/my-custom") && req.method() === "PATCH",
+    );
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    const patchRequest = await patchPromise;
+    const body = patchRequest.postDataJSON() as Record<string, unknown>;
+    expect(body.required_skill_groups).toEqual([]);
+    expect(body.required_skill_ids).toEqual([]);
+  });
+
+  test("dissolving a group folds members into standalone and sends required_skill_ids instead", async ({ page }) => {
+    const base = { ...mockAssignedSkill, group_key: "vcs-group" };
+    const githubReq = { ...base, id: MOCK_PLATFORM_SKILL_ID, name: "github", required_providers: ["github"] };
+    const bitbucketReq = { ...base, id: MOCK_BITBUCKET_SKILL_ID, name: "bitbucket", required_providers: ["bitbucket"] };
+    const versions = mockVersionsForSlug("my-custom").map((v) => ({
+      ...v,
+      required_skills: [githubReq, bitbucketReq],
+    }));
+    await dataSupport.agents.interceptGetTemplateVersionsRequest({ body: versions });
+    await dataSupport.skills.interceptGetSkillsRequest({ body: [mockPlatformSkill, mockBitbucketSkill] });
+    await dataSupport.agents.interceptUpdateTemplateRequest({ slug: "my-custom" });
+
+    await page.getByText("My Custom", { exact: true }).click();
+    await page.getByRole("button", { name: "Edit template" }).click();
+
+    await page.getByRole("button", { name: "Dissolve group" }).click();
+    await expect(page.getByTestId("required-skill-group-vcs-group")).toHaveCount(0);
+
+    const patchPromise = page.waitForRequest(
+      (req) => req.url().includes("/templates/my-custom") && req.method() === "PATCH",
+    );
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    const patchRequest = await patchPromise;
+    const body = patchRequest.postDataJSON() as Record<string, unknown>;
+    expect(body.required_skill_groups).toEqual([]);
+    expect([...(body.required_skill_ids as string[])].sort()).toEqual(
+      [MOCK_PLATFORM_SKILL_ID, MOCK_BITBUCKET_SKILL_ID].sort(),
+    );
   });
 });

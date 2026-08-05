@@ -13,6 +13,7 @@ from api.core.config import Config
 from api.domains.auth.hashing import hash_text
 from api.domains.auth.models import (
     AcceptInviteRequest,
+    CredentialClass,
     ForgotPasswordRequest,
     PasswordResetRequest,
     PasswordResetToken,
@@ -124,9 +125,12 @@ class AuthService:
                 full_name=full_name,
                 hashed_password=hashed_password,
             )
-            organization = Organization(name=self._default_organization_name(full_name))
-
             self.user_repository.save_with_session(user, session)
+            organization = Organization(
+                name=self._default_organization_name(full_name),
+                created_by_user_id=user.id,
+                allowed_models=[self.config.agent_default_model.removeprefix("litellm/openrouter/")],
+            )
             self.organization_repository.save_with_session(organization, session)
             self.organization_user_repository.save_with_session(
                 OrganizationUser(
@@ -154,7 +158,9 @@ class AuthService:
         except EmailTakenHTTPException:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already in use")
 
-        return self.create_token_pair(TokenData(user_id=str(user.id), stamp=user.security_stamp))
+        return self.create_token_pair(
+            TokenData(user_id=str(user.id), stamp=user.security_stamp, credential_class=CredentialClass.USER_SESSION)
+        )
 
     def verify_refresh_token(self, token: str) -> RefreshToken:
         refresh_token = self.refresh_token_repository.get(token)

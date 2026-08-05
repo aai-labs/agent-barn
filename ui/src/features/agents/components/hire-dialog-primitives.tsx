@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { EyeIcon, EyeOffIcon } from "@/components/icons";
+import { EyeIcon, EyeOffIcon, PlusIcon, XIcon } from "@/components/icons";
 import { useGoogleOAuth, type GoogleOAuthResult } from "../hooks/use-google-oauth";
 
 export function DialogShell({
@@ -278,6 +278,76 @@ export function NextStep({
         {children && (
           <div className="text-[0.781rem] leading-[1.5]" style={{ color: "var(--ink-3)" }}>{children}</div>
         )}
+      </div>
+    </div>
+  );
+}
+
+export function RepoListField({
+  repos,
+  onChange,
+  placeholder,
+}: {
+  repos: string[];
+  onChange: (repos: string[]) => void;
+  placeholder?: string;
+}) {
+  const [draft, setDraft] = useState("");
+
+  function addRepo() {
+    const trimmed = draft.trim();
+    if (trimmed && !repos.includes(trimmed)) {
+      onChange([...repos, trimmed]);
+    }
+    setDraft("");
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      {repos.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {repos.map((repo) => (
+            <span
+              key={repo}
+              className="inline-flex items-center gap-1 text-[0.781rem] px-2.5 py-1 rounded-full"
+              style={{ background: "var(--bg-elev)", border: "1px solid var(--line)", color: "var(--ink-2)" }}
+            >
+              {repo}
+              <button
+                type="button"
+                className="ml-0.5 rounded-full flex items-center"
+                style={{ color: "var(--ink-4)" }}
+                onClick={() => onChange(repos.filter((r) => r !== repo))}
+                aria-label={`Remove ${repo}`}
+              >
+                <XIcon style={{ width: 12, height: 12 }} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      <div className="flex items-stretch gap-2">
+        <input
+          className="af-input flex-1"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              addRepo();
+            }
+          }}
+          placeholder={placeholder}
+          autoComplete="off"
+        />
+        <button
+          type="button"
+          className="af-btn flex items-center gap-1"
+          onClick={addRepo}
+          disabled={!draft.trim()}
+        >
+          <PlusIcon size={14} /> Add
+        </button>
       </div>
     </div>
   );

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { BuildingIcon, UsersIcon } from "@/components/icons";
+import { BuildingIcon, ServerIcon, UsersIcon } from "@/components/icons";
 import { PlatformAdminOnly } from "@/auth/components/platform-admin-only";
 
 const platformLinks = [
@@ -17,12 +17,18 @@ const platformLinks = [
       "Manage customer organizations and jump into organization view.",
     Icon: BuildingIcon,
   },
+  {
+    href: "/dashboard/platform/event-deliveries",
+    title: "Event Deliveries",
+    description: "Inspect delivery pipeline health and diagnose handler failures.",
+    Icon: ServerIcon,
+  },
 ];
 
 export default function PlatformPage() {
   return (
     <PlatformAdminOnly>
-      <div className="max-w-[980px] mx-auto px-10 pt-9 pb-24">
+      <div className="af-page">
         <div className="mb-8">
           <h1
             className="text-[28px] font-semibold tracking-tight"

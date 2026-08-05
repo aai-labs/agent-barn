@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from injector import inject, singleton
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
@@ -106,6 +107,37 @@ class OrganizationUserRepository:
                 query = query.limit(limit)
             return list(session.exec(query).all())
 
+    def get_members_with_users_paginated(
+        self,
+        organization_id: UUID,
+        *,
+        search: str | None = None,
+        page: int = 1,
+        page_size: int = 15,
+    ) -> tuple[list[tuple[OrganizationUser, User]], int]:
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(OrganizationUser, User)
+                .join(User, col(User.id) == col(OrganizationUser.user_id))
+                .where(col(OrganizationUser.organization_id) == organization_id)
+            )
+            count_query = (
+                select(func.count())
+                .select_from(OrganizationUser)
+                .join(User, col(User.id) == col(OrganizationUser.user_id))
+                .where(col(OrganizationUser.organization_id) == organization_id)
+            )
+            if search:
+                pattern = f"%{search}%"
+                condition = col(User.full_name).ilike(pattern) | col(User.email).ilike(pattern)
+                query = query.where(condition)
+                count_query = count_query.where(condition)
+
+            total = session.scalar(count_query) or 0
+            query = query.order_by(col(OrganizationUser.created_at).asc())
+            query = query.offset((page - 1) * page_size).limit(page_size)
+            return list(session.exec(query).all()), total
+
     def delete(self, membership: OrganizationUser) -> bool:
         return self.delegate.delete(membership)
 
@@ -116,6 +148,7 @@ class OrganizationUserRepository:
         user_id: UUID,
         new_role: OrganizationRole,
         actor: ActorIdentity,
+        actor_display: str | None = None,
         correlation_id: UUID | None = None,
     ) -> RoleChangeWithEventResult | None:
         with Session(self.delegate.engine, expire_on_commit=False) as session:
@@ -133,11 +166,14 @@ class OrganizationUserRepository:
             membership.role = new_role
             session.add(membership)
             session.flush()
+            subject_user = session.get(User, membership.user_id) if membership.user_id is not None else None
             event = self.build_role_changed_event(
                 membership=membership,
                 previous_role=previous_role,
                 new_role=new_role,
                 actor=actor,
+                actor_display=actor_display,
+                subject_display=(subject_user.full_name or subject_user.email) if subject_user else None,
                 correlation_id=correlation_id or uuid4(),
             )
             self.outbox_repository.stage(session=session, event=event, registry=EVENT_REGISTRY)
@@ -152,6 +188,8 @@ class OrganizationUserRepository:
         previous_role: OrganizationRole,
         new_role: OrganizationRole,
         actor: ActorIdentity,
+        actor_display: str | None = None,
+        subject_display: str | None = None,
         correlation_id: UUID,
     ) -> DomainEventEnvelope:
         return EVENT_REGISTRY.build_event(
@@ -172,6 +210,8 @@ class OrganizationUserRepository:
                 "user_id": membership.user_id,
                 "previous_role": previous_role.value,
                 "new_role": new_role.value,
+                "actor_display": actor_display or actor.type.value,
+                "subject_display": subject_display or str(membership.user_id or membership.id),
             },
         )
 

@@ -34,6 +34,8 @@ export type CreateAgentData = {
   skillIds?: string[];
   // Integration credentials (provider + provider-specific content; name is server-stamped)
   secrets?: Array<{ provider: string; content: Record<string, string | string[] | boolean> }>;
+  // Shared credentials to attach (by ID)
+  sharedCredentials?: Array<{ sharedCredentialId: string }>;
   approvalMode?: "manual" | "auto" | "off";
 };
 

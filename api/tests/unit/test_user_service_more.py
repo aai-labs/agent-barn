@@ -50,6 +50,8 @@ def build_user_service() -> tuple[
         organization_repository=cast(OrganizationRepository, organization_repository),
         refresh_token_repository=cast(RefreshTokenRepository, refresh_token_repository),
         config=config,
+        event_delivery_dispatcher=Mock(),
+        auth_service=Mock(),
     )
     organization_user_service.find_by_user_id.return_value = []
     return (

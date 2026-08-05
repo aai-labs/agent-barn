@@ -77,7 +77,7 @@ export function CostsDashboard() {
 
   if (isLoadingSummary) {
     return (
-      <div className="max-w-[75rem] mx-auto px-10 pt-9 pb-24 flex flex-col items-center justify-center min-h-[400px]">
+      <div className="af-page flex flex-col items-center justify-center min-h-[400px]">
         <div
           className="w-7 h-7 rounded-full border-2 border-t-transparent animate-spin mb-4"
           style={{ borderColor: "var(--line-strong)", borderTopColor: "transparent" }}
@@ -120,7 +120,7 @@ export function CostsDashboard() {
 
 
   return (
-    <div className="max-w-[75rem] mx-auto px-10 pt-9 pb-24">
+    <div className="af-page">
       {/* Page header */}
       <div className="mb-14">
         <h1
