@@ -773,7 +773,7 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                           <span className="font-medium" style={{ color: "var(--ink)" }}>
                             Slack
                           </span>{" "}
-                          — uses this agent's existing Slack bot token automatically. No credentials needed here.
+                          — uses this agent&apos;s existing Slack bot token automatically. No credentials needed here.
                         </div>
                       );
                     }
