@@ -4,8 +4,7 @@ import { expect, test } from "@playwright/test";
 import {
   mockAgentTemplate,
   mockAssignedSkill,
-  mockTemplates,
-  mockVersionsForSlug,
+  mockVersionsForKey,
 } from "../pages/data-support/agent-data-support.po";
 import { DataSupport } from "../pages/data-support/data-support.po";
 import {
@@ -37,12 +36,101 @@ test.describe("Settings · Templates", () => {
     await page.getByRole("button", { name: "Templates", exact: true }).click();
   });
 
-  test("lists templates with slug, version, and source badges", async ({ page }) => {
+  test("lists templates with version and source badges", async ({ page }) => {
     await expect(page.getByText("General Purpose", { exact: true })).toBeVisible();
-    await expect(page.getByText("· general-purpose@v1")).toBeVisible();
-    // Badge spans only — the source filter <option> also says "Pre-defined".
-    await expect(page.locator('span:text-is("Pre-defined")')).toHaveCount(2);
+    await expect(page.getByRole("button", { name: /General Purpose · v1/ })).toBeVisible();
+    // Badge spans only — the source filter option also says "Built-in".
+    await expect(page.locator('span:text-is("Built-in")')).toHaveCount(2);
     await expect(page.getByText("My Custom", { exact: true })).toBeVisible();
+  });
+
+  test("surfaces and applies an available platform template update", async ({ page }) => {
+    const fork = {
+      ...mockAgentTemplate,
+      id: "55555555-5555-4555-8555-555555555553",
+      template_key: "my-custom",
+      template_name: "My Custom",
+      template_source: "pre-defined",
+      forked_from_platform_template_id: "11111111-1111-4111-8111-111111111111",
+      fork_baseline_platform_template_id: "22222222-2222-4222-8222-222222222222",
+      fork_baseline_platform_version: 2,
+      platform_update_available: true,
+    };
+    const versions = mockVersionsForKey("my-custom").map((version) => ({
+      ...version,
+      ...fork,
+      id: version.id,
+      version: version.version,
+    }));
+    await dataSupport.agents.interceptGetTemplatesRequest({
+      body: { page: 1, page_size: 50, total: 1, items: [fork] },
+    });
+    await dataSupport.agents.interceptGetTemplateVersionsRequest({ body: versions });
+    await dataSupport.agents.interceptUpdateTemplateFromPlatformRequest({
+      templateKey: "my-custom",
+      body: {
+        ...fork,
+        version: 3,
+        fork_baseline_platform_version: 3,
+        platform_update_available: false,
+      },
+    });
+
+    await page.reload();
+    await expect(page.getByTestId("template-update-available-my-custom")).toBeVisible();
+    await expect(page.getByText("Org fork", { exact: true })).toHaveCount(1);
+    await page.getByText("My Custom", { exact: true }).click();
+    await expect(page.getByTestId("template-update-available")).toBeVisible();
+    await expect(page.getByText("Organization fork · Platform baseline v2", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Apply platform update" }).click();
+
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.getByRole("heading", { name: "Apply platform template update?" })).toBeVisible();
+    await expect(dialog).toContainText("clones the latest Platform Template content and required skills");
+    const updatePromise = page.waitForRequest(
+      (request) => request.url().includes("/templates/my-custom/platform-update") && request.method() === "POST",
+    );
+    await dialog.getByRole("button", { name: "Apply update" }).click();
+    await updatePromise;
+    await expect(page.getByText("Saved as v3")).toBeVisible();
+  });
+
+  test("does not show an update for the current version when only an older fork version is stale", async ({ page }) => {
+    const current = {
+      ...mockAgentTemplate,
+      id: "55555555-5555-4555-8555-555555555563",
+      template_key: "my-custom",
+      template_name: "My Custom",
+      template_source: "pre-defined",
+      version: 3,
+      forked_from_platform_template_id: "11111111-1111-4111-8111-111111111111",
+      fork_baseline_platform_template_id: "33333333-3333-4333-8333-333333333333",
+      fork_baseline_platform_version: 3,
+      platform_update_available: false,
+    };
+    const staleHistory = {
+      ...current,
+      id: "55555555-5555-4555-8555-555555555562",
+      version: 2,
+      fork_baseline_platform_template_id: "22222222-2222-4222-8222-222222222222",
+      fork_baseline_platform_version: 1,
+      platform_update_available: true,
+    };
+    await dataSupport.agents.interceptGetTemplatesRequest({
+      body: { page: 1, page_size: 50, total: 1, items: [current] },
+    });
+    await dataSupport.agents.interceptGetTemplateVersionsRequest({ body: [current, staleHistory] });
+
+    await page.reload();
+    await page.getByText("My Custom", { exact: true }).click();
+    await expect(page.getByText("Organization fork · Platform baseline v3", { exact: true })).toBeVisible();
+
+    // Selecting historical content must not change lineage-level update status.
+    await page.getByLabel("Version").click();
+    await page.getByRole("menuitemradio", { name: "v2" }).click();
+    await expect(page.getByText("Organization fork · Platform baseline v1", { exact: true })).toBeVisible();
+    await expect(page.getByTestId("template-update-available")).not.toBeVisible();
+    await expect(page.getByRole("button", { name: "Apply platform update" })).not.toBeVisible();
   });
 
   test("search filters the list", async ({ page }) => {
@@ -82,7 +170,7 @@ test.describe("Settings · Templates", () => {
   });
 
   test("edit template enables fields and save publishes a new version (name inherited)", async ({ page }) => {
-    await dataSupport.agents.interceptUpdateTemplateRequest({ slug: "my-custom" });
+    await dataSupport.agents.interceptUpdateTemplateRequest({ templateKey: "my-custom" });
 
     await page.getByText("My Custom", { exact: true }).click();
     await page.getByRole("button", { name: "Edit template" }).click();
@@ -106,12 +194,12 @@ test.describe("Settings · Templates", () => {
 
   test("new template posts template_name and md content", async ({ page }) => {
     await dataSupport.agents.interceptCreateTemplateRequest({
-      body: { ...mockAgentTemplate, template_slug: "support-helper", template_name: "Support Helper" },
+      body: { ...mockAgentTemplate, template_key: "tpl-123456789abc", template_name: "Support Helper" }
     });
 
     await page.getByRole("button", { name: /new template/i }).click();
     await page.getByLabel("Template name").fill("Support Helper");
-    await expect(page.getByText("Slug:")).toContainText("support-helper");
+    await expect(page.getByText("Slug:")).toHaveCount(0);
     await page.getByLabel("SOUL.md content").fill("# A fresh soul");
 
     const createPromise = page.waitForRequest(
@@ -123,20 +211,20 @@ test.describe("Settings · Templates", () => {
     const createRequest = await createPromise;
     const body = createRequest.postDataJSON() as Record<string, unknown>;
     expect(body.template_name).toBe("Support Helper");
+    expect(body.template_key).toBeUndefined();
     expect(body.soul_md).toBe("# A fresh soul");
   });
 
-  test("conflict on create surfaces the backend error", async ({ page }) => {
+  test("duplicate display names do not require a conflict response", async ({ page }) => {
     await dataSupport.agents.interceptCreateTemplateRequest({
-      status: 409,
-      detail: `A template with slug ${mockTemplates[2].template_slug} already exists`,
+      body: { ...mockAgentTemplate, template_key: "tpl-8f3a91c2d4e7", template_name: "My Custom" },
     });
 
     await page.getByRole("button", { name: /new template/i }).click();
     await page.getByLabel("Template name").fill("My Custom");
     await page.getByRole("button", { name: "Create template" }).click();
 
-    await expect(page.getByText(/already exists/)).toBeVisible();
+    await expect(page.getByRole("heading", { name: "My Custom" })).not.toBeVisible();
   });
 
   test("view mode shows Required skills None when template has no required skills", async ({ page }) => {
@@ -147,7 +235,7 @@ test.describe("Settings · Templates", () => {
   });
 
   test("view mode shows required skill pill when template has required skills", async ({ page }) => {
-    const versions = mockVersionsForSlug("my-custom").map((v) => ({
+    const versions = mockVersionsForKey("my-custom").map((v) => ({
       ...v,
       required_skills: [mockAssignedSkill],
     }));
@@ -160,7 +248,7 @@ test.describe("Settings · Templates", () => {
   });
 
   test("edit mode adding a skill sends required_skill_ids in PATCH body", async ({ page }) => {
-    await dataSupport.agents.interceptUpdateTemplateRequest({ slug: "my-custom" });
+    await dataSupport.agents.interceptUpdateTemplateRequest({ templateKey: "my-custom" });
 
     await page.getByText("My Custom", { exact: true }).click();
     await page.getByRole("button", { name: "Edit template" }).click();
@@ -193,7 +281,7 @@ test.describe("Settings · Templates", () => {
 
   test("creating a group from two selected skills sends required_skill_groups in PATCH body", async ({ page }) => {
     await dataSupport.skills.interceptGetSkillsRequest({ body: [mockPlatformSkill, mockBitbucketSkill] });
-    await dataSupport.agents.interceptUpdateTemplateRequest({ slug: "my-custom" });
+    await dataSupport.agents.interceptUpdateTemplateRequest({ templateKey: "my-custom" });
 
     await page.getByText("My Custom", { exact: true }).click();
     await page.getByRole("button", { name: "Edit template" }).click();
@@ -226,7 +314,7 @@ test.describe("Settings · Templates", () => {
     const base = { ...mockAssignedSkill, group_key: "vcs-group" };
     const githubReq = { ...base, id: MOCK_PLATFORM_SKILL_ID, name: "github", required_providers: ["github"] };
     const bitbucketReq = { ...base, id: MOCK_BITBUCKET_SKILL_ID, name: "bitbucket", required_providers: ["bitbucket"] };
-    const versions = mockVersionsForSlug("my-custom").map((v) => ({
+    const versions = mockVersionsForKey("my-custom").map((v) => ({
       ...v,
       required_skills: [githubReq, bitbucketReq],
     }));
@@ -234,7 +322,7 @@ test.describe("Settings · Templates", () => {
     await dataSupport.skills.interceptGetSkillsRequest({
       body: [mockPlatformSkill, mockBitbucketSkill, mockJiraSkill],
     });
-    await dataSupport.agents.interceptUpdateTemplateRequest({ slug: "my-custom" });
+    await dataSupport.agents.interceptUpdateTemplateRequest({ templateKey: "my-custom" });
 
     await page.getByText("My Custom", { exact: true }).click();
     await page.getByRole("button", { name: "Edit template" }).click();
@@ -262,7 +350,7 @@ test.describe("Settings · Templates", () => {
     const githubReq = { ...base, id: MOCK_PLATFORM_SKILL_ID, name: "github", required_providers: ["github"] };
     const bitbucketReq = { ...base, id: MOCK_BITBUCKET_SKILL_ID, name: "bitbucket", required_providers: ["bitbucket"] };
     const jiraReq = { ...base, id: MOCK_JIRA_SKILL_ID, name: "jira", required_providers: ["jira"] };
-    const versions = mockVersionsForSlug("my-custom").map((v) => ({
+    const versions = mockVersionsForKey("my-custom").map((v) => ({
       ...v,
       required_skills: [githubReq, bitbucketReq, jiraReq],
     }));
@@ -270,7 +358,7 @@ test.describe("Settings · Templates", () => {
     await dataSupport.skills.interceptGetSkillsRequest({
       body: [mockPlatformSkill, mockBitbucketSkill, mockJiraSkill],
     });
-    await dataSupport.agents.interceptUpdateTemplateRequest({ slug: "my-custom" });
+    await dataSupport.agents.interceptUpdateTemplateRequest({ templateKey: "my-custom" });
 
     await page.getByText("My Custom", { exact: true }).click();
     await page.getByRole("button", { name: "Edit template" }).click();
@@ -299,13 +387,13 @@ test.describe("Settings · Templates", () => {
     const base = { ...mockAssignedSkill, group_key: "vcs-group" };
     const githubReq = { ...base, id: MOCK_PLATFORM_SKILL_ID, name: "github", required_providers: ["github"] };
     const bitbucketReq = { ...base, id: MOCK_BITBUCKET_SKILL_ID, name: "bitbucket", required_providers: ["bitbucket"] };
-    const versions = mockVersionsForSlug("my-custom").map((v) => ({
+    const versions = mockVersionsForKey("my-custom").map((v) => ({
       ...v,
       required_skills: [githubReq, bitbucketReq],
     }));
     await dataSupport.agents.interceptGetTemplateVersionsRequest({ body: versions });
     await dataSupport.skills.interceptGetSkillsRequest({ body: [mockPlatformSkill, mockBitbucketSkill] });
-    await dataSupport.agents.interceptUpdateTemplateRequest({ slug: "my-custom" });
+    await dataSupport.agents.interceptUpdateTemplateRequest({ templateKey: "my-custom" });
 
     await page.getByText("My Custom", { exact: true }).click();
     await page.getByRole("button", { name: "Edit template" }).click();

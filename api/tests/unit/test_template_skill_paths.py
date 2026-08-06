@@ -41,6 +41,6 @@ def test_predefined_templates_reference_only_real_skill_files():
         referenced = set(_PATH_RE.findall(_all_template_text(template)))
         missing = referenced - VALID_SKILL_PATHS
         assert not missing, (
-            f"Template '{template.slug}' references skill paths that are not seeded: "
+            f"Template '{template.key}' references skill paths that are not seeded: "
             f"{sorted(missing)}. Valid paths: {sorted(VALID_SKILL_PATHS)}"
         )

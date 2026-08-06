@@ -156,12 +156,14 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
 
   const effectiveTemplate = selectedTemplate;
   const { versions, isLoading: versionsLoading } = useTemplateVersions(
-    effectiveTemplate?.templateSlug,
+    effectiveTemplate?.templateKey,
   );
-  // The chosen version (defaults to latest = versions[0]). The full row for the
-  // resolved version drives the preview + submit.
-  const resolvedVersion =
-    selectedVersion ?? versions[0]?.version ?? effectiveTemplate?.version ?? null;
+  // Forks default to the organization's effective version; built-ins and
+  // custom lineages default to their newest available version.
+  const defaultVersion = effectiveTemplate?.forkedFromPlatformTemplateId
+    ? effectiveTemplate.version
+    : versions[0]?.version ?? effectiveTemplate?.version ?? null;
+  const resolvedVersion = selectedVersion ?? defaultVersion;
   const versionTemplate =
     versions.find((v) => v.version === resolvedVersion) ?? effectiveTemplate;
   const roleLabel = effectiveTemplate?.templateName ?? "Agent";
@@ -268,7 +270,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
       const agent = await createAgent.mutateAsync({
         name, model, platform,
         agentType,
-        templateSlug: effectiveTemplate.templateSlug,
+        templateKey: effectiveTemplate.templateKey,
         ...(resolvedVersion != null ? { templateVersion: resolvedVersion } : {}),
         skillIds: [
           ...standaloneRequiredSkills.map((s) => s.id),
@@ -503,7 +505,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
       <div className="flex-1 overflow-y-auto p-6">
         {step === "template" && (
           <TemplateStep
-            selectedSlug={effectiveTemplate?.templateSlug ?? null}
+            selectedKey={effectiveTemplate?.templateKey ?? null}
             onPick={handlePickTemplate}
             versions={versions}
             versionsLoading={versionsLoading}

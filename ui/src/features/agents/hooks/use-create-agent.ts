@@ -27,7 +27,7 @@ export type CreateAgentData = {
   telegramGroupPolicy?: "open" | "allowlist";
   telegramDmPolicy?: "off" | "open" | "allowlist";
   // Template reference — pins to templateVersion if given, else latest.
-  templateSlug: string;
+  templateKey: string;
   templateVersion?: number;
   model?: string;
   // Skills to assign on creation

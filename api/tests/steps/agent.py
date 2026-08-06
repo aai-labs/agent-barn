@@ -31,7 +31,7 @@ from api.domains.templates.defaults import (
 )
 from api.domains.templates.models import AgentTemplate, TemplateSource
 from api.domains.templates.repository import TemplateRepository
-from api.domains.templates.slug import generate_template_slug
+from api.domains.templates.slug import generate_template_key
 from api.infrastructure.crypto import encrypt_token
 from api.infrastructure.kubernetes.client import KubernetesClient
 from api.infrastructure.litellm.client import LiteLLMClient
@@ -85,7 +85,7 @@ def there_is_an_agent(
 
         template = AgentTemplate(
             organization_id=org_id,
-            template_slug=generate_template_slug(name),
+            template_key=generate_template_key(),
             template_name=name,
             template_source=TemplateSource.CUSTOM,
             version=1,

@@ -1,19 +1,25 @@
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from typing import Protocol
 from uuid import UUID
 
 from injector import inject, singleton
-from sqlalchemy import or_
+from sqlalchemy import func, or_, text
 from sqlmodel import Session, col, delete, select, update
 
 from api.domains.agents.models import (
     Agent,
     AgentTemplateSkill,
+    PlatformTemplateDraftSkill,
     PlatformTemplateSkill,
 )
 from api.domains.skills.models import Skill
 from api.domains.templates.models import (
     AgentTemplate,
     PlatformTemplate,
+    PlatformTemplateAdminSummary,
+    PlatformTemplateDraft,
+    PlatformTemplateDraftRead,
     TemplateFilter,
     TemplateRead,
     TemplateRequiredSkillRead,
@@ -21,6 +27,39 @@ from api.domains.templates.models import (
 )
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.infrastructure.shared.models import Pagination
+
+
+class TemplateKeyCollisionError(RuntimeError):
+    """Raised when a newly generated key is already used by any template row."""
+
+
+_TEMPLATE_KEY_ALLOCATION_LOCK = "agent-farm.template-key-allocation"
+
+
+class _RequiredSkillRow(Protocol):
+    skill_id: UUID
+    group_key: str | None
+
+
+def _diff_sync_skill_rows(
+    session: Session,
+    existing_rows: Sequence[_RequiredSkillRow],
+    group_keys_by_skill_id: dict[UUID, str | None],
+    make_row: Callable[[UUID, str | None], _RequiredSkillRow],
+) -> None:
+    """Reconcile a parent's required-skill rows with the desired group_key per
+    skill (None = standalone AND-required; shared non-None keys form an
+    "at least one of" group)."""
+    existing_by_id = {row.skill_id: row for row in existing_rows}
+    for skill_id, row in existing_by_id.items():
+        if skill_id not in group_keys_by_skill_id:
+            session.delete(row)
+        elif row.group_key != group_keys_by_skill_id[skill_id]:
+            row.group_key = group_keys_by_skill_id[skill_id]
+            session.add(row)
+    for skill_id, group_key in group_keys_by_skill_id.items():
+        if skill_id not in existing_by_id:
+            session.add(make_row(skill_id, group_key))
 
 
 @inject
@@ -44,10 +83,11 @@ class TemplateRepository:
             return TemplateRead(
                 id=template.id,
                 organization_id=None,
-                template_slug=template.template_slug,
+                template_key=template.template_key,
                 template_name=template.template_name,
                 template_source=TemplateSource.PRE_DEFINED,
                 forked_from_platform_template_id=None,
+                fork_baseline_platform_version=None,
                 version=template.version,
                 description=template.description,
                 soul_md=template.soul_md,
@@ -65,10 +105,12 @@ class TemplateRepository:
         return TemplateRead(
             id=template.id,
             organization_id=template.organization_id,
-            template_slug=template.template_slug,
+            template_key=template.template_key,
             template_name=template.template_name,
             template_source=template.template_source,
             forked_from_platform_template_id=template.forked_from_platform_template_id,
+            fork_baseline_platform_template_id=template.fork_baseline_platform_template_id,
+            fork_baseline_platform_version=template.fork_baseline_platform_version,
             version=template.version,
             description=template.description,
             soul_md=template.soul_md,
@@ -84,33 +126,62 @@ class TemplateRepository:
             required_skills=required_skills,
         )
 
-    def get_org_template_by_slug_version(self, org_id: UUID, slug: str, version: int) -> AgentTemplate | None:
+    @staticmethod
+    def to_draft_read(
+        draft: PlatformTemplateDraft,
+        skills: list[tuple[Skill, str | None]] | None = None,
+    ) -> PlatformTemplateDraftRead:
+        from api.domains.skills.models import SkillRead
+
+        required_skills = [
+            TemplateRequiredSkillRead(**SkillRead.model_validate(skill).model_dump(), group_key=group_key)
+            for skill, group_key in (skills or [])
+        ]
+        return PlatformTemplateDraftRead(
+            id=draft.id,
+            template_key=draft.template_key,
+            template_name=draft.template_name,
+            description=draft.description,
+            soul_md=draft.soul_md,
+            identity_md=draft.identity_md,
+            user_md=draft.user_md,
+            tools_md=draft.tools_md,
+            agents_md=draft.agents_md,
+            boot_md=draft.boot_md,
+            bootstrap_md=draft.bootstrap_md,
+            heartbeat_md=draft.heartbeat_md,
+            created_at=draft.created_at,
+            updated_at=draft.updated_at,
+            required_skills=required_skills,
+        )
+
+    def get_org_template_by_key_version(self, org_id: UUID, template_key: str, version: int) -> AgentTemplate | None:
         with Session(self.delegate.engine) as session:
             query = (
                 select(AgentTemplate)
                 .where(col(AgentTemplate.organization_id) == org_id)
-                .where(col(AgentTemplate.template_slug) == slug)
+                .where(col(AgentTemplate.template_key) == template_key)
                 .where(col(AgentTemplate.version) == version)
             )
             return session.exec(query).first()
 
-    def get_latest_org_template(self, org_id: UUID, slug: str) -> AgentTemplate | None:
+    def get_latest_org_template(self, org_id: UUID, template_key: str) -> AgentTemplate | None:
         with Session(self.delegate.engine) as session:
             query = (
                 select(AgentTemplate)
                 .where(col(AgentTemplate.organization_id) == org_id)
-                .where(col(AgentTemplate.template_slug) == slug)
+                .where(col(AgentTemplate.template_key) == template_key)
                 .order_by(col(AgentTemplate.version).desc())
                 .limit(1)
             )
             return session.exec(query).first()
 
-    def find_org_versions(self, org_id: UUID, slug: str) -> list[AgentTemplate]:
+    def find_org_versions(self, org_id: UUID, template_key: str) -> list[AgentTemplate]:
         with Session(self.delegate.engine) as session:
             query = (
                 select(AgentTemplate)
                 .where(col(AgentTemplate.organization_id) == org_id)
-                .where(col(AgentTemplate.template_slug) == slug)
+                .where(col(AgentTemplate.template_key) == template_key)
                 .order_by(col(AgentTemplate.version).desc())
             )
             return list(session.exec(query).all())
@@ -118,7 +189,7 @@ class TemplateRepository:
     def _latest_org_template_keys(
         self, org_id: UUID, template_filter: TemplateFilter
     ) -> list[tuple[UUID, str, str, int, TemplateSource]]:
-        """Latest org-scoped version per slug, filtered (no pagination).
+        """Latest org-scoped version per template_key, filtered (no pagination).
 
         Selects only identity columns (not the markdown body columns) since this
         is used to merge/sort/paginate across both template tables in memory;
@@ -127,16 +198,16 @@ class TemplateRepository:
         with Session(self.delegate.engine) as session:
             query = select(  # ty: ignore[no-matching-overload]
                 col(AgentTemplate.id),
-                col(AgentTemplate.template_slug),
+                col(AgentTemplate.template_key),
                 col(AgentTemplate.template_name),
                 col(AgentTemplate.version),
                 col(AgentTemplate.template_source),
             )
             query = (
                 query.where(col(AgentTemplate.organization_id) == org_id)
-                .distinct(col(AgentTemplate.template_slug))
+                .distinct(col(AgentTemplate.template_key))
                 .order_by(
-                    col(AgentTemplate.template_slug).asc(),
+                    col(AgentTemplate.template_key).asc(),
                     col(AgentTemplate.version).desc(),
                 )
             )
@@ -145,7 +216,7 @@ class TemplateRepository:
                 query = query.where(
                     or_(
                         col(AgentTemplate.template_name).ilike(pattern),
-                        col(AgentTemplate.template_slug).ilike(pattern),
+                        col(AgentTemplate.template_key).ilike(pattern),
                     )
                 )
             if template_filter.source is not None:
@@ -156,24 +227,71 @@ class TemplateRepository:
         self.delegate.save(template)
         return template
 
+    @staticmethod
+    def _lock_template_key_allocation(session: Session) -> None:
+        """Serialize generated-key allocation across both template tables."""
+        session.exec(  # ty: ignore[no-matching-overload]
+            text("SELECT pg_advisory_xact_lock(hashtext(:lock_name))"),
+            params={"lock_name": _TEMPLATE_KEY_ALLOCATION_LOCK},
+        )
+
+    @staticmethod
+    def _template_key_exists(session: Session, template_key: str) -> bool:
+        for model in (AgentTemplate, PlatformTemplate, PlatformTemplateDraft):
+            if (
+                session.exec(select(model.id).where(col(model.template_key) == template_key).limit(1)).first()
+                is not None
+            ):
+                return True
+        return False
+
+    def save_new_org_template_with_skills(
+        self,
+        template: AgentTemplate,
+        group_keys_by_skill_id: dict[UUID, str | None],
+    ) -> AgentTemplate:
+        """Persist a new org lineage and its requirements with a globally unique key."""
+        with Session(self.delegate.engine) as session:
+            self._lock_template_key_allocation(session)
+            if self._template_key_exists(session, template.template_key):
+                raise TemplateKeyCollisionError(template.template_key)
+            session.add(template)
+            session.flush()
+            for skill_id, group_key in group_keys_by_skill_id.items():
+                session.add(AgentTemplateSkill(template_id=template.id, skill_id=skill_id, group_key=group_key))
+            session.commit()
+            session.refresh(template)
+        return template
+
+    def save_org_template_version_with_skills(
+        self,
+        template: AgentTemplate,
+        group_keys_by_skill_id: dict[UUID, str | None],
+    ) -> AgentTemplate:
+        """Persist one org template version and its requirements atomically."""
+        with Session(self.delegate.engine) as session:
+            session.add(template)
+            session.flush()
+            for skill_id, group_key in group_keys_by_skill_id.items():
+                session.add(AgentTemplateSkill(template_id=template.id, skill_id=skill_id, group_key=group_key))
+            session.commit()
+            session.refresh(template)
+        return template
+
     def save_org_template_skills(self, template_id: UUID, group_keys_by_skill_id: dict[UUID, str | None]) -> None:
-        """Diff-sync a template's required-skill rows, including each row's
-        group_key (None = standalone AND-required; shared non-None keys form
-        an "at least one of" group)."""
+        """Diff-sync a template's required-skill rows (see _diff_sync_skill_rows)."""
         with Session(self.delegate.engine) as session:
             existing_rows = session.exec(
                 select(AgentTemplateSkill).where(col(AgentTemplateSkill.template_id) == template_id)
             ).all()
-            existing_by_id = {row.skill_id: row for row in existing_rows}
-            for skill_id, row in existing_by_id.items():
-                if skill_id not in group_keys_by_skill_id:
-                    session.delete(row)
-                elif row.group_key != group_keys_by_skill_id[skill_id]:
-                    row.group_key = group_keys_by_skill_id[skill_id]
-                    session.add(row)
-            for skill_id, group_key in group_keys_by_skill_id.items():
-                if skill_id not in existing_by_id:
-                    session.add(AgentTemplateSkill(template_id=template_id, skill_id=skill_id, group_key=group_key))
+            _diff_sync_skill_rows(
+                session,
+                existing_rows,
+                group_keys_by_skill_id,
+                lambda skill_id, group_key: AgentTemplateSkill(
+                    template_id=template_id, skill_id=skill_id, group_key=group_key
+                ),
+            )
             session.commit()
 
     def get_org_required_skills(self, template_id: UUID) -> list[tuple[Skill, str | None]]:
@@ -201,30 +319,33 @@ class TemplateRepository:
             query = select(AgentTemplateSkill.skill_id).where(col(AgentTemplateSkill.template_id) == template_id)
             return set(session.exec(query).all())
 
-    def get_platform_template_by_slug_version(self, slug: str, version: int) -> PlatformTemplate | None:
+    def get_platform_template_by_key_version(self, template_key: str, version: int) -> PlatformTemplate | None:
         with Session(self.delegate.engine) as session:
             query = (
                 select(PlatformTemplate)
-                .where(col(PlatformTemplate.template_slug) == slug)
+                .where(col(PlatformTemplate.template_key) == template_key)
                 .where(col(PlatformTemplate.version) == version)
             )
             return session.exec(query).first()
 
-    def get_latest_platform_template(self, slug: str) -> PlatformTemplate | None:
+    def get_platform_template_by_id(self, template_id: UUID) -> PlatformTemplate | None:
+        return self.delegate.find_by_id(PlatformTemplate, template_id)
+
+    def get_latest_platform_template(self, template_key: str) -> PlatformTemplate | None:
         with Session(self.delegate.engine) as session:
             query = (
                 select(PlatformTemplate)
-                .where(col(PlatformTemplate.template_slug) == slug)
+                .where(col(PlatformTemplate.template_key) == template_key)
                 .order_by(col(PlatformTemplate.version).desc())
                 .limit(1)
             )
             return session.exec(query).first()
 
-    def find_platform_versions(self, slug: str) -> list[PlatformTemplate]:
+    def find_platform_versions(self, template_key: str) -> list[PlatformTemplate]:
         with Session(self.delegate.engine) as session:
             query = (
                 select(PlatformTemplate)
-                .where(col(PlatformTemplate.template_slug) == slug)
+                .where(col(PlatformTemplate.template_key) == template_key)
                 .order_by(col(PlatformTemplate.version).desc())
             )
             return list(session.exec(query).all())
@@ -232,7 +353,7 @@ class TemplateRepository:
     def _latest_platform_template_keys(
         self, template_filter: TemplateFilter
     ) -> list[tuple[UUID, str, str, int, TemplateSource]]:
-        """Latest platform version per slug, filtered (no pagination).
+        """Latest platform version per template_key, filtered (no pagination).
 
         Selects only identity columns; see `_latest_org_template_keys`.
         """
@@ -243,13 +364,13 @@ class TemplateRepository:
             query = (
                 select(
                     col(PlatformTemplate.id),
-                    col(PlatformTemplate.template_slug),
+                    col(PlatformTemplate.template_key),
                     col(PlatformTemplate.template_name),
                     col(PlatformTemplate.version),
                 )
-                .distinct(col(PlatformTemplate.template_slug))
+                .distinct(col(PlatformTemplate.template_key))
                 .order_by(
-                    col(PlatformTemplate.template_slug).asc(),
+                    col(PlatformTemplate.template_key).asc(),
                     col(PlatformTemplate.version).desc(),
                 )
             )
@@ -258,35 +379,51 @@ class TemplateRepository:
                 query = query.where(
                     or_(
                         col(PlatformTemplate.template_name).ilike(pattern),
-                        col(PlatformTemplate.template_slug).ilike(pattern),
+                        col(PlatformTemplate.template_key).ilike(pattern),
                     )
                 )
             return [
-                (id_, slug, name, version, TemplateSource.PRE_DEFINED)
-                for id_, slug, name, version in session.exec(query).all()
+                (id_, template_key, name, version, TemplateSource.PRE_DEFINED)
+                for id_, template_key, name, version in session.exec(query).all()
             ]
 
     def save_platform_template(self, template: PlatformTemplate) -> PlatformTemplate:
         self.delegate.save(template)
         return template
 
+    def publish_draft_with_skills(
+        self,
+        published: PlatformTemplate,
+        draft_id: UUID,
+        group_keys_by_skill_id: dict[UUID, str | None],
+    ) -> PlatformTemplate:
+        """Persist the newly published platform template version, its required
+        skills, and the draft's deletion in a single transaction."""
+        with Session(self.delegate.engine) as session:
+            session.add(published)
+            session.flush()
+            for skill_id, group_key in group_keys_by_skill_id.items():
+                session.add(PlatformTemplateSkill(template_id=published.id, skill_id=skill_id, group_key=group_key))
+            purge = delete(PlatformTemplateDraft).where(col(PlatformTemplateDraft.id) == draft_id)
+            session.exec(purge)  # type: ignore[call-overload]
+            session.commit()
+            session.refresh(published)
+        return published
+
     def save_platform_template_skills(self, template_id: UUID, group_keys_by_skill_id: dict[UUID, str | None]) -> None:
-        """Diff-sync a platform template's required-skill rows, group-aware
-        (see save_org_template_skills)."""
+        """Diff-sync a platform template's required-skill rows (see _diff_sync_skill_rows)."""
         with Session(self.delegate.engine) as session:
             existing_rows = session.exec(
                 select(PlatformTemplateSkill).where(col(PlatformTemplateSkill.template_id) == template_id)
             ).all()
-            existing_by_id = {row.skill_id: row for row in existing_rows}
-            for skill_id, row in existing_by_id.items():
-                if skill_id not in group_keys_by_skill_id:
-                    session.delete(row)
-                elif row.group_key != group_keys_by_skill_id[skill_id]:
-                    row.group_key = group_keys_by_skill_id[skill_id]
-                    session.add(row)
-            for skill_id, group_key in group_keys_by_skill_id.items():
-                if skill_id not in existing_by_id:
-                    session.add(PlatformTemplateSkill(template_id=template_id, skill_id=skill_id, group_key=group_key))
+            _diff_sync_skill_rows(
+                session,
+                existing_rows,
+                group_keys_by_skill_id,
+                lambda skill_id, group_key: PlatformTemplateSkill(
+                    template_id=template_id, skill_id=skill_id, group_key=group_key
+                ),
+            )
             session.commit()
 
     def get_platform_required_skills(self, template_id: UUID) -> list[tuple[Skill, str | None]]:
@@ -314,30 +451,181 @@ class TemplateRepository:
             query = select(PlatformTemplateSkill.skill_id).where(col(PlatformTemplateSkill.template_id) == template_id)
             return set(session.exec(query).all())
 
-    def resolve_template(self, org_id: UUID, slug: str, version: int) -> AgentTemplate | PlatformTemplate | None:
-        org_template = self.get_org_template_by_slug_version(org_id, slug, version)
+    def get_draft(self, template_key: str) -> PlatformTemplateDraft | None:
+        with Session(self.delegate.engine) as session:
+            query = select(PlatformTemplateDraft).where(col(PlatformTemplateDraft.template_key) == template_key)
+            return session.exec(query).first()
+
+    def save_new_draft_with_skills(
+        self,
+        draft: PlatformTemplateDraft,
+        group_keys_by_skill_id: dict[UUID, str | None],
+    ) -> PlatformTemplateDraft:
+        """Persist a new platform lineage draft, with a globally unique key, and
+        its required skills atomically."""
+        with Session(self.delegate.engine) as session:
+            self._lock_template_key_allocation(session)
+            if self._template_key_exists(session, draft.template_key):
+                raise TemplateKeyCollisionError(draft.template_key)
+            session.add(draft)
+            session.flush()
+            for skill_id, group_key in group_keys_by_skill_id.items():
+                session.add(PlatformTemplateDraftSkill(draft_id=draft.id, skill_id=skill_id, group_key=group_key))
+            session.commit()
+            session.refresh(draft)
+        return draft
+
+    def save_draft_with_skills(
+        self,
+        draft: PlatformTemplateDraft,
+        group_keys_by_skill_id: dict[UUID, str | None],
+    ) -> PlatformTemplateDraft:
+        """Persist a draft seeded from an existing lineage, and its required
+        skills, atomically. The draft's template_key intentionally reuses the
+        source lineage's key, so no uniqueness check runs here."""
+        with Session(self.delegate.engine) as session:
+            session.add(draft)
+            session.flush()
+            for skill_id, group_key in group_keys_by_skill_id.items():
+                session.add(PlatformTemplateDraftSkill(draft_id=draft.id, skill_id=skill_id, group_key=group_key))
+            session.commit()
+            session.refresh(draft)
+        return draft
+
+    def update_draft_with_skills(
+        self,
+        draft: PlatformTemplateDraft,
+        group_keys_by_skill_id: dict[UUID, str | None],
+    ) -> PlatformTemplateDraft:
+        """Persist edits to an existing draft and diff-sync its required-skill
+        rows atomically (see _diff_sync_skill_rows)."""
+        with Session(self.delegate.engine) as session:
+            session.add(draft)
+            session.flush()
+            existing_rows = session.exec(
+                select(PlatformTemplateDraftSkill).where(col(PlatformTemplateDraftSkill.draft_id) == draft.id)
+            ).all()
+            _diff_sync_skill_rows(
+                session,
+                existing_rows,
+                group_keys_by_skill_id,
+                lambda skill_id, group_key: PlatformTemplateDraftSkill(
+                    draft_id=draft.id, skill_id=skill_id, group_key=group_key
+                ),
+            )
+            session.commit()
+            session.refresh(draft)
+        return draft
+
+    def delete_draft(self, draft_id: UUID) -> None:
+        with Session(self.delegate.engine) as session:
+            purge = delete(PlatformTemplateDraft).where(col(PlatformTemplateDraft.id) == draft_id)
+            session.exec(purge)  # type: ignore[call-overload]
+            session.commit()
+
+    def get_draft_required_skills(self, draft_id: UUID) -> list[tuple[Skill, str | None]]:
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(Skill, PlatformTemplateDraftSkill.group_key)
+                .join(
+                    PlatformTemplateDraftSkill,
+                    col(PlatformTemplateDraftSkill.skill_id) == col(Skill.id),
+                )
+                .where(col(PlatformTemplateDraftSkill.draft_id) == draft_id)
+                .order_by(col(PlatformTemplateDraftSkill.group_key).nulls_first(), col(Skill.name))
+            )
+            return list(session.exec(query).all())
+
+    def get_draft_required_skill_map(self, draft_id: UUID) -> dict[UUID, str | None]:
+        with Session(self.delegate.engine) as session:
+            query = select(PlatformTemplateDraftSkill.skill_id, PlatformTemplateDraftSkill.group_key).where(
+                col(PlatformTemplateDraftSkill.draft_id) == draft_id
+            )
+            return dict(session.exec(query).all())
+
+    def list_platform_lineages_for_admin(self) -> list[PlatformTemplateAdminSummary]:
+        """Every Platform Template lineage plus its draft status, for the admin authoring catalogue.
+
+        Includes lineages that only exist as a draft (no published version yet).
+        """
+        with Session(self.delegate.engine) as session:
+            latest_published = session.exec(
+                select(
+                    col(PlatformTemplate.template_key),
+                    col(PlatformTemplate.template_name),
+                    col(PlatformTemplate.version),
+                )
+                .distinct(col(PlatformTemplate.template_key))
+                .order_by(col(PlatformTemplate.template_key).asc(), col(PlatformTemplate.version).desc())
+            ).all()
+            drafts = session.exec(
+                select(col(PlatformTemplateDraft.template_key), col(PlatformTemplateDraft.template_name))
+            ).all()
+
+        published_by_key = {template_key: (name, version) for template_key, name, version in latest_published}
+        draft_keys = {template_key for template_key, _ in drafts}
+        summaries = [
+            PlatformTemplateAdminSummary(
+                template_key=template_key,
+                template_name=name,
+                latest_published_version=version,
+                has_draft=template_key in draft_keys,
+            )
+            for template_key, (name, version) in published_by_key.items()
+        ]
+        draft_only_keys = draft_keys - published_by_key.keys()
+        summaries += [
+            PlatformTemplateAdminSummary(
+                template_key=template_key,
+                template_name=name,
+                latest_published_version=None,
+                has_draft=True,
+            )
+            for template_key, name in drafts
+            if template_key in draft_only_keys
+        ]
+        return sorted(summaries, key=lambda s: s.template_key)
+
+    def resolve_template(
+        self, org_id: UUID, template_key: str, version: int
+    ) -> AgentTemplate | PlatformTemplate | None:
+        org_template = self.get_org_template_by_key_version(org_id, template_key, version)
         if org_template is not None:
             return org_template
-        return self.get_platform_template_by_slug_version(slug, version)
+        return self.get_platform_template_by_key_version(template_key, version)
 
-    def resolve_latest_template(self, org_id: UUID, slug: str) -> AgentTemplate | PlatformTemplate | None:
-        org_latest = self.get_latest_org_template(org_id, slug)
-        platform_latest = self.get_latest_platform_template(slug)
-        if org_latest is None:
-            return platform_latest
-        if platform_latest is None:
+    def resolve_latest_template(self, org_id: UUID, template_key: str) -> AgentTemplate | PlatformTemplate | None:
+        org_latest = self.get_latest_org_template(org_id, template_key)
+        platform_latest = self.get_latest_platform_template(template_key)
+        # An organization fork shadows the global lineage until an explicit
+        # Template Update advances its Fork Baseline Version. A custom template
+        # cannot share a template_key with a platform template (enforced at
+        # create time).
+        if org_latest is not None:
             return org_latest
-        # An org fork continues the platform lineage at a higher version, so the
-        # higher version is the lineage's latest. A custom template cannot share
-        # a slug with a platform template (enforced at create time).
-        return org_latest if org_latest.version >= platform_latest.version else platform_latest
+        return platform_latest
 
-    def resolve_versions(self, org_id: UUID, slug: str) -> list[AgentTemplate | PlatformTemplate]:
-        org_versions = self.find_org_versions(org_id, slug)
-        platform_versions = self.find_platform_versions(slug)
-        combined: list[AgentTemplate | PlatformTemplate] = list(org_versions) + list(platform_versions)
-        combined.sort(key=lambda t: t.version, reverse=True)
-        return combined
+    def get_next_org_template_version(self, org_id: UUID, template_key: str) -> int:
+        """Return the next version in an organization-owned template lineage."""
+        with Session(self.delegate.engine) as session:
+            latest = session.exec(
+                select(func.max(col(AgentTemplate.version)))
+                .where(col(AgentTemplate.organization_id) == org_id)
+                .where(col(AgentTemplate.template_key) == template_key)
+            ).one()
+        return (latest or 0) + 1
+
+    def resolve_versions(self, org_id: UUID, template_key: str) -> list[AgentTemplate | PlatformTemplate]:
+        org_versions = self.find_org_versions(org_id, template_key)
+        platform_versions = self.find_platform_versions(template_key)
+        # Version numbers are shared across the platform lineage and an org
+        # fork. When both tables contain a number, the org version shadows the
+        # platform row just as it does for latest-template resolution.
+        by_version: dict[int, AgentTemplate | PlatformTemplate] = {
+            template.version: template for template in platform_versions
+        }
+        by_version.update({template.version: template for template in org_versions})
+        return sorted(by_version.values(), key=lambda template: template.version, reverse=True)
 
     def find_latest_templates(
         self,
@@ -348,19 +636,23 @@ class TemplateRepository:
         org_keys = self._latest_org_template_keys(org_id, template_filter)
         platform_keys = self._latest_platform_template_keys(template_filter)
 
-        # Merge: a slug present in both resolves to the higher version (the org
-        # fork shadows the platform template). Custom slugs never collide with
-        # platform slugs (enforced at create time). Only identity columns are
+        # Merge: a template_key present in both resolves to the organization fork.
+        # Custom template_keys never collide with platform template_keys (enforced
+        # at create time). Only identity columns are
         # touched here so this stays cheap regardless of markdown body size.
-        by_slug: dict[str, tuple[UUID, str, str, int, TemplateSource, bool]] = {}
-        for id_, slug, name, version, source in platform_keys:
-            by_slug[slug] = (id_, slug, name, version, source, True)
-        for id_, slug, name, version, source in org_keys:
-            existing = by_slug.get(slug)
-            if existing is None or version >= existing[3]:
-                by_slug[slug] = (id_, slug, name, version, source, False)
+        by_key: dict[str, tuple[UUID, str, str, int, TemplateSource, bool]] = {}
+        for id_, template_key, name, version, source in platform_keys:
+            by_key[template_key] = (id_, template_key, name, version, source, True)
+        for id_, template_key, name, version, source in org_keys:
+            # Once an organization has forked a Platform Template lineage, its
+            # local fork remains the organization's visible template until the
+            # organization explicitly applies a Template Update. A later
+            # platform version must not replace the fork in the catalog.
+            existing = by_key.get(template_key)
+            if existing is None or existing[5]:
+                by_key[template_key] = (id_, template_key, name, version, source, False)
 
-        merged = list(by_slug.values())
+        merged = list(by_key.values())
         merged.sort(key=lambda t: (0 if t[4] == TemplateSource.PRE_DEFINED else 1, t[2]))
         total = len(merged)
         start = (pagination.page - 1) * pagination.size
@@ -394,33 +686,80 @@ class TemplateRepository:
         ]
         return items, total
 
-    def get_slugs_used_by_live_agents(self, org_id: UUID, slugs: list[str]) -> set[str]:
-        if not slugs:
+    def get_platform_update_flags(self, templates: list[TemplateRead]) -> dict[UUID, bool]:
+        """Return one update status for each organization fork lineage.
+
+        Version history can contain older organization rows whose baselines are
+        behind the platform even after the latest organization row has caught
+        up. Update availability is a lineage-level decision, so every row for
+        a lineage receives the comparison between the latest platform version
+        and the latest organization version's baseline.
+        """
+        candidates = [
+            template
+            for template in templates
+            if template.template_source == TemplateSource.PRE_DEFINED
+            and template.organization_id is not None
+            and template.fork_baseline_platform_version is not None
+        ]
+        if not candidates:
+            return {}
+
+        template_keys = {template.template_key for template in candidates}
+        latest_org_by_lineage: dict[tuple[UUID, str], TemplateRead] = {}
+        for template in candidates:
+            assert template.organization_id is not None
+            lineage = (template.organization_id, template.template_key)
+            latest = latest_org_by_lineage.get(lineage)
+            if latest is None or template.version > latest.version:
+                latest_org_by_lineage[lineage] = template
+
+        with Session(self.delegate.engine) as session:
+            latest_versions = dict(
+                session.exec(
+                    select(col(PlatformTemplate.template_key), func.max(col(PlatformTemplate.version)))
+                    .where(col(PlatformTemplate.template_key).in_(template_keys))
+                    .group_by(col(PlatformTemplate.template_key))
+                ).all()
+            )
+
+        lineage_flags = {
+            lineage: latest_versions.get(latest.template_key, -1) > (latest.fork_baseline_platform_version or -1)
+            for lineage, latest in latest_org_by_lineage.items()
+        }
+        flags: dict[UUID, bool] = {}
+        for template in candidates:
+            assert template.organization_id is not None
+            flags[template.id] = lineage_flags[(template.organization_id, template.template_key)]
+        return flags
+
+    def get_keys_used_by_live_agents(self, org_id: UUID, template_keys: list[str]) -> set[str]:
+        if not template_keys:
             return set()
         used: set[str] = set()
         with Session(self.delegate.engine) as session:
             org_query = (
-                select(AgentTemplate.template_slug)
+                select(AgentTemplate.template_key)
                 .join(Agent, col(Agent.agent_template_id) == col(AgentTemplate.id))
                 .distinct()
                 .where(col(Agent.organization_id) == org_id)
                 .where(col(Agent.deleted_at).is_(None))
-                .where(col(AgentTemplate.template_slug).in_(slugs))
+                .where(col(AgentTemplate.template_key).in_(template_keys))
             )
             used.update(session.exec(org_query).all())
 
             platform_query = (
-                select(PlatformTemplate.template_slug)
+                select(PlatformTemplate.template_key)
                 .join(Agent, col(Agent.platform_template_id) == col(PlatformTemplate.id))
                 .distinct()
                 .where(col(Agent.organization_id) == org_id)
                 .where(col(Agent.deleted_at).is_(None))
-                .where(col(PlatformTemplate.template_slug).in_(slugs))
+                .where(col(PlatformTemplate.template_key).in_(template_keys))
             )
             used.update(session.exec(platform_query).all())
         return used
 
-    def is_org_lineage_used_by_live_agent(self, org_id: UUID, slug: str) -> bool:
+    def is_org_lineage_used_by_live_agent(self, org_id: UUID, template_key: str) -> bool:
         with Session(self.delegate.engine) as session:
             query = (
                 select(Agent.id)
@@ -428,12 +767,12 @@ class TemplateRepository:
                 .where(col(Agent.organization_id) == org_id)
                 .where(col(Agent.deleted_at).is_(None))
                 .where(col(AgentTemplate.organization_id) == org_id)
-                .where(col(AgentTemplate.template_slug) == slug)
+                .where(col(AgentTemplate.template_key) == template_key)
                 .limit(1)
             )
             return session.exec(query).first() is not None
 
-    def purge_org_template_lineage(self, org_id: UUID, slug: str) -> None:
+    def purge_org_template_lineage(self, org_id: UUID, template_key: str) -> None:
         """Delete every org-scoped version, detaching soft-deleted agents first.
 
         Live agents retain their RESTRICT pin and are checked before purge.
@@ -444,7 +783,7 @@ class TemplateRepository:
             template_ids = session.exec(
                 select(AgentTemplate.id)
                 .where(col(AgentTemplate.organization_id) == org_id)
-                .where(col(AgentTemplate.template_slug) == slug)
+                .where(col(AgentTemplate.template_key) == template_key)
             ).all()
             if not template_ids:
                 return
@@ -522,7 +861,7 @@ class TemplateRepository:
         return None
 
     def get_pinned_template_info_for_agents(self, agents: list[Agent]) -> dict[UUID, tuple[str, int]]:
-        """Bulk-resolve (slug, version) for each agent's pinned template."""
+        """Bulk-resolve (template_key, version) for each agent's pinned template."""
         result: dict[UUID, tuple[str, int]] = {}
         org_ids = [a.agent_template_id for a in agents if a.agent_template_id is not None]
         platform_ids = [a.platform_template_id for a in agents if a.platform_template_id is not None]
@@ -542,11 +881,11 @@ class TemplateRepository:
             if a.agent_template_id is not None:
                 t = org_by_id.get(a.agent_template_id)
                 if t:
-                    result[a.id] = (t.template_slug, t.version)
+                    result[a.id] = (t.template_key, t.version)
             elif a.platform_template_id is not None:
                 t = platform_by_id.get(a.platform_template_id)
                 if t:
-                    result[a.id] = (t.template_slug, t.version)
+                    result[a.id] = (t.template_key, t.version)
         return result
 
     def get_required_skill_map_for_agents(self, agents: list[Agent]) -> dict[UUID, dict[UUID, str | None]]:

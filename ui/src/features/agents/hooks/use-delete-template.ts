@@ -12,8 +12,8 @@ export function useDeleteTemplate() {
   const orgApiBase = useOrganizationApiBase();
 
   return useMutation({
-    mutationFn: async (slug: string) => {
-      await api.delete(`${orgApiBase}/templates/${slug}`);
+    mutationFn: async (templateKey: string) => {
+      await api.delete(`${orgApiBase}/templates/${templateKey}`);
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: templatesKey.all });

@@ -49,7 +49,7 @@ _CREATE = {
     "platform": "slack",
     "slack_bot_token": "xoxb-member-agent",
     "slack_app_token": "xapp-1-member-agent",
-    "template_slug": "test-template",
+    "template_key": "test-template",
 }
 _GIVEN = [
     set_env_variable(
@@ -204,7 +204,7 @@ def test_agent_and_creator_access_insert_roll_back_together():
         template_repo = context.injector.get(TemplateRepository)
         template = AgentTemplate(
             organization_id=context.organization.id,
-            template_slug="rollback-template",
+            template_key="rollback-template",
             template_name="Rollback Template",
             template_source=TemplateSource.CUSTOM,
             version=1,

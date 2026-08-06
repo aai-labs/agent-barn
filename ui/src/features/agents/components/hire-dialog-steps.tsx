@@ -97,14 +97,25 @@ export async function downloadTeamsAppPackage(manifest: string, botName: string)
   URL.revokeObjectURL(url);
 }
 
-export function TemplateSourceBadge({ source }: { source: AgentTemplateRead["templateSource"] }) {
+export function TemplateSourceBadge({
+  source,
+  isFork = false,
+}: {
+  source: AgentTemplateRead["templateSource"];
+  isFork?: boolean;
+}) {
   if (source !== "pre-defined") return null;
   return (
     <span
       className="text-[0.6875rem] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full"
-      style={{ color: "var(--ink-3)", background: "var(--line)" }}
+      style={
+        isFork
+          ? { color: "var(--accent-ink)", background: "var(--accent-soft)" }
+          : { color: "var(--ink-3)", background: "var(--line)" }
+      }
+      title={isFork ? "Organization fork of a Platform Template" : "Platform Template"}
     >
-      Pre-defined
+      {isFork ? "Org fork" : "Built-in"}
     </span>
   );
 }
@@ -197,14 +208,14 @@ function ClampedDescription({ text }: { text: string }) {
 }
 
 export function TemplateStep({
-  selectedSlug,
+  selectedKey,
   onPick,
   versions,
   versionsLoading,
   selectedVersion,
   onVersionChange,
 }: {
-  selectedSlug: string | null;
+  selectedKey: string | null;
   onPick: (template: AgentTemplateRead) => void;
   versions: AgentTemplateRead[];
   versionsLoading: boolean;
@@ -265,21 +276,24 @@ export function TemplateStep({
         <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
           {templates.map((t) => (
             <div
-              key={t.templateSlug}
+              key={t.templateKey}
               className="flex flex-col gap-1.5 p-4 rounded-2xl cursor-default transition-colors min-h-[4.5rem]"
               style={{
-                border: selectedSlug === t.templateSlug ? "1.5px solid var(--ink)" : "1.5px solid var(--line)",
-                background: selectedSlug === t.templateSlug ? "var(--bg-soft)" : "var(--bg-elev)",
+                border: selectedKey === t.templateKey ? "1.5px solid var(--ink)" : "1.5px solid var(--line)",
+                background: selectedKey === t.templateKey ? "var(--bg-soft)" : "var(--bg-elev)",
               }}
               onClick={() => onPick(t)}
             >
               <div className="flex items-center justify-between gap-2">
                 <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>{t.templateName}</div>
-                <TemplateSourceBadge source={t.templateSource} />
+                <TemplateSourceBadge
+                  source={t.templateSource}
+                  isFork={Boolean(t.forkedFromPlatformTemplateId)}
+                />
               </div>
               {t.description && <ClampedDescription text={t.description} />}
               <div className="mt-1">
-                {selectedSlug === t.templateSlug ? (
+                {selectedKey === t.templateKey ? (
                   <div onClick={(e) => e.stopPropagation()}>
                     {versionsLoading ? (
                       <span className="text-[0.75rem]" style={{ color: "var(--ink-3)" }}>Loading…</span>
@@ -1199,7 +1213,10 @@ export function DetailsStep({
         <div className="flex-1">
           <div className="flex items-center gap-2">
             <div className="font-semibold text-sm" style={{ color: "var(--ink)" }}>{template.templateName}</div>
-            <TemplateSourceBadge source={template.templateSource} />
+            <TemplateSourceBadge
+              source={template.templateSource}
+              isFork={Boolean(template.forkedFromPlatformTemplateId)}
+            />
           </div>
           <div className="text-[0.8125rem] font-mono" style={{ color: "var(--ink-3)" }}>
             v{template.version}
