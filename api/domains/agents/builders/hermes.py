@@ -112,7 +112,7 @@ def build_hermes_config(
         "reply_in_thread": True,
         "broadcast_reply": False,
         "require_mention": True,
-        "strict_mention": False,
+        "strict_mention": True,
         "unauthorized_dm_behavior": "ignore",
     }
     return cfg
@@ -130,7 +130,7 @@ def build_hermes_config_telegram(
         enabled_plugins.append("telegram-channel-allowlist")
     if dm_policy != "open":
         enabled_plugins.append("telegram-deny-dms")
-    return _hermes_config_core(
+    cfg = _hermes_config_core(
         model,
         litellm_base_url,
         enabled_plugins,
@@ -141,6 +141,11 @@ def build_hermes_config_telegram(
         },
         approval_mode=approval_mode,
     )
+    cfg["telegram"] = {
+        "require_mention": True,
+        "exclusive_bot_mentions": True,
+    }
+    return cfg
 
 
 def build_hermes_config_map(

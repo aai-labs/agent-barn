@@ -34,6 +34,16 @@ def test_build_hermes_config_unauthorized_dm_behavior_is_ignore():
     assert_that(cfg["slack"]["unauthorized_dm_behavior"], equal_to("ignore"))
 
 
+def test_build_hermes_config_strict_mention_is_enabled():
+    cfg = build_hermes_config("litellm/qwen3", "http://litellm:4000")
+    assert_that(cfg["slack"]["strict_mention"], equal_to(True))
+
+
+def test_build_hermes_config_require_mention_is_enabled():
+    cfg = build_hermes_config("litellm/qwen3", "http://litellm:4000")
+    assert_that(cfg["slack"]["require_mention"], equal_to(True))
+
+
 def test_build_hermes_config_plugins_has_deny_dms():
     cfg = build_hermes_config("litellm/qwen3", "http://litellm:4000")
     assert_that("slack-deny-dms" in cfg["plugins"]["enabled"], equal_to(True))
@@ -469,6 +479,16 @@ def test_build_hermes_config_telegram_sets_model():
 def test_build_hermes_config_telegram_has_no_slack_section():
     cfg = build_hermes_config_telegram("litellm/qwen3", "http://litellm:4000")
     assert_that(cfg, is_not(has_key("slack")))
+
+
+def test_build_hermes_config_telegram_require_mention_is_enabled():
+    cfg = build_hermes_config_telegram("litellm/qwen3", "http://litellm:4000")
+    assert_that(cfg["telegram"]["require_mention"], equal_to(True))
+
+
+def test_build_hermes_config_telegram_exclusive_bot_mentions_is_enabled():
+    cfg = build_hermes_config_telegram("litellm/qwen3", "http://litellm:4000")
+    assert_that(cfg["telegram"]["exclusive_bot_mentions"], equal_to(True))
 
 
 def test_build_hermes_config_telegram_has_telegram_platform():

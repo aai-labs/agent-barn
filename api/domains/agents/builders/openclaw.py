@@ -120,6 +120,8 @@ def build_openclaw_config_overlay(
                 "groupPolicy": slack_group_policy,
                 "dmPolicy": openclaw_dm_policy,
                 "allowFrom": allow_from,
+                "requireMention": True,
+                "thread": {"requireExplicitMention": True},
                 "replyToModeByChatType": {
                     "direct": direct_reply_mode,
                     "group": "all",
@@ -186,7 +188,11 @@ def build_openclaw_config_overlay_telegram(
                 "groupPolicy": group_policy,
                 "dmPolicy": openclaw_dm_policy,
                 "allowFrom": allow_from,
-                **({"groups": {cid: {} for cid in (allowed_chat_ids or [])}} if group_policy == "allowlist" else {}),
+                **(
+                    {"groups": {cid: {"requireMention": True} for cid in (allowed_chat_ids or [])}}
+                    if group_policy == "allowlist"
+                    else {}
+                ),
             }
         },
     )

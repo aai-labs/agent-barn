@@ -29,6 +29,23 @@ A failed Slack or Telegram credential check or Kubernetes start can place the ag
 
 Runtime is persisted as `agent_type`; platform is persisted separately. Both runtimes receive rendered template files, skills, integrations, model/LiteLLM settings, and ingest credentials, but their filesystem and configuration shapes differ.
 
+## Mention gating
+
+In a shared channel or group an agent responds only to messages that explicitly mention it. Every agent owns its own bot identity and therefore receives every message in rooms it belongs to, so mention gating is the only thing that keeps an untagged agent from acting on a message addressed to another agent. Gating requires a fresh mention per message: participating earlier in a thread does not entitle an agent to later messages. Direct messages are exempt.
+
+Builders set this per runtime and platform:
+
+| Runtime  | Platform | Generated configuration                                                                       |
+| -------- | -------- | --------------------------------------------------------------------------------------------- |
+| Hermes   | Slack    | `slack.require_mention` and `slack.strict_mention`                                              |
+| Hermes   | Telegram | `telegram.require_mention` and `telegram.exclusive_bot_mentions`                                |
+| OpenClaw | Slack    | `channels.slack.requireMention`, `channels.slack.thread.requireExplicitMention`, and per-channel `requireMention` |
+| OpenClaw | Telegram | per-group `channels.telegram.groups.<chat_id>.requireMention`                                   |
+
+Two residual gaps are runtime limitations rather than configuration choices. Hermes Telegram treats a direct reply to the agent's own message as a trigger and exposes no switch to disable it; OpenClaw Telegram behaves the same way. Both remain addressed to a single agent, so neither reopens the cross-agent case. OpenClaw Telegram also emits no `groups` map when the group policy is open, leaving gating to the runtime default.
+
+Runtime configuration is generated at agent start, so a running agent keeps the gating it was started with until it is stopped and started again.
+
 ## Telemetry and costs
 
 Agent runtimes report messages and tool-call state to the separate Ingest API using the per-start ingest key. Ingest authentication currently remains valid after stop because status is not checked and the stored key is not cleared. Costs follow a separate path: the API queries LiteLLM and attributes spend through each agent's LiteLLM key identity.
