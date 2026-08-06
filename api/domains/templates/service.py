@@ -439,10 +439,8 @@ class TemplateService:
             bootstrap_md=source.bootstrap_md,
             heartbeat_md=source.heartbeat_md,
         )
-        self.repository.save_draft(draft)
         skill_map = self.repository.get_platform_required_skill_map(source.id)
-        if skill_map:
-            self.repository.save_draft_skills(draft.id, skill_map)
+        self.repository.save_draft_with_skills(draft, skill_map)
         return self.get_draft(template_key)
 
     def create_new_template_draft(self, data: PlatformTemplateDraftCreate) -> PlatformTemplateDraftRead:
@@ -466,10 +464,8 @@ class TemplateService:
                 heartbeat_md=data.heartbeat_md or DEFAULT_HEARTBEAT_MD,
             )
 
-        draft = self._allocate_unique_key(build, self.repository.save_new_draft)
         skills_map = self._skills_map(data.required_skill_ids, data.required_skill_groups)
-        if skills_map:
-            self.repository.save_draft_skills(draft.id, skills_map)
+        draft = self._allocate_unique_key(build, lambda d: self.repository.save_new_draft_with_skills(d, skills_map))
         return self.get_draft(draft.template_key)
 
     def update_draft(self, template_key: str, data: PlatformTemplateDraftUpdate) -> PlatformTemplateDraftRead:
@@ -490,7 +486,6 @@ class TemplateService:
         ):
             if field in updated:
                 setattr(draft, field, updated[field])
-        self.repository.save_draft(draft)
 
         old_map = self.repository.get_draft_required_skill_map(draft.id)
         if data.required_skill_ids is None:
@@ -506,7 +501,7 @@ class TemplateService:
             if group_skill_ids:
                 self._validate_global_skill_ids(group_skill_ids)
             groups_map = {sid: group.group_key for group in data.required_skill_groups for sid in group.skill_ids}
-        self.repository.save_draft_skills(draft.id, {sid: None for sid in standalone_ids} | groups_map)
+        self.repository.update_draft_with_skills(draft, {sid: None for sid in standalone_ids} | groups_map)
         return self.get_draft(template_key)
 
     def discard_draft(self, template_key: str) -> None:
@@ -537,10 +532,7 @@ class TemplateService:
             bootstrap_md=draft.bootstrap_md,
             heartbeat_md=draft.heartbeat_md,
         )
-        self.repository.save_platform_template(published)
         skill_map = self.repository.get_draft_required_skill_map(draft.id)
-        if skill_map:
-            self.repository.save_platform_template_skills(published.id, skill_map)
-        self.repository.delete_draft(draft.id)
+        published = self.repository.publish_draft_with_skills(published, draft.id, skill_map)
         skills = self.repository.get_platform_required_skills(published.id)
         return self.repository.to_read(published, skills)

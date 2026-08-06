@@ -391,6 +391,25 @@ class TemplateRepository:
         self.delegate.save(template)
         return template
 
+    def publish_draft_with_skills(
+        self,
+        published: PlatformTemplate,
+        draft_id: UUID,
+        group_keys_by_skill_id: dict[UUID, str | None],
+    ) -> PlatformTemplate:
+        """Persist the newly published platform template version, its required
+        skills, and the draft's deletion in a single transaction."""
+        with Session(self.delegate.engine) as session:
+            session.add(published)
+            session.flush()
+            for skill_id, group_key in group_keys_by_skill_id.items():
+                session.add(PlatformTemplateSkill(template_id=published.id, skill_id=skill_id, group_key=group_key))
+            purge = delete(PlatformTemplateDraft).where(col(PlatformTemplateDraft.id) == draft_id)
+            session.exec(purge)  # type: ignore[call-overload]
+            session.commit()
+            session.refresh(published)
+        return published
+
     def save_platform_template_skills(self, template_id: UUID, group_keys_by_skill_id: dict[UUID, str | None]) -> None:
         """Diff-sync a platform template's required-skill rows (see _diff_sync_skill_rows)."""
         with Session(self.delegate.engine) as session:
@@ -437,41 +456,71 @@ class TemplateRepository:
             query = select(PlatformTemplateDraft).where(col(PlatformTemplateDraft.template_key) == template_key)
             return session.exec(query).first()
 
-    def save_new_draft(self, draft: PlatformTemplateDraft) -> PlatformTemplateDraft:
-        """Persist a new platform lineage draft with a globally unique key."""
+    def save_new_draft_with_skills(
+        self,
+        draft: PlatformTemplateDraft,
+        group_keys_by_skill_id: dict[UUID, str | None],
+    ) -> PlatformTemplateDraft:
+        """Persist a new platform lineage draft, with a globally unique key, and
+        its required skills atomically."""
         with Session(self.delegate.engine) as session:
             self._lock_template_key_allocation(session)
             if self._template_key_exists(session, draft.template_key):
                 raise TemplateKeyCollisionError(draft.template_key)
             session.add(draft)
+            session.flush()
+            for skill_id, group_key in group_keys_by_skill_id.items():
+                session.add(PlatformTemplateDraftSkill(draft_id=draft.id, skill_id=skill_id, group_key=group_key))
             session.commit()
             session.refresh(draft)
         return draft
 
-    def save_draft(self, draft: PlatformTemplateDraft) -> PlatformTemplateDraft:
-        self.delegate.save(draft)
+    def save_draft_with_skills(
+        self,
+        draft: PlatformTemplateDraft,
+        group_keys_by_skill_id: dict[UUID, str | None],
+    ) -> PlatformTemplateDraft:
+        """Persist a draft seeded from an existing lineage, and its required
+        skills, atomically. The draft's template_key intentionally reuses the
+        source lineage's key, so no uniqueness check runs here."""
+        with Session(self.delegate.engine) as session:
+            session.add(draft)
+            session.flush()
+            for skill_id, group_key in group_keys_by_skill_id.items():
+                session.add(PlatformTemplateDraftSkill(draft_id=draft.id, skill_id=skill_id, group_key=group_key))
+            session.commit()
+            session.refresh(draft)
         return draft
 
-    def delete_draft(self, draft_id: UUID) -> None:
+    def update_draft_with_skills(
+        self,
+        draft: PlatformTemplateDraft,
+        group_keys_by_skill_id: dict[UUID, str | None],
+    ) -> PlatformTemplateDraft:
+        """Persist edits to an existing draft and diff-sync its required-skill
+        rows atomically (see _diff_sync_skill_rows)."""
         with Session(self.delegate.engine) as session:
-            purge = delete(PlatformTemplateDraft).where(col(PlatformTemplateDraft.id) == draft_id)
-            session.exec(purge)  # type: ignore[call-overload]
-            session.commit()
-
-    def save_draft_skills(self, draft_id: UUID, group_keys_by_skill_id: dict[UUID, str | None]) -> None:
-        """Diff-sync a draft's required-skill rows (see _diff_sync_skill_rows)."""
-        with Session(self.delegate.engine) as session:
+            session.add(draft)
+            session.flush()
             existing_rows = session.exec(
-                select(PlatformTemplateDraftSkill).where(col(PlatformTemplateDraftSkill.draft_id) == draft_id)
+                select(PlatformTemplateDraftSkill).where(col(PlatformTemplateDraftSkill.draft_id) == draft.id)
             ).all()
             _diff_sync_skill_rows(
                 session,
                 existing_rows,
                 group_keys_by_skill_id,
                 lambda skill_id, group_key: PlatformTemplateDraftSkill(
-                    draft_id=draft_id, skill_id=skill_id, group_key=group_key
+                    draft_id=draft.id, skill_id=skill_id, group_key=group_key
                 ),
             )
+            session.commit()
+            session.refresh(draft)
+        return draft
+
+    def delete_draft(self, draft_id: UUID) -> None:
+        with Session(self.delegate.engine) as session:
+            purge = delete(PlatformTemplateDraft).where(col(PlatformTemplateDraft.id) == draft_id)
+            session.exec(purge)  # type: ignore[call-overload]
             session.commit()
 
     def get_draft_required_skills(self, draft_id: UUID) -> list[tuple[Skill, str | None]]:
