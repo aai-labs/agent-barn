@@ -599,6 +599,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
                 return { ...prev, [groupKey]: next };
               })
             }
+            platform={platform}
           />
         )}
       </div>

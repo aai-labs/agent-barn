@@ -14,7 +14,16 @@ from hamcrest import (
 )
 from starlette.testclient import TestClient
 
-from api.domains.agents.models import AgentPlatform, AgentStatus, AgentType, SecretProvider
+from api.domains.agents.models import (
+    AgentPlatform,
+    AgentSecret,
+    AgentStatus,
+    AgentType,
+    SecretProvider,
+    SlackContent,
+    encrypt_content,
+    validate_content,
+)
 from api.domains.agents.repository import AgentRepository
 from api.domains.agents.service import AgentService
 from api.domains.events.catalog import AGENT_CREATED, AGENT_STARTED, AGENT_STOPPED
@@ -2501,6 +2510,68 @@ def test_create_agent_duplicate_skill_ids_assigns_skill_once():
             assert_that(len(agent_skills), equal_to(1))
 
 
+# --- aai-cli Slack secret mirrors the gateway bot token ---
+
+
+def test_create_slack_agent_with_slack_skill_mirrors_bot_token_secret():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Slack Skill", required_providers=[SecretProvider.SLACK]),
+        ]
+    ) as context:
+        from api.domains.agents.models import decrypt_content
+
+        client: TestClient = context.client
+        payload = {**_VALID_CREATE, "skill_ids": [str(context.skill.id)]}
+
+        with when("I create a Slack agent with the Slack skill and no explicit slack secret"):
+            response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("it returns 201 and the mirrored secret matches the gateway bot token"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            from uuid import UUID
+
+            repository: AgentRepository = context.injector.get(AgentRepository)
+            secret = repository.get_secret(UUID(response.json()["id"]), SecretProvider.SLACK)
+            assert secret is not None
+            assert secret.content is not None
+            content = decrypt_content(SecretProvider.SLACK, secret.content, TEST_ENCRYPTION_KEY)
+            assert_that(content, equal_to(SlackContent(token=_VALID_CREATE["slack_bot_token"])))
+
+
+def test_create_agent_slack_skill_on_non_slack_platform_returns_400():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Slack Skill", required_providers=[SecretProvider.SLACK]),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        payload = {**_VALID_CREATE_TEAMS, "skill_ids": [str(context.skill.id)]}
+
+        with when("I create a Teams agent with the Slack skill"):
+            response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("it returns 400 explaining the skill requires the Slack platform"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], contains_string("Slack Skill"))
+            assert_that(response.json()["detail"], contains_string("Slack platform"))
+
+
+def test_create_agent_rejects_explicit_slack_secret():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        payload = {**_VALID_CREATE, "secrets": [{"provider": "slack", "content": {"token": "xoxb-manual"}}]}
+
+        with when("I create an agent submitting a slack secret directly"):
+            response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("it returns 400"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], contains_string("managed automatically"))
+
+
 # --- skill assignment on agent update ---
 
 
@@ -2612,6 +2683,149 @@ def test_patch_agent_add_skill_missing_provider_returns_400():
             assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
             assert_that(response.json()["detail"], contains_string("GitHub Skill"))
             assert_that(response.json()["detail"], contains_string("github"))
+
+
+def test_patch_agent_adds_slack_skill_mirrors_bot_token_secret():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(bot_token=TEST_SLACK_BOT_TOKEN),
+            there_is_a_skill(name="Slack Skill", required_providers=[SecretProvider.SLACK]),
+        ]
+    ) as context:
+        from api.domains.agents.models import decrypt_content
+
+        client: TestClient = context.client
+
+        with when("I add the Slack skill via PATCH without submitting a secret"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"skill_ids": [str(context.skill.id)]},
+                headers=_auth(context),
+            )
+
+        with then("it returns 200 and the mirrored secret matches the gateway bot token"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            repository: AgentRepository = context.injector.get(AgentRepository)
+            secret = repository.get_secret(context.agent.id, SecretProvider.SLACK)
+            assert secret is not None
+            assert secret.content is not None
+            content = decrypt_content(SecretProvider.SLACK, secret.content, TEST_ENCRYPTION_KEY)
+            assert_that(content, equal_to(SlackContent(token=TEST_SLACK_BOT_TOKEN)))
+
+
+def test_patch_agent_removes_slack_skill_deletes_mirrored_secret():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(bot_token=TEST_SLACK_BOT_TOKEN),
+            there_is_a_skill(name="Slack Skill", required_providers=[SecretProvider.SLACK]),
+            skill_is_assigned_to_agent(),
+        ]
+    ) as context:
+        repository: AgentRepository = context.injector.get(AgentRepository)
+        repository.save_secret(
+            AgentSecret(
+                agent_id=context.agent.id,
+                provider=SecretProvider.SLACK,
+                secret_name="Slack credential",
+                content=encrypt_content(
+                    validate_content(SecretProvider.SLACK, {"token": TEST_SLACK_BOT_TOKEN}), TEST_ENCRYPTION_KEY
+                ),
+            )
+        )
+        client: TestClient = context.client
+
+        with when("I remove the Slack skill via PATCH"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"removed_skill_ids": [str(context.skill.id)]},
+                headers=_auth(context),
+            )
+
+        with then("it returns 200 and the mirrored secret is gone"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            secret = repository.get_secret(context.agent.id, SecretProvider.SLACK)
+            assert_that(secret, none())
+
+
+def test_patch_agent_rotates_slack_bot_token_resyncs_mirrored_secret():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(bot_token=TEST_SLACK_BOT_TOKEN),
+            there_is_a_skill(name="Slack Skill", required_providers=[SecretProvider.SLACK]),
+            skill_is_assigned_to_agent(),
+        ]
+    ) as context:
+        from api.domains.agents.models import decrypt_content
+
+        repository: AgentRepository = context.injector.get(AgentRepository)
+        repository.save_secret(
+            AgentSecret(
+                agent_id=context.agent.id,
+                provider=SecretProvider.SLACK,
+                secret_name="Slack credential",
+                content=encrypt_content(
+                    validate_content(SecretProvider.SLACK, {"token": TEST_SLACK_BOT_TOKEN}), TEST_ENCRYPTION_KEY
+                ),
+            )
+        )
+        client: TestClient = context.client
+        new_token = "xoxb-rotated-token"
+
+        with when("I rotate the gateway bot token via PATCH"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"slack_bot_token": new_token, "slack_app_token": "xapp-1-real-app-token"},
+                headers=_auth(context),
+            )
+
+        with then("it returns 200 and the mirrored secret is re-synced to the new token"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            secret = repository.get_secret(context.agent.id, SecretProvider.SLACK)
+            assert secret is not None
+            assert secret.content is not None
+            content = decrypt_content(SecretProvider.SLACK, secret.content, TEST_ENCRYPTION_KEY)
+            assert_that(content, equal_to(SlackContent(token=new_token)))
+
+
+def test_patch_agent_add_slack_skill_on_non_slack_platform_returns_400():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(platform=AgentPlatform.TEAMS),
+            there_is_a_skill(name="Slack Skill", required_providers=[SecretProvider.SLACK]),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("I add the Slack skill to a Teams agent via PATCH"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"skill_ids": [str(context.skill.id)]},
+                headers=_auth(context),
+            )
+
+        with then("it returns 400 explaining the skill requires the Slack platform"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], contains_string("Slack platform"))
+
+
+def test_patch_agent_rejects_explicit_slack_secret():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I submit a slack secret directly via PATCH"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"secrets": [{"provider": "slack", "content": {"token": "xoxb-manual"}}]},
+                headers=_auth(context),
+            )
+
+        with then("it returns 400"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], contains_string("managed automatically"))
 
 
 # --- skills.json in ConfigMap on start ---

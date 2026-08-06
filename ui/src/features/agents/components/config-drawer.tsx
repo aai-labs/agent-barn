@@ -233,6 +233,9 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
     : (enabledKeys[0] ?? "personality");
 
   const configuredSecrets = agent.secrets ?? [];
+  // Slack is derived from the agent's gateway bot token and managed automatically
+  // via skill add/remove — never listed as a manually addable/removable integration.
+  const manuallyManagedSecrets = configuredSecrets.filter((s) => s.provider !== "slack");
   const validateIntegration = useValidateIntegration();
   const [validationState, setValidationState] = useState<
     Record<string, IntegrationValidationResult | "loading">
@@ -337,9 +340,11 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
   ];
 
   // Always include a draft entry for every newly required provider so forms render.
-  const effectiveRepinSecretDrafts: IntegrationDraft[] = newRequiredProviderIds.map(
-    (p) => repinSecretDrafts.find((d) => d.provider === p) ?? { provider: p, content: {} },
-  );
+  // Slack is excluded — it's never manually configured, the API derives it from
+  // the agent's gateway bot token and rejects an explicit secrets entry for it.
+  const effectiveRepinSecretDrafts: IntegrationDraft[] = newRequiredProviderIds
+    .filter((p) => p !== "slack")
+    .map((p) => repinSecretDrafts.find((d) => d.provider === p) ?? { provider: p, content: {} });
 
   function setRepinSecretField(provider: string, key: string, value: string) {
     setRepinSecretDrafts((prev) => {
@@ -693,8 +698,9 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                   </div>
                   <div className="flex flex-col gap-1.5">
                     {newStandaloneRequiredSkills.map((skill) => {
+                      // Slack is never "missing" — the API derives it automatically.
                       const missingProviders = skill.requiredProviders.filter(
-                        (p) => !existingSecretProviders.has(p),
+                        (p) => p !== "slack" && !existingSecretProviders.has(p),
                       );
                       return (
                         <div
@@ -723,8 +729,9 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                         Choose at least one:
                       </div>
                       {group.members.map((member) => {
+                        // Slack is never "missing" — the API derives it automatically.
                         const missingProviders = member.requiredProviders.filter(
-                          (p) => !existingSecretProviders.has(p),
+                          (p) => p !== "slack" && !existingSecretProviders.has(p),
                         );
                         return (
                           <label
@@ -756,6 +763,21 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                   ))}
 
                   {newRequiredProviderIds.map((providerId) => {
+                    if (providerId === "slack") {
+                      return (
+                        <div
+                          key={providerId}
+                          className="px-4 py-3 rounded-2xl text-[0.8125rem]"
+                          style={{ border: "1px solid var(--line)", background: "var(--bg-soft)", color: "var(--ink-3)" }}
+                        >
+                          <span className="font-medium" style={{ color: "var(--ink)" }}>
+                            Slack
+                          </span>{" "}
+                          — uses this agent&apos;s existing Slack bot token automatically. No credentials needed here.
+                        </div>
+                      );
+                    }
+
                     const providerSpec = getIntegrationProvider(providerId);
                     const draft = effectiveRepinSecretDrafts.find((d) => d.provider === providerId);
                     if (!draft) return null;
@@ -1004,9 +1026,9 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                 to change one, re-enter its fields below.
               </Hint>
 
-              {configuredSecrets.length > 0 && (
+              {manuallyManagedSecrets.length > 0 && (
                 <div className="flex flex-col gap-2">
-                  {configuredSecrets.map((s) => {
+                  {manuallyManagedSecrets.map((s) => {
                     const label = getIntegrationProvider(s.provider)?.label ?? s.provider;
                     const isPendingRemoval = removedProviders.includes(s.provider);
                     const isShared = !!s.sharedCredentialId;

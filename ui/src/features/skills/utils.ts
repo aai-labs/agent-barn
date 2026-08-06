@@ -12,6 +12,7 @@ export const SKILL_PROVIDER_LABELS: Record<string, string> = {
   google_calendar: "Google Calendar",
   zoho_mail: "Zoho Mail",
   zoho_calendar: "Zoho Calendar",
+  slack: "Slack",
   pipedrive: "Pipedrive",
 };
 

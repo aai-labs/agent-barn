@@ -290,16 +290,33 @@ class AgentService:
             and all(p in configured_providers for p in skill.required_providers)
         ]
 
+    def _remaining_skills(
+        self,
+        agent_id: UUID,
+        added_skill_ids: list[UUID],
+        removed_skill_ids: list[UUID],
+    ) -> list[Skill]:
+        """Skills the agent would have after applying the given add/remove sets."""
+        current_skill_rows = self.repository.get_skills_for_agent(agent_id)
+        current_skill_ids = {row.skill_id for row in current_skill_rows}
+        remaining_skill_ids = (current_skill_ids - set(removed_skill_ids)) | set(added_skill_ids)
+        if not remaining_skill_ids:
+            return []
+        return self.skill_repository.get_many_by_ids(list(remaining_skill_ids))
+
     def _resolve_skills(
         self,
         skill_ids: list[UUID],
         secrets_data: list[AgentSecretCreate],
         org_id: UUID,
+        platform: AgentPlatform,
         extra_providers: set[SecretProvider] | None = None,
     ) -> list[Skill]:
         if not skill_ids:
             return []
         submitted_providers = {item.provider for item in secrets_data}
+        if platform == AgentPlatform.SLACK:
+            submitted_providers = submitted_providers | {SecretProvider.SLACK}
         if extra_providers:
             submitted_providers |= extra_providers
         accessible = {s.id: s for s in self.skill_repository.find_accessible_for_org(org_id)}
@@ -310,6 +327,11 @@ class AgentService:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"Skill {skill_id} not found",
+                )
+            if SecretProvider.SLACK in skill.required_providers and platform != AgentPlatform.SLACK:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Skill '{skill.name}' requires the agent to run on the Slack platform",
                 )
             missing = [p for p in skill.required_providers if p not in submitted_providers]
             if missing:
@@ -338,11 +360,8 @@ class AgentService:
                         detail=f"Skill {skill_id} not found",
                     )
 
-        current_skill_rows = self.repository.get_skills_for_agent(agent.id)
-        current_skill_ids = {row.skill_id for row in current_skill_rows}
-        remaining_skill_ids = (current_skill_ids - set(data.removed_skill_ids)) | set(data.skill_ids)
-
-        if not remaining_skill_ids:
+        remaining_skills = self._remaining_skills(agent.id, data.skill_ids, data.removed_skill_ids)
+        if not remaining_skills:
             return
 
         current_secrets = self.repository.get_secrets_for_agent(agent.id)
@@ -356,9 +375,15 @@ class AgentService:
             )
             shared_attach_providers = {c.provider for c in shared_creds}
         remaining_providers = (current_providers - removed_providers) | upsert_providers | shared_attach_providers
+        if agent.platform == AgentPlatform.SLACK:
+            remaining_providers = remaining_providers | {SecretProvider.SLACK}
 
-        remaining_skills = self.skill_repository.get_many_by_ids(list(remaining_skill_ids))
         for skill in remaining_skills:
+            if SecretProvider.SLACK in skill.required_providers and agent.platform != AgentPlatform.SLACK:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Skill '{skill.name}' requires the agent to run on the Slack platform",
+                )
             missing = [p for p in skill.required_providers if p not in remaining_providers]
             if missing:
                 names = ", ".join(p for p in missing)
@@ -481,6 +506,12 @@ class AgentService:
         org_id = self._org_id(context)
         self.authorization.require_collection_scope(context, PermissionKey.AGENT_CREATE)
         self._ensure_model_allowed(data.model, org_id)
+
+        if any(item.provider == SecretProvider.SLACK for item in data.secrets):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Slack credentials are derived from the agent's Slack bot token and managed automatically.",
+            )
 
         if data.platform == AgentPlatform.SLACK:
             assert data.slack_bot_token is not None
@@ -667,9 +698,32 @@ class AgentService:
             )
             secrets.append(saved)
 
-        # Resolve and validate skills before any DB writes.
+        # Resolve and validate skills after all other secrets (manual + shared)
+        # are known, so the Slack-derive check below sees the final skill set.
         shared_providers = {s.provider for s in secrets if s.shared_credential_id}
-        skills_to_assign = self._resolve_skills(data.skill_ids, data.secrets, org_id, extra_providers=shared_providers)
+        skills_to_assign = self._resolve_skills(
+            data.skill_ids, data.secrets, org_id, data.platform, extra_providers=shared_providers
+        )
+
+        # The Slack Agent Secret used by aai-cli is never submitted by the client
+        # (see the rejection check above) — mirror it from the same gateway bot
+        # token whenever a resolved skill requires it. Runs after every other
+        # secret validation/persist step above, so a failure there never leaves
+        # this mirrored secret orphaned.
+        if data.platform == AgentPlatform.SLACK and any(
+            SecretProvider.SLACK in skill.required_providers for skill in skills_to_assign
+        ):
+            slack_content = validate_content(SecretProvider.SLACK, {"token": data.slack_bot_token})
+            secrets.append(
+                self.repository.save_secret(
+                    AgentSecret(
+                        agent_id=agent.id,
+                        provider=SecretProvider.SLACK,
+                        secret_name=PROVIDER_DISPLAY_NAMES[SecretProvider.SLACK],
+                        content=encrypt_content(slack_content, self.config.agent_token_encryption_key),
+                    )
+                )
+            )
 
         if skills_to_assign:
             self.repository.save_skills([AgentSkill(agent_id=agent.id, skill_id=s.id) for s in skills_to_assign])
@@ -762,6 +816,14 @@ class AgentService:
         updated = data.model_dump(exclude_unset=True)
         if _CREDENTIAL_FIELDS & updated.keys():
             self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_SECRET_MANAGE)
+
+        if any(item.provider == SecretProvider.SLACK for item in data.secrets or []) or (
+            SecretProvider.SLACK in (data.removed_secret_providers or [])
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Slack credentials are derived from the agent's Slack bot token and managed automatically.",
+            )
 
         if agent.status == AgentStatus.RUNNING:
             raise HTTPException(
@@ -1033,6 +1095,49 @@ class AgentService:
             self.repository.remove_skill(agent.id, skill_id)
         for skill_id in dict.fromkeys(data.skill_ids):
             self.repository.add_skill(agent.id, skill_id)
+
+        # Keep the aai-cli Slack Agent Secret in sync with the gateway bot token:
+        # write/refresh it whenever a remaining skill requires it (covers skill add
+        # and bot token rotation), delete it when no remaining skill needs it
+        # anymore (covers skill removal). Runs last, after every other
+        # secret/skill validation and persistence step above, so a failure
+        # earlier in this method never leaves this mirrored secret orphaned.
+        if agent.platform == AgentPlatform.SLACK and (
+            data.skill_ids or data.removed_skill_ids or "slack_bot_token" in updated
+        ):
+            remaining_skills = self._remaining_skills(agent.id, [], [])
+            slack_required = any(SecretProvider.SLACK in skill.required_providers for skill in remaining_skills)
+
+            if slack_required:
+                if "slack_bot_token" in updated:
+                    bot_token = updated["slack_bot_token"]
+                else:
+                    existing_slack_config = self.repository.get_slack_config(agent.id)
+                    bot_token = (
+                        decrypt_token(existing_slack_config.bot_token_encrypted, self.config.agent_token_encryption_key)
+                        if existing_slack_config
+                        else None
+                    )
+                if bot_token:
+                    slack_secret_content = encrypt_content(
+                        validate_content(SecretProvider.SLACK, {"token": bot_token}),
+                        self.config.agent_token_encryption_key,
+                    )
+                    existing_slack_secret = self.repository.get_secret(agent.id, SecretProvider.SLACK)
+                    if existing_slack_secret:
+                        existing_slack_secret.content = slack_secret_content
+                        self.repository.save_secret(existing_slack_secret)
+                    else:
+                        self.repository.save_secret(
+                            AgentSecret(
+                                agent_id=agent.id,
+                                provider=SecretProvider.SLACK,
+                                secret_name=PROVIDER_DISPLAY_NAMES[SecretProvider.SLACK],
+                                content=slack_secret_content,
+                            )
+                        )
+            else:
+                self.repository.delete_secret(agent.id, SecretProvider.SLACK)
 
         self.repository.save(agent)
         return self._get_agent_read(agent, context)

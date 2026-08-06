@@ -76,6 +76,7 @@ _GOOGLE_CALENDAR = validate_content(
     SecretProvider.GOOGLE_CALENDAR,
     {"access_token": "gc_tok", "calendar_id": "primary"},
 )
+_SLACK = validate_content(SecretProvider.SLACK, {"token": "xoxb-slack-tok"})
 _PIPEDRIVE = cast(
     PipedriveContent,
     validate_content(SecretProvider.PIPEDRIVE, {"api_token": "pd_tok"}),
@@ -93,6 +94,7 @@ def test_env_var_for():
     assert env_var_for("google.gmail_refresh_token") == "AAI_SECRET_GOOGLE_GMAIL_REFRESH_TOKEN"
     assert env_var_for("zoho.client_secret") == "AAI_SECRET_ZOHO_CLIENT_SECRET"
     assert env_var_for("zoho.mail_refresh_token") == "AAI_SECRET_ZOHO_MAIL_REFRESH_TOKEN"
+    assert env_var_for("slack.token") == "AAI_SECRET_SLACK_TOKEN"
     assert env_var_for("pipedrive.api_token") == "AAI_SECRET_PIPEDRIVE_API_TOKEN"
 
 
@@ -254,6 +256,20 @@ def test_setup_sh_zoho_mail_sets_both_secrets():
     )
 
 
+def test_config_toml_slack_uses_bearer_token_profile():
+    toml = build_config_toml({SecretProvider.SLACK: _SLACK})
+    assert "[profiles.slack-work]" in toml
+    assert 'provider = "slack"' in toml
+    assert 'auth_type = "bearer_token"' in toml
+    assert 'token_secret = "slack.token"' in toml
+    assert "xoxb-slack-tok" not in toml
+
+
+def test_setup_sh_slack_sets_secret():
+    setup = build_setup_sh([SecretProvider.SLACK])
+    assert f"printf '%s' \"$AAI_SECRET_SLACK_TOKEN\" | aai-cli --config {CONFIG_PATH} secrets set slack.token" in setup
+
+
 def test_setup_sh_pipedrive_sets_secret():
     setup = build_setup_sh([SecretProvider.PIPEDRIVE])
     assert (
@@ -290,6 +306,11 @@ def test_build_env_zoho_mail_emits_both_secrets():
         "AAI_SECRET_ZOHO_CLIENT_SECRET": "z_client_secret",
         "AAI_SECRET_ZOHO_MAIL_REFRESH_TOKEN": "z_refresh_tok",
     }
+
+
+def test_build_env_slack_maps_token():
+    env = build_env({SecretProvider.SLACK: _SLACK})
+    assert env == {"AAI_SECRET_SLACK_TOKEN": "xoxb-slack-tok"}
 
 
 def test_build_env_pipedrive_emits_secret():
@@ -368,6 +389,13 @@ def test_tool_context_md_omits_non_aai_cli_providers():
 def test_tool_context_md_empty_when_only_firecrawl():
     md = build_tool_context_md({SecretProvider.FIRECRAWL: FirecrawlContent(api_key="fc-x")})
     assert md == ""
+
+
+def test_tool_context_md_omits_slack():
+    # Slack has no per-secret metadata worth surfacing (unlike site URL/owner for
+    # Jira/GitHub/etc.) — deliberately excluded from _TOOL_CONTEXT_PROVIDERS, same as
+    # Gmail/Zoho Mail.
+    assert build_tool_context_md({SecretProvider.SLACK: _SLACK}) == ""
 
 
 def test_tool_context_md_empty_when_only_pipedrive():
@@ -522,6 +550,11 @@ def test_integrations_policy_md_covers_non_store_providers():
     assert "--profile zoho-mail-rest" in md
 
 
+def test_integrations_policy_md_covers_slack():
+    md = build_integrations_policy_md({SecretProvider.SLACK: _SLACK})
+    assert "--profile slack-work" in md
+
+
 def test_integrations_policy_md_pipedrive_emits_profile_line():
     md = build_integrations_policy_md({SecretProvider.PIPEDRIVE: _PIPEDRIVE})
     assert "--profile pipedrive-work" in md
@@ -542,9 +575,11 @@ def test_integrations_policy_md_never_leaks_tokens():
             SecretProvider.GITHUB: _GITHUB,
             SecretProvider.JIRA: _JIRA,
             SecretProvider.GMAIL: _GMAIL,
+            SecretProvider.SLACK: _SLACK,
         }
     )
     assert "ghp_tok" not in md
     assert "jira_tok" not in md
     assert "g_client_secret" not in md
     assert "g_refresh_tok" not in md
+    assert "xoxb-slack-tok" not in md
