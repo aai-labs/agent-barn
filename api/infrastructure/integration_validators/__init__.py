@@ -45,6 +45,6 @@ __all__ = [
     "validate_github",
     "validate_gmail",
     "validate_jira",
-    "validate_slack",
     "validate_pipedrive",
+    "validate_slack",
 ]
