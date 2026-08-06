@@ -68,7 +68,10 @@ AAI_CLI_PROVIDER_SKILLS: list[dict] = [
         "name": "Excel",
         "required_providers": [],
         "files": EXCEL_SKILLS,
-        "tools_pointer": "\nFor Excel (.xlsx) files, use the aai-cli tool. See ./skills/aai-cli/excel_skill.md\n",
+        "tools_pointer": (
+            "\nFor spreadsheets (.xlsx/.xlsm/.csv/.tsv), use `aai-cli excel` — never Python or "
+            "openpyxl. See ./skills/aai-cli/excel_skill.md\n"
+        ),
     },
     {
         "name": "Zoho Mail",

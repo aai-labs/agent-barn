@@ -15,6 +15,7 @@ from api.domains.agents.aai_cli_artifacts import (
     build_config_toml,
     build_env,
     build_integrations_policy_md,
+    build_local_tools_policy_md,
     build_setup_sh,
     build_tool_context_md,
     provider_secrets_map,
@@ -1488,7 +1489,15 @@ class AgentService:
         # --profile mapping + no-fallback policy is appended here (not just to TOOLS.md).
         # The chat-commands policy rides along unconditionally — it applies to every
         # agent, integrations or not, and to custom templates we don't control.
-        agents_md = rendered.agents_md + build_integrations_policy_md(decrypted) + build_chat_commands_policy_md()
+        # Credential-free tools ride in their own block: the integrations policy is built
+        # from configured secrets, so a tool with no provider would otherwise be invisible
+        # in the auto-loaded prompt no matter that its skill is mounted.
+        agents_md = (
+            rendered.agents_md
+            + build_integrations_policy_md(decrypted)
+            + build_local_tools_policy_md(s.name for s in mounted_skills)
+            + build_chat_commands_policy_md()
+        )
 
         if agent.agent_type == AgentType.HERMES:
             assert hermes_cfg is not None
