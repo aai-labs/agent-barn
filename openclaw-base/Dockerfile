@@ -4,10 +4,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       git pkg-config libssl-dev ca-certificates && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
-# TEMPORARY (AF-251): pinned to the excel branch so local builds pick up `aai-cli excel`
-# before it merges. REVERT to the default branch before this ships.
 RUN --mount=type=secret,id=gh_token \
-    git clone --depth 1 --branch AF-251-add-excel-support \
+    git clone --depth 1 \
       "https://x-access-token:$(cat /run/secrets/gh_token)@github.com/aai-labs/agent-cli-tools.git" repo && \
     cargo install --path repo --root /out --locked
 
