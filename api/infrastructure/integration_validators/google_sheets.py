@@ -58,10 +58,29 @@ def validate_google_sheets(content: GoogleSheetsContent) -> IntegrationValidatio
         granted = set(granted_scope.split())
         missing = [label for scope, label in _REQUIRED_SCOPES.items() if scope not in granted]
 
-    return IntegrationValidationResult(valid=True, identity=_fetch_identity(access_token), missing_scopes=missing)
+    identity, blocked = _probe_identity(access_token)
+    if blocked:
+        # The credential itself is fine, but nothing it authorises can be called, so
+        # reporting "valid" would leave the user with a green tick and an agent that
+        # fails on its first command.
+        return IntegrationValidationResult(valid=False, error=blocked)
+
+    return IntegrationValidationResult(valid=True, identity=identity, missing_scopes=missing)
 
 
-def _fetch_identity(access_token: str) -> str | None:
+# Google's wording when a project has the API switched off. It is a 403, but it is a
+# server-side misconfiguration rather than anything wrong with the user's grant.
+_API_DISABLED_MARKER = "has not been used in project"
+
+
+def _probe_identity(access_token: str) -> tuple[str | None, str | None]:
+    """Look up the account's email, and surface a disabled-API misconfiguration.
+
+    Returns ``(identity, blocking_error)``. Ordinary probe failures stay silent — a flaky
+    identity lookup should not condemn a working credential — but a disabled API is
+    reported, because every Sheets and Drive call will fail the same way and the symptom
+    ("connected, yet nothing works") is otherwise very hard to trace.
+    """
     try:
         resp = httpx.get(
             _ABOUT_ENDPOINT,
@@ -69,7 +88,15 @@ def _fetch_identity(access_token: str) -> str | None:
             timeout=_TIMEOUT,
         )
     except Exception:
-        return None
+        return None, None
+
+    if resp.status_code == 403 and _API_DISABLED_MARKER in resp.text:
+        return None, (
+            "The Google Drive and Sheets APIs are not enabled on this server's Google Cloud "
+            "project. The credential and its scopes are fine, but every spreadsheet command "
+            "will fail until both APIs are enabled for the project, after which you can "
+            "re-validate without reconnecting."
+        )
     if resp.status_code != 200:
-        return None
-    return resp.json().get("user", {}).get("emailAddress")
+        return None, None
+    return resp.json().get("user", {}).get("emailAddress"), None

@@ -1007,6 +1007,45 @@ def test_google_sheets_silent_scope_response_does_not_invent_warnings():
     assert result.missing_scopes == []
 
 
+def test_google_sheets_reports_a_disabled_api_instead_of_a_green_tick():
+    """A disabled Drive/Sheets API is a 403 on every call, but the grant itself is fine —
+    so this used to validate green with a null identity and then fail at first use, which
+    is near-impossible to trace from the UI."""
+    disabled = _resp(
+        {
+            "error": {
+                "code": 403,
+                "message": "Google Drive API has not been used in project 1234 before or it is disabled.",
+            }
+        },
+        status=403,
+    )
+    with (
+        patch(_SHEETS_TOKEN_MOD, return_value=_resp(_SHEETS_TOKEN_OK)),
+        patch(_SHEETS_ABOUT_MOD, return_value=disabled),
+    ):
+        result = validate_google_sheets(_SHEETS)
+
+    assert result.valid is False
+    assert result.error is not None
+    assert "not enabled" in result.error
+    # It must not read as the user's fault — their grant is correct.
+    assert "scopes are fine" in result.error
+
+
+def test_google_sheets_other_probe_failures_still_do_not_fail_the_credential():
+    """Only the disabled-API signature is blocking; a flaky probe must not condemn an
+    otherwise working credential."""
+    for bad in (_resp({}, status=500), _resp({"error": {"message": "backend error"}}, status=403)):
+        with (
+            patch(_SHEETS_TOKEN_MOD, return_value=_resp(_SHEETS_TOKEN_OK)),
+            patch(_SHEETS_ABOUT_MOD, return_value=bad),
+        ):
+            result = validate_google_sheets(_SHEETS)
+        assert result.valid is True, bad.status_code
+        assert result.identity is None
+
+
 def test_google_sheets_network_error_returns_error():
     with patch(_SHEETS_TOKEN_MOD, side_effect=_connect_error()):
         result = validate_google_sheets(_SHEETS)
