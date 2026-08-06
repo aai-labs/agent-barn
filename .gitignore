@@ -22,6 +22,11 @@ dist/
 # Per-environment deploy configs hold real secrets; keep only the tracked spec.
 .env.deploy.*
 !.env.deploy.spec
+# Any other .env variant — backups (.env.bak.*) and per-branch copies hold the same
+# secrets as .env, and the exact-name rules above do not catch them.
+.env.*
+!.env.spec
+!.env.deploy.spec
 
 # Log files
 *.log
@@ -130,6 +135,9 @@ miscellaneous/
 CLAUDE.md
 
 kubeconfig.yaml
+# Cluster configs carry client certs; the bare name above misses prefixed variants
+# such as k3d-kubeconfig.yaml.
+*kubeconfig*.yaml
 
 # Review helper scripts (untracked, shared across worktrees) — root only:
 # a bare scripts/ would also swallow tracked dirs like api/domains/agents/scripts/.
