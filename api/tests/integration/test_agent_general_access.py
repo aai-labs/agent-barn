@@ -5,7 +5,7 @@ from hamcrest import assert_that, contains_inanyorder, equal_to, has_item, is_no
 
 from api.domains.agents.models import AgentAccess
 from api.domains.agents.repository import AgentRepository
-from api.domains.events.models import OutboxMessage
+from api.domains.events.models import EventDelivery, EventDeliveryStatus, OutboxMessage
 from api.domains.organizations.models import Organization
 from api.domains.rbac.catalog import (
     AGENT_EDITOR_ROLE_ID,
@@ -71,6 +71,11 @@ def _access_settings_url(agent_id: UUID) -> str:
 def _outbox_messages(context) -> list[OutboxMessage]:
     repository: AgentRepository = context.injector.get(AgentRepository)
     return repository.delegate.find_all(OutboxMessage)
+
+
+def _event_deliveries(context) -> list[EventDelivery]:
+    repository: AgentRepository = context.injector.get(AgentRepository)
+    return repository.delegate.find_all(EventDelivery)
 
 
 def test_general_access_defaults_to_restricted():
@@ -572,6 +577,16 @@ def test_access_settings_snapshot_replaces_general_and_direct_access():
         assert_that(general.payload["new_access_role_id"], equal_to(str(AGENT_VIEWER_ROLE_ID)))
         assert_that(granted.payload["actor_display"], equal_to("Test User"))
         assert_that(granted.payload["subject_display"], equal_to(context.agent.name))
+        # Regression: replace_access_settings must enqueue its staged deliveries
+        # immediately, like every other event-emitting mutation, instead of leaving
+        # them stuck at PENDING until a reconciliation sweep happens to run.
+        event_ids = {message.event_id for message in messages}
+        deliveries = [delivery for delivery in _event_deliveries(context) if delivery.event_id in event_ids]
+        assert_that(len(deliveries), equal_to(3))
+        assert_that(
+            [delivery.status for delivery in deliveries],
+            equal_to([EventDeliveryStatus.ENQUEUED] * 3),
+        )
 
 
 def test_access_settings_rolls_back_when_snapshot_is_invalid():

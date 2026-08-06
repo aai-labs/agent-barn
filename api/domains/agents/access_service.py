@@ -16,7 +16,7 @@ from api.domains.agents.models import (
 )
 from api.domains.agents.repository import AgentRepository
 from api.domains.auth.models import CurrentUserContext
-from api.domains.events import resolve_actor_identity
+from api.domains.events import EventDeliveryDispatcher, resolve_actor_identity
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.models import AgentAccessRole
 from api.domains.rbac.repository import RbacRepository
@@ -36,6 +36,7 @@ class AgentAccessService:
     authorization: AgentAuthorization
     membership_repository: OrganizationUserRepository
     rbac_repository: RbacRepository
+    event_delivery_dispatcher: EventDeliveryDispatcher
 
     def list_roles(self, context: CurrentUserContext) -> list[AgentAccessRoleRead]:
         organization_id = context.require_current_user_organization().organization_id
@@ -82,18 +83,20 @@ class AgentAccessService:
         # "not present in assignment_roles" as "remove access".
         self._preserve_hidden_assignments(agent, assignment_roles)
 
-        if not self.repository.replace_access_settings(
+        delivery_ids = self.repository.replace_access_settings(
             agent.id,
             agent.organization_id,
             general_access_role_id=data.general_access_role_id,
             assignment_roles=assignment_roles,
             actor=resolve_actor_identity(context, agent.organization_id),
             actor_display=context.user.full_name or context.user.email,
-        ):
+        )
+        if delivery_ids is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Agent or member is no longer available",
             )
+        self.event_delivery_dispatcher.enqueue_immediate(delivery_ids)
         return AgentAccessSettingsRead(
             general_access=AgentGeneralAccessRead(role=general_role_read),
             assignments=assignments,

@@ -232,8 +232,9 @@ class AgentRepository:
         actor: ActorIdentity | None = None,
         actor_display: str | None = None,
         correlation_id: UUID | None = None,
-    ) -> bool:
-        """Replace General Access and explicit assignments atomically."""
+    ) -> list[UUID] | None:
+        """Replace General Access and explicit assignments atomically. Returns the
+        staged Event Deliveries' ids, or None if the agent/members were not found."""
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             agent = session.exec(
                 select(Agent)
@@ -245,7 +246,7 @@ class AgentRepository:
                 .with_for_update()
             ).first()
             if agent is None:
-                return False
+                return None
 
             desired_role_ids = set(assignment_roles.values())
             if general_access_role_id is not None:
@@ -265,7 +266,7 @@ class AgentRepository:
                     ).all()
                 )
                 if existing_role_ids != desired_role_ids:
-                    return False
+                    return None
 
             if assignment_roles:
                 existing_membership_ids = set(
@@ -279,7 +280,7 @@ class AgentRepository:
                     ).all()
                 )
                 if existing_membership_ids != set(assignment_roles):
-                    return False
+                    return None
 
             previous_general_access_role_id = agent.general_access_role_id
             agent.general_access_role_id = general_access_role_id
@@ -298,13 +299,35 @@ class AgentRepository:
             audit_actor = actor or ActorIdentity(type=ActorIdentityType.SYSTEM, id="system")
             audit_actor_display = actor_display or audit_actor.type.value
             audit_correlation_id = correlation_id or uuid4()
+            staged_event_ids: list[UUID] = []
 
             if previous_general_access_role_id != general_access_role_id:
-                self.outbox_repository.stage(
-                    session=session,
-                    registry=EVENT_REGISTRY,
-                    event=EVENT_REGISTRY.build_event(
-                        event_name=AGENT_GENERAL_ACCESS_CHANGED,
+                general_access_event = EVENT_REGISTRY.build_event(
+                    event_name=AGENT_GENERAL_ACCESS_CHANGED,
+                    schema_version=1,
+                    occurred_at=datetime.now(UTC),
+                    organization_id=organization_id,
+                    actor=audit_actor,
+                    subject=SubjectIdentity(
+                        type=SubjectIdentityType.AGENT, id=agent_id, organization_id=organization_id
+                    ),
+                    correlation_id=audit_correlation_id,
+                    payload={
+                        "organization_id": organization_id,
+                        "agent_id": agent_id,
+                        "previous_access_role_id": previous_general_access_role_id,
+                        "new_access_role_id": general_access_role_id,
+                        "actor_display": audit_actor_display,
+                        "subject_display": agent.name,
+                    },
+                )
+                self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=general_access_event)
+                staged_event_ids.append(general_access_event.event_id)
+
+            for membership_id, access in existing_by_membership.items():
+                if membership_id not in desired_membership_ids:
+                    access_revoked_event = EVENT_REGISTRY.build_event(
+                        event_name=AGENT_ACCESS_REVOKED,
                         schema_version=1,
                         occurred_at=datetime.now(UTC),
                         organization_id=organization_id,
@@ -316,39 +339,14 @@ class AgentRepository:
                         payload={
                             "organization_id": organization_id,
                             "agent_id": agent_id,
-                            "previous_access_role_id": previous_general_access_role_id,
-                            "new_access_role_id": general_access_role_id,
+                            "membership_id": membership_id,
+                            "previous_access_role_id": access.access_role_id,
                             "actor_display": audit_actor_display,
                             "subject_display": agent.name,
                         },
-                    ),
-                )
-
-            for membership_id, access in existing_by_membership.items():
-                if membership_id not in desired_membership_ids:
-                    self.outbox_repository.stage(
-                        session=session,
-                        registry=EVENT_REGISTRY,
-                        event=EVENT_REGISTRY.build_event(
-                            event_name=AGENT_ACCESS_REVOKED,
-                            schema_version=1,
-                            occurred_at=datetime.now(UTC),
-                            organization_id=organization_id,
-                            actor=audit_actor,
-                            subject=SubjectIdentity(
-                                type=SubjectIdentityType.AGENT, id=agent_id, organization_id=organization_id
-                            ),
-                            correlation_id=audit_correlation_id,
-                            payload={
-                                "organization_id": organization_id,
-                                "agent_id": agent_id,
-                                "membership_id": membership_id,
-                                "previous_access_role_id": access.access_role_id,
-                                "actor_display": audit_actor_display,
-                                "subject_display": agent.name,
-                            },
-                        ),
                     )
+                    self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=access_revoked_event)
+                    staged_event_ids.append(access_revoked_event.event_id)
                     session.delete(access)
 
             for membership_id, access_role_id in assignment_roles.items():
@@ -362,35 +360,38 @@ class AgentRepository:
                             access_role_id=access_role_id,
                         )
                     )
-                    self.outbox_repository.stage(
-                        session=session,
-                        registry=EVENT_REGISTRY,
-                        event=EVENT_REGISTRY.build_event(
-                            event_name=AGENT_ACCESS_GRANTED,
-                            schema_version=1,
-                            occurred_at=datetime.now(UTC),
-                            organization_id=organization_id,
-                            actor=audit_actor,
-                            subject=SubjectIdentity(
-                                type=SubjectIdentityType.AGENT, id=agent_id, organization_id=organization_id
-                            ),
-                            correlation_id=audit_correlation_id,
-                            payload={
-                                "organization_id": organization_id,
-                                "agent_id": agent_id,
-                                "membership_id": membership_id,
-                                "access_role_id": access_role_id,
-                                "actor_display": audit_actor_display,
-                                "subject_display": agent.name,
-                            },
+                    access_granted_event = EVENT_REGISTRY.build_event(
+                        event_name=AGENT_ACCESS_GRANTED,
+                        schema_version=1,
+                        occurred_at=datetime.now(UTC),
+                        organization_id=organization_id,
+                        actor=audit_actor,
+                        subject=SubjectIdentity(
+                            type=SubjectIdentityType.AGENT, id=agent_id, organization_id=organization_id
                         ),
+                        correlation_id=audit_correlation_id,
+                        payload={
+                            "organization_id": organization_id,
+                            "agent_id": agent_id,
+                            "membership_id": membership_id,
+                            "access_role_id": access_role_id,
+                            "actor_display": audit_actor_display,
+                            "subject_display": agent.name,
+                        },
                     )
+                    self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=access_granted_event)
+                    staged_event_ids.append(access_granted_event.event_id)
                 else:
                     access.access_role_id = access_role_id
                     session.add(access)
 
+            delivery_ids = (
+                list(session.exec(select(EventDelivery.id).where(col(EventDelivery.event_id).in_(staged_event_ids))))
+                if staged_event_ids
+                else []
+            )
             session.commit()
-            return True
+            return delivery_ids
 
     def create_with_creator_access(
         self,
