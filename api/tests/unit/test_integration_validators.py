@@ -1065,6 +1065,7 @@ def test_google_sheets_about_fetch_failure_still_valid_without_identity():
     assert result.valid is True
     assert result.identity is None
 
+
 # ── Pipedrive ─────────────────────────────────────────────────────────────────
 
 _PD_MOD = "api.infrastructure.integration_validators.pipedrive.httpx.get"
