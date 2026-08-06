@@ -13,6 +13,7 @@ from api.domains.agents.aai_cli_artifacts import (
 from api.domains.agents.models import (
     FirecrawlContent,
     GmailContent,
+    PipedriveContent,
     SecretProvider,
     ZohoMailContent,
     validate_content,
@@ -76,6 +77,14 @@ _GOOGLE_CALENDAR = validate_content(
     {"access_token": "gc_tok", "calendar_id": "primary"},
 )
 _SLACK = validate_content(SecretProvider.SLACK, {"token": "xoxb-slack-tok"})
+_PIPEDRIVE = cast(
+    PipedriveContent,
+    validate_content(SecretProvider.PIPEDRIVE, {"api_token": "pd_tok"}),
+)
+_PIPEDRIVE_WITH_DOMAIN = cast(
+    PipedriveContent,
+    validate_content(SecretProvider.PIPEDRIVE, {"api_token": "pd_tok", "domain": "aai-labs"}),
+)
 
 
 def test_env_var_for():
@@ -86,6 +95,7 @@ def test_env_var_for():
     assert env_var_for("zoho.client_secret") == "AAI_SECRET_ZOHO_CLIENT_SECRET"
     assert env_var_for("zoho.mail_refresh_token") == "AAI_SECRET_ZOHO_MAIL_REFRESH_TOKEN"
     assert env_var_for("slack.token") == "AAI_SECRET_SLACK_TOKEN"
+    assert env_var_for("pipedrive.api_token") == "AAI_SECRET_PIPEDRIVE_API_TOKEN"
 
 
 def test_config_toml_emits_only_present_store_profiles():
@@ -196,6 +206,21 @@ def test_config_toml_zoho_mail_uses_oauth_rest_profile():
     assert "smtp_imap" not in toml
 
 
+def test_config_toml_pipedrive_without_domain_omits_base_url():
+    toml = build_config_toml({SecretProvider.PIPEDRIVE: _PIPEDRIVE})
+    assert "[profiles.pipedrive-work]" in toml
+    assert 'auth_type = "pipedrive_personal_token"' in toml
+    assert 'api_token_secret = "pipedrive.api_token"' in toml
+    assert "base_url" not in toml
+    assert "pd_tok" not in toml
+
+
+def test_config_toml_pipedrive_with_domain_emits_base_url():
+    toml = build_config_toml({SecretProvider.PIPEDRIVE: _PIPEDRIVE_WITH_DOMAIN})
+    assert "[profiles.pipedrive-work]" in toml
+    assert 'base_url = "https://aai-labs.pipedrive.com"' in toml
+
+
 def test_setup_sh_cp_always_and_secrets_set_per_store_provider():
     setup = build_setup_sh([SecretProvider.JIRA, SecretProvider.GITHUB])
     assert f"cp /app/config/aai-cli-config.toml {CONFIG_PATH}" in setup
@@ -245,6 +270,14 @@ def test_setup_sh_slack_sets_secret():
     assert f"printf '%s' \"$AAI_SECRET_SLACK_TOKEN\" | aai-cli --config {CONFIG_PATH} secrets set slack.token" in setup
 
 
+def test_setup_sh_pipedrive_sets_secret():
+    setup = build_setup_sh([SecretProvider.PIPEDRIVE])
+    assert (
+        f"printf '%s' \"$AAI_SECRET_PIPEDRIVE_API_TOKEN\" | "
+        f"aai-cli --config {CONFIG_PATH} secrets set pipedrive.api_token" in setup
+    )
+
+
 def test_setup_sh_no_store_providers_only_copies():
     setup = build_setup_sh([])
     assert f"cp /app/config/aai-cli-config.toml {CONFIG_PATH}" in setup
@@ -278,6 +311,11 @@ def test_build_env_zoho_mail_emits_both_secrets():
 def test_build_env_slack_maps_token():
     env = build_env({SecretProvider.SLACK: _SLACK})
     assert env == {"AAI_SECRET_SLACK_TOKEN": "xoxb-slack-tok"}
+
+
+def test_build_env_pipedrive_emits_secret():
+    env = build_env({SecretProvider.PIPEDRIVE: _PIPEDRIVE})
+    assert env == {"AAI_SECRET_PIPEDRIVE_API_TOKEN": "pd_tok"}
 
 
 def test_build_env_ignores_non_store_providers():
@@ -358,6 +396,13 @@ def test_tool_context_md_omits_slack():
     # Jira/GitHub/etc.) — deliberately excluded from _TOOL_CONTEXT_PROVIDERS, same as
     # Gmail/Zoho Mail.
     assert build_tool_context_md({SecretProvider.SLACK: _SLACK}) == ""
+
+
+def test_tool_context_md_empty_when_only_pipedrive():
+    # Pipedrive is deliberately excluded from _TOOL_CONTEXT_PROVIDERS — no per-secret
+    # metadata (site URL, owner/workspace) worth surfacing beyond "configured".
+    md = build_tool_context_md({SecretProvider.PIPEDRIVE: _PIPEDRIVE})
+    assert md == ""
 
 
 def test_tool_context_md_never_leaks_tokens():
@@ -508,6 +553,12 @@ def test_integrations_policy_md_covers_non_store_providers():
 def test_integrations_policy_md_covers_slack():
     md = build_integrations_policy_md({SecretProvider.SLACK: _SLACK})
     assert "--profile slack-work" in md
+
+
+def test_integrations_policy_md_pipedrive_emits_profile_line():
+    md = build_integrations_policy_md({SecretProvider.PIPEDRIVE: _PIPEDRIVE})
+    assert "--profile pipedrive-work" in md
+    assert "pd_tok" not in md
 
 
 def test_profile_slugs_are_single_source_of_truth_for_jira():

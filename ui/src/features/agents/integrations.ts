@@ -138,6 +138,15 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
       { key: "baseUrl", label: "Base URL", type: "text", required: false, placeholder: "https://api.firecrawl.dev", hint: "Leave empty to use the platform's self-hosted Firecrawl." },
     ],
   },
+  {
+    id: "pipedrive",
+    label: "Pipedrive",
+    scopeNote: "Personal API token grants full account access — no scopes to select. Domain is optional; only needed for a custom Pipedrive endpoint.",
+    fields: [
+      { key: "apiToken", label: "API token", type: "secret", required: true },
+      { key: "domain", label: "Company domain", type: "text", required: false, placeholder: "aai-labs", hint: "Leave empty to use the default api.pipedrive.com endpoint." },
+    ],
+  },
   // zoho_calendar disabled: not currently offered as an integration. Re-enable by
   // uncommenting if needed again.
   // {

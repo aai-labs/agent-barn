@@ -81,9 +81,12 @@ class UserRepository:
         rows = self.delegate.find_all_by_query(model=User, query=query)
         return rows[0] if rows else None
 
-    def get_platform_admin(self) -> User | None:
+    def count_platform_admins(self) -> int:
+        # A platform may have any number of administrators — change_platform_privilege
+        # only forbids dropping to zero — so callers ask how many there are rather
+        # than for "the" administrator.
         query = select(User).where(col(User.is_platform_admin).is_(True))
-        return self.delegate.find_one_by_query(model=User, query=query)
+        return self.delegate.count_by_query(query)
 
     def find_one(self, **kwargs) -> User | None:
         return self.delegate.find_one(User, **kwargs)

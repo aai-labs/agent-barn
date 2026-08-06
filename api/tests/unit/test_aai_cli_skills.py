@@ -16,6 +16,7 @@ _EXPECTED_PROVIDER_NAMES = {
     "Gmail",
     "Zoho Mail",
     "Slack",
+    "Pipedrive",
 }
 
 

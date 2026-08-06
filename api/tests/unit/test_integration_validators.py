@@ -13,6 +13,7 @@ from api.domains.agents.models import (
     GithubContent,
     GmailContent,
     JiraContent,
+    PipedriveContent,
     SlackContent,
 )
 from api.infrastructure.integration_validators.bitbucket import validate_bitbucket
@@ -20,6 +21,7 @@ from api.infrastructure.integration_validators.confluence import validate_conflu
 from api.infrastructure.integration_validators.github import validate_github
 from api.infrastructure.integration_validators.gmail import validate_gmail
 from api.infrastructure.integration_validators.jira import validate_jira
+from api.infrastructure.integration_validators.pipedrive import validate_pipedrive
 from api.infrastructure.integration_validators.result import IntegrationValidationResult
 from api.infrastructure.integration_validators.slack import validate_slack
 
@@ -58,6 +60,8 @@ _GMAIL = GmailContent(
     refresh_token="rt-123",
 )
 _SLACK = SlackContent(token="xoxb-test-token")
+_PD = PipedriveContent(api_token="pd-tok")
+_PD_WITH_DOMAIN = PipedriveContent(api_token="pd-tok", domain="aai-labs")
 
 # ── IntegrationValidationResult ───────────────────────────────────────────────
 
@@ -889,3 +893,59 @@ def test_slack_network_error_returns_error():
     assert result.error is not None
     assert "slack" in result.error.lower()
     assert result.identity is None
+
+
+# ── Pipedrive ─────────────────────────────────────────────────────────────────
+
+_PD_MOD = "api.infrastructure.integration_validators.pipedrive.httpx.get"
+
+
+def test_pipedrive_valid_token_returns_identity():
+    with patch(_PD_MOD, return_value=_resp({"success": True, "data": {"email": "alice@acme.com"}})) as mock_get:
+        result = validate_pipedrive(_PD)
+
+    assert result.valid is True
+    assert result.identity == "alice@acme.com"
+    mock_get.assert_called_once_with(
+        "https://api.pipedrive.com/v1/users/me",
+        headers={"x-api-token": "pd-tok"},
+        timeout=10,
+    )
+
+
+def test_pipedrive_with_domain_hits_tenant_hostname():
+    with patch(_PD_MOD, return_value=_resp({"success": True, "data": {"email": "alice@acme.com"}})) as mock_get:
+        result = validate_pipedrive(_PD_WITH_DOMAIN)
+
+    assert result.valid is True
+    mock_get.assert_called_once_with(
+        "https://aai-labs.pipedrive.com/v1/users/me",
+        headers={"x-api-token": "pd-tok"},
+        timeout=10,
+    )
+
+
+def test_pipedrive_invalid_token_401():
+    with patch(_PD_MOD, return_value=_resp({"success": False, "error": "invalid api_token"}, status=401)):
+        result = validate_pipedrive(_PD)
+
+    assert result.valid is False
+    assert result.error is not None
+    assert "invalid" in result.error.lower()
+
+
+def test_pipedrive_unexpected_status_returns_error():
+    with patch(_PD_MOD, return_value=_resp({}, status=500)):
+        result = validate_pipedrive(_PD)
+
+    assert result.valid is False
+    assert "500" in (result.error or "")
+
+
+def test_pipedrive_network_error_returns_error():
+    with patch(_PD_MOD, side_effect=_connect_error()):
+        result = validate_pipedrive(_PD)
+
+    assert result.valid is False
+    assert result.error is not None
+    assert "pipedrive" in result.error.lower()
