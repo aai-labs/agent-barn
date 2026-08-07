@@ -397,9 +397,35 @@ class AgentRepository:
                     )
                     self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=access_granted_event)
                     staged_event_ids.append(access_granted_event.event_id)
-                else:
+                elif access.access_role_id != access_role_id:
+                    previous_access_role_id = access.access_role_id
                     access.access_role_id = access_role_id
                     session.add(access)
+                    access_role_changed_event = EVENT_REGISTRY.build_event(
+                        event_name=AGENT_ACCESS_GRANTED,
+                        schema_version=1,
+                        occurred_at=datetime.now(UTC),
+                        organization_id=organization_id,
+                        actor=audit_actor,
+                        subject=SubjectIdentity(
+                            type=SubjectIdentityType.AGENT, id=agent_id, organization_id=organization_id
+                        ),
+                        correlation_id=audit_correlation_id,
+                        payload={
+                            "organization_id": organization_id,
+                            "agent_id": agent_id,
+                            "membership_id": membership_id,
+                            "access_role_id": access_role_id,
+                            "previous_access_role_id": previous_access_role_id,
+                            "actor_display": audit_actor_display,
+                            "subject_display": agent.name,
+                            "member_display": member_display_by_membership_id.get(membership_id, str(membership_id)),
+                        },
+                    )
+                    self.outbox_repository.stage(
+                        session=session, registry=EVENT_REGISTRY, event=access_role_changed_event
+                    )
+                    staged_event_ids.append(access_role_changed_event.event_id)
 
             delivery_ids = (
                 list(session.exec(select(EventDelivery.id).where(col(EventDelivery.event_id).in_(staged_event_ids))))

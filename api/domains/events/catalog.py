@@ -48,7 +48,12 @@ class AgentAccessGrantedPayload(BaseModel):
     """subject_display names the Agent (the event's Subject); member_display is a
     write-time snapshot of the target member's name/email, since membership_id alone
     can't be resolved to a human-readable identity once the membership or user is
-    later deleted (records must survive that per the retention ADR)."""
+    later deleted (records must survive that per the retention ADR).
+
+    previous_access_role_id is set when this event represents a role change for a
+    member who already had direct access (None means a brand-new grant) — reusing
+    "granted" rather than adding a third event type, since both cases converge on
+    the same "member has this access role now" fact."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -56,6 +61,7 @@ class AgentAccessGrantedPayload(BaseModel):
     agent_id: UUID
     membership_id: UUID
     access_role_id: UUID
+    previous_access_role_id: UUID | None = None
     actor_display: str
     subject_display: str
     member_display: str

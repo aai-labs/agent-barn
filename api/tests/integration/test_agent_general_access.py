@@ -597,6 +597,84 @@ def test_access_settings_snapshot_replaces_general_and_direct_access():
             assert_that(delivery.status, is_in([EventDeliveryStatus.PENDING, EventDeliveryStatus.ENQUEUED]))
 
 
+def test_access_settings_role_change_for_existing_member_emits_granted_event():
+    with given(_GIVEN) as context:
+        agent_id = context.agent.id
+        member, membership = _add_target_member(context)
+        repository: AgentRepository = context.injector.get(AgentRepository)
+        repository.delegate.save(
+            AgentAccess(
+                organization_id=context.organization.id,
+                membership_id=membership.id,
+                agent_id=agent_id,
+                access_role_id=AGENT_VIEWER_ROLE_ID,
+            )
+        )
+
+        response = context.client.put(
+            _access_settings_url(agent_id),
+            json={
+                "general_access_role_id": None,
+                "assignments": [
+                    {
+                        "user_id": str(member.id),
+                        "access_role_id": str(AGENT_EDITOR_ROLE_ID),
+                    }
+                ],
+            },
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(
+            [item["access_role"]["id"] for item in response.json()["assignments"]],
+            contains_inanyorder(str(AGENT_EDITOR_ROLE_ID)),
+        )
+        # Regression: changing an already-assigned member's role must itself be
+        # audited — before this fix, the repository silently updated AgentAccess
+        # in place with no event staged at all, so role changes for existing
+        # assignments left no audit trail (unlike brand-new grants or revocations).
+        messages = _outbox_messages(context)
+        assert_that([message.event_name for message in messages], equal_to(["agent.access.granted"]))
+        granted = messages[0]
+        assert_that(granted.payload["membership_id"], equal_to(str(membership.id)))
+        assert_that(granted.payload["access_role_id"], equal_to(str(AGENT_EDITOR_ROLE_ID)))
+        assert_that(granted.payload["previous_access_role_id"], equal_to(str(AGENT_VIEWER_ROLE_ID)))
+        assert_that(granted.payload["member_display"], equal_to(member.full_name))
+
+
+def test_access_settings_role_change_to_same_role_emits_no_event():
+    with given(_GIVEN) as context:
+        agent_id = context.agent.id
+        member, membership = _add_target_member(context)
+        repository: AgentRepository = context.injector.get(AgentRepository)
+        repository.delegate.save(
+            AgentAccess(
+                organization_id=context.organization.id,
+                membership_id=membership.id,
+                agent_id=agent_id,
+                access_role_id=AGENT_VIEWER_ROLE_ID,
+            )
+        )
+
+        response = context.client.put(
+            _access_settings_url(agent_id),
+            json={
+                "general_access_role_id": None,
+                "assignments": [
+                    {
+                        "user_id": str(member.id),
+                        "access_role_id": str(AGENT_VIEWER_ROLE_ID),
+                    }
+                ],
+            },
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(_outbox_messages(context), equal_to([]))
+
+
 def test_access_settings_rolls_back_when_snapshot_is_invalid():
     with given(_GIVEN) as context:
         agent_id = context.agent.id
