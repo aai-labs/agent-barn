@@ -166,8 +166,7 @@ Pick the block that matches how you run the API.
 ```bash
 export KUBECONFIG=.k3d/kubeconfig-host.yaml
 export K8S_KUBECONFIG_PATH=.k3d/kubeconfig-host.yaml
-make dev-api
-make dev-ingest   # second shell — see "Runtime telemetry" below
+make dev-api      # starts the API and the ingest sink together
 ```
 
 **API in Docker** (`make up`): add this one line to `.env` (one-time — the path
@@ -229,10 +228,10 @@ run but their activity stays empty.
 Ingest listens on port `8001`, separate from the main API on `8000`. Pods reach
 it through the host, using the same `host.docker.internal` hop as LiteLLM:
 
-- **API in Docker** (`make up`) — `api/start.sh` already runs ingest inside the
+- **API in Docker** (`make up`) — `api/start.sh` runs ingest inside the
   container, and compose publishes `8001`. Nothing to do.
-- **API on the host** (`make dev-api`) — ingest needs its own process:
-  `make dev-ingest`.
+- **API on the host** (`make dev-api`) — starts ingest alongside the main app,
+  the same pairing as the container. `make dev-ingest` runs it on its own.
 
 Both paths hand pods `INGEST_BASE_URL=http://host.docker.internal:8001/ingest/v1`
 by default, overriding the in-cluster Service address that only applies when the

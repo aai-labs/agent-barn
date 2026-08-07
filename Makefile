@@ -9,15 +9,26 @@ COMPOSE := docker compose -f compose.yml
 
 # Agent pods in k3d push telemetry back through the host, so the pod-facing URL
 # has to override the in-cluster default (which only resolves when the API runs
-# in k8s). Same value as compose; run `make dev-ingest` alongside `make dev-api`.
+# in k8s). Same value as compose.
 INGEST_PORT ?= 8001
 INGEST_BASE_URL ?= http://host.docker.internal:$(INGEST_PORT)/ingest/v1
+# Overridable so a second worktree can run its own stack without port clashes.
+API_DEV_PORT ?= 8000
 
+# Runs ingest alongside the main app, mirroring the container entrypoint
+# (api/start.sh) so host and Docker behave the same. Without ingest, agents
+# start and chat normally but their activity silently never persists — the
+# worst failure mode to leave to a second, easily-forgotten command.
+# The trap kills both on Ctrl-C; a stray listener on $(INGEST_PORT) otherwise
+# breaks the next run confusingly.
 dev-api:
-	cd api && INGEST_BASE_URL=$(INGEST_BASE_URL) uv run python -m fastapi dev main.py --host 0.0.0.0 --port 8000
+	@cd api && \
+	trap 'kill 0' EXIT INT TERM; \
+	uv run python -m fastapi dev ingest_main.py --host 0.0.0.0 --port $(INGEST_PORT) & \
+	INGEST_BASE_URL=$(INGEST_BASE_URL) uv run python -m fastapi dev main.py --host 0.0.0.0 --port $(API_DEV_PORT)
 
-# Ingest API — the sink agent pods push telemetry to. Under Docker this runs
-# inside the api container (api/start.sh); on the host it needs its own process.
+# Ingest on its own — `make dev-api` already starts it; use this to run or
+# restart the telemetry sink independently.
 # --host 0.0.0.0 is required: the default loopback bind is unreachable from pods.
 dev-ingest:
 	cd api && uv run python -m fastapi dev ingest_main.py --host 0.0.0.0 --port $(INGEST_PORT)
