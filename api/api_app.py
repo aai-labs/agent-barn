@@ -34,9 +34,9 @@ from api.domains.organizations.routes import org_router, platform_org_router
 from api.domains.rbac.seeder import RbacSeeder
 from api.domains.shared_credentials.routes import shared_credentials_router
 from api.domains.skills.repository import SkillRepository
-from api.domains.skills.routes import skills_router
+from api.domains.skills.routes import platform_skills_router, skills_router
 from api.domains.skills.skill_seeder import seed_aai_cli_skills
-from api.domains.templates.routes import templates_router
+from api.domains.templates.routes import platform_templates_router, templates_router
 from api.domains.templates.service import TemplateService
 from api.domains.tool_calls.routes import tool_calls_router
 from api.domains.users.organization_users.routes import member_router, platform_member_router
@@ -110,8 +110,10 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(platform_member_router)
     subapi.include_router(shared_credentials_router)
     subapi.include_router(skills_router)
+    subapi.include_router(platform_skills_router)
     subapi.include_router(integrations_router)
     subapi.include_router(templates_router)
+    subapi.include_router(platform_templates_router)
     subapi.include_router(tool_calls_router)
     subapi.include_router(users_router)
     subapi.include_router(slack_router)

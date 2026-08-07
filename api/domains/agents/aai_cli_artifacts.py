@@ -13,8 +13,10 @@ from api.domains.agents.models import (
     GmailContent,
     GoogleCalendarContent,
     JiraContent,
+    PipedriveContent,
     SecretContent,
     SecretProvider,
+    SlackContent,
     ZohoCalendarContent,
     ZohoMailContent,
 )
@@ -35,6 +37,8 @@ provider_secrets_map: dict[str, list[tuple[str, str]]] = {
         ("zoho.client_secret", "client_secret"),
         ("zoho.mail_refresh_token", "refresh_token"),
     ],
+    "slack": [("slack.token", "token")],
+    "pipedrive": [("pipedrive.api_token", "api_token")],
 }
 
 # Canonical aai-cli --profile slug per provider — the single source of truth shared by the
@@ -50,6 +54,8 @@ PROFILE_SLUGS: dict[SecretProvider, str] = {
     SecretProvider.GOOGLE_CALENDAR: "google-calendar-work",
     SecretProvider.ZOHO_MAIL: "zoho-mail-rest",
     SecretProvider.ZOHO_CALENDAR: "zoho-calendar-work",
+    SecretProvider.SLACK: "slack-work",
+    SecretProvider.PIPEDRIVE: "pipedrive-work",
 }
 
 # Default config dir for OpenClaw (node user). Callers can pass a different home_dir for other
@@ -203,6 +209,26 @@ def _zoho_calendar_block(c: ZohoCalendarContent) -> str:
     )
 
 
+def _slack_block(c: SlackContent) -> str:
+    return (
+        f"[profiles.{PROFILE_SLUGS[SecretProvider.SLACK]}]\n"
+        'provider = "slack"\n'
+        'auth_type = "bearer_token"\n'
+        'token_secret = "slack.token"\n'
+    )
+
+
+def _pipedrive_block(c: PipedriveContent) -> str:
+    lines = [
+        f"[profiles.{PROFILE_SLUGS[SecretProvider.PIPEDRIVE]}]\n",
+        'auth_type = "pipedrive_personal_token"\n',
+    ]
+    if c.domain:
+        lines.append(f"base_url = {_q(f'https://{c.domain}.pipedrive.com')}\n")
+    lines.append('api_token_secret = "pipedrive.api_token"\n')
+    return "".join(lines)
+
+
 _PROFILE_BUILDERS: dict[SecretProvider, Callable[..., str]] = {
     SecretProvider.GITHUB: _github_block,
     SecretProvider.JIRA: _jira_block,
@@ -212,6 +238,8 @@ _PROFILE_BUILDERS: dict[SecretProvider, Callable[..., str]] = {
     SecretProvider.GOOGLE_CALENDAR: _google_calendar_block,
     SecretProvider.ZOHO_MAIL: _zoho_mail_block,
     SecretProvider.ZOHO_CALENDAR: _zoho_calendar_block,
+    SecretProvider.SLACK: _slack_block,
+    SecretProvider.PIPEDRIVE: _pipedrive_block,
 }
 
 
@@ -287,6 +315,8 @@ _INTEGRATION_LABELS: dict[SecretProvider, str] = {
     SecretProvider.GOOGLE_CALENDAR: "Google Calendar",
     SecretProvider.ZOHO_MAIL: "Zoho Mail",
     SecretProvider.ZOHO_CALENDAR: "Zoho Calendar",
+    SecretProvider.SLACK: "Slack",
+    SecretProvider.PIPEDRIVE: "Pipedrive",
 }
 
 

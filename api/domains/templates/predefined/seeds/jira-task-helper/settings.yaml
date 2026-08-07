@@ -1,0 +1,4 @@
+name: Jira Task Helper
+description: Turns a plain-language request — in any language — into a well-structured Jira task and files it for you.
+required_skills:
+- Jira

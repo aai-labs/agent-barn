@@ -19,7 +19,7 @@ import { Pagination } from "./pagination";
 
 const SOURCE_FILTERS: Array<{ value: TemplateSource | ""; label: string }> = [
   { value: "", label: "All sources" },
-  { value: "pre-defined", label: "Pre-defined" },
+  { value: "pre-defined", label: "Built-in" },
   { value: "custom", label: "Custom" },
 ];
 
@@ -112,7 +112,7 @@ export function TemplatesPanel() {
 
       {templates.map((t) => (
         <div
-          key={t.templateSlug}
+          key={t.templateKey}
           role="button"
           className="flex items-center gap-3 px-0 py-3.5 cursor-default"
           style={{ borderBottom: "1px solid var(--line)" }}
@@ -122,9 +122,21 @@ export function TemplatesPanel() {
             <div className="font-medium text-[14px] flex items-center gap-2" style={{ color: "var(--ink)" }}>
               <span>{t.templateName}</span>
               <span className="font-mono text-[12px] font-normal" style={{ color: "var(--ink-4)" }}>
-                · {t.templateSlug}@v{t.version}
+                · v{t.version}
               </span>
-              <TemplateSourceBadge source={t.templateSource} />
+              <TemplateSourceBadge
+                source={t.templateSource}
+                isFork={Boolean(t.forkedFromPlatformTemplateId)}
+              />
+              {t.platformUpdateAvailable && (
+                <span
+                  data-testid={`template-update-available-${t.templateKey}`}
+                  className="text-[11.5px] font-semibold px-2 py-0.5 rounded-full"
+                  style={{ color: "var(--accent-ink)", background: "var(--accent-soft)" }}
+                >
+                  Platform update available
+                </span>
+              )}
             </div>
           </div>
           <button
@@ -143,8 +155,9 @@ export function TemplatesPanel() {
       {openTemplate && (
         <TemplateDrawer
           mode="view"
-          slug={openTemplate.templateSlug}
+          templateKey={openTemplate.templateKey}
           canManage={canManage}
+          platformUpdateAvailable={openTemplate.platformUpdateAvailable}
           onClose={() => setOpenTemplate(null)}
         />
       )}

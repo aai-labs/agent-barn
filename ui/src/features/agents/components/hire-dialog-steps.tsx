@@ -97,14 +97,25 @@ export async function downloadTeamsAppPackage(manifest: string, botName: string)
   URL.revokeObjectURL(url);
 }
 
-export function TemplateSourceBadge({ source }: { source: AgentTemplateRead["templateSource"] }) {
+export function TemplateSourceBadge({
+  source,
+  isFork = false,
+}: {
+  source: AgentTemplateRead["templateSource"];
+  isFork?: boolean;
+}) {
   if (source !== "pre-defined") return null;
   return (
     <span
       className="text-[0.6875rem] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full"
-      style={{ color: "var(--ink-3)", background: "var(--line)" }}
+      style={
+        isFork
+          ? { color: "var(--accent-ink)", background: "var(--accent-soft)" }
+          : { color: "var(--ink-3)", background: "var(--line)" }
+      }
+      title={isFork ? "Organization fork of a Platform Template" : "Platform Template"}
     >
-      Pre-defined
+      {isFork ? "Org fork" : "Built-in"}
     </span>
   );
 }
@@ -197,14 +208,14 @@ function ClampedDescription({ text }: { text: string }) {
 }
 
 export function TemplateStep({
-  selectedSlug,
+  selectedKey,
   onPick,
   versions,
   versionsLoading,
   selectedVersion,
   onVersionChange,
 }: {
-  selectedSlug: string | null;
+  selectedKey: string | null;
   onPick: (template: AgentTemplateRead) => void;
   versions: AgentTemplateRead[];
   versionsLoading: boolean;
@@ -265,21 +276,24 @@ export function TemplateStep({
         <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
           {templates.map((t) => (
             <div
-              key={t.templateSlug}
+              key={t.templateKey}
               className="flex flex-col gap-1.5 p-4 rounded-2xl cursor-default transition-colors min-h-[4.5rem]"
               style={{
-                border: selectedSlug === t.templateSlug ? "1.5px solid var(--ink)" : "1.5px solid var(--line)",
-                background: selectedSlug === t.templateSlug ? "var(--bg-soft)" : "var(--bg-elev)",
+                border: selectedKey === t.templateKey ? "1.5px solid var(--ink)" : "1.5px solid var(--line)",
+                background: selectedKey === t.templateKey ? "var(--bg-soft)" : "var(--bg-elev)",
               }}
               onClick={() => onPick(t)}
             >
               <div className="flex items-center justify-between gap-2">
                 <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>{t.templateName}</div>
-                <TemplateSourceBadge source={t.templateSource} />
+                <TemplateSourceBadge
+                  source={t.templateSource}
+                  isFork={Boolean(t.forkedFromPlatformTemplateId)}
+                />
               </div>
               {t.description && <ClampedDescription text={t.description} />}
               <div className="mt-1">
-                {selectedSlug === t.templateSlug ? (
+                {selectedKey === t.templateKey ? (
                   <div onClick={(e) => e.stopPropagation()}>
                     {versionsLoading ? (
                       <span className="text-[0.75rem]" style={{ color: "var(--ink-3)" }}>Loading…</span>
@@ -1199,7 +1213,10 @@ export function DetailsStep({
         <div className="flex-1">
           <div className="flex items-center gap-2">
             <div className="font-semibold text-sm" style={{ color: "var(--ink)" }}>{template.templateName}</div>
-            <TemplateSourceBadge source={template.templateSource} />
+            <TemplateSourceBadge
+              source={template.templateSource}
+              isFork={Boolean(template.forkedFromPlatformTemplateId)}
+            />
           </div>
           <div className="text-[0.8125rem] font-mono" style={{ color: "var(--ink-3)" }}>
             v{template.version}
@@ -1358,6 +1375,7 @@ export function SkillsStep({
   requiredGroups = [],
   groupChoices = {},
   onGroupChoiceChange,
+  platform,
 }: {
   selectedSkillIds: string[];
   skillCredentials: IntegrationDraft[];
@@ -1367,6 +1385,7 @@ export function SkillsStep({
   requiredGroups?: RequiredSkillGroup[];
   groupChoices?: Record<string, string[]>;
   onGroupChoiceChange?: (groupKey: string, skillId: string) => void;
+  platform: "slack" | "telegram";
 }) {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
@@ -1420,7 +1439,9 @@ export function SkillsStep({
   function syncCredentialDrafts(requiredProviders: Set<string>) {
     const newCreds = skillCredentials.filter((c) => requiredProviders.has(c.provider));
     for (const p of requiredProviders) {
-      if (!newCreds.find((c) => c.provider === p)) {
+      // Slack is never manually configured — the API derives it from the agent's
+      // gateway bot token, so it must never appear in the secrets payload.
+      if (p !== "slack" && !newCreds.find((c) => c.provider === p)) {
         newCreds.push({ provider: p, content: {} });
       }
     }
@@ -1571,17 +1592,20 @@ export function SkillsStep({
           <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
             {orderedSkills.map((skill) => {
               const isRequired = requiredSkillIds.has(skill.id);
+              const needsSlackPlatform = skill.requiredProviders.includes("slack") && platform !== "slack";
               const selected = isRequired || selectedSkillIds.includes(skill.id);
+              const disabled = !isRequired && needsSlackPlatform;
               return (
                 <div
                   key={skill.id}
                   className="flex flex-col gap-1.5 p-4 rounded-2xl transition-colors min-h-[4.5rem]"
                   style={{
-                    cursor: isRequired ? "default" : "pointer",
+                    cursor: isRequired || disabled ? "default" : "pointer",
                     border: selected ? "1.5px solid var(--ink)" : "1.5px solid var(--line)",
                     background: selected ? "var(--bg-soft)" : "var(--bg-elev)",
+                    opacity: disabled ? 0.5 : 1,
                   }}
-                  onClick={() => { if (!isRequired) toggleSkill(skill); }}
+                  onClick={() => { if (!isRequired && !disabled) toggleSkill(skill); }}
                 >
                   <div className="flex items-center justify-between gap-2">
                     <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
@@ -1594,10 +1618,16 @@ export function SkillsStep({
                       Required by template
                     </div>
                   )}
-                  {skill.requiredProviders.length > 0 && (
+                  {needsSlackPlatform ? (
                     <div className="text-[0.75rem]" style={{ color: "var(--ink-4)" }}>
-                      {skill.requiredProviders.map((p) => SKILL_PROVIDER_LABELS[p] ?? p).join(", ")}
+                      Requires Slack platform
                     </div>
+                  ) : (
+                    skill.requiredProviders.length > 0 && (
+                      <div className="text-[0.75rem]" style={{ color: "var(--ink-4)" }}>
+                        {skill.requiredProviders.map((p) => SKILL_PROVIDER_LABELS[p] ?? p).join(", ")}
+                      </div>
+                    )
                   )}
                 </div>
               );
@@ -1614,6 +1644,21 @@ export function SkillsStep({
             Required credentials
           </div>
           {requiredProviderIds.map((providerId) => {
+            if (providerId === "slack") {
+              return (
+                <div
+                  key={providerId}
+                  className="px-4 py-3 rounded-2xl text-[0.8125rem]"
+                  style={{ border: "1px solid var(--line)", background: "var(--bg-soft)", color: "var(--ink-3)" }}
+                >
+                  <span className="font-medium" style={{ color: "var(--ink)" }}>
+                    Slack
+                  </span>{" "}
+                  — uses this agent&apos;s existing Slack bot token automatically. No credentials needed here.
+                </div>
+              );
+            }
+
             const providerSpec = getIntegrationProvider(providerId);
             const draft = skillCredentials.find((c) => c.provider === providerId);
             if (!draft) return null;

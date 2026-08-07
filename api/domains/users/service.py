@@ -52,10 +52,11 @@ class UserService:
     event_delivery_dispatcher: EventDeliveryDispatcher
     auth_service: AuthService
 
-    def ensure_default_platform_admin(self) -> User:
-        existing = self.user_repository.get_platform_admin()
-        if existing:
-            return existing
+    def ensure_default_platform_admin(self) -> User | None:
+        """Seed the configured administrator when a platform has none. Returns the
+        created user, or None when administrators already exist."""
+        if self.user_repository.count_platform_admins() > 0:
+            return None
         email, password = self.config.platform_admin_credentials.split(":")
         full_name = self.config.platform_admin_full_name
         return self.create_platform_admin(email=email, password=password, full_name=full_name)

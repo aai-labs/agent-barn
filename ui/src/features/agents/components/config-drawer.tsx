@@ -195,7 +195,7 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
   const [saved, setSaved] = useState(false);
   // Template re-pin browsing state.
   const [templateSearch, setTemplateSearch] = useState("");
-  const [repinSlug, setRepinSlug] = useState<string | null>(null);
+  const [repinKey, setRepinKey] = useState<string | null>(null);
   const [repinVersion, setRepinVersion] = useState<number | null>(null);
   const [savedTemplate, setSavedTemplate] = useState(false);
   const [slackAppToken, setSlackAppToken] = useState("");
@@ -233,6 +233,9 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
     : (enabledKeys[0] ?? "personality");
 
   const configuredSecrets = agent.secrets ?? [];
+  // Slack is derived from the agent's gateway bot token and managed automatically
+  // via skill add/remove — never listed as a manually addable/removable integration.
+  const manuallyManagedSecrets = configuredSecrets.filter((s) => s.provider !== "slack");
   const validateIntegration = useValidateIntegration();
   const [validationState, setValidationState] = useState<
     Record<string, IntegrationValidationResult | "loading">
@@ -278,16 +281,16 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
     search: templateSearch || undefined,
   });
   const { versions: repinVersions, isLoading: repinVersionsLoading } =
-    useTemplateVersions(repinSlug);
+    useTemplateVersions(repinKey);
   const resolvedRepinVersion =
     repinVersion ?? repinVersions[0]?.version ?? null;
   const repinIsNoop =
-    repinSlug === agent.templateSlug &&
+    repinKey === agent.templateKey &&
     resolvedRepinVersion === agent.templateVersion;
 
   // Required skills for the currently selected re-pin version.
   const newTemplateRequiredSkills =
-    repinSlug != null && resolvedRepinVersion != null
+    repinKey != null && resolvedRepinVersion != null
       ? (repinVersions.find((v) => v.version === resolvedRepinVersion)?.requiredSkills ?? [])
       : [];
   const { standalone: newStandaloneRequiredSkills, groups: newRequiredGroups } =
@@ -337,9 +340,11 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
   ];
 
   // Always include a draft entry for every newly required provider so forms render.
-  const effectiveRepinSecretDrafts: IntegrationDraft[] = newRequiredProviderIds.map(
-    (p) => repinSecretDrafts.find((d) => d.provider === p) ?? { provider: p, content: {} },
-  );
+  // Slack is excluded — it's never manually configured, the API derives it from
+  // the agent's gateway bot token and rejects an explicit secrets entry for it.
+  const effectiveRepinSecretDrafts: IntegrationDraft[] = newRequiredProviderIds
+    .filter((p) => p !== "slack")
+    .map((p) => repinSecretDrafts.find((d) => d.provider === p) ?? { provider: p, content: {} });
 
   function setRepinSecretField(provider: string, key: string, value: string) {
     setRepinSecretDrafts((prev) => {
@@ -376,13 +381,13 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
   }
 
   async function handleApplyTemplate() {
-    if (!repinSlug || resolvedRepinVersion == null) return;
+    if (!repinKey || resolvedRepinVersion == null) return;
     updateAgent.reset();
     setErrorSection(null);
     try {
       await updateAgent.mutateAsync({
         agentId: agent.id,
-        templateSlug: repinSlug,
+        templateKey: repinKey,
         templateVersion: resolvedRepinVersion,
         skillIds: [...newStandaloneRequiredSkills, ...chosenGroupSkills].map((s) => s.id),
         ...(effectiveRepinSecretDrafts.length > 0
@@ -394,7 +399,7 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
             }
           : {}),
       });
-      setRepinSlug(null);
+      setRepinKey(null);
       setRepinVersion(null);
       setRepinSecretDrafts([]);
       setRepinGroupOverrides({});
@@ -604,8 +609,7 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                 <div className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>Template</div>
                 <div className="text-[0.8125rem]" style={{ color: "var(--ink-3)" }}>
                   Currently pinned to{" "}
-                  <span className="font-mono">{agent.templateSlug}@v{agent.templateVersion}</span>
-                  {template?.templateName ? ` · ${template.templateName}` : ""}.
+                  {template?.templateName ?? "this template"} v{agent.templateVersion}.
                   {" "}Re-pin to a different template or version. Edit content in Settings → Templates.
                 </div>
               </div>
@@ -633,10 +637,10 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                   </div>
                 ) : (
                   browseTemplates.map((t) => {
-                    const selected = repinSlug === t.templateSlug;
+                    const selected = repinKey === t.templateKey;
                     return (
                       <button
-                        key={t.templateSlug}
+                        key={t.templateKey}
                         type="button"
                         disabled={isRunning}
                         className="flex items-center gap-2 px-3.5 py-2.5 text-left"
@@ -645,25 +649,25 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                           background: selected ? "var(--bg-soft)" : "transparent",
                         }}
                         onClick={() => {
-                          setRepinSlug(t.templateSlug);
-                          setRepinVersion(null);
+                          setRepinKey(t.templateKey);
+                          setRepinVersion(t.version);
                           setRepinSecretDrafts([]);
                         }}
                       >
                         <span className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>
                           {t.templateName}
                         </span>
-                        <span className="font-mono text-[12px]" style={{ color: "var(--ink-4)" }}>
-                          {t.templateSlug}
-                        </span>
-                        <TemplateSourceBadge source={t.templateSource} />
+                        <TemplateSourceBadge
+                  source={t.templateSource}
+                  isFork={Boolean(t.forkedFromPlatformTemplateId)}
+                />
                       </button>
                     );
                   })
                 )}
               </div>
 
-              {repinSlug && (
+              {repinKey && (
                 <div className="flex items-center gap-3">
                   <label className="text-[0.844rem] font-medium" style={{ color: "var(--ink-2)" }}>
                     Version
@@ -693,8 +697,9 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                   </div>
                   <div className="flex flex-col gap-1.5">
                     {newStandaloneRequiredSkills.map((skill) => {
+                      // Slack is never "missing" — the API derives it automatically.
                       const missingProviders = skill.requiredProviders.filter(
-                        (p) => !existingSecretProviders.has(p),
+                        (p) => p !== "slack" && !existingSecretProviders.has(p),
                       );
                       return (
                         <div
@@ -723,8 +728,9 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                         Choose at least one:
                       </div>
                       {group.members.map((member) => {
+                        // Slack is never "missing" — the API derives it automatically.
                         const missingProviders = member.requiredProviders.filter(
-                          (p) => !existingSecretProviders.has(p),
+                          (p) => p !== "slack" && !existingSecretProviders.has(p),
                         );
                         return (
                           <label
@@ -756,6 +762,21 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                   ))}
 
                   {newRequiredProviderIds.map((providerId) => {
+                    if (providerId === "slack") {
+                      return (
+                        <div
+                          key={providerId}
+                          className="px-4 py-3 rounded-2xl text-[0.8125rem]"
+                          style={{ border: "1px solid var(--line)", background: "var(--bg-soft)", color: "var(--ink-3)" }}
+                        >
+                          <span className="font-medium" style={{ color: "var(--ink)" }}>
+                            Slack
+                          </span>{" "}
+                          — uses this agent&apos;s existing Slack bot token automatically. No credentials needed here.
+                        </div>
+                      );
+                    }
+
                     const providerSpec = getIntegrationProvider(providerId);
                     const draft = effectiveRepinSecretDrafts.find((d) => d.provider === providerId);
                     if (!draft) return null;
@@ -809,7 +830,7 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                   disabled={
                     isRunning ||
                     updateAgent.isPending ||
-                    !repinSlug ||
+                    !repinKey ||
                     repinIsNoop ||
                     hasIncompleteIntegration(effectiveRepinSecretDrafts) ||
                     newRequiredGroups.some((g) => !repinGroupChoices[g.key]?.length)
@@ -1004,9 +1025,9 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                 to change one, re-enter its fields below.
               </Hint>
 
-              {configuredSecrets.length > 0 && (
+              {manuallyManagedSecrets.length > 0 && (
                 <div className="flex flex-col gap-2">
-                  {configuredSecrets.map((s) => {
+                  {manuallyManagedSecrets.map((s) => {
                     const label = getIntegrationProvider(s.provider)?.label ?? s.provider;
                     const isPendingRemoval = removedProviders.includes(s.provider);
                     const isShared = !!s.sharedCredentialId;

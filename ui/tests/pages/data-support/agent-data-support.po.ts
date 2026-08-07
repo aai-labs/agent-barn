@@ -2,7 +2,7 @@ import { Page } from "@playwright/test";
 
 export const MOCK_AGENT_ID = "33333333-3333-4333-8333-333333333333";
 export const MOCK_TEMPLATE_ID = "44444444-4444-4444-8444-444444444444";
-export const MOCK_TEMPLATE_SLUG = "maya-3f9a2c1b";
+export const MOCK_TEMPLATE_KEY = "tpl-8f3a91c2d4e7";
 export const MOCK_ORG_ID = "22222222-2222-4222-8222-222222222222";
 
 export const MOCK_VIEWER_ROLE_ID = "77777777-0000-4000-8000-000000000001";
@@ -97,7 +97,7 @@ export const mockAgent = {
   status: "RUNNING",
   platform: "slack",
   organization_id: MOCK_ORG_ID,
-  template_slug: MOCK_TEMPLATE_SLUG,
+  template_key: MOCK_TEMPLATE_KEY,
   template_version: 1,
   model: "litellm/gpt-5-mini",
   approval_mode: "auto",
@@ -148,7 +148,7 @@ export const mockToolCall = {
 export const mockAgentTemplate = {
   id: MOCK_TEMPLATE_ID,
   organization_id: MOCK_ORG_ID,
-  template_slug: MOCK_TEMPLATE_SLUG,
+  template_key: MOCK_TEMPLATE_KEY,
   template_name: "Maya",
   template_source: "custom",
   version: 1,
@@ -169,14 +169,14 @@ export const mockTemplates = [
   {
     ...mockAgentTemplate,
     id: "55555555-5555-4555-8555-555555555551",
-    template_slug: "general-purpose",
+    template_key: "general-purpose",
     template_name: "General Purpose",
     template_source: "pre-defined",
   },
   {
     ...mockAgentTemplate,
     id: "55555555-5555-4555-8555-555555555552",
-    template_slug: "scrum-master",
+    template_key: "scrum-master",
     template_name: "Scrum Master",
     template_source: "pre-defined",
     soul_md: "# SOUL.md - Who {{ agent_display_name }} Is\nScrum master soul.",
@@ -184,19 +184,19 @@ export const mockTemplates = [
   {
     ...mockAgentTemplate,
     id: "55555555-5555-4555-8555-555555555553",
-    template_slug: "my-custom",
+    template_key: "my-custom",
     template_name: "My Custom",
     template_source: "custom",
   },
 ];
 
 // Two versions (latest first) for any lineage — used by version dropdowns.
-export function mockVersionsForSlug(slug: string) {
+export function mockVersionsForKey(templateKey: string) {
   const base =
-    mockTemplates.find((t) => t.template_slug === slug) ?? {
+    mockTemplates.find((t) => t.template_key === templateKey) ?? {
       ...mockAgentTemplate,
-      template_slug: slug,
-      template_name: slug,
+      template_key: templateKey,
+      template_name: templateKey,
     };
   return [
     {
@@ -701,7 +701,7 @@ export class AgentDataSupport {
         items = items.filter(
           (t) =>
             t.template_name.toLowerCase().includes(search) ||
-            t.template_slug.toLowerCase().includes(search),
+            t.template_key.toLowerCase().includes(search),
         );
       }
       if (source) {
@@ -725,23 +725,23 @@ export class AgentDataSupport {
   }
 
   async interceptGetTemplateRequest({
-    slug = MOCK_TEMPLATE_SLUG,
+    templateKey = MOCK_TEMPLATE_KEY,
     status = 200,
     detail = "Unable to load template",
     body,
   }: {
-    slug?: string;
+    templateKey?: string;
     status?: number;
     detail?: string;
     body?: unknown;
   } = {}) {
-    await this.page.route(`**/api/v1/organizations/*/templates/${slug}`, async (route) => {
+    await this.page.route(`**/api/v1/organizations/*/templates/${templateKey}`, async (route) => {
       if (route.request().method() !== "GET") {
         await route.fallback();
         return;
       }
       const fallback =
-        mockTemplates.find((t) => t.template_slug === slug) ?? mockAgentTemplate;
+        mockTemplates.find((t) => t.template_key === templateKey) ?? mockAgentTemplate;
       await route.fulfill({
         status,
         contentType: "application/json",
@@ -767,12 +767,12 @@ export class AgentDataSupport {
       const match = new URL(route.request().url()).pathname.match(
         /\/templates\/([^/]+)\/versions$/,
       );
-      const slug = match ? match[1] : MOCK_TEMPLATE_SLUG;
+      const templateKey = match ? match[1] : MOCK_TEMPLATE_KEY;
       await route.fulfill({
         status,
         contentType: "application/json",
         body: JSON.stringify(
-          status >= 400 ? { detail } : (body ?? mockVersionsForSlug(slug)),
+          status >= 400 ? { detail } : (body ?? mockVersionsForKey(templateKey)),
         ),
       });
     });
@@ -803,23 +803,23 @@ export class AgentDataSupport {
   }
 
   async interceptUpdateTemplateRequest({
-    slug = MOCK_TEMPLATE_SLUG,
+    templateKey = MOCK_TEMPLATE_KEY,
     status = 200,
     detail = "Unable to update template",
     body,
   }: {
-    slug?: string;
+    templateKey?: string;
     status?: number;
     detail?: string;
     body?: unknown;
   } = {}) {
-    await this.page.route(`**/api/v1/organizations/*/templates/${slug}`, async (route) => {
+    await this.page.route(`**/api/v1/organizations/*/templates/${templateKey}`, async (route) => {
       if (route.request().method() !== "PATCH") {
         await route.fallback();
         return;
       }
       const fallback =
-        mockTemplates.find((t) => t.template_slug === slug) ?? mockAgentTemplate;
+        mockTemplates.find((t) => t.template_key === templateKey) ?? mockAgentTemplate;
       await route.fulfill({
         status,
         contentType: "application/json",
@@ -828,6 +828,39 @@ export class AgentDataSupport {
         ),
       });
     });
+  }
+
+  async interceptUpdateTemplateFromPlatformRequest({
+    templateKey = MOCK_TEMPLATE_KEY,
+    status = 201,
+    detail = "Unable to apply platform template update",
+    body,
+  }: {
+    templateKey?: string;
+    status?: number;
+    detail?: string;
+    body?: unknown;
+  } = {}) {
+    await this.page.route(
+      `**/api/v1/organizations/*/templates/${templateKey}/platform-update`,
+      async (route) => {
+        if (route.request().method() !== "POST") {
+          await route.fallback();
+          return;
+        }
+        const fallback =
+          mockTemplates.find((t) => t.template_key === templateKey) ?? mockAgentTemplate;
+        await route.fulfill({
+          status,
+          contentType: "application/json",
+          body: JSON.stringify(
+            status >= 400
+              ? { detail }
+              : (body ?? { ...fallback, version: fallback.version + 1, platform_update_available: false }),
+          ),
+        });
+      },
+    );
   }
 
   async interceptGetToolCallsRequest({

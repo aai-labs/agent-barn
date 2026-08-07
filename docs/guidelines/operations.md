@@ -30,6 +30,7 @@ Use `make db-down`, `make db-logs`, and `make db-restart` for database lifecycle
 
 ```bash
 make migrate
+make merge-heads
 make rollback
 make makemigrations
 ```

@@ -155,7 +155,7 @@ class TemplateCreatedPayload(BaseModel):
 
     organization_id: UUID
     template_id: UUID
-    template_slug: str
+    template_key: str
     template_name: str
     version: int
     actor_display: str
@@ -167,7 +167,7 @@ class TemplateUpdatedPayload(BaseModel):
 
     organization_id: UUID
     template_id: UUID
-    template_slug: str
+    template_key: str
     previous_version: int
     new_version: int
     field_changes: dict[str, dict[str, Any]]
@@ -179,7 +179,7 @@ class TemplateDeletedPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     organization_id: UUID
-    template_slug: str
+    template_key: str
     versions_deleted: list[int]
     actor_display: str
     subject_display: str
