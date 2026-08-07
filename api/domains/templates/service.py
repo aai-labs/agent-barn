@@ -152,7 +152,10 @@ class TemplateService:
         for group in data.required_skill_groups:
             skills_map.update(dict.fromkeys(group.skill_ids, group.group_key))
         result = self.repository.save_template_with_created_event(
-            template, skills_map, actor=resolve_actor_identity(context, org_id)
+            template,
+            skills_map,
+            actor=resolve_actor_identity(context, org_id),
+            actor_display=context.user.full_name or context.user.email,
         )
         self.event_delivery_dispatcher.enqueue_immediate(result.delivery_ids)
         return self._to_read_with_skills(result.template)
@@ -219,6 +222,7 @@ class TemplateService:
             previous_version=old.version,
             field_changes=field_changes,
             actor=resolve_actor_identity(context, org_id),
+            actor_display=context.user.full_name or context.user.email,
         )
         self.event_delivery_dispatcher.enqueue_immediate(result.delivery_ids)
         return self._to_read_with_skills(result.template)
@@ -244,7 +248,10 @@ class TemplateService:
             )
         try:
             delivery_ids = self.repository.purge_org_template_lineage_with_event(
-                org_id, slug, actor=resolve_actor_identity(context, org_id)
+                org_id,
+                slug,
+                actor=resolve_actor_identity(context, org_id),
+                actor_display=context.user.full_name or context.user.email,
             )
         except IntegrityError:
             raise HTTPException(

@@ -186,11 +186,16 @@ class TemplateDeletedPayload(BaseModel):
 
 
 class OrganizationModelAllowlistChangedPayload(BaseModel):
+    """Carries the diff (added/removed), not the full before/after lists — the
+    allowlist is validated against the OpenRouter catalog (400+ models) with no
+    length bound, so two full lists can exceed MAX_PAYLOAD_BYTES and make the
+    allowlist permanently uneditable once it's grown large enough."""
+
     model_config = ConfigDict(extra="forbid")
 
     organization_id: UUID
-    previous_models: list[str]
-    new_models: list[str]
+    added: list[str]
+    removed: list[str]
     actor_display: str
     subject_display: str
 

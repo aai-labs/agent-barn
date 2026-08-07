@@ -179,6 +179,7 @@ class TemplateRepository:
         skills_map: dict[UUID, str | None],
         *,
         actor: ActorIdentity,
+        actor_display: str | None = None,
         correlation_id: UUID | None = None,
     ) -> TemplateLifecycleEventResult:
         """Insert a new org template row, its required-skill rows, and a
@@ -208,7 +209,7 @@ class TemplateRepository:
                     "template_slug": template.template_slug,
                     "template_name": template.template_name,
                     "version": template.version,
-                    "actor_display": actor.type.value,
+                    "actor_display": actor_display or actor.type.value,
                     "subject_display": template.template_name,
                 },
             )
@@ -226,6 +227,7 @@ class TemplateRepository:
         previous_version: int,
         field_changes: dict[str, dict[str, Any]],
         actor: ActorIdentity,
+        actor_display: str | None = None,
         correlation_id: UUID | None = None,
     ) -> TemplateLifecycleEventResult:
         """Insert the new immutable version row, its required-skill rows, and a
@@ -262,7 +264,7 @@ class TemplateRepository:
                     "previous_version": previous_version,
                     "new_version": template.version,
                     "field_changes": field_changes,
-                    "actor_display": actor.type.value,
+                    "actor_display": actor_display or actor.type.value,
                     "subject_display": template.template_name,
                 },
             )
@@ -536,6 +538,7 @@ class TemplateRepository:
         slug: str,
         *,
         actor: ActorIdentity,
+        actor_display: str | None = None,
         correlation_id: UUID | None = None,
     ) -> list[UUID]:
         """Delete every org-scoped version, detaching soft-deleted agents first,
@@ -582,7 +585,7 @@ class TemplateRepository:
                     "organization_id": org_id,
                     "template_slug": slug,
                     "versions_deleted": versions_deleted,
-                    "actor_display": actor.type.value,
+                    "actor_display": actor_display or actor.type.value,
                     "subject_display": latest_name,
                 },
             )

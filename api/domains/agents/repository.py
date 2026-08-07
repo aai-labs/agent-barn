@@ -546,6 +546,7 @@ class AgentRepository:
         agent: Agent,
         *,
         actor: ActorIdentity,
+        actor_display: str | None = None,
         correlation_id: UUID | None = None,
     ) -> AgentLifecycleEventResult:
         """Persist the scalar identity/config fields `update_agent` mutates directly
@@ -593,7 +594,7 @@ class AgentRepository:
                     "organization_id": persisted.organization_id,
                     "agent_id": persisted.id,
                     "field_changes": field_changes,
-                    "actor_display": actor.type.value,
+                    "actor_display": actor_display or actor.type.value,
                     "subject_display": persisted.name,
                 },
             )
@@ -607,6 +608,7 @@ class AgentRepository:
         agent: Agent,
         *,
         actor: ActorIdentity,
+        actor_display: str | None = None,
         correlation_id: UUID | None = None,
     ) -> AgentLifecycleEventResult:
         with Session(self.delegate.engine, expire_on_commit=False) as session:
@@ -634,7 +636,7 @@ class AgentRepository:
                     "agent_name": persisted.name,
                     "platform": persisted.platform,
                     "runtime": persisted.agent_type,
-                    "actor_display": actor.type.value,
+                    "actor_display": actor_display or actor.type.value,
                     "subject_display": persisted.name,
                 },
             )
@@ -651,6 +653,7 @@ class AgentRepository:
         organization_id: UUID,
         agent_name: str,
         actor: ActorIdentity,
+        actor_display: str | None = None,
         correlation_id: UUID | None = None,
     ) -> list[UUID]:
         """Save an AgentSecret row and stage an agent.secret.added/.updated event in
@@ -680,7 +683,7 @@ class AgentRepository:
                     "provider": SecretProvider(secret.provider).value,
                     "label": secret.secret_name,
                     "shared_reference_id": secret.shared_credential_id,
-                    "actor_display": actor.type.value,
+                    "actor_display": actor_display or actor.type.value,
                     "subject_display": agent_name,
                 },
             )
@@ -697,6 +700,7 @@ class AgentRepository:
         organization_id: UUID,
         agent_name: str,
         actor: ActorIdentity,
+        actor_display: str | None = None,
         correlation_id: UUID | None = None,
     ) -> list[UUID]:
         with Session(self.delegate.engine, expire_on_commit=False) as session:
@@ -730,7 +734,7 @@ class AgentRepository:
                     "provider": SecretProvider(provider).value,
                     "label": label,
                     "shared_reference_id": shared_reference_id,
-                    "actor_display": actor.type.value,
+                    "actor_display": actor_display or actor.type.value,
                     "subject_display": agent_name,
                 },
             )

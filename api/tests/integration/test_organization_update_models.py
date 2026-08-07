@@ -231,8 +231,11 @@ def test_update_organization_allowed_models_emits_model_allowlist_changed_event(
         messages = _outbox_messages(context)
         changed_events = [m for m in messages if m.event_name == ORGANIZATION_MODEL_ALLOWLIST_CHANGED]
         assert_that(len(changed_events), equal_to(1))
-        assert_that(changed_events[0].payload["previous_models"], equal_to([]))
-        assert_that(changed_events[0].payload["new_models"], equal_to(["openai/gpt-4o"]))
+        assert_that(changed_events[0].payload["added"], equal_to(["openai/gpt-4o"]))
+        assert_that(changed_events[0].payload["removed"], equal_to([]))
+        # Regression: actor_display must be the acting user's name, not the
+        # ActorIdentity type string ("MEMBERSHIP"/"USER").
+        assert_that(changed_events[0].payload["actor_display"], equal_to("Test User"))
 
 
 def test_update_organization_same_allowed_models_emits_no_event():

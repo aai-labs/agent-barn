@@ -635,6 +635,7 @@ class AgentService:
         # Integration secrets are platform-independent. Persist them before any
         # Teams auto-start so they exist if/when the pod is later built.
         secret_actor = resolve_actor_identity(context, org_id)
+        secret_actor_display = context.user.full_name or context.user.email
         secrets: list[AgentSecret] = []
         secret_delivery_ids: list[UUID] = []
         for item in data.secrets:
@@ -651,6 +652,7 @@ class AgentService:
                 organization_id=org_id,
                 agent_name=agent.name,
                 actor=secret_actor,
+                actor_display=secret_actor_display,
             )
             secrets.append(secret)
 
@@ -681,6 +683,7 @@ class AgentService:
                 organization_id=org_id,
                 agent_name=agent.name,
                 actor=secret_actor,
+                actor_display=secret_actor_display,
             )
             secrets.append(secret)
 
@@ -971,6 +974,7 @@ class AgentService:
             self._validate_skill_update(agent, data, org_id)
 
         secret_actor = resolve_actor_identity(context, org_id)
+        secret_actor_display = context.user.full_name or context.user.email
         secret_delivery_ids: list[UUID] = []
 
         # Integration secrets: platform-independent. Remove first, then upsert
@@ -996,6 +1000,7 @@ class AgentService:
                     organization_id=org_id,
                     agent_name=agent.name,
                     actor=secret_actor,
+                    actor_display=secret_actor_display,
                 )
             for item, encrypted in upserts:
                 existing = self.repository.get_secret(agent.id, item.provider)
@@ -1009,6 +1014,7 @@ class AgentService:
                         organization_id=org_id,
                         agent_name=agent.name,
                         actor=secret_actor,
+                        actor_display=secret_actor_display,
                     )
                 else:
                     secret = AgentSecret(
@@ -1023,6 +1029,7 @@ class AgentService:
                         organization_id=org_id,
                         agent_name=agent.name,
                         actor=secret_actor,
+                        actor_display=secret_actor_display,
                     )
 
         # Shared credential attachments
@@ -1059,6 +1066,7 @@ class AgentService:
                         organization_id=org_id,
                         agent_name=agent.name,
                         actor=secret_actor,
+                        actor_display=secret_actor_display,
                     )
                 else:
                     secret = AgentSecret(
@@ -1074,6 +1082,7 @@ class AgentService:
                         organization_id=org_id,
                         agent_name=agent.name,
                         actor=secret_actor,
+                        actor_display=secret_actor_display,
                     )
 
         # Apply skill changes
@@ -1082,7 +1091,9 @@ class AgentService:
         for skill_id in dict.fromkeys(data.skill_ids):
             self.repository.add_skill(agent.id, skill_id)
 
-        update_result = self.repository.update_scalar_fields_with_event(agent, actor=secret_actor)
+        update_result = self.repository.update_scalar_fields_with_event(
+            agent, actor=secret_actor, actor_display=secret_actor_display
+        )
         self.event_delivery_dispatcher.enqueue_immediate(update_result.delivery_ids + secret_delivery_ids)
         return self._get_agent_read(update_result.agent, context)
 
@@ -1661,7 +1672,9 @@ class AgentService:
             self.repository.save_slack_config(slack_config)
 
         delete_result = self.repository.soft_delete_with_event(
-            agent, actor=resolve_actor_identity(context, agent.organization_id)
+            agent,
+            actor=resolve_actor_identity(context, agent.organization_id),
+            actor_display=context.user.full_name or context.user.email,
         )
         self.event_delivery_dispatcher.enqueue_immediate(delete_result.delivery_ids)
 

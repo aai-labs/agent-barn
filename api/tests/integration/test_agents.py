@@ -948,6 +948,9 @@ def test_update_agent_emits_updated_domain_event_with_field_changes():
             field_changes = updated_events[0].payload["field_changes"]
             assert_that(field_changes["name"]["previous"], equal_to("Old Name"))
             assert_that(field_changes["name"]["new"], equal_to("New Name"))
+            # Regression: actor_display must be the acting user's name, not the
+            # ActorIdentity type string ("MEMBERSHIP"/"USER").
+            assert_that(updated_events[0].payload["actor_display"], equal_to("Test User"))
 
 
 def test_update_agent_with_no_tracked_field_change_emits_no_updated_event():
@@ -981,6 +984,7 @@ def test_delete_agent_emits_deleted_domain_event():
             deleted_events = [message for message in messages if message.event_name == AGENT_DELETED]
             assert_that(len(deleted_events), equal_to(1))
             assert_that(deleted_events[0].payload["agent_id"], equal_to(str(context.agent.id)))
+            assert_that(deleted_events[0].payload["actor_display"], equal_to("Test User"))
 
 
 def test_patch_agent_add_secret_emits_secret_added_domain_event():
@@ -1001,6 +1005,7 @@ def test_patch_agent_add_secret_emits_secret_added_domain_event():
             assert_that(len(added_events), equal_to(1))
             assert_that(added_events[0].payload["provider"], equal_to("jira"))
             assert_that(added_events[0].payload, is_not(has_key("content")))
+            assert_that(added_events[0].payload["actor_display"], equal_to("Test User"))
 
 
 def test_patch_agent_update_secret_emits_secret_updated_domain_event():

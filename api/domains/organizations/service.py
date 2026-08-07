@@ -210,7 +210,9 @@ class OrganizationService:
 
             from sqlalchemy.orm.attributes import flag_modified
 
-            previous_models: list[str] | None = None
+            added_models: list[str] = []
+            removed_models: list[str] = []
+            allowlist_changed = False
             if "allowed_models" in dump:
                 if dump["allowed_models"] is None:
                     # An explicit null is a no-op: allowed_models is non-nullable at
@@ -219,15 +221,18 @@ class OrganizationService:
                 else:
                     self._validate_allowed_models(dump["allowed_models"], existing=organization.allowed_models)
                     dump["allowed_models"] = [m.removeprefix("litellm/openrouter/") for m in dump["allowed_models"]]
-                    if dump["allowed_models"] != organization.allowed_models:
-                        previous_models = list(organization.allowed_models)
+                    previous_set = set(organization.allowed_models)
+                    new_set = set(dump["allowed_models"])
+                    added_models = sorted(new_set - previous_set)
+                    removed_models = sorted(previous_set - new_set)
+                    allowlist_changed = bool(added_models or removed_models)
                     flag_modified(organization, "allowed_models")
 
             for key, value in dump.items():
                 setattr(organization, key, value)
             session.flush()
 
-            if previous_models is not None:
+            if allowlist_changed:
                 actor = resolve_actor_identity(context, organization_id)
                 event = EVENT_REGISTRY.build_event(
                     event_name=ORGANIZATION_MODEL_ALLOWLIST_CHANGED,
@@ -243,9 +248,9 @@ class OrganizationService:
                     correlation_id=uuid4(),
                     payload={
                         "organization_id": organization_id,
-                        "previous_models": previous_models,
-                        "new_models": organization.allowed_models,
-                        "actor_display": actor.type.value,
+                        "added": added_models,
+                        "removed": removed_models,
+                        "actor_display": context.user.full_name or context.user.email,
                         "subject_display": organization.name,
                     },
                 )

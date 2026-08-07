@@ -1574,6 +1574,9 @@ def test_create_template_emits_created_domain_event():
             assert_that(len(created_events), equal_to(1))
             assert_that(created_events[0].payload["template_slug"], equal_to("my-template"))
             assert_that(created_events[0].payload["version"], equal_to(1))
+            # Regression: actor_display must be the acting user's name, not the
+            # ActorIdentity type string ("MEMBERSHIP"/"USER").
+            assert_that(created_events[0].payload["actor_display"], equal_to("Test User"))
 
 
 def test_update_template_description_emits_updated_domain_event_with_field_changes():

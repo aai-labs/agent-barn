@@ -415,13 +415,18 @@ def test_agent_secret_added_payload_rejects_content_field():
         )
 
 
-def test_organization_model_allowlist_changed_payload_handles_realistic_large_list():
-    """Regression guard against the 16KB payload size bound: a large-but-realistic
-    allowlist (hundreds of glob patterns) must still fit, since truncating an
-    audit record's before/after state would defeat its purpose."""
+def test_organization_model_allowlist_changed_payload_carries_a_diff_not_full_lists():
+    """Regression: the payload carries added/removed, not full before/after lists.
+    Full lists hit the 16KB payload bound at roughly 230 entries per list, and once
+    an org's allowlist grew that large, *any* further edit — including shrinking it
+    back down — would 500 forever, since the payload for the shrink itself would
+    also exceed the cap. A diff is bounded by the size of the actual change, not
+    the accumulated allowlist size, so a small edit stays small no matter how large
+    the allowlist has grown. This asserts a diff double the size of the old cliff
+    still fits comfortably."""
     organization_id = uuid4()
-    previous_models = [f"openai/gpt-{i}" for i in range(150)]
-    new_models = [f"anthropic/claude-{i}" for i in range(150)]
+    added_models = [f"openai/gpt-{i}" for i in range(300)]
+    removed_models = [f"anthropic/claude-{i}" for i in range(300)]
 
     event = EVENT_REGISTRY.build_event(
         event_name=ORGANIZATION_MODEL_ALLOWLIST_CHANGED,
@@ -435,11 +440,12 @@ def test_organization_model_allowlist_changed_payload_handles_realistic_large_li
         correlation_id=uuid4(),
         payload={
             "organization_id": str(organization_id),
-            "previous_models": previous_models,
-            "new_models": new_models,
+            "added": added_models,
+            "removed": removed_models,
             "actor_display": "USER",
             "subject_display": "My Org",
         },
     )
 
-    assert event.payload["new_models"] == new_models
+    assert event.payload["added"] == added_models
+    assert event.payload["removed"] == removed_models
