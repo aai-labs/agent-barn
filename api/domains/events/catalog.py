@@ -45,6 +45,11 @@ class OrganizationRoleChangedPayload(BaseModel):
 
 
 class AgentAccessGrantedPayload(BaseModel):
+    """subject_display names the Agent (the event's Subject); member_display is a
+    write-time snapshot of the target member's name/email, since membership_id alone
+    can't be resolved to a human-readable identity once the membership or user is
+    later deleted (records must survive that per the retention ADR)."""
+
     model_config = ConfigDict(extra="forbid")
 
     organization_id: UUID
@@ -53,9 +58,12 @@ class AgentAccessGrantedPayload(BaseModel):
     access_role_id: UUID
     actor_display: str
     subject_display: str
+    member_display: str
 
 
 class AgentAccessRevokedPayload(BaseModel):
+    """See AgentAccessGrantedPayload — same subject_display/member_display split."""
+
     model_config = ConfigDict(extra="forbid")
 
     organization_id: UUID
@@ -64,6 +72,7 @@ class AgentAccessRevokedPayload(BaseModel):
     previous_access_role_id: UUID
     actor_display: str
     subject_display: str
+    member_display: str
 
 
 class AgentGeneralAccessChangedPayload(BaseModel):

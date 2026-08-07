@@ -301,6 +301,20 @@ class AgentRepository:
             audit_correlation_id = correlation_id or uuid4()
             staged_event_ids: list[UUID] = []
 
+            # Snapshot each touched member's display name at write time — the same
+            # pattern used for organization.member.*/ownership_transferred — so
+            # `agent.access.granted`/`.revoked` remain readable after the membership
+            # or user row is later deleted, without a live join at read time.
+            touched_membership_ids = set(existing_by_membership) | set(assignment_roles)
+            member_display_by_membership_id: dict[UUID, str] = {}
+            if touched_membership_ids:
+                for membership_id, full_name, email in session.exec(
+                    select(OrganizationUser.id, User.full_name, User.email)
+                    .join(User, col(User.id) == col(OrganizationUser.user_id))
+                    .where(col(OrganizationUser.id).in_(touched_membership_ids))
+                ).all():
+                    member_display_by_membership_id[membership_id] = full_name or str(email)
+
             if previous_general_access_role_id != general_access_role_id:
                 general_access_event = EVENT_REGISTRY.build_event(
                     event_name=AGENT_GENERAL_ACCESS_CHANGED,
@@ -343,6 +357,7 @@ class AgentRepository:
                             "previous_access_role_id": access.access_role_id,
                             "actor_display": audit_actor_display,
                             "subject_display": agent.name,
+                            "member_display": member_display_by_membership_id.get(membership_id, str(membership_id)),
                         },
                     )
                     self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=access_revoked_event)
@@ -377,6 +392,7 @@ class AgentRepository:
                             "access_role_id": access_role_id,
                             "actor_display": audit_actor_display,
                             "subject_display": agent.name,
+                            "member_display": member_display_by_membership_id.get(membership_id, str(membership_id)),
                         },
                     )
                     self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=access_granted_event)

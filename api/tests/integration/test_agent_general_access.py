@@ -577,6 +577,12 @@ def test_access_settings_snapshot_replaces_general_and_direct_access():
         assert_that(general.payload["new_access_role_id"], equal_to(str(AGENT_VIEWER_ROLE_ID)))
         assert_that(granted.payload["actor_display"], equal_to("Test User"))
         assert_that(granted.payload["subject_display"], equal_to(context.agent.name))
+        # subject_display names the Agent (the event's Subject); member_display is a
+        # separate write-time snapshot of the target member's own name, so the audit
+        # trail can answer "who was granted/revoked access" without a live join once
+        # the membership or user is later deleted.
+        assert_that(granted.payload["member_display"], equal_to(second_member.full_name))
+        assert_that(revoked.payload["member_display"], equal_to(first_member.full_name))
         # Regression: replace_access_settings must attempt to enqueue its staged
         # deliveries immediately, like every other event-emitting mutation, instead of
         # leaving them stuck at PENDING forever with no enqueue attempt at all. The
