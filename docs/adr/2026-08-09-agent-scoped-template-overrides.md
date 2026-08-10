@@ -1,7 +1,7 @@
 # Agent-scoped immutable Template Overrides
 
-Status: Accepted  
-Date: 2026-08-09  
+Status: Accepted
+Date: 2026-08-09
 Origin: [AF-253](https://aai-labs.atlassian.net/browse/AF-253), [AF-252](https://aai-labs.atlassian.net/browse/AF-252)
 
 Agent-specific Template customization uses an Agent-owned draft and immutable published snapshots rather than reusing the shared Organization Template lineage. Publishing is separate from selecting a version, and a running Agent applies a selected version only through an explicit Restart. This preserves sibling isolation, rollback, auditability, and operational safety while retaining the same full-snapshot update model as Organization Templates.
