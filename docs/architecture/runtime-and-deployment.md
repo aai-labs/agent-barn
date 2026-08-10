@@ -29,6 +29,26 @@ A failed Slack or Telegram credential check or Kubernetes start can place the ag
 
 Runtime is persisted as `agent_type`; platform is persisted separately. Both runtimes receive rendered template files, skills, integrations, model/LiteLLM settings, and ingest credentials, but their filesystem and configuration shapes differ.
 
+## Mention gating
+
+In a shared channel or group an agent responds only to messages that explicitly mention it. Every agent owns its own bot identity and therefore receives every message in rooms it belongs to, so mention gating is the only thing that keeps an untagged agent from acting on a message addressed to another agent. Gating requires a fresh mention per message: participating earlier in a thread does not entitle an agent to later messages. Direct messages are exempt.
+
+Builders set this per runtime and platform:
+
+| Runtime  | Platform | Generated configuration                                                                       |
+| -------- | -------- | --------------------------------------------------------------------------------------------- |
+| Hermes   | Slack    | `slack.require_mention` and `slack.strict_mention`                                              |
+| Hermes   | Telegram | `telegram.require_mention` and `telegram.exclusive_bot_mentions`                                |
+| OpenClaw | Slack    | `channels.slack.requireMention`, `channels.slack.thread.requireExplicitMention`, and per-channel `requireMention` |
+| OpenClaw | Teams    | `channels.msteams.requireMention`                                                               |
+| OpenClaw | Telegram | `channels.telegram.groups.<chat_id>.requireMention`, or the `*` wildcard group when the group policy is open |
+
+The table covers all five supported runtime/platform pairs. Every value is pinned explicitly rather than left to a runtime default, so an upstream default change cannot silently reopen the gap.
+
+Guarantee strength differs by platform. Slack on both runtimes enforces a fresh mention per message, disabling thread auto-engagement. Teams and Telegram enforce "mention required" but expose no per-message re-mention control, so a direct reply to the agent's own message still reaches it. Those replies remain addressed to exactly one agent, so they do not reopen the cross-agent case.
+
+Runtime configuration is generated at agent start, so a running agent keeps the gating it was started with until it is stopped and started again.
+
 ## Telemetry and costs
 
 Agent runtimes report messages and tool-call state to the separate Ingest API using the per-start ingest key. Ingest authentication currently remains valid after stop because status is not checked and the stored key is not cleared. Costs follow a separate path: the API queries LiteLLM and attributes spend through each agent's LiteLLM key identity.

@@ -1674,6 +1674,8 @@ def test_start_agent_overlay_uses_slack_settings():
                 slack["channels"],
                 equal_to({"C123": {"enabled": True, "requireMention": True}}),
             )
+            assert_that(slack["requireMention"], equal_to(True))
+            assert_that(slack["thread"]["requireExplicitMention"], equal_to(True))
 
 
 def test_start_agent_open_policy_sets_allow_from_wildcard():

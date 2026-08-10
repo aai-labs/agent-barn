@@ -21,6 +21,7 @@ An Agent is the central operational aggregate. It connects organization tenancy,
 - Runtime and platform are separate. Hermes supports Slack and Telegram; OpenClaw supports Slack, Teams, and Telegram.
 - Persisted lifecycle states are `STOPPED`, `RUNNING`, and `ERROR`.
 - Slack agents require bot and app tokens. Teams agents require app ID, app password, and tenant ID. Telegram agents require a bot token.
+- Agents respond in shared channels and groups only to messages that explicitly mention them, on every supported platform. Slack additionally requires that mention on every message rather than inheriting it from earlier thread participation; Teams and Telegram expose no equivalent control. Direct messages are exempt. Gating is generated at start; see [`../architecture/runtime-and-deployment.md`](../architecture/runtime-and-deployment.md).
 - Each active Slack agent must use a distinct bot token (enforced globally); creating or updating with a duplicate returns 409. Deleting an agent releases its token for reuse.
 - Platform is not changed through agent update. Runtime/platform compatibility is schema-validated.
 - Running agents reject configuration updates.
