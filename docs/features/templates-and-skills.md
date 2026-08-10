@@ -2,7 +2,7 @@
 
 ## Read when
 
-Read before changing template versioning, predefined template seeding, template Markdown fields, required skills, skill archives, skill provider requirements, or agent skill mounting.
+Read before changing template versioning, predefined template seeding, template Markdown fields, Agent Template Overrides, required skills, skill archives, skill provider requirements, or agent skill mounting.
 
 ## Role in the system
 
@@ -19,6 +19,7 @@ Templates provide versioned agent configuration; Skills provide packaged instruc
 - Editing a platform predefined template creates the first organization snapshot at **Org v1**, regardless of the platform version. The row stores the original platform source ID, the current platform baseline ID, and the denormalized baseline version. Later organization edits publish Org v2, v3, and so on. Organization Template reads expose the lineage-level `platform_update_available` result of comparing the latest organization version's baseline with the latest published platform version; the same result is used across version history so selecting an older version cannot change update availability. The Org Template UI labels the row as an Organization fork rather than a Built-in template. The seeder only bootstraps missing platform lineages; org forks are never clobbered.
 - Template name, key, and source remain stable across versions. Template content consists of the configured Markdown artifacts: soul, identity, user, tools, agents, boot, bootstrap, and heartbeat.
 - Required-skill associations are stored in `agent_template_skill` (org-scoped) and `platform_template_skill` (global), mirroring the template split.
+- AF-253 Agent Template Overrides are Agent-scoped snapshots, not Organization Template rows. They copy the complete source version—including metadata, all eight Markdown artifacts, and required-skill requirements—into an Agent-owned draft/version lineage. Shared Template history and sibling Agent pins remain unchanged; the accepted draft/publish/select/restart contract is documented in [`../plans/AF-253-agent-config-tuning.md`](../plans/AF-253-agent-config-tuning.md).
 - Each required-skill row carries a nullable `group_key`. `NULL` means the skill is standalone and AND-required (must be assigned). Rows sharing a non-`NULL` `group_key` on the same template form an "at least one of" group: at hire/update time at least one member must be assigned, and an agent can never be updated down to zero assigned members in a group it once had one in. A skill cannot be both standalone and a group member on the same template version (enforced at the API layer). `TemplateCreate`/`TemplateUpdate` accept groups via `required_skill_groups` (list of `{group_key, skill_ids}`) alongside the existing `required_skill_ids` for standalone skills.
 
 ## Skill invariants
@@ -52,6 +53,10 @@ Validate referenced skills, create the next immutable custom version, copy omitt
 
 For an organization fork with a newer Platform Template Version available, an explicit Template Update clones the complete newer platform snapshot—including content and required skills—into the next organization version. Organization customizations are intentionally replaced by the platform snapshot. The original fork origin remains intact, the stored platform baseline ID/version advances to the adopted platform version, and existing Agent pins remain unchanged.
 
+### Apply a source update to an Agent Override
+
+An Agent Override may show an update only from the direct Platform or Organization lineage of its Override Source Version. The user explicitly copies the complete newer source snapshot into the Agent Override Draft, publishes the next immutable Agent Override Version, and then selects it for the Agent. The UI identifies the source lineage and exact source version. Source updates never merge local Override edits and never move an Agent pin automatically; an unavailable source does not invalidate an existing self-contained Override snapshot.
+
 ### Assign and mount skills
 
 Explicit assignments are persisted after organization access and provider requirements pass. Agent start loads those skills, adds eligible built-in provider skills, builds the runtime skill manifest, and appends skill pointers to rendered tool context.
@@ -77,6 +82,6 @@ Platform Administrators use the Platform View's Platform Templates catalog (`/da
 
 ## Change impact
 
-Template changes affect agent pinning/rendering, predefined seeds, required skills, UI template schemas, and existing-version behavior. Changes to predefined v1 requirements must account for already-pinned agents. Skill changes affect ZIP validation, assignment/deletion guards, agent start manifests, provider requirements, templates, and the Skills UI; provider-requirement edits must account for existing assignments. Verify all three domain test suites when their relationship changes.
+Template changes affect agent pinning/rendering, predefined seeds, required skills, UI template schemas, and existing-version behavior. Changes to predefined v1 requirements must account for already-pinned agents. Agent Template Override changes additionally affect Agent-owned snapshot persistence, source update discovery, pin selection, restart activation, rollback, and sibling isolation. Skill changes affect ZIP validation, assignment/deletion guards, agent start manifests, provider requirements, templates, and the Skills UI; provider-requirement edits must account for existing assignments. Verify all three domain test suites when their relationship changes.
 
-Required-skill *group* changes (the `group_key` column and the "at least one of" model) affect: agent create/update validation (group membership, the never-drop-to-zero grandfathering rule), predefined seeding idempotency (a group's seeded membership can be a subset when not all member skills exist yet), the hire dialog (multi-select group UI, gates Hire until a choice is made), the template editor (group authoring: create/add/remove member/dissolve), and the agent config drawer's re-pin flow (group choice re-derived against the new template's groups). Changes here must be verified against both `agent_template_skill` and `platform_template_skill` groups.
+Required-skill *group* changes (the `group_key` column and the "at least one of" model) affect: agent create/update validation (group membership, the never-drop-to-zero grandfathering rule), predefined seeding idempotency (a group's seeded membership can be a subset when not all member skills exist yet), the hire dialog (multi-select group UI, gates Hire until a choice is made), the template editor (group authoring: create/add/remove member/dissolve), and the canonical Agent configuration page's Template selection flow (group choice re-derived against the new template's groups). Changes here must be verified against both `agent_template_skill` and `platform_template_skill` groups.
