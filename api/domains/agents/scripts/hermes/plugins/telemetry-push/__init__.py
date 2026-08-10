@@ -20,8 +20,8 @@ _tool_call_ids_lock = threading.Lock()
 _counter = 0
 _counter_lock = threading.Lock()
 
-_last_channel = {}
-_last_channel_lock = threading.Lock()
+_session_store = None
+_session_store_lock = threading.Lock()
 
 _agent_id = None
 _ingest_url = None
@@ -56,6 +56,39 @@ def _now_iso():
     from datetime import datetime
 
     return datetime.now(UTC).isoformat()
+
+
+def _resolve_chat(session_id):
+    """Resolve a session_id to (chat_id, chat_type, thread_id), or None.
+
+    post_llm_call carries only a session_id, so the gateway's session store is
+    the authoritative link back to the originating chat. Callers must drop the
+    event when this returns None rather than fall back to another chat.
+    """
+    with _session_store_lock:
+        store = _session_store
+
+    if store is None or not session_id:
+        return None
+
+    try:
+        entries = store.list_sessions()
+    except Exception as e:
+        logger.warning("telemetry-push could not read the session store: %s", e)
+        return None
+
+    for entry in entries:
+        if getattr(entry, "session_id", None) != session_id:
+            continue
+        origin = getattr(entry, "origin", None)
+        chat_id = str(getattr(origin, "chat_id", "") or "")
+        if not chat_id:
+            return None
+        chat_type = str(getattr(entry, "chat_type", "") or "dm").lower()
+        thread_id = str(getattr(origin, "thread_id", "") or "") or None
+        return chat_id, chat_type, thread_id
+
+    return None
 
 
 def _flush():
@@ -121,6 +154,14 @@ def _flush_loop():
 
 
 def _on_pre_gateway_dispatch(event, **kwargs):
+    global _session_store
+
+    # Held for post_llm_call, which receives only a session_id.
+    session_store = kwargs.get("session_store")
+    if session_store is not None:
+        with _session_store_lock:
+            _session_store = session_store
+
     source = getattr(event, "source", None)
     if source is None:
         return
@@ -139,11 +180,6 @@ def _on_pre_gateway_dispatch(event, **kwargs):
     if thread_id:
         session_key = f"{session_key}:{thread_id}"
     conv_type = "DM" if chat_type == "dm" else "CHANNEL"
-
-    with _last_channel_lock:
-        _last_channel["channel_id"] = chat_id
-        _last_channel["chat_type"] = chat_type
-        _last_channel["thread_id"] = thread_id
 
     _buffer_push(
         {
@@ -169,12 +205,17 @@ def _on_pre_gateway_dispatch(event, **kwargs):
 def _on_post_llm_call(session_id=None, user_message=None, assistant_response=None, **kwargs):
     if not assistant_response:
         return
-    ts = _now_iso()
 
-    with _last_channel_lock:
-        channel_id = _last_channel.get("channel_id", "")
-        chat_type = _last_channel.get("chat_type", "dm")
-        thread_id = _last_channel.get("thread_id")
+    resolved = _resolve_chat(session_id)
+    if resolved is None:
+        logger.warning(
+            "telemetry-push dropping outbound message: no chat resolved for session_id=%s",
+            session_id,
+        )
+        return
+
+    channel_id, chat_type, thread_id = resolved
+    ts = _now_iso()
 
     conv_type = "DM" if chat_type == "dm" else "CHANNEL"
     session_key = _build_session_key(chat_type, channel_id)
@@ -202,13 +243,15 @@ def _on_post_llm_call(session_id=None, user_message=None, assistant_response=Non
     )
 
 
-def _on_pre_tool_call(tool_name=None, args=None, task_id=None, **kwargs):
+def _on_pre_tool_call(tool_name=None, args=None, task_id=None, tool_call_id=None, **kwargs):
     ts = _now_iso()
     external_id = f"hermes:{task_id}:{tool_name}:{int(time.time() * 1000)}:{_next_counter()}"
 
-    with _tool_call_ids_lock:
-        key = f"{task_id}:{tool_name}"
-        _tool_call_ids[key] = external_id
+    # Keyed on the per-invocation id: concurrent calls to one tool within a task
+    # share task_id and tool_name, so those would collide.
+    if tool_call_id:
+        with _tool_call_ids_lock:
+            _tool_call_ids[tool_call_id] = external_id
 
     _buffer_push(
         {
@@ -224,11 +267,14 @@ def _on_pre_tool_call(tool_name=None, args=None, task_id=None, **kwargs):
     )
 
 
-def _on_post_tool_call(tool_name=None, args=None, result=None, task_id=None, duration_ms=None, **kwargs):
+def _on_post_tool_call(
+    tool_name=None, args=None, result=None, task_id=None, duration_ms=None, tool_call_id=None, **kwargs
+):
     ts = _now_iso()
-    key = f"{task_id}:{tool_name}"
-    with _tool_call_ids_lock:
-        external_id = _tool_call_ids.pop(key, None)
+    external_id = None
+    if tool_call_id:
+        with _tool_call_ids_lock:
+            external_id = _tool_call_ids.pop(tool_call_id, None)
 
     if external_id is None:
         external_id = f"hermes:{task_id}:{tool_name}:{int(time.time() * 1000)}:{_next_counter()}"
