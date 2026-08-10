@@ -1,7 +1,7 @@
 import { TEST_ORG_ID } from "../constants";
 import { expect, test } from "@playwright/test";
 
-import { MOCK_AGENT_ID, mockAgent, mockAssignedSkill, mockSecret, mockToolCall, mockVersionsForSlug } from "../pages/data-support/agent-data-support.po";
+import { MOCK_AGENT_ID, mockAgent, mockAssignedSkill, mockSecret, mockToolCall, mockVersionsForKey } from "../pages/data-support/agent-data-support.po";
 import { mockCustomSkill, mockPlatformSkill, MOCK_PLATFORM_SKILL_ID } from "../pages/data-support/skill-data-support.po";
 import { DataSupport } from "../pages/data-support/data-support.po";
 import { AgentDetailPage } from "../pages/agent-detail-page.po";
@@ -235,7 +235,7 @@ test.describe("Agent Detail Page — Template tab (re-pin)", () => {
     await page.getByRole("button", { name: "Apply template" }).click();
     const body = (await patchPromise).postDataJSON() as Record<string, unknown>;
 
-    expect(body.template_slug).toBe("scrum-master");
+    expect(body.template_key).toBe("scrum-master");
     expect(body.template_version).toBe(1);
     // No per-agent markdown is ever sent.
     expect(body.soul_md).toBeUndefined();
@@ -243,7 +243,7 @@ test.describe("Agent Detail Page — Template tab (re-pin)", () => {
 
   test("shows Required skills section when re-pinning to template with required skills", async ({ page }) => {
     await dataSupportPage.agents.interceptGetTemplateVersionsRequest({
-      body: mockVersionsForSlug("scrum-master").map((v) => ({
+      body: mockVersionsForKey("scrum-master").map((v) => ({
         ...v,
         required_skills: [{
           id: MOCK_PLATFORM_SKILL_ID,
@@ -267,7 +267,7 @@ test.describe("Agent Detail Page — Template tab (re-pin)", () => {
 
   test("Apply button is disabled when required skill credential form is incomplete", async ({ page }) => {
     await dataSupportPage.agents.interceptGetTemplateVersionsRequest({
-      body: mockVersionsForSlug("scrum-master").map((v) => ({
+      body: mockVersionsForKey("scrum-master").map((v) => ({
         ...v,
         required_skills: [{
           id: MOCK_PLATFORM_SKILL_ID,
@@ -289,7 +289,7 @@ test.describe("Agent Detail Page — Template tab (re-pin)", () => {
 
   test("Apply button enables after filling required skill credentials", async ({ page }) => {
     await dataSupportPage.agents.interceptGetTemplateVersionsRequest({
-      body: mockVersionsForSlug("scrum-master").map((v) => ({
+      body: mockVersionsForKey("scrum-master").map((v) => ({
         ...v,
         required_skills: [{
           id: MOCK_PLATFORM_SKILL_ID,

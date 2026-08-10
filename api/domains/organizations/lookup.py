@@ -22,3 +22,12 @@ class OrganizationLookupService:
     def get_name(self, organization_id: UUID) -> str:
         organization = self.repository.get(organization_id)
         return organization.name if organization else ""
+
+    def get_allowed_models(self, organization_id: UUID) -> list[str] | None:
+        """The org's per-org model allowlist, or None if the org doesn't exist.
+
+        None (missing org) is distinct from [] (org exists but allows nothing),
+        so callers can raise 404 vs. reject the model accordingly.
+        """
+        organization = self.repository.get(organization_id)
+        return organization.allowed_models if organization else None

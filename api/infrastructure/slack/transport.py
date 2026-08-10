@@ -3,9 +3,17 @@ import time  # noqa: F401 — kept so tests can patch transport.time
 from api.core.config import get_config
 from api.infrastructure.http import (
     DEFAULT_RETRY_AFTER_SECONDS as _DEFAULT_RETRY_AFTER_SECONDS,
+)
+from api.infrastructure.http import (
     MAX_RETRIES as _MAX_RETRIES,
+)
+from api.infrastructure.http import (
     RATE_LIMIT_MAX_WAIT_SECONDS as _RATE_LIMIT_MAX_WAIT_SECONDS,
+)
+from api.infrastructure.http import (
     resilient_request,
+)
+from api.infrastructure.http import (
     retry_after_seconds as _retry_after_seconds,
 )
 

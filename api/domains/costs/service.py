@@ -1,4 +1,3 @@
-from api.domains.costs.models import AgentModelBreakdown
 import datetime
 import hashlib
 import logging
@@ -15,6 +14,7 @@ from api.domains.agents.repository import AgentRepository
 from api.domains.auth.models import CurrentUserContext
 from api.domains.costs.models import (
     AgentCostRead,
+    AgentModelBreakdown,
     CostByModelRead,
     CostTimeSeriesPoint,
     OrgCostSummaryRead,
@@ -47,7 +47,7 @@ class CostService:
         return decrypt_token(encrypted, self.config.agent_token_encryption_key)
 
     def _date_range(self, days: int = _SPEND_LOOKBACK_DAYS) -> tuple[str, str]:
-        end = datetime.date.today()
+        end = datetime.datetime.now(datetime.UTC).date()
         start = end - datetime.timedelta(days=days)
         return start.isoformat(), end.isoformat()
 
@@ -189,7 +189,6 @@ class CostService:
                 completion_tokens=0,
             )
 
-        start_str, end_str = self._date_range(days=365)
         key = self._decrypt_key(agent.litellm_key_encrypted)
         try:
             info = self.litellm.get_key_info(key)

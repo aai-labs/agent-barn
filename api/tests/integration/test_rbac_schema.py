@@ -289,16 +289,16 @@ def test_fresh_upgrade_seeds_exact_system_catalogues(fresh_database):
                     )
                 ).scalars()
             ),
-            "agent_access_roles": dict(
-                (name, role_id)
+            "agent_access_roles": {
+                name: role_id
                 for role_id, name in connection.execute(
                     text("SELECT id, name FROM agent_access_roles WHERE is_system ORDER BY name")
                 ).all()
-            ),
-            "permissions": dict(
-                (key, permission_id)
+            },
+            "permissions": {
+                key: permission_id
                 for permission_id, key in connection.execute(text("SELECT id, key FROM permissions ORDER BY key")).all()
-            ),
+            },
             "agent_grants": connection.execute(text("SELECT count(*) FROM agent_access_role_permissions")).scalar_one(),
             "organization_role_enum_count": connection.execute(
                 text("SELECT count(*) FROM pg_type WHERE typname = 'organizationrole'")
@@ -386,9 +386,11 @@ def test_system_agent_access_role_grants_reject_mutation(fresh_database):
             },
         ),
         (
-            "UPDATE agent_access_role_permissions "
-            "SET permission_id = :new_permission_id "
-            "WHERE role_id = :role_id AND permission_id = :permission_id",
+            (
+                "UPDATE agent_access_role_permissions "
+                "SET permission_id = :new_permission_id "
+                "WHERE role_id = :role_id AND permission_id = :permission_id"
+            ),
             {
                 "role_id": AGENT_VIEWER_ROLE_ID,
                 "permission_id": PERMISSION_ID_BY_KEY[PermissionKey.AGENT_READ],
@@ -538,15 +540,18 @@ def test_fresh_upgrade_adds_nullable_general_access_role_column(fresh_database):
 def test_upgrade_leaves_existing_agents_restricted(legacy_database):
     command.upgrade(legacy_database.config, "heads")
     with legacy_database.engine.connect() as connection:
-        general_access_roles = (
+        general_access_roles = connection.execute(text(f"SELECT {GENERAL_ACCESS_COLUMN} FROM agent")).scalars().all()
+        pinned_keys = (
             connection.execute(
-                text(f"SELECT {GENERAL_ACCESS_COLUMN} FROM agent")  # noqa: S608
+                text("SELECT t.template_key FROM agent a JOIN agent_template t ON t.id = a.agent_template_id")
             )
             .scalars()
             .all()
         )
 
     assert_that(general_access_roles, equal_to([None, None, None]))
+    assert_that(len(pinned_keys), equal_to(3))
+    assert_that(set(pinned_keys), equal_to({"legacy"}))
 
 
 def test_general_access_role_rejects_referenced_role_deletion(legacy_database):
@@ -690,9 +695,11 @@ def test_agent_access_rejects_custom_role_from_another_organization(
 def test_locked_agent_access_roles_reject_mutation(legacy_database):
     mutations = (
         (
-            "INSERT INTO agent_access_roles "
-            "(id, created_at, updated_at, organization_id, name, is_system) "
-            "VALUES (:id, now(), now(), NULL, :name, true)",
+            (
+                "INSERT INTO agent_access_roles "
+                "(id, created_at, updated_at, organization_id, name, is_system) "
+                "VALUES (:id, now(), now(), NULL, :name, true)"
+            ),
             {"id": uuid7(), "name": "SYSTEM-CUSTOM"},
         ),
         (

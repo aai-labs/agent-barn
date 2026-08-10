@@ -69,7 +69,7 @@ def test_get_agent_logs_returns_snapshot_lines_when_stopped():
         service: AgentService = context.injector.get(AgentService)
         repo: AgentRepository = context.injector.get(AgentRepository)
 
-        now = dt.datetime.now(dt.timezone.utc)
+        now = dt.datetime.now(dt.UTC)
         repo.save_log_snapshot(
             AgentLogSnapshot(
                 agent_id=context.agent.id,
@@ -160,7 +160,7 @@ def test_get_log_history_returns_all_lines_from_latest_snapshot():
         k8s = _k8s(context)
         k8s.read_pod_logs.return_value = ""
 
-        now = dt.datetime.now(dt.timezone.utc)
+        now = dt.datetime.now(dt.UTC)
         repo.save_log_snapshot(
             AgentLogSnapshot(
                 agent_id=context.agent.id,
@@ -201,8 +201,8 @@ def test_get_log_history_has_more_when_older_snapshot_exists():
         k8s = _k8s(context)
         k8s.read_pod_logs.return_value = ""
 
-        t1 = dt.datetime(2025, 1, 1, tzinfo=dt.timezone.utc)
-        t2 = dt.datetime(2025, 1, 2, tzinfo=dt.timezone.utc)
+        t1 = dt.datetime(2025, 1, 1, tzinfo=dt.UTC)
+        t2 = dt.datetime(2025, 1, 2, tzinfo=dt.UTC)
         repo.save_log_snapshot(
             AgentLogSnapshot(
                 agent_id=context.agent.id,
@@ -238,8 +238,8 @@ def test_get_log_history_walks_to_older_snapshot_via_next_id():
         k8s = _k8s(context)
         k8s.read_pod_logs.return_value = ""
 
-        t1 = dt.datetime(2025, 1, 1, tzinfo=dt.timezone.utc)
-        t2 = dt.datetime(2025, 1, 2, tzinfo=dt.timezone.utc)
+        t1 = dt.datetime(2025, 1, 1, tzinfo=dt.UTC)
+        t2 = dt.datetime(2025, 1, 2, tzinfo=dt.UTC)
         repo.save_log_snapshot(
             AgentLogSnapshot(
                 agent_id=context.agent.id,
@@ -280,7 +280,7 @@ def test_get_log_history_no_more_when_single_snapshot():
         k8s = _k8s(context)
         k8s.read_pod_logs.return_value = ""
 
-        now = dt.datetime.now(dt.timezone.utc)
+        now = dt.datetime.now(dt.UTC)
         repo.save_log_snapshot(
             AgentLogSnapshot(
                 agent_id=context.agent.id,
@@ -307,7 +307,7 @@ def test_capture_logs_deletes_old_snapshots_keeping_latest_5():
         k8s = _k8s(context)
 
         for i in range(6):
-            t = dt.datetime(2025, 1, 1 + i, tzinfo=dt.timezone.utc)
+            t = dt.datetime(2025, 1, 1 + i, tzinfo=dt.UTC)
             repo.save_log_snapshot(
                 AgentLogSnapshot(
                     agent_id=context.agent.id,
@@ -332,6 +332,7 @@ def test_capture_logs_deletes_old_snapshots_keeping_latest_5():
                 assert_that(count, equal_to(5))
 
                 latest = repo.get_latest_log_snapshot(context.agent.id)
+                assert latest is not None
                 assert_that(latest.log_text, equal_to("newest-session"))
 
 

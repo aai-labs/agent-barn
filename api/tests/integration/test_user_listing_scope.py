@@ -58,51 +58,55 @@ def _org_a_populated():
 
 def test_org_owner_cannot_list_users():
     owner_id = uuid7()
-    with given(
-        [
-            *_GIVEN,
-            _org_a_populated(),
-            there_is_a_user(
-                id=owner_id,
-                email="owner-a@example.com",
-                organization_id=ORG_A,
-                role=OrganizationRole.OWNER,
-            ),
-            there_is_an_access_token_for_user(user_id=owner_id),
-        ]
-    ) as context:
-        with when("an org owner (not a platform_admin) tries to list users"):
-            response = context.client.get(
-                _USERS,
-                headers=_auth(context),
-            )
+    with (
+        given(
+            [
+                *_GIVEN,
+                _org_a_populated(),
+                there_is_a_user(
+                    id=owner_id,
+                    email="owner-a@example.com",
+                    organization_id=ORG_A,
+                    role=OrganizationRole.OWNER,
+                ),
+                there_is_an_access_token_for_user(user_id=owner_id),
+            ]
+        ) as context,
+        when("an org owner (not a platform_admin) tries to list users"),
+    ):
+        response = context.client.get(
+            _USERS,
+            headers=_auth(context),
+        )
 
-            with then("it is forbidden — Users is platform_admin-only"):
-                assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+        with then("it is forbidden — Users is platform_admin-only"):
+            assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
 def test_plain_member_cannot_list_users():
     member_id = uuid7()
-    with given(
-        [
-            *_GIVEN,
-            there_is_a_user(
-                id=member_id,
-                email="member-a@example.com",
-                organization_id=ORG_A,
-                role=OrganizationRole.MEMBER,
-            ),
-            there_is_an_access_token_for_user(user_id=member_id),
-        ]
-    ) as context:
-        with when("a plain member tries to list users"):
-            response = context.client.get(
-                _USERS,
-                headers=_auth(context),
-            )
+    with (
+        given(
+            [
+                *_GIVEN,
+                there_is_a_user(
+                    id=member_id,
+                    email="member-a@example.com",
+                    organization_id=ORG_A,
+                    role=OrganizationRole.MEMBER,
+                ),
+                there_is_an_access_token_for_user(user_id=member_id),
+            ]
+        ) as context,
+        when("a plain member tries to list users"),
+    ):
+        response = context.client.get(
+            _USERS,
+            headers=_auth(context),
+        )
 
-            with then("it is forbidden"):
-                assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+        with then("it is forbidden"):
+            assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
 def test_platform_admin_lists_all_users_globally():

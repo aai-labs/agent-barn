@@ -27,13 +27,15 @@ export type CreateAgentData = {
   telegramGroupPolicy?: "open" | "allowlist";
   telegramDmPolicy?: "off" | "open" | "allowlist";
   // Template reference — pins to templateVersion if given, else latest.
-  templateSlug: string;
+  templateKey: string;
   templateVersion?: number;
   model?: string;
   // Skills to assign on creation
   skillIds?: string[];
   // Integration credentials (provider + provider-specific content; name is server-stamped)
   secrets?: Array<{ provider: string; content: Record<string, string | string[] | boolean> }>;
+  // Shared credentials to attach (by ID)
+  sharedCredentials?: Array<{ sharedCredentialId: string }>;
   approvalMode?: "manual" | "auto" | "off";
 };
 

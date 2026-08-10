@@ -23,7 +23,7 @@ def test_i_can_get_organization_read_with_owner_details():
             org_read = repository.get_read(context.organization.id)
 
             with then("owner information should be present"):
-                assert_that(org_read, is_not(none()))
+                assert org_read is not None
                 assert_that(org_read.name, equal_to("Owner Org"))
                 assert_that(org_read.owner_email, is_not(none()))
 

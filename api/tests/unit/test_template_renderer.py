@@ -1,18 +1,18 @@
-from datetime import date
+from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid7
 
-from hamcrest import assert_that, contains_string, equal_to, is_not
+from hamcrest import assert_that, contains_string, equal_to, is_not, matches_regexp
 
 from api.domains.templates.models import AgentTemplate, TemplateSource
 from api.domains.templates.renderer import render_template
-from api.domains.templates.slug import generate_template_slug, slugify
+from api.domains.templates.slug import generate_template_key
 
 
 def _template(**overrides: Any) -> AgentTemplate:
     fields: dict[str, Any] = {
         "organization_id": uuid7(),
-        "template_slug": "test",
+        "template_key": "test",
         "template_name": "Test",
         "template_source": TemplateSource.CUSTOM,
         "version": 1,
@@ -39,7 +39,7 @@ def test_renders_all_known_variables():
 
     rendered = render_template(template, "Maya Bot")
 
-    today = date.today().isoformat()
+    today = datetime.now(UTC).date().isoformat()
     assert_that(
         rendered.soul_md,
         equal_to(f"name=Maya Bot slug=maya-bot app=Maya Bot date={today}"),
@@ -106,14 +106,6 @@ def test_all_eight_fields_are_rendered():
     assert_that(rendered.tools_md, is_not(contains_string("{{")))
 
 
-def test_slugify_basic():
-    assert_that(slugify("Scrum Master"), equal_to("scrum-master"))
-    assert_that(slugify("  My!! Agent??  "), equal_to("my-agent"))
-    assert_that(slugify("!!!"), equal_to(""))
-
-
-def test_generate_template_slug_appends_hex_suffix():
-    slug = generate_template_slug("Maya")
-    base, _, suffix = slug.rpartition("-")
-    assert_that(base, equal_to("maya"))
-    assert_that(len(suffix), equal_to(8))
+def test_generate_template_key_is_opaque_and_url_safe():
+    key = generate_template_key()
+    assert_that(key, matches_regexp(r"^tpl-[0-9a-f]{12}$"))

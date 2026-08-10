@@ -26,7 +26,7 @@ class EventDeliveryContext:
     handler_name: str
     attempt_count: int
     correlation_id: UUID
-    organization_id: UUID
+    organization_id: UUID | None
 
 
 @dataclass(frozen=True)
@@ -42,8 +42,13 @@ class SupportedEvent:
 
 
 class EventHandler(Protocol):
-    name: str
-    supported_events: Sequence[SupportedEvent]
+    # Read-only properties, not plain attributes: implementations declare these as
+    # ClassVar constants, and the registry only ever reads them.
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def supported_events(self) -> Sequence[SupportedEvent]: ...
 
     def handle(self, event: DomainEventEnvelope, context: EventDeliveryContext) -> None: ...
 

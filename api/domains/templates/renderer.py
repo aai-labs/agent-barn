@@ -1,6 +1,6 @@
 import re
 from dataclasses import dataclass
-from datetime import date
+from datetime import UTC, datetime
 
 from api.domains.templates.models import AgentTemplate, PlatformTemplate
 from api.domains.templates.slug import slugify
@@ -32,7 +32,7 @@ def render_template(template: AgentTemplate | PlatformTemplate, agent_name: str)
         # The Slack app display name is not persisted; the hire wizard keeps it
         # in sync with the agent name.
         "slack_app_display_name": agent_name,
-        "deploy_date": date.today().isoformat(),
+        "deploy_date": datetime.now(UTC).date().isoformat(),
     }
     tools_md = _fill(template.tools_md, variables)
     return RenderedTemplate(

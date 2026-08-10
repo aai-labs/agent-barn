@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
@@ -48,12 +48,11 @@ def test_authenticate_raises_when_agent_not_found():
         repo.get_by_id.return_value = None
         service = _make_service(agent_repo=repo)
 
-        with when("I authenticate with any key"):
-            with then("a PermissionError is raised"):
-                assert_that(
-                    calling(service.authenticate).with_args(uuid4(), "some-key"),
-                    raises(PermissionError, "agent not found"),
-                )
+        with when("I authenticate with any key"), then("a PermissionError is raised"):
+            assert_that(
+                calling(service.authenticate).with_args(uuid4(), "some-key"),
+                raises(PermissionError, "agent not found"),
+            )
 
 
 def test_authenticate_raises_when_agent_has_no_ingest_key():
@@ -63,12 +62,11 @@ def test_authenticate_raises_when_agent_has_no_ingest_key():
         repo.get_by_id.return_value = agent
         service = _make_service(agent_repo=repo)
 
-        with when("I authenticate"):
-            with then("a PermissionError is raised"):
-                assert_that(
-                    calling(service.authenticate).with_args(agent.id, "some-key"),
-                    raises(PermissionError, "no ingest key"),
-                )
+        with when("I authenticate"), then("a PermissionError is raised"):
+            assert_that(
+                calling(service.authenticate).with_args(agent.id, "some-key"),
+                raises(PermissionError, "no ingest key"),
+            )
 
 
 @patch("api.domains.ingest.service.get_config")
@@ -82,12 +80,11 @@ def test_authenticate_raises_on_wrong_key(mock_decrypt, mock_config):
         mock_decrypt.return_value = "correct-key"
         service = _make_service(agent_repo=repo)
 
-        with when("I authenticate with a wrong key"):
-            with then("a PermissionError is raised"):
-                assert_that(
-                    calling(service.authenticate).with_args(agent.id, "wrong-key"),
-                    raises(PermissionError, "invalid ingest key"),
-                )
+        with when("I authenticate with a wrong key"), then("a PermissionError is raised"):
+            assert_that(
+                calling(service.authenticate).with_args(agent.id, "wrong-key"),
+                raises(PermissionError, "invalid ingest key"),
+            )
 
 
 @patch("api.domains.ingest.service.get_config")
@@ -132,7 +129,7 @@ def test_process_messages_calls_upsert(mock_maps):
         conv_repo = MagicMock()
         service = _make_service(conv_repo=conv_repo)
         agent = _make_agent()
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         batch = IngestBatchRequest(
             messages=[
                 IngestMessageEvent(
@@ -169,7 +166,7 @@ def test_process_messages_resolves_names_from_slack(mock_maps):
         conv_repo = MagicMock()
         service = _make_service(conv_repo=conv_repo)
         agent = _make_agent()
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         batch = IngestBatchRequest(
             messages=[
                 IngestMessageEvent(
@@ -200,7 +197,7 @@ def test_process_messages_keeps_provided_names(mock_maps):
         conv_repo = MagicMock()
         service = _make_service(conv_repo=conv_repo)
         agent = _make_agent()
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         batch = IngestBatchRequest(
             messages=[
                 IngestMessageEvent(
@@ -238,7 +235,7 @@ def test_process_messages_resolves_telegram_names(mock_maps):
         service = _make_service(conv_repo=conv_repo)
         agent = _make_agent()
         agent.platform = AgentPlatform.TELEGRAM
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         batch = IngestBatchRequest(
             messages=[
                 IngestMessageEvent(
@@ -270,7 +267,7 @@ def test_process_tool_calls_calls_upsert_pending():
         tc_repo.get_session.return_value.__exit__ = MagicMock(return_value=False)
         service = _make_service(tc_repo=tc_repo)
         agent = _make_agent()
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         batch = IngestBatchRequest(
             tool_calls=[
                 IngestToolCallEvent(
@@ -308,7 +305,7 @@ def test_process_tool_results_calls_complete():
         tc_repo.complete.return_value = None
         service = _make_service(tc_repo=tc_repo)
         agent = _make_agent()
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         batch = IngestBatchRequest(
             tool_results=[
                 IngestToolResultEvent(

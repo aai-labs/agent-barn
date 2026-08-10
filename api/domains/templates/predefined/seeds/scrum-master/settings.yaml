@@ -1,0 +1,5 @@
+name: Scrum Master
+description: Runs your sprint ceremonies, tracks blockers, and keeps the team on cadence.
+required_skills:
+- Jira
+- Confluence

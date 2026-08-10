@@ -18,13 +18,13 @@ from api.tests.core.modules import (
     set_env_variable,
 )
 from api.tests.steps.agent import (
+    TEST_ENCRYPTION_KEY,
     MockK8sModule,
     MockLiteLLMModule,
-    TEST_ENCRYPTION_KEY,
     skill_is_assigned_to_agent,
-    there_is_an_agent,
     there_is_a_skill,
     there_is_a_skill_for_another_org,
+    there_is_an_agent,
     use_org_for_auth,
 )
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
@@ -36,6 +36,7 @@ from api.tests.steps.template import there_is_a_template, there_is_a_template_sk
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
 
 _BASE = "/api/v1/organizations/{organization_id}/skills"
+_PLATFORM_BASE = "/api/v1/platform/skills"
 
 _GIVEN = [
     set_env_variable(
@@ -340,22 +341,21 @@ def test_create_skill_with_oversized_zip_returns_400():
 def test_create_skill_with_spoofed_uncompressed_size_returns_400():
     # The zip's metadata declares 0 bytes per entry (bypassing the header check), but
     # actual extraction totals 1500 bytes — above the patched 1000-byte limit.
-    with patch("api.domains.skills.service._MAX_UNCOMPRESSED_BYTES", 1000):
-        with given(_GIVEN) as context:
-            client: TestClient = context.client
+    with patch("api.domains.skills.service._MAX_UNCOMPRESSED_BYTES", 1000), given(_GIVEN) as context:
+        client: TestClient = context.client
 
-            with when("I create a skill with a zip that has spoofed metadata but oversized content"):
-                response = client.post(
-                    _BASE,
-                    json={
-                        "name": "Spoofed Skill",
-                        "zip_content": _make_zip_spoofed_uncompressed_size(file_count=3, file_size=500),
-                    },
-                    headers=_auth(context),
-                )
+        with when("I create a skill with a zip that has spoofed metadata but oversized content"):
+            response = client.post(
+                _BASE,
+                json={
+                    "name": "Spoofed Skill",
+                    "zip_content": _make_zip_spoofed_uncompressed_size(file_count=3, file_size=500),
+                },
+                headers=_auth(context),
+            )
 
-            with then("it returns 400"):
-                assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+        with then("it returns 400"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
 
 
 def test_create_skill_without_auth_returns_401():
@@ -519,6 +519,34 @@ def test_list_skills_requires_auth():
 
         with then("request is rejected with 401"):
             assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
+
+
+def test_platform_admin_can_list_global_skills():
+    platform_admin_id = uuid7()
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Global Platform Skill", global_skill=True),
+            there_is_a_user(
+                id=platform_admin_id,
+                email="platform-skill-reader@example.com",
+                role=OrganizationRole.MEMBER,
+                is_platform_admin=True,
+            ),
+            there_is_an_access_token_for_user(user_id=platform_admin_id),
+        ]
+    ) as context:
+        response = context.client.get(_PLATFORM_BASE, headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that([skill["name"] for skill in response.json()], has_item("Global Platform Skill"))
+
+
+def test_non_platform_admin_cannot_list_global_skills():
+    with given([*_GIVEN, there_is_a_skill(name="Global Platform Skill", global_skill=True)]) as context:
+        response = context.client.get(_PLATFORM_BASE, headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
 def test_member_without_skill_read_cannot_get_skill():
@@ -837,9 +865,9 @@ def test_delete_skill_no_longer_required_by_latest_template_returns_204():
         [
             *_GIVEN,
             there_is_a_skill(),
-            there_is_a_template(slug="test-template", version=1),
+            there_is_a_template(template_key="test-template", version=1),
             there_is_a_template_skill(),
-            there_is_a_template(slug="test-template", version=2),
+            there_is_a_template(template_key="test-template", version=2),
         ]
     ) as context:
         client: TestClient = context.client

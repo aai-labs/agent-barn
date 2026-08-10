@@ -1,14 +1,18 @@
-from typing import List, Literal, Optional, Type, TypeVar
+from typing import Literal, TypeVar
 from uuid import UUID
 
 from sqlalchemy import create_engine, delete, func
-from sqlmodel import Session, asc, col, desc, select
+from sqlmodel import Session, SQLModel, asc, col, desc, select
 
+from api.core.config import Config
 from api.infrastructure.postgres.models import BaseModel
 from api.infrastructure.shared.models import PaginatedItems, Pagination
-from api.core.config import Config
 
 M = TypeVar("M", bound=BaseModel)
+# save/save_all/delete_many operate purely through the SQLAlchemy session and never
+# touch `.id`, so they accept any SQLModel table — not just our BaseModel convention
+# (e.g. pure-junction tables like AgentAccessRolePermission with a composite PK).
+SM = TypeVar("SM", bound=SQLModel)
 
 
 class PostgresRepositoryDelegate:
@@ -24,7 +28,7 @@ class PostgresRepositoryDelegate:
     def _apply_filters_and_search(
         self,
         query,
-        model: Type[M],
+        model: type[M],
         search_term: str | None = None,
         search_field: str | None = None,
         **kwargs,
@@ -40,7 +44,7 @@ class PostgresRepositoryDelegate:
     def _apply_ordering(
         self,
         query,
-        model: Type[M],
+        model: type[M],
         order_by: list[tuple[str, Literal["asc", "desc"]]] | None = None,
     ):
         if order_by:
@@ -53,7 +57,7 @@ class PostgresRepositoryDelegate:
 
     def find_one(
         self,
-        model: Type[M],
+        model: type[M],
         search_term: str | None = None,
         search_field: str | None = None,
         **kwargs,
@@ -71,28 +75,28 @@ class PostgresRepositoryDelegate:
             result = session.exec(query)
             return result.first() or None
 
-    def exists(self, model: Type[M], id: UUID) -> bool:
+    def exists(self, model: type[M], id: UUID) -> bool:
         with Session(self.engine) as session:
-            id_column = getattr(model, "id")
+            id_column = model.id
             query = select(model).where(col(id_column) == id)
             result = session.exec(query)
             return result.first() is not None
 
-    def find_by_id(self, model: Type[M], id: UUID) -> M | None:
+    def find_by_id(self, model: type[M], id: UUID) -> M | None:
         with Session(self.engine) as session:
-            id_column = getattr(model, "id")
+            id_column = model.id
             query = select(model).where(col(id_column) == id)
             result = session.exec(query)
             return result.first()
 
     def find_all(
         self,
-        model: Type[M],
+        model: type[M],
         order_by: list[tuple[str, Literal["asc", "desc"]]] | None = None,
         search_term: str | None = None,
         search_field: str | None = None,
         **kwargs,
-    ) -> List[M]:
+    ) -> list[M]:
         with Session(self.engine) as session:
             query = select(model)
             query = self._apply_filters_and_search(
@@ -106,16 +110,16 @@ class PostgresRepositoryDelegate:
             result = session.exec(query)
             return list(result)
 
-    def find_many(self, model: Type[M], ids: list[UUID]) -> List[M]:
+    def find_many(self, model: type[M], ids: list[UUID]) -> list[M]:
         with Session(self.engine) as session:
-            id_column = getattr(model, "id")
+            id_column = model.id
             query = select(model).where(col(id_column).in_(ids))
             result = session.exec(query)
             return list(result)
 
     def find_all_paginated(
         self,
-        model: Type[M],
+        model: type[M],
         pagination: Pagination | None = None,
         order_by: list[tuple[str, Literal["asc", "desc"]]] | None = None,
         search_term: str | None = None,
@@ -146,7 +150,7 @@ class PostgresRepositoryDelegate:
 
             total = session.exec(total_query).one()
             result = session.exec(query)
-            items: List[M] = list(result)
+            items: list[M] = list(result)
 
             return PaginatedItems(
                 page=pagination.page if pagination else 1,
@@ -157,9 +161,9 @@ class PostgresRepositoryDelegate:
 
     def find_all_paginated_by_query(
         self,
-        model: Type[M],
+        model: type[M],
         query,
-        pagination: Optional[Pagination] = None,
+        pagination: Pagination | None = None,
         order_by: list[tuple[str, Literal["asc", "desc"]]] | None = None,
     ) -> PaginatedItems[M]:
         with Session(self.engine) as session:
@@ -182,7 +186,7 @@ class PostgresRepositoryDelegate:
 
     def find_all_by_query(
         self,
-        model: Type[M],
+        model: type[M],
         query,
         order_by: list[tuple[str, Literal["asc", "desc"]]] | None = None,
     ) -> list[M]:
@@ -193,14 +197,14 @@ class PostgresRepositoryDelegate:
         )
         return result.items
 
-    def find_one_by_query(self, model: Type[M], query) -> M | None:
+    def find_one_by_query(self, model: type[M], query) -> M | None:
         with Session(self.engine) as session:
             result = session.exec(query)
             return result.one_or_none()
 
     def count(
         self,
-        model: Type[M],
+        model: type[M],
         search_term: str | None = None,
         search_field: str | None = None,
         **kwargs,
@@ -223,22 +227,22 @@ class PostgresRepositoryDelegate:
             total = session.scalar(total_query)
             return total
 
-    def save(self, item: M):
+    def save(self, item: SM):
         with Session(self.engine) as session:
             session.add(item)
             session.commit()
             session.refresh(item)
 
-    def save_all(self, items: List[M]):
+    def save_all(self, items: list[SM]):
         with Session(self.engine) as session:
             session.add_all(items)
             session.commit()
             for item in items:
                 session.refresh(item)
 
-    def delete_one(self, model: Type[M], id) -> bool:
+    def delete_one(self, model: type[M], id) -> bool:
         with Session(self.engine) as session:
-            id_column = getattr(model, "id")
+            id_column = model.id
             query = select(model).where(col(id_column) == id)
             result = session.exec(query)
             item = result.first()
@@ -254,14 +258,14 @@ class PostgresRepositoryDelegate:
             session.commit()
             return True
 
-    def delete_many(self, items: List[M]):
+    def delete_many(self, items: list[SM]):
         with Session(self.engine) as session:
             for item in items:
                 session.delete(item)
             session.commit()
             return True
 
-    def delete_all(self, model: Type[M], **kwargs) -> bool:
+    def delete_all(self, model: type[M], **kwargs) -> bool:
         with Session(self.engine) as session:
             filtered_kwargs = {k: v for k, v in kwargs.items() if v is not None}
             stmt = delete(model).filter_by(**filtered_kwargs)

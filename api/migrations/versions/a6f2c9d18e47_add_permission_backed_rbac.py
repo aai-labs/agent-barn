@@ -4,8 +4,8 @@ Revision ID: a6f2c9d18e47
 Revises: d3f9a1c7b2e5
 """
 
-from datetime import datetime, timezone
-from typing import Sequence, Union
+from collections.abc import Sequence
+from datetime import UTC, datetime
 from uuid import UUID
 
 import sqlalchemy as sa
@@ -13,9 +13,9 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "a6f2c9d18e47"
-down_revision: Union[str, None] = "d3f9a1c7b2e5"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "d3f9a1c7b2e5"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 AGENT_OWNER_ROLE_ID = UUID("8f2a47ff-7caf-5ded-9027-4a16b85620b3")
 AGENT_EDITOR_ROLE_ID = UUID("30e5e846-5e24-548f-a068-2505f774ce35")
@@ -147,7 +147,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("role_id", "permission_id"),
     )
 
-    timestamp = datetime.now(timezone.utc)
+    timestamp = datetime.now(UTC)
     permissions_table = sa.table(
         "permissions",
         sa.column("id", postgresql.UUID(as_uuid=True)),

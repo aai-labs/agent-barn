@@ -1,3 +1,17 @@
+# Local dev stack only — prod runs via Helm (see helm/, helmfile.yaml.gotmpl).
+# api/worker/ui run with source bind-mounted and dev servers in watch mode, so
+# `make up` gives you the same hot reload as `make dev-api`/`dev-ui`/`dev-worker`,
+# just fully containerized.
+
+x-api-env: &api-env
+  # Container-network hostnames override the localhost defaults in .env.
+  DB_CONNECTION_URL: postgresql://${POSTGRES_USER:?POSTGRES_USER is required}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@db:5432/${POSTGRES_DB:?POSTGRES_DB is required}
+  REDIS_URL: redis://redis:6379/0
+  SECRET_SIGNING_KEY: ${SECRET_SIGNING_KEY:?SECRET_SIGNING_KEY is required}
+  PLATFORM_ADMIN_CREDENTIALS: ${PLATFORM_ADMIN_CREDENTIALS:?PLATFORM_ADMIN_CREDENTIALS is required}
+  ENVIRONMENT: ${ENVIRONMENT:?ENVIRONMENT is required}
+  UI_APP_URL: ${UI_APP_URL:?UI_APP_URL is required}
+
 services:
   db:
     image: postgres:16
@@ -10,7 +24,7 @@ services:
     ports:
       - "${POSTGRES_PORT:?POSTGRES_PORT is required}:5432"
     volumes:
-      - aai_db_postgres_data:/var/lib/postgresql
+      - aai_db_postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:?POSTGRES_USER is required} -d ${POSTGRES_DB:?POSTGRES_DB is required}"]
       interval: 5s
@@ -37,74 +51,54 @@ services:
       dockerfile: api/Dockerfile
     container_name: aai_api
     restart: unless-stopped
+    command: >
+      sh -c "uvicorn api.ingest_main:app --host 0.0.0.0 --port 8001 --reload &
+             exec fastapi dev api/main.py --host 0.0.0.0 --port 8000"
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
+    # Pulls in everything else defined in .env (AGENT_*, LITELLM_*, OPENROUTER_*,
+    # EMAIL_*, GOOGLE_CLOUD_*, ...); `environment:` below overrides only the
+    # values that must point at in-network container hostnames.
+    env_file:
+      - .env
     environment:
-      DB_CONNECTION_URL: postgresql://${POSTGRES_USER:?POSTGRES_USER is required}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@db:5432/${POSTGRES_DB:?POSTGRES_DB is required}
-      SECRET_SIGNING_KEY: ${SECRET_SIGNING_KEY:?SECRET_SIGNING_KEY is required}
-      PLATFORM_ADMIN_CREDENTIALS: ${PLATFORM_ADMIN_CREDENTIALS:?PLATFORM_ADMIN_CREDENTIALS is required}
-      EMAIL_SERVER_CREDENTIAL: ${EMAIL_SERVER_CREDENTIAL-}
-      EMAIL_SMTP_SERVER: ${EMAIL_SMTP_SERVER-}
-      # Gmail "Authenticate with Google" OAuth client (optional; empty disables the flow).
-      GOOGLE_CLOUD_CLIENT_ID: ${GOOGLE_CLOUD_CLIENT_ID-}
-      GOOGLE_CLOUD_CLIENT_SECRET: ${GOOGLE_CLOUD_CLIENT_SECRET-}
-      ENVIRONMENT: ${ENVIRONMENT:?ENVIRONMENT is required}
-      UI_APP_URL: ${UI_APP_URL:?UI_APP_URL is required}
-      REDIS_URL: redis://redis:6379/0
+      <<: *api-env
+      # The rest of the agent config (AGENT_*, LITELLM_SECRET_NAME, OPENCLAW_IMAGE,
+      # ...) arrives via env_file above. Only the values that must differ inside
+      # the container are overridden here.
+      #
       # Local k8s (k3d) dev: point this at the in-container kubeconfig to let the
-      # API drive the k3d cluster. Unset by default so plain `make up` is
-      # unchanged; `make cluster-up` prints the exact value to add to .env.
+      # API drive the k3d cluster. Named differently from the code's var so plain
+      # `make up` stays unchanged; `make cluster-up` prints the value to set.
       K8S_KUBECONFIG_PATH: ${API_K8S_KUBECONFIG_PATH-}
       # Where agent pods push telemetry. The code default targets the in-cluster
       # Service, which only resolves when the API itself runs in k8s; here it runs
       # in Docker, so pods must come back through the host. Same value as the
       # host-run path in the Makefile — see README "Runtime telemetry".
       INGEST_BASE_URL: ${INGEST_BASE_URL:-http://host.docker.internal:${INGEST_PORT:-8001}/ingest/v1}
-      # Agent management against the local cluster. Without these the API starts
-      # fine but every agent operation fails — creation can't encrypt platform
-      # tokens, and start can't mint a LiteLLM key or name a pod image.
-      AGENT_TOKEN_ENCRYPTION_KEY: ${AGENT_TOKEN_ENCRYPTION_KEY-}
-      K8S_NAMESPACE: ${K8S_NAMESPACE:-agent-farm}
-      STORAGE_CLASS: ${STORAGE_CLASS-}
-      OPENCLAW_IMAGE: ${OPENCLAW_IMAGE-}
-      HERMES_IMAGE: ${HERMES_IMAGE-}
-      # Empty locally: `make k3d-load-images` imports the images, so pods never pull.
-      AGENT_IMAGE_PULL_SECRET: ${AGENT_IMAGE_PULL_SECRET-}
-      # The API mints per-agent LiteLLM keys over the compose network; agent pods
-      # then call LiteLLM through the host, the same hop as telemetry. This URL
-      # depends on where the API runs, so it gets its own var like
-      # API_K8S_KUBECONFIG_PATH: .env's LITELLM_BASE_URL is host-facing
-      # (127.0.0.1) and inside this container would resolve to the container.
+      # The API mints per-agent LiteLLM keys over the compose network. .env's
+      # LITELLM_BASE_URL is host-facing (127.0.0.1) and env_file would pull it in
+      # verbatim, where it resolves to this container instead of the proxy.
       LITELLM_BASE_URL: ${API_LITELLM_BASE_URL:-http://litellm:4000}
-      LITELLM_SECRET_NAME: ${LITELLM_SECRET_NAME:-litellm}
-      # 7070 is the host port the litellm service publishes below.
-      AGENT_LITELLM_BASE_URL: ${AGENT_LITELLM_BASE_URL:-http://host.docker.internal:7070}
-      # Defaults mirror api/core/config.py: an unset var interpolates to an empty
-      # string, which would override the code default rather than fall back to it
-      # (and empty fails outright for the typed bool).
-      AGENT_DEFAULT_MODEL: ${AGENT_DEFAULT_MODEL:-litellm/openrouter/qwen/qwen3.6-plus}
-      AGENT_MODEL_ALLOWLIST: ${AGENT_MODEL_ALLOWLIST-}
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY-}
-      API_EXTERNAL_URL: ${API_EXTERNAL_URL-}
-      SKIP_SLACK_TOKEN_VALIDATION: ${SKIP_SLACK_TOKEN_VALIDATION:-false}
     extra_hosts:
       # Reach the host-published k8s API from inside the container. No-op on
       # Docker Desktop; required on Linux/CI where host.docker.internal is unset.
       - "host.docker.internal:host-gateway"
     volumes:
+      - ./api:/app/api
       # k3d writes kubeconfigs here. Directory mount is safe when absent (Docker
       # creates an empty, gitignored dir) — avoids the missing-file-becomes-a-dir
       # bind-mount trap.
       - ./.k3d:/app/.k3d:ro
     ports:
       - "${API_PORT:?API_PORT is required}:8000"
-      # Ingest (api/start.sh runs it alongside the main app). Published on all
-      # interfaces so agent pods inside k3d can reach it through the host — on
-      # Linux host.docker.internal maps to the bridge gateway, not loopback.
-      # Every request needs the agent's INGEST_API_KEY as a bearer token.
+      # Ingest, run by the api command above. Published on all interfaces so agent
+      # pods inside k3d can reach it through the host — on Linux
+      # host.docker.internal maps to the bridge gateway, not loopback. Every
+      # request needs the agent's INGEST_API_KEY as a bearer token.
       - "${INGEST_PORT:-8001}:8001"
 
   worker:
@@ -113,35 +107,38 @@ services:
       dockerfile: api/Dockerfile
     container_name: aai_worker
     restart: unless-stopped
-    command: ["dramatiq", "api.worker_app", "--processes", "1", "--threads", "4"]
+    command: ["dramatiq", "api.worker_app", "--processes", "1", "--threads", "4", "--watch", "/app/api"]
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
+    env_file:
+      - .env
     environment:
-      DB_CONNECTION_URL: postgresql://${POSTGRES_USER:?POSTGRES_USER is required}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@db:5432/${POSTGRES_DB:?POSTGRES_DB is required}
-      SECRET_SIGNING_KEY: ${SECRET_SIGNING_KEY:?SECRET_SIGNING_KEY is required}
-      SUPER_USER_CREDENTIALS: ${SUPER_USER_CREDENTIALS:?SUPER_USER_CREDENTIALS is required}
-      EMAIL_SERVER_CREDENTIAL: ${EMAIL_SERVER_CREDENTIAL-}
-      EMAIL_SMTP_SERVER: ${EMAIL_SMTP_SERVER-}
-      ENVIRONMENT: ${ENVIRONMENT:?ENVIRONMENT is required}
-      UI_APP_URL: ${UI_APP_URL:?UI_APP_URL is required}
-      REDIS_URL: redis://redis:6379/0
+      <<: *api-env
+    volumes:
+      - ./api:/app/api
 
   ui:
     build:
       context: ./ui
       dockerfile: Dockerfile
-      args:
-        NEXT_PUBLIC_BACKEND_URL: http://api:8000
+      target: deps
     container_name: aai_ui
     restart: unless-stopped
+    command: sh -c "pnpm install && pnpm exec next dev --hostname 0.0.0.0 --port 3000"
     depends_on:
       api:
         condition: service_started
     environment:
       NEXT_PUBLIC_BACKEND_URL: http://api:8000
+      # Non-interactive: without this, pnpm prompts before pruning node_modules
+      # when the lockfile changes, which hangs forever with no TTY in the container.
+      CI: "true"
+    volumes:
+      - ./ui:/app
+      - aai_ui_node_modules:/app/node_modules
     ports:
       - "3000:3000"
 
@@ -203,3 +200,4 @@ volumes:
   aai_db_postgres_data:
   aai_litellm_db_data:
   aai_redis_data:
+  aai_ui_node_modules:

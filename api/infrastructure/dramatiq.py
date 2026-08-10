@@ -14,5 +14,5 @@ def first_arg_as_uuid(message: dict[str, Any]) -> UUID | None:
         return None
     try:
         return UUID(str(args[0]))
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None

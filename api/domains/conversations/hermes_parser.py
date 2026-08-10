@@ -2,7 +2,7 @@
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID
 
 from api.domains.conversations.models import (
@@ -106,7 +106,7 @@ def hermes_channel_sessions(
 
 
 def _unix_to_utc(ts: float) -> datetime:
-    return datetime.fromtimestamp(ts, tz=timezone.utc)
+    return datetime.fromtimestamp(ts, tz=UTC)
 
 
 def parse_hermes_export(

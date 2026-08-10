@@ -14,9 +14,9 @@ from api.tests.core.modules import (
     set_env_variable,
 )
 from api.tests.steps.agent import (
+    TEST_ENCRYPTION_KEY,
     MockK8sModule,
     MockLiteLLMModule,
-    TEST_ENCRYPTION_KEY,
     there_is_an_agent,
 )
 from api.tests.steps.database import database_is_clean, database_repo_is_ready

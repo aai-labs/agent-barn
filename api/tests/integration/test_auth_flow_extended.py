@@ -13,6 +13,7 @@ from hamcrest import (
 )
 from starlette.testclient import TestClient
 
+from api.domains.users.organization_users.models import OrganizationRole
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
     create_test_client,
@@ -25,7 +26,6 @@ from api.tests.steps.organization import (
     there_is_an_organization,
 )
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
-from api.domains.users.organization_users.models import OrganizationRole
 
 
 def _extract_token_from_email(email_html: str) -> str:
@@ -144,7 +144,7 @@ def test_signup_org_sees_global_predefined_templates():
         assert_that(user, is_not(none()))
 
         template_repo = context.injector.get(TemplateRepository)
-        visible = template_repo.get_latest_platform_template(PREDEFINED_TEMPLATES[0].slug)
+        visible = template_repo.get_latest_platform_template(PREDEFINED_TEMPLATES[0].key)
         assert_that(visible, is_not(none()))
         # platform_template rows have no organization_id column — they are global
 

@@ -9,6 +9,8 @@ from api.domains.events.catalog import (
     AGENT_STOPPED,
     EVENT_REGISTRY,
     ORGANIZATION_ROLE_CHANGED,
+    PLATFORM_USER_PRIVILEGE_GRANTED,
+    PLATFORM_USER_PRIVILEGE_REVOKED,
 )
 from api.domains.events.handlers import EventHandlerRegistry
 from api.domains.events.security_audit import SecurityAuditProjection
@@ -18,7 +20,7 @@ def _build_production_handler_registry() -> EventHandlerRegistry:
     return EventHandlerRegistry(
         [
             AgentLifecycleEmailHandler(repository=Mock(), email_service=Mock()),
-            SecurityAuditProjection(),
+            SecurityAuditProjection(repository=Mock()),
         ]
     )
 
@@ -36,6 +38,8 @@ def test_every_catalog_handler_name_has_a_registered_handler():
         AGENT_GENERAL_ACCESS_CHANGED,
         AGENT_STARTED,
         AGENT_STOPPED,
+        PLATFORM_USER_PRIVILEGE_GRANTED,
+        PLATFORM_USER_PRIVILEGE_REVOKED,
     ):
         for handler_name in EVENT_REGISTRY.handler_names_for(event_name, 1):
             assert handlers.supports(handler_name, event_name, 1)

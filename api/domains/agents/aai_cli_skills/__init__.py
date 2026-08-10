@@ -17,8 +17,9 @@ from .confluence import CONFLUENCE_SKILLS
 from .github import GITHUB_SKILLS
 from .gmail import GMAIL_SKILLS
 from .jira import JIRA_SKILLS
+from .pipedrive import PIPEDRIVE_SKILLS
+from .slack import SLACK_SKILLS
 from .zoho_mail import ZOHO_MAIL_SKILLS
-
 
 # One entry per aai-cli provider skill seeded into the DB on startup.
 AAI_CLI_PROVIDER_SKILLS: list[dict] = [
@@ -58,6 +59,18 @@ AAI_CLI_PROVIDER_SKILLS: list[dict] = [
         "files": ZOHO_MAIL_SKILLS,
         "tools_pointer": "\nFor Zoho Mail, use the aai-cli tool. See ./skills/aai-cli/zoho_mail_skill.md\n",
     },
+    {
+        "name": "Slack",
+        "required_providers": [SecretProvider.SLACK],
+        "files": SLACK_SKILLS,
+        "tools_pointer": "\nFor Slack, use the aai-cli tool. See ./skills/aai-cli/slack_skill.md\n",
+    },
+    {
+        "name": "Pipedrive",
+        "required_providers": [SecretProvider.PIPEDRIVE],
+        "files": PIPEDRIVE_SKILLS,
+        "tools_pointer": "\nFor Pipedrive, use the aai-cli tool. See ./skills/aai-cli/pipedrive_skill.md\n",
+    },
 ]
 
 
@@ -81,7 +94,7 @@ def build_skills_manifest_from_zips(skills: list) -> str:
         buf = io.BytesIO(skill.zip_content)
         with zipfile.ZipFile(buf, "r") as zf:
             for name in zf.namelist():
-                if name.endswith("/") or name.startswith("__MACOSX/") or name.startswith("._"):
+                if name.endswith("/") or name.startswith(("__MACOSX/", "._")):
                     continue
                 entries.append({"path": name, "content": zf.read(name).decode()})
     return json.dumps(sorted(entries, key=lambda d: d["path"]))

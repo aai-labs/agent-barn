@@ -6,10 +6,12 @@ from sqlalchemy import and_, func
 from sqlalchemy.orm import aliased
 from sqlmodel import Session, col, or_, select
 
+from api.domains.organizations.exceptions import OrganizationCreationLimitReached
 from api.domains.organizations.models import (
     Organization,
     OrganizationFilter,
     OrganizationRead,
+    PlatformOrganizationRead,
 )
 from api.domains.users.models import User
 from api.domains.users.organization_users.models import (
@@ -55,6 +57,43 @@ class OrganizationRepository:
         )
 
     @staticmethod
+    def _build_platform_organization_read_query():
+        owner = aliased(User)
+        creator = aliased(User)
+        return (
+            select(
+                col(Organization.id).label("id"),
+                col(Organization.created_at).label("created_at"),
+                col(Organization.updated_at).label("updated_at"),
+                col(Organization.name).label("name"),
+            )
+            .add_columns(
+                col(Organization.description).label("description"),
+                col(owner.id).label("owner_user_id"),
+                col(owner.email).label("owner_email"),
+                col(owner.full_name).label("owner_name"),
+                col(creator.id).label("creator_user_id"),
+                col(creator.email).label("creator_email"),
+                col(creator.full_name).label("creator_name"),
+            )
+            .select_from(Organization)
+            .outerjoin(
+                OrganizationUser,
+                and_(
+                    col(OrganizationUser.organization_id) == Organization.id,
+                    col(OrganizationUser.role) == OrganizationRole.OWNER,
+                ),
+            )
+            .outerjoin(owner, col(owner.id) == col(OrganizationUser.user_id))
+            .outerjoin(creator, col(creator.id) == col(Organization.created_by_user_id)),
+            owner,
+        )
+
+    @staticmethod
+    def _to_platform_organization_read(row) -> PlatformOrganizationRead:
+        return PlatformOrganizationRead(**row._mapping)
+
+    @staticmethod
     def _member_of_organization(user_id: UUID):
         # Scope "my orgs" by *any* membership, correlated to the outer Organization.
         # Deliberately separate from the owner-display join above (which is OWNER-only,
@@ -94,6 +133,73 @@ class OrganizationRepository:
                 return None
             organization, owner_email, owner_name = row
             return self._to_organization_read(organization, owner_email, owner_name)
+
+    def get_platform_read(self, organization_id: UUID) -> PlatformOrganizationRead | None:
+        with Session(self.delegate.engine) as session:
+            query, _ = self._build_platform_organization_read_query()
+            query = query.where(col(Organization.id) == organization_id)
+            row = session.exec(query).first()
+            if row is None:
+                return None
+            return self._to_platform_organization_read(row)
+
+    @staticmethod
+    def _apply_platform_organization_filters(query, organization_filter: OrganizationFilter, owner):
+        if organization_filter.search:
+            search = f"%{organization_filter.search}%"
+            query = query.where(
+                or_(
+                    col(Organization.name).ilike(search),
+                    col(Organization.description).ilike(search),
+                    col(owner.email).ilike(search),
+                    col(owner.full_name).ilike(search),
+                )
+            )
+        return query
+
+    @staticmethod
+    def _build_platform_organization_count_query():
+        owner = aliased(User)
+        return (
+            select(func.count(func.distinct(Organization.id)))
+            .select_from(Organization)
+            .outerjoin(
+                OrganizationUser,
+                and_(
+                    col(OrganizationUser.organization_id) == Organization.id,
+                    col(OrganizationUser.role) == OrganizationRole.OWNER,
+                ),
+            )
+            .outerjoin(owner, col(owner.id) == col(OrganizationUser.user_id)),
+            owner,
+        )
+
+    def find_all_paginated_platform_read(
+        self,
+        organization_filter: OrganizationFilter,
+        pagination: Pagination | None = None,
+    ) -> PaginatedItems[PlatformOrganizationRead]:
+        with Session(self.delegate.engine) as session:
+            query, owner = self._build_platform_organization_read_query()
+            query = self._apply_platform_organization_filters(query, organization_filter, owner)
+            query = query.order_by(col(Organization.updated_at).asc())
+
+            count_query, count_owner = self._build_platform_organization_count_query()
+            count_query = self._apply_platform_organization_filters(count_query, organization_filter, count_owner)
+            total = session.scalar(count_query) or 0
+
+            if pagination:
+                query = query.offset((pagination.page - 1) * pagination.size).limit(pagination.size)
+
+            rows = session.exec(query).all()
+            items = [self._to_platform_organization_read(row) for row in rows]
+
+            return PaginatedItems(
+                page=pagination.page if pagination else 1,
+                page_size=pagination.size if pagination else len(items),
+                total=total,
+                items=items,
+            )
 
     def find_all_paginated_read(
         self,
@@ -149,6 +255,34 @@ class OrganizationRepository:
         session.add(organization)
         session.flush()
         return organization
+
+    def create_for_user(
+        self,
+        organization: Organization,
+        creator_id: UUID,
+        creation_limit: int,
+    ) -> Organization:
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            # Serialize creation attempts for one user. Without this lock, two
+            # concurrent requests could both observe one remaining quota slot.
+            creator = session.exec(select(User).where(col(User.id) == creator_id).with_for_update()).one()
+            created_count = session.scalar(
+                select(func.count()).select_from(Organization).where(col(Organization.created_by_user_id) == creator.id)
+            )
+            if (created_count or 0) >= creation_limit:
+                raise OrganizationCreationLimitReached(creation_limit)
+
+            session.add(organization)
+            session.flush()
+            session.add(
+                OrganizationUser(
+                    user_id=creator.id,
+                    organization_id=organization.id,
+                    role=OrganizationRole.OWNER,
+                )
+            )
+            session.commit()
+            return organization
 
     def delete(self, organization_id: UUID) -> bool:
         return self.delegate.delete_one(Organization, organization_id)

@@ -2,11 +2,9 @@ import logging
 import threading
 import time
 from collections.abc import Callable
-from typing import Any, TypeVar
+from typing import Any
 
 logger = logging.getLogger(__name__)
-
-T = TypeVar("T")
 
 _cache: dict[str, tuple[float, Any]] = {}
 _cache_lock = threading.Lock()
@@ -29,7 +27,7 @@ def _key_lock(key: str) -> threading.Lock:
         return lock
 
 
-def cached(key: str, fetch: Callable[[], T], *, ttl: float) -> T:
+def cached[T](key: str, fetch: Callable[[], T], *, ttl: float) -> T:
     """Return cached value for *key*, refreshing via *fetch* on miss/expiry.
 
     Per-key locking ensures a miss triggers exactly one fetch. A failed fetch

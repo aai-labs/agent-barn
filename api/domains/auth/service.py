@@ -1,7 +1,7 @@
 import hashlib
 import secrets
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid7
 
 import jwt
@@ -13,6 +13,7 @@ from api.core.config import Config
 from api.domains.auth.hashing import hash_text
 from api.domains.auth.models import (
     AcceptInviteRequest,
+    CredentialClass,
     ForgotPasswordRequest,
     PasswordResetRequest,
     PasswordResetToken,
@@ -77,7 +78,7 @@ class AuthService:
 
     def _encode_jwt(self, data: dict, exp: float, jti: str | None = None) -> str:
         to_encode = data.copy()
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         to_encode.update({"iat": int(now.timestamp()), "exp": exp, "jti": jti or str(uuid7())})
         return jwt.encode(to_encode, self.config.secret_signing_key, algorithm=JWT_ENCODING_ALGORITHM)
 
@@ -85,7 +86,7 @@ class AuthService:
         to_encode = data.model_dump().copy()
         to_encode["token_type"] = "access"
 
-        expires_at = datetime.now(timezone.utc) + timedelta(
+        expires_at = datetime.now(UTC) + timedelta(
             minutes=self.config.access_token_expire_minutes or DEFAULT_ACCESS_TOKEN_EXPIRE_MINUTES
         )
         return self._encode_jwt(data=to_encode, exp=expires_at.timestamp())
@@ -96,7 +97,7 @@ class AuthService:
             RefreshToken(
                 token=str(uuid7()),
                 user_id=UUID(data.user_id),
-                expires_at=datetime.now(timezone.utc) + expires,
+                expires_at=datetime.now(UTC) + expires,
                 stamp=data.stamp,
             )
         )
@@ -124,9 +125,12 @@ class AuthService:
                 full_name=full_name,
                 hashed_password=hashed_password,
             )
-            organization = Organization(name=self._default_organization_name(full_name))
-
             self.user_repository.save_with_session(user, session)
+            organization = Organization(
+                name=self._default_organization_name(full_name),
+                created_by_user_id=user.id,
+                allowed_models=[self.config.agent_default_model.removeprefix("litellm/openrouter/")],
+            )
             self.organization_repository.save_with_session(organization, session)
             self.organization_user_repository.save_with_session(
                 OrganizationUser(
@@ -154,11 +158,13 @@ class AuthService:
         except EmailTakenHTTPException:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already in use")
 
-        return self.create_token_pair(TokenData(user_id=str(user.id), stamp=user.security_stamp))
+        return self.create_token_pair(
+            TokenData(user_id=str(user.id), stamp=user.security_stamp, credential_class=CredentialClass.USER_SESSION)
+        )
 
     def verify_refresh_token(self, token: str) -> RefreshToken:
         refresh_token = self.refresh_token_repository.get(token)
-        if not refresh_token or refresh_token.expires_at < datetime.now(timezone.utc):
+        if not refresh_token or refresh_token.expires_at < datetime.now(UTC):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid or revoked refresh token",
@@ -178,7 +184,7 @@ class AuthService:
         self.pwd_reset_token_repository.invalidate_unused_for_user(user_id)
 
         raw_token = secrets.token_urlsafe(32)
-        expires_at = datetime.now(timezone.utc) + timedelta(minutes=DEFAULT_PWD_RESET_TOKEN_EXPIRE_MINUTES)
+        expires_at = datetime.now(UTC) + timedelta(minutes=DEFAULT_PWD_RESET_TOKEN_EXPIRE_MINUTES)
         self.pwd_reset_token_repository.save(
             PasswordResetToken(
                 user_id=user_id,
@@ -201,7 +207,7 @@ class AuthService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid password reset token",
             )
-        if saved_token.expires_at < datetime.now(timezone.utc):
+        if saved_token.expires_at < datetime.now(UTC):
             raise HTTPException(
                 status_code=status.HTTP_410_GONE,
                 detail="Password reset token expired",
@@ -223,7 +229,7 @@ class AuthService:
         user.hashed_password = hash_text(reset_request.new_password)
         user.security_stamp = uuid7().hex
         if mark_email_verified and user.email_verified_at is None:
-            user.email_verified_at = datetime.now(timezone.utc)
+            user.email_verified_at = datetime.now(UTC)
         # On invite acceptance the user provides their own (authoritative) name.
         if full_name is not None:
             user.full_name = full_name
@@ -266,7 +272,7 @@ class AuthService:
         # A fresh link supersedes any outstanding one, within this transaction.
         self.pwd_reset_token_repository.invalidate_unused_for_user_with_session(user.id, session)
         raw_token = secrets.token_urlsafe(32)
-        expires_at = datetime.now(timezone.utc) + timedelta(minutes=DEFAULT_PWD_RESET_TOKEN_EXPIRE_MINUTES)
+        expires_at = datetime.now(UTC) + timedelta(minutes=DEFAULT_PWD_RESET_TOKEN_EXPIRE_MINUTES)
         self.pwd_reset_token_repository.save_with_session(
             PasswordResetToken(
                 user_id=user.id,

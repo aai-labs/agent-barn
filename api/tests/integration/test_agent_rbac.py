@@ -32,8 +32,8 @@ from api.tests.steps.agent import (
     TEST_ENCRYPTION_KEY,
     MockK8sModule,
     MockLiteLLMModule,
-    there_is_an_agent,
     there_is_agent_access,
+    there_is_an_agent,
     use_org_for_auth,
 )
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
@@ -49,7 +49,7 @@ _CREATE = {
     "platform": "slack",
     "slack_bot_token": "xoxb-member-agent",
     "slack_app_token": "xapp-1-member-agent",
-    "template_slug": "test-template",
+    "template_key": "test-template",
 }
 _GIVEN = [
     set_env_variable(
@@ -204,7 +204,7 @@ def test_agent_and_creator_access_insert_roll_back_together():
         template_repo = context.injector.get(TemplateRepository)
         template = AgentTemplate(
             organization_id=context.organization.id,
-            template_slug="rollback-template",
+            template_key="rollback-template",
             template_name="Rollback Template",
             template_source=TemplateSource.CUSTOM,
             version=1,
@@ -661,7 +661,7 @@ def test_removed_membership_cascades_agent_access():
 
         assert_that(granted.status_code, equal_to(status.HTTP_200_OK))
         assert_that(
-            repository.find_access_membership_ids(context.agent.id, context.organization.id),
+            list(repository.find_access_membership_ids(context.agent.id, context.organization.id)),
             is_not(has_item(target_membership.id)),
         )
 

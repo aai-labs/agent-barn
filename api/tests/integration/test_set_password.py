@@ -59,6 +59,7 @@ def test_invited_user_sets_password_and_can_log_in():
                 assert_that(response.status_code, equal_to(status.HTTP_200_OK))
                 user_repo: UserRepository = context.injector.get(UserRepository)
                 refreshed = user_repo.get(context.user.id)
+                assert refreshed is not None
                 assert_that(refreshed.email_verified_at, is_(not_none()))
                 assert_that(refreshed.full_name, equal_to("Invited Person"))
 

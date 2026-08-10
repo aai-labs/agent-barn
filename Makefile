@@ -1,9 +1,18 @@
 COMPOSE := docker compose -f compose.yml
 
 .PHONY: \
-	dev-api dev-ingest dev-ui dev-worker reconcile migrate rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring fix-api test check fix \
+	setup \
+	dev-api dev-ingest dev-ui dev-worker reconcile seed-event-deliveries migrate merge-heads rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring fix-api test check fix \
 	up down restart logs build clean db-up db-down db-logs db-restart redis-up redis-down redis-logs worker-logs \
 	cluster-up cluster-down cluster-reset k3d-load-images k3d-load-openclaw k3d-load-hermes
+
+# One-time project bootstrap: installs deps for api + ui and creates a local
+# .env from the tracked template if one doesn't already exist.
+setup:
+	cd api && uv sync
+	cd ui && pnpm install
+	@test -f .env || cp .env.spec .env
+	@echo "Setup complete. Fill in .env, then run: make db-up && make migrate && make up"
 
 # Non-docker commands
 
@@ -37,14 +46,34 @@ dev-ui:
 	cd ui && pnpm dev
 
 dev-worker:
-	cd api && uv run dramatiq api.worker_app --processes 1 --threads 4
+	cd api && uv run dramatiq api.worker_app --path .. --processes 1 --threads 4 --watch .
 
 # One-shot reconciliation pass; production runs this on a CronJob schedule.
 reconcile:
 	cd api && uv run python -m api.domains.events.reconciliation
 
+# Local-only: populate the dev database with realistic Event Deliveries for
+# manually exercising the Platform Event Delivery Monitor UI. Safe to re-run.
+seed-event-deliveries:
+	api/.venv/bin/python -m api.scripts.seed_event_delivery_monitor_fixtures --count 200
+
 migrate:
 	cd api && uv run python -m alembic upgrade head
+
+merge-heads:
+	@cd api && \
+	head_output="$$(uv run alembic heads)" && \
+	heads="$$(printf '%s\n' "$$head_output" | awk '$$2 == "(head)" { print $$1 }')" && \
+	count="$$(printf '%s\n' "$$heads" | awk 'NF { count += 1 } END { print count + 0 }')" && \
+	if [ "$$count" -eq 0 ]; then \
+		echo "No Alembic heads found."; \
+		exit 1; \
+	elif [ "$$count" -eq 1 ]; then \
+		echo "One Alembic head found ($$heads); nothing to merge."; \
+	else \
+		echo "Merging $$count Alembic heads: $$heads"; \
+		uv run alembic merge -m "merge heads" $$heads; \
+	fi
 
 rollback:
 	cd api && uv run python -m alembic downgrade -1
@@ -92,14 +121,14 @@ fix-api:
 # Docker commands
 
 up:
-	$(COMPOSE) up -d --build
+	$(COMPOSE) up --build
 
 down:
 	$(COMPOSE) down
 
 restart:
 	$(COMPOSE) down
-	$(COMPOSE) up -d --build
+	$(COMPOSE) up --build
 
 logs:
 	$(COMPOSE) logs -f

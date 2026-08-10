@@ -40,6 +40,7 @@ from api.domains.agents.builders import (
     build_service,
 )
 from api.domains.agents.error_messages import friendly_k8s_error, friendly_pod_reason
+from api.domains.agents.exceptions import BotTokenConflictHTTPException
 from api.domains.agents.models import (
     PROVIDER_DISPLAY_NAMES,
     Agent,
@@ -65,38 +66,36 @@ from api.domains.agents.models import (
     AgentTelegramConfigRead,
     AgentType,
     AgentUpdate,
-    FirecrawlContent,
     ConfluenceContent,
+    FirecrawlContent,
     GmailContent,
     JiraContent,
     PairRequest,
     SecretProvider,
-    decrypt_content,
     compute_bot_token_hash,
+    decrypt_content,
     encrypt_content,
     validate_content,
 )
-from api.domains.agents.exceptions import BotTokenConflictHTTPException
 from api.domains.agents.repository import AgentRepository
 from api.domains.agents.runtime_policy import build_chat_commands_policy_md
 from api.domains.auth.models import CurrentUserContext
+from api.domains.auth.token_service import SlackConfigTokenService
 from api.domains.events import EventDeliveryDispatcher, resolve_actor_identity
 from api.domains.events.catalog import AGENT_STARTED, AGENT_STOPPED
-from api.domains.auth.token_service import SlackConfigTokenService
 from api.domains.organizations.lookup import OrganizationLookupService
 from api.domains.rbac.catalog import PermissionKey
+from api.domains.shared_credentials.repository import SharedCredentialRepository
 from api.domains.skills.models import Skill
 from api.domains.skills.repository import SkillRepository
 from api.domains.templates.models import AgentTemplate, PlatformTemplate, TemplateRead
 from api.domains.templates.renderer import render_template
 from api.domains.templates.repository import TemplateRepository
+from api.domains.templates.requirements import effective_required_ids, split_requirements
 from api.infrastructure.crypto import decrypt_token, encrypt_token
 from api.infrastructure.integration_validators import (
-    validate_bitbucket,
-    validate_confluence,
-    validate_github,
-    validate_gmail,
-    validate_jira,
+    PROVIDER_VALIDATORS,
+    format_validation_result,
 )
 from api.infrastructure.integration_validators.atlassian_utils import (
     get_atlassian_cloud_id,
@@ -148,6 +147,7 @@ _CREDENTIAL_FIELDS = frozenset(
         "teams_app_id",
         "teams_app_password",
         "secrets",
+        "shared_credentials",
         "removed_secret_providers",
     }
 )
@@ -166,18 +166,6 @@ _TELEGRAM_CONFIG_FIELDS = frozenset(
 _MAX_LOG_SNAPSHOT_BYTES = 1_048_576  # 1 MB
 
 _OPENROUTER_MODEL_PREFIX = "litellm/openrouter/"
-
-_VALIDATORS: dict[SecretProvider, Any] = {
-    SecretProvider.GITHUB: validate_github,
-    SecretProvider.JIRA: validate_jira,
-    SecretProvider.CONFLUENCE: validate_confluence,
-    SecretProvider.BITBUCKET: validate_bitbucket,
-    SecretProvider.GMAIL: validate_gmail,
-}
-
-
-def _allowlist_patterns(allowlist: str) -> list[str]:
-    return [p.strip().lower() for p in allowlist.split(",") if p.strip()]
 
 
 def _enrich_atlassian_content(content: Any) -> Any:
@@ -202,24 +190,28 @@ def _enrich_atlassian_content(content: Any) -> Any:
     return content
 
 
-def filter_models_by_allowlist(catalog: list[dict], allowlist: str) -> list[dict]:
-    """Keeps catalogue entries whose id matches any comma-separated glob pattern.
-    An empty allowlist passes everything through. Matching is case-insensitive.
+def filter_models_by_allowlist(catalog: list[dict], allowlist: list[str]) -> list[dict]:
+    """Keeps catalogue entries whose id matches any glob pattern in the allowlist.
+    An empty allowlist blocks everything. Matching is case-insensitive.
     """
-    patterns = _allowlist_patterns(allowlist)
+    if not allowlist:
+        return []
+    patterns = [p.strip().lower() for p in allowlist if p.strip()]
     if not patterns:
-        return catalog
+        return []
     return [model for model in catalog if any(fnmatch.fnmatch(model["id"].lower(), pattern) for pattern in patterns)]
 
 
-def is_model_allowed(model: str, allowlist: str) -> bool:
+def is_model_allowed(model: str, allowlist: list[str]) -> bool:
     """Whether a stored model string (litellm/openrouter/<slug>) is permitted by
-    the allowlist globs. An empty allowlist permits everything. The litellm/
+    the allowlist globs. An empty allowlist blocks everything. The litellm/
     gateway prefix is stripped so patterns match the OpenRouter slug.
     """
-    patterns = _allowlist_patterns(allowlist)
+    if not allowlist:
+        return False
+    patterns = [p.strip().lower() for p in allowlist if p.strip()]
     if not patterns:
-        return True
+        return False
     slug = model.removeprefix(_OPENROUTER_MODEL_PREFIX).lower()
     return any(fnmatch.fnmatch(slug, pattern) for pattern in patterns)
 
@@ -237,6 +229,7 @@ class AgentService:
     config: Config
     skill_repository: SkillRepository
     slack_token_service: SlackConfigTokenService
+    shared_credential_repository: SharedCredentialRepository
     event_delivery_dispatcher: EventDeliveryDispatcher
     organization_lookup: OrganizationLookupService
 
@@ -256,16 +249,20 @@ class AgentService:
     def count_agents_in_error(self) -> int:
         return self.repository.count_agents_in_error()
 
-    def _ensure_model_allowed(self, model: str | None) -> None:
+    def _ensure_model_allowed(self, model: str | None, org_id: UUID) -> None:
         """Rejects models outside the allowlist. litellm is cluster-internal, so
         create/update are the only paths that can set an agent's model; enforcing
         here is sufficient. An empty/None model defers to the configured default.
         """
-        if model and not is_model_allowed(model, self.config.agent_model_allowlist):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Model '{model}' is not in the allowed model list",
-            )
+        if model:
+            allowed_models = self.organization_lookup.get_allowed_models(org_id)
+            if allowed_models is None:
+                raise HTTPException(status_code=404, detail="Organization not found")
+            if not is_model_allowed(model, allowed_models):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Model '{model}' is not in the allowed model list",
+                )
 
     @staticmethod
     def _build_skill_pointers(skills: list[Skill]) -> str:
@@ -293,15 +290,35 @@ class AgentService:
             and all(p in configured_providers for p in skill.required_providers)
         ]
 
+    def _remaining_skills(
+        self,
+        agent_id: UUID,
+        added_skill_ids: list[UUID],
+        removed_skill_ids: list[UUID],
+    ) -> list[Skill]:
+        """Skills the agent would have after applying the given add/remove sets."""
+        current_skill_rows = self.repository.get_skills_for_agent(agent_id)
+        current_skill_ids = {row.skill_id for row in current_skill_rows}
+        remaining_skill_ids = (current_skill_ids - set(removed_skill_ids)) | set(added_skill_ids)
+        if not remaining_skill_ids:
+            return []
+        return self.skill_repository.get_many_by_ids(list(remaining_skill_ids))
+
     def _resolve_skills(
         self,
         skill_ids: list[UUID],
         secrets_data: list[AgentSecretCreate],
         org_id: UUID,
+        platform: AgentPlatform,
+        extra_providers: set[SecretProvider] | None = None,
     ) -> list[Skill]:
         if not skill_ids:
             return []
         submitted_providers = {item.provider for item in secrets_data}
+        if platform == AgentPlatform.SLACK:
+            submitted_providers = submitted_providers | {SecretProvider.SLACK}
+        if extra_providers:
+            submitted_providers |= extra_providers
         accessible = {s.id: s for s in self.skill_repository.find_accessible_for_org(org_id)}
         skills = []
         for skill_id in dict.fromkeys(skill_ids):
@@ -310,6 +327,11 @@ class AgentService:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"Skill {skill_id} not found",
+                )
+            if SecretProvider.SLACK in skill.required_providers and platform != AgentPlatform.SLACK:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Skill '{skill.name}' requires the agent to run on the Slack platform",
                 )
             missing = [p for p in skill.required_providers if p not in submitted_providers]
             if missing:
@@ -324,7 +346,7 @@ class AgentService:
     def _validate_skill_update(
         self,
         agent: Agent,
-        data: "AgentUpdate",
+        data: AgentUpdate,
         org_id: UUID,
     ) -> None:
         """Validate that new skills are accessible and that all remaining skills
@@ -338,21 +360,30 @@ class AgentService:
                         detail=f"Skill {skill_id} not found",
                     )
 
-        current_skill_rows = self.repository.get_skills_for_agent(agent.id)
-        current_skill_ids = {row.skill_id for row in current_skill_rows}
-        remaining_skill_ids = (current_skill_ids - set(data.removed_skill_ids)) | set(data.skill_ids)
-
-        if not remaining_skill_ids:
+        remaining_skills = self._remaining_skills(agent.id, data.skill_ids, data.removed_skill_ids)
+        if not remaining_skills:
             return
 
         current_secrets = self.repository.get_secrets_for_agent(agent.id)
         current_providers = {s.provider for s in current_secrets}
         upsert_providers = {s.provider for s in data.secrets or []}
         removed_providers = set(data.removed_secret_providers or [])
-        remaining_providers = (current_providers - removed_providers) | upsert_providers
+        shared_attach_providers: set[str] = set()
+        if data.shared_credentials:
+            shared_creds = self.shared_credential_repository.get_by_ids_and_org(
+                [sc.shared_credential_id for sc in data.shared_credentials], org_id
+            )
+            shared_attach_providers = {c.provider for c in shared_creds}
+        remaining_providers = (current_providers - removed_providers) | upsert_providers | shared_attach_providers
+        if agent.platform == AgentPlatform.SLACK:
+            remaining_providers = remaining_providers | {SecretProvider.SLACK}
 
-        remaining_skills = self.skill_repository.get_many_by_ids(list(remaining_skill_ids))
         for skill in remaining_skills:
+            if SecretProvider.SLACK in skill.required_providers and agent.platform != AgentPlatform.SLACK:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Skill '{skill.name}' requires the agent to run on the Slack platform",
+                )
             missing = [p for p in skill.required_providers if p not in remaining_providers]
             if missing:
                 names = ", ".join(p for p in missing)
@@ -369,9 +400,9 @@ class AgentService:
         telegram_config: AgentTelegramConfig | None = None,
         secrets: list[AgentSecret] | None = None,
         skills: list[Skill] | None = None,
-        required_skill_ids: set[UUID] | None = None,
+        required_skill_map: dict[UUID, str | None] | None = None,
         allowed_actions: list[PermissionKey] | None = None,
-        template_slug: str = "",
+        template_key: str = "",
         template_version: int = 0,
     ) -> AgentRead:
         slack_config_read = AgentSlackConfigRead.model_validate(slack_config) if slack_config else None
@@ -379,8 +410,21 @@ class AgentService:
             slack_config_read.bot_display_name = self._get_bot_display_name(str(agent.id), slack_config)
         teams_config_read = AgentTeamsConfigRead.model_validate(teams_config) if teams_config else None
         telegram_config_read = AgentTelegramConfigRead.model_validate(telegram_config) if telegram_config else None
-        secrets_read = [AgentSecretRead.model_validate(secret) for secret in (secrets or [])]
-        req_ids = required_skill_ids or set()
+        shared_ids = [s.shared_credential_id for s in (secrets or []) if s.shared_credential_id is not None]
+        shared_creds_by_id = {}
+        if shared_ids:
+            shared_creds = self.shared_credential_repository.get_by_ids_and_org(shared_ids, agent.organization_id)
+            shared_creds_by_id = {c.id: c for c in shared_creds}
+        secrets_read = []
+        for secret in secrets or []:
+            read = AgentSecretRead.model_validate(secret)
+            if secret.shared_credential_id and secret.shared_credential_id in shared_creds_by_id:
+                sc = shared_creds_by_id[secret.shared_credential_id]
+                read.shared_credential_id = sc.id
+                read.shared_credential_name = sc.name
+            secrets_read.append(read)
+        assigned_ids = {skill.id for skill in (skills or [])}
+        req_ids = effective_required_ids(required_skill_map or {}, assigned_ids)
         skills_read = [
             AgentAssignedSkillRead.model_validate(skill).model_copy(update={"required": skill.id in req_ids})
             for skill in (skills or [])
@@ -397,7 +441,7 @@ class AgentService:
             platform=agent.platform,
             agent_type=agent.agent_type,
             organization_id=agent.organization_id,
-            template_slug=template_slug,
+            template_key=template_key,
             template_version=template_version,
             model=agent.model,
             approval_mode=agent.approval_mode,
@@ -425,7 +469,7 @@ class AgentService:
         secrets = self.repository.get_secrets_for_agent(agent.id)
         skills = [s for _, s in self.skill_repository.get_agent_skills_with_details(agent.id)]
         template = self.template_repository.get_pinned_template(agent)
-        required_ids = self.template_repository.get_required_skill_ids_for(template) if template else set()
+        required_map = self.template_repository.get_required_skill_map_for(template) if template else {}
         allowed_actions = self.authorization.allowed_actions(context, [agent])[agent.id]
         return self._build_agent_read(
             agent,
@@ -434,14 +478,14 @@ class AgentService:
             telegram_config,
             secrets,
             skills,
-            required_ids,
+            required_map,
             allowed_actions,
-            template_slug=template.template_slug if template else "",
+            template_key=template.template_key if template else "",
             template_version=template.version if template else 0,
         )
 
     def _get_bot_display_name(self, agent_id: str, slack_config: AgentSlackConfig) -> str | None:
-        now = dt.datetime.now(dt.timezone.utc)
+        now = dt.datetime.now(dt.UTC)
         cached = _bot_name_cache.get(agent_id)
         if cached and now - cached[1] < _BOT_NAME_TTL:
             return cached[0]
@@ -461,7 +505,13 @@ class AgentService:
     def create_agent(self, data: AgentCreate, context: CurrentUserContext) -> AgentRead:
         org_id = self._org_id(context)
         self.authorization.require_collection_scope(context, PermissionKey.AGENT_CREATE)
-        self._ensure_model_allowed(data.model)
+        self._ensure_model_allowed(data.model, org_id)
+
+        if any(item.provider == SecretProvider.SLACK for item in data.secrets):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Slack credentials are derived from the agent's Slack bot token and managed automatically.",
+            )
 
         if data.platform == AgentPlatform.SLACK:
             assert data.slack_bot_token is not None
@@ -481,11 +531,11 @@ class AgentService:
 
         # Pin to the requested version, or the lineage's latest if unspecified.
         if data.template_version is not None:
-            template = self.template_repository.resolve_template(org_id, data.template_slug, data.template_version)
-            missing_detail = f"Template {data.template_slug} v{data.template_version} not found"
+            template = self.template_repository.resolve_template(org_id, data.template_key, data.template_version)
+            missing_detail = f"Template {data.template_key} v{data.template_version} not found"
         else:
-            template = self.template_repository.resolve_latest_template(org_id, data.template_slug)
-            missing_detail = f"Template {data.template_slug} not found"
+            template = self.template_repository.resolve_latest_template(org_id, data.template_key)
+            missing_detail = f"Template {data.template_key} not found"
         if template is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=missing_detail)
 
@@ -510,14 +560,24 @@ class AgentService:
                     detail="LiteLLM key generation failed; cannot create agent.",
                 ) from exc
 
-        # Validate that all template-required skills are present in the request.
-        required_ids = self.template_repository.get_required_skill_ids_for(template)
-        if required_ids:
-            missing = required_ids - set(data.skill_ids)
-            if missing:
+        # Validate that all template-required skills are present in the request:
+        # every standalone-required skill, and at least one member of each
+        # "at least one of" group (e.g. GitHub OR Bitbucket).
+        required_map = self.template_repository.get_required_skill_map_for(template)
+        standalone_ids, required_groups = split_requirements(required_map)
+        selected_skill_ids = set(data.skill_ids)
+        if standalone_ids - selected_skill_ids:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Required template skills must be included in skill_ids",
+            )
+        for group_key in sorted(required_groups):
+            members = required_groups[group_key]
+            if not (members & selected_skill_ids):
+                names = sorted(s.name for s in self.skill_repository.get_many_by_ids(list(members)))
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Required template skills must be included in skill_ids",
+                    detail=f"At least one of these template skills must be included in skill_ids: {', '.join(names)}",
                 )
 
         # The creator always gets an explicit Owner AgentAccess row, even if they
@@ -613,8 +673,57 @@ class AgentService:
             )
             secrets.append(saved)
 
-        # Resolve and validate skills before any DB writes.
-        skills_to_assign = self._resolve_skills(data.skill_ids, data.secrets, org_id)
+        # Shared credentials: look up each, verify org ownership, create link rows
+        for attach in data.shared_credentials:
+            shared_cred = self.shared_credential_repository.get_by_id_and_org(attach.shared_credential_id, org_id)
+            if shared_cred is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Shared credential {attach.shared_credential_id} not found",
+                )
+            used_providers = {s.provider for s in secrets}
+            if shared_cred.provider in used_providers:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Provider {shared_cred.provider} already has a credential in this request",
+                )
+            saved = self.repository.save_secret(
+                AgentSecret(
+                    agent_id=agent.id,
+                    provider=shared_cred.provider,
+                    secret_name=shared_cred.name,
+                    content=None,
+                    shared_credential_id=shared_cred.id,
+                )
+            )
+            secrets.append(saved)
+
+        # Resolve and validate skills after all other secrets (manual + shared)
+        # are known, so the Slack-derive check below sees the final skill set.
+        shared_providers = {s.provider for s in secrets if s.shared_credential_id}
+        skills_to_assign = self._resolve_skills(
+            data.skill_ids, data.secrets, org_id, data.platform, extra_providers=shared_providers
+        )
+
+        # The Slack Agent Secret used by aai-cli is never submitted by the client
+        # (see the rejection check above) — mirror it from the same gateway bot
+        # token whenever a resolved skill requires it. Runs after every other
+        # secret validation/persist step above, so a failure there never leaves
+        # this mirrored secret orphaned.
+        if data.platform == AgentPlatform.SLACK and any(
+            SecretProvider.SLACK in skill.required_providers for skill in skills_to_assign
+        ):
+            slack_content = validate_content(SecretProvider.SLACK, {"token": data.slack_bot_token})
+            secrets.append(
+                self.repository.save_secret(
+                    AgentSecret(
+                        agent_id=agent.id,
+                        provider=SecretProvider.SLACK,
+                        secret_name=PROVIDER_DISPLAY_NAMES[SecretProvider.SLACK],
+                        content=encrypt_content(slack_content, self.config.agent_token_encryption_key),
+                    )
+                )
+            )
 
         if skills_to_assign:
             self.repository.save_skills([AgentSkill(agent_id=agent.id, skill_id=s.id) for s in skills_to_assign])
@@ -631,9 +740,9 @@ class AgentService:
             telegram_config,
             secrets,
             skills_to_assign,
-            required_ids,
+            required_map,
             allowed_actions,
-            template_slug=template.template_slug,
+            template_key=template.template_key,
             template_version=template.version,
         )
 
@@ -650,7 +759,7 @@ class AgentService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Agent {agent_id} has no pinned template",
             )
-        template = self.template_repository.resolve_template(org_id, pinned.template_slug, version)
+        template = self.template_repository.resolve_template(org_id, pinned.template_key, version)
         if not template:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -675,7 +784,7 @@ class AgentService:
         secrets_by_agent = self.repository.get_secrets_for_agents(agent_ids)
         skills_by_agent = self.skill_repository.get_skills_for_agents(agent_ids)
 
-        req_ids_by_agent = self.template_repository.get_required_skill_ids_for_agents(agents)
+        req_maps_by_agent = self.template_repository.get_required_skill_map_for_agents(agents)
         pin_info = self.template_repository.get_pinned_template_info_for_agents(agents)
 
         items = [
@@ -686,9 +795,9 @@ class AgentService:
                 telegram_configs.get(agent.id),
                 secrets_by_agent.get(agent.id, []),
                 skills_by_agent.get(agent.id, []),
-                req_ids_by_agent.get(agent.id, set()),
+                req_maps_by_agent.get(agent.id, {}),
                 allowed_actions.get(agent.id, []),
-                template_slug=pin_info.get(agent.id, ("", 0))[0],
+                template_key=pin_info.get(agent.id, ("", 0))[0],
                 template_version=pin_info.get(agent.id, ("", 0))[1],
             )
             for agent in agents
@@ -707,6 +816,14 @@ class AgentService:
         updated = data.model_dump(exclude_unset=True)
         if _CREDENTIAL_FIELDS & updated.keys():
             self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_SECRET_MANAGE)
+
+        if any(item.provider == SecretProvider.SLACK for item in data.secrets or []) or (
+            SecretProvider.SLACK in (data.removed_secret_providers or [])
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Slack credentials are derived from the agent's Slack bot token and managed automatically.",
+            )
 
         if agent.status == AgentStatus.RUNNING:
             raise HTTPException(
@@ -735,17 +852,17 @@ class AgentService:
                     detail=f"Cannot set {label} fields on a {agent.platform.title()} agent",
                 )
 
-        # Re-pin the agent to a different template (slug, version). The model
+        # Re-pin the agent to a different template (key, version). The model
         # validator guarantees both keys appear together.
         effective_template = None
-        if "template_slug" in updated:
+        if "template_key" in updated:
             effective_template = self.template_repository.resolve_template(
-                org_id, updated["template_slug"], updated["template_version"]
+                org_id, updated["template_key"], updated["template_version"]
             )
             if effective_template is None:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail=(f"Template {updated['template_slug']} v{updated['template_version']} not found"),
+                    detail=(f"Template {updated['template_key']} v{updated['template_version']} not found"),
                 )
             self._set_pin(agent, effective_template)
 
@@ -755,7 +872,7 @@ class AgentService:
                 self._try_rename_slack_app(agent, updated["name"], context)
 
         if "model" in updated:
-            self._ensure_model_allowed(updated["model"])
+            self._ensure_model_allowed(updated["model"], org_id)
             agent.model = updated["model"]
 
         if "approval_mode" in updated:
@@ -764,13 +881,16 @@ class AgentService:
         # Validate skill changes against the effective template's required skills
         if effective_template is None:
             effective_template = self.template_repository.get_pinned_template(agent)
-        required_ids = (
-            self.template_repository.get_required_skill_ids_for(effective_template) if effective_template else set()
+        required_map = (
+            self.template_repository.get_required_skill_map_for(effective_template) if effective_template else {}
         )
-        if required_ids:
+        if required_map:
+            standalone_ids, required_groups = split_requirements(required_map)
+            existing_skill_ids = {s.id for _, s in self.skill_repository.get_agent_skills_with_details(agent.id)}
+            effective_skill_ids = (existing_skill_ids | set(data.skill_ids)) - set(data.removed_skill_ids)
             # Block removal of required skills.
             if data.removed_skill_ids:
-                blocked = required_ids & set(data.removed_skill_ids)
+                blocked = standalone_ids & set(data.removed_skill_ids)
                 if blocked:
                     blocked_skills = self.skill_repository.get_many_by_ids(list(blocked))
                     names = ", ".join(s.name for s in blocked_skills)
@@ -778,15 +898,37 @@ class AgentService:
                         status_code=status.HTTP_409_CONFLICT,
                         detail=f"Cannot remove skills required by the template: {names}",
                     )
+                for group_key in sorted(required_groups):
+                    members = required_groups[group_key]
+                    # Only block if the group had an assigned member before this
+                    # update; this grandfathers agents whose pinned template
+                    # gained the group after they were created (e.g. via an
+                    # in-place predefined-template reseed), and permits swapping
+                    # one member for another in the same request.
+                    if (members & existing_skill_ids) and not (members & effective_skill_ids):
+                        names = sorted(s.name for s in self.skill_repository.get_many_by_ids(list(members)))
+                        raise HTTPException(
+                            status_code=status.HTTP_409_CONFLICT,
+                            detail=("At least one of these template-required skills must remain: " + ", ".join(names)),
+                        )
             # When re-pinning, validate that required skills will be present.
-            if "template_slug" in updated:
-                existing_skill_ids = {s.id for _, s in self.skill_repository.get_agent_skills_with_details(agent.id)}
-                effective_skill_ids = (existing_skill_ids | set(data.skill_ids)) - set(data.removed_skill_ids)
-                if required_ids - effective_skill_ids:
+            if "template_key" in updated:
+                if standalone_ids - effective_skill_ids:
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail="Required template skills must be included in skill_ids",
                     )
+                for group_key in sorted(required_groups):
+                    members = required_groups[group_key]
+                    if not (members & effective_skill_ids):
+                        names = sorted(s.name for s in self.skill_repository.get_many_by_ids(list(members)))
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail=(
+                                "At least one of these template skills must be included in skill_ids: "
+                                + ", ".join(names)
+                            ),
+                        )
 
         # Slack config updates
         if agent.platform == AgentPlatform.SLACK and (_SLACK_CONFIG_FIELDS & updated.keys()):
@@ -895,6 +1037,7 @@ class AgentService:
                 existing = self.repository.get_secret(agent.id, item.provider)
                 if existing:
                     existing.content = encrypted
+                    existing.shared_credential_id = None
                     existing.secret_name = PROVIDER_DISPLAY_NAMES[item.provider]
                     self.repository.save_secret(existing)
                 else:
@@ -907,11 +1050,94 @@ class AgentService:
                         )
                     )
 
+        # Shared credential attachments
+        if "shared_credentials" in updated:
+            current_secrets = self.repository.get_secrets_for_agent(agent.id)
+            manual_providers = {s.provider for s in current_secrets if not s.shared_credential_id}
+            shared_providers_seen: set[str] = set()
+            for attach in data.shared_credentials or []:
+                shared_cred = self.shared_credential_repository.get_by_id_and_org(attach.shared_credential_id, org_id)
+                if shared_cred is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=f"Shared credential {attach.shared_credential_id} not found",
+                    )
+                if shared_cred.provider in manual_providers:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Provider {shared_cred.provider} already has a manual credential",
+                    )
+                if shared_cred.provider in shared_providers_seen:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Duplicate shared credential provider: {shared_cred.provider}",
+                    )
+                shared_providers_seen.add(shared_cred.provider)
+                existing = self.repository.get_secret(agent.id, shared_cred.provider)
+                if existing:
+                    existing.content = None
+                    existing.shared_credential_id = shared_cred.id
+                    existing.secret_name = shared_cred.name
+                    self.repository.save_secret(existing)
+                else:
+                    self.repository.save_secret(
+                        AgentSecret(
+                            agent_id=agent.id,
+                            provider=shared_cred.provider,
+                            secret_name=shared_cred.name,
+                            content=None,
+                            shared_credential_id=shared_cred.id,
+                        )
+                    )
+
         # Apply skill changes
         for skill_id in data.removed_skill_ids:
             self.repository.remove_skill(agent.id, skill_id)
         for skill_id in dict.fromkeys(data.skill_ids):
             self.repository.add_skill(agent.id, skill_id)
+
+        # Keep the aai-cli Slack Agent Secret in sync with the gateway bot token:
+        # write/refresh it whenever a remaining skill requires it (covers skill add
+        # and bot token rotation), delete it when no remaining skill needs it
+        # anymore (covers skill removal). Runs last, after every other
+        # secret/skill validation and persistence step above, so a failure
+        # earlier in this method never leaves this mirrored secret orphaned.
+        if agent.platform == AgentPlatform.SLACK and (
+            data.skill_ids or data.removed_skill_ids or "slack_bot_token" in updated
+        ):
+            remaining_skills = self._remaining_skills(agent.id, [], [])
+            slack_required = any(SecretProvider.SLACK in skill.required_providers for skill in remaining_skills)
+
+            if slack_required:
+                if "slack_bot_token" in updated:
+                    bot_token = updated["slack_bot_token"]
+                else:
+                    existing_slack_config = self.repository.get_slack_config(agent.id)
+                    bot_token = (
+                        decrypt_token(existing_slack_config.bot_token_encrypted, self.config.agent_token_encryption_key)
+                        if existing_slack_config
+                        else None
+                    )
+                if bot_token:
+                    slack_secret_content = encrypt_content(
+                        validate_content(SecretProvider.SLACK, {"token": bot_token}),
+                        self.config.agent_token_encryption_key,
+                    )
+                    existing_slack_secret = self.repository.get_secret(agent.id, SecretProvider.SLACK)
+                    if existing_slack_secret:
+                        existing_slack_secret.content = slack_secret_content
+                        self.repository.save_secret(existing_slack_secret)
+                    else:
+                        self.repository.save_secret(
+                            AgentSecret(
+                                agent_id=agent.id,
+                                provider=SecretProvider.SLACK,
+                                secret_name=PROVIDER_DISPLAY_NAMES[SecretProvider.SLACK],
+                                content=slack_secret_content,
+                            )
+                        )
+            else:
+                self.repository.delete_secret(agent.id, SecretProvider.SLACK)
 
         self.repository.save(agent)
         return self._get_agent_read(agent, context)
@@ -947,6 +1173,18 @@ class AgentService:
             else ""
         )
         effective_model = agent.model or self.config.agent_default_model
+        llm_proxy_url = "http://localhost:8090"
+
+        # Re-check the allowlist at start time, not just create/update: the org's
+        # allowlist can change after the agent was created, and a model that was
+        # valid then may no longer be permitted now.
+        allowed_models = self.organization_lookup.get_allowed_models(org_id)
+        if allowed_models is None or not is_model_allowed(effective_model, allowed_models):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Model '{effective_model}' is no longer in the organization's allowed model list",
+            )
+
         overlay: dict | None = None
         hermes_cfg: dict | None = None
 
@@ -974,7 +1212,7 @@ class AgentService:
                 api_server_key = secrets.token_urlsafe(32)
                 hermes_cfg = build_hermes_config(
                     effective_model,
-                    self.config.agent_litellm_base_url,
+                    llm_proxy_url,
                     dm_policy=str(slack_config.dm_policy),
                     group_policy=str(slack_config.group_policy),
                     verbose_mode=slack_config.verbose_mode,
@@ -988,7 +1226,7 @@ class AgentService:
                     slack_bot_token=bot_token,
                     slack_app_token=app_token,
                     litellm_api_key=litellm_key,
-                    litellm_base_url=self.config.agent_litellm_base_url,
+                    litellm_base_url=llm_proxy_url,
                     api_server_key=api_server_key,
                     channel_ids=slack_config.channel_ids,
                     dm_user_ids=slack_config.dm_user_ids,
@@ -1004,7 +1242,7 @@ class AgentService:
             else:
                 overlay = build_openclaw_config_overlay(
                     effective_model,
-                    self.config.agent_litellm_base_url,
+                    llm_proxy_url,
                     slack_channel_ids=slack_config.channel_ids,
                     slack_dm_user_ids=slack_config.dm_user_ids,
                     slack_group_policy=str(slack_config.group_policy),
@@ -1018,7 +1256,7 @@ class AgentService:
                     slack_bot_token=bot_token,
                     slack_app_token=app_token,
                     litellm_api_key=litellm_key,
-                    litellm_base_url=self.config.agent_litellm_base_url,
+                    litellm_base_url=llm_proxy_url,
                 )
                 deployment = build_deployment(
                     agent.id,
@@ -1041,7 +1279,7 @@ class AgentService:
             )
             overlay = build_openclaw_config_overlay_teams(
                 effective_model,
-                self.config.agent_litellm_base_url,
+                llm_proxy_url,
                 approval_mode=str(agent.approval_mode),
             )
             secret = build_secret_teams(
@@ -1052,7 +1290,7 @@ class AgentService:
                 msteams_app_password=app_password,
                 msteams_tenant_id=teams_config.tenant_id,
                 litellm_api_key=litellm_key,
-                litellm_base_url=self.config.agent_litellm_base_url,
+                litellm_base_url=llm_proxy_url,
             )
             service = build_service(
                 agent.id,
@@ -1093,7 +1331,7 @@ class AgentService:
                 api_server_key = secrets.token_urlsafe(32)
                 hermes_cfg = build_hermes_config_telegram(
                     effective_model,
-                    self.config.agent_litellm_base_url,
+                    llm_proxy_url,
                     dm_policy=str(telegram_config.dm_policy),
                     group_policy=str(telegram_config.group_policy),
                     approval_mode=str(agent.approval_mode),
@@ -1105,7 +1343,7 @@ class AgentService:
                     agent_name=agent.name,
                     telegram_bot_token=bot_token,
                     litellm_api_key=litellm_key,
-                    litellm_base_url=self.config.agent_litellm_base_url,
+                    litellm_base_url=llm_proxy_url,
                     api_server_key=api_server_key,
                     dm_policy=str(telegram_config.dm_policy),
                     allowed_user_ids=telegram_config.allowed_user_ids,
@@ -1121,7 +1359,7 @@ class AgentService:
             else:
                 overlay = build_openclaw_config_overlay_telegram(
                     effective_model,
-                    self.config.agent_litellm_base_url,
+                    llm_proxy_url,
                     dm_policy=str(telegram_config.dm_policy),
                     group_policy=str(telegram_config.group_policy),
                     allowed_user_ids=telegram_config.allowed_user_ids,
@@ -1134,7 +1372,7 @@ class AgentService:
                     namespace=ns,
                     telegram_bot_token=bot_token,
                     litellm_api_key=litellm_key,
-                    litellm_base_url=self.config.agent_litellm_base_url,
+                    litellm_base_url=llm_proxy_url,
                 )
                 deployment = build_deployment(
                     agent.id,
@@ -1151,14 +1389,21 @@ class AgentService:
 
         # aai-cli integration secrets — all agent types.
         agent_secrets = self.repository.get_secrets_for_agent(agent.id)
-        decrypted = {
-            SecretProvider(s.provider): decrypt_content(
-                SecretProvider(s.provider),
-                s.content,
-                self.config.agent_token_encryption_key,
-            )
-            for s in agent_secrets
-        }
+        shared_ids = [s.shared_credential_id for s in agent_secrets if s.shared_credential_id is not None]
+        shared_by_id = {}
+        if shared_ids:
+            shared_creds = self.shared_credential_repository.get_by_ids_and_org(shared_ids, org_id)
+            shared_by_id = {c.id: c for c in shared_creds}
+        key = self.config.agent_token_encryption_key
+        decrypted = {}
+        for s in agent_secrets:
+            provider = SecretProvider(s.provider)
+            if s.shared_credential_id and s.shared_credential_id in shared_by_id:
+                ciphertext = shared_by_id[s.shared_credential_id].content
+            else:
+                ciphertext = s.content
+            assert ciphertext is not None
+            decrypted[provider] = decrypt_content(provider, ciphertext, key)
         self._backfill_gmail_client_credentials(decrypted)
         gmail = decrypted.get(SecretProvider.GMAIL)
         if isinstance(gmail, GmailContent) and (not gmail.client_id or not gmail.client_secret):
@@ -1222,6 +1467,7 @@ class AgentService:
                 "AGENT_ID": str(agent.id),
                 "INGEST_URL": self.config.ingest_base_url,
                 "INGEST_API_KEY": ingest_key,
+                "LITELLM_PROXY_TARGET": self.config.agent_litellm_base_url,
             }
         )
 
@@ -1384,7 +1630,7 @@ class AgentService:
             next_snapshot_id=older.id if older is not None else None,
         )
 
-    def _capture_logs_before_stop(self, agent: "Agent") -> None:
+    def _capture_logs_before_stop(self, agent: Agent) -> None:
         try:
             log_text = self.k8s.read_pod_logs(
                 f"agent-{agent.id}",
@@ -1401,7 +1647,7 @@ class AgentService:
                 idx = log_text.find("\n")
                 if idx > 0:
                     log_text = log_text[idx + 1 :]
-            now = dt.datetime.now(dt.timezone.utc)
+            now = dt.datetime.now(dt.UTC)
             byte_size = len(log_text.encode("utf-8"))
             self.repository.save_log_snapshot(
                 AgentLogSnapshot(
@@ -1470,7 +1716,7 @@ class AgentService:
             slack_config.bot_token_hash = None
             self.repository.save_slack_config(slack_config)
 
-        agent.deleted_at = dt.datetime.now(dt.timezone.utc)
+        agent.deleted_at = dt.datetime.now(dt.UTC)
         self.repository.save(agent)
 
         if agent.litellm_key_encrypted:
@@ -1560,19 +1806,33 @@ class AgentService:
             except Exception as e:
                 logger.warning("Unexpected error joining channel %s: %s", channel_id, e)
 
-    def list_models(self, context: CurrentUserContext) -> list[dict]:
+    def list_models(self, context: CurrentUserContext, catalog: bool = False) -> list[dict]:
         """Returns the allowlisted OpenRouter models as picker options. The
         configured default (AGENT_DEFAULT_MODEL) is guaranteed present, flagged
         is_default, and listed first so the frontend and backend agree on it.
         """
+        org_id = self._org_id(context)
         self.authorization.require_collection_scope(context, PermissionKey.AGENT_CREATE)
-        catalog = self.openrouter.list_models()
-        allowed = filter_models_by_allowlist(catalog, self.config.agent_model_allowlist)
+        raw_catalog = self.openrouter.list_models()
+
+        if catalog:
+            self.authorization.policy.require(
+                context,
+                org_id,
+                PermissionKey.ORGANIZATION_UPDATE,
+                detail="You don't have permission to view the full model catalog.",
+            )
+            allowed = raw_catalog
+        else:
+            allowed_models = self.organization_lookup.get_allowed_models(org_id)
+            if allowed_models is None:
+                raise HTTPException(status_code=404, detail="Organization not found")
+            allowed = filter_models_by_allowlist(raw_catalog, allowed_models)
         options = [
             {
                 "value": f"litellm/openrouter/{model['id']}",
                 "label": model["name"],
-                "context_length": model.get("context_length"),
+                "contextLength": model.get("context_length"),
                 "pricing": model.get("pricing"),
             }
             for model in allowed
@@ -1580,20 +1840,19 @@ class AgentService:
 
         default_value = self.config.agent_default_model
         if default_value and not any(o["value"] == default_value for o in options):
-            options.insert(
-                0,
+            options.append(
                 {
                     "value": default_value,
-                    "label": default_value.removeprefix(_OPENROUTER_MODEL_PREFIX),
-                    "context_length": None,
+                    "label": default_value.removeprefix("litellm/openrouter/"),
+                    "contextLength": None,
                     "pricing": None,
-                },
+                }
             )
 
         # Stable sort puts the default first while preserving catalogue order.
         options.sort(key=lambda o: o["value"] != default_value)
         for option in options:
-            option["is_default"] = option["value"] == default_value
+            option["isDefault"] = option["value"] == default_value
         return options
 
     def list_slack_channels(self, agent_id: UUID, context: CurrentUserContext, search: str | None = None) -> list[dict]:
@@ -1642,6 +1901,7 @@ class AgentService:
 
     def validate_integration(self, agent_id: UUID, provider: SecretProvider, context: CurrentUserContext) -> dict:
         """Validate an existing secret on demand. Never persists — returns result directly."""
+        org_id = self._org_id(context)
         self.authorization.require_action(context, agent_id, PermissionKey.AGENT_SECRET_MANAGE)
         secret = self.repository.get_secret(agent_id, provider)
         if secret is None:
@@ -1649,27 +1909,27 @@ class AgentService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"No {provider.value} credential configured for this agent",
             )
-        validator = _VALIDATORS.get(provider)
+        validator = PROVIDER_VALIDATORS.get(provider)
         if validator is None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"No validator available for {provider.value}",
             )
-        content = decrypt_content(provider, secret.content, self.config.agent_token_encryption_key)
+        if secret.shared_credential_id:
+            shared = self.shared_credential_repository.get_by_ids_and_org([secret.shared_credential_id], org_id)
+            if not shared:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Referenced shared credential no longer exists",
+                )
+            ciphertext = shared[0].content
+        else:
+            ciphertext = secret.content
+        assert ciphertext is not None
+        content = decrypt_content(provider, ciphertext, self.config.agent_token_encryption_key)
         self._backfill_gmail_client_credentials({provider: content})
         result = validator(content)  # type: ignore[arg-type]
-        if result.valid and result.missing_scopes:
-            validation_status = "warning"
-        elif result.valid:
-            validation_status = "valid"
-        else:
-            validation_status = "invalid"
-        return {
-            "validation_status": validation_status,
-            "validation_identity": result.identity,
-            "validation_error": result.error,
-            "missing_scopes": result.missing_scopes,
-        }
+        return format_validation_result(result)
 
     def _try_rename_slack_app(self, agent: Agent, new_name: str, context: CurrentUserContext) -> None:
         """Best-effort: rename the Slack app to match the new agent name. Never raises."""

@@ -2,7 +2,7 @@ from uuid import UUID, uuid4
 
 
 def test_event_delivery_actor_delegates_to_domain_handler(monkeypatch):
-    import api.worker_app as worker_app
+    from api import worker_app
 
     calls: list[UUID] = []
     monkeypatch.setattr(worker_app.events_worker, "process_event_delivery", calls.append)
@@ -14,7 +14,7 @@ def test_event_delivery_actor_delegates_to_domain_handler(monkeypatch):
 
 
 def test_retry_exhausted_actor_delegates_to_domain_handler_with_parsed_retries(monkeypatch):
-    import api.worker_app as worker_app
+    from api import worker_app
 
     calls: list[tuple[dict, int | None]] = []
     monkeypatch.setattr(

@@ -1,10 +1,4 @@
-"""Phase 2 (AF-147): Platform Administrator creates an organization and invites the first owner.
-
-`POST /platform/organizations` creates a customer org, attaches the given owner as OWNER
-(inviting them when they are new/unverified), and returns the set-password invite link
-so the platform_admin can also deliver it manually.
-"""
-
+from typing import cast
 from uuid import UUID, uuid7
 
 from fastapi import status
@@ -12,14 +6,13 @@ from hamcrest import (
     assert_that,
     contains_string,
     equal_to,
-    is_,
-    none,
     not_none,
 )
 
+from api.core.config import Config
+from api.domains.organizations.models import Organization
 from api.domains.organizations.repository import OrganizationRepository
-from api.domains.users.organization_users.models import OrganizationRole, OrganizationUser
-from api.domains.users.organization_users.repository import OrganizationUserRepository
+from api.domains.users.models import User
 from api.domains.users.repository import UserRepository
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
@@ -32,6 +25,7 @@ from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
 
 _ORGS = "/api/v1/platform/organizations"
+_SELF_SERVICE_ORGS = "/api/v1/organizations"
 
 _GIVEN = [
     prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
@@ -56,153 +50,196 @@ def _there_is_a_platform_admin(email: str = "root@example.com"):
     return step
 
 
-def test_platform_admin_creates_organization_and_invites_owner():
-    with given([*_GIVEN, _there_is_a_platform_admin()]) as context:
-        with when("platform admin creates an org with a brand-new owner email"):
+def test_authenticated_user_creates_owned_organization():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_user(email="creator@example.com", organization_id=None),
+            there_is_an_access_token_for_user(),
+        ]
+    ) as context:
+        with when("an authenticated user creates an organization for themselves"):
             response = context.client.post(
-                _ORGS,
+                _SELF_SERVICE_ORGS,
                 json={
-                    "name": "Acme Inc",
-                    "description": "Acme workspace",
-                    "owner_email": "owner@acme.com",
-                    "owner_name": "Acme Owner",
+                    "name": "Creator Org",
+                    "description": "Owned by its creator",
                 },
                 headers=_auth(context),
             )
 
-            with then("the org is created and an invite link is returned"):
-                assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
-                body = response.json()
-                assert_that(body["organization"]["name"], equal_to("Acme Inc"))
-                assert_that(body["organization"]["owner_email"], equal_to("owner@acme.com"))
-                assert_that(body["invite_link"], not_none())
-                assert_that(
-                    body["invite_link"],
-                    contains_string("/set-password?token="),
-                )
+        with then("the user is recorded as creator and initial owner"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            organization_id = UUID(response.json()["id"])
 
-            with then("the owner exists as a pending (unverified) OWNER"):
-                user_repo: UserRepository = context.injector.get(UserRepository)
-                org_repo: OrganizationRepository = context.injector.get(OrganizationRepository)
-                org_id = response.json()["organization"]["id"]
-                owner = user_repo.get_organization_owner(org_id)
-                assert_that(owner, not_none())
-                assert_that(owner.email, equal_to("owner@acme.com"))
-                assert_that(owner.email_verified_at, is_(none()))
-                assert_that(org_repo.get(org_id), not_none())
+            organization_repo: OrganizationRepository = context.injector.get(OrganizationRepository)
+            user_repo: UserRepository = context.injector.get(UserRepository)
+            organization = organization_repo.get(organization_id)
+            owner = user_repo.get_organization_owner(organization_id)
+
+            assert_that(organization, not_none())
+            organization = cast(Organization, organization)
+            assert_that(organization.created_by_user_id, equal_to(context.user.id))
+            assert_that(owner, not_none())
+            owner = cast(User, owner)
+            assert_that(owner.id, equal_to(context.user.id))
 
 
-def test_new_organization_sees_global_predefined_templates():
-    """A newly created org sees the global predefined template catalog without
-    per-org seeding (predefined templates are platform/global resources, like
-    built-in skills)."""
-    from api.domains.templates.predefined import PREDEFINED_TEMPLATES
-    from api.domains.templates.service import TemplateService
-
-    with given([*_GIVEN, _there_is_a_platform_admin()]) as context:
-        context.injector.get(TemplateService).seed_predefined_templates()
-        create = context.client.post(
-            _ORGS,
-            json={"name": "Seeded Inc", "owner_email": "owner@seeded.com"},
-            headers=_auth(context),
-        )
-        assert_that(create.status_code, equal_to(status.HTTP_201_CREATED))
-        org_id = create.json()["organization"]["id"]
-
-        # Platform admin needs org membership to list its templates.
-        org_uuid = UUID(org_id)
-        repo: OrganizationUserRepository = context.injector.get(OrganizationUserRepository)
-        org_user = OrganizationUser(
-            user_id=context.user.id,
-            organization_id=org_uuid,
-            role=OrganizationRole.ADMIN,
-        )
-        repo.save(org_user)
-        # Update the current_user_context so the auth middleware sees the membership.
-        context.current_user_context.organization_ids.append(org_uuid)
-        context.current_user_context.user_organization_map[org_uuid] = org_user
-        context.current_user_context.current_user_organization = org_user
-
-        templates = context.client.get(
-            f"/api/v1/organizations/{org_id}/templates",
-            headers=_auth(context),
-        )
-        assert_that(templates.status_code, equal_to(status.HTTP_200_OK))
-        assert_that(templates.json()["total"], equal_to(len(PREDEFINED_TEMPLATES)))
-
-
-def test_non_platform_admin_cannot_create_organization():
+def test_organization_creator_cannot_exceed_creation_limit():
     with given(
         [
             *_GIVEN,
-            there_is_a_user(
-                email="member@example.com",
-                organization_id=uuid7(),
-                role=OrganizationRole.MEMBER,
-            ),
+            there_is_a_user(email="limited@example.com", organization_id=None),
             there_is_an_access_token_for_user(),
         ]
     ) as context:
-        with when("a non-platform_admin attempts to create an org"):
+        for index in range(5):
+            created = context.client.post(
+                _SELF_SERVICE_ORGS,
+                json={"name": f"Limited Org {index}"},
+                headers=_auth(context),
+            )
+            assert_that(created.status_code, equal_to(status.HTTP_201_CREATED))
+
+        with when("the creator attempts a sixth non-deleted organization"):
             response = context.client.post(
-                _ORGS,
-                json={"name": "Nope Inc", "owner_email": "x@nope.com"},
+                _SELF_SERVICE_ORGS,
+                json={"name": "Over Limit Org"},
                 headers=_auth(context),
             )
 
-            with then("it is forbidden"):
-                assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+        with then("creation is rejected with a clear conflict"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+            assert_that(response.json()["detail"], contains_string("5"))
 
 
-def test_create_organization_short_name_is_rejected():
+def test_platform_admin_uses_same_self_service_creation_and_quota():
     with given([*_GIVEN, _there_is_a_platform_admin()]) as context:
-        with when("the org name is too short"):
+        for index in range(5):
+            created = context.client.post(
+                _SELF_SERVICE_ORGS,
+                json={"name": f"Admin Org {index}"},
+                headers=_auth(context),
+            )
+            assert_that(created.status_code, equal_to(status.HTTP_201_CREATED))
+
+        with when("the platform admin attempts a sixth organization"):
             response = context.client.post(
-                _ORGS,
-                json={"name": "ab", "owner_email": "owner@short.com"},
+                _SELF_SERVICE_ORGS,
+                json={"name": "Admin Over Limit"},
                 headers=_auth(context),
             )
 
-            with then("validation rejects it"):
-                assert_that(
-                    response.status_code,
-                    equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY),
-                )
+        with then("platform privilege does not bypass the creator quota"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
 
 
-def test_create_organization_with_existing_active_owner_sends_no_invite():
+def test_self_service_creation_rejects_removed_provisioning_fields():
     with given(
         [
             *_GIVEN,
-            there_is_a_user(email="existing@corp.com"),  # active, email verified
-            _there_is_a_platform_admin(),
+            there_is_a_user(email="creator@example.com", organization_id=None),
+            there_is_an_access_token_for_user(),
         ]
     ) as context:
-        with when("platform admin creates an org owned by an already-active user"):
+        with when("the old owner and model provisioning fields are submitted"):
             response = context.client.post(
-                _ORGS,
-                json={"name": "Corp Inc", "owner_email": "existing@corp.com"},
+                _SELF_SERVICE_ORGS,
+                json={
+                    "name": "Legacy Contract Org",
+                    "owner_email": "other@example.com",
+                    "owner_name": "Other Owner",
+                    "allowed_models": ["openai/gpt-5"],
+                },
                 headers=_auth(context),
             )
 
-            with then("org is created, owner attached, but no invite link"):
-                assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
-                body = response.json()
-                assert_that(body["invite_link"], is_(none()))
-
-                user_repo: UserRepository = context.injector.get(UserRepository)
-                org_id = body["organization"]["id"]
-                owner = user_repo.get_organization_owner(org_id)
-                assert_that(owner.email, equal_to("existing@corp.com"))
-
-
-def test_create_organization_requires_auth():
-    with given([*_GIVEN]) as context:
-        with when("no auth token is provided"):
-            response = context.client.post(
-                _ORGS,
-                json={"name": "Anon Inc", "owner_email": "a@anon.com"},
+        with then("the removed contract is rejected rather than silently ignored"):
+            assert_that(
+                response.status_code,
+                equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY),
             )
 
-            with then("it is unauthorized"):
-                assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
+
+def test_self_service_creation_requires_authentication():
+    with given([*_GIVEN]) as context:
+        with when("an anonymous caller tries to create an organization"):
+            response = context.client.post(
+                _SELF_SERVICE_ORGS,
+                json={"name": "Anonymous Org"},
+            )
+
+        with then("authentication is required"):
+            assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
+
+
+def test_platform_organization_creation_operation_is_removed():
+    with given([*_GIVEN, _there_is_a_platform_admin()]) as context:
+        with when("a platform administrator calls the old provisioning route"):
+            response = context.client.post(
+                _ORGS,
+                json={"name": "Legacy Platform Org"},
+                headers=_auth(context),
+            )
+
+        with then("the operation is unavailable"):
+            assert_that(response.status_code, equal_to(status.HTTP_405_METHOD_NOT_ALLOWED))
+
+
+def test_new_organization_uses_platform_default_model():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_user(email="creator@example.com", organization_id=None),
+            there_is_an_access_token_for_user(),
+        ]
+    ) as context:
+        with when("the user creates an organization without model configuration"):
+            response = context.client.post(
+                _SELF_SERVICE_ORGS,
+                json={"name": "Default Model Org"},
+                headers=_auth(context),
+            )
+
+            with then("the organization receives the platform default model"):
+                assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+                expected_model = context.injector.get(Config).agent_default_model.removeprefix("litellm/openrouter/")
+                assert_that(
+                    response.json()["allowed_models"],
+                    equal_to([expected_model]),
+                )
+
+
+def test_deleted_organization_releases_creator_quota():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_user(email="creator@example.com", organization_id=None),
+            there_is_an_access_token_for_user(),
+        ]
+    ) as context:
+        created_ids = []
+        for index in range(5):
+            created = context.client.post(
+                _SELF_SERVICE_ORGS,
+                json={"name": f"Disposable Org {index}"},
+                headers=_auth(context),
+            )
+            assert_that(created.status_code, equal_to(status.HTTP_201_CREATED))
+            created_ids.append(created.json()["id"])
+
+        deleted = context.client.delete(
+            f"{_SELF_SERVICE_ORGS}/{created_ids[0]}",
+            headers=_auth(context),
+        )
+        assert_that(deleted.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+
+        with when("the creator replaces a deleted organization"):
+            response = context.client.post(
+                _SELF_SERVICE_ORGS,
+                json={"name": "Replacement Org"},
+                headers=_auth(context),
+            )
+
+        with then("only non-deleted organizations count toward the limit"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))

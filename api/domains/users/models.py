@@ -1,18 +1,20 @@
 from datetime import datetime
-from uuid import uuid7
-from uuid import UUID
+from typing import Annotated
+from uuid import UUID, uuid7
 
 from fastapi import Query
 from pydantic import BaseModel as PydanticBaseModel
-from pydantic import EmailStr
+from pydantic import EmailStr, StringConstraints
 from sqlalchemy import Column, DateTime, Index
 from sqlmodel import Field
 
-from api.infrastructure.postgres.models import BaseModel
+from api.domains.organizations.models import PlatformOrganizationRead
 from api.domains.users.organization_users.models import (
     OrganizationRole,
     OrganizationUserRead,
+    PlatformOrganizationUserRead,
 )
+from api.infrastructure.postgres.models import BaseModel
 
 
 class User(BaseModel, table=True):
@@ -47,18 +49,48 @@ class UserRead(BaseModel):
     organization_users: list[OrganizationUserRead] | None = None
 
 
-class AdminUserCreate(PydanticBaseModel):
+class PlatformUserRead(UserRead):
+    """Platform View user read model with allowlisted membership organizations."""
+
+    organization_users: list[PlatformOrganizationUserRead] | None = None
+
+
+class PlatformUserCreate(PydanticBaseModel):
+    model_config = {"extra": "forbid"}
+
     email: EmailStr
-    password: str
-    full_name: str | None = None
-    # Platform-admin provisioned accounts must land in a chosen org (never a silent default),
-    # so they're usable immediately.
-    organization_id: UUID
-    role: OrganizationRole = OrganizationRole.MEMBER
+    full_name: (
+        Annotated[
+            str,
+            StringConstraints(strip_whitespace=True, min_length=1, max_length=200),
+        ]
+        | None
+    ) = None
+    organization_name: (
+        Annotated[
+            str,
+            StringConstraints(strip_whitespace=True, min_length=3, max_length=255),
+        ]
+        | None
+    ) = None
 
 
-class AdminPasswordReset(PydanticBaseModel):
-    new_password: str
+class PlatformUserCreateResult(PydanticBaseModel):
+    user: PlatformUserRead
+    organization: PlatformOrganizationRead
+    invite_link: str
+
+
+class PlatformUserInviteResult(PydanticBaseModel):
+    invite_link: str
+
+
+class PlatformPrivilegeUpdate(PydanticBaseModel):
+    is_platform_admin: bool
+    reason: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=1000),
+    ]
 
 
 class UserUpdate(PydanticBaseModel):

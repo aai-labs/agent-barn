@@ -1,0 +1,5 @@
+name: Documentation Agent
+description: Documents merged pull requests (GitHub or Bitbucket) into Confluence, keeps a changelog, and posts a weekly digest of what shipped to Slack.
+required_skills:
+- Jira
+- Confluence
