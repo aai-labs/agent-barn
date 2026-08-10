@@ -10,8 +10,6 @@ def slugify(name: str) -> str:
     return _NON_SLUG_CHARS.sub("-", name.lower()).strip("-")[:_MAX_BASE_LENGTH].strip("-")
 
 
-def generate_template_slug(name: str) -> str:
-    """slugify(name) + '-' + 8-char random hex, e.g. 'maya-3f9a2c1b'."""
-    base = slugify(name)
-    suffix = secrets.token_hex(4)
-    return f"{base}-{suffix}" if base else suffix
+def generate_template_key() -> str:
+    """Generate an opaque, URL-safe identifier for a new template lineage."""
+    return f"tpl-{secrets.token_hex(6)}"

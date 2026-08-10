@@ -2,6 +2,11 @@
 
 Revision ID: 6c23680e1076
 Revises: 96333a5d58e4
+
+Includes 'slack' too: on environments where the sibling branch d731eac8a160
+(add slack) already ran and inserted slack rows before this branch caught
+up, recreating the constraint without slack fails with a CheckViolation
+against that existing data.
 """
 
 from alembic import op
@@ -17,7 +22,7 @@ _OLD = (
 )
 _NEW = (
     "provider IN ('github', 'jira', 'confluence', 'bitbucket', "
-    "'gmail', 'google_calendar', 'zoho_mail', 'zoho_calendar', 'firecrawl', 'pipedrive')"
+    "'gmail', 'google_calendar', 'zoho_mail', 'zoho_calendar', 'firecrawl', 'slack', 'pipedrive')"
 )
 
 

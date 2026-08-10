@@ -75,6 +75,7 @@ class SecretProvider(str, enum.Enum):
     ZOHO_MAIL = "zoho_mail"
     ZOHO_CALENDAR = "zoho_calendar"
     FIRECRAWL = "firecrawl"
+    SLACK = "slack"
     PIPEDRIVE = "pipedrive"
 
 
@@ -89,6 +90,7 @@ PROVIDER_DISPLAY_NAMES: dict[SecretProvider, str] = {
     SecretProvider.ZOHO_MAIL: "Zoho Mail credential",
     SecretProvider.ZOHO_CALENDAR: "Zoho Calendar credential",
     SecretProvider.FIRECRAWL: "Firecrawl credential",
+    SecretProvider.SLACK: "Slack credential",
     SecretProvider.PIPEDRIVE: "Pipedrive credential",
 }
 
@@ -182,6 +184,10 @@ class FirecrawlContent(SecretContent):
     base_url: str = ""
 
 
+class SlackContent(SecretContent):
+    token: str
+
+
 class PipedriveContent(SecretContent):
     api_token: str
     # Bare subdomain, e.g. "aai-labs" (-> https://aai-labs.pipedrive.com). Optional: a
@@ -200,6 +206,7 @@ PROVIDER_CONTENT_MODELS: dict[SecretProvider, type[SecretContent]] = {
     SecretProvider.ZOHO_MAIL: ZohoMailContent,
     SecretProvider.ZOHO_CALENDAR: ZohoCalendarContent,
     SecretProvider.FIRECRAWL: FirecrawlContent,
+    SecretProvider.SLACK: SlackContent,
     SecretProvider.PIPEDRIVE: PipedriveContent,
 }
 
@@ -532,6 +539,24 @@ class PlatformTemplateSkill(BaseModel, table=True):
     group_key: str | None = SqlField(default=None, nullable=True, max_length=100)
 
 
+class PlatformTemplateDraftSkill(BaseModel, table=True):
+    __tablename__: str = "platform_template_draft_skill"
+
+    # Mirrors PlatformTemplateSkill: the required-skill selection currently
+    # staged on a Draft Template Version, carried over to platform_template_skill
+    # on publish.
+    __table_args__ = (
+        sa.UniqueConstraint("draft_id", "skill_id", name="uq_platform_template_draft_skill"),
+        sa.Index("ix_platform_template_draft_skill_draft", "draft_id"),
+    )
+
+    draft_id: UUID = SqlField(foreign_key="platform_template_draft.id", nullable=False, ondelete="CASCADE")
+    skill_id: UUID = SqlField(foreign_key="skill.id", nullable=False, ondelete="RESTRICT")
+    # None for a standalone (AND-required) skill; otherwise the key of the
+    # "at least one of" group this skill belongs to on this draft.
+    group_key: str | None = SqlField(default=None, nullable=True, max_length=100)
+
+
 class AgentSecretCreate(PydanticBaseModel):  # no secret_name — backend stamps it
     provider: SecretProvider
     content: dict
@@ -570,7 +595,7 @@ class AgentCreate(PydanticBaseModel):
     telegram_dm_policy: TelegramDmPolicy = TelegramDmPolicy.OFF
     # Template reference. The agent pins to template_version if given, else to
     # the lineage's latest version.
-    template_slug: str = Field(min_length=1, max_length=255)
+    template_key: str = Field(min_length=1, max_length=255)
     template_version: int | None = None
     model: str | None = None
     # Integration credentials (optional)
@@ -621,10 +646,10 @@ class AgentUpdate(PydanticBaseModel):
     telegram_allowed_chat_ids: list[str] | None = None
     telegram_group_policy: TelegramGroupPolicy | None = None
     telegram_dm_policy: TelegramDmPolicy | None = None
-    # Template re-pin: point the agent at a different (slug, version). Both must
+    # Template re-pin: point the agent at a different (key, version). Both must
     # be provided together. Per-agent markdown editing is no longer supported —
     # persona changes happen by editing templates in the catalog.
-    template_slug: str | None = Field(default=None, min_length=1, max_length=255)
+    template_key: str | None = Field(default=None, min_length=1, max_length=255)
     template_version: int | None = None
     model: str | None = None
     skill_ids: list[UUID] = Field(default_factory=list)
@@ -636,6 +661,13 @@ class AgentUpdate(PydanticBaseModel):
     removed_secret_providers: list[SecretProvider] | None = None
     approval_mode: CommandApprovalMode | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def reject_legacy_template_slug(cls, values: object) -> object:
+        if isinstance(values, dict) and "template_slug" in values:
+            raise ValueError("template_slug is no longer supported; use template_key")
+        return values
+
     @model_validator(mode="after")
     def validate_skill_operations(self) -> AgentUpdate:
         overlap = set(self.skill_ids) & set(self.removed_skill_ids)
@@ -646,8 +678,8 @@ class AgentUpdate(PydanticBaseModel):
 
     @model_validator(mode="after")
     def validate_template_repin(self) -> AgentUpdate:
-        if (self.template_slug is None) != (self.template_version is None):
-            raise ValueError("template_slug and template_version must be provided together")
+        if (self.template_key is None) != (self.template_version is None):
+            raise ValueError("template_key and template_version must be provided together")
         return self
 
     @model_validator(mode="after")
@@ -760,7 +792,7 @@ class AgentRead(PydanticBaseModel):
     platform: AgentPlatform
     agent_type: AgentType
     organization_id: UUID
-    template_slug: str
+    template_key: str
     template_version: int
     model: str
     slack_config: AgentSlackConfigRead | None = None

@@ -7,6 +7,8 @@
 - Important API responses are validated with feature-local Zod schemas.
 - Query keys use centralized helpers rather than scattered literal arrays.
 - Server Components are the App Router default; add `"use client"` only for client-owned behavior.
+- Use the shared branded `ConfirmationDialog` from `../../ui/src/components/confirmation-dialog.tsx` for every user confirmation, including publish, discard, destructive, and unsaved-change flows. Never use browser-native `window.confirm`, `window.alert`, or `alert()` in the UI.
+- Use the shadcn `Select` primitives from `../../ui/src/components/ui/select.tsx` for user-facing option selectors; do not add native `<select>` controls. Keep `SelectItem` elements inside a `SelectGroup`.
 - Select loading and error boundaries according to who owns the asynchronous work.
 
 Read `../architecture/ui.md` before changing authentication, organization scoping, provider composition, query-cache isolation, or SSE behavior.

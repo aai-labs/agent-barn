@@ -144,7 +144,7 @@ def test_signup_org_sees_global_predefined_templates():
         assert_that(user, is_not(none()))
 
         template_repo = context.injector.get(TemplateRepository)
-        visible = template_repo.get_latest_platform_template(PREDEFINED_TEMPLATES[0].slug)
+        visible = template_repo.get_latest_platform_template(PREDEFINED_TEMPLATES[0].key)
         assert_that(visible, is_not(none()))
         # platform_template rows have no organization_id column — they are global
 

@@ -18,6 +18,9 @@ jobs:
 
   detect-changes:
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
     outputs:
       api: ${{ steps.changes.outputs.api }}
       ui: ${{ steps.changes.outputs.ui }}
@@ -26,21 +29,54 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          fetch-depth: 2
+          fetch-depth: 0
       - name: Detect changed components
         id: changes
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
+
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "api=true" >> "$GITHUB_OUTPUT"
-            echo "ui=true" >> "$GITHUB_OUTPUT"
-            echo "hermes=true" >> "$GITHUB_OUTPUT"
-            echo "openclaw=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "api=true"
+              echo "ui=true"
+              echo "hermes=true"
+              echo "openclaw=true"
+            } >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           api=false; ui=false; hermes=false; openclaw=false
 
-          if ! git diff --name-only HEAD~1 HEAD > /tmp/changed.txt 2>/dev/null; then
+          # A failed deploy must not become the baseline for the next run. Find
+          # the last successful deploy on this branch and compare the whole
+          # range to the current commit, so a later API-only fix also rebuilds
+          # a UI change that was part of the failed attempt.
+          baseline_sha="$(gh run list \
+            --workflow deploy.yml \
+            --branch "$GITHUB_REF_NAME" \
+            --status success \
+            --limit 1 \
+            --json headSha \
+            --jq '.[0].headSha // empty' 2>/dev/null || true)"
+
+          if [ -z "$baseline_sha" ]; then
+            echo "::warning::No successful deploy baseline found; building all components."
+            build_all=true
+          elif ! git cat-file -e "${baseline_sha}^{commit}" 2>/dev/null; then
+            echo "::warning::Successful deploy baseline $baseline_sha is not available locally; building all components."
+            build_all=true
+          elif ! git merge-base --is-ancestor "$baseline_sha" "$GITHUB_SHA"; then
+            echo "::warning::Successful deploy baseline $baseline_sha is not an ancestor of $GITHUB_SHA; building all components."
+            build_all=true
+          else
+            echo "Using successful deploy $baseline_sha as the change baseline."
+            git diff --name-only "$baseline_sha" "$GITHUB_SHA" > /tmp/changed.txt
+            build_all=false
+          fi
+
+          if [ "$build_all" = true ]; then
             api=true; ui=true; hermes=true; openclaw=true
           else
             if grep -qE '^(api/|Makefile$)' /tmp/changed.txt; then api=true; fi
@@ -49,10 +85,12 @@ jobs:
             if grep -q '^openclaw-base/' /tmp/changed.txt; then openclaw=true; fi
           fi
 
-          echo "api=$api" >> "$GITHUB_OUTPUT"
-          echo "ui=$ui" >> "$GITHUB_OUTPUT"
-          echo "hermes=$hermes" >> "$GITHUB_OUTPUT"
-          echo "openclaw=$openclaw" >> "$GITHUB_OUTPUT"
+          {
+            echo "api=$api"
+            echo "ui=$ui"
+            echo "hermes=$hermes"
+            echo "openclaw=$openclaw"
+          } >> "$GITHUB_OUTPUT"
 
   # ═══════════════════════════════════════════════════════════════
   # Phase 2: Lint, test, build + push each changed component (parallel)
@@ -155,10 +193,12 @@ jobs:
           IMAGE_SUFFIX: ${{ steps.resolve.outputs.image_suffix }}
           SERVICE_IMAGE_TAG: ${{ steps.resolve.outputs.service_image_tag }}
         run: |
-          echo "api_image_tag=${SERVICE_IMAGE_TAG}" >> "$GITHUB_OUTPUT"
-          echo "ui_image_tag=${SERVICE_IMAGE_TAG}" >> "$GITHUB_OUTPUT"
-          echo "openclaw_image_tag=$(cat openclaw-base/VERSION)${IMAGE_SUFFIX}" >> "$GITHUB_OUTPUT"
-          echo "hermes_image_tag=$(cat hermes-base/VERSION)${IMAGE_SUFFIX}" >> "$GITHUB_OUTPUT"
+          {
+            echo "api_image_tag=${SERVICE_IMAGE_TAG}"
+            echo "ui_image_tag=${SERVICE_IMAGE_TAG}"
+            echo "openclaw_image_tag=$(cat openclaw-base/VERSION)${IMAGE_SUFFIX}"
+            echo "hermes_image_tag=$(cat hermes-base/VERSION)${IMAGE_SUFFIX}"
+          } >> "$GITHUB_OUTPUT"
 
   # ═══════════════════════════════════════════════════════════════
   # Phase 4: Deploy

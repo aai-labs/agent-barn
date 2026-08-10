@@ -16,6 +16,7 @@ from api.domains.agents.models import (
     PipedriveContent,
     SecretContent,
     SecretProvider,
+    SlackContent,
     ZohoCalendarContent,
     ZohoMailContent,
 )
@@ -36,6 +37,7 @@ provider_secrets_map: dict[str, list[tuple[str, str]]] = {
         ("zoho.client_secret", "client_secret"),
         ("zoho.mail_refresh_token", "refresh_token"),
     ],
+    "slack": [("slack.token", "token")],
     "pipedrive": [("pipedrive.api_token", "api_token")],
 }
 
@@ -52,6 +54,7 @@ PROFILE_SLUGS: dict[SecretProvider, str] = {
     SecretProvider.GOOGLE_CALENDAR: "google-calendar-work",
     SecretProvider.ZOHO_MAIL: "zoho-mail-rest",
     SecretProvider.ZOHO_CALENDAR: "zoho-calendar-work",
+    SecretProvider.SLACK: "slack-work",
     SecretProvider.PIPEDRIVE: "pipedrive-work",
 }
 
@@ -206,6 +209,15 @@ def _zoho_calendar_block(c: ZohoCalendarContent) -> str:
     )
 
 
+def _slack_block(c: SlackContent) -> str:
+    return (
+        f"[profiles.{PROFILE_SLUGS[SecretProvider.SLACK]}]\n"
+        'provider = "slack"\n'
+        'auth_type = "bearer_token"\n'
+        'token_secret = "slack.token"\n'
+    )
+
+
 def _pipedrive_block(c: PipedriveContent) -> str:
     lines = [
         f"[profiles.{PROFILE_SLUGS[SecretProvider.PIPEDRIVE]}]\n",
@@ -226,6 +238,7 @@ _PROFILE_BUILDERS: dict[SecretProvider, Callable[..., str]] = {
     SecretProvider.GOOGLE_CALENDAR: _google_calendar_block,
     SecretProvider.ZOHO_MAIL: _zoho_mail_block,
     SecretProvider.ZOHO_CALENDAR: _zoho_calendar_block,
+    SecretProvider.SLACK: _slack_block,
     SecretProvider.PIPEDRIVE: _pipedrive_block,
 }
 
@@ -302,6 +315,7 @@ _INTEGRATION_LABELS: dict[SecretProvider, str] = {
     SecretProvider.GOOGLE_CALENDAR: "Google Calendar",
     SecretProvider.ZOHO_MAIL: "Zoho Mail",
     SecretProvider.ZOHO_CALENDAR: "Zoho Calendar",
+    SecretProvider.SLACK: "Slack",
     SecretProvider.PIPEDRIVE: "Pipedrive",
 }
 

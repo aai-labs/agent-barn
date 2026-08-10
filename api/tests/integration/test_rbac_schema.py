@@ -541,8 +541,17 @@ def test_upgrade_leaves_existing_agents_restricted(legacy_database):
     command.upgrade(legacy_database.config, "heads")
     with legacy_database.engine.connect() as connection:
         general_access_roles = connection.execute(text(f"SELECT {GENERAL_ACCESS_COLUMN} FROM agent")).scalars().all()
+        pinned_keys = (
+            connection.execute(
+                text("SELECT t.template_key FROM agent a JOIN agent_template t ON t.id = a.agent_template_id")
+            )
+            .scalars()
+            .all()
+        )
 
     assert_that(general_access_roles, equal_to([None, None, None]))
+    assert_that(len(pinned_keys), equal_to(3))
+    assert_that(set(pinned_keys), equal_to({"legacy"}))
 
 
 def test_general_access_role_rejects_referenced_role_deletion(legacy_database):

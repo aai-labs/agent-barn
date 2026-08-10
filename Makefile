@@ -2,7 +2,7 @@ COMPOSE := docker compose -f compose.yml
 
 .PHONY: \
 	setup \
-	dev-api dev-ui dev-worker reconcile seed-event-deliveries migrate rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring fix-api test check fix \
+	dev-api dev-ui dev-worker reconcile seed-event-deliveries migrate merge-heads rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring fix-api test check fix \
 	up down restart logs build clean db-up db-down db-logs db-restart redis-up redis-down redis-logs worker-logs
 
 # One-time project bootstrap: installs deps for api + ui and creates a local
@@ -35,6 +35,21 @@ seed-event-deliveries:
 
 migrate:
 	cd api && uv run python -m alembic upgrade head
+
+merge-heads:
+	@cd api && \
+	head_output="$$(uv run alembic heads)" && \
+	heads="$$(printf '%s\n' "$$head_output" | awk '$$2 == "(head)" { print $$1 }')" && \
+	count="$$(printf '%s\n' "$$heads" | awk 'NF { count += 1 } END { print count + 0 }')" && \
+	if [ "$$count" -eq 0 ]; then \
+		echo "No Alembic heads found."; \
+		exit 1; \
+	elif [ "$$count" -eq 1 ]; then \
+		echo "One Alembic head found ($$heads); nothing to merge."; \
+	else \
+		echo "Merging $$count Alembic heads: $$heads"; \
+		uv run alembic merge -m "merge heads" $$heads; \
+	fi
 
 rollback:
 	cd api && uv run python -m alembic downgrade -1

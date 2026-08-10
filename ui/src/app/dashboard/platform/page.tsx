@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { BuildingIcon, ServerIcon, UsersIcon } from "@/components/icons";
 import { PlatformAdminOnly } from "@/auth/components/platform-admin-only";
+import { FileText } from "lucide-react";
 
 const platformLinks = [
   {
@@ -22,6 +23,12 @@ const platformLinks = [
     title: "Event Deliveries",
     description: "Inspect delivery pipeline health and diagnose handler failures.",
     Icon: ServerIcon,
+  },
+  {
+    href: "/dashboard/platform/templates",
+    title: "Platform Templates",
+    description: "Author and publish the global agent prompt templates.",
+    Icon: FileText,
   },
 ];
 

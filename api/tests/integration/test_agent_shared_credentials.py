@@ -65,7 +65,7 @@ _VALID_CREATE = {
     "platform": "slack",
     "slack_bot_token": "xoxb-real-bot-token",
     "slack_app_token": "xapp-1-real-app-token",
-    "template_slug": "test-template",
+    "template_key": "test-template",
 }
 
 
