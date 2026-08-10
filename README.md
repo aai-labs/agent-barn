@@ -145,15 +145,31 @@ a native Linux docker engine, to add a CoreDNS host alias). It's
 [supported in GitHub Actions](https://github.com/AbsaOSS/k3d-action), so the same
 setup backs CI (see the `test-k8s` job in `.github/workflows/api.yml`).
 
+### What to add to `.env` first
+
+`make setup` seeds `.env` from `.env.spec`, which covers the app but **not** this
+k3d flow. Add these before starting, or the cluster and agent steps fail:
+
+| Variable | Needed by | Notes |
+| --- | --- | --- |
+| `OPENROUTER_API_KEY` | `cluster-up` | passed to LiteLLM; also used for the model picker |
+| `LITELLM_MASTER_KEY` | `cluster-up` | **stable** admin key, e.g. `sk-$(openssl rand -hex 16)` |
+| `AGENT_TOKEN_ENCRYPTION_KEY` | creating agents | Fernet key; agent creation fails without it |
+| `OPENCLAW_IMAGE`, `HERMES_IMAGE` | `k3d-load-images` | full `name:tag`, tag must equal the matching `*-base/VERSION` |
+| `GH_TOKEN` | `k3d-load-images` | PAT with read access to `aai-labs/agent-cli-tools` |
+| `API_K8S_KUBECONFIG_PATH` | `make up` only | `/app/.k3d/kubeconfig-internal.yaml` (see step 2) |
+
+`LITELLM_MASTER_KEY` is worth setting once and leaving alone: LiteLLM encrypts the
+virtual keys it stores in Postgres with it, so changing it between runs breaks
+agents created under the old key.
+
+Optional overrides, all with working defaults: `API_LITELLM_BASE_URL` (how the
+API in Docker reaches LiteLLM, defaults to the compose service — `.env`'s
+`LITELLM_BASE_URL` is host-facing and would resolve to the container itself),
+`INGEST_PORT` / `INGEST_BASE_URL`, and `API_DEV_PORT` (lets a second worktree run
+its own stack without port clashes).
+
 ### 1. Start the cluster
-
-`cluster-up` requires two values in `.env`:
-
-- `OPENROUTER_API_KEY` — passed to LiteLLM.
-- `LITELLM_MASTER_KEY` — a **stable** admin key for LiteLLM (e.g.
-  `LITELLM_MASTER_KEY=sk-$(openssl rand -hex 16)`). Set it once and leave it:
-  LiteLLM encrypts the virtual keys it stores in Postgres with this value, so
-  changing it between runs breaks agents created under the old key.
 
 ```bash
 make cluster-up      # start LiteLLM + a k3d cluster; write kubeconfigs to .k3d/
@@ -231,7 +247,31 @@ its `VERSION` tag, and the API launches pods using these env-var refs — so if 
 tag doesn't match its `VERSION`, you'll build, import, or pull an image that isn't
 the version the code expects.
 
-### 4. Runtime telemetry (conversations and tool calls)
+If a base-image build crawls or times out fetching Debian packages, the default
+archive CDN has likely handed you a degraded edge (seen at ~30KB/s, stalling the
+build for over an hour). Point the build at another full mirror — it must carry
+both `/debian` and `/debian-security`:
+
+```bash
+APT_MIRROR=mirror.csclub.uwaterloo.ca make k3d-load-images
+```
+
+### 4. Create an organization
+
+A fresh database has a platform admin but **no organization**, and agents live
+under one — so agent creation fails until an org exists. Create it in the UI on
+first login, or via the API:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/organizations \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"name":"Local Dev"}'
+```
+
+Agent routes are org-scoped from there:
+`/api/v1/organizations/{organization_id}/agents`.
+
+### 5. Runtime telemetry (conversations and tool calls)
 
 Agents don't store their history in the pod — runtime plugins push events to the
 ingest API, and the UI reads what was persisted. If that path is broken, agents
