@@ -869,7 +869,7 @@ def test_start_agent_wires_telemetry_push_into_the_secret():
         ]
     ) as context:
         client: TestClient = context.client
-        k8s: KubernetesClient = context.injector.get(KubernetesClient)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
 
         with when("I start the agent"):
             response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
