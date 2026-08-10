@@ -9,6 +9,8 @@ from sqlmodel import Session, col, delete, select, update
 
 from api.domains.agents.models import (
     Agent,
+    AgentTemplateOverrideVersion,
+    AgentTemplateOverrideVersionSkill,
     AgentTemplateSkill,
     PlatformTemplateDraftSkill,
     PlatformTemplateSkill,
@@ -152,6 +154,41 @@ class TemplateRepository:
             heartbeat_md=draft.heartbeat_md,
             created_at=draft.created_at,
             updated_at=draft.updated_at,
+            required_skills=required_skills,
+        )
+
+    @staticmethod
+    def to_override_read(
+        version: AgentTemplateOverrideVersion,
+        organization_id: UUID,
+        skills: list[tuple[Skill, str | None]] | None = None,
+    ) -> TemplateRead:
+        from api.domains.skills.models import SkillRead
+
+        required_skills = [
+            TemplateRequiredSkillRead(**SkillRead.model_validate(skill).model_dump(), group_key=group_key)
+            for skill, group_key in (skills or [])
+        ]
+        return TemplateRead(
+            id=version.id,
+            organization_id=organization_id,
+            template_key=version.source_template_key,
+            template_name=version.template_name,
+            template_source=(
+                TemplateSource.PRE_DEFINED if version.source_type.value == "platform" else TemplateSource.CUSTOM
+            ),
+            version=version.version,
+            description=version.description,
+            soul_md=version.soul_md,
+            identity_md=version.identity_md,
+            user_md=version.user_md,
+            tools_md=version.tools_md,
+            agents_md=version.agents_md,
+            boot_md=version.boot_md,
+            bootstrap_md=version.bootstrap_md,
+            heartbeat_md=version.heartbeat_md,
+            created_at=version.created_at,
+            updated_at=version.updated_at,
             required_skills=required_skills,
         )
 
@@ -627,6 +664,26 @@ class TemplateRepository:
         by_version.update({template.version: template for template in org_versions})
         return sorted(by_version.values(), key=lambda template: template.version, reverse=True)
 
+    def get_shared_versions(self, org_id: UUID, template_key: str) -> list[AgentTemplate | PlatformTemplate]:
+        """Return both shared source tables for one lineage without shadowing IDs.
+
+        The normal catalog intentionally shadows Platform rows with an
+        Organization fork. An Agent configuration selector needs both immutable
+        source options so a user can explicitly choose either lineage.
+        """
+        versions = [
+            *self.find_org_versions(org_id, template_key),
+            *self.find_platform_versions(template_key),
+        ]
+        return sorted(
+            versions,
+            key=lambda template: (
+                template.version,
+                0 if isinstance(template, AgentTemplate) else 1,
+            ),
+            reverse=True,
+        )
+
     def find_latest_templates(
         self,
         org_id: UUID,
@@ -799,14 +856,24 @@ class TemplateRepository:
             session.exec(purge)  # type: ignore[call-overload]
             session.commit()
 
-    def get_required_skills_for(self, template: AgentTemplate | PlatformTemplate) -> list[tuple[Skill, str | None]]:
+    def get_required_skills_for(
+        self,
+        template: AgentTemplate | PlatformTemplate | AgentTemplateOverrideVersion,
+    ) -> list[tuple[Skill, str | None]]:
         if isinstance(template, PlatformTemplate):
             return self.get_platform_required_skills(template.id)
+        if isinstance(template, AgentTemplateOverrideVersion):
+            return self.get_override_required_skills(template.id)
         return self.get_org_required_skills(template.id)
 
-    def get_required_skill_map_for(self, template: AgentTemplate | PlatformTemplate) -> dict[UUID, str | None]:
+    def get_required_skill_map_for(
+        self,
+        template: AgentTemplate | PlatformTemplate | AgentTemplateOverrideVersion,
+    ) -> dict[UUID, str | None]:
         if isinstance(template, PlatformTemplate):
             return self.get_platform_required_skill_map(template.id)
+        if isinstance(template, AgentTemplateOverrideVersion):
+            return self.get_override_required_skill_map(template.id)
         return self.get_org_required_skill_map(template.id)
 
     def is_skill_required_by_any_template(self, skill_id: UUID) -> bool:
@@ -851,18 +918,47 @@ class TemplateRepository:
                 result.setdefault(pts.template_id, []).append((skill, pts.group_key))
             return result
 
-    def get_pinned_template(self, agent: Agent) -> AgentTemplate | PlatformTemplate | None:
+    def get_override_required_skills(self, version_id: UUID) -> list[tuple[Skill, str | None]]:
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(Skill, AgentTemplateOverrideVersionSkill.group_key)
+                .join(
+                    AgentTemplateOverrideVersionSkill,
+                    col(AgentTemplateOverrideVersionSkill.skill_id) == col(Skill.id),
+                )
+                .where(col(AgentTemplateOverrideVersionSkill.version_id) == version_id)
+                .order_by(col(AgentTemplateOverrideVersionSkill.group_key).nulls_first(), col(Skill.name))
+            )
+            return list(session.exec(query).all())
+
+    def get_override_required_skill_map(self, version_id: UUID) -> dict[UUID, str | None]:
+        with Session(self.delegate.engine) as session:
+            query = select(
+                AgentTemplateOverrideVersionSkill.skill_id,
+                AgentTemplateOverrideVersionSkill.group_key,
+            ).where(col(AgentTemplateOverrideVersionSkill.version_id) == version_id)
+            return dict(session.exec(query).all())
+
+    def get_pinned_template(
+        self, agent: Agent
+    ) -> AgentTemplate | PlatformTemplate | AgentTemplateOverrideVersion | None:
         if agent.agent_template_id is not None:
             with Session(self.delegate.engine) as session:
                 return session.get(AgentTemplate, agent.agent_template_id)
         if agent.platform_template_id is not None:
             with Session(self.delegate.engine) as session:
                 return session.get(PlatformTemplate, agent.platform_template_id)
+        if agent.agent_template_override_version_id is not None:
+            with Session(self.delegate.engine) as session:
+                return session.get(AgentTemplateOverrideVersion, agent.agent_template_override_version_id)
         return None
 
-    def get_pinned_template_info_for_agents(self, agents: list[Agent]) -> dict[UUID, tuple[str, int]]:
-        """Bulk-resolve (template_key, version) for each agent's pinned template."""
-        result: dict[UUID, tuple[str, int]] = {}
+    def get_pinned_template_info_for_agents(
+        self,
+        agents: list[Agent],
+    ) -> dict[UUID, tuple[str, int, str, int | None]]:
+        """Bulk-resolve the display pin for each agent."""
+        result: dict[UUID, tuple[str, int, str, int | None]] = {}
         org_ids = [a.agent_template_id for a in agents if a.agent_template_id is not None]
         platform_ids = [a.platform_template_id for a in agents if a.platform_template_id is not None]
 
@@ -876,16 +972,28 @@ class TemplateRepository:
             with Session(self.delegate.engine) as session:
                 for t in session.exec(select(PlatformTemplate).where(col(PlatformTemplate.id).in_(platform_ids))).all():
                     platform_by_id[t.id] = t
+        override_ids = [a.agent_template_override_version_id for a in agents if a.agent_template_override_version_id]
+        overrides_by_id: dict[UUID, AgentTemplateOverrideVersion] = {}
+        if override_ids:
+            with Session(self.delegate.engine) as session:
+                for version in session.exec(
+                    select(AgentTemplateOverrideVersion).where(col(AgentTemplateOverrideVersion.id).in_(override_ids))
+                ).all():
+                    overrides_by_id[version.id] = version
 
         for a in agents:
             if a.agent_template_id is not None:
                 t = org_by_id.get(a.agent_template_id)
                 if t:
-                    result[a.id] = (t.template_key, t.version)
+                    result[a.id] = (t.template_key, t.version, "shared", None)
             elif a.platform_template_id is not None:
                 t = platform_by_id.get(a.platform_template_id)
                 if t:
-                    result[a.id] = (t.template_key, t.version)
+                    result[a.id] = (t.template_key, t.version, "shared", None)
+            elif a.agent_template_override_version_id is not None:
+                version = overrides_by_id.get(a.agent_template_override_version_id)
+                if version:
+                    result[a.id] = (version.source_template_key, version.version, "override", version.version)
         return result
 
     def get_required_skill_map_for_agents(self, agents: list[Agent]) -> dict[UUID, dict[UUID, str | None]]:
@@ -894,6 +1002,9 @@ class TemplateRepository:
         result: dict[UUID, dict[UUID, str | None]] = {a.id: {} for a in agents}
         org_template_ids = [a.agent_template_id for a in agents if a.agent_template_id is not None]
         platform_template_ids = [a.platform_template_id for a in agents if a.platform_template_id is not None]
+        override_version_ids = [
+            a.agent_template_override_version_id for a in agents if a.agent_template_override_version_id is not None
+        ]
 
         # Map template id -> list of agent ids that pin it.
         org_agents: dict[UUID, list[UUID]] = {}
@@ -923,6 +1034,21 @@ class TemplateRepository:
                 ).all()
                 for row in rows:
                     for agent_id in platform_agents.get(row.template_id, []):
+                        result[agent_id][row.skill_id] = row.group_key
+
+        if override_version_ids:
+            override_agents: dict[UUID, list[UUID]] = {}
+            for a in agents:
+                if a.agent_template_override_version_id is not None:
+                    override_agents.setdefault(a.agent_template_override_version_id, []).append(a.id)
+            with Session(self.delegate.engine) as session:
+                rows = session.exec(
+                    select(AgentTemplateOverrideVersionSkill).where(
+                        col(AgentTemplateOverrideVersionSkill.version_id).in_(override_version_ids)
+                    )
+                ).all()
+                for row in rows:
+                    for agent_id in override_agents.get(row.version_id, []):
                         result[agent_id][row.skill_id] = row.group_key
 
         return result
