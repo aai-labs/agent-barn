@@ -7,6 +7,7 @@ const INGEST_API_KEY = process.env.INGEST_API_KEY || "";
 const MAX_BUFFER_SIZE = 500;
 const MAX_RETRIES = 3;
 const MAX_CHAT_CONTEXTS = 200;
+const MAX_PENDING_TOOL_CALLS = 200;
 
 let buffer = [];
 let flushTimer = null;
@@ -118,6 +119,34 @@ function toolKey(event, ctx) {
   return `${event.runId || (ctx && ctx.runId) || ""}:${event.toolName || ""}`;
 }
 
+// Without a runtime call id, runId + toolName is the most specific key
+// available, and overlapping calls to one tool share it. Queue the ids instead
+// of storing one, so N calls yield N distinct ids and no result is orphaned or
+// overwritten. Pairing is FIFO, which is exact only when calls complete in
+// order — unknowable without a call id, but never a collision.
+function rememberPendingToolCall(key, externalId) {
+  const queued = pendingToolCalls.get(key);
+  if (queued) {
+    queued.push(externalId);
+    return;
+  }
+  // A key is runId:toolName, so a run whose results never arrive strands its
+  // keys permanently. Bounded like the buffer and chat contexts; queue depth
+  // needs no bound of its own, being limited to one turn's calls.
+  if (pendingToolCalls.size >= MAX_PENDING_TOOL_CALLS) {
+    pendingToolCalls.delete(pendingToolCalls.keys().next().value);
+  }
+  pendingToolCalls.set(key, [externalId]);
+}
+
+function takePendingToolCall(key) {
+  const queued = pendingToolCalls.get(key);
+  if (!queued || queued.length === 0) return undefined;
+  const externalId = queued.shift();
+  if (queued.length === 0) pendingToolCalls.delete(key);
+  return externalId;
+}
+
 export default {
   id: "telemetry-push",
   name: "Telemetry Push",
@@ -201,7 +230,7 @@ export default {
       // Without a runtime call id, after_tool_call cannot recompute this id, so
       // hold it for the matching result rather than minting a second one.
       if (!event.toolCallId) {
-        pendingToolCalls.set(toolKey(event, ctx), externalId);
+        rememberPendingToolCall(toolKey(event, ctx), externalId);
       }
       bufferPush({
         type: "tool_call",
@@ -216,12 +245,7 @@ export default {
     });
 
     api.on("after_tool_call", (event, ctx) => {
-      let externalId = event.toolCallId;
-      if (!externalId) {
-        const key = toolKey(event, ctx);
-        externalId = pendingToolCalls.get(key);
-        pendingToolCalls.delete(key);
-      }
+      let externalId = event.toolCallId || takePendingToolCall(toolKey(event, ctx));
       if (!externalId) externalId = `oc:tr:${Date.now()}:${++counter}`;
       bufferPush({
         type: "tool_result",

@@ -343,6 +343,35 @@ def test_tool_call_and_result_share_an_external_id():
             )
 
 
+def test_overlapping_calls_to_one_tool_without_a_call_id_stay_distinct():
+    with given():
+        # No toolCallId: runId + toolName is all we have, so both calls share a
+        # key. Each must still get its own id, with no result orphaned.
+        steps = [
+            {"hook": "before_tool_call", "event": {"toolName": "bash", "params": {"cmd": "ls"}, "runId": "run-1"}},
+            {"hook": "before_tool_call", "event": {"toolName": "bash", "params": {"cmd": "pwd"}, "runId": "run-1"}},
+            {
+                "hook": "after_tool_call",
+                "event": {"toolName": "bash", "params": {"cmd": "ls"}, "runId": "run-1", "result": "file1"},
+            },
+            {
+                "hook": "after_tool_call",
+                "event": {"toolName": "bash", "params": {"cmd": "pwd"}, "runId": "run-1", "result": "/root"},
+            },
+            _SESSION_END,
+        ]
+
+        with when("two calls to the same tool overlap with no runtime call id"):
+            payload = _run_driver(steps)
+
+        with then("both calls keep distinct ids and both results are paired"):
+            call_ids = [c["external_id"] for c in payload["tool_calls"]]
+            result_ids = [r["external_id"] for r in payload["tool_results"]]
+            assert_that(call_ids, has_length(2))
+            assert_that(set(call_ids), has_length(2))
+            assert_that(sorted(result_ids), equal_to(sorted(call_ids)))
+
+
 def test_concurrent_calls_to_the_same_tool_keep_distinct_results():
     with given():
         steps = [

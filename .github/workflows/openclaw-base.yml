@@ -11,6 +11,10 @@ on:
     paths:
       - openclaw-base/**
       - .github/workflows/openclaw-base.yml
+      # The telemetry-contract check asserts the runtime still declares what the
+      # plugin reads, so a plugin change must re-verify it rather than waiting
+      # for the next image bump.
+      - api/domains/agents/scripts/openclaw/plugins/**
   workflow_call:
 
 jobs:
