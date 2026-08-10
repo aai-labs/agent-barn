@@ -29,6 +29,10 @@ export class RbacUiPage {
     return this.page.getByRole("button", { name });
   }
 
+  agentConfigurationLink(): Locator {
+    return this.page.getByRole("link", { name: "Configuration", exact: true });
+  }
+
   async openSettingsSection(name: "Templates" | "Skills") {
     await this.page.getByRole("button", { name, exact: true }).click();
   }
