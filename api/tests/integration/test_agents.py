@@ -1,4 +1,5 @@
 import json
+from typing import cast
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -29,6 +30,7 @@ from api.domains.agents.service import AgentService
 from api.domains.events.catalog import AGENT_CREATED, AGENT_STARTED, AGENT_STOPPED
 from api.domains.events.models import EventDeliveryStatus, OutboxMessage
 from api.domains.organizations.repository import OrganizationRepository
+from api.domains.templates.models import AgentTemplate, PlatformTemplate
 from api.domains.templates.repository import TemplateRepository
 from api.infrastructure.kubernetes.client import KubernetesClient
 from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
@@ -3934,3 +3936,195 @@ def test_start_hermes_agent_secret_has_litellm_proxy_target():
         with then("the secret routes LLM traffic through the local proxy"):
             assert_that(secret.string_data["OPENAI_BASE_URL"], equal_to("http://localhost:8090"))
             assert_that(secret.string_data["OPENROUTER_BASE_URL"], equal_to("http://localhost:8090"))
+
+
+def test_agent_configuration_override_draft_publish_and_select_preserves_lineage():
+    with given([*_GIVEN, there_is_an_agent(name="Configurable Agent")]) as context:
+        client: TestClient = context.client
+        configuration_url = f"{_BASE}/{context.agent.id}/configuration"
+        template_repository: TemplateRepository = context.injector.get(TemplateRepository)
+        pinned_template = cast(
+            AgentTemplate | PlatformTemplate,
+            template_repository.get_pinned_template(context.agent),
+        )
+        assert pinned_template is not None
+
+        with when("I read the Agent configuration"):
+            initial = client.get(configuration_url, headers=_auth(context))
+
+        with then("the active shared snapshot and source lineage are returned"):
+            assert_that(initial.status_code, equal_to(status.HTTP_200_OK))
+            initial_body = initial.json()
+            assert_that(initial_body["active"]["pin_type"], equal_to("shared"))
+            assert_that(initial_body["active"]["source_type"], equal_to("organization"))
+            assert_that(initial_body["active"]["source_template_key"], equal_to(pinned_template.template_key))
+            assert_that(initial_body["draft"], none())
+
+        with when("I start an Override Draft"):
+            draft_response = client.post(f"{configuration_url}/draft", headers=_auth(context))
+
+        with then("the draft is a complete copy of the pinned snapshot"):
+            assert_that(draft_response.status_code, equal_to(status.HTTP_201_CREATED))
+            draft = draft_response.json()
+            assert_that(draft["state"], equal_to("draft"))
+            assert_that(draft["source_template_key"], equal_to(pinned_template.template_key))
+            assert_that(draft["source_template_version"], equal_to(pinned_template.version))
+            assert_that(draft["soul_md"], equal_to(pinned_template.soul_md))
+            assert_that(draft["user_md"], equal_to(pinned_template.user_md))
+
+        with when("I save a changed artifact"):
+            update_response = client.patch(
+                f"{configuration_url}/draft",
+                json={
+                    "expected_updated_at": draft["updated_at"],
+                    "soul_md": "# Agent-specific soul",
+                },
+                headers=_auth(context),
+            )
+
+        with then("the draft keeps the source lineage and changed content"):
+            assert_that(update_response.status_code, equal_to(status.HTTP_200_OK))
+            updated_draft = update_response.json()
+            assert_that(updated_draft["soul_md"], equal_to("# Agent-specific soul"))
+            assert_that(updated_draft["source_template_key"], equal_to(pinned_template.template_key))
+
+        with when("I publish the draft"):
+            publish_response = client.post(
+                f"{configuration_url}/draft/publish",
+                json={"expected_updated_at": updated_draft["updated_at"]},
+                headers=_auth(context),
+            )
+
+        with then("it creates immutable Override Version 1 without changing the active pin"):
+            assert_that(publish_response.status_code, equal_to(status.HTTP_201_CREATED))
+            published = publish_response.json()
+            assert_that(published["version"], equal_to(1))
+            assert_that(published["state"], equal_to("published"))
+            assert_that(published["soul_md"], equal_to("# Agent-specific soul"))
+            still_shared = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+            assert_that(still_shared["template_pin_type"], equal_to("shared"))
+            assert_that(still_shared["override_version"], none())
+
+        with when("I select the published Override Version"):
+            select_response = client.post(
+                f"{configuration_url}/select",
+                json={
+                    "selection_type": "override",
+                    "override_version": 1,
+                    "expected_agent_updated_at": still_shared["updated_at"],
+                },
+                headers=_auth(context),
+            )
+
+        with then("the Agent points at the Override while the shared source remains available"):
+            assert_that(select_response.status_code, equal_to(status.HTTP_200_OK))
+            selected = select_response.json()
+            assert_that(selected["template_pin_type"], equal_to("override"))
+            assert_that(selected["override_version"], equal_to(1))
+            after_select = client.get(configuration_url, headers=_auth(context)).json()
+            assert_that(after_select["active"]["pin_type"], equal_to("override"))
+            assert_that(after_select["active"]["state"], equal_to("active"))
+            assert_that(after_select["active"]["soul_md"], equal_to("# Agent-specific soul"))
+            assert_that(len(after_select["shared_versions"]), equal_to(1))
+            assert_that(after_select["draft"], none())
+
+        with when("I start another draft from the active Override"):
+            second_draft = client.post(f"{configuration_url}/draft", headers=_auth(context))
+
+        with then("the new draft clones the active Override and retains its original source lineage"):
+            assert_that(second_draft.status_code, equal_to(status.HTTP_201_CREATED))
+            second_body = second_draft.json()
+            assert_that(second_body["soul_md"], equal_to("# Agent-specific soul"))
+            assert_that(second_body["source_template_key"], equal_to(pinned_template.template_key))
+            assert_that(second_body["source_template_version"], equal_to(pinned_template.version))
+
+
+def test_agent_configuration_draft_rejects_stale_update():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        configuration_url = f"{_BASE}/{context.agent.id}/configuration"
+        draft = client.post(f"{configuration_url}/draft", headers=_auth(context)).json()
+        first_update = client.patch(
+            f"{configuration_url}/draft",
+            json={"expected_updated_at": draft["updated_at"], "description": "first writer"},
+            headers=_auth(context),
+        )
+        assert_that(first_update.status_code, equal_to(status.HTTP_200_OK))
+
+        stale = client.patch(
+            f"{configuration_url}/draft",
+            json={"expected_updated_at": draft["updated_at"], "description": "stale writer"},
+            headers=_auth(context),
+        )
+
+    assert_that(stale.status_code, equal_to(status.HTTP_409_CONFLICT))
+
+
+def test_agent_configuration_override_isolated_per_agent():
+    with given([*_GIVEN, there_is_an_agent(name="First Agent")]) as context:
+        client: TestClient = context.client
+        first_agent = context.agent
+        there_is_an_agent(name="Second Agent")(context)
+        second_agent = context.agent
+        first_url = f"{_BASE}/{first_agent.id}/configuration"
+
+        draft = client.post(f"{first_url}/draft", headers=_auth(context)).json()
+        published_response = client.post(
+            f"{first_url}/draft/publish",
+            json={"expected_updated_at": draft["updated_at"]},
+            headers=_auth(context),
+        )
+        published = published_response.json()
+        first_read = client.get(f"{_BASE}/{first_agent.id}", headers=_auth(context)).json()
+        selected = client.post(
+            f"{first_url}/select",
+            json={
+                "selection_type": "override",
+                "override_version": published["version"],
+                "expected_agent_updated_at": first_read["updated_at"],
+            },
+            headers=_auth(context),
+        )
+
+        first_configuration = client.get(first_url, headers=_auth(context)).json()
+        second_configuration = client.get(
+            f"{_BASE}/{second_agent.id}/configuration",
+            headers=_auth(context),
+        ).json()
+
+        assert_that(selected.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(first_configuration["active"]["pin_type"], equal_to("override"))
+        assert_that(second_configuration["active"]["pin_type"], equal_to("shared"))
+        assert_that(second_configuration["draft"], none())
+
+
+def test_agent_configuration_draft_and_publish_are_safe_while_running():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        client: TestClient = context.client
+        configuration_url = f"{_BASE}/{context.agent.id}/configuration"
+        draft_response = client.post(
+            f"{configuration_url}/draft",
+            headers=_auth(context),
+        )
+        assert_that(draft_response.status_code, equal_to(status.HTTP_201_CREATED))
+        draft = draft_response.json()
+
+        publish_response = client.post(
+            f"{configuration_url}/draft/publish",
+            json={"expected_updated_at": draft["updated_at"]},
+            headers=_auth(context),
+        )
+
+        assert_that(publish_response.status_code, equal_to(status.HTTP_201_CREATED))
+        selection_response = client.post(
+            f"{configuration_url}/select",
+            json={
+                "selection_type": "override",
+                "override_version": 1,
+                "expected_agent_updated_at": context.agent.updated_at.isoformat(),
+            },
+            headers=_auth(context),
+        )
+        assert_that(selection_response.status_code, equal_to(status.HTTP_409_CONFLICT))
+        agent = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+        assert_that(agent["template_pin_type"], equal_to("shared"))
