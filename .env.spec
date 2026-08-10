@@ -59,3 +59,37 @@ OPENROUTER_API_KEY=
 # Comma-separated fnmatch globs limiting which OpenRouter models the picker offers,
 # e.g. "z-ai/glm-5.2,openai/gpt-5*". Empty offers the full catalogue.
 AGENT_MODEL_ALLOWLIST=
+
+# ── Local Kubernetes (k3d) dev environment ──────────────────────────────────
+# Only needed to run agents locally (`make cluster-up`, `make k3d-load-images`).
+# See README → "Local Kubernetes (k3d) dev environment".
+
+# Stable admin key for the local LiteLLM proxy, e.g. sk-$(openssl rand -hex 16).
+# LiteLLM encrypts the virtual keys it stores with this value, so changing it
+# between runs breaks agents created under the old key. Set once and leave it.
+LITELLM_MASTER_KEY=
+
+# Full image refs the agent pods request. Each tag must equal the matching
+# openclaw-base/VERSION and hermes-base/VERSION; `make k3d-load-images` builds
+# and imports under exactly these tags. These supersede AGENT_IMAGE above,
+# which the API no longer reads.
+OPENCLAW_IMAGE=
+HERMES_IMAGE=
+
+# GitHub PAT with read access to aai-labs/agent-cli-tools — the base-image
+# build clones that repo.
+GH_TOKEN=
+
+# In-container path to the kubeconfig, for the API started by `make up`.
+# `make cluster-up` prints the exact value. Leave empty if you're not using k3d.
+API_K8S_KUBECONFIG_PATH=
+
+# Optional. How the API inside Docker reaches LiteLLM; defaults to the compose
+# service (http://litellm:4000). LITELLM_BASE_URL above is host-facing
+# (127.0.0.1) and inside the container would resolve to the container itself.
+API_LITELLM_BASE_URL=
+
+# Optional. Host port the ingest API is published on for agent pods to push
+# telemetry to; defaults to 8001. (`make dev-api` takes API_DEV_PORT/INGEST_PORT
+# as make variables on the command line, not from here.)
+INGEST_PORT=
