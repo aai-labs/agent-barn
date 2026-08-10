@@ -173,9 +173,16 @@ its own stack without port clashes).
 
 ```bash
 make cluster-up      # start LiteLLM + a k3d cluster; write kubeconfigs to .k3d/
-make cluster-down    # delete the cluster and stop LiteLLM
-make cluster-reset   # cluster-down + cluster-up
+make cluster-down    # stop the cluster and LiteLLM (nothing is lost)
+make cluster-delete  # destroy the cluster
+make cluster-reset   # cluster-delete + cluster-up
 ```
+
+`cluster-down` **stops**, matching `db-down`/`redis-down` — imported base images,
+the namespace and any running agents survive, and `cluster-up` brings it back in
+seconds. `cluster-delete` throws all of that away, so you'll need to re-run
+`make k3d-load-images` afterwards; reach for it when a stopped cluster comes back
+unhealthy.
 
 It writes two kubeconfigs into `.k3d/` (gitignored) — the same cluster, reached
 differently depending on where the client runs:

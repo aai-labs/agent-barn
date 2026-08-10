@@ -71,7 +71,11 @@ green "  k3d-runner ready"
 step "k3d cluster '${CLUSTER}'"
 if ${COMPOSE} run --rm k3d-runner k3d cluster list 2>/dev/null \
     | awk 'NR>1{print $1}' | grep -qx "${CLUSTER}"; then
-  yellow "  Cluster already exists — skipping creation"
+  # Exists, but `cluster-down` may have stopped it — start is a no-op when it is
+  # already running, and the steps below need a reachable API server.
+  yellow "  Cluster already exists — starting it if stopped"
+  ${COMPOSE} run --rm k3d-runner k3d cluster start "${CLUSTER}" >/dev/null
+  green "  Cluster running"
 else
   echo "  Creating cluster…"
   ${COMPOSE} run --rm k3d-runner k3d cluster create "${CLUSTER}" \

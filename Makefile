@@ -4,7 +4,7 @@ COMPOSE := docker compose -f compose.yml
 	setup \
 	dev-api dev-ingest dev-ui dev-worker reconcile seed-event-deliveries migrate merge-heads rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring fix-api test check fix \
 	up down restart logs build clean db-up db-down db-logs db-restart redis-up redis-down redis-logs worker-logs \
-	cluster-up cluster-down cluster-reset k3d-load-images k3d-load-openclaw k3d-load-hermes
+	cluster-up cluster-down cluster-delete cluster-reset k3d-load-images k3d-load-openclaw k3d-load-hermes
 
 # One-time project bootstrap: installs deps for api + ui and creates a local
 # .env from the tracked template if one doesn't already exist.
@@ -171,11 +171,21 @@ worker-logs:
 cluster-up:
 	@bash docker/k3d/k3d-up.sh
 
+# Stops the cluster, matching what -down means everywhere else here (db-down and
+# redis-down stop rather than destroy). Imported base images, the namespace and
+# any running agents survive, and cluster-up brings it back in seconds.
 cluster-down:
+	$(COMPOSE) --profile k3d run --rm k3d-runner k3d cluster stop agentfarm-dev
+	$(COMPOSE) --profile k3d stop litellm litellm-db
+
+# Destroys the cluster: imported images and every workload in it are lost, and
+# the next cluster-up rebuilds from scratch (re-run k3d-load-images afterwards).
+# Reach for this when a stopped cluster comes back unhealthy.
+cluster-delete:
 	$(COMPOSE) --profile k3d run --rm k3d-runner k3d cluster delete agentfarm-dev
 	$(COMPOSE) --profile k3d stop litellm litellm-db
 
-cluster-reset: cluster-down cluster-up
+cluster-reset: cluster-delete cluster-up
 
 # Build both agent base images locally and import them into the k3d cluster.
 # Requires GH_TOKEN in env (GitHub PAT with repo read access).
