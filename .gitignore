@@ -148,3 +148,7 @@ helm/monitoring/tests/generated/
 
 .kube
 .pi*
+.agents
+.scratch
+docs/agents
+docs/plans
