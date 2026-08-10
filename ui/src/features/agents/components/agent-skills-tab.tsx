@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useState } from "react";
 import { useDebouncedValue } from "@tanstack/react-pacer";
 
 import { AppErrorState } from "@/components/app-error-state";
@@ -23,14 +23,19 @@ import {
 } from "../integrations";
 import { useUpdateAgent } from "../hooks/use-update-agent";
 import type { Agent, AgentAssignedSkill } from "../schemas";
+import type { AgentConfigurationEditHandle } from "./agent-configuration-utils";
 import { IntegrationFields } from "./integration-fields";
 
 interface AgentSkillsTabProps {
   agent: Agent;
   isRunning: boolean;
+  onDirtyChange?: (isDirty: boolean, isValid?: boolean) => void;
 }
 
-export function AgentSkillsTab({ agent, isRunning }: AgentSkillsTabProps) {
+export const AgentSkillsTab = forwardRef<
+  AgentConfigurationEditHandle,
+  AgentSkillsTabProps
+>(function AgentSkillsTab({ agent, isRunning, onDirtyChange }, ref) {
   const [search, setSearch] = useState("");
   const [debouncedSearch] = useDebouncedValue(search, { wait: 300 });
   const { skills, isLoading, error, refetch } = useSkills({ search: debouncedSearch || undefined, pageSize: 100 });
@@ -39,7 +44,6 @@ export function AgentSkillsTab({ agent, isRunning }: AgentSkillsTabProps) {
   const [pendingAddIds, setPendingAddIds] = useState<string[]>([]);
   const [pendingRemoveIds, setPendingRemoveIds] = useState<string[]>([]);
   const [newSecretDrafts, setNewSecretDrafts] = useState<IntegrationDraft[]>([]);
-  const [saved, setSaved] = useState(false);
 
   const existingSecretProviders = new Set(
     (agent.secrets ?? []).map((s) => s.provider),
@@ -66,6 +70,11 @@ export function AgentSkillsTab({ agent, isRunning }: AgentSkillsTabProps) {
 
   const hasPendingChanges =
     pendingAddIds.length > 0 || pendingRemoveIds.length > 0;
+  const isValid = !hasIncompleteIntegration(newSecretDrafts);
+
+  useEffect(() => {
+    onDirtyChange?.(hasPendingChanges || newSecretDrafts.length > 0, isValid);
+  }, [hasPendingChanges, isValid, newSecretDrafts.length, onDirtyChange]);
 
   function addSkill(skill: Skill) {
     // Slack is never manually configured — the API derives it from the agent's
@@ -130,56 +139,60 @@ export function AgentSkillsTab({ agent, isRunning }: AgentSkillsTabProps) {
   );
 
   async function handleSave() {
+    if (hasIncompleteIntegration(newSecretDrafts)) return;
     updateAgent.reset();
-    try {
-      // Providers required by skills that survive this update (kept + newly added).
-      const survivingSkills = [
-        ...agent.skills.filter((s) => !pendingRemoveIds.includes(s.id)),
-        ...skills.filter((s) => pendingAddIds.includes(s.id)),
-      ];
-      const stillNeeded = new Set(survivingSkills.flatMap((s) => s.requiredProviders));
+    // Providers required by skills that survive this update (kept + newly added).
+    const survivingSkills = [
+      ...agent.skills.filter((s) => !pendingRemoveIds.includes(s.id)),
+      ...skills.filter((s) => pendingAddIds.includes(s.id)),
+    ];
+    const stillNeeded = new Set(survivingSkills.flatMap((s) => s.requiredProviders));
 
-      // Secrets whose provider is no longer required by any remaining skill.
-      // Slack is excluded — the API removes/re-syncs it automatically based on
-      // skill membership and rejects an explicit removedSecretProviders entry.
-      const orphanedProviders = [
-        ...new Set(
-          agent.skills
-            .filter((s) => pendingRemoveIds.includes(s.id))
-            .flatMap((s) => s.requiredProviders)
-            .filter((p) => p !== "slack" && !stillNeeded.has(p)),
-        ),
-      ];
+    // Secrets whose provider is no longer required by any remaining skill.
+    // Slack is excluded — the API removes/re-syncs it automatically based on
+    // skill membership and rejects an explicit removedSecretProviders entry.
+    const orphanedProviders = [
+      ...new Set(
+        agent.skills
+          .filter((s) => pendingRemoveIds.includes(s.id))
+          .flatMap((s) => s.requiredProviders)
+          .filter((p) => p !== "slack" && !stillNeeded.has(p)),
+      ),
+    ];
 
-      const manualDrafts = newSecretDrafts.filter((d) => !d.sharedCredentialId);
-      const sharedDrafts = newSecretDrafts.filter((d) => !!d.sharedCredentialId);
+    const manualDrafts = newSecretDrafts.filter((d) => !d.sharedCredentialId);
+    const sharedDrafts = newSecretDrafts.filter((d) => !!d.sharedCredentialId);
 
-      await updateAgent.mutateAsync({
-        agentId: agent.id,
-        skillIds: pendingAddIds,
-        removedSkillIds: pendingRemoveIds,
-        ...(orphanedProviders.length > 0 ? { removedSecretProviders: orphanedProviders } : {}),
-        ...(manualDrafts.length > 0
-          ? {
-              secrets: manualDrafts.map((d) => ({
-                provider: d.provider,
-                content: coerceBooleanFields(d.provider === "github" ? expandGithubContent(d.content) : d.content),
-              })),
-            }
-          : {}),
-        ...(sharedDrafts.length > 0
-          ? { sharedCredentials: sharedDrafts.map((d) => ({ sharedCredentialId: d.sharedCredentialId! })) }
-          : {}),
-      });
-      setPendingAddIds([]);
-      setPendingRemoveIds([]);
-      setNewSecretDrafts([]);
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-    } catch {
-      // error displayed via updateAgent.error
-    }
+    await updateAgent.mutateAsync({
+      agentId: agent.id,
+      skillIds: pendingAddIds,
+      removedSkillIds: pendingRemoveIds,
+      ...(orphanedProviders.length > 0 ? { removedSecretProviders: orphanedProviders } : {}),
+      ...(manualDrafts.length > 0
+        ? {
+            secrets: manualDrafts.map((d) => ({
+              provider: d.provider,
+              content: coerceBooleanFields(d.provider === "github" ? expandGithubContent(d.content) : d.content),
+            })),
+          }
+        : {}),
+      ...(sharedDrafts.length > 0
+        ? { sharedCredentials: sharedDrafts.map((d) => ({ sharedCredentialId: d.sharedCredentialId! })) }
+        : {}),
+    });
+    setPendingAddIds([]);
+    setPendingRemoveIds([]);
+    setNewSecretDrafts([]);
   }
+
+  function resetForm() {
+    setPendingAddIds([]);
+    setPendingRemoveIds([]);
+    setNewSecretDrafts([]);
+    updateAgent.reset();
+  }
+
+  useImperativeHandle(ref, () => ({ apply: handleSave, cancel: resetForm }));
 
   if (isLoading) {
     return (
@@ -417,34 +430,16 @@ export function AgentSkillsTab({ agent, isRunning }: AgentSkillsTabProps) {
         ))}
       </div>
 
-      {/* Save */}
-      {hasPendingChanges && (
-        <div className="flex gap-2 items-center">
-          <button
-            className="af-btn af-btn-sm"
-            disabled={
-              isRunning ||
-              updateAgent.isPending ||
-              hasIncompleteIntegration(newSecretDrafts)
-            }
-            onClick={() => {
-              void handleSave();
-            }}
-          >
-            {updateAgent.isPending ? "Saving…" : saved ? "Saved!" : "Save changes"}
-          </button>
-          {updateAgent.error && (
-            <span className="text-xs" style={{ color: "var(--err)" }}>
-              {updateAgent.error instanceof Error
-                ? updateAgent.error.message
-                : "Save failed"}
-            </span>
-          )}
-        </div>
+      {updateAgent.error && (
+        <span className="text-xs" style={{ color: "var(--err)" }}>
+          {updateAgent.error instanceof Error
+            ? updateAgent.error.message
+            : "Save failed"}
+        </span>
       )}
     </div>
   );
-}
+});
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
