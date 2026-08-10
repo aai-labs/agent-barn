@@ -40,9 +40,12 @@ Builders set this per runtime and platform:
 | Hermes   | Slack    | `slack.require_mention` and `slack.strict_mention`                                              |
 | Hermes   | Telegram | `telegram.require_mention` and `telegram.exclusive_bot_mentions`                                |
 | OpenClaw | Slack    | `channels.slack.requireMention`, `channels.slack.thread.requireExplicitMention`, and per-channel `requireMention` |
-| OpenClaw | Telegram | per-group `channels.telegram.groups.<chat_id>.requireMention`                                   |
+| OpenClaw | Teams    | `channels.msteams.requireMention`                                                               |
+| OpenClaw | Telegram | `channels.telegram.groups.<chat_id>.requireMention`, or the `*` wildcard group when the group policy is open |
 
-Two residual gaps are runtime limitations rather than configuration choices. Hermes Telegram treats a direct reply to the agent's own message as a trigger and exposes no switch to disable it; OpenClaw Telegram behaves the same way. Both remain addressed to a single agent, so neither reopens the cross-agent case. OpenClaw Telegram also emits no `groups` map when the group policy is open, leaving gating to the runtime default.
+The table covers all five supported runtime/platform pairs. Every value is pinned explicitly rather than left to a runtime default, so an upstream default change cannot silently reopen the gap.
+
+Guarantee strength differs by platform. Slack on both runtimes enforces a fresh mention per message, disabling thread auto-engagement. Teams and Telegram enforce "mention required" but expose no per-message re-mention control, so a direct reply to the agent's own message still reaches it. Those replies remain addressed to exactly one agent, so they do not reopen the cross-agent case.
 
 Runtime configuration is generated at agent start, so a running agent keeps the gating it was started with until it is stopped and started again.
 
