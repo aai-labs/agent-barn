@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, Query, Response, status
 from fastapi_injector import Injected
 
 from api.domains.auth.models import CurrentUserContext
-from api.domains.auth.utils import get_current_user
+from api.domains.auth.utils import get_current_user, require_platform_admin
 from api.domains.skills.models import (
     SkillCreate,
     SkillFilter,
@@ -17,6 +17,15 @@ from api.domains.skills.service import SkillService
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 skills_router = APIRouter(prefix="/organizations/{organization_id}/skills", tags=["skills"])
+platform_skills_router = APIRouter(prefix="/platform/skills", tags=["platform-skills"])
+
+
+@platform_skills_router.get("", response_model=list[SkillRead])
+def list_global_skills_for_platform_admin(
+    _: Annotated[CurrentUserContext, Depends(require_platform_admin())],
+    service: Annotated[SkillService, Injected(SkillService)],
+):
+    return service.list_global_skills_for_platform_admin()
 
 
 @skills_router.post("", response_model=SkillRead, status_code=status.HTTP_201_CREATED)

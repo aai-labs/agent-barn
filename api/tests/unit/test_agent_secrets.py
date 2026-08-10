@@ -12,7 +12,9 @@ from api.domains.agents.models import (
     GithubContent,
     GmailContent,
     JiraContent,
+    PipedriveContent,
     SecretProvider,
+    SlackContent,
     ZohoMailContent,
     decrypt_content,
     encrypt_content,
@@ -26,7 +28,7 @@ _BASE_CREATE = {
     "name": "Agent",
     "slack_bot_token": "xoxb-x",
     "slack_app_token": "xapp-x",
-    "template_slug": "test-template",
+    "template_key": "test-template",
 }
 
 _JIRA = {
@@ -248,6 +250,51 @@ def test_firecrawl_encrypt_decrypt_round_trip_with_base_url():
     assert decrypted.base_url == "https://api.firecrawl.dev"
 
 
+# --- Pipedrive (AF-245) ---
+
+_PIPEDRIVE_BASE = {"api_token": "test-token"}
+
+
+def test_pipedrive_content_validates_without_domain():
+    content = validate_content(SecretProvider.PIPEDRIVE, _PIPEDRIVE_BASE)
+    assert isinstance(content, PipedriveContent)
+    assert content.api_token == "test-token"
+    assert content.domain == ""
+
+
+def test_pipedrive_content_validates_with_domain():
+    content = validate_content(SecretProvider.PIPEDRIVE, {**_PIPEDRIVE_BASE, "domain": "aai-labs"})
+    assert isinstance(content, PipedriveContent)
+    assert content.api_token == "test-token"
+    assert content.domain == "aai-labs"
+
+
+def test_pipedrive_content_rejects_missing_api_token():
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.PIPEDRIVE, {})
+
+
+def test_pipedrive_content_rejects_extra_fields():
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.PIPEDRIVE, {**_PIPEDRIVE_BASE, "extra": "nope"})
+
+
+def test_pipedrive_encrypt_decrypt_round_trip():
+    original = validate_content(SecretProvider.PIPEDRIVE, _PIPEDRIVE_BASE)
+    blob = encrypt_content(original, _KEY)
+    assert "test-token" not in blob
+    assert decrypt_content(SecretProvider.PIPEDRIVE, blob, _KEY) == original
+
+
+def test_pipedrive_encrypt_decrypt_round_trip_with_domain():
+    original = validate_content(SecretProvider.PIPEDRIVE, {**_PIPEDRIVE_BASE, "domain": "aai-labs"})
+    blob = encrypt_content(original, _KEY)
+    decrypted = decrypt_content(SecretProvider.PIPEDRIVE, blob, _KEY)
+    assert decrypted == original
+    assert isinstance(decrypted, PipedriveContent)
+    assert decrypted.domain == "aai-labs"
+
+
 def test_decrypt_content_reads_legacy_gmail_blob():
     """Legacy Gmail secrets from the old three-field form still decrypt with all fields."""
     legacy_blob = encrypt_token(
@@ -259,3 +306,31 @@ def test_decrypt_content_reads_legacy_gmail_blob():
     assert content.client_id == "cid"
     assert content.client_secret == "cs"
     assert content.refresh_token == "rt"
+
+
+# --- Slack (AF-209) ---
+
+_SLACK_BASE = {"token": "xoxb-test-token"}
+
+
+def test_slack_content_validates_token():
+    content = validate_content(SecretProvider.SLACK, _SLACK_BASE)
+    assert isinstance(content, SlackContent)
+    assert content.token == "xoxb-test-token"
+
+
+def test_slack_content_rejects_missing_token():
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.SLACK, {})
+
+
+def test_slack_content_rejects_extra_fields():
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.SLACK, {**_SLACK_BASE, "extra": "nope"})
+
+
+def test_slack_encrypt_decrypt_round_trip():
+    original = validate_content(SecretProvider.SLACK, _SLACK_BASE)
+    blob = encrypt_content(original, _KEY)
+    assert "xoxb-test-token" not in blob
+    assert decrypt_content(SecretProvider.SLACK, blob, _KEY) == original

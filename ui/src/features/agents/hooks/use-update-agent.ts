@@ -15,7 +15,7 @@ export type UpdateAgentData = {
   slackBotToken?: string;
   slackAppToken?: string;
   // Re-pin the agent to a different template version (both required together).
-  templateSlug?: string;
+  templateKey?: string;
   templateVersion?: number;
   slackChannelIds?: string[];
   slackDmUserIds?: string[];
@@ -34,6 +34,8 @@ export type UpdateAgentData = {
   removedSkillIds?: string[];
   // Integration credentials: upsert (add/replace) + explicit removal.
   secrets?: Array<{ provider: string; content: Record<string, string | string[] | boolean> }>;
+  // Shared credentials to attach (by ID)
+  sharedCredentials?: Array<{ sharedCredentialId: string }>;
   removedSecretProviders?: string[];
   approvalMode?: "manual" | "auto" | "off";
 };

@@ -428,6 +428,8 @@ def test_owner_changes_member_role():
             assert_that(messages[0].payload["previous_role"], equal_to("MEMBER"))
             assert_that(messages[0].payload["new_role"], equal_to("ADMIN"))
             assert_that(messages[0].payload["user_id"], equal_to(str(member_id)))
+            assert_that(messages[0].payload["actor_display"], equal_to("Test User"))
+            assert_that(messages[0].payload["subject_display"], equal_to("Test User"))
 
 
 def _there_is_an_admin_actor(admin_id):

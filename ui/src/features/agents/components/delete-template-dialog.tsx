@@ -32,7 +32,7 @@ export function DeleteTemplateDialog({
 
   const handleDelete = () => {
     if (!template) return;
-    deleteTemplate.mutate(template.templateSlug, {
+    deleteTemplate.mutate(template.templateKey, {
       onSuccess: () => {
         toast.success("Template deleted");
         onOpenChange(false);

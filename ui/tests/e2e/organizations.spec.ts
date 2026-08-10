@@ -20,7 +20,6 @@ function twoOrgs() {
       is_default: false,
       owner_email: "owner@example.com",
       owner_name: "Grace Hopper",
-      allowed_models: ["*"],
     },
     {
       id: ORG_B_ID,
@@ -31,7 +30,6 @@ function twoOrgs() {
       is_default: false,
       owner_email: "hank@globex.com",
       owner_name: "Hank Scorpio",
-      allowed_models: ["*"],
     },
   ];
 }
@@ -63,13 +61,24 @@ function userWithOrgMemberships({
     is_platform_admin: isPlatformAdmin,
     email_verified_at: "2024-01-01T00:00:00Z",
     organization_users: [
-      membership(orgA, roles[0] ?? "OWNER", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
-      membership(orgB, roles[1] ?? "OWNER", "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"),
+      membership(
+        orgA,
+        roles[0] ?? "OWNER",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      ),
+      membership(
+        orgB,
+        roles[1] ?? "OWNER",
+        "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      ),
     ],
   };
 }
 
-test.describe("Organizations — list & create (platform_admin)", () => {
+// Organization creation is self-service only, via the org switcher inside
+// Organization View (see "Organization creation for ordinary users" below) —
+// the Platform View grid at ORGS_URL has no create action of its own.
+test.describe("Organizations — list", () => {
   let data: DataSupport;
   test.use({ storageState: { cookies: [], origins: [] } });
 
@@ -78,7 +87,6 @@ test.describe("Organizations — list & create (platform_admin)", () => {
     await data.auth.interceptRefreshRequest();
     await data.users.interceptGetUserContextRequest();
     await data.organizations.interceptListOrganizations();
-    await data.organizations.interceptCreateOrganization();
   });
 
   test("renders the organizations list", async ({ page }) => {
@@ -88,28 +96,89 @@ test.describe("Organizations — list & create (platform_admin)", () => {
     ).toBeVisible();
     await expect(page.getByText("AAI Labs").first()).toBeVisible();
   });
+});
 
-  test("platform_admin creates an org and sees the owner invite link", async ({
+test.describe("Platform organization detail", () => {
+  let data: DataSupport;
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  test.beforeEach(async ({ page }) => {
+    data = new DataSupport(page);
+    await data.auth.interceptRefreshRequest();
+    await data.users.interceptGetUserContextRequest();
+    await data.organizations.interceptGetPlatformOrganization();
+    await data.organizations.interceptGetPlatformOrganizationMembers();
+  });
+
+  test("renders allowlisted organization identity and members", async ({ page }) => {
+    await page.goto(`/dashboard/platform/organizations/${ORG_A_ID}`);
+
+    await expect(page.getByRole("heading", { name: "AAI Labs" })).toBeVisible();
+    await expect(page.getByText("Starter organization")).toBeVisible();
+    await expect(page.getByText("Grace Hopper").first()).toBeVisible();
+    await expect(page.getByText("Ada Lovelace")).toBeVisible();
+    await expect(page.getByRole("main").getByRole("link", { name: /organizations/i })).toHaveAttribute(
+      "href",
+      ORGS_URL,
+    );
+  });
+
+  test("shows a retryable error for an unavailable organization", async ({ page }) => {
+    await data.organizations.interceptGetPlatformOrganization({ status: 500 });
+    await page.goto(`/dashboard/platform/organizations/${ORG_A_ID}`);
+
+    await expect(page.getByText(/couldn't load this organization/i)).toBeVisible();
+    await expect(page.getByRole("button", { name: /retry/i })).toBeVisible();
+  });
+});
+
+test.describe("Organization creation for ordinary users", () => {
+  let data: DataSupport;
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  test.beforeEach(async ({ page }) => {
+    data = new DataSupport(page);
+    await data.auth.interceptRefreshRequest();
+    await data.users.interceptGetUserContextRequest({
+      userContext: userWithOrgMemberships({ isPlatformAdmin: false }),
+    });
+    await data.organizations.interceptCreateOrganization();
+    await data.agents.interceptGetAgentsRequest();
+  });
+
+  test("organization switcher exposes self-service creation", async ({
     page,
   }) => {
-    await page.goto(ORGS_URL);
-
+    await page.goto(`/dashboard/${ORG_A_ID}`);
+    await page.locator('button[aria-haspopup="listbox"]').click();
     await page.getByRole("button", { name: /create organization/i }).click();
     await expect(
       page.getByRole("heading", { name: /^create organization$/i }),
     ).toBeVisible();
 
-    await page.getByLabel("Name", { exact: true }).fill("New Org");
-    await page.getByLabel(/owner email/i).fill("founder@acme.com");
+    await page.getByLabel("Name", { exact: true }).fill("Member Created Org");
+    await expect(page.getByLabel(/owner email/i)).not.toBeVisible();
     await page.getByRole("button", { name: /^create$/i }).click();
 
     await expect(
-      page.getByRole("heading", { name: /organization created/i }),
+      page.getByText(/Member Created Org created. You are its owner/i),
     ).toBeVisible();
-    const dialog = page.getByRole("dialog");
-    await expect(dialog.locator("input[readonly]")).toHaveValue(
-      /set-password\?token=/,
-    );
+    await expect(page.getByRole("dialog")).not.toBeVisible();
+  });
+
+  test("shows the per-user creation limit conflict", async ({ page }) => {
+    await data.organizations.interceptCreateOrganization({
+      success: false,
+      status: 409,
+      detail: "You can create up to 5 organizations",
+    });
+    await page.goto(`/dashboard/${ORG_A_ID}`);
+    await page.locator('button[aria-haspopup="listbox"]').click();
+    await page.getByRole("button", { name: /create organization/i }).click();
+    await page.getByLabel("Name", { exact: true }).fill("Sixth Org");
+    await page.getByRole("button", { name: /^create$/i }).click();
+
+    await expect(page.getByText(/up to 5 organizations/i)).toBeVisible();
   });
 });
 
@@ -129,9 +198,7 @@ test.describe("Organization detail — delete", () => {
 
   test("shows org details and members", async ({ page }) => {
     await page.goto(DETAIL_URL);
-    await expect(
-      page.getByRole("heading", { name: "AAI Labs" }),
-    ).toBeVisible();
+    await expect(page.getByRole("heading", { name: "AAI Labs" })).toBeVisible();
     await expect(page.getByText("Starter organization")).toBeVisible();
     await expect(page.getByText("ada@example.com")).toBeVisible();
   });
@@ -141,9 +208,7 @@ test.describe("Organization detail — delete", () => {
   }) => {
     await page.goto(DETAIL_URL);
 
-    await page
-      .getByRole("button", { name: /delete organization/i })
-      .click();
+    await page.getByRole("button", { name: /delete organization/i }).click();
 
     const dialog = page.getByRole("dialog");
     const confirm = dialog.getByRole("button", {
@@ -238,7 +303,9 @@ test.describe("Org switcher on the detail page", () => {
     await data.organizations.interceptGetMembers();
   });
 
-  test("switching org navigates to the selected org's page", async ({ page }) => {
+  test("switching org navigates to the selected org's page", async ({
+    page,
+  }) => {
     await page.goto(DETAIL_URL);
 
     const switcher = page.locator('button[aria-haspopup="listbox"]');
@@ -278,7 +345,9 @@ test.describe("Org switcher — manage page for a member-only org", () => {
     page,
   }) => {
     await page.goto(DETAIL_URL); // org A manage page (I'm the owner)
-    await expect(page.getByRole("heading", { name: /AAI Labs/i })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: /AAI Labs/i }),
+    ).toBeVisible();
 
     const switcher = page.locator('button[aria-haspopup="listbox"]');
     await switcher.click();
@@ -303,10 +372,21 @@ test.describe("Org switcher (platform_admin)", () => {
     await data.users.interceptGetUserContextRequest({
       userContext: userWithOrgMemberships(),
     });
-    await data.organizations.interceptListOrganizations({ items: twoOrgs() });
+    await data.organizations.interceptListOrganizations({
+      items: [
+        ...twoOrgs(),
+        {
+          ...twoOrgs()[0],
+          id: "55555555-5555-4555-8555-555555555555",
+          name: "Umbrella",
+        },
+      ],
+    });
   });
 
-  test("lists all orgs and switches the active one", async ({ page }) => {
+  test("lists only memberships and switches the active one", async ({
+    page,
+  }) => {
     await page.goto(ORGS_URL);
 
     const switcher = page.locator('button[aria-haspopup="listbox"]');
@@ -314,8 +394,15 @@ test.describe("Org switcher (platform_admin)", () => {
 
     await switcher.click();
     const listbox = page.getByRole("listbox");
-    await expect(listbox.getByRole("option", { name: /aai labs/i })).toBeVisible();
-    await expect(listbox.getByRole("option", { name: /globex/i })).toBeVisible();
+    await expect(
+      listbox.getByRole("option", { name: /aai labs/i }),
+    ).toBeVisible();
+    await expect(
+      listbox.getByRole("option", { name: /globex/i }),
+    ).toBeVisible();
+    await expect(
+      listbox.getByRole("option", { name: /umbrella/i }),
+    ).toHaveCount(0);
 
     await listbox.getByRole("option", { name: /globex/i }).click();
     await expect(page).toHaveURL(new RegExp(`/dashboard/${ORG_B_ID}$`));
@@ -379,7 +466,9 @@ test.describe("Forgot / reset password", () => {
     await data.auth.interceptResetPasswordRequest();
   });
 
-  test("forgot password shows a check-your-email confirmation", async ({ page }) => {
+  test("forgot password shows a check-your-email confirmation", async ({
+    page,
+  }) => {
     await page.goto("/forgot-password");
 
     await page.getByLabel(/email/i).fill("someone@example.com");

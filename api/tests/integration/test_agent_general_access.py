@@ -570,6 +570,8 @@ def test_access_settings_snapshot_replaces_general_and_direct_access():
         assert_that(granted.payload["membership_id"], equal_to(str(second_membership.id)))
         assert_that(revoked.payload["membership_id"], equal_to(str(first_membership.id)))
         assert_that(general.payload["new_access_role_id"], equal_to(str(AGENT_VIEWER_ROLE_ID)))
+        assert_that(granted.payload["actor_display"], equal_to("Test User"))
+        assert_that(granted.payload["subject_display"], equal_to(context.agent.name))
 
 
 def test_access_settings_rolls_back_when_snapshot_is_invalid():
@@ -626,7 +628,7 @@ def test_owner_created_agent_share_settings_round_trip_without_creator_row():
                 "platform": "slack",
                 "slack_bot_token": "xoxb-real-bot-token",
                 "slack_app_token": "xapp-1-real-app-token",
-                "template_slug": "test-template",
+                "template_key": "test-template",
             },
             headers=_auth(context),
         )

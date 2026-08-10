@@ -88,6 +88,7 @@ class AgentAccessService:
             general_access_role_id=data.general_access_role_id,
             assignment_roles=assignment_roles,
             actor=resolve_actor_identity(context, agent.organization_id),
+            actor_display=context.user.full_name or context.user.email,
         ):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,

@@ -5,7 +5,8 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useCurrentUser } from "@/auth/providers/user-context-provider";
 import { useLogout } from "@/auth/hooks/use-logout";
-import { PlusIcon, UserIcon, UsersIcon, BuildingIcon, LogOutIcon, ShieldIcon } from "@/components/icons";
+import { PlusIcon, UserIcon, UsersIcon, BuildingIcon, LogOutIcon, ShieldIcon, ServerIcon } from "@/components/icons";
+import { FileText } from "lucide-react";
 import { LogoMark } from "@/components/logo-mark";
 import { OrgSwitcher } from "@/features/organizations/components/org-switcher";
 import { useActiveOrgRole } from "@/features/organizations/hooks/use-active-org-role";
@@ -34,6 +35,8 @@ export function TopNav({ onHire }: TopNavProps) {
         { href: "/dashboard/platform", label: "Overview" },
         { href: "/dashboard/platform/users", label: "Users" },
         { href: "/dashboard/platform/organizations", label: "Organizations" },
+        { href: "/dashboard/platform/event-deliveries", label: "Event Deliveries" },
+        { href: "/dashboard/platform/templates", label: "Templates" },
       ]
     : [
         { href: orgBase, label: "Home" },
@@ -188,6 +191,22 @@ export function TopNav({ onHire }: TopNavProps) {
                     onClick={() => setMenuOpen(false)}
                   >
                     <BuildingIcon /> Organizations
+                  </Link>
+                  <Link
+                    href="/dashboard/platform/event-deliveries"
+                    className="af-hover-bg w-full text-left flex items-center gap-2.5 px-3.5 py-2 text-[13.5px]"
+                    style={{ color: "var(--ink-2)" }}
+                    onClick={() => setMenuOpen(false)}
+                  >
+                    <ServerIcon /> Event Deliveries
+                  </Link>
+                  <Link
+                    href="/dashboard/platform/templates"
+                    className="af-hover-bg w-full text-left flex items-center gap-2.5 px-3.5 py-2 text-[13.5px]"
+                    style={{ color: "var(--ink-2)" }}
+                    onClick={() => setMenuOpen(false)}
+                  >
+                    <FileText size={14} /> Templates
                   </Link>
                 </div>
               )}

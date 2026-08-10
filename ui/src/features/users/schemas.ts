@@ -1,5 +1,21 @@
 import { z } from "zod";
 
+import {
+  OrganizationRoleSchema,
+  OrganizationSchema,
+  PlatformOrganizationSchema,
+} from "@/features/organizations/schemas";
+
+export const UserOrganizationMembershipSchema = z.object({
+  id: z.string().uuid(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  userId: z.string().uuid(),
+  organizationId: z.string().uuid(),
+  role: OrganizationRoleSchema,
+  organization: OrganizationSchema,
+});
+
 export const UserReadSchema = z.object({
   id: z.string().uuid(),
   createdAt: z.string(),
@@ -8,34 +24,67 @@ export const UserReadSchema = z.object({
   email: z.string().email(),
   isPlatformAdmin: z.boolean(),
   emailVerifiedAt: z.string().nullable().optional(),
+  // Only populated by the single-user detail endpoint — the list endpoint omits it.
+  organizationUsers: z.array(UserOrganizationMembershipSchema).nullable().optional(),
+});
+
+export const PlatformUserOrganizationMembershipSchema = z.object({
+  id: z.string().uuid(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  userId: z.string().uuid(),
+  organizationId: z.string().uuid(),
+  role: OrganizationRoleSchema,
+  organization: PlatformOrganizationSchema,
+});
+
+export const PlatformUserReadSchema = UserReadSchema.extend({
+  organizationUsers: z
+    .array(PlatformUserOrganizationMembershipSchema)
+    .nullable()
+    .optional(),
 });
 
 export const PaginatedUsersSchema = z.object({
   page: z.number().int().min(1),
   pageSize: z.number().int().min(1),
   total: z.number().int().min(0),
-  items: z.array(UserReadSchema),
+  items: z.array(PlatformUserReadSchema),
 });
 
-export const CreateUserSchema = z.object({
-  email: z.string().email({ message: "Invalid email address" }),
-  password: z
+export const PlatformUserCreateFormSchema = z.object({
+  email: z.string().email({ message: "Enter a valid email address" }),
+  fullName: z.string().trim().max(200).optional(),
+  organizationName: z
     .string()
-    .min(8, { message: "Password must be at least 8 characters" })
-    .regex(/[A-Z]/, {
-      message: "Password must include at least one uppercase letter",
+    .trim()
+    .refine((value) => value.length === 0 || value.length >= 3, {
+      message: "Organization name must be at least 3 characters",
     })
-    .regex(/[a-z]/, {
-      message: "Password must include at least one lowercase letter",
-    })
-    .regex(/[0-9]/, {
-      message: "Password must include at least one number",
+    .refine((value) => value.length <= 255, {
+      message: "Organization name must be at most 255 characters",
     }),
-  fullName: z.string().optional(),
-  organizationId: z.string().uuid({ message: "Select an organization" }),
-  role: z.enum(["MEMBER", "ADMIN"]),
+});
+
+export const PlatformUserCreateResultSchema = z.object({
+  user: PlatformUserReadSchema,
+  organization: PlatformOrganizationSchema,
+  inviteLink: z.string().url(),
+});
+
+export const PlatformUserInviteResultSchema = z.object({
+  inviteLink: z.string().url(),
 });
 
 export type UserRead = z.infer<typeof UserReadSchema>;
+export type PlatformUserRead = z.infer<typeof PlatformUserReadSchema>;
+export type UserOrganizationMembership = z.infer<
+  typeof UserOrganizationMembershipSchema
+>;
 export type PaginatedUsers = z.infer<typeof PaginatedUsersSchema>;
-export type CreateUserData = z.infer<typeof CreateUserSchema>;
+export type PlatformUserCreateForm = z.infer<
+  typeof PlatformUserCreateFormSchema
+>;
+export type PlatformUserCreateResult = z.infer<
+  typeof PlatformUserCreateResultSchema
+>;

@@ -163,6 +163,7 @@ class EventDeliveryProcessor:
             event_name=message.event_name,
             schema_version=message.schema_version,
             occurred_at=message.occurred_at,
+            event_scope=message.event_scope,
             organization_id=message.organization_id,
             actor=ActorIdentity.model_validate(message.actor),
             subject=SubjectIdentity.model_validate(message.subject),

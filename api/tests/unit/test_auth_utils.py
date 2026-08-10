@@ -12,6 +12,7 @@ from api.domains.auth.exceptions import (
     EmailNotVerifiedException,
     ForbiddenException,
 )
+from api.domains.auth.models import CredentialClass
 from api.domains.auth.utils import get_authenticated_user
 from api.domains.users.models import User
 from api.domains.users.organization_users.models import (
@@ -51,7 +52,7 @@ def test_get_authenticated_user_returns_context():
     )
     config = SimpleNamespace(secret_signing_key="x" * 32)
     token = jwt.encode(
-        {"user_id": str(user.id), "token_type": "access"},
+        {"user_id": str(user.id), "token_type": "access", "credential_class": CredentialClass.USER_SESSION.value},
         config.secret_signing_key,
         algorithm="HS256",
     )
@@ -71,7 +72,7 @@ def test_get_authenticated_user_rejects_unverified_user_when_required():
     user = User(email="unverified@example.com", hashed_password="x", email_verified_at=None)
     config = SimpleNamespace(secret_signing_key="x" * 32)
     token = jwt.encode(
-        {"user_id": str(user.id), "token_type": "access"},
+        {"user_id": str(user.id), "token_type": "access", "credential_class": CredentialClass.USER_SESSION.value},
         config.secret_signing_key,
         algorithm="HS256",
     )
@@ -102,7 +103,7 @@ def test_get_authenticated_user_requires_role_for_org_context():
     )
     config = SimpleNamespace(secret_signing_key="x" * 32)
     token = jwt.encode(
-        {"user_id": str(user.id), "token_type": "access"},
+        {"user_id": str(user.id), "token_type": "access", "credential_class": CredentialClass.USER_SESSION.value},
         config.secret_signing_key,
         algorithm="HS256",
     )
@@ -129,7 +130,7 @@ def test_get_authenticated_user_rejects_platform_admin_without_org_membership():
     )
     config = SimpleNamespace(secret_signing_key="x" * 32)
     token = jwt.encode(
-        {"user_id": str(user.id), "token_type": "access"},
+        {"user_id": str(user.id), "token_type": "access", "credential_class": CredentialClass.USER_SESSION.value},
         config.secret_signing_key,
         algorithm="HS256",
     )
@@ -154,7 +155,7 @@ def test_get_authenticated_user_rejects_invalid_token_type():
     )
     config = SimpleNamespace(secret_signing_key="x" * 32)
     token = jwt.encode(
-        {"user_id": str(user.id), "token_type": "refresh"},
+        {"user_id": str(user.id), "token_type": "refresh", "credential_class": CredentialClass.USER_SESSION.value},
         config.secret_signing_key,
         algorithm="HS256",
     )

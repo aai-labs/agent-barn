@@ -14,7 +14,16 @@ from hamcrest import (
 )
 from starlette.testclient import TestClient
 
-from api.domains.agents.models import AgentPlatform, AgentStatus, AgentType, SecretProvider
+from api.domains.agents.models import (
+    AgentPlatform,
+    AgentSecret,
+    AgentStatus,
+    AgentType,
+    SecretProvider,
+    SlackContent,
+    encrypt_content,
+    validate_content,
+)
 from api.domains.agents.repository import AgentRepository
 from api.domains.agents.service import AgentService
 from api.domains.events.catalog import AGENT_CREATED, AGENT_STARTED, AGENT_STOPPED
@@ -48,7 +57,11 @@ from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import (
     there_is_an_organization_with_user_and_access_token,
 )
-from api.tests.steps.template import there_is_a_template, there_is_a_template_skill
+from api.tests.steps.template import (
+    there_is_a_template,
+    there_is_a_template_skill,
+    there_is_a_template_skill_group,
+)
 
 _BASE = "/api/v1/organizations/{organization_id}/agents"
 
@@ -57,7 +70,7 @@ _VALID_CREATE = {
     "platform": "slack",
     "slack_bot_token": "xoxb-real-bot-token",
     "slack_app_token": "xapp-1-real-app-token",
-    "template_slug": "test-template",
+    "template_key": "test-template",
 }
 
 _VALID_CREATE_TEAMS = {
@@ -66,7 +79,7 @@ _VALID_CREATE_TEAMS = {
     "teams_app_id": "test-app-id-000",
     "teams_app_password": "test-app-password-000",
     "teams_tenant_id": "test-tenant-000",
-    "template_slug": "test-template",
+    "template_key": "test-template",
 }
 
 _GIVEN = [
@@ -150,23 +163,36 @@ def test_create_agent_emits_created_domain_event():
             assert_that(created_events[0].payload["created_by_user_id"], equal_to(str(context.user.id)))
 
 
-def test_create_agent_missing_template_slug_returns_422():
+def test_create_agent_missing_template_key_returns_422():
     with given(_GIVEN) as context:
         client: TestClient = context.client
         payload = {**_VALID_CREATE}
-        del payload["template_slug"]
+        del payload["template_key"]
 
-        with when("I create an agent without template_slug"):
+        with when("I create an agent without template_key"):
             response = client.post(_BASE, json=payload, headers=_auth(context))
 
         with then("it returns 422"):
             assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
 
 
-def test_create_agent_unknown_template_slug_returns_404():
+def test_create_agent_rejects_template_slug_after_key_migration():
     with given(_GIVEN) as context:
         client: TestClient = context.client
-        payload = {**_VALID_CREATE, "template_slug": "no-such-template"}
+        payload = {**_VALID_CREATE, "template_slug": _VALID_CREATE["template_key"]}
+        del payload["template_key"]
+
+        with when("I create an agent using the removed template_slug field"):
+            response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("it returns 422"):
+            assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
+
+
+def test_create_agent_unknown_template_key_returns_404():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        payload = {**_VALID_CREATE, "template_key": "no-such-template"}
 
         with when("I create an agent referencing a non-existent template"):
             response = client.post(_BASE, json=payload, headers=_auth(context))
@@ -196,7 +222,7 @@ def test_create_agent_pins_latest_template_version():
         with then("it returns 201 pinned to the latest version"):
             assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             body = response.json()
-            assert_that(body["template_slug"], equal_to("test-template"))
+            assert_that(body["template_key"], equal_to("test-template"))
             assert_that(body["template_version"], equal_to(2))
 
 
@@ -379,14 +405,14 @@ def test_patch_agent_repins_template():
         with when("I re-pin the agent to a different template version"):
             response = client.patch(
                 f"{_BASE}/{context.agent.id}",
-                json={"template_slug": "test-template", "template_version": 1},
+                json={"template_key": "test-template", "template_version": 1},
                 headers=_auth(context),
             )
 
         with then("it returns 200 pinned to the requested template"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             body = response.json()
-            assert_that(body["template_slug"], equal_to("test-template"))
+            assert_that(body["template_key"], equal_to("test-template"))
             assert_that(body["template_version"], equal_to(1))
 
 
@@ -397,7 +423,7 @@ def test_patch_agent_repin_unknown_version_returns_404():
         with when("I re-pin to a non-existent version"):
             response = client.patch(
                 f"{_BASE}/{context.agent.id}",
-                json={"template_slug": "test-template", "template_version": 99},
+                json={"template_key": "test-template", "template_version": 99},
                 headers=_auth(context),
             )
 
@@ -405,14 +431,29 @@ def test_patch_agent_repin_unknown_version_returns_404():
             assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
-def test_patch_agent_repin_requires_both_slug_and_version():
+def test_patch_agent_repin_requires_both_template_key_and_version():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         client: TestClient = context.client
 
-        with when("I send only template_slug without a version"):
+        with when("I send only template_key without a version"):
             response = client.patch(
                 f"{_BASE}/{context.agent.id}",
-                json={"template_slug": "test-template"},
+                json={"template_key": "test-template"},
+                headers=_auth(context),
+            )
+
+        with then("it returns 422"):
+            assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
+
+
+def test_patch_agent_repin_rejects_template_slug_after_key_migration():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I re-pin using the removed template_slug field"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"template_slug": "test-template", "template_version": 1},
                 headers=_auth(context),
             )
 
@@ -1162,7 +1203,7 @@ def test_start_agent_configmap_has_overlay():
             )
             assert_that(
                 overlay["models"]["providers"]["litellm"]["baseUrl"],
-                equal_to("http://litellm:4000"),
+                equal_to("http://localhost:8090"),
             )
 
 
@@ -1979,7 +2020,7 @@ _VALID_CREATE_HERMES = {
     "agent_type": "hermes",
     "slack_bot_token": "xoxb-hermes-bot-token",
     "slack_app_token": "xapp-1-hermes-app-token",
-    "template_slug": "test-template",
+    "template_key": "test-template",
 }
 
 _GIVEN_WITH_HERMES_IMAGE = [
@@ -2110,7 +2151,7 @@ def test_start_hermes_agent_configmap_has_hermes_config():
             config_map = k8s.create_config_map.call_args.args[1]
             assert_that(config_map.data, has_key("hermes-config.yaml"))
             cfg = _yaml.safe_load(config_map.data["hermes-config.yaml"])
-            assert_that(cfg["model"]["base_url"], equal_to("http://litellm:4000"))
+            assert_that(cfg["model"]["base_url"], equal_to("http://localhost:8090"))
             assert_that(cfg["slack"]["unauthorized_dm_behavior"], equal_to("ignore"))
             assert_that(
                 cfg["display"]["platforms"]["slack"]["interim_assistant_messages"],
@@ -2497,6 +2538,68 @@ def test_create_agent_duplicate_skill_ids_assigns_skill_once():
             assert_that(len(agent_skills), equal_to(1))
 
 
+# --- aai-cli Slack secret mirrors the gateway bot token ---
+
+
+def test_create_slack_agent_with_slack_skill_mirrors_bot_token_secret():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Slack Skill", required_providers=[SecretProvider.SLACK]),
+        ]
+    ) as context:
+        from api.domains.agents.models import decrypt_content
+
+        client: TestClient = context.client
+        payload = {**_VALID_CREATE, "skill_ids": [str(context.skill.id)]}
+
+        with when("I create a Slack agent with the Slack skill and no explicit slack secret"):
+            response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("it returns 201 and the mirrored secret matches the gateway bot token"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            from uuid import UUID
+
+            repository: AgentRepository = context.injector.get(AgentRepository)
+            secret = repository.get_secret(UUID(response.json()["id"]), SecretProvider.SLACK)
+            assert secret is not None
+            assert secret.content is not None
+            content = decrypt_content(SecretProvider.SLACK, secret.content, TEST_ENCRYPTION_KEY)
+            assert_that(content, equal_to(SlackContent(token=_VALID_CREATE["slack_bot_token"])))
+
+
+def test_create_agent_slack_skill_on_non_slack_platform_returns_400():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Slack Skill", required_providers=[SecretProvider.SLACK]),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        payload = {**_VALID_CREATE_TEAMS, "skill_ids": [str(context.skill.id)]}
+
+        with when("I create a Teams agent with the Slack skill"):
+            response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("it returns 400 explaining the skill requires the Slack platform"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], contains_string("Slack Skill"))
+            assert_that(response.json()["detail"], contains_string("Slack platform"))
+
+
+def test_create_agent_rejects_explicit_slack_secret():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        payload = {**_VALID_CREATE, "secrets": [{"provider": "slack", "content": {"token": "xoxb-manual"}}]}
+
+        with when("I create an agent submitting a slack secret directly"):
+            response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("it returns 400"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], contains_string("managed automatically"))
+
+
 # --- skill assignment on agent update ---
 
 
@@ -2608,6 +2711,149 @@ def test_patch_agent_add_skill_missing_provider_returns_400():
             assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
             assert_that(response.json()["detail"], contains_string("GitHub Skill"))
             assert_that(response.json()["detail"], contains_string("github"))
+
+
+def test_patch_agent_adds_slack_skill_mirrors_bot_token_secret():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(bot_token=TEST_SLACK_BOT_TOKEN),
+            there_is_a_skill(name="Slack Skill", required_providers=[SecretProvider.SLACK]),
+        ]
+    ) as context:
+        from api.domains.agents.models import decrypt_content
+
+        client: TestClient = context.client
+
+        with when("I add the Slack skill via PATCH without submitting a secret"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"skill_ids": [str(context.skill.id)]},
+                headers=_auth(context),
+            )
+
+        with then("it returns 200 and the mirrored secret matches the gateway bot token"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            repository: AgentRepository = context.injector.get(AgentRepository)
+            secret = repository.get_secret(context.agent.id, SecretProvider.SLACK)
+            assert secret is not None
+            assert secret.content is not None
+            content = decrypt_content(SecretProvider.SLACK, secret.content, TEST_ENCRYPTION_KEY)
+            assert_that(content, equal_to(SlackContent(token=TEST_SLACK_BOT_TOKEN)))
+
+
+def test_patch_agent_removes_slack_skill_deletes_mirrored_secret():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(bot_token=TEST_SLACK_BOT_TOKEN),
+            there_is_a_skill(name="Slack Skill", required_providers=[SecretProvider.SLACK]),
+            skill_is_assigned_to_agent(),
+        ]
+    ) as context:
+        repository: AgentRepository = context.injector.get(AgentRepository)
+        repository.save_secret(
+            AgentSecret(
+                agent_id=context.agent.id,
+                provider=SecretProvider.SLACK,
+                secret_name="Slack credential",
+                content=encrypt_content(
+                    validate_content(SecretProvider.SLACK, {"token": TEST_SLACK_BOT_TOKEN}), TEST_ENCRYPTION_KEY
+                ),
+            )
+        )
+        client: TestClient = context.client
+
+        with when("I remove the Slack skill via PATCH"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"removed_skill_ids": [str(context.skill.id)]},
+                headers=_auth(context),
+            )
+
+        with then("it returns 200 and the mirrored secret is gone"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            secret = repository.get_secret(context.agent.id, SecretProvider.SLACK)
+            assert_that(secret, none())
+
+
+def test_patch_agent_rotates_slack_bot_token_resyncs_mirrored_secret():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(bot_token=TEST_SLACK_BOT_TOKEN),
+            there_is_a_skill(name="Slack Skill", required_providers=[SecretProvider.SLACK]),
+            skill_is_assigned_to_agent(),
+        ]
+    ) as context:
+        from api.domains.agents.models import decrypt_content
+
+        repository: AgentRepository = context.injector.get(AgentRepository)
+        repository.save_secret(
+            AgentSecret(
+                agent_id=context.agent.id,
+                provider=SecretProvider.SLACK,
+                secret_name="Slack credential",
+                content=encrypt_content(
+                    validate_content(SecretProvider.SLACK, {"token": TEST_SLACK_BOT_TOKEN}), TEST_ENCRYPTION_KEY
+                ),
+            )
+        )
+        client: TestClient = context.client
+        new_token = "xoxb-rotated-token"
+
+        with when("I rotate the gateway bot token via PATCH"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"slack_bot_token": new_token, "slack_app_token": "xapp-1-real-app-token"},
+                headers=_auth(context),
+            )
+
+        with then("it returns 200 and the mirrored secret is re-synced to the new token"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            secret = repository.get_secret(context.agent.id, SecretProvider.SLACK)
+            assert secret is not None
+            assert secret.content is not None
+            content = decrypt_content(SecretProvider.SLACK, secret.content, TEST_ENCRYPTION_KEY)
+            assert_that(content, equal_to(SlackContent(token=new_token)))
+
+
+def test_patch_agent_add_slack_skill_on_non_slack_platform_returns_400():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(platform=AgentPlatform.TEAMS),
+            there_is_a_skill(name="Slack Skill", required_providers=[SecretProvider.SLACK]),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("I add the Slack skill to a Teams agent via PATCH"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"skill_ids": [str(context.skill.id)]},
+                headers=_auth(context),
+            )
+
+        with then("it returns 400 explaining the skill requires the Slack platform"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], contains_string("Slack platform"))
+
+
+def test_patch_agent_rejects_explicit_slack_secret():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I submit a slack secret directly via PATCH"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"secrets": [{"provider": "slack", "content": {"token": "xoxb-manual"}}]},
+                headers=_auth(context),
+            )
+
+        with then("it returns 400"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], contains_string("managed automatically"))
 
 
 # --- skills.json in ConfigMap on start ---
@@ -2955,7 +3201,7 @@ def test_update_agent_repin_missing_required_skill_returns_400():
         [
             *_GIVEN,
             there_is_a_skill(name="Jira"),
-            there_is_a_template(slug="with-skill", name="With Skill"),
+            there_is_a_template(template_key="with-skill", name="With Skill"),
             there_is_a_template_skill(),
         ]
     ) as context:
@@ -2964,14 +3210,14 @@ def test_update_agent_repin_missing_required_skill_returns_400():
         with when("I create an agent using a template with no required skills"):
             agent = client.post(
                 _BASE,
-                json={**_VALID_CREATE, "template_slug": "test-template"},
+                json={**_VALID_CREATE, "template_key": "test-template"},
                 headers=_auth(context),
             ).json()
 
         with when("I repin to a template that requires a skill I haven't provided"):
             response = client.patch(
                 f"{_BASE}/{agent['id']}",
-                json={"template_slug": "with-skill", "template_version": 1},
+                json={"template_key": "with-skill", "template_version": 1},
                 headers=_auth(context),
             )
 
@@ -2984,7 +3230,7 @@ def test_update_agent_repin_with_required_skill_marks_it_required():
         [
             *_GIVEN,
             there_is_a_skill(name="Jira"),
-            there_is_a_template(slug="with-skill", name="With Skill"),
+            there_is_a_template(template_key="with-skill", name="With Skill"),
             there_is_a_template_skill(),
         ]
     ) as context:
@@ -2994,7 +3240,7 @@ def test_update_agent_repin_with_required_skill_marks_it_required():
         with when("I create an agent using a template with no required skills"):
             agent = client.post(
                 _BASE,
-                json={**_VALID_CREATE, "template_slug": "test-template"},
+                json={**_VALID_CREATE, "template_key": "test-template"},
                 headers=_auth(context),
             ).json()
 
@@ -3002,7 +3248,7 @@ def test_update_agent_repin_with_required_skill_marks_it_required():
             response = client.patch(
                 f"{_BASE}/{agent['id']}",
                 json={
-                    "template_slug": "with-skill",
+                    "template_key": "with-skill",
                     "template_version": 1,
                     "skill_ids": [skill_id],
                 },
@@ -3043,6 +3289,280 @@ def test_list_agents_marks_required_skills():
             assert_that(len(agents), equal_to(1))
             jira = next(s for s in agents[0]["skills"] if s["id"] == skill_id)
             assert_that(jira["required"], equal_to(True))
+
+
+# --- template required skill groups ("at least one of") ---
+
+
+def _group_skill_ids(context) -> dict[str, str]:
+    return {s.name: str(s.id) for s in context.template_skill_group["skills"]}
+
+
+def test_create_agent_with_no_group_member_returns_400():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_template_skill_group(("GitHub", "Bitbucket")),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("I create an agent without any group member in skill_ids"):
+            response = client.post(_BASE, json=_VALID_CREATE, headers=_auth(context))
+
+        with then("it returns 400"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+
+
+def test_create_agent_with_one_group_member_succeeds_and_marks_it_required():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_template_skill_group(("GitHub", "Bitbucket")),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        github_id = _group_skill_ids(context)["GitHub"]
+
+        with when("I create an agent including one group member"):
+            response = client.post(
+                _BASE,
+                json={**_VALID_CREATE, "skill_ids": [github_id]},
+                headers=_auth(context),
+            )
+
+        with then("it returns 201 and that skill is marked required=true"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            skills = response.json()["skills"]
+            github = next(s for s in skills if s["id"] == github_id)
+            assert_that(github["required"], equal_to(True))
+
+
+def test_create_agent_with_both_group_members_marks_neither_required():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_template_skill_group(("GitHub", "Bitbucket")),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        ids = _group_skill_ids(context)
+
+        with when("I create an agent including both group members"):
+            response = client.post(
+                _BASE,
+                json={**_VALID_CREATE, "skill_ids": [ids["GitHub"], ids["Bitbucket"]]},
+                headers=_auth(context),
+            )
+
+        with then("it returns 201 and neither is marked required, since either is removable"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            skills = response.json()["skills"]
+            assert_that(all(not s["required"] for s in skills), equal_to(True))
+
+
+def test_update_agent_can_remove_one_group_member_while_other_remains():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_template_skill_group(("GitHub", "Bitbucket")),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        ids = _group_skill_ids(context)
+
+        with when("I create an agent with both group members"):
+            agent = client.post(
+                _BASE,
+                json={**_VALID_CREATE, "skill_ids": [ids["GitHub"], ids["Bitbucket"]]},
+                headers=_auth(context),
+            ).json()
+
+        with when("I remove one member via PATCH"):
+            response = client.patch(
+                f"{_BASE}/{agent['id']}",
+                json={"removed_skill_ids": [ids["GitHub"]]},
+                headers=_auth(context),
+            )
+
+        with then("it returns 200 and the survivor becomes required=true"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            bitbucket = next(s for s in response.json()["skills"] if s["id"] == ids["Bitbucket"])
+            assert_that(bitbucket["required"], equal_to(True))
+
+
+def test_update_agent_cannot_remove_last_group_member():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_template_skill_group(("GitHub", "Bitbucket")),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        ids = _group_skill_ids(context)
+
+        with when("I create an agent with a single group member"):
+            agent = client.post(
+                _BASE,
+                json={**_VALID_CREATE, "skill_ids": [ids["GitHub"]]},
+                headers=_auth(context),
+            ).json()
+
+        with when("I try to remove that sole group member via PATCH"):
+            response = client.patch(
+                f"{_BASE}/{agent['id']}",
+                json={"removed_skill_ids": [ids["GitHub"]]},
+                headers=_auth(context),
+            )
+
+        with then("it returns 409"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+
+
+def test_update_agent_can_swap_group_members_in_one_call():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_template_skill_group(("GitHub", "Bitbucket")),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        ids = _group_skill_ids(context)
+
+        with when("I create an agent with the GitHub member"):
+            agent = client.post(
+                _BASE,
+                json={**_VALID_CREATE, "skill_ids": [ids["GitHub"]]},
+                headers=_auth(context),
+            ).json()
+
+        with when("I swap GitHub for Bitbucket in the same PATCH"):
+            response = client.patch(
+                f"{_BASE}/{agent['id']}",
+                json={"skill_ids": [ids["Bitbucket"]], "removed_skill_ids": [ids["GitHub"]]},
+                headers=_auth(context),
+            )
+
+        with then("it returns 200 and Bitbucket is now required=true"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            bitbucket = next(s for s in response.json()["skills"] if s["id"] == ids["Bitbucket"])
+            assert_that(bitbucket["required"], equal_to(True))
+
+
+def test_update_agent_repin_to_grouped_template_without_member_returns_400():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_template(template_key="with-group", name="With Group"),
+            there_is_a_template_skill_group(("GitHub", "Bitbucket")),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("I create an agent using a template with no required skills"):
+            agent = client.post(
+                _BASE,
+                json={**_VALID_CREATE, "template_key": "test-template"},
+                headers=_auth(context),
+            ).json()
+
+        with when("I repin to the grouped template without a member"):
+            response = client.patch(
+                f"{_BASE}/{agent['id']}",
+                json={"template_key": "with-group", "template_version": 1},
+                headers=_auth(context),
+            )
+
+        with then("it returns 400"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+
+
+def test_update_agent_repin_to_grouped_template_with_member_succeeds_and_marks_required():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_template(template_key="with-group", name="With Group"),
+            there_is_a_template_skill_group(("GitHub", "Bitbucket")),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        ids = _group_skill_ids(context)
+
+        with when("I create an agent using a template with no required skills"):
+            agent = client.post(
+                _BASE,
+                json={**_VALID_CREATE, "template_key": "test-template"},
+                headers=_auth(context),
+            ).json()
+
+        with when("I repin providing a group member in skill_ids"):
+            response = client.patch(
+                f"{_BASE}/{agent['id']}",
+                json={
+                    "template_key": "with-group",
+                    "template_version": 1,
+                    "skill_ids": [ids["Bitbucket"]],
+                },
+                headers=_auth(context),
+            )
+
+        with then("it returns 200 and the provided member is marked required=true"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            bitbucket = next(s for s in response.json()["skills"] if s["id"] == ids["Bitbucket"])
+            assert_that(bitbucket["required"], equal_to(True))
+
+
+def test_list_agents_marks_sole_group_member_required():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_template_skill_group(("GitHub", "Bitbucket")),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        github_id = _group_skill_ids(context)["GitHub"]
+
+        with when("I create an agent with a single group member"):
+            client.post(
+                _BASE,
+                json={**_VALID_CREATE, "skill_ids": [github_id]},
+                headers=_auth(context),
+            )
+
+        with when("I list agents"):
+            response = client.get(_BASE, headers=_auth(context))
+
+        with then("the sole group member appears with required=true in the list response"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            agents = response.json()["items"]
+            github = next(s for s in agents[0]["skills"] if s["id"] == github_id)
+            assert_that(github["required"], equal_to(True))
+
+
+def test_update_agent_grandfathered_without_group_member_can_still_be_updated():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+
+        with when("I create an agent on a template with no required skills yet"):
+            agent = client.post(_BASE, json=_VALID_CREATE, headers=_auth(context)).json()
+
+        with when("the template is later given a GitHub-or-Bitbucket group (e.g. via reseed)"):
+            there_is_a_template_skill_group(("GitHub", "Bitbucket"))(context)
+            # there_is_a_template_skill_group attaches to context.template, which
+            # is the same "test-template" row the agent above is pinned to.
+            assert repository.get_org_required_skill_map(context.template.id)
+
+        with when("I make an unrelated update (rename) without touching skills"):
+            response = client.patch(
+                f"{_BASE}/{agent['id']}",
+                json={"name": "Renamed Agent"},
+                headers=_auth(context),
+            )
+
+        with then("it succeeds — the agent is grandfathered in without a group member"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["name"], equal_to("Renamed Agent"))
 
 
 _GIVEN_WITH_FIRECRAWL = [
@@ -3374,3 +3894,43 @@ def test_create_agent_duplicate_token_does_not_leave_orphan():
         with then("no orphaned agent row is left behind"):
             agents = client.get(_BASE, headers=_auth(context)).json()["items"]
             assert_that(len(agents), equal_to(1))
+
+
+def test_start_agent_secret_has_litellm_proxy_target():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("I start the agent"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the secret contains LITELLM_PROXY_TARGET pointing to the real LiteLLM URL"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            secret = k8s.create_secret.call_args.args[1]
+            assert_that(secret.string_data["LITELLM_PROXY_TARGET"], equal_to("http://litellm:4000"))
+
+        with then("the secret routes LLM traffic through the local proxy"):
+            assert_that(secret.string_data["LITELLM_BASE_URL"], equal_to("http://localhost:8090"))
+
+
+def test_start_hermes_agent_secret_has_litellm_proxy_target():
+    with given(
+        [
+            *_GIVEN_WITH_HERMES_IMAGE,
+            there_is_an_agent(agent_type=AgentType.HERMES),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("I start the Hermes agent"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the secret contains LITELLM_PROXY_TARGET pointing to the real LiteLLM URL"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            secret = k8s.create_secret.call_args.args[1]
+            assert_that(secret.string_data["LITELLM_PROXY_TARGET"], equal_to("http://litellm:4000"))
+
+        with then("the secret routes LLM traffic through the local proxy"):
+            assert_that(secret.string_data["OPENAI_BASE_URL"], equal_to("http://localhost:8090"))
+            assert_that(secret.string_data["OPENROUTER_BASE_URL"], equal_to("http://localhost:8090"))

@@ -50,6 +50,8 @@ def build_user_service() -> tuple[
         organization_repository=cast(OrganizationRepository, organization_repository),
         refresh_token_repository=cast(RefreshTokenRepository, refresh_token_repository),
         config=config,
+        event_delivery_dispatcher=Mock(),
+        auth_service=Mock(),
     )
     organization_user_service.find_by_user_id.return_value = []
     return (
@@ -61,45 +63,35 @@ def build_user_service() -> tuple[
     )
 
 
-def test_ensure_default_platform_admin_returns_existing_user():
+def test_ensure_default_platform_admin_leaves_existing_administrator_alone():
     service, user_repository, _, _, _ = build_user_service()
-    existing = User(
-        email="admin@example.com",
-        hashed_password=hash_text("StrongPass123"),
-        full_name="Super User",
-        email_verified_at=None,
-    )
-    user_repository.get_platform_admin.return_value = existing
+    user_repository.count_platform_admins.return_value = 1
 
     result = service.ensure_default_platform_admin()
 
-    assert_that(result, equal_to(existing))
+    assert_that(result, equal_to(None))
     user_repository.save.assert_not_called()
 
 
-def test_ensure_default_platform_admin_does_not_update_existing():
+def test_ensure_default_platform_admin_tolerates_several_administrators():
+    # Promoting a second administrator is supported, and must not break startup.
     service, user_repository, _, _, _ = build_user_service()
-    existing = User(
-        email="different@example.com",
-        hashed_password=hash_text("DifferentPass999"),
-        full_name="Different Name",
-    )
-    user_repository.get_platform_admin.return_value = existing
+    user_repository.count_platform_admins.return_value = 3
 
     result = service.ensure_default_platform_admin()
 
-    assert_that(result, equal_to(existing))
-    assert_that(result.email, equal_to("different@example.com"))
+    assert_that(result, equal_to(None))
     user_repository.save.assert_not_called()
 
 
 def test_ensure_default_platform_admin_creates_when_missing():
     service, user_repository, _, _, _ = build_user_service()
-    user_repository.get_platform_admin.return_value = None
+    user_repository.count_platform_admins.return_value = 0
     user_repository.save.side_effect = lambda user: user
 
     result = service.ensure_default_platform_admin()
 
+    assert result is not None
     assert_that(result.email, equal_to("admin@example.com"))
     assert_that(result.is_platform_admin, equal_to(True))
     user_repository.save.assert_called_once()

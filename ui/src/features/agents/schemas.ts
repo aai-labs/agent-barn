@@ -26,6 +26,8 @@ export const AgentTelegramConfigSchema = z.object({
 export const AgentSecretReadSchema = z.object({
   provider: z.string(),
   secretName: z.string(),
+  sharedCredentialId: z.string().uuid().nullable().optional(),
+  sharedCredentialName: z.string().nullable().optional(),
 });
 
 export const IntegrationValidationResultSchema = z.object({
@@ -47,6 +49,14 @@ export const AgentAssignedSkillSchema = z.object({
   required: z.boolean().default(false),
   createdAt: z.string(),
   updatedAt: z.string(),
+});
+
+// A template's required skill. groupKey is null for a standalone
+// (AND-required) skill; skills sharing the same non-null groupKey form an
+// "at least one of" requirement group (e.g. GitHub OR Bitbucket) — the user
+// must pick one at hire time, and can't drop below one member thereafter.
+export const TemplateRequiredSkillSchema = AgentAssignedSkillSchema.extend({
+  groupKey: z.string().nullable().optional().default(null),
 });
 
 export const AgentPermissionKeySchema = z.enum([
@@ -96,7 +106,7 @@ export const AgentSchema = z.object({
   platform: z.enum(["slack", "teams", "telegram"]),
   agentType: z.enum(["openclaw", "hermes"]).default("openclaw"),
   organizationId: z.string().uuid(),
-  templateSlug: z.string(),
+  templateKey: z.string(),
   templateVersion: z.number().int(),
   model: z.string(),
   approvalMode: z.enum(["manual", "auto", "off"]).default("auto"),
@@ -114,10 +124,13 @@ export const AgentSchema = z.object({
 export const AgentTemplateReadSchema = z.object({
   id: z.string().uuid(),
   organizationId: z.string().uuid().nullable(),
-  templateSlug: z.string(),
+  templateKey: z.string(),
   templateName: z.string(),
   templateSource: z.enum(["pre-defined", "custom"]),
   forkedFromPlatformTemplateId: z.string().uuid().nullable().optional(),
+  forkBaselinePlatformTemplateId: z.string().uuid().nullable().optional(),
+  forkBaselinePlatformVersion: z.number().int().nullable().optional(),
+  platformUpdateAvailable: z.boolean().default(false),
   version: z.number().int(),
   description: z.string().nullable().optional(),
   soulMd: z.string(),
@@ -128,7 +141,7 @@ export const AgentTemplateReadSchema = z.object({
   bootMd: z.string(),
   bootstrapMd: z.string(),
   heartbeatMd: z.string(),
-  requiredSkills: z.array(AgentAssignedSkillSchema).default([]),
+  requiredSkills: z.array(TemplateRequiredSkillSchema).default([]),
   inUse: z.boolean().default(false),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -257,6 +270,7 @@ export type CommandApprovalMode = "manual" | "auto" | "off";
 export type AgentPermissionKey = z.infer<typeof AgentPermissionKeySchema>;
 export type Agent = z.infer<typeof AgentSchema>;
 export type AgentAssignedSkill = z.infer<typeof AgentAssignedSkillSchema>;
+export type TemplateRequiredSkill = z.infer<typeof TemplateRequiredSkillSchema>;
 export type AgentSlackConfig = z.infer<typeof AgentSlackConfigSchema>;
 export type AgentTeamsConfig = z.infer<typeof AgentTeamsConfigSchema>;
 export type AgentTelegramConfig = z.infer<typeof AgentTelegramConfigSchema>;

@@ -11,6 +11,7 @@ def test_build_manifest_contains_expanded_scopes():
         "pins:write",
         "reactions:read",
         "search:read.users",
+        "bookmarks:read",
     ]:
         assert scope in scopes
 

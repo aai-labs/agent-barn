@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Copy, Eye, EyeOff, RefreshCw } from "lucide-react";
+import { CheckIcon, CopyIcon, Loader2Icon, UserPlusIcon } from "lucide-react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 
@@ -14,12 +14,21 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-
-import { useAllOrganizations } from "@/features/organizations/hooks/use-all-organizations";
+import {
+  Field,
+  FieldDescription,
+  FieldError,
+  FieldGroup,
+  FieldLabel,
+} from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
 
 import { useCreateUser } from "../hooks/use-create-user";
-import { CreateUserData, CreateUserSchema } from "../schemas";
-import { generateStrongPassword } from "../utils";
+import {
+  type PlatformUserCreateForm,
+  type PlatformUserCreateResult,
+  PlatformUserCreateFormSchema,
+} from "../schemas";
 
 interface CreateUserDialogProps {
   open: boolean;
@@ -27,33 +36,33 @@ interface CreateUserDialogProps {
 }
 
 export function CreateUserDialog({ open, onOpenChange }: CreateUserDialogProps) {
-  const [showPassword, setShowPassword] = useState(false);
+  const [created, setCreated] = useState<PlatformUserCreateResult | null>(null);
   const createUser = useCreateUser();
-  const { organizations } = useAllOrganizations({ enabled: open });
-
   const {
     register,
     handleSubmit,
-    setValue,
     reset,
     formState: { errors },
-  } = useForm<CreateUserData>({
-    resolver: zodResolver(CreateUserSchema),
-    defaultValues: {
-      email: "",
-      password: "",
-      fullName: "",
-      organizationId: "",
-      role: "MEMBER",
-    },
+  } = useForm<PlatformUserCreateForm>({
+    resolver: zodResolver(PlatformUserCreateFormSchema),
+    defaultValues: { email: "", fullName: "", organizationName: "" },
   });
 
-  const onSubmit = (values: CreateUserData) => {
+  const resetDialog = () => {
+    reset();
+    setCreated(null);
+  };
+
+  const closeDialog = () => {
+    resetDialog();
+    onOpenChange(false);
+  };
+
+  const onSubmit = (values: PlatformUserCreateForm) => {
     createUser.mutate(values, {
-      onSuccess: () => {
-        toast.success("User created successfully");
-        reset();
-        onOpenChange(false);
+      onSuccess: (result) => {
+        setCreated(result);
+        toast.success("User and initial organization created");
       },
       onError: (error) => {
         toast.error(error.message || "Failed to create user");
@@ -61,168 +70,134 @@ export function CreateUserDialog({ open, onOpenChange }: CreateUserDialogProps) 
     });
   };
 
-  const handleGenerate = () => {
-    const password = generateStrongPassword();
-    setValue("password", password, { shouldValidate: true });
-    setShowPassword(true);
-  };
-
-  const handleCopy = async () => {
-    const field = document.querySelector<HTMLInputElement>('input[name="password"]');
-    if (field?.value) {
-      await navigator.clipboard.writeText(field.value);
-      toast.success("Password copied to clipboard");
-    }
+  const copyInvite = async () => {
+    if (!created) return;
+    await navigator.clipboard.writeText(created.inviteLink);
+    toast.success("Invitation link copied");
   };
 
   return (
     <Dialog
       open={open}
-      onOpenChange={(v) => {
-        if (!v) reset();
-        onOpenChange(v);
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen) resetDialog();
+        onOpenChange(nextOpen);
       }}
     >
       <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Create user</DialogTitle>
-          <DialogDescription>
-            Create an account and add it to an organization.
-          </DialogDescription>
-        </DialogHeader>
-
-        <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4">
-          <div>
-            <label htmlFor="email" className="block font-medium text-[13.5px] mb-1.5" style={{ color: "var(--ink)" }}>
-              Email
-            </label>
-            <input
-              id="email"
-              type="email"
-              placeholder="user@example.com"
-              className="af-input"
-              aria-invalid={!!errors.email}
-              {...register("email")}
-            />
-            {errors.email && (
-              <p className="text-[12.5px] mt-1" style={{ color: "var(--err)" }}>
-                {errors.email.message}
-              </p>
-            )}
-          </div>
-
-          <div>
-            <label htmlFor="password" className="block font-medium text-[13.5px] mb-1.5" style={{ color: "var(--ink)" }}>
-              Password
-            </label>
-            <div className="flex gap-1.5">
-              <div className="relative flex-1">
-                <input
-                  id="password"
-                  type={showPassword ? "text" : "password"}
-                  className="af-input w-full pr-9"
-                  aria-invalid={!!errors.password}
-                  {...register("password")}
+        {created ? (
+          <>
+            <DialogHeader>
+              <DialogTitle>Invitation created</DialogTitle>
+              <DialogDescription>
+                {created.user.email} is the owner of {created.organization.name}. An
+                invitation was sent so they can set their password.
+              </DialogDescription>
+            </DialogHeader>
+            <FieldGroup>
+              <Field>
+                <FieldLabel htmlFor="created-user-invite">Invitation link</FieldLabel>
+                <Input
+                  id="created-user-invite"
+                  value={created.inviteLink}
+                  readOnly
                 />
+                <FieldDescription>
+                  Copy this link if email delivery is unavailable.
+                </FieldDescription>
+              </Field>
+            </FieldGroup>
+            <DialogFooter>
+              <button
+                type="button"
+                className="af-btn"
+                onClick={() => void copyInvite()}
+              >
+                <CopyIcon width={15} height={15} /> Copy link
+              </button>
+              <button
+                type="button"
+                className="af-btn af-btn-primary"
+                onClick={closeDialog}
+              >
+                <CheckIcon width={15} height={15} /> Done
+              </button>
+            </DialogFooter>
+          </>
+        ) : (
+          <>
+            <DialogHeader>
+              <DialogTitle>Create user</DialogTitle>
+              <DialogDescription>
+                Create a pending account and its initial organization. The user will
+                receive an invitation to set their own password.
+              </DialogDescription>
+            </DialogHeader>
+            <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-5">
+              <FieldGroup>
+                <Field data-invalid={!!errors.email}>
+                  <FieldLabel htmlFor="new-user-email">Email</FieldLabel>
+                  <Input
+                    id="new-user-email"
+                    type="email"
+                    placeholder="user@example.com"
+                    aria-invalid={!!errors.email}
+                    {...register("email")}
+                  />
+                  <FieldError errors={[errors.email]} />
+                </Field>
+                <Field data-invalid={!!errors.fullName}>
+                  <FieldLabel htmlFor="new-user-full-name">Full name</FieldLabel>
+                  <Input
+                    id="new-user-full-name"
+                    placeholder="Jane Doe"
+                    aria-invalid={!!errors.fullName}
+                    {...register("fullName")}
+                  />
+                  <FieldDescription>Optional.</FieldDescription>
+                  <FieldError errors={[errors.fullName]} />
+                </Field>
+                <Field data-invalid={!!errors.organizationName}>
+                  <FieldLabel htmlFor="new-user-organization-name">
+                    Initial organization name
+                  </FieldLabel>
+                  <Input
+                    id="new-user-organization-name"
+                    placeholder="Jane Doe's Organization"
+                    aria-invalid={!!errors.organizationName}
+                    {...register("organizationName")}
+                  />
+                  <FieldDescription>
+                    Optional. Organization names are display labels and do not need to
+                    be globally unique.
+                  </FieldDescription>
+                  <FieldError errors={[errors.organizationName]} />
+                </Field>
+              </FieldGroup>
+              <DialogFooter>
                 <button
                   type="button"
-                  className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded"
-                  style={{ color: "var(--ink-4)" }}
-                  onClick={() => setShowPassword((v) => !v)}
-                  tabIndex={-1}
+                  className="af-btn"
+                  onClick={closeDialog}
                 >
-                  {showPassword ? <EyeOff width={15} height={15} /> : <Eye width={15} height={15} />}
+                  Cancel
                 </button>
-              </div>
-              <button
-                type="button"
-                className="af-btn"
-                onClick={handleGenerate}
-                title="Generate password"
-              >
-                <RefreshCw width={14} height={14} />
-              </button>
-              <button
-                type="button"
-                className="af-btn"
-                onClick={() => void handleCopy()}
-                title="Copy password"
-              >
-                <Copy width={14} height={14} />
-              </button>
-            </div>
-            {errors.password && (
-              <p className="text-[12.5px] mt-1" style={{ color: "var(--err)" }}>
-                {errors.password.message}
-              </p>
-            )}
-          </div>
-
-          <div>
-            <label htmlFor="fullName" className="block font-medium text-[13.5px] mb-1.5" style={{ color: "var(--ink)" }}>
-              Full name <span className="font-normal" style={{ color: "var(--ink-4)" }}>(optional)</span>
-            </label>
-            <input
-              id="fullName"
-              type="text"
-              placeholder="Jane Doe"
-              className="af-input"
-              {...register("fullName")}
-            />
-          </div>
-
-          <div className="flex gap-3">
-            <div className="flex-1 min-w-0">
-              <label htmlFor="organizationId" className="block font-medium text-[13.5px] mb-1.5" style={{ color: "var(--ink)" }}>
-                Organization
-              </label>
-              <select
-                id="organizationId"
-                className="af-select w-full"
-                aria-invalid={!!errors.organizationId}
-                {...register("organizationId")}
-              >
-                <option value="">Select an organization</option>
-                {organizations.map((org) => (
-                  <option key={org.id} value={org.id}>
-                    {org.name}
-                  </option>
-                ))}
-              </select>
-              {errors.organizationId && (
-                <p className="text-[12.5px] mt-1" style={{ color: "var(--err)" }}>
-                  {errors.organizationId.message}
-                </p>
-              )}
-            </div>
-            <div className="w-[130px] flex-shrink-0">
-              <label htmlFor="role" className="block font-medium text-[13.5px] mb-1.5" style={{ color: "var(--ink)" }}>
-                Role
-              </label>
-              <select id="role" className="af-select w-full" {...register("role")}>
-                <option value="MEMBER">Member</option>
-                <option value="ADMIN">Admin</option>
-              </select>
-            </div>
-          </div>
-
-          <DialogFooter>
-            <button
-              type="button"
-              className="af-btn"
-              onClick={() => onOpenChange(false)}
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              className="af-btn af-btn-primary"
-              disabled={createUser.isPending}
-            >
-              {createUser.isPending ? "Creating…" : "Create"}
-            </button>
-          </DialogFooter>
-        </form>
+                <button
+                  type="submit"
+                  className="af-btn af-btn-primary"
+                  disabled={createUser.isPending}
+                >
+                  {createUser.isPending ? (
+                    <Loader2Icon width={15} height={15} className="animate-spin" />
+                  ) : (
+                    <UserPlusIcon width={15} height={15} />
+                  )}
+                  Create and invite
+                </button>
+              </DialogFooter>
+            </form>
+          </>
+        )}
       </DialogContent>
     </Dialog>
   );

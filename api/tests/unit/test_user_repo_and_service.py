@@ -46,6 +46,34 @@ def test_i_cannot_save_duplicate_email():
                 )
 
 
+def test_count_platform_admins():
+    with given([prepare_injector(), database_repo_is_ready(), database_is_clean()]) as context:
+        repository: UserRepository = context.injector.get(UserRepository)
+
+        with then("a platform without administrators counts none"):
+            assert_that(repository.count_platform_admins(), equal_to(0))
+
+        with when("several administrators exist alongside a regular user"):
+            repository.save(
+                User(
+                    email="first_admin@example.com",
+                    hashed_password="hashed_password",
+                    is_platform_admin=True,
+                )
+            )
+            repository.save(
+                User(
+                    email="second_admin@example.com",
+                    hashed_password="hashed_password",
+                    is_platform_admin=True,
+                )
+            )
+            repository.save(User(email="member@example.com", hashed_password="hashed_password"))
+
+            with then("only the administrators are counted"):
+                assert_that(repository.count_platform_admins(), equal_to(2))
+
+
 def test_find_all_in_organization():
     with given(
         [

@@ -5,10 +5,10 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "@/shared/api";
 
 import {
-  PaginatedOrganizations,
-  PaginatedOrganizationsSchema,
+  PaginatedPlatformOrganizations,
+  PaginatedPlatformOrganizationsSchema,
 } from "../schemas";
-import { organizationsKey } from "../utils";
+import { platformOrganizationsKey } from "../utils";
 
 // Upper bound for the org switcher. If a platform admin ever manages more orgs than this,
 // the picker should move to a searchable/paginated list.
@@ -20,11 +20,11 @@ const ALL_ORGANIZATIONS_PAGE_SIZE = 200;
  */
 export function useAllOrganizations({ enabled }: { enabled: boolean }) {
   const query = useQuery({
-    queryKey: organizationsKey.list({ scope: { mode: "all" } }),
+    queryKey: platformOrganizationsKey.list({ scope: { mode: "all" } }),
     queryFn: async () => {
-      const response = await api.get<PaginatedOrganizations>(
+      const response = await api.get<PaginatedPlatformOrganizations>(
         `/api/v1/platform/organizations?page=1&page_size=${ALL_ORGANIZATIONS_PAGE_SIZE}`,
-        { schema: PaginatedOrganizationsSchema },
+        { schema: PaginatedPlatformOrganizationsSchema },
       );
       return response.data;
     },

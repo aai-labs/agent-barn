@@ -2,6 +2,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
+from api.domains.events.models import EventScope
 from api.domains.events.registry import DomainEventDefinition, DomainEventRegistry
 
 ORGANIZATION_ROLE_CHANGED = "organization.role.changed"
@@ -11,6 +12,8 @@ AGENT_GENERAL_ACCESS_CHANGED = "agent.general_access.changed"
 AGENT_CREATED = "agent.created"
 AGENT_STARTED = "agent.started"
 AGENT_STOPPED = "agent.stopped"
+PLATFORM_USER_PRIVILEGE_GRANTED = "platform.user_privilege.granted"
+PLATFORM_USER_PRIVILEGE_REVOKED = "platform.user_privilege.revoked"
 
 SECURITY_AUDIT_HANDLER = "security_audit.projection"
 AGENT_LIFECYCLE_EMAIL_HANDLER = "agent.lifecycle_email.notification"
@@ -24,6 +27,8 @@ class OrganizationRoleChangedPayload(BaseModel):
     user_id: UUID | None
     previous_role: str
     new_role: str
+    actor_display: str
+    subject_display: str
 
 
 class AgentAccessGrantedPayload(BaseModel):
@@ -33,6 +38,8 @@ class AgentAccessGrantedPayload(BaseModel):
     agent_id: UUID
     membership_id: UUID
     access_role_id: UUID
+    actor_display: str
+    subject_display: str
 
 
 class AgentAccessRevokedPayload(BaseModel):
@@ -42,6 +49,8 @@ class AgentAccessRevokedPayload(BaseModel):
     agent_id: UUID
     membership_id: UUID
     previous_access_role_id: UUID
+    actor_display: str
+    subject_display: str
 
 
 class AgentGeneralAccessChangedPayload(BaseModel):
@@ -51,6 +60,8 @@ class AgentGeneralAccessChangedPayload(BaseModel):
     agent_id: UUID
     previous_access_role_id: UUID | None
     new_access_role_id: UUID | None
+    actor_display: str
+    subject_display: str
 
 
 class AgentCreatedPayload(BaseModel):
@@ -76,6 +87,16 @@ class AgentLifecyclePayload(BaseModel):
     runtime: str
 
 
+class PlatformUserPrivilegeChangedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    actor_user_id: UUID
+    actor_display: str
+    subject_user_id: UUID
+    subject_display: str
+    reason: str
+
+
 def build_default_event_registry() -> DomainEventRegistry:
     registry = DomainEventRegistry()
     for event_name, payload_model in (
@@ -90,6 +111,7 @@ def build_default_event_registry() -> DomainEventRegistry:
                 schema_version=1,
                 payload_model=payload_model,
                 handler_names=(SECURITY_AUDIT_HANDLER,),
+                event_scope=EventScope.ORGANIZATION,
             )
         )
     registry.register(
@@ -97,6 +119,7 @@ def build_default_event_registry() -> DomainEventRegistry:
             event_name=AGENT_CREATED,
             schema_version=1,
             payload_model=AgentCreatedPayload,
+            event_scope=EventScope.ORGANIZATION,
         )
     )
     for event_name in (AGENT_STARTED, AGENT_STOPPED):
@@ -106,6 +129,20 @@ def build_default_event_registry() -> DomainEventRegistry:
                 schema_version=1,
                 payload_model=AgentLifecyclePayload,
                 handler_names=(AGENT_LIFECYCLE_EMAIL_HANDLER,),
+                event_scope=EventScope.ORGANIZATION,
+            )
+        )
+    for event_name in (
+        PLATFORM_USER_PRIVILEGE_GRANTED,
+        PLATFORM_USER_PRIVILEGE_REVOKED,
+    ):
+        registry.register(
+            DomainEventDefinition(
+                event_name=event_name,
+                schema_version=1,
+                payload_model=PlatformUserPrivilegeChangedPayload,
+                handler_names=(SECURITY_AUDIT_HANDLER,),
+                event_scope=EventScope.PLATFORM,
             )
         )
     return registry

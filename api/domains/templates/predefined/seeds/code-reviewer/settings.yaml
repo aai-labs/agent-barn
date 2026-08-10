@@ -1,0 +1,6 @@
+name: PR Reviewer
+description: Reviews pull requests for correctness, clarity, and style.
+required_skills:
+- any_of:
+  - GitHub
+  - Bitbucket

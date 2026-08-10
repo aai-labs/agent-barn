@@ -50,7 +50,13 @@ Creation requires `agent.create`, resolves the requested template version or the
 
 ### Update
 
-Update is allowed only while not running. It can change runtime-relevant configuration, repin to an existing template version, add/remove allowed skills, and upsert/remove Agent Secrets. Repinning requires both slug and version and revalidates required skills.
+Update is allowed only while not running. It can change runtime-relevant configuration, repin to an existing template version, add/remove allowed skills, and upsert/remove Agent Secrets. Repinning requires both template_key and version and revalidates required skills.
+
+### Tuning and configuration overrides
+
+The Agent configuration drawer is the per-Agent tuning surface. While an Agent is stopped and the caller has `agent.update`, it can override the Agent name, Configured Model, Command Approval Mode, platform routing (Slack channels/DMs, Teams endpoint, or Telegram chats), pinned Template Version, and explicit Skill assignments. Secret and credential changes additionally require `agent.secret.manage`; secret values remain encrypted and are never returned.
+
+Template Markdown is not edited as an unversioned per-Agent override. Selecting a different Template Version is an explicit repin of that Agent, and the resulting required-skill and provider-credential checks run before the change is accepted. Platform Template publishing and Organization Template Updates never move existing Agent pins automatically. Running Agents reject all configuration overrides, so stop the Agent before applying tuning changes.
 
 ### Start
 

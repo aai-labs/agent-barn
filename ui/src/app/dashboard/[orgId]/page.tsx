@@ -51,7 +51,7 @@ export default function DashboardPage() {
   };
 
   return (
-    <div className="max-w-[75rem] mx-auto px-10 pt-9 pb-24">
+    <div className="af-page">
       <div className="mb-14">
         <h1 className="text-4xl font-medium tracking-[-0.028em] leading-[1.18] m-0 mb-3" style={{ color: "var(--ink)" }}>
           {greet}, {firstName}

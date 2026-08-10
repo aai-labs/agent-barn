@@ -2,6 +2,8 @@ const http = require('http');
 const https = require('https');
 const { execFile } = require('child_process');
 
+
+const PROXY_PORT = 8090;
 const PORT = parseInt(process.env.HEALTHZ_PORT || '8081', 10);
 const CACHE_TTL_MS = 10_000;
 const TOKEN_POLL_MS = 5 * 60 * 1000; // 5 minutes
@@ -10,10 +12,18 @@ const AGENT_PLATFORM = process.env.AGENT_PLATFORM || 'slack';
 const SKIP_VALIDATION = ['1', 'true', 'yes'].includes(
   (process.env.SKIP_SLACK_TOKEN_VALIDATION || '').toLowerCase()
 );
+const LITELLM_PROXY_TARGET = process.env.LITELLM_PROXY_TARGET || '';
 
 let cache = null;
 let tokenCache = null;
+let proxyServer = null;
 let refreshing = false;
+
+const TERMINAL_LLM_ERRORS = {
+  401: 'LLM API key is invalid or expired. Check your API key configuration.',
+  402: 'OpenRouter credits exhausted. Add credits at https://openrouter.ai/credits.',
+  403: 'LLM API access denied. Check your account permissions.',
+};
 
 function slackPost(path, token) {
   return new Promise((resolve) => {
@@ -177,6 +187,72 @@ const server = http.createServer((req, res) => {
   }
 });
 
-process.on('SIGTERM', () => server.close(() => process.exit(0)));
+process.on('SIGTERM', () => {
+  if (proxyServer) proxyServer.close();
+  server.close(() => process.exit(0));
+});
 
 server.listen(PORT, () => console.log('[healthz] listening on :' + PORT));
+
+// ---------------------------------------------------------------------------
+// LLM proxy — intercepts terminal errors and returns clean messages
+// ---------------------------------------------------------------------------
+
+if (LITELLM_PROXY_TARGET) {
+  const targetUrl = new URL(LITELLM_PROXY_TARGET);
+  const targetModule = targetUrl.protocol === 'https:' ? https : http;
+  const targetPort = targetUrl.port || (targetUrl.protocol === 'https:' ? 443 : 80);
+
+  proxyServer = http.createServer((clientReq, clientRes) => {
+    const opts = {
+      hostname: targetUrl.hostname,
+      port: targetPort,
+      path: clientReq.url,
+      method: clientReq.method,
+      headers: { ...clientReq.headers, host: targetUrl.host },
+      timeout: 120_000,
+    };
+
+    const upstreamReq = targetModule.request(opts, (upstreamRes) => {
+      const cleanMsg = TERMINAL_LLM_ERRORS[upstreamRes.statusCode];
+      if (cleanMsg) {
+        // Consume upstream body then send clean response
+        const chunks = [];
+        upstreamRes.on('data', (c) => chunks.push(c));
+        upstreamRes.on('end', () => {
+          const body = JSON.stringify({
+            error: { message: cleanMsg, type: null, param: null, code: String(upstreamRes.statusCode) }
+          });
+          clientRes.writeHead(upstreamRes.statusCode, {
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(body),
+          });
+          clientRes.end(body);
+        });
+      } else {
+        clientRes.writeHead(upstreamRes.statusCode, upstreamRes.headers);
+        upstreamRes.pipe(clientRes);
+      }
+    });
+
+    upstreamReq.on('error', () => {
+      if (!clientRes.headersSent && !clientRes.destroyed) {
+        const body = JSON.stringify({
+          error: { message: 'LLM proxy upstream unreachable', type: null, param: null, code: '502' }
+        });
+        clientRes.writeHead(502, {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(body),
+        });
+        clientRes.end(body);
+      } else {
+        clientRes.destroy();
+      }
+    });
+
+    clientReq.pipe(upstreamReq);
+    clientReq.on('close', () => { if (!clientReq.complete) upstreamReq.destroy(); });
+  });
+
+  proxyServer.listen(PROXY_PORT, () => console.log('[llm-proxy] listening on :' + PROXY_PORT));
+}

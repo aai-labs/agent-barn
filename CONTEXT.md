@@ -8,6 +8,18 @@ Agent Farm manages organization-owned AI agents that operate in Slack, Microsoft
 The tenant boundary that owns agents, templates, skills, memberships, and organization-scoped activity.
 _Avoid_: workspace, tenant account
 
+**Organization Creator**:
+The user who originally created an Organization, retained as immutable provenance. Creation grants an Organization Owner Membership, but later ownership changes do not change the Organization Creator.
+_Avoid_: Organization Owner, current owner
+
+**Organization Status**:
+The platform-controlled lifecycle state of an Organization: Active or Suspended. Suspension preserves the Organization and its Memberships while disabling organization-scoped access and runtime activity until reactivation.
+_Avoid_: deleted Organization, disabled Membership
+
+**Organization Creation Limit**:
+The deployment-configured maximum number of non-deleted Organizations attributed to one Organization Creator. Active and Suspended Organizations both count, and Platform Privilege does not bypass the limit.
+_Avoid_: Membership limit, ownership limit, Platform Administrator quota
+
 **Platform Administrator**:
 A user with platform-level authority to administer Agent Farm outside any single Organization. A Platform Administrator may also have normal Memberships, but platform authority is separate from Organization Membership authority.
 _Avoid_: superuser, super admin, global role
@@ -21,8 +33,12 @@ A global resource owned by Agent Farm itself rather than by an Organization.
 _Avoid_: default Organization resource, shared tenant data
 
 **Platform View**:
-The product mode where a Platform Administrator manages platform-level users, organizations, and operational metadata without an Active Organization.
+The product mode where a Platform Administrator manages Platform Resources and Platform Oversight Data without an Active Organization or direct access to Organization-owned resources.
 _Avoid_: default Organization, admin Organization, global workspace
+
+**Platform Oversight Data**:
+An explicitly allowlisted, read-only representation of user, Organization, Membership, Agent, activity, model-usage, and platform-borne cost facts used for cross-Organization governance. It excludes tenant content, configuration payloads, credentials, Secrets, and raw telemetry.
+_Avoid_: Organization View, impersonation, unrestricted tenant access
 
 **Organization View**:
 The product mode where a user, including a Platform Administrator with Memberships, operates through Membership authority inside an Active Organization.
@@ -64,6 +80,14 @@ _Avoid_: Organization Owner, permanent Agent authority
 An organization-owned AI worker configured from a pinned template version and executed by one runtime on one chat platform.
 _Avoid_: bot, pod
 
+**Configured Model**:
+The model currently selected for an Agent. It describes present configuration, not necessarily every model the Agent used historically.
+_Avoid_: model usage, observed model
+
+**Observed Model Usage**:
+The models and token usage attributed to Agent executions during a defined reporting period. It may include multiple models and may differ from the Agent's current Configured Model.
+_Avoid_: configured model, current model
+
 **Runtime**:
 The implementation that executes an agent. Agent Farm currently supports Hermes and OpenClaw.
 _Avoid_: platform
@@ -76,17 +100,41 @@ _Avoid_: runtime
 A versioned Markdown configuration lineage used to create and run agents. Predefined templates are Platform Resources; custom templates belong to one Organization.
 _Avoid_: prompt, preset
 
+**Template Key**:
+An immutable, server-generated opaque identifier for a Template lineage, normally formatted as `tpl-` plus 12 lowercase hexadecimal characters. The key is used in URLs and API lookups; it is not derived from or managed through the display name.
+_Avoid_: template slug, editable identifier
+
 **Template Version**:
-A numbered configuration within a template lineage. An agent pins a specific version rather than following the latest automatically; system-managed predefined version 1 can be refreshed in place during startup seeding.
+A numbered configuration within a template lineage. An agent pins a specific version rather than following the latest automatically.
 _Avoid_: template revision
+
+**Draft Template Version**:
+An unpublished, in-progress next version of a Platform Template lineage, editable only by a Platform Administrator and invisible to every Organization. A lineage has at most one Draft Template Version at a time; publishing it produces the next immutable Platform Template Version.
+_Avoid_: unpublished template, WIP template
+
+**Template Restore**:
+A Platform Administrator action that seeds the Draft Template Version from any selected immutable Platform Template Version. Publishing the restored draft creates the next version in the lineage; it never mutates or removes the selected historical version.
+_Avoid_: version pointer switch, destructive rollback
+
+**Fork Baseline Version**:
+The Platform Template Version whose complete snapshot was copied into the current Organization Template version. It is stored with the organization row and advances each time a Template Update clones a newer platform snapshot.
+_Avoid_: fork version, template merge baseline
+
+**Template Update**:
+The manual action that clones an origin's newer Platform Template snapshot—including content and required skills—into the next Organization Template Version. It intentionally replaces organization customizations; existing Agent pins remain unchanged.
+_Avoid_: template merge, in-place sync
 
 **Skill**:
 A packaged set of agent instructions or references that can be assigned to an agent and required by a template.
 _Avoid_: integration, tool
 
 **Agent Secret**:
-An encrypted, provider-specific credential payload assigned to one agent so its runtime can access an external service.
+An encrypted, provider-specific credential payload assigned to one agent so its runtime can access an external service. May hold its own encrypted content or reference a Shared Credential.
 _Avoid_: skill, application secret
+
+**Shared Credential**:
+An encrypted, provider-specific credential payload owned by an organization and reusable across agents. Admins manage shared credentials; any org member can attach one to an agent.
+_Avoid_: org secret, global credential
 
 **Integration**:
 An external service made available to an agent through an Agent Secret and runtime-specific configuration.
@@ -105,8 +153,12 @@ An ingested record of one external tool execution by an agent, with pending, suc
 _Avoid_: integration call
 
 **Domain Event**:
-An immutable, typed business fact that occurred within an Organization and may be handled internally by Agent Farm.
+An immutable, typed business fact that occurred at Platform or Organization scope and may be handled internally by Agent Farm.
 _Avoid_: outbox row, telemetry event, audit log
+
+**Event Scope**:
+The boundary within which a Domain Event occurred: Platform or Organization. Organization-scoped events identify exactly one Organization; Platform-scoped events identify none.
+_Avoid_: default Organization, global tenant
 
 **Outbox Message**:
 The durable PostgreSQL record of a committed Domain Event that represents publication intent without depending on a broker-specific transport.
@@ -137,7 +189,7 @@ A named internal consumer of one or more Domain Events, with a stable identity u
 _Avoid_: worker, callback, subscriber
 
 **Security Audit Record**:
-A durable compliance artifact that records a security-relevant fact, usually produced as a projection from a Domain Event.
+A durable, immutable compliance artifact that records a security-relevant fact, usually produced as a projection from a Domain Event. It survives deletion of the Organization, user, Membership, Agent, or other subject it describes.
 _Avoid_: domain event, audit event, log line
 
 **Ingest**:
@@ -146,17 +198,24 @@ _Avoid_: webhook
 
 ## Relationships
 
-- An **Organization** has many **Memberships**, **Agents**, **Templates**, and custom **Skills**.
+- An **Organization** has many **Memberships**, **Agents**, **Templates**, custom **Skills**, and **Shared Credentials**.
+- An **Organization** has one immutable **Organization Creator**, and creation grants that user the initial Organization Owner **Membership**.
+- **Platform Oversight Data** may describe Organizations and their resources but never establishes an Active Organization or grants Organization authority.
 - A **Membership** links one user to one **Organization** with one **Organization Role**.
 - An **Organization Role** grants **Permissions** for Organization capabilities.
 - An **Agent Access Role** grants **Permissions** for one Agent aggregate.
 - An **Agent** belongs to one **Organization**, has one original **Agent Creator**, pins one **Template Version**, uses one **Runtime**, and connects to one **Platform**.
+- An **Agent** has one current **Configured Model** and may have **Observed Model Usage** for multiple models over time.
 - A **Membership** may have **Agent Access** to many Agents, and each relationship carries one **Agent Access Role**; creating an Agent grants its creator explicit Agent Owner access without transferring Organization ownership.
 - An **Agent** has one **Agent General Access** setting whose Permissions combine with (never subtract from) explicit Agent Access grants.
 - A **Template Version** may require multiple **Skills**.
+- A Platform Template lineage has at most one **Draft Template Version**, authored only by a **Platform Administrator**; publishing it exposes the next Platform Template Version to every Organization.
+- A **Platform Administrator** can inspect any immutable Platform Template Version and use a **Template Restore** to seed a new Draft Template Version from it; the restore leaves version history and existing Agent pins unchanged.
+- An Organization Template fork tracks a **Fork Baseline Version**; the first fork is Organization v1 and a **Template Update** clones its origin's newer Platform Template snapshot into the next organization version.
+- Editing an Agent's configuration from the Agent's own screen forks (or updates the existing fork of) its pinned Platform Template and repins that one Agent to the resulting Organization Template Version; other Agents still pinned to the prior version are unaffected. Running agents reject configuration updates, so the Agent must be stopped first.
 - An **Agent** may have multiple **Skills** and **Agent Secrets**.
 - Agent runtimes send **Telemetry Events** through **Ingest**, where they become **Conversation Messages** or **Tool Calls**.
-- A committed **Domain Event** is persisted as one **Outbox Message** and may have many **Event Deliveries**, one per intended handler.
+- A **Domain Event** has one **Event Scope**. A committed Domain Event is persisted as one **Outbox Message** and may have many **Event Deliveries**, one per intended handler.
 - A **Security Audit Record** may be produced from a **Domain Event**, but it is not itself the Domain Event.
 
 ## Flagged ambiguities

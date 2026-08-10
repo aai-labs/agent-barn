@@ -20,6 +20,19 @@ function org(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function platformOrg(overrides: Record<string, unknown> = {}) {
+  return {
+    id: ORG_A_ID,
+    created_at: "2024-01-01T00:00:00Z",
+    updated_at: "2024-01-01T00:00:00Z",
+    name: "AAI Labs",
+    description: "Starter organization",
+    owner_email: "owner@example.com",
+    owner_name: "Grace Hopper",
+    ...overrides,
+  };
+}
+
 export const DEFAULT_MEMBERS = [
   {
     user_id: OWNER_ID,
@@ -54,7 +67,7 @@ export class OrganizationDataSupport {
     status?: number;
     detail?: string;
   } = {}) {
-    const list = items ?? [org()];
+    const list = items ?? [platformOrg()];
     await this.page.route("**/api/v1/platform/organizations?*", async (route) => {
       if (route.request().method() !== "GET") {
         await route.fallback();
@@ -72,10 +85,79 @@ export class OrganizationDataSupport {
     });
   }
 
+  async interceptGetPlatformOrganization({
+    organizationId = ORG_A_ID,
+    organization,
+    status = 200,
+    detail = "Organization not found",
+  }: {
+    organizationId?: string;
+    organization?: unknown;
+    status?: number;
+    detail?: string;
+  } = {}) {
+    await this.page.route(`**/api/v1/platform/organizations/${organizationId}`, async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status,
+        contentType: "application/json",
+        body: JSON.stringify(
+          status >= 400
+            ? { detail }
+            : (organization ?? {
+                id: ORG_A_ID,
+                created_at: "2024-01-01T00:00:00Z",
+                updated_at: "2024-01-01T00:00:00Z",
+                name: "AAI Labs",
+                description: "Starter organization",
+                owner_user_id: OWNER_ID,
+                owner_email: "owner@example.com",
+                owner_name: "Grace Hopper",
+                creator_user_id: OWNER_ID,
+                creator_email: "owner@example.com",
+                creator_name: "Grace Hopper",
+              }),
+        ),
+      });
+    });
+  }
+
+  async interceptGetPlatformOrganizationMembers({
+    organizationId = ORG_A_ID,
+    members,
+    status = 200,
+    detail = "Unable to load members",
+  }: {
+    organizationId?: string;
+    members?: unknown[];
+    status?: number;
+    detail?: string;
+  } = {}) {
+    await this.page.route(`**/api/v1/platform/organizations/${organizationId}/members*`, async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      const items = members ?? DEFAULT_MEMBERS;
+      await route.fulfill({
+        status,
+        contentType: "application/json",
+        body: JSON.stringify(
+          status >= 400
+            ? { detail, page: 1, page_size: 20, total: 0, items: [] }
+            : { page: 1, page_size: 20, total: items.length, items },
+        ),
+      });
+    });
+  }
+
   async interceptCreateOrganization({
     success = true,
     status = 201,
-    detail = "Only a platform_admin can create organizations",
+    detail = "You can create up to 5 organizations",
     result,
   }: {
     success?: boolean;
@@ -83,7 +165,7 @@ export class OrganizationDataSupport {
     detail?: string;
     result?: unknown;
   } = {}) {
-    await this.page.route("**/api/v1/platform/organizations", async (route) => {
+    await this.page.route("**/api/v1/organizations", async (route) => {
       if (route.request().method() !== "POST") {
         await route.fallback();
         return;
@@ -96,20 +178,22 @@ export class OrganizationDataSupport {
         });
         return;
       }
+      const request = route.request().postDataJSON() as {
+        name?: string;
+        description?: string;
+      };
       await route.fulfill({
         status,
         contentType: "application/json",
         body: JSON.stringify(
-          result ?? {
-            organization: org({
+          result ??
+            org({
               id: ORG_B_ID,
-              name: "New Org",
-              owner_email: "founder@acme.com",
-              owner_name: null,
+              name: request.name ?? "New Org",
+              description: request.description ?? null,
+              owner_email: "owner-a@example.com",
+              owner_name: "Grace Hopper",
             }),
-            invite_link:
-              "http://127.0.0.1:3003/set-password?token=create-token-123",
-          },
         ),
       });
     });
