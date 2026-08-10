@@ -14,6 +14,8 @@ The separately served Ingest API receives authenticated runtime telemetry. It pe
 - Message identity is unique per `(agent_id, openclaw_msg_id)` for both runtimes.
 - Hermes-generated external message IDs use a `hermes:` prefix, despite the persisted field's OpenClaw-specific name.
 - Conversation messages record direction, channel/direct-message type, session, channel, optional thread, names, content, and occurrence time.
+- Outbound telemetry is attributed to the chat that produced it through the runtime's own session correlation — Hermes resolves the completed call's `session_id` against the gateway session store, OpenClaw correlates `agent_end` to the inbound message by session key. Telemetry that cannot be attributed is dropped at the runtime plugin with a warning rather than recorded against another chat.
+- Tool results are paired to their call by the runtime's per-invocation call id, so concurrent calls to one tool within a task stay distinct.
 - Tool calls are unique per `(agent_id, external_id)` and use `PENDING`, `SUCCESS`, or `ERROR` status.
 - Duplicate message and pending tool-call identities are handled idempotently. Tool results update any matching row regardless of its current status; a result arriving before its pending event is currently dropped.
 - Product API conversation and tool-call reads require `activity.read` and are scoped through an accessible, organization-owned, non-deleted Agent. Assigned Members cannot bypass Agent Access through activity endpoints.
@@ -54,6 +56,8 @@ Runtime parsers own translation from runtime-specific records into the shared in
 | Runtime telemetry configuration                | `../../api/domains/agents/service.py`, runtime builders/base configs                                                                                                                                                           |
 | UI activity hooks and tabs                     | `../../ui/src/features/agents/hooks/use-conversations.ts`, `../../ui/src/features/agents/hooks/use-tool-calls.ts`, `../../ui/src/features/agents/components/conversations-tab.tsx`, `../../ui/src/features/agents/components/tool-calls-tab.tsx` |
 | Tests                                          | `../../api/tests/integration/test_ingest.py`, `../../api/tests/integration/test_conversations.py`, `../../api/tests/integration/test_tool_calls.py`, related unit parser/repository tests                                                  |
+| Runtime plugin tests                           | `../../api/tests/unit/test_hermes_telemetry_push_plugin.py`, `../../api/tests/unit/test_openclaw_telemetry_push_plugin.py`, harness in `../../api/tests/helpers/telemetry_plugins.py`                                                      |
+| Runtime contract checks                        | `../../hermes-base/smoke-test.sh`, `../../openclaw-base/smoke-test.sh`, and the plugin-contract step in `../../.github/workflows/hermes-base.yml`                                                                                          |
 
 ## Related decisions
 
