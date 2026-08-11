@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import { parseAsStringEnum, useQueryState } from "nuqs";
 import { ArrowLeft, CircleAlert } from "lucide-react";
 
 import { AppErrorState } from "@/components/app-error-state";
@@ -45,7 +46,14 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
     agentId,
     canReadActivity && agent?.status === "ERROR",
   );
-  const [activeSection, setActiveSection] = useState<AgentConfigurationSectionKey>("profile");
+  const [activeSection, setActiveSection] = useQueryState(
+    "section",
+    parseAsStringEnum<AgentConfigurationSectionKey>(
+      AGENT_CONFIGURATION_SECTIONS.map((item) => item.key),
+    )
+      .withDefault("profile")
+      .withOptions({ scroll: false, history: "replace" }),
+  );
   const [editingSection, setEditingSection] = useState<AgentConfigurationSectionKey | null>(null);
 
   if (agentLoading || configurationLoading) {
@@ -90,7 +98,7 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
   const section = AGENT_CONFIGURATION_SECTIONS.find((item) => item.key === activeSection) ?? AGENT_CONFIGURATION_SECTIONS[0];
 
   function selectSection(nextSection: AgentConfigurationSectionKey) {
-    setActiveSection(nextSection);
+    void setActiveSection(nextSection);
     setEditingSection(null);
   }
 

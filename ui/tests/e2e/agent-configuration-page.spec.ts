@@ -39,6 +39,29 @@ test.describe("Agent configuration page", () => {
     await expect(alert.getByRole("link", { name: "View Agent logs" })).toBeVisible();
   });
 
+  test("keeps the selected tab in the URL and restores it on refresh", async ({ page }) => {
+    const dataSupport = new DataSupport(page);
+    const configurationPage = new AgentConfigurationPage(page);
+
+    await dataSupport.auth.interceptRefreshRequest();
+    await dataSupport.users.interceptGetUserContextRequest();
+    await dataSupport.users.interceptGetOrganizationsRequest();
+    await dataSupport.agents.interceptGetAgentRequest({ body: mockAgent });
+    await dataSupport.agents.interceptGetAgentConfigurationRequest();
+    await dataSupport.agents.interceptGetTemplatesRequest();
+    await dataSupport.agents.interceptGetTemplateVersionsRequest();
+
+    await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
+    await expect(configurationPage.profileHeading()).toBeVisible();
+
+    await configurationPage.sectionButton("Agent-owned override").click();
+    await expect(page).toHaveURL(/section=override/);
+
+    await page.reload();
+    await expect(page.getByRole("heading", { name: "No active override" })).toBeVisible();
+    await expect(page).toHaveURL(/section=override/);
+  });
+
   test("creates, saves, publishes, and selects an Agent-owned override", async ({ page }) => {
     const dataSupport = new DataSupport(page);
     const configurationPage = new AgentConfigurationPage(page);
