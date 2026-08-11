@@ -6,12 +6,18 @@ Related context: [`../agents.md`](../agents.md), [`../../adr/2026-08-09-agent-sc
 
 ## Current state
 
-- Delivered: full-page Agent configuration, Agent-owned drafts, immutable published Override Versions, authorship, required-Skill validation, and stopped-Agent selection.
-- In transition: pending activation state was intentionally discarded; the explicit Apply & Restart workflow remains; Override history and direct source-update workflows remain in later AF-253 slices.
-- Next: AF-253-03 — historical selection and rollback.
-- Blockers: none for the delivered AF-253-01 slice.
+- Delivered: full-page Agent configuration, Agent-owned drafts, immutable published Override Versions, authorship, required-Skill validation, shared and Override history, safe historical selection/rollback, draft preservation, and retention after soft Agent deletion.
+- In transition: pending activation state was intentionally discarded; the explicit Apply & Restart workflow remains; direct source-update workflows remain in a later AF-253 slice.
+- Next: AF-253-04 — direct source updates.
+- Blockers: none for the delivered AF-253-01 and AF-253-03 slices.
 
 ## Changes
+
+### 2026-08-11 — AF-253-03
+
+- Delivered: the existing configuration history and selection flow satisfies historical selection and rollback without a compensating version; independent drafts remain untouched, shared switching preserves Override history, and soft-deleted Agents retain hidden history.
+- Decision: rollback is selecting an existing immutable published Override Version; no separate rollback endpoint, migration, or pending pin is needed.
+- Follow-up: direct Platform/Organization source updates remain in AF-253-04.
 
 ### 2026-08-09 — AF-253-01
 
