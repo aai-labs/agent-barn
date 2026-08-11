@@ -34,6 +34,20 @@ jobs:
             -v "${{ github.workspace }}/hermes-base/smoke-test.sh:/smoke-test.sh:ro" \
             hermes-base:ci \
             /bin/sh /smoke-test.sh
+      # Runs the telemetry-push plugin against the runtime's real SessionStore.
+      # Unit tests can only prove our own routing logic against fakes; this is
+      # what proves the runtime still behaves the way those fakes assume.
+      - name: Plugin contract
+        run: |
+          docker run --rm \
+            -e AGENT_ID=00000000-0000-0000-0000-000000000000 \
+            -e INGEST_URL=http://127.0.0.1:9/ingest/v1 \
+            -e INGEST_API_KEY=ci \
+            -v "${{ github.workspace }}/api/domains/agents/scripts/hermes/plugins/telemetry-push:/plugin:ro" \
+            -v "${{ github.workspace }}/api/tests/fixtures/hermes_session_store_driver.py:/driver.py:ro" \
+            --entrypoint python3 \
+            hermes-base:ci \
+            /driver.py
 
   push:
     name: Push
@@ -75,6 +89,17 @@ jobs:
             -v "${{ github.workspace }}/hermes-base/smoke-test.sh:/smoke-test.sh:ro" \
             ${{ vars.REGISTRY_URL }}/agentfarm-hermes-base:${{ steps.tag.outputs.value }} \
             /bin/sh /smoke-test.sh
+      - name: Plugin contract
+        run: |
+          docker run --rm \
+            -e AGENT_ID=00000000-0000-0000-0000-000000000000 \
+            -e INGEST_URL=http://127.0.0.1:9/ingest/v1 \
+            -e INGEST_API_KEY=ci \
+            -v "${{ github.workspace }}/api/domains/agents/scripts/hermes/plugins/telemetry-push:/plugin:ro" \
+            -v "${{ github.workspace }}/api/tests/fixtures/hermes_session_store_driver.py:/driver.py:ro" \
+            --entrypoint python3 \
+            ${{ vars.REGISTRY_URL }}/agentfarm-hermes-base:${{ steps.tag.outputs.value }} \
+            /driver.py
       - name: Push
         uses: docker/build-push-action@v7
         with:

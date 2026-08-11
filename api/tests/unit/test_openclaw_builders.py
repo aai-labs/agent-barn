@@ -34,9 +34,33 @@ def test_build_openclaw_config_overlay_gateway_auth_is_none():
     assert_that(overlay["gateway"]["auth"]["mode"], equal_to("none"))
 
 
+def test_build_openclaw_config_overlay_teams_require_mention_is_enabled():
+    overlay = build_openclaw_config_overlay_teams("litellm/gpt-4o", "http://litellm:4000")
+    assert_that(overlay["channels"]["msteams"]["requireMention"], equal_to(True))
+
+
 def test_build_openclaw_config_overlay_teams_gateway_auth_is_none():
     overlay = build_openclaw_config_overlay_teams("litellm/gpt-4o", "http://litellm:4000")
     assert_that(overlay["gateway"]["auth"]["mode"], equal_to("none"))
+
+
+def test_build_openclaw_config_overlay_thread_requires_explicit_mention():
+    overlay = build_openclaw_config_overlay("litellm/gpt-4o", "http://litellm:4000")
+    assert_that(overlay["channels"]["slack"]["thread"]["requireExplicitMention"], equal_to(True))
+
+
+def test_build_openclaw_config_overlay_require_mention_is_enabled():
+    overlay = build_openclaw_config_overlay("litellm/gpt-4o", "http://litellm:4000")
+    assert_that(overlay["channels"]["slack"]["requireMention"], equal_to(True))
+
+
+def test_build_openclaw_config_overlay_allowlisted_channel_requires_mention():
+    overlay = build_openclaw_config_overlay(
+        "litellm/gpt-4o",
+        "http://litellm:4000",
+        slack_channel_ids=["C001"],
+    )
+    assert_that(overlay["channels"]["slack"]["channels"]["C001"]["requireMention"], equal_to(True))
 
 
 def test_build_deployment_has_pvc_owner_init_container():
@@ -147,7 +171,7 @@ def test_build_openclaw_config_overlay_telegram_allowed_chat_ids():
     )
     assert_that(
         overlay["channels"]["telegram"]["groups"],
-        equal_to({"-100123": {}, "-100456": {}}),
+        equal_to({"-100123": {"requireMention": True}, "-100456": {"requireMention": True}}),
     )
 
 
@@ -156,9 +180,12 @@ def test_build_openclaw_config_overlay_telegram_allowed_chat_ids_empty_when_none
     assert_that(overlay["channels"]["telegram"]["groups"], equal_to({}))
 
 
-def test_build_openclaw_config_overlay_telegram_no_allowed_chats_when_open():
+def test_build_openclaw_config_overlay_telegram_open_policy_gates_all_groups():
     overlay = build_openclaw_config_overlay_telegram("litellm/gpt-4o", "http://litellm:4000", group_policy="open")
-    assert_that("groups" in overlay["channels"]["telegram"], equal_to(False))
+    assert_that(
+        overlay["channels"]["telegram"]["groups"],
+        equal_to({"*": {"requireMention": True}}),
+    )
 
 
 # --- Telegram secret --------------------------------------------------------

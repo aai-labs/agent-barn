@@ -39,24 +39,42 @@ def test_redirect_uri_uses_web_app_url():
     assert oauth._redirect_uri(_config()) == "http://localhost:3000/api/v1/integrations/google/callback"
 
 
-def test_state_round_trip_valid():
+def test_state_round_trip_returns_provider():
     cfg = _config()
-    assert oauth._state_is_valid(oauth._encode_state(cfg), cfg) is True
+    state = oauth._encode_state(cfg, "google_sheets")
+    assert oauth._provider_from_state(state, cfg) == "google_sheets"
 
 
 def test_state_rejects_wrong_signing_key():
-    state = oauth._encode_state(_config())
-    assert oauth._state_is_valid(state, _config(secret_signing_key="other")) is False
+    state = oauth._encode_state(_config(), "gmail")
+    assert oauth._provider_from_state(state, _config(secret_signing_key="other")) is None
 
 
 def test_state_rejects_wrong_token_type():
     cfg = _config()
     forged = jwt.encode({"typ": "access"}, cfg.secret_signing_key, algorithm=JWT_ENCODING_ALGORITHM)
-    assert oauth._state_is_valid(forged, cfg) is False
+    assert oauth._provider_from_state(forged, cfg) is None
 
 
 def test_state_rejects_garbage():
-    assert oauth._state_is_valid("not-a-jwt", _config()) is False
+    assert oauth._provider_from_state("not-a-jwt", _config()) is None
+
+
+def test_state_rejects_unknown_provider():
+    cfg = _config()
+    state = oauth._encode_state(cfg, "dropbox")
+    assert oauth._provider_from_state(state, cfg) is None
+
+
+def test_state_without_provider_claim_defaults_to_gmail():
+    # States signed before the provider claim existed must keep working.
+    cfg = _config()
+    legacy = jwt.encode(
+        {"typ": oauth._STATE_TYPE, "exp": 9999999999},
+        cfg.secret_signing_key,
+        algorithm=JWT_ENCODING_ALGORITHM,
+    )
+    assert oauth._provider_from_state(legacy, cfg) == "gmail"
 
 
 # --- authorize-url ---
@@ -69,6 +87,20 @@ def test_authorize_url_contains_expected_params():
     assert "prompt=consent" in url
     assert "gmail.readonly" in url
     assert "client-id.apps.googleusercontent.com" in url
+
+
+def test_authorize_url_requests_sheets_scopes_for_sheets_provider():
+    url = oauth.google_authorize_url(_context=_NO_CONTEXT, provider="google_sheets", config=_config())["authorize_url"]
+    assert "auth%2Fspreadsheets" in url
+    assert "drive.metadata.readonly" in url
+    # Connecting Sheets must not drag Gmail access along with it.
+    assert "gmail" not in url
+
+
+def test_authorize_url_rejects_unknown_provider():
+    with pytest.raises(HTTPException) as exc:
+        oauth.google_authorize_url(_context=_NO_CONTEXT, provider="dropbox", config=_config())
+    assert exc.value.status_code == 400
 
 
 def test_authorize_url_requires_configured_client():
@@ -99,13 +131,20 @@ def test_callback_success_posts_code(monkeypatch):
         lambda *a, **k: pytest.fail("callback must not exchange the code"),
     )
     cfg = _config()
-    state = oauth._encode_state(cfg)
+    state = oauth._encode_state(cfg, "gmail")
     resp = oauth.google_callback(config=cfg, code="auth-code", state=state, error=None)
     msg = _extract_message(resp.body.decode())
     assert msg["type"] == oauth.MESSAGE_TYPE
-    assert msg["provider"] == oauth.PROVIDER
+    assert msg["provider"] == "gmail"
     assert msg["code"] == "auth-code"
     assert "error" not in msg
+
+
+def test_callback_echoes_the_provider_from_state():
+    cfg = _config()
+    state = oauth._encode_state(cfg, "google_sheets")
+    resp = oauth.google_callback(config=cfg, code="auth-code", state=state, error=None)
+    assert _extract_message(resp.body.decode())["provider"] == "google_sheets"
 
 
 def test_callback_rejects_invalid_state():
@@ -117,7 +156,7 @@ def test_callback_rejects_invalid_state():
 
 def test_callback_requires_code():
     cfg = _config()
-    state = oauth._encode_state(cfg)
+    state = oauth._encode_state(cfg, "gmail")
     resp = oauth.google_callback(config=cfg, code=None, state=state, error=None)
     msg = _extract_message(resp.body.decode())
     assert "error" in msg

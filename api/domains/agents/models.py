@@ -83,6 +83,7 @@ class SecretProvider(str, enum.Enum):
     BITBUCKET = "bitbucket"
     GMAIL = "gmail"
     GOOGLE_CALENDAR = "google_calendar"
+    GOOGLE_SHEETS = "google_sheets"
     ZOHO_MAIL = "zoho_mail"
     ZOHO_CALENDAR = "zoho_calendar"
     FIRECRAWL = "firecrawl"
@@ -98,6 +99,7 @@ PROVIDER_DISPLAY_NAMES: dict[SecretProvider, str] = {
     SecretProvider.BITBUCKET: "Bitbucket credential",
     SecretProvider.GMAIL: "Gmail credential",
     SecretProvider.GOOGLE_CALENDAR: "Google Calendar credential",
+    SecretProvider.GOOGLE_SHEETS: "Google Sheets credential",
     SecretProvider.ZOHO_MAIL: "Zoho Mail credential",
     SecretProvider.ZOHO_CALENDAR: "Zoho Calendar credential",
     SecretProvider.FIRECRAWL: "Firecrawl credential",
@@ -175,6 +177,15 @@ class GoogleCalendarContent(SecretContent):
     calendar_id: str
 
 
+class GoogleSheetsContent(SecretContent):
+    # Same shape and rationale as GmailContent: the "Authenticate with Google" flow
+    # stores only the refresh token and the app-owned client id/secret are injected
+    # from config at agent-start time. A user's own Google client carries all three.
+    client_id: str = ""
+    client_secret: str = ""
+    refresh_token: str
+
+
 class ZohoMailContent(SecretContent):
     email: str
     account_id: str
@@ -214,6 +225,7 @@ PROVIDER_CONTENT_MODELS: dict[SecretProvider, type[SecretContent]] = {
     SecretProvider.BITBUCKET: BitbucketContent,
     SecretProvider.GMAIL: GmailContent,
     SecretProvider.GOOGLE_CALENDAR: GoogleCalendarContent,
+    SecretProvider.GOOGLE_SHEETS: GoogleSheetsContent,
     SecretProvider.ZOHO_MAIL: ZohoMailContent,
     SecretProvider.ZOHO_CALENDAR: ZohoCalendarContent,
     SecretProvider.FIRECRAWL: FirecrawlContent,

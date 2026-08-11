@@ -24,6 +24,7 @@ import { SkillSourceBadge } from "@/features/skills/components/skill-drawer";
 import {
   INTEGRATION_PROVIDERS,
   getIntegrationProvider,
+  isAutoConfiguredProvider,
   type IntegrationDraft,
 } from "../integrations";
 import type { AgentAssignedSkill, AgentTemplateRead, TemplateRequiredSkill } from "../schemas";
@@ -1439,9 +1440,9 @@ export function SkillsStep({
   function syncCredentialDrafts(requiredProviders: Set<string>) {
     const newCreds = skillCredentials.filter((c) => requiredProviders.has(c.provider));
     for (const p of requiredProviders) {
-      // Slack is never manually configured — the API derives it from the agent's
-      // gateway bot token, so it must never appear in the secrets payload.
-      if (p !== "slack" && !newCreds.find((c) => c.provider === p)) {
+      // Auto-configured providers are derived from the agent's configuration and
+      // must never appear in the secrets payload.
+      if (!isAutoConfiguredProvider(p) && !newCreds.find((c) => c.provider === p)) {
         newCreds.push({ provider: p, content: {} });
       }
     }
@@ -1488,10 +1489,19 @@ export function SkillsStep({
   }
 
   function setField(providerId: string, key: string, value: string) {
+    setFields(providerId, { [key]: value });
+  }
+  /** Apply several keys in ONE update.
+   *
+   * These helpers derive the next list from the closed-over prop rather than from a
+   * functional setState, so successive calls in the same tick all read the same stale
+   * value and the last one wins. The OAuth flow writes refreshToken, clientId and
+   * clientSecret together, which silently discarded the token. */
+  function setFields(providerId: string, patch: Record<string, string>) {
     onSkillCredentialsChange(
       skillCredentials.map((c) =>
         c.provider === providerId
-          ? { ...c, content: { ...c.content, [key]: value } }
+          ? { ...c, content: { ...c.content, ...patch } }
           : c,
       ),
     );
@@ -1716,9 +1726,7 @@ export function SkillsStep({
                     onFieldChange={(key, value) => setField(providerId, key, value)}
                     onReposChange={(key, repos) => setRepos(providerId, key, repos)}
                     onOAuthConnected={({ refreshToken, clientId, clientSecret }) => {
-                      setField(providerId, "refreshToken", refreshToken);
-                      setField(providerId, "clientId", clientId);
-                      setField(providerId, "clientSecret", clientSecret);
+                      setFields(providerId, { refreshToken, clientId, clientSecret });
                     }}
                   />
                 )}
@@ -1754,10 +1762,16 @@ export function IntegrationsStep({
     onChange(integrations.filter((i) => i.provider !== id));
   }
   function setField(providerId: string, key: string, value: string) {
+    setFields(providerId, { [key]: value });
+  }
+  /** Apply several keys in ONE update — see the note on the sibling step: successive
+   * single-key calls in the same tick overwrite each other, which dropped the OAuth
+   * refresh token. */
+  function setFields(providerId: string, patch: Record<string, string>) {
     onChange(
       integrations.map((i) =>
         i.provider === providerId
-          ? { ...i, content: { ...i.content, [key]: value } }
+          ? { ...i, content: { ...i.content, ...patch } }
           : i,
       ),
     );
@@ -1824,9 +1838,7 @@ export function IntegrationsStep({
                 onFieldChange={(key, value) => setField(draft.provider, key, value)}
                 onReposChange={(key, repos) => setRepos(draft.provider, key, repos)}
                 onOAuthConnected={({ refreshToken, clientId, clientSecret }) => {
-                  setField(draft.provider, "refreshToken", refreshToken);
-                  setField(draft.provider, "clientId", clientId);
-                  setField(draft.provider, "clientSecret", clientSecret);
+                  setFields(draft.provider, { refreshToken, clientId, clientSecret });
                 }}
               />
             )}

@@ -4,7 +4,7 @@ These are pure string/dict builders (no k8s types) consumed by ``start_agent`` t
 agent's integration secrets into its pod so the baked-in ``aai-cli`` can use them.
 """
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 
 from api.domains.agents.models import (
     BitbucketContent,
@@ -12,6 +12,7 @@ from api.domains.agents.models import (
     GithubContent,
     GmailContent,
     GoogleCalendarContent,
+    GoogleSheetsContent,
     JiraContent,
     PipedriveContent,
     SecretContent,
@@ -33,6 +34,13 @@ provider_secrets_map: dict[str, list[tuple[str, str]]] = {
         ("google.client_secret", "client_secret"),
         ("google.gmail_refresh_token", "refresh_token"),
     ],
+    # Deliberately not sharing gmail's "google.client_secret": a user may bring their own
+    # Google client for one provider and use the app-owned one for the other, and these
+    # names are flat keys in the same store — sharing would let one clobber the other.
+    "google_sheets": [
+        ("google.sheets_client_secret", "client_secret"),
+        ("google.sheets_refresh_token", "refresh_token"),
+    ],
     "zoho_mail": [
         ("zoho.client_secret", "client_secret"),
         ("zoho.mail_refresh_token", "refresh_token"),
@@ -52,6 +60,7 @@ PROFILE_SLUGS: dict[SecretProvider, str] = {
     SecretProvider.BITBUCKET: "bitbucket-work",
     SecretProvider.GMAIL: "gmail-work",
     SecretProvider.GOOGLE_CALENDAR: "google-calendar-work",
+    SecretProvider.GOOGLE_SHEETS: "google-sheets-work",
     SecretProvider.ZOHO_MAIL: "zoho-mail-rest",
     SecretProvider.ZOHO_CALENDAR: "zoho-calendar-work",
     SecretProvider.SLACK: "slack-work",
@@ -173,6 +182,17 @@ def _gmail_block(c: GmailContent) -> str:
     )
 
 
+def _google_sheets_block(c: GoogleSheetsContent) -> str:
+    return (
+        f"[profiles.{PROFILE_SLUGS[SecretProvider.GOOGLE_SHEETS]}]\n"
+        'provider = "google"\n'
+        'auth_type = "bearer_token"\n'
+        f"client_id = {_q(c.client_id)}\n"
+        'client_secret_secret = "google.sheets_client_secret"\n'
+        'refresh_token_secret = "google.sheets_refresh_token"\n'
+    )
+
+
 def _google_calendar_block(c: GoogleCalendarContent) -> str:
     return (
         f"[profiles.{PROFILE_SLUGS[SecretProvider.GOOGLE_CALENDAR]}]\n"
@@ -235,6 +255,7 @@ _PROFILE_BUILDERS: dict[SecretProvider, Callable[..., str]] = {
     SecretProvider.CONFLUENCE: _confluence_block,
     SecretProvider.BITBUCKET: _bitbucket_block,
     SecretProvider.GMAIL: _gmail_block,
+    SecretProvider.GOOGLE_SHEETS: _google_sheets_block,
     SecretProvider.GOOGLE_CALENDAR: _google_calendar_block,
     SecretProvider.ZOHO_MAIL: _zoho_mail_block,
     SecretProvider.ZOHO_CALENDAR: _zoho_calendar_block,
@@ -305,6 +326,65 @@ def build_tool_context_md(decrypted: Mapping[SecretProvider, SecretContent]) -> 
     return "\n".join(lines) + "\n"
 
 
+# Capabilities that need no credential, keyed by the seeded skill name.
+#
+# The integrations block above is built from configured secrets, so a tool with no
+# provider can never appear there — and its skill pointer only reaches TOOLS.md, which the
+# runtimes do not auto-load. Without this the agent simply never learns the capability
+# exists. Listed only when the skill is actually mounted, since these are opt-in.
+CREDENTIAL_FREE_TOOLS: dict[str, str] = {
+    "Excel": (
+        "- **Excel / CSV** (local files): `aai-cli excel <resource> <verb>` — read and write "
+        "`.xlsx`/`.xlsm` and `.csv`/`.tsv` on disk (`.xls`/`.xlsb`/`.ods` are read-only). "
+        "**This is the only supported way to build or edit a spreadsheet.** Do not write "
+        "Python, and do not reach for `openpyxl`, `pandas`, `xlsxwriter` or a hand-rolled "
+        "zip — they are not installed and produce files Excel may reject. "
+        "Read `./skills/aai-cli/excel_skill.md` for the command shapes."
+    ),
+}
+
+
+def build_local_tools_policy_md(mounted_skill_names: Iterable[str]) -> str:
+    """Render the agents_md block for mounted credential-free tools.
+
+    Kept separate from the integrations block because that one tells the agent to always
+    pass ``--profile``, which is exactly wrong here — these take no profile and no
+    credentials.
+
+    A tool that produces files is only half useful if the agent cannot hand one back, and
+    naming the file in prose does not attach it. Both runtimes attach on a ``MEDIA:<path>``
+    token in the reply — Hermes matches it anywhere, OpenClaw also has a line-start-only
+    path, so the guidance insists on its own line to satisfy both.
+    """
+    lines = [CREDENTIAL_FREE_TOOLS[name] for name in mounted_skill_names if name in CREDENTIAL_FREE_TOOLS]
+    if not lines:
+        return ""
+    block = (
+        "\n## Local file tools (aai-cli)\n\n"
+        "These work on files on this machine. They need **no credentials and no "
+        "`--profile`** — do not ask the user to authenticate for them.\n\n" + "\n".join(lines) + "\n"
+    )
+    block += (
+        "\nWrite files you intend to share into `/workspace` — it persists across restarts "
+        "and is readable by the messaging layer.\n"
+    )
+    block += (
+        "\n**Always send back a file you produced.** When you create or update a file the "
+        "user asked for, attach it in that same reply — do not wait to be asked, and do "
+        "not just tell them where you saved it. A path they cannot open is not an answer.\n"
+        "\nAttach it by putting `MEDIA:<absolute path>` **on its own line** at the end of the "
+        "reply:\n\n"
+        "```\n"
+        "Here's the Q1 report.\n"
+        "MEDIA:/workspace/q1-report.xlsx\n"
+        "```\n\n"
+        "Naming the file in prose does **not** attach it — delivery only happens when that "
+        "token is present. Keep it on its own line and keep the path absolute: one runtime "
+        "only scans line starts, so a token buried mid-sentence is silently ignored.\n"
+    )
+    return block
+
+
 # Display label per provider for the agents_md integrations block.
 _INTEGRATION_LABELS: dict[SecretProvider, str] = {
     SecretProvider.GITHUB: "GitHub",
@@ -313,6 +393,7 @@ _INTEGRATION_LABELS: dict[SecretProvider, str] = {
     SecretProvider.BITBUCKET: "Bitbucket",
     SecretProvider.GMAIL: "Gmail",
     SecretProvider.GOOGLE_CALENDAR: "Google Calendar",
+    SecretProvider.GOOGLE_SHEETS: "Google Sheets",
     SecretProvider.ZOHO_MAIL: "Zoho Mail",
     SecretProvider.ZOHO_CALENDAR: "Zoho Calendar",
     SecretProvider.SLACK: "Slack",

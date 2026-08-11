@@ -584,6 +584,36 @@ def test_patch_agent_adds_secret():
             assert_that(jira["secret_name"], equal_to("Jira credential"))
 
 
+def test_patch_agent_adds_google_sheets_secret():
+    """Exercises the provider check constraint: a provider missing from the migration
+    is rejected by the database, not by validation, so this only passes once both the
+    enum and the constraint know about google_sheets."""
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I patch the agent with a google sheets secret"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={
+                    "secrets": [
+                        {
+                            "provider": "google_sheets",
+                            "content": {"refresh_token": "rt-sheets"},
+                        }
+                    ]
+                },
+                headers=_auth(context),
+            )
+
+        with then("it returns 200 and the agent exposes the google sheets secret"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(_providers(response), equal_to(["google_sheets"]))
+            sheets = response.json()["secrets"][0]
+            assert_that(sheets["secret_name"], equal_to("Google Sheets credential"))
+            # Read APIs return provider and label, never credential contents.
+            assert_that("content" in sheets, equal_to(False))
+
+
 def test_patch_agent_upserts_existing_secret():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         client: TestClient = context.client
@@ -1720,6 +1750,8 @@ def test_start_agent_overlay_uses_slack_settings():
                 slack["channels"],
                 equal_to({"C123": {"enabled": True, "requireMention": True}}),
             )
+            assert_that(slack["requireMention"], equal_to(True))
+            assert_that(slack["thread"]["requireExplicitMention"], equal_to(True))
 
 
 def test_start_agent_open_policy_sets_allow_from_wildcard():
@@ -3010,6 +3042,41 @@ def test_start_agent_auto_attaches_aai_cli_skill_for_configured_provider():
             assert_that(config_map.data["TOOLS.md"], contains_string(_JIRA_POINTER))
 
 
+def test_start_agent_does_not_auto_attach_credential_free_skill():
+    """A skill with no required providers (Excel works on local files) must stay opt-in.
+
+    Auto-mount keys off provider coverage, and an empty requirement list is trivially
+    satisfied — so without an explicit guard every agent would silently get this skill.
+    """
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(),
+            there_is_a_skill(
+                name="Excel",
+                required_providers=[],
+                global_skill=True,
+                tools_pointer="\nFor Excel (.xlsx) files, use the aai-cli tool.\n",
+            ),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("a jira secret is configured and the excel skill is not assigned"):
+            client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"secrets": [{"provider": "jira", "content": _JIRA_CONTENT}]},
+                headers=_auth(context),
+            )
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the excel skill is not mounted"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            assert_that("For Excel" in config_map.data.get("TOOLS.md", ""), equal_to(False))
+
+
 def test_start_agent_does_not_auto_attach_skill_for_unconfigured_provider():
     with given(
         [
@@ -3151,6 +3218,38 @@ def test_start_agent_injects_chat_commands_policy_into_agents_md_hermes():
             agents_md = config_map.data["AGENTS.md"]
             assert_that(agents_md, contains_string("## Chat Commands"))
             assert_that(agents_md, contains_string("/help"))
+
+
+def test_start_agent_injects_role_scope_policy_into_agents_md_openclaw():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("the OpenClaw agent starts"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("AGENTS.md tells the agent to stay inside its defined role"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            agents_md = config_map.data["AGENTS.md"]
+            assert_that(agents_md, contains_string("## Role Scope"))
+            assert_that(agents_md, contains_string("out of scope"))
+
+
+def test_start_agent_injects_role_scope_policy_into_agents_md_hermes():
+    with given([*_GIVEN_WITH_HERMES_IMAGE, there_is_an_agent(agent_type=AgentType.HERMES)]) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("the Hermes agent starts"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("AGENTS.md tells the agent to stay inside its defined role"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            agents_md = config_map.data["AGENTS.md"]
+            assert_that(agents_md, contains_string("## Role Scope"))
+            assert_that(agents_md, contains_string("out of scope"))
 
 
 def test_start_agent_no_integrations_omits_integrations_block():
