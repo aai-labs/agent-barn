@@ -138,8 +138,6 @@ test.describe("Agent configuration page", () => {
     await configurationPage.publishButton().click();
     await expect(configurationPage.publishConfirmButton()).toBeVisible();
     await configurationPage.publishConfirmButton().click();
-    await expect(page.getByRole("heading", { name: "Template selection" }).first()).toBeVisible();
-    await configurationPage.sectionButton("Agent-owned override").click();
     await expect(page.getByRole("heading", { name: "Published override history" })).toBeVisible();
     await expect(page.getByText("A private Agent-owned configuration based on the source template below.")).toBeVisible();
     await expect(page.getByText("Published by")).toBeVisible();

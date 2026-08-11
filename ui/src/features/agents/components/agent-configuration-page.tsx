@@ -100,7 +100,6 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
 
   function handleOverridePublished() {
     setEditingSection(null);
-    setActiveSection("template");
   }
 
   return (
