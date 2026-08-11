@@ -24,6 +24,7 @@ import { SkillSourceBadge } from "@/features/skills/components/skill-drawer";
 import {
   INTEGRATION_PROVIDERS,
   getIntegrationProvider,
+  isAutoConfiguredProvider,
   type IntegrationDraft,
 } from "../integrations";
 import type { AgentAssignedSkill, AgentTemplateRead, TemplateRequiredSkill } from "../schemas";
@@ -1439,9 +1440,9 @@ export function SkillsStep({
   function syncCredentialDrafts(requiredProviders: Set<string>) {
     const newCreds = skillCredentials.filter((c) => requiredProviders.has(c.provider));
     for (const p of requiredProviders) {
-      // Slack is never manually configured — the API derives it from the agent's
-      // gateway bot token, so it must never appear in the secrets payload.
-      if (p !== "slack" && !newCreds.find((c) => c.provider === p)) {
+      // Auto-configured providers are derived from the agent's configuration and
+      // must never appear in the secrets payload.
+      if (!isAutoConfiguredProvider(p) && !newCreds.find((c) => c.provider === p)) {
         newCreds.push({ provider: p, content: {} });
       }
     }
