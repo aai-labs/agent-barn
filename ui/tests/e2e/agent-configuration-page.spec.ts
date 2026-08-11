@@ -156,6 +156,55 @@ test.describe("Agent configuration page", () => {
     await expect(page.getByRole("button", { name: "Create new draft" })).toBeVisible();
   });
 
+  test("edits an existing Override Draft loaded from the server", async ({ page }) => {
+    const dataSupport = new DataSupport(page);
+    const configurationPage = new AgentConfigurationPage(page);
+    let draft = { ...mockAgentOverrideDraft, updated_at: "2026-05-14T09:14:00Z" };
+    const configuration = {
+      ...mockAgentConfiguration,
+      draft,
+      shared_versions: [mockAgentConfiguration.active],
+    };
+
+    await dataSupport.auth.interceptRefreshRequest();
+    await dataSupport.users.interceptGetUserContextRequest();
+    await dataSupport.users.interceptGetOrganizationsRequest();
+    await dataSupport.agents.interceptGetAgentRequest({ body: { ...mockAgent, status: "STOPPED" } });
+    await dataSupport.skills.interceptGetSkillsRequest();
+    await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/configuration`, async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(configuration) });
+    });
+    await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/configuration/draft`, async (route) => {
+      if (route.request().method() !== "PATCH") {
+        await route.fallback();
+        return;
+      }
+      const body = route.request().postDataJSON() as Record<string, unknown>;
+      draft = { ...draft, soul_md: (body.soul_md as string | undefined) ?? draft.soul_md, updated_at: "2026-05-14T09:16:00Z" };
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(draft) });
+    });
+
+    await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
+    await configurationPage.sectionButton("Agent-owned override").click();
+
+    await expect(page.getByRole("heading", { name: "Override draft" })).toBeVisible();
+    await page.getByRole("button", { name: "Edit", exact: true }).click();
+
+    await expect(configurationPage.draftHeading()).toBeVisible();
+    const soulField = configurationPage.artifact("SOUL.md").last();
+    await soulField.fill("# Edited existing draft");
+    await expect(soulField).toHaveValue("# Edited existing draft");
+    await expect(configurationPage.saveDraftButton()).toBeEnabled();
+
+    await configurationPage.saveDraftButton().click();
+    await expect(page.getByRole("heading", { name: "Override draft" })).toBeVisible();
+    await expect(configurationPage.saveDraftButton()).toHaveCount(0);
+  });
+
   test("repins to a labeled Platform source update without changing the local Override Draft", async ({ page }) => {
     const dataSupport = new DataSupport(page);
     const configurationPage = new AgentConfigurationPage(page);

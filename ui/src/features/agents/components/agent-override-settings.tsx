@@ -59,6 +59,11 @@ export function AgentOverrideSettings({
     });
   }
 
+  function startEditing() {
+    if (activeDraft) setFormOverride(draftToForm(activeDraft));
+    onEdit();
+  }
+
   function handleChange(field: DraftTextField, value: string) {
     setFormOverride((current) => (current ? { ...current, [field]: value } : current));
   }
@@ -161,7 +166,7 @@ export function AgentOverrideSettings({
                 actions={
                   canEdit && (
                     <>
-                      <button type="button" className="af-btn" onClick={onEdit}>
+                      <button type="button" className="af-btn" onClick={startEditing}>
                         <Pencil size={14} /> Edit
                       </button>
                       <button
