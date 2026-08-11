@@ -30,8 +30,9 @@ def _set_default(key: str, value: str) -> None:
 os.environ["ENVIRONMENT"] = "test"
 _set_default("SECRET_SIGNING_KEY", "test-secret-key")
 _set_default("PLATFORM_ADMIN_CREDENTIALS", "admin@example.com:StrongPass123")
-_set_default("EMAIL_SERVER_CREDENTIAL", "noreply@example.com:test-password")
-_set_default("EMAIL_SMTP_SERVER", "localhost")
+_set_default("CLOUDFLARE_ACCOUNT_ID", "test-account-id")
+_set_default("CLOUDFLARE_API_TOKEN", "test-api-token")
+_set_default("SENDER_EMAIL", "noreply@example.com")
 
 alembic_dir = Path(__file__).resolve().parents[1]
 alembic_ini_path = alembic_dir / "alembic.ini"

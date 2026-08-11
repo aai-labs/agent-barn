@@ -33,7 +33,7 @@ class EmailService:
             "Email delivery is disabled: action=%s recipient=%s reason=%s",
             action,
             receiver_email,
-            "EMAIL_SERVER_CREDENTIAL or EMAIL_SMTP_SERVER is missing",
+            "CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN or SENDER_EMAIL is missing",
         )
         return False
 
