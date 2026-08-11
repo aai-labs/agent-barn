@@ -1,6 +1,7 @@
 import json
 from typing import cast
 from unittest.mock import MagicMock, patch
+from uuid import uuid7
 
 import httpx
 from fastapi import status
@@ -19,6 +20,8 @@ from api.domains.agents.models import (
     AgentPlatform,
     AgentSecret,
     AgentStatus,
+    AgentTemplateOverrideSourceType,
+    AgentTemplateOverrideVersion,
     AgentType,
     SecretProvider,
     SlackContent,
@@ -113,6 +116,39 @@ def _auth(context) -> dict:
 
 def _outbox_messages(context) -> list[OutboxMessage]:
     return context.injector.get(PostgresRepositoryDelegate).find_all(OutboxMessage)
+
+
+def _pin_override_to_source(
+    context, source: AgentTemplate | PlatformTemplate, source_type: AgentTemplateOverrideSourceType
+):
+    version = AgentTemplateOverrideVersion(
+        organization_id=context.agent.organization_id,
+        agent_id=context.agent.id,
+        version=1,
+        created_by_user_id=context.user.id,
+        source_type=source_type,
+        source_template_key=source.template_key,
+        source_template_version=source.version,
+        source_platform_template_id=source.id if source_type == AgentTemplateOverrideSourceType.PLATFORM else None,
+        source_agent_template_id=source.id if source_type == AgentTemplateOverrideSourceType.ORGANIZATION else None,
+        template_name=source.template_name,
+        description=source.description,
+        soul_md=source.soul_md,
+        identity_md=source.identity_md,
+        user_md=source.user_md,
+        tools_md=source.tools_md,
+        agents_md=source.agents_md,
+        boot_md=source.boot_md,
+        bootstrap_md=source.bootstrap_md,
+        heartbeat_md=source.heartbeat_md,
+    )
+    delegate = context.injector.get(PostgresRepositoryDelegate)
+    delegate.save(version)
+    context.agent.platform_template_id = None
+    context.agent.agent_template_id = None
+    context.agent.agent_template_override_version_id = version.id
+    context.injector.get(AgentRepository).save(context.agent)
+    return version
 
 
 def test_create_slack_agent_returns_201_stopped():
@@ -4128,3 +4164,167 @@ def test_agent_configuration_draft_and_publish_are_safe_while_running():
         assert_that(selection_response.status_code, equal_to(status.HTTP_409_CONFLICT))
         agent = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
         assert_that(agent["template_pin_type"], equal_to("shared"))
+
+
+def test_agent_override_platform_source_update_repins_without_changing_draft():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+        source_v1 = PlatformTemplate(
+            template_key="direct-platform-source",
+            template_name="Direct Platform Source",
+            version=1,
+            description="platform v1",
+            soul_md="platform soul v1",
+            identity_md="platform identity v1",
+            user_md="platform user v1",
+            tools_md="platform tools v1",
+            agents_md="platform agents v1",
+            boot_md="platform boot v1",
+            bootstrap_md="platform bootstrap v1",
+            heartbeat_md="platform heartbeat v1",
+        )
+        delegate.save(source_v1)
+        _pin_override_to_source(context, source_v1, AgentTemplateOverrideSourceType.PLATFORM)
+        source_v2 = PlatformTemplate(
+            template_key=source_v1.template_key,
+            template_name=source_v1.template_name,
+            version=2,
+            description="platform v2",
+            soul_md="platform soul v2",
+            identity_md=source_v1.identity_md,
+            user_md=source_v1.user_md,
+            tools_md=source_v1.tools_md,
+            agents_md=source_v1.agents_md,
+            boot_md=source_v1.boot_md,
+            bootstrap_md=source_v1.bootstrap_md,
+            heartbeat_md=source_v1.heartbeat_md,
+        )
+        delegate.save(source_v2)
+        configuration_url = f"{_BASE}/{context.agent.id}/configuration"
+
+        configuration = client.get(configuration_url, headers=_auth(context)).json()
+        assert_that(configuration["source_update"]["source_type"], equal_to("platform"))
+        assert_that(configuration["source_update"]["source_template_version"], equal_to(2))
+        assert_that(configuration["source_update"]["soul_md"], equal_to("platform soul v2"))
+
+        draft = client.post(f"{configuration_url}/draft", headers=_auth(context)).json()
+        local_edit = client.patch(
+            f"{configuration_url}/draft",
+            json={"expected_updated_at": draft["updated_at"], "soul_md": "local change"},
+            headers=_auth(context),
+        ).json()
+        agent_before_select = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+        selected = client.post(
+            f"{configuration_url}/select",
+            json={
+                "selection_type": "platform",
+                "template_key": source_v1.template_key,
+                "template_version": 2,
+                "expected_agent_updated_at": agent_before_select["updated_at"],
+            },
+            headers=_auth(context),
+        )
+        assert_that(selected.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(selected.json()["template_pin_type"], equal_to("shared"))
+        assert_that(selected.json()["override_version"], none())
+
+        after_select = client.get(configuration_url, headers=_auth(context)).json()
+        assert_that(after_select["active"]["source_type"], equal_to("platform"))
+        assert_that(after_select["active"]["source_template_version"], equal_to(2))
+        assert_that(after_select["draft"]["source_template_version"], equal_to(1))
+        assert_that(after_select["draft"]["soul_md"], equal_to("local change"))
+        assert_that(after_select["draft"]["updated_at"], equal_to(local_edit["updated_at"]))
+
+
+def test_agent_override_organization_source_update_is_labeled_and_can_be_selected():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+        template_repository = context.injector.get(TemplateRepository)
+        source_v1 = cast(AgentTemplate, template_repository.get_pinned_template(context.agent))
+        source_v2 = AgentTemplate(
+            organization_id=source_v1.organization_id,
+            template_key=source_v1.template_key,
+            template_name=source_v1.template_name,
+            template_source=source_v1.template_source,
+            version=2,
+            description="organization v2",
+            soul_md="organization soul v2",
+            identity_md=source_v1.identity_md,
+            user_md=source_v1.user_md,
+            tools_md=source_v1.tools_md,
+            agents_md=source_v1.agents_md,
+            boot_md=source_v1.boot_md,
+            bootstrap_md=source_v1.bootstrap_md,
+            heartbeat_md=source_v1.heartbeat_md,
+        )
+        delegate.save(source_v2)
+        _pin_override_to_source(context, source_v1, AgentTemplateOverrideSourceType.ORGANIZATION)
+        configuration_url = f"{_BASE}/{context.agent.id}/configuration"
+
+        configuration = client.get(configuration_url, headers=_auth(context)).json()
+        assert_that(configuration["source_update"]["source_type"], equal_to("organization"))
+        assert_that(configuration["source_update"]["source_template_version"], equal_to(2))
+        assert_that(configuration["source_update"]["soul_md"], equal_to("organization soul v2"))
+
+        draft = client.post(f"{configuration_url}/draft", headers=_auth(context)).json()
+        local_edit = client.patch(
+            f"{configuration_url}/draft",
+            json={"expected_updated_at": draft["updated_at"], "soul_md": "organization local change"},
+            headers=_auth(context),
+        ).json()
+        agent_before_select = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+        selected = client.post(
+            f"{configuration_url}/select",
+            json={
+                "selection_type": "organization",
+                "template_key": source_v1.template_key,
+                "template_version": 2,
+                "expected_agent_updated_at": agent_before_select["updated_at"],
+            },
+            headers=_auth(context),
+        )
+        assert_that(selected.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(selected.json()["template_pin_type"], equal_to("shared"))
+        assert_that(selected.json()["override_version"], none())
+
+        after_select = client.get(configuration_url, headers=_auth(context)).json()
+        assert_that(after_select["active"]["source_type"], equal_to("organization"))
+        assert_that(after_select["active"]["source_template_version"], equal_to(2))
+        assert_that(after_select["draft"]["source_template_version"], equal_to(1))
+        assert_that(after_select["draft"]["soul_md"], equal_to("organization local change"))
+        assert_that(after_select["draft"]["updated_at"], equal_to(local_edit["updated_at"]))
+
+
+def test_agent_override_source_update_has_no_candidate_when_source_is_unavailable():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+        source = PlatformTemplate(
+            template_key="unavailable-platform-source",
+            template_name="Unavailable Platform Source",
+            version=1,
+            description="platform v1",
+            soul_md="platform soul v1",
+            identity_md="platform identity v1",
+            user_md="platform user v1",
+            tools_md="platform tools v1",
+            agents_md="platform agents v1",
+            boot_md="platform boot v1",
+            bootstrap_md="platform bootstrap v1",
+            heartbeat_md="platform heartbeat v1",
+        )
+        delegate.save(source)
+        delegate.save(source.model_copy(update={"id": uuid7(), "version": 2, "soul_md": "platform soul v2"}))
+        _pin_override_to_source(context, source, AgentTemplateOverrideSourceType.PLATFORM)
+        delegate.delete_one(PlatformTemplate, source.id)
+
+        configuration = context.client.get(
+            f"{_BASE}/{context.agent.id}/configuration",
+            headers=_auth(context),
+        )
+        assert_that(configuration.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(configuration.json()["source_update"], none())
+        active_agent = context.client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context))
+        assert_that(active_agent.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(active_agent.json()["override_version"], equal_to(1))

@@ -1014,6 +1014,7 @@ class AgentConfigurationRead(PydanticBaseModel):
     agent_id: UUID
     active: AgentConfigurationVersionRead
     draft: AgentTemplateOverrideDraftRead | None = None
+    source_update: AgentConfigurationVersionRead | None = None
     shared_versions: list[AgentConfigurationVersionRead] = Field(default_factory=list)
     override_versions: list[AgentTemplateOverrideVersionRead] = Field(default_factory=list)
 

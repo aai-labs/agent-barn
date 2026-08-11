@@ -202,6 +202,15 @@ class TemplateRepository:
             )
             return session.exec(query).first()
 
+    def get_org_template_by_id(self, org_id: UUID, template_id: UUID) -> AgentTemplate | None:
+        with Session(self.delegate.engine) as session:
+            return session.exec(
+                select(AgentTemplate).where(
+                    col(AgentTemplate.id) == template_id,
+                    col(AgentTemplate.organization_id) == org_id,
+                )
+            ).first()
+
     def get_latest_org_template(self, org_id: UUID, template_key: str) -> AgentTemplate | None:
         with Session(self.delegate.engine) as session:
             query = (

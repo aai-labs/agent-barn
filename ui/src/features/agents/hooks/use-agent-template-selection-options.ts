@@ -34,10 +34,12 @@ export function useAgentTemplateSelectionOptions({
   templates,
   active,
   overrideVersions,
+  sourceUpdate,
 }: {
   templates: AgentTemplateRead[];
   active: AgentConfigurationVersion;
   overrideVersions: AgentOverrideVersion[];
+  sourceUpdate?: AgentConfigurationVersion | null;
 }) {
   const orgApiBase = useOrganizationApiBase();
   const templateKeys = useMemo(
@@ -81,6 +83,10 @@ export function useAgentTemplateSelectionOptions({
         template.templateKey,
         template.version,
       );
+      const isSourceUpdate =
+        sourceUpdate?.sourceType === selectionType &&
+        sourceUpdate.sourceTemplateKey === template.templateKey &&
+        sourceUpdate.sourceTemplateVersion === template.version;
       sharedOptionsByValue.set(value, {
         value,
         selectionType,
@@ -95,6 +101,7 @@ export function useAgentTemplateSelectionOptions({
           template.version ===
           latestByLineage.get(`${selectionType}:${template.templateKey}`),
         platformUpdateAvailable: template.platformUpdateAvailable,
+        sourceUpdateAvailable: isSourceUpdate,
         searchText: [
           templateTypeLabel(template),
           template.templateName,
@@ -102,8 +109,52 @@ export function useAgentTemplateSelectionOptions({
           `version ${template.version}`,
           template.description ?? "",
           template.platformUpdateAvailable ? "platform update available" : "",
+          isSourceUpdate ? `${selectionType} update available` : "",
         ].join(" "),
       });
+    }
+
+    if (sourceUpdate) {
+      const selectionType = sourceUpdate.sourceType;
+      const value = templateSelectionValue(
+        selectionType,
+        sourceUpdate.sourceTemplateKey,
+        sourceUpdate.sourceTemplateVersion,
+      );
+      const existing = sharedOptionsByValue.get(value);
+      if (existing) {
+        existing.sourceUpdateAvailable = true;
+        existing.searchText = `${existing.searchText} ${selectionType} update available`;
+      } else {
+        const typeLabel: TemplateSelectionOption["typeLabel"] =
+          selectionType === "platform"
+            ? "Built-in platform"
+            : sourceUpdate.sourcePlatformTemplateId
+              ? "Organization fork"
+              : "Organization-owned";
+        sharedOptionsByValue.set(value, {
+          value,
+          selectionType,
+          templateKey: sourceUpdate.sourceTemplateKey,
+          templateVersion: sourceUpdate.sourceTemplateVersion,
+          snapshot: sourceUpdate,
+          typeLabel,
+          name: sourceUpdate.templateName,
+          version: sourceUpdate.sourceTemplateVersion,
+          updatedAt: sourceUpdate.updatedAt,
+          isLatest: true,
+          platformUpdateAvailable: false,
+          sourceUpdateAvailable: true,
+          searchText: [
+            typeLabel,
+            `${selectionType} update available`,
+            sourceUpdate.templateName,
+            sourceUpdate.sourceTemplateKey,
+            `version ${sourceUpdate.sourceTemplateVersion}`,
+            sourceUpdate.description ?? "",
+          ].join(" "),
+        });
+      }
     }
 
     const latestOverrideVersion = overrideVersions.reduce(
@@ -124,6 +175,7 @@ export function useAgentTemplateSelectionOptions({
         updatedAt: version.updatedAt,
         isLatest: version.version === latestOverrideVersion,
         platformUpdateAvailable: false,
+        sourceUpdateAvailable: false,
         searchText: [
           "Agent override",
           version.templateName,
@@ -173,6 +225,7 @@ export function useAgentTemplateSelectionOptions({
         updatedAt: active.updatedAt,
         isLatest: false,
         platformUpdateAvailable: false,
+        sourceUpdateAvailable: false,
         searchText: [
           typeLabel,
           active.templateName,
@@ -196,7 +249,7 @@ export function useAgentTemplateSelectionOptions({
         left.name.localeCompare(right.name) ||
         right.version - left.version,
     );
-  }, [active, overrideVersions, sharedVersions, templates]);
+  }, [active, overrideVersions, sharedVersions, sourceUpdate, templates]);
 
   return { options, isLoading, hasError };
 }

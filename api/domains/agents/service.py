@@ -814,6 +814,49 @@ class AgentService:
             )
         return self.template_repository.to_read(template, self.template_repository.get_required_skills_for(template))
 
+    def _get_available_source_update(
+        self,
+        agent_id: UUID,
+        organization_id: UUID,
+        active: AgentTemplateOverrideVersion,
+    ) -> AgentConfigurationVersionRead | None:
+        """Resolve a newer row in the Override's direct source lineage.
+
+        Source IDs are checked before looking for a newer version. If the
+        original source row was removed, the Override remains self-contained but
+        there is no update candidate to display.
+        """
+        baseline = active
+        if baseline.source_type == AgentTemplateOverrideSourceType.PLATFORM:
+            if baseline.source_platform_template_id is None:
+                return None
+            source = self.template_repository.get_platform_template_by_id(baseline.source_platform_template_id)
+            latest = self.template_repository.get_latest_platform_template(baseline.source_template_key)
+        else:
+            if baseline.source_agent_template_id is None:
+                return None
+            source = self.template_repository.get_org_template_by_id(
+                organization_id,
+                baseline.source_agent_template_id,
+            )
+            latest = self.template_repository.get_latest_org_template(
+                organization_id,
+                baseline.source_template_key,
+            )
+        if (
+            source is None
+            or source.template_key != baseline.source_template_key
+            or source.version != baseline.source_template_version
+            or latest is None
+            or latest.version <= baseline.source_template_version
+        ):
+            return None
+        return self._shared_configuration_read(
+            latest,
+            agent_id,
+            self.template_repository.get_required_skills_for(latest),
+        )
+
     def get_agent_configuration(
         self,
         agent_id: UUID,
@@ -851,6 +894,11 @@ class AgentService:
             if draft is not None
             else None
         )
+        source_update = (
+            self._get_available_source_update(agent.id, org_id, active)
+            if isinstance(active, AgentTemplateOverrideVersion)
+            else None
+        )
         versions = self.override_repository.get_versions(agent.id, org_id)
         version_reads = [
             self._override_version_read(
@@ -871,6 +919,7 @@ class AgentService:
             agent_id=agent.id,
             active=active_read,
             draft=draft_read,
+            source_update=source_update,
             shared_versions=shared_reads,
             override_versions=version_reads,
         )
@@ -1163,12 +1212,16 @@ class AgentService:
         skill: Skill,
         group_key: str | None,
     ) -> AgentTemplateOverrideRequiredSkillRead:
+        source = skill.source.value if hasattr(skill.source, "value") else skill.source
+        required_providers = [
+            provider.value if hasattr(provider, "value") else provider for provider in skill.required_providers
+        ]
         return AgentTemplateOverrideRequiredSkillRead(
             id=skill.id,
             organization_id=skill.organization_id,
             name=skill.name,
-            source=skill.source.value,
-            required_providers=[provider.value for provider in skill.required_providers],
+            source=source,
+            required_providers=required_providers,
             tools_pointer=skill.tools_pointer,
             group_key=group_key,
             created_at=skill.created_at,

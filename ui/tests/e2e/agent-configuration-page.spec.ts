@@ -149,6 +149,151 @@ test.describe("Agent configuration page", () => {
     await expect(page.getByRole("button", { name: "Create new draft" })).toBeVisible();
   });
 
+  test("repins to a labeled Platform source update without changing the local Override Draft", async ({ page }) => {
+    const dataSupport = new DataSupport(page);
+    const configurationPage = new AgentConfigurationPage(page);
+    const sourceUpdate = {
+      ...mockAgentConfiguration.active,
+      id: "66666666-6666-4666-8666-666666666662",
+      version: 2,
+      template_name: "General Purpose",
+      description: "Platform source v2",
+      soul_md: "# Platform source v2",
+      source_type: "platform",
+      source_template_key: "general-purpose",
+      source_template_version: 2,
+      source_platform_template_id: "55555555-5555-4555-8555-555555555551",
+      source_agent_template_id: null,
+      state: "published",
+      pin_type: "shared",
+    };
+    const localDraft = {
+      ...mockAgentOverrideDraft,
+      soul_md: "# Local draft change",
+    };
+    let configuration: Record<string, unknown> = {
+      ...mockAgentConfiguration,
+      active: { ...mockAgentOverrideVersion, state: "active" },
+      draft: localDraft,
+      override_versions: [mockAgentOverrideVersion],
+      source_update: sourceUpdate,
+    };
+    let currentAgent: Record<string, unknown> = {
+      ...mockAgent,
+      status: "STOPPED",
+      template_pin_type: "override",
+      override_version: 1,
+    };
+
+    await dataSupport.auth.interceptRefreshRequest();
+    await dataSupport.users.interceptGetUserContextRequest();
+    await dataSupport.users.interceptGetOrganizationsRequest();
+    await dataSupport.skills.interceptGetSkillsRequest();
+    await dataSupport.agents.interceptGetTemplatesRequest();
+    await dataSupport.agents.interceptGetTemplateVersionsRequest();
+    await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}`, async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(currentAgent) });
+    });
+    await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/configuration`, async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(configuration) });
+    });
+    await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/configuration/select`, async (route) => {
+      if (route.request().method() !== "POST") {
+        await route.fallback();
+        return;
+      }
+      currentAgent = { ...currentAgent, template_pin_type: "shared", override_version: null };
+      configuration = {
+        ...configuration,
+        active: { ...sourceUpdate, state: "active" },
+        source_update: null,
+      };
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(currentAgent) });
+    });
+
+    await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
+    await configurationPage.sectionButton("Template selection").click();
+    await expect(page.getByText(/newer Platform source version \(v2\)/)).toBeVisible();
+    await configurationPage.versionSelect().click();
+    await expect(page.getByText("Platform update").first()).toBeVisible();
+    await page.getByRole("option", { name: /v2.*Platform update/i }).click();
+    await configurationPage.applyButton().click();
+    await configurationPage.applyConfirmationButton().click();
+    await expect(configurationPage.applyButton()).toBeDisabled();
+
+    await configurationPage.sectionButton("Agent-owned override").click();
+    await expect(configurationPage.draftHeading()).toBeVisible();
+    await expect(configurationPage.artifact("SOUL.md").last()).toHaveValue("# Local draft change");
+  });
+
+  test("restarts a running Agent even when a source-update selection fails", async ({ page }) => {
+    const dataSupport = new DataSupport(page);
+    const configurationPage = new AgentConfigurationPage(page);
+    const sourceUpdate = {
+      ...mockAgentConfiguration.active,
+      id: "66666666-6666-4666-8666-666666666662",
+      version: 2,
+      template_name: "Maya Organization",
+      source_template_version: 2,
+      state: "published",
+      pin_type: "shared",
+    };
+    const configuration = {
+      ...mockAgentConfiguration,
+      active: { ...mockAgentOverrideVersion, state: "active" },
+      source_update: sourceUpdate,
+      override_versions: [mockAgentOverrideVersion],
+    };
+
+    await dataSupport.auth.interceptRefreshRequest();
+    await dataSupport.users.interceptGetUserContextRequest();
+    await dataSupport.users.interceptGetOrganizationsRequest();
+    await dataSupport.skills.interceptGetSkillsRequest();
+    await dataSupport.agents.interceptGetTemplatesRequest();
+    await dataSupport.agents.interceptGetTemplateVersionsRequest();
+    await dataSupport.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, status: "RUNNING", template_pin_type: "override", override_version: 1 },
+    });
+    await dataSupport.agents.interceptStopAgentRequest();
+    await dataSupport.agents.interceptStartAgentRequest();
+    await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/configuration`, async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(configuration) });
+    });
+    await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/configuration/select`, async (route) => {
+      if (route.request().method() !== "POST") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ detail: "Selection conflict" }) });
+    });
+
+    await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
+    await configurationPage.sectionButton("Template selection").click();
+    await configurationPage.versionSelect().click();
+    await page.getByRole("option", { name: /v2.*Organization update/i }).click();
+    await configurationPage.applyButton().click();
+    const stopPromise = page.waitForRequest(
+      (request) => request.url().endsWith(`/agents/${MOCK_AGENT_ID}/stop`) && request.method() === "POST",
+    );
+    const startPromise = page.waitForRequest(
+      (request) => request.url().endsWith(`/agents/${MOCK_AGENT_ID}/start`) && request.method() === "POST",
+    );
+    await configurationPage.applyConfirmationButton().click();
+    await Promise.all([stopPromise, startPromise]);
+  });
+
   test("keeps override creation available and restarts running Agents when applying changes", async ({ page }) => {
     const dataSupport = new DataSupport(page);
     const configurationPage = new AgentConfigurationPage(page);

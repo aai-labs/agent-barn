@@ -328,6 +328,7 @@ export const AgentConfigurationSchema = z.object({
   agentId: z.string().uuid(),
   active: AgentConfigurationVersionSchema,
   draft: AgentOverrideDraftSchema.nullable(),
+  sourceUpdate: AgentConfigurationVersionSchema.nullable().optional(),
   sharedVersions: z.array(AgentConfigurationVersionSchema).default([]),
   overrideVersions: z.array(AgentOverrideVersionSchema).default([]),
 });

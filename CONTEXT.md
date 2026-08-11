@@ -129,7 +129,7 @@ The user whose action created an Agent Template Override Draft or Version, retai
 _Avoid_: current editor, Agent Creator, last viewer
 
 **Agent Override Update**:
-A user-initiated action that copies a newer Override Source Version into the Agent Template Override Draft, replacing local override changes. Publishing then creates the next immutable Agent Template Override Version while preserving previous versions for rollback.
+A user-initiated action that selects a newer direct Platform or Organization Override Source Version as the Agent's shared pin, leaving any existing Agent Template Override Draft untouched. A stopped Agent repins immediately; a running Agent applies the selection through Apply & Restart.
 _Avoid_: merge, automatic sync, rollback
 
 **Draft Template Version**:

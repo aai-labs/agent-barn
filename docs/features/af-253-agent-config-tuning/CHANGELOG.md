@@ -6,12 +6,18 @@ Related context: [`../agents.md`](../agents.md), [`../../adr/2026-08-09-agent-sc
 
 ## Current state
 
-- Delivered: full-page Agent configuration, Agent-owned drafts, immutable published Override Versions, authorship, required-Skill validation, shared and Override history, safe historical selection/rollback, draft preservation, and retention after soft Agent deletion.
-- In transition: pending activation state was intentionally discarded; the explicit Apply & Restart workflow remains; direct source-update workflows remain in a later AF-253 slice.
-- Next: AF-253-04 — direct source updates.
-- Blockers: none for the delivered AF-253-01 and AF-253-03 slices.
+- Delivered: full-page Agent configuration, Agent-owned drafts, immutable published Override Versions, authorship, required-Skill validation, shared and Override history, safe historical selection/rollback, draft preservation, retention after soft Agent deletion, and direct Platform/Organization source updates.
+- In transition: pending activation state was intentionally discarded; the explicit Apply & Restart workflow remains.
+- Next: none for the delivered AF-253 slices.
+- Blockers: none.
 
 ## Changes
+
+### 2026-08-11 — AF-253-04
+
+- Delivered: direct source-update discovery for active Agent Overrides, exact Platform/Organization provenance and source versions, explicit repinning through the existing Template selection workflow, and publish/select/lifecycle activation safety.
+- Decision: source updates select the complete newer direct shared source version and never mutate an existing Override Draft. Local draft work remains available independently; unavailable source rows produce no candidate while existing immutable Overrides remain self-contained.
+- Coverage: Platform and Organization integration flows plus configuration-page end-to-end coverage verify labels, draft preservation, stopped selection, and no false candidate for unavailable sources.
 
 ### 2026-08-11 — AF-253-03
 

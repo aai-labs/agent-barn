@@ -18,8 +18,7 @@ import { cn } from "@/lib/utils";
 import { formatDate } from "@/shared/date";
 import { toastError } from "@/shared/toast";
 
-import { useStartAgent } from "../hooks/use-start-agent";
-import { useStopAgent } from "../hooks/use-stop-agent";
+import { useAgentApplyAndRestart } from "../hooks/use-agent-apply-and-restart";
 import { useAgentTemplateSelectionOptions } from "../hooks/use-agent-template-selection-options";
 import { useSelectAgentTemplate } from "../hooks/use-agent-override-actions";
 import { useTemplates } from "../hooks/use-templates";
@@ -53,8 +52,7 @@ export function AgentTemplateSelectionSettings({
   const [applyConfirmOpen, setApplyConfirmOpen] = useState(false);
   const [selectedValue, setSelectedValue] = useState<string | null>(null);
   const selectTemplate = useSelectAgentTemplate();
-  const stopAgent = useStopAgent();
-  const startAgent = useStartAgent();
+  const { applyAndRestart, isPending: isRestartPending } = useAgentApplyAndRestart(agent);
   const {
     templates,
     isLoading: templatesLoading,
@@ -65,6 +63,7 @@ export function AgentTemplateSelectionSettings({
       templates,
       active: configuration.active,
       overrideVersions: configuration.overrideVersions,
+      sourceUpdate: configuration.sourceUpdate,
     });
   const active = configuration.active;
   const activeValue =
@@ -98,8 +97,7 @@ export function AgentTemplateSelectionSettings({
   }, [agent.skills, selectedOption]);
   const isRunning = agent.status === "RUNNING";
   const canApply = canEdit && (!isRunning || canAgent(agent, "agent.lifecycle.manage"));
-  const isPending =
-    selectTemplate.isPending || stopAgent.isPending || startAgent.isPending;
+  const isPending = selectTemplate.isPending || isRestartPending;
   const catalogLoading = templatesLoading || versionsLoading;
   const applyLabel = isRunning ? "Apply & Restart" : "Apply";
 
@@ -115,22 +113,16 @@ export function AgentTemplateSelectionSettings({
     }
 
     try {
-      let latestAgent = agent;
-      if (isRunning) {
-        latestAgent = await stopAgent.mutateAsync(latestAgent.id);
-      }
-
-      await selectTemplate.mutateAsync({
-        agentId: latestAgent.id,
-        selectionType: selectedOption.selectionType,
-        templateKey: selectedOption.templateKey,
-        templateVersion: selectedOption.templateVersion,
-        overrideVersion: selectedOption.overrideVersion,
-        expectedAgentUpdatedAt: latestAgent.updatedAt,
+      await applyAndRestart(async (stoppedAgent) => {
+        await selectTemplate.mutateAsync({
+          agentId: stoppedAgent.id,
+          selectionType: selectedOption.selectionType,
+          templateKey: selectedOption.templateKey,
+          templateVersion: selectedOption.templateVersion,
+          overrideVersion: selectedOption.overrideVersion,
+          expectedAgentUpdatedAt: stoppedAgent.updatedAt,
+        });
       });
-      if (isRunning) {
-        await startAgent.mutateAsync(latestAgent.id);
-      }
       setApplyConfirmOpen(false);
     } catch (error) {
       toastError(error);
@@ -295,6 +287,11 @@ export function AgentTemplateSelectionSettings({
                                   Platform update
                                 </span>
                               )}
+                              {option.sourceUpdateAvailable && (
+                                <span className="rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[0.68rem] font-medium text-amber-700 dark:text-amber-300">
+                                  {option.selectionType === "platform" ? "Platform update" : "Organization update"}
+                                </span>
+                              )}
                             </span>
                             <span className="mt-0.5 block truncate text-xs text-muted-foreground">
                               Template key: {optionKey(option)}
@@ -324,6 +321,11 @@ export function AgentTemplateSelectionSettings({
                 Some template versions could not be loaded. The available versions are still shown.
               </p>
             )}
+            {configuration.sourceUpdate && (
+              <p className="mb-0 mt-2 text-xs text-muted-foreground">
+                A newer {configuration.sourceUpdate.sourceType === "platform" ? "Platform" : "Organization"} source version (v{configuration.sourceUpdate.sourceTemplateVersion}) is available. Selecting it repins the Agent and leaves any existing Override Draft unchanged.
+              </p>
+            )}
           </div>
         </div>
 
@@ -346,6 +348,11 @@ export function AgentTemplateSelectionSettings({
                 {selectedOption.isLatest && (
                   <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[0.68rem] font-medium text-primary">
                     Latest
+                  </span>
+                )}
+                {selectedOption.sourceUpdateAvailable && (
+                  <span className="rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[0.68rem] font-medium text-amber-700 dark:text-amber-300">
+                    {selectedOption.selectionType === "platform" ? "Platform update" : "Organization update"}
                   </span>
                 )}
                 {selectedOption.value === activeValue && (

@@ -220,6 +220,7 @@ export type TemplateSelectionOption = {
   updatedAt: string;
   isLatest: boolean;
   platformUpdateAvailable: boolean;
+  sourceUpdateAvailable: boolean;
   searchText: string;
 };
 
