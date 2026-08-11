@@ -1,11 +1,22 @@
 import json
 import os
-import types
 from unittest.mock import MagicMock, patch
 
-from hamcrest import assert_that, equal_to, has_length, is_
+from hamcrest import assert_that, empty, equal_to, has_length, is_
 
+from api.domains.ingest.models import IngestBatchRequest
 from api.tests.core.givenpy import given, then, when
+from api.tests.helpers.telemetry_plugins import (
+    dispatch,
+    flush_and_capture,
+    load_hermes_plugin,
+    make_message_event,
+    make_session_entry,
+    make_session_store,
+    outbound_messages,
+    post_llm_call,
+    register_hermes_plugin,
+)
 
 _ENV = {
     "AGENT_ID": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
@@ -14,47 +25,13 @@ _ENV = {
 }
 
 
-def _load_plugin():
-    import importlib.util
-
-    path = os.path.dirname(__file__) + "/../../domains/agents/scripts/hermes/plugins/telemetry-push/__init__.py"
-    spec = importlib.util.spec_from_file_location("telemetry_push", os.path.abspath(path))
-    assert spec is not None
-    mod = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(mod)
-    return mod
-
-
-def _make_event(text="hello", chat_type="dm", chat_id="C123", user_id="U456", message_id=None):
-    source = types.SimpleNamespace(
-        platform="slack",
-        chat_type=chat_type,
-        chat_id=chat_id,
-        user_id=user_id,
-    )
-    return types.SimpleNamespace(
-        text=text,
-        source=source,
-        message_id=message_id,
-    )
-
-
-def _register(mod):
-    hooks = {}
-    ctx = MagicMock()
-    ctx.register_hook.side_effect = lambda name, fn: hooks.update({name: fn})
-    mod.register(ctx)
-    return hooks, ctx
-
-
 # --- register ---
 
 
 def test_register_returns_early_without_env_vars():
     with given():
         with when("I register the plugin without env vars"), patch.dict(os.environ, {}, clear=True):
-            mod = _load_plugin()
+            mod = load_hermes_plugin()
             ctx = MagicMock()
             mod.register(ctx)
 
@@ -65,7 +42,7 @@ def test_register_returns_early_without_env_vars():
 def test_register_hooks_with_env_vars():
     with given():
         with when("I register the plugin with valid env vars"), patch.dict(os.environ, _ENV, clear=True):
-            mod = _load_plugin()
+            mod = load_hermes_plugin()
             ctx = MagicMock()
             mod.register(ctx)
             hook_names = [call.args[0] for call in ctx.register_hook.call_args_list]
@@ -84,7 +61,7 @@ def test_register_hooks_with_env_vars():
 def test_dm_session_key():
     with given():
         with patch.dict(os.environ, _ENV, clear=True):
-            mod = _load_plugin()
+            mod = load_hermes_plugin()
 
         with when("I build a session key for a DM"):
             key = mod._build_session_key("dm", "D999")
@@ -96,7 +73,7 @@ def test_dm_session_key():
 def test_channel_session_key():
     with given():
         with patch.dict(os.environ, _ENV, clear=True):
-            mod = _load_plugin()
+            mod = load_hermes_plugin()
 
         with when("I build a session key for a channel"):
             key = mod._build_session_key("channel", "C123")
@@ -108,7 +85,7 @@ def test_channel_session_key():
 def test_group_session_key():
     with given():
         with patch.dict(os.environ, _ENV, clear=True):
-            mod = _load_plugin()
+            mod = load_hermes_plugin()
 
         with when("I build a session key for a group"):
             key = mod._build_session_key("group", "G456")
@@ -123,9 +100,9 @@ def test_group_session_key():
 def test_pre_gateway_dispatch_buffers_inbound_message():
     with given():
         with patch.dict(os.environ, _ENV, clear=True):
-            mod = _load_plugin()
-            hooks, _ = _register(mod)
-        event = _make_event(text="hello", chat_type="dm", chat_id="C123", user_id="U456")
+            mod = load_hermes_plugin()
+            hooks, _ = register_hermes_plugin(mod)
+        event = make_message_event(text="hello", chat_type="dm", chat_id="C123", user_id="U456")
 
         with when("I dispatch an inbound message"):
             result = hooks["pre_gateway_dispatch"](event)
@@ -144,18 +121,13 @@ def test_pre_gateway_dispatch_buffers_inbound_message():
 def test_post_llm_call_buffers_outbound_message():
     with given():
         with patch.dict(os.environ, _ENV, clear=True):
-            mod = _load_plugin()
-            hooks, _ = _register(mod)
+            mod = load_hermes_plugin()
+            hooks, _ = register_hermes_plugin(mod)
+        store = make_session_store(make_session_entry("sess-1", "C123"))
+        dispatch(hooks, make_message_event(chat_id="C123"), store)
 
         with when("a post_llm_call fires with an assistant response"):
-            hooks["post_llm_call"](
-                session_id="sess-1",
-                user_message="hi",
-                assistant_response="hello back",
-                conversation_history=[],
-                model="qwen3",
-                platform="slack",
-            )
+            post_llm_call(hooks, "sess-1")
 
         with then("an outbound message is buffered"):
             outbound = [e for e in mod._buffer if e["type"] == "message" and e["data"]["direction"] == "OUTBOUND"]
@@ -166,8 +138,8 @@ def test_post_llm_call_buffers_outbound_message():
 def test_pre_tool_call_buffers_tool_call():
     with given():
         with patch.dict(os.environ, _ENV, clear=True):
-            mod = _load_plugin()
-            hooks, _ = _register(mod)
+            mod = load_hermes_plugin()
+            hooks, _ = register_hermes_plugin(mod)
 
         with when("a pre_tool_call fires"):
             result = hooks["pre_tool_call"](
@@ -186,8 +158,8 @@ def test_pre_tool_call_buffers_tool_call():
 def test_post_tool_call_buffers_tool_result():
     with given():
         with patch.dict(os.environ, _ENV, clear=True):
-            mod = _load_plugin()
-            hooks, _ = _register(mod)
+            mod = load_hermes_plugin()
+            hooks, _ = register_hermes_plugin(mod)
         hooks["pre_tool_call"](tool_name="terminal", args={"command": "ls"}, task_id="task-1")
 
         with when("a post_tool_call fires for the same tool"):
@@ -205,6 +177,157 @@ def test_post_tool_call_buffers_tool_result():
             assert_that(results[0]["data"]["result"], equal_to("file1.txt\nfile2.txt"))
 
 
+# --- chat attribution ---
+
+
+def test_outbound_goes_to_its_own_chat_when_another_chat_messaged_meanwhile():
+    with given():
+        with patch.dict(os.environ, _ENV, clear=True):
+            mod = load_hermes_plugin()
+            hooks, _ = register_hermes_plugin(mod)
+        store = make_session_store(
+            make_session_entry("sess-a", "C_AAA"),
+            make_session_entry("sess-b", "C_BBB"),
+        )
+        dispatch(hooks, make_message_event(text="from A", chat_id="C_AAA"), store)
+        dispatch(hooks, make_message_event(text="from B", chat_id="C_BBB"), store)
+
+        with when("chat A's LLM call completes after chat B's message arrived"):
+            post_llm_call(hooks, "sess-a", response="reply for A")
+
+        with then("the reply is attributed to chat A, not chat B"):
+            outbound = outbound_messages(flush_and_capture(mod))
+            assert_that(outbound, has_length(1))
+            assert_that(outbound[0]["channel_id"], equal_to("C_AAA"))
+            assert_that(outbound[0]["session_key"], equal_to("agent:main:slack:dm:C_AAA"))
+            assert_that(outbound[0]["content"], equal_to("reply for A"))
+
+
+def test_each_concurrent_chat_gets_its_own_reply():
+    with given():
+        with patch.dict(os.environ, _ENV, clear=True):
+            mod = load_hermes_plugin()
+            hooks, _ = register_hermes_plugin(mod)
+        store = make_session_store(
+            make_session_entry("sess-a", "C_AAA"),
+            make_session_entry("sess-b", "C_BBB"),
+        )
+        dispatch(hooks, make_message_event(chat_id="C_AAA"), store)
+        dispatch(hooks, make_message_event(chat_id="C_BBB"), store)
+
+        with when("both chats' LLM calls complete out of arrival order"):
+            post_llm_call(hooks, "sess-b", response="reply for B")
+            post_llm_call(hooks, "sess-a", response="reply for A")
+
+        with then("each reply carries its own chat"):
+            outbound = outbound_messages(flush_and_capture(mod))
+            by_channel = {m["channel_id"]: m["content"] for m in outbound}
+            assert_that(by_channel, equal_to({"C_BBB": "reply for B", "C_AAA": "reply for A"}))
+
+
+def test_outbound_is_dropped_when_session_is_unknown():
+    with given():
+        with patch.dict(os.environ, _ENV, clear=True):
+            mod = load_hermes_plugin()
+            hooks, _ = register_hermes_plugin(mod)
+        store = make_session_store(make_session_entry("sess-a", "C_AAA"))
+        dispatch(hooks, make_message_event(chat_id="C_AAA"), store)
+
+        with when("a post_llm_call fires for a session the store does not know"):
+            post_llm_call(hooks, "sess-unknown")
+
+        with then("nothing is recorded rather than guessing a chat"):
+            assert_that(outbound_messages(flush_and_capture(mod)), is_(empty()))
+
+
+def test_outbound_is_dropped_when_session_store_was_never_captured():
+    with given():
+        with patch.dict(os.environ, _ENV, clear=True):
+            mod = load_hermes_plugin()
+            hooks, _ = register_hermes_plugin(mod)
+
+        with when("a reply fires before any inbound dispatch, e.g. a cron run on a fresh pod"):
+            post_llm_call(hooks, "sess-a")
+
+        with then("nothing is recorded and no exception escapes"):
+            assert_that(outbound_messages(flush_and_capture(mod)), is_(empty()))
+
+
+def test_thread_scoped_outbound_keeps_its_thread_suffix():
+    with given():
+        with patch.dict(os.environ, _ENV, clear=True):
+            mod = load_hermes_plugin()
+            hooks, _ = register_hermes_plugin(mod)
+        store = make_session_store(
+            make_session_entry("sess-t", "C123", chat_type="channel", thread_id="1779269814.824809"),
+        )
+        dispatch(hooks, make_message_event(chat_type="channel", chat_id="C123"), store)
+
+        with when("the reply for a threaded conversation completes"):
+            post_llm_call(hooks, "sess-t")
+
+        with then("thread_id is carried and the session key keeps its thread suffix"):
+            outbound = outbound_messages(flush_and_capture(mod))
+            assert_that(outbound, has_length(1))
+            assert_that(outbound[0]["thread_id"], equal_to("1779269814.824809"))
+            assert_that(
+                outbound[0]["session_key"],
+                equal_to("agent:main:slack:group:C123:1779269814.824809"),
+            )
+            assert_that(outbound[0]["conversation_type"], equal_to("CHANNEL"))
+
+
+def test_concurrent_calls_to_the_same_tool_keep_distinct_results():
+    with given():
+        with patch.dict(os.environ, _ENV, clear=True):
+            mod = load_hermes_plugin()
+            hooks, _ = register_hermes_plugin(mod)
+
+        with when("two calls to the same tool overlap within one task"):
+            hooks["pre_tool_call"](
+                tool_name="terminal", args={"command": "ls"}, task_id="task-1", tool_call_id="call-1"
+            )
+            hooks["pre_tool_call"](
+                tool_name="terminal", args={"command": "pwd"}, task_id="task-1", tool_call_id="call-2"
+            )
+            hooks["post_tool_call"](
+                tool_name="terminal", args={"command": "pwd"}, result="/root", task_id="task-1", tool_call_id="call-2"
+            )
+            hooks["post_tool_call"](
+                tool_name="terminal", args={"command": "ls"}, result="file1", task_id="task-1", tool_call_id="call-1"
+            )
+
+        with then("each result is bound to the external id of its own call"):
+            payload = flush_and_capture(mod)
+            calls = {c["arguments"]["command"]: c["external_id"] for c in payload["tool_calls"]}
+            results = {r["external_id"]: r["result"] for r in payload["tool_results"]}
+            assert_that(results[calls["ls"]], equal_to("file1"))
+            assert_that(results[calls["pwd"]], equal_to("/root"))
+
+
+def test_flushed_payload_satisfies_the_ingest_contract():
+    with given():
+        with patch.dict(os.environ, _ENV, clear=True):
+            mod = load_hermes_plugin()
+            hooks, _ = register_hermes_plugin(mod)
+        store = make_session_store(make_session_entry("sess-a", "C_AAA"))
+        dispatch(hooks, make_message_event(chat_id="C_AAA"), store)
+        post_llm_call(hooks, "sess-a")
+        hooks["pre_tool_call"](tool_name="terminal", args={"command": "ls"}, task_id="t1", tool_call_id="call-1")
+        hooks["post_tool_call"](
+            tool_name="terminal", args={"command": "ls"}, result="ok", task_id="t1", tool_call_id="call-1"
+        )
+
+        with when("the buffered batch is flushed"):
+            payload = flush_and_capture(mod)
+
+        with then("Ingest accepts it without coercion errors"):
+            batch = IngestBatchRequest.model_validate(payload)
+            assert_that(batch.messages, has_length(2))
+            assert_that(batch.tool_calls, has_length(1))
+            assert_that(batch.tool_results, has_length(1))
+
+
 # --- flush ---
 
 
@@ -218,9 +341,9 @@ def test_flush_sends_correct_payload(mock_urlopen):
         mock_urlopen.return_value = mock_response
 
         with patch.dict(os.environ, _ENV, clear=True):
-            mod = _load_plugin()
-            hooks, _ = _register(mod)
-        event = _make_event(text="test msg", chat_type="dm", chat_id="C123", user_id="U456")
+            mod = load_hermes_plugin()
+            hooks, _ = register_hermes_plugin(mod)
+        event = make_message_event(text="test msg", chat_type="dm", chat_id="C123", user_id="U456")
         hooks["pre_gateway_dispatch"](event)
 
         with when("I flush the buffer"):
@@ -249,9 +372,9 @@ def test_flush_clears_buffer_on_success(mock_urlopen):
         mock_urlopen.return_value = mock_response
 
         with patch.dict(os.environ, _ENV, clear=True):
-            mod = _load_plugin()
-            hooks, _ = _register(mod)
-        hooks["pre_gateway_dispatch"](_make_event())
+            mod = load_hermes_plugin()
+            hooks, _ = register_hermes_plugin(mod)
+        hooks["pre_gateway_dispatch"](make_message_event())
         assert_that(mod._buffer, has_length(1))
 
         with when("I flush the buffer"):
@@ -265,9 +388,9 @@ def test_flush_clears_buffer_on_success(mock_urlopen):
 def test_flush_does_not_crash_on_http_error(mock_urlopen):
     with given():
         with patch.dict(os.environ, _ENV, clear=True):
-            mod = _load_plugin()
-            hooks, _ = _register(mod)
-        hooks["pre_gateway_dispatch"](_make_event())
+            mod = load_hermes_plugin()
+            hooks, _ = register_hermes_plugin(mod)
+        hooks["pre_gateway_dispatch"](make_message_event())
 
         with when("I flush and the HTTP call fails"):
             mod._flush()
@@ -279,7 +402,7 @@ def test_flush_does_not_crash_on_http_error(mock_urlopen):
 def test_empty_flush_is_noop():
     with given():
         with patch.dict(os.environ, _ENV, clear=True):
-            mod = _load_plugin()
+            mod = load_hermes_plugin()
 
         with when("I flush an empty buffer"), patch("urllib.request.urlopen") as mock_urlopen:
             mod._flush()

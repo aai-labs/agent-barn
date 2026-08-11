@@ -54,6 +54,8 @@ export function IntegrationFields({
           connected={isOAuthConnected(draft)}
           onConnected={onOAuthConnected}
           disabled={disabled}
+          provider={provider.id}
+          connectedNote={provider.oauthConnectedNote}
         />
       )}
 

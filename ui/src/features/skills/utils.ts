@@ -10,6 +10,7 @@ export const SKILL_PROVIDER_LABELS: Record<string, string> = {
   bitbucket: "Bitbucket",
   gmail: "Gmail",
   google_calendar: "Google Calendar",
+  google_sheets: "Google Sheets",
   zoho_mail: "Zoho Mail",
   zoho_calendar: "Zoho Calendar",
   slack: "Slack",

@@ -14,14 +14,19 @@ from api.domains.agents.models import SecretProvider
 
 from .bitbucket import BITBUCKET_SKILLS
 from .confluence import CONFLUENCE_SKILLS
+from .excel import EXCEL_SKILLS
 from .github import GITHUB_SKILLS
 from .gmail import GMAIL_SKILLS
+from .google_sheets import GOOGLE_SHEETS_SKILLS
 from .jira import JIRA_SKILLS
 from .pipedrive import PIPEDRIVE_SKILLS
 from .slack import SLACK_SKILLS
 from .zoho_mail import ZOHO_MAIL_SKILLS
 
-# One entry per aai-cli provider skill seeded into the DB on startup.
+# One entry per aai-cli skill seeded into the DB on startup. Most are provider-gated, but
+# a skill needing no credential (Excel works on local files) carries an empty
+# ``required_providers``: it stays selectable, and _auto_mount_skills deliberately skips it
+# so it is only ever mounted when someone actually picks it.
 AAI_CLI_PROVIDER_SKILLS: list[dict] = [
     {
         "name": "Jira",
@@ -52,6 +57,21 @@ AAI_CLI_PROVIDER_SKILLS: list[dict] = [
         "required_providers": [SecretProvider.GMAIL],
         "files": GMAIL_SKILLS,
         "tools_pointer": "\nFor Gmail, use the aai-cli tool. See ./skills/aai-cli/gmail_skill.md\n",
+    },
+    {
+        "name": "Google Sheets",
+        "required_providers": [SecretProvider.GOOGLE_SHEETS],
+        "files": GOOGLE_SHEETS_SKILLS,
+        "tools_pointer": "\nFor Google Sheets, use the aai-cli tool. See ./skills/aai-cli/google_sheets_skill.md\n",
+    },
+    {
+        "name": "Excel",
+        "required_providers": [],
+        "files": EXCEL_SKILLS,
+        "tools_pointer": (
+            "\nFor spreadsheets (.xlsx/.xlsm/.csv/.tsv), use `aai-cli excel` — never Python or "
+            "openpyxl. See ./skills/aai-cli/excel_skill.md\n"
+        ),
     },
     {
         "name": "Zoho Mail",

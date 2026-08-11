@@ -2,6 +2,11 @@
 
 Revision ID: d731eac8a160
 Revises: 181dcfcc93ef
+
+Includes 'pipedrive' too: on environments where the sibling branch
+6c23680e1076 (add pipedrive) already ran and inserted pipedrive rows before
+this branch caught up, recreating the constraint without pipedrive fails
+with a CheckViolation against that existing data.
 """
 
 from alembic import op
@@ -17,7 +22,7 @@ _OLD = (
 )
 _NEW = (
     "provider IN ('github', 'jira', 'confluence', 'bitbucket', "
-    "'gmail', 'google_calendar', 'zoho_mail', 'zoho_calendar', 'firecrawl', 'slack')"
+    "'gmail', 'google_calendar', 'zoho_mail', 'zoho_calendar', 'firecrawl', 'slack', 'pipedrive')"
 )
 
 

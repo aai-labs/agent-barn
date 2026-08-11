@@ -36,7 +36,8 @@ export type GoogleOAuthResult = {
 };
 
 /**
- * Runs the Google OAuth popup flow and resolves with the captured Gmail refresh token.
+ * Runs the Google OAuth popup flow and resolves with the captured refresh token for the
+ * requested Google provider.
  *
  * The popup is opened synchronously on click (before any await) so browsers don't block
  * it; we then fetch the authorize URL (authenticated) and point the popup at Google.
@@ -49,7 +50,12 @@ export function useGoogleOAuth() {
   const [isConnecting, setIsConnecting] = useState(false);
 
   const connectGoogle = useCallback(
-    async (creds?: GoogleClientCredentials): Promise<GoogleOAuthResult> => {
+    async (
+      creds?: GoogleClientCredentials,
+      // Which Google integration is being connected — decides the scopes the backend
+      // requests. Defaults to gmail, the only provider this flow originally served.
+      provider: string = "gmail",
+    ): Promise<GoogleOAuthResult> => {
       setIsConnecting(true);
       const popup = window.open("about:blank", "google-oauth", POPUP_FEATURES);
       if (!popup) {
@@ -63,7 +69,7 @@ export function useGoogleOAuth() {
           {
             schema: AuthorizeUrlSchema,
             // Query params are sent as-is (not decamelized), so use the snake_case key.
-            params: creds?.clientId ? { client_id: creds.clientId } : undefined,
+            params: creds?.clientId ? { provider, client_id: creds.clientId } : { provider },
           },
         );
         popup.location.href = data.authorizeUrl;

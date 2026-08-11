@@ -60,6 +60,25 @@ Representative sources:
 - Ingest/activity: `../../api/tests/integration/test_ingest.py`, `../../api/tests/integration/test_conversations.py`, `../../api/tests/integration/test_tool_calls.py`
 - Test application setup: `../../api/tests/conftest.py`, `../../api/tests/core/`
 
+## Runtime plugin tests
+
+The Hermes and OpenClaw telemetry plugins ship inside agent images rather than
+being importable modules, so they are loaded from their source path and their
+hooks are called directly. Shared setup lives in
+`../../api/tests/helpers/telemetry_plugins.py`.
+
+- Assert on the payload a plugin **posts**, not on its internal buffer, and
+  validate it against the real ingest models so the two halves cannot drift.
+- The OpenClaw plugin is JavaScript, so its tests drive it as a `node`
+  subprocess against a throwaway HTTP listener, following the same
+  subprocess-and-real-HTTP pattern as `../../api/tests/unit/test_healthz_server_metrics.py`.
+  `node` is required; a missing `node` MUST fail rather than skip.
+- Fakes of runtime objects can only prove our own logic. Anything that depends
+  on runtime behavior MUST also be checked inside the pinned image — see the
+  base-image smoke tests and the plugin-contract step in
+  `../../.github/workflows/hermes-base.yml`. Those run on version bumps, which is
+  when such assumptions break.
+
 ## UI and browser tests
 
 Changed UI behavior SHOULD include Playwright coverage when regression risk is non-trivial.
@@ -89,6 +108,7 @@ Avoid assertions inside page objects. Avoid feature-specific network interceptio
 | API route/auth contract      | Integration test                                              |
 | Database schema              | Migration plus integration coverage                           |
 | Parser or runtime builder    | Focused unit tests; integration where wiring matters          |
+| Runtime plugin behavior      | Unit tests asserting the payload the plugin posts, plus a contract check inside the pinned runtime image |
 | UI interaction or navigation | Playwright when regression risk is meaningful                 |
 | UI schema/query hook         | Typecheck, lint, and focused browser coverage                 |
 | Helm/Kubernetes behavior     | Chart/render checks and Kubernetes integration when available |

@@ -523,6 +523,60 @@ test.describe("Hire Dialog — Skills step", () => {
     await expect(page.getByRole("button", { name: /hire aria/i })).toBeDisabled();
   });
 
+  test("automatic Slack credentials do not block hiring", async ({ page }) => {
+    await dataSupportPage.agents.interceptCreateAgentRequest({
+      body: { ...mockAgent, status: "STOPPED" },
+    });
+    await dataSupportPage.agents.interceptGetTemplateVersionsRequest({
+      body: mockVersionsForKey("general-purpose").map((v) => ({
+        ...v,
+        required_skills: [
+          {
+            id: mockJiraSkill.id,
+            name: "jira",
+            source: "aai_cli",
+            required_providers: ["jira"],
+            tools_pointer: null,
+            required: true,
+            created_at: "2026-01-01T00:00:00Z",
+            updated_at: "2026-01-01T00:00:00Z",
+          },
+          {
+            id: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+            name: "slack",
+            source: "aai_cli",
+            required_providers: ["slack"],
+            tools_pointer: null,
+            required: true,
+            created_at: "2026-01-01T00:00:00Z",
+            updated_at: "2026-01-01T00:00:00Z",
+          },
+        ],
+      })),
+    });
+
+    await navigateToSkillsStep(page);
+
+    await expect(page.getByText(/Slack — uses this agent's existing Slack bot token automatically/)).toBeVisible();
+    await page.getByPlaceholder(/atlassian\.net/).fill("https://aai-labs.atlassian.net/");
+    await page.getByRole("radio", { name: "Scoped token", exact: true }).check();
+    await page.getByPlaceholder("you@example.com").fill("kalkidan@aai-labs.com");
+    await page.locator('input[type="password"]').last().fill("jira-api-token");
+
+    const createPromise = page.waitForRequest(
+      (req) =>
+        /\/api\/v1\/organizations\/[^/]+\/agents$/.test(new URL(req.url()).pathname) &&
+        req.method() === "POST",
+    );
+    await expect(page.getByRole("button", { name: /hire aria/i })).toBeEnabled();
+    await page.getByRole("button", { name: "Hire Aria" }).click();
+
+    const body = (await createPromise).postDataJSON() as {
+      secrets: Array<{ provider: string }>;
+    };
+    expect(body.secrets.some((secret) => secret.provider === "slack")).toBe(false);
+  });
+
   test("selecting a gmail skill reveals the Google OAuth button", async ({ page }) => {
     await navigateToSkillsStep(page);
 
