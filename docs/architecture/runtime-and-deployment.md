@@ -13,10 +13,12 @@ Starting an agent is an API-orchestrated deployment flow:
 3. Decrypt platform and provider credentials.
 4. Select runtime-specific configuration and deployment builders.
 5. Combine explicitly assigned skills with eligible built-in provider skills.
-6. Append tool pointers and integration policy to rendered Markdown.
+6. Append tool pointers, integration policy, and the unconditional runtime behaviour policies (chat commands, role scope) to rendered Markdown.
 7. Generate a fresh ingest key and runtime environment.
 8. Build ConfigMap, Secret, PVC, Service, and Deployment resources.
 9. Apply resources through the Kubernetes client and mark the agent running.
+
+Runtime behaviour policies are appended to `AGENTS.md` rather than stored in a template, because both runtimes auto-load `AGENTS.md` into the startup system prompt. They are unconditional and carry no role-specific wording, so custom and forked templates inherit them and the role-scope policy defers to whatever role the agent's own template defines.
 
 A failed Slack or Telegram credential check or Kubernetes start can place the agent in `ERROR`; successful start clears the prior error.
 
@@ -29,6 +31,26 @@ A failed Slack or Telegram credential check or Kubernetes start can place the ag
 
 Runtime is persisted as `agent_type`; platform is persisted separately. Both runtimes receive rendered template files, skills, integrations, model/LiteLLM settings, and ingest credentials, but their filesystem and configuration shapes differ.
 
+## Mention gating
+
+In a shared channel or group an agent responds only to messages that explicitly mention it. Every agent owns its own bot identity and therefore receives every message in rooms it belongs to, so mention gating is the only thing that keeps an untagged agent from acting on a message addressed to another agent. Gating requires a fresh mention per message: participating earlier in a thread does not entitle an agent to later messages. Direct messages are exempt.
+
+Builders set this per runtime and platform:
+
+| Runtime  | Platform | Generated configuration                                                                       |
+| -------- | -------- | --------------------------------------------------------------------------------------------- |
+| Hermes   | Slack    | `slack.require_mention` and `slack.strict_mention`                                              |
+| Hermes   | Telegram | `telegram.require_mention` and `telegram.exclusive_bot_mentions`                                |
+| OpenClaw | Slack    | `channels.slack.requireMention`, `channels.slack.thread.requireExplicitMention`, and per-channel `requireMention` |
+| OpenClaw | Teams    | `channels.msteams.requireMention`                                                               |
+| OpenClaw | Telegram | `channels.telegram.groups.<chat_id>.requireMention`, or the `*` wildcard group when the group policy is open |
+
+The table covers all five supported runtime/platform pairs. Every value is pinned explicitly rather than left to a runtime default, so an upstream default change cannot silently reopen the gap.
+
+Guarantee strength differs by platform. Slack on both runtimes enforces a fresh mention per message, disabling thread auto-engagement. Teams and Telegram enforce "mention required" but expose no per-message re-mention control, so a direct reply to the agent's own message still reaches it. Those replies remain addressed to exactly one agent, so they do not reopen the cross-agent case.
+
+Runtime configuration is generated at agent start, so a running agent keeps the gating it was started with until it is stopped and started again.
+
 ## Telemetry and costs
 
 Agent runtimes report messages and tool-call state to the separate Ingest API using the per-start ingest key. Ingest authentication currently remains valid after stop because status is not checked and the stored key is not cleared. Costs follow a separate path: the API queries LiteLLM and attributes spend through each agent's LiteLLM key identity.
@@ -39,7 +61,7 @@ Agent runtimes report messages and tool-call state to the separate Ingest API us
 
 The API image also runs Domain Event delivery workloads with different commands: a Dramatiq worker deployment processes committed Event Delivery IDs from Redis, and a CronJob runs the one-shot Event Delivery reconciler. Product and Ingest API health probes remain PostgreSQL-only; worker readiness checks Redis connectivity through the delivery transport adapter.
 
-The deploy workflow builds API and UI images under moving environment tags, passes those tags into Helmfile as `API_IMAGE_TAG` and `UI_IMAGE_TAG`, and applies Helmfile. The current convention is `latest` on `main` and `latest-staging` on the `staging` branch. Manual and bundled release flows also pass explicit API/UI tags; chart metadata is not used as the source of truth for API/UI images.
+The deploy workflow builds API and UI images under moving environment tags, passes those tags into Helmfile as `API_IMAGE_TAG` and `UI_IMAGE_TAG`, and applies Helmfile. The current convention is `latest` on `main` and `latest-staging` on the `staging` branch. Component change detection compares the current commit with the latest successful deploy run for that branch; failed runs therefore leave their entire source range pending for the next attempt. Manual dispatches and missing or non-ancestor baselines rebuild all components. Manual and bundled release flows also pass explicit API/UI tags; chart metadata is not used as the source of truth for API/UI images.
 
 Every release's namespace and `needs:` entries are templated on a `NAMESPACE` env var (default `agent-farm`), which is how the `staging` branch deploys a fully separate stack into `agent-farm-staging` instead of prod's `agent-farm`. See [`../guidelines/operations.md`](../guidelines/operations.md#staging-environment) for the operator runbook and [`../adr/2026-07-13-staging-environment-namespace-isolation.md`](../adr/2026-07-13-staging-environment-namespace-isolation.md) for why namespace isolation was chosen over GitHub Environments or a second cluster.
 

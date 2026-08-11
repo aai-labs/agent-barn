@@ -80,7 +80,7 @@ from api.domains.agents.models import (
     validate_content,
 )
 from api.domains.agents.repository import AgentRepository
-from api.domains.agents.runtime_policy import build_chat_commands_policy_md
+from api.domains.agents.runtime_policy import build_chat_commands_policy_md, build_role_scope_policy_md
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.token_service import SlackConfigTokenService
 from api.domains.events import EventDeliveryDispatcher, resolve_actor_identity
@@ -1487,8 +1487,9 @@ class AgentService:
         tools_md = rendered.tools_md + self._build_skill_pointers(mounted_skills) + build_tool_context_md(decrypted)
         # AGENTS.md is auto-loaded into the startup prompt by both runtimes, so the
         # --profile mapping + no-fallback policy is appended here (not just to TOOLS.md).
-        # The chat-commands policy rides along unconditionally — it applies to every
-        # agent, integrations or not, and to custom templates we don't control.
+        # The chat-commands and role-scope policies ride along unconditionally — they
+        # apply to every agent, integrations or not, and to custom templates we don't
+        # control.
         # Credential-free tools ride in their own block: the integrations policy is built
         # from configured secrets, so a tool with no provider would otherwise be invisible
         # in the auto-loaded prompt no matter that its skill is mounted.
@@ -1497,6 +1498,7 @@ class AgentService:
             + build_integrations_policy_md(decrypted)
             + build_local_tools_policy_md(s.name for s in mounted_skills)
             + build_chat_commands_policy_md()
+            + build_role_scope_policy_md()
         )
 
         if agent.agent_type == AgentType.HERMES:

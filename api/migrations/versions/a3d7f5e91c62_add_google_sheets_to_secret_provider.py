@@ -1,25 +1,20 @@
 """Add google_sheets to agent_secret provider check constraint.
 
-Descends from both current heads, so it doubles as the merge revision staging needs.
-
-5e0adff0f5e2 (#109) and f6a7b8c9d0e1 (#110) merged within an hour of each other, each
-adding migrations on its own line and neither reconciling the other, which leaves staging
-with two heads and `alembic upgrade head` refusing to run. Taking both as parents repairs
-that rather than adding a third head.
-
-Only 5e0adff0f5e2 touches ck_agent_secret_provider, so the _OLD snapshot below still
-matches what is on the table — every revision touching this constraint recreates it from
-its own snapshot, which is exactly the collision 5e0adff0f5e2 had to repair between slack
-and pipedrive.
+Chains off 3df7fef61316, staging's merge of the 5e0adff0f5e2 (#109) and f6a7b8c9d0e1
+(#110) heads. That merge is a no-op and f6a7b8c9d0e1 does not touch this constraint, so
+the last revision to recreate ck_agent_secret_provider is still 5e0adff0f5e2 and the _OLD
+snapshot below matches what is on the table. Every revision touching this constraint
+recreates it from its own snapshot, which is exactly the collision 5e0adff0f5e2 had to
+repair between slack and pipedrive.
 
 Revision ID: a3d7f5e91c62
-Revises: (5e0adff0f5e2, f6a7b8c9d0e1)
+Revises: 3df7fef61316
 """
 
 from alembic import op
 
 revision: str = "a3d7f5e91c62"
-down_revision: tuple[str, str] = ("5e0adff0f5e2", "f6a7b8c9d0e1")
+down_revision: str = "3df7fef61316"
 branch_labels: str | None = None
 depends_on: str | None = None
 

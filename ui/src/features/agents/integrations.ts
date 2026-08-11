@@ -41,6 +41,15 @@ export interface IntegrationDraft {
   sharedCredentialId?: string;
 }
 
+// These providers are derived from the agent configuration rather than stored as
+// standalone credentials. They can appear in a skill's required_providers list,
+// but must not be collected or validated as manual integration drafts.
+const AUTO_CONFIGURED_PROVIDER_IDS = new Set(["slack"]);
+
+export function isAutoConfiguredProvider(providerId: string): boolean {
+  return AUTO_CONFIGURED_PROVIDER_IDS.has(providerId);
+}
+
 export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
   {
     id: "github",
@@ -215,6 +224,7 @@ export function isOAuthConnected(draft: IntegrationDraft): boolean {
 // True if any added integration is missing a required field — used to gate "Hire".
 export function hasIncompleteIntegration(integrations: IntegrationDraft[]): boolean {
   return integrations.some((draft) => {
+    if (isAutoConfiguredProvider(draft.provider)) return false;
     if (draft.sharedCredentialId) return false;
     const provider = getIntegrationProvider(draft.provider);
     if (!provider) return true;
