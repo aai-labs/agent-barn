@@ -1,6 +1,6 @@
 "use client";
 
-import { Loader2, Pencil, Send } from "lucide-react";
+import { Loader2, Pencil } from "lucide-react";
 
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -26,10 +26,8 @@ export function AgentOverrideDraftEditor({
   onChange,
   onRequirementsChange,
   onSave,
-  onPublish,
-  canEdit,
+  onCancel,
   isSaving,
-  isPublishing,
 }: {
   draft: AgentOverrideDraft;
   form: DraftForm;
@@ -39,10 +37,8 @@ export function AgentOverrideDraftEditor({
     groups: RequiredSkillGroupDraft[],
   ) => void;
   onSave: () => void;
-  onPublish: () => void;
-  canEdit: boolean;
+  onCancel: () => void;
   isSaving: boolean;
-  isPublishing: boolean;
 }) {
   const { skills, isLoading: skillsLoading } = useSkills({ pageSize: 100 });
   const original = draftToForm(draft);
@@ -124,28 +120,25 @@ export function AgentOverrideDraftEditor({
               and does not switch the active pin.
             </p>
           </div>
-          {canEdit && (
-            <div className="flex gap-2">
-              <button
-                className="af-btn"
-                type="button"
-                disabled={!isDirty || isSaving}
-                onClick={onSave}
-              >
-                {isSaving && <Loader2 size={14} className="animate-spin" />}
-                {isSaving ? "Saving…" : "Save draft"}
-              </button>
-              <button
-                className="af-btn af-btn-primary"
-                type="button"
-                disabled={isDirty || isPublishing}
-                onClick={onPublish}
-              >
-                {isPublishing && <Loader2 size={14} className="animate-spin" />}
-                <Send size={14} /> {isPublishing ? "Publishing…" : "Publish"}
-              </button>
-            </div>
-          )}
+          <div className="flex gap-2">
+            <button
+              className="af-btn"
+              type="button"
+              disabled={isSaving}
+              onClick={onCancel}
+            >
+              Cancel
+            </button>
+            <button
+              className="af-btn af-btn-primary"
+              type="button"
+              disabled={!isDirty || isSaving}
+              onClick={onSave}
+            >
+              {isSaving && <Loader2 size={14} className="animate-spin" />}
+              {isSaving ? "Saving…" : "Save draft"}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -161,7 +154,6 @@ export function AgentOverrideDraftEditor({
           <Input
             id="override-template-name"
             value={form.templateName}
-            disabled={!canEdit}
             onChange={(event) => onChange("templateName", event.target.value)}
             required
           />
@@ -177,7 +169,6 @@ export function AgentOverrideDraftEditor({
           <Input
             id="override-description"
             value={form.description}
-            disabled={!canEdit}
             onChange={(event) => onChange("description", event.target.value)}
             placeholder="What this Agent-specific configuration is for"
           />
@@ -185,7 +176,7 @@ export function AgentOverrideDraftEditor({
 
         <ConfigurationArtifactSurface
           snapshot={draft}
-          editable={canEdit}
+          editable
           values={form}
           onChange={(artifact, value) => onChange(artifact, value)}
         />
@@ -215,7 +206,6 @@ export function AgentOverrideDraftEditor({
                   skillMap={skillMap}
                   selectedSkillIds={selectedSkillIds}
                   onToggle={toggleSkill}
-                  disabled={!canEdit}
                 />
               ))}
               <div className="grid gap-2 sm:grid-cols-2">
@@ -225,7 +215,6 @@ export function AgentOverrideDraftEditor({
                     skill={skill}
                     checked={selectedSkillIds.has(skill.id)}
                     onChange={() => toggleSkill(skill.id)}
-                    disabled={!canEdit}
                   />
                 ))}
               </div>
@@ -240,15 +229,6 @@ export function AgentOverrideDraftEditor({
           </p>
         </div>
         <ConfigurationRequiredSkills snapshot={draft} />
-        {!canEdit && (
-          <p
-            className="mb-0 mt-4 text-[0.8rem]"
-            style={{ color: "var(--ink-3)" }}
-          >
-            You have read access to this draft. An Agent Editor can update it
-            without changing the active pin.
-          </p>
-        )}
       </div>
     </section>
   );

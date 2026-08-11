@@ -221,6 +221,8 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
                 agentId={agent.id}
                 configuration={configuration}
                 canEdit={canEdit}
+                editing={editingSection === "override"}
+                onEdit={() => toggleEditing("override")}
                 onPublished={handleOverridePublished}
               />
             )}

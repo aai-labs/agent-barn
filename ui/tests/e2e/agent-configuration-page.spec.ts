@@ -130,8 +130,10 @@ test.describe("Agent configuration page", () => {
     await expect(configurationPage.draftHeading()).toBeVisible();
 
     await configurationPage.artifact("SOUL.md").last().fill("# Agent-specific soul");
+    await expect(configurationPage.saveDraftButton()).toBeEnabled();
     await configurationPage.saveDraftButton().click();
-    await expect(configurationPage.saveDraftButton()).toBeDisabled();
+    await expect(page.getByRole("heading", { name: "Override draft" })).toBeVisible();
+    await expect(configurationPage.saveDraftButton()).toHaveCount(0);
 
     await configurationPage.publishButton().click();
     await expect(configurationPage.publishConfirmButton()).toBeVisible();

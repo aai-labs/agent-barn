@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { FileText, Loader2 } from "lucide-react";
+import { FileText, Loader2, Pencil, Send } from "lucide-react";
 
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
 import { toastError } from "@/shared/toast";
@@ -26,11 +26,15 @@ export function AgentOverrideSettings({
   agentId,
   configuration,
   canEdit,
+  editing,
+  onEdit,
   onPublished,
 }: {
   agentId: string;
   configuration: AgentConfiguration;
   canEdit: boolean;
+  editing: boolean;
+  onEdit: () => void;
   onPublished: () => void;
 }) {
   const startDraftMutation = useStartAgentOverrideDraft();
@@ -42,12 +46,14 @@ export function AgentOverrideSettings({
   const activeDraft = draftOverride ?? configuration.draft;
   const form = formOverride ?? (activeDraft ? draftToForm(activeDraft) : null);
   const activeOverride = configuration.active.pinType === "override";
+  const isEditingDraft = editing && canEdit;
 
   function createDraft() {
     startDraftMutation.mutate(agentId, {
       onSuccess: (draft) => {
         setDraftOverride(draft);
         setFormOverride(draftToForm(draft));
+        if (!editing) onEdit();
       },
       onError: (error) => toastError(error),
     });
@@ -77,11 +83,18 @@ export function AgentOverrideSettings({
       {
         onSuccess: (draft) => {
           setDraftOverride(draft);
-          setFormOverride(draftToForm(draft));
+          setFormOverride(null);
+          onEdit();
         },
         onError: (error) => toastError(error),
       },
     );
+  }
+
+  function cancelEditing() {
+    setFormOverride(null);
+    updateDraft.reset();
+    onEdit();
   }
 
   async function publish() {
@@ -131,20 +144,38 @@ export function AgentOverrideSettings({
           {activeOverride && <ConfigurationReadOnlySnapshot snapshot={configuration.active} title="Active override" />}
 
           {activeDraft && form && (
-            canEdit ? (
+            isEditingDraft ? (
               <AgentOverrideDraftEditor
                 draft={activeDraft}
                 form={form}
                 onChange={handleChange}
                 onRequirementsChange={handleRequirementsChange}
                 onSave={saveDraft}
-                onPublish={() => setPublishOpen(true)}
-                canEdit={canEdit}
+                onCancel={cancelEditing}
                 isSaving={updateDraft.isPending}
-                isPublishing={publishDraft.isPending}
               />
             ) : (
-              <ConfigurationReadOnlySnapshot snapshot={activeDraft} title="Override draft" />
+              <ConfigurationReadOnlySnapshot
+                snapshot={activeDraft}
+                title="Override draft"
+                actions={
+                  canEdit && (
+                    <>
+                      <button type="button" className="af-btn" onClick={onEdit}>
+                        <Pencil size={14} /> Edit
+                      </button>
+                      <button
+                        type="button"
+                        className="af-btn af-btn-primary"
+                        disabled={publishDraft.isPending}
+                        onClick={() => setPublishOpen(true)}
+                      >
+                        <Send size={14} /> Publish
+                      </button>
+                    </>
+                  )
+                }
+              />
             )
           )}
 
