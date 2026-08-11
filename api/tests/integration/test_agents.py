@@ -4468,7 +4468,9 @@ def test_agent_configuration_select_rejects_stale_agent_update():
 
 
 def test_agent_configuration_publish_rejects_unassigned_required_skill():
-    with given([*_GIVEN, there_is_an_agent(name="Missing Required Skill Agent"), there_is_a_skill(name="Jira")]) as context:
+    with given(
+        [*_GIVEN, there_is_an_agent(name="Missing Required Skill Agent"), there_is_a_skill(name="Jira")]
+    ) as context:
         client: TestClient = context.client
         configuration_url = f"{_BASE}/{context.agent.id}/configuration"
         skill_id = str(context.skill.id)
@@ -4527,5 +4529,5 @@ def test_agent_configuration_override_history_retained_after_soft_delete():
         with then("the Override Version remains retained"):
             override_repository: AgentOverrideRepository = context.injector.get(AgentOverrideRepository)
             retained = override_repository.get_version(agent_id, context.organization.id, published["version"])
-            assert_that(retained, is_not(none()))
+            assert retained is not None
             assert_that(retained.soul_md, equal_to(published["soul_md"]))
