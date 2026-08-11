@@ -149,6 +149,39 @@ test.describe("RBAC-aware Agent controls", () => {
     await expect(rbac.agentAction(/^share$/i)).toHaveCount(0);
   });
 
+  test("Viewer sees read-only override and template selection controls", async ({ page }) => {
+    const data = new DataSupport(page);
+    const rbac = new RbacUiPage(page);
+    await data.auth.interceptRefreshRequest();
+    await data.users.interceptGetUserContextRequest();
+    await data.users.interceptGetOrganizationsRequest();
+    await data.agents.interceptGetAgentRequest({
+      body: {
+        ...mockAgent,
+        allowed_actions: ["agent.read", "activity.read", "cost.read"],
+      },
+    });
+    await data.agents.interceptGetAgentTemplateRequest();
+    await data.agents.interceptGetAgentHealthRequest();
+    await data.agents.interceptGetConversationChannelsRequest();
+    await data.agents.interceptGetTemplatesRequest();
+    await data.agents.interceptGetTemplateVersionsRequest();
+    await data.agents.interceptGetAgentConfigurationRequest();
+
+    await page.goto(
+      `/dashboard/${TEST_ORG_ID}/agents/${MOCK_AGENT_ID}/configuration`,
+    );
+
+    await page.getByRole("button", { name: "Template selection", exact: true }).click();
+    await expect(page.getByRole("button", { name: /^Apply/ })).toBeDisabled();
+
+    await page.getByRole("button", { name: "Agent-owned override", exact: true }).click();
+    await expect(rbac.agentAction(/create override/i)).toHaveCount(0);
+
+    await page.getByRole("button", { name: "Danger zone", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Retire agent" })).toHaveCount(0);
+  });
+
   test("Share button is shown when agent.access.manage is granted", async ({ page }) => {
     const data = new DataSupport(page);
     const rbac = new RbacUiPage(page);

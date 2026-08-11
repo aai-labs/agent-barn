@@ -28,6 +28,7 @@ from api.domains.agents.models import (
     encrypt_content,
     validate_content,
 )
+from api.domains.agents.override_repository import AgentOverrideRepository
 from api.domains.agents.repository import AgentRepository
 from api.domains.agents.service import AgentService
 from api.domains.events.catalog import AGENT_CREATED, AGENT_STARTED, AGENT_STOPPED
@@ -4328,3 +4329,203 @@ def test_agent_override_source_update_has_no_candidate_when_source_is_unavailabl
         active_agent = context.client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context))
         assert_that(active_agent.status_code, equal_to(status.HTTP_200_OK))
         assert_that(active_agent.json()["override_version"], equal_to(1))
+
+
+def test_agent_configuration_select_rolls_back_to_prior_version_and_preserves_independent_draft():
+    with given([*_GIVEN, there_is_an_agent(name="Rollback Agent")]) as context:
+        client: TestClient = context.client
+        configuration_url = f"{_BASE}/{context.agent.id}/configuration"
+
+        with when("I publish and select Override Version 1"):
+            draft_v1 = client.post(f"{configuration_url}/draft", headers=_auth(context)).json()
+            client.patch(
+                f"{configuration_url}/draft",
+                json={"expected_updated_at": draft_v1["updated_at"], "soul_md": "# Soul v1"},
+                headers=_auth(context),
+            )
+            draft_v1 = client.get(configuration_url, headers=_auth(context)).json()["draft"]
+            publish_v1 = client.post(
+                f"{configuration_url}/draft/publish",
+                json={"expected_updated_at": draft_v1["updated_at"]},
+                headers=_auth(context),
+            ).json()
+            agent_after_v1 = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+            select_v1 = client.post(
+                f"{configuration_url}/select",
+                json={
+                    "selection_type": "override",
+                    "override_version": publish_v1["version"],
+                    "expected_agent_updated_at": agent_after_v1["updated_at"],
+                },
+                headers=_auth(context),
+            )
+            assert_that(select_v1.status_code, equal_to(status.HTTP_200_OK))
+
+        with when("I publish and select Override Version 2"):
+            draft_v2 = client.post(f"{configuration_url}/draft", headers=_auth(context)).json()
+            client.patch(
+                f"{configuration_url}/draft",
+                json={"expected_updated_at": draft_v2["updated_at"], "soul_md": "# Soul v2"},
+                headers=_auth(context),
+            )
+            draft_v2 = client.get(configuration_url, headers=_auth(context)).json()["draft"]
+            publish_v2 = client.post(
+                f"{configuration_url}/draft/publish",
+                json={"expected_updated_at": draft_v2["updated_at"]},
+                headers=_auth(context),
+            ).json()
+            agent_after_v2 = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+            select_v2 = client.post(
+                f"{configuration_url}/select",
+                json={
+                    "selection_type": "override",
+                    "override_version": publish_v2["version"],
+                    "expected_agent_updated_at": agent_after_v2["updated_at"],
+                },
+                headers=_auth(context),
+            )
+            assert_that(select_v2.status_code, equal_to(status.HTTP_200_OK))
+
+        with when("I start an independent draft and then roll back to Override Version 1"):
+            rollback_draft = client.post(f"{configuration_url}/draft", headers=_auth(context)).json()
+            client.patch(
+                f"{configuration_url}/draft",
+                json={"expected_updated_at": rollback_draft["updated_at"], "soul_md": "# Independent draft"},
+                headers=_auth(context),
+            )
+            agent_after_draft = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+            rollback = client.post(
+                f"{configuration_url}/select",
+                json={
+                    "selection_type": "override",
+                    "override_version": publish_v1["version"],
+                    "expected_agent_updated_at": agent_after_draft["updated_at"],
+                },
+                headers=_auth(context),
+            )
+
+        with then("the Agent points back at Override Version 1 and the independent draft is preserved"):
+            assert_that(rollback.status_code, equal_to(status.HTTP_200_OK))
+            rolled_back = rollback.json()
+            assert_that(rolled_back["template_pin_type"], equal_to("override"))
+            assert_that(rolled_back["override_version"], equal_to(publish_v1["version"]))
+            after_rollback = client.get(configuration_url, headers=_auth(context)).json()
+            assert_that(after_rollback["active"]["soul_md"], equal_to("# Soul v1"))
+            assert_that(after_rollback["draft"], is_not(none()))
+            assert_that(after_rollback["draft"]["soul_md"], equal_to("# Independent draft"))
+
+
+def test_agent_configuration_select_rejects_stale_agent_update():
+    with given([*_GIVEN, there_is_an_agent(name="Stale Select Agent")]) as context:
+        client: TestClient = context.client
+        configuration_url = f"{_BASE}/{context.agent.id}/configuration"
+
+        draft = client.post(f"{configuration_url}/draft", headers=_auth(context)).json()
+        publish = client.post(
+            f"{configuration_url}/draft/publish",
+            json={"expected_updated_at": draft["updated_at"]},
+            headers=_auth(context),
+        ).json()
+        stale_agent = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+
+        with when("I select the Override Version once, then retry with the same stale timestamp"):
+            first_select = client.post(
+                f"{configuration_url}/select",
+                json={
+                    "selection_type": "override",
+                    "override_version": publish["version"],
+                    "expected_agent_updated_at": stale_agent["updated_at"],
+                },
+                headers=_auth(context),
+            )
+            assert_that(first_select.status_code, equal_to(status.HTTP_200_OK))
+
+            second_draft = client.post(f"{configuration_url}/draft", headers=_auth(context)).json()
+            client.patch(
+                f"{configuration_url}/draft",
+                json={"expected_updated_at": second_draft["updated_at"], "soul_md": "# Second"},
+                headers=_auth(context),
+            )
+            second_draft = client.get(configuration_url, headers=_auth(context)).json()["draft"]
+            second_publish = client.post(
+                f"{configuration_url}/draft/publish",
+                json={"expected_updated_at": second_draft["updated_at"]},
+                headers=_auth(context),
+            ).json()
+
+            stale_select = client.post(
+                f"{configuration_url}/select",
+                json={
+                    "selection_type": "override",
+                    "override_version": second_publish["version"],
+                    "expected_agent_updated_at": stale_agent["updated_at"],
+                },
+                headers=_auth(context),
+            )
+
+        with then("the stale selection is rejected with 409"):
+            assert_that(stale_select.status_code, equal_to(status.HTTP_409_CONFLICT))
+
+
+def test_agent_configuration_publish_rejects_unassigned_required_skill():
+    with given([*_GIVEN, there_is_an_agent(name="Missing Required Skill Agent"), there_is_a_skill(name="Jira")]) as context:
+        client: TestClient = context.client
+        configuration_url = f"{_BASE}/{context.agent.id}/configuration"
+        skill_id = str(context.skill.id)
+
+        with when("I mark a Skill required on the draft while it is still assigned to the Agent"):
+            assign = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"skill_ids": [skill_id]},
+                headers=_auth(context),
+            )
+            assert_that(assign.status_code, equal_to(status.HTTP_200_OK))
+
+            draft = client.post(f"{configuration_url}/draft", headers=_auth(context)).json()
+            marked = client.patch(
+                f"{configuration_url}/draft",
+                json={"expected_updated_at": draft["updated_at"], "required_skill_ids": [skill_id]},
+                headers=_auth(context),
+            )
+            assert_that(marked.status_code, equal_to(status.HTTP_200_OK))
+            marked_body = marked.json()
+
+        with when("the required Skill is removed from the Agent before publishing"):
+            unassign = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"removed_skill_ids": [skill_id]},
+                headers=_auth(context),
+            )
+            assert_that(unassign.status_code, equal_to(status.HTTP_200_OK))
+
+        with then("publishing without the required Skill assigned is rejected with 400"):
+            publish = client.post(
+                f"{configuration_url}/draft/publish",
+                json={"expected_updated_at": marked_body["updated_at"]},
+                headers=_auth(context),
+            )
+            assert_that(publish.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+
+
+def test_agent_configuration_override_history_retained_after_soft_delete():
+    with given([*_GIVEN, there_is_an_agent(name="Retention Agent")]) as context:
+        client: TestClient = context.client
+        configuration_url = f"{_BASE}/{context.agent.id}/configuration"
+        agent_id = context.agent.id
+
+        draft = client.post(f"{configuration_url}/draft", headers=_auth(context)).json()
+        published = client.post(
+            f"{configuration_url}/draft/publish",
+            json={"expected_updated_at": draft["updated_at"]},
+            headers=_auth(context),
+        ).json()
+
+        with when("I soft-delete the Agent"):
+            delete_response = client.delete(f"{_BASE}/{agent_id}", headers=_auth(context))
+            assert_that(delete_response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+
+        with then("the Override Version remains retained"):
+            override_repository: AgentOverrideRepository = context.injector.get(AgentOverrideRepository)
+            retained = override_repository.get_version(agent_id, context.organization.id, published["version"])
+            assert_that(retained, is_not(none()))
+            assert_that(retained.soul_md, equal_to(published["soul_md"]))

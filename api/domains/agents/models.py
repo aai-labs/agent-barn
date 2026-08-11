@@ -943,14 +943,6 @@ class AgentTemplateSelection(PydanticBaseModel):
     override_version: int | None = Field(default=None, ge=1)
     expected_agent_updated_at: datetime
 
-    @model_validator(mode="before")
-    @classmethod
-    def normalize_selection_type(cls, values: object) -> object:
-        if isinstance(values, dict) and "selection_type" not in values:
-            values = dict(values)
-            values["selection_type"] = values.get("source_type") or values.get("target_type")
-        return values
-
     @model_validator(mode="after")
     def validate_target(self) -> AgentTemplateSelection:
         if self.selection_type in {"platform", "organization"}:
