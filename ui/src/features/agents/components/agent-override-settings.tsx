@@ -11,7 +11,6 @@ import {
   useUpdateAgentOverrideDraft,
 } from "../hooks/use-agent-override-actions";
 import type { AgentConfiguration, AgentOverrideDraft } from "../schemas";
-import { AgentConfigurationSection } from "./agent-configuration-section";
 import { AgentConfigurationOverrideHistory } from "./configuration-override-history";
 import { ConfigurationReadOnlySnapshot } from "./configuration-read-only-snapshot";
 import { AgentOverrideDraftEditor } from "./configuration-draft-editor";
@@ -117,78 +116,73 @@ export function AgentOverrideSettings({
 
   return (
     <>
-      <AgentConfigurationSection
-        title="Agent-owned override"
-        description="An override is private to this Agent. Drafts can be saved without changing the active pin; publishing creates an immutable version."
-      >
-        <div className="flex flex-col gap-5">
-          {!activeDraft && (
-            <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl p-5" style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}>
-              <div>
-                <div className="flex items-center gap-2">
-                  <FileText size={16} style={{ color: "var(--ink-3)" }} />
-                  <h3 className="m-0 text-[0.98rem] font-semibold" style={{ color: "var(--ink-2)" }}>
-                    {activeOverride ? "No override draft" : "No active override"}
-                  </h3>
-                </div>
-                <p className="mb-0 mt-1 max-w-xl text-[0.82rem]" style={{ color: "var(--ink-3)" }}>
-                  {activeOverride
-                    ? "Create a new private draft from the active override when you need another Agent-specific revision."
-                    : "This Agent currently uses its shared template. Create a private draft when you need Agent-specific instructions."}
-                </p>
+      <div aria-label="Agent-owned override" className="flex flex-col gap-5">
+        {!activeDraft && (
+          <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl p-5" style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}>
+            <div>
+              <div className="flex items-center gap-2">
+                <FileText size={16} style={{ color: "var(--ink-3)" }} />
+                <h3 className="m-0 text-[0.98rem] font-semibold" style={{ color: "var(--ink-2)" }}>
+                  {activeOverride ? "No override draft" : "No active override"}
+                </h3>
               </div>
-              {canEdit && (
-                <button type="button" className="af-btn af-btn-primary" disabled={startDraftMutation.isPending} onClick={createDraft}>
-                  {startDraftMutation.isPending && <Loader2 size={14} className="animate-spin" />}
-                  {startDraftMutation.isPending ? "Creating…" : activeOverride ? "Create new draft" : "Create override"}
-                </button>
-              )}
+              <p className="mb-0 mt-1 max-w-xl text-[0.82rem]" style={{ color: "var(--ink-3)" }}>
+                {activeOverride
+                  ? "Create a new private draft from the active override when you need another Agent-specific revision."
+                  : "This Agent currently uses its shared template. Create a private draft when you need Agent-specific instructions."}
+              </p>
             </div>
-          )}
+            {canEdit && (
+              <button type="button" className="af-btn af-btn-primary" disabled={startDraftMutation.isPending} onClick={createDraft}>
+                {startDraftMutation.isPending && <Loader2 size={14} className="animate-spin" />}
+                {startDraftMutation.isPending ? "Creating…" : activeOverride ? "Create new draft" : "Create override"}
+              </button>
+            )}
+          </div>
+        )}
 
-          {activeOverride && <ConfigurationReadOnlySnapshot snapshot={configuration.active} title="Active override" />}
+        {activeOverride && <ConfigurationReadOnlySnapshot snapshot={configuration.active} title="Active override" />}
 
-          {activeDraft && form && (
-            isEditingDraft ? (
-              <AgentOverrideDraftEditor
-                draft={activeDraft}
-                form={form}
-                onChange={handleChange}
-                onRequirementsChange={handleRequirementsChange}
-                onSave={saveDraft}
-                onCancel={cancelEditing}
-                isSaving={updateDraft.isPending}
-              />
-            ) : (
-              <ConfigurationReadOnlySnapshot
-                snapshot={activeDraft}
-                title="Override draft"
-                actions={
-                  canEdit && (
-                    <>
-                      <button type="button" className="af-btn" onClick={startEditing}>
-                        <Pencil size={14} /> Edit
-                      </button>
-                      <button
-                        type="button"
-                        className="af-btn af-btn-primary"
-                        disabled={publishDraft.isPending}
-                        onClick={() => setPublishOpen(true)}
-                      >
-                        <Send size={14} /> Publish
-                      </button>
-                    </>
-                  )
-                }
-              />
-            )
-          )}
+        {activeDraft && form && (
+          isEditingDraft ? (
+            <AgentOverrideDraftEditor
+              draft={activeDraft}
+              form={form}
+              onChange={handleChange}
+              onRequirementsChange={handleRequirementsChange}
+              onSave={saveDraft}
+              onCancel={cancelEditing}
+              isSaving={updateDraft.isPending}
+            />
+          ) : (
+            <ConfigurationReadOnlySnapshot
+              snapshot={activeDraft}
+              title="Override draft"
+              actions={
+                canEdit && (
+                  <>
+                    <button type="button" className="af-btn" onClick={startEditing}>
+                      <Pencil size={14} /> Edit
+                    </button>
+                    <button
+                      type="button"
+                      className="af-btn af-btn-primary"
+                      disabled={publishDraft.isPending}
+                      onClick={() => setPublishOpen(true)}
+                    >
+                      <Send size={14} /> Publish
+                    </button>
+                  </>
+                )
+              }
+            />
+          )
+        )}
 
-          {configuration.overrideVersions.length > 0 && (
-            <AgentConfigurationOverrideHistory versions={configuration.overrideVersions} />
-          )}
-        </div>
-      </AgentConfigurationSection>
+        {configuration.overrideVersions.length > 0 && (
+          <AgentConfigurationOverrideHistory versions={configuration.overrideVersions} />
+        )}
+      </div>
       <ConfirmationDialog
         open={publishOpen}
         onOpenChange={setPublishOpen}

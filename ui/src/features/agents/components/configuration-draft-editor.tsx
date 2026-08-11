@@ -98,48 +98,25 @@ export function AgentOverrideDraftEditor({
         className="border-b px-5 py-4"
         style={{ borderColor: "var(--line)" }}
       >
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <div className="flex items-center gap-2">
-              <Pencil size={15} style={{ color: "var(--accent-ink)" }} />
-              <h2
-                className="m-0 text-[1rem] font-semibold"
-                style={{ color: "var(--ink)" }}
-              >
-                Override Draft
-              </h2>
-            </div>
-            <div className="mt-1">
-              <ConfigurationSnapshotMeta snapshot={draft} />
-            </div>
-            <p
-              className="mb-0 mt-2 text-[0.78rem]"
-              style={{ color: "var(--ink-3)" }}
-            >
-              Drafts are Agent-owned. Publishing creates a new immutable version
-              and does not switch the active pin.
-            </p>
-          </div>
-          <div className="flex gap-2">
-            <button
-              className="af-btn"
-              type="button"
-              disabled={isSaving}
-              onClick={onCancel}
-            >
-              Cancel
-            </button>
-            <button
-              className="af-btn af-btn-primary"
-              type="button"
-              disabled={!isDirty || isSaving}
-              onClick={onSave}
-            >
-              {isSaving && <Loader2 size={14} className="animate-spin" />}
-              {isSaving ? "Saving…" : "Save draft"}
-            </button>
-          </div>
+        <div className="flex items-center gap-2">
+          <Pencil size={15} style={{ color: "var(--accent-ink)" }} />
+          <h2
+            className="m-0 text-[1rem] font-semibold"
+            style={{ color: "var(--ink)" }}
+          >
+            Override Draft
+          </h2>
         </div>
+        <div className="mt-1">
+          <ConfigurationSnapshotMeta snapshot={draft} />
+        </div>
+        <p
+          className="mb-0 mt-2 text-[0.78rem]"
+          style={{ color: "var(--ink-3)" }}
+        >
+          Drafts are Agent-owned. Publishing creates a new immutable version
+          and does not switch the active pin.
+        </p>
       </div>
 
       <div className="p-5">
@@ -230,6 +207,29 @@ export function AgentOverrideDraftEditor({
         </div>
         <ConfigurationRequiredSkills snapshot={draft} />
       </div>
+
+      <footer
+        className="flex flex-wrap items-center justify-end gap-2 border-t px-5 py-3"
+        style={{ borderColor: "var(--line)" }}
+      >
+        <button
+          className="af-btn"
+          type="button"
+          disabled={isSaving}
+          onClick={onCancel}
+        >
+          Cancel
+        </button>
+        <button
+          className="af-btn af-btn-primary"
+          type="button"
+          disabled={!isDirty || isSaving}
+          onClick={onSave}
+        >
+          {isSaving && <Loader2 size={14} className="animate-spin" />}
+          {isSaving ? "Saving…" : "Save draft"}
+        </button>
+      </footer>
     </section>
   );
 }
