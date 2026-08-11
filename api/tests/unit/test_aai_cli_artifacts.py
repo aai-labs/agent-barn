@@ -6,6 +6,7 @@ from api.domains.agents.aai_cli_artifacts import (
     build_config_toml,
     build_env,
     build_integrations_policy_md,
+    build_local_tools_policy_md,
     build_setup_sh,
     build_tool_context_md,
     env_var_for,
@@ -13,6 +14,7 @@ from api.domains.agents.aai_cli_artifacts import (
 from api.domains.agents.models import (
     FirecrawlContent,
     GmailContent,
+    GoogleSheetsContent,
     PipedriveContent,
     SecretProvider,
     ZohoMailContent,
@@ -56,6 +58,17 @@ _GMAIL = cast(
             "client_id": "132806748841-abc.apps.googleusercontent.com",
             "client_secret": "g_client_secret",
             "refresh_token": "g_refresh_tok",
+        },
+    ),
+)
+_GOOGLE_SHEETS = cast(
+    GoogleSheetsContent,
+    validate_content(
+        SecretProvider.GOOGLE_SHEETS,
+        {
+            "client_id": "132806748841-sheets.apps.googleusercontent.com",
+            "client_secret": "xyz_sheet_client_sec",
+            "refresh_token": "xyz_sheet_refresh_tok",
         },
     ),
 )
@@ -188,6 +201,31 @@ def test_config_toml_gmail_uses_secret_store():
     assert "token_env" not in toml
 
 
+def test_config_toml_google_sheets_uses_secret_store():
+    toml = build_config_toml({SecretProvider.GOOGLE_SHEETS: _GOOGLE_SHEETS})
+    assert "[profiles.google-sheets-work]" in toml
+    assert 'provider = "google"' in toml
+    assert 'auth_type = "bearer_token"' in toml
+    assert f'client_id = "{_GOOGLE_SHEETS.client_id}"' in toml
+    assert 'client_secret_secret = "google.sheets_client_secret"' in toml
+    assert 'refresh_token_secret = "google.sheets_refresh_token"' in toml
+    # secret values must not appear in the config
+    assert "xyz_sheet_client_sec" not in toml
+    assert "xyz_sheet_refresh_tok" not in toml
+
+
+def test_gmail_and_sheets_secrets_do_not_collide():
+    """Each Google provider owns its secret names, so a user-supplied client for one
+    can't overwrite the other's credentials in the flat secret store."""
+    env = build_env({SecretProvider.GMAIL: _GMAIL, SecretProvider.GOOGLE_SHEETS: _GOOGLE_SHEETS})
+    assert env == {
+        "AAI_SECRET_GOOGLE_CLIENT_SECRET": "g_client_secret",
+        "AAI_SECRET_GOOGLE_GMAIL_REFRESH_TOKEN": "g_refresh_tok",
+        "AAI_SECRET_GOOGLE_SHEETS_CLIENT_SECRET": "xyz_sheet_client_sec",
+        "AAI_SECRET_GOOGLE_SHEETS_REFRESH_TOKEN": "xyz_sheet_refresh_tok",
+    }
+
+
 def test_config_toml_zoho_mail_uses_oauth_rest_profile():
     toml = build_config_toml({SecretProvider.ZOHO_MAIL: _ZOHO_MAIL})
     assert "[profiles.zoho-mail-rest]" in toml
@@ -241,6 +279,18 @@ def test_setup_sh_gmail_sets_both_secrets():
     assert (
         f"printf '%s' \"$AAI_SECRET_GOOGLE_GMAIL_REFRESH_TOKEN\" | "
         f"aai-cli --config {CONFIG_PATH} secrets set google.gmail_refresh_token" in setup
+    )
+
+
+def test_setup_sh_google_sheets_sets_both_secrets():
+    setup = build_setup_sh([SecretProvider.GOOGLE_SHEETS])
+    assert (
+        f"printf '%s' \"$AAI_SECRET_GOOGLE_SHEETS_CLIENT_SECRET\" | "
+        f"aai-cli --config {CONFIG_PATH} secrets set google.sheets_client_secret" in setup
+    )
+    assert (
+        f"printf '%s' \"$AAI_SECRET_GOOGLE_SHEETS_REFRESH_TOKEN\" | "
+        f"aai-cli --config {CONFIG_PATH} secrets set google.sheets_refresh_token" in setup
     )
 
 
@@ -543,10 +593,12 @@ def test_integrations_policy_md_covers_non_store_providers():
     md = build_integrations_policy_md(
         {
             SecretProvider.GMAIL: _GMAIL,
+            SecretProvider.GOOGLE_SHEETS: _GOOGLE_SHEETS,
             SecretProvider.ZOHO_MAIL: _ZOHO_MAIL,
         }
     )
     assert "--profile gmail-work" in md
+    assert "--profile google-sheets-work" in md
     assert "--profile zoho-mail-rest" in md
 
 
@@ -583,3 +635,59 @@ def test_integrations_policy_md_never_leaks_tokens():
     assert "g_client_secret" not in md
     assert "g_refresh_tok" not in md
     assert "xoxb-slack-tok" not in md
+
+
+def test_local_tools_block_names_credential_free_capabilities():
+    """A tool with no provider can never reach the integrations block, which is built from
+    configured secrets — so without this the agent never learns Excel exists."""
+    md = build_local_tools_policy_md(["Google Sheets", "Excel"])
+    assert "aai-cli excel" in md
+    assert ".csv" in md
+    # The integrations block tells the agent to always pass --profile; this must say the
+    # opposite, or it will invent one.
+    assert "no `--profile`" in md
+    assert "excel_skill.md" in md
+
+
+def test_local_tools_block_is_empty_when_the_skill_is_not_mounted():
+    """It is opt-in: advertising a skill the agent has not been given would send it after
+    a file reference that was never mounted."""
+    assert build_local_tools_policy_md(["Google Sheets", "Jira"]) == ""
+    assert build_local_tools_policy_md([]) == ""
+
+
+def test_local_tools_block_tells_hermes_agents_how_to_attach_a_file():
+    """Producing a file is only half the job: Hermes attaches on an explicit MEDIA: token,
+    so naming the file in prose silently sends text and no attachment."""
+    md = build_local_tools_policy_md(["Excel"])
+    assert "MEDIA:<absolute path>" in md
+    assert "/workspace" in md
+    # The failure mode is silent, so the instruction has to be explicit about it.
+    assert "does **not** attach" in md
+
+
+def test_attaching_a_produced_file_is_the_default_not_a_request():
+    """Explaining the mechanism was not enough — agents described where they saved the file
+    and waited to be asked for it. Attaching has to read as standing behaviour."""
+    md = build_local_tools_policy_md(["Excel"])
+    assert "Always send back a file you produced" in md
+    assert "do not wait to be asked" in md
+
+
+def test_attach_token_is_documented_on_its_own_line_for_both_runtimes():
+    """Both runtimes parse MEDIA:, but OpenClaw also has a line-start-only extractor, so a
+    token buried mid-sentence would be dropped there while working on Hermes."""
+    md = build_local_tools_policy_md(["Excel"])
+    assert "on its own line" in md
+    # The worked example must itself put the token at the start of a line.
+    assert "\nMEDIA:/workspace/q1-report.xlsx\n" in md
+
+
+def test_local_tools_block_forbids_the_python_fallback():
+    """Describing the tool was not enough — agents reached for openpyxl anyway and
+    hand-rolled a zip. The integrations block works because it names the wrong path and
+    forbids it; do the same here."""
+    md = build_local_tools_policy_md(["Excel"])
+    assert "openpyxl" in md
+    assert "Do not write Python" in md
+    assert "only supported way" in md
