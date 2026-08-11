@@ -4094,13 +4094,17 @@ def test_agent_configuration_override_lifecycle_emits_domain_events():
 
         with then("a Draft Saved Domain Event is persisted with created=True"):
             draft_events = [
-                message for message in _outbox_messages(context) if message.event_name == AGENT_TEMPLATE_OVERRIDE_DRAFT_SAVED
+                message
+                for message in _outbox_messages(context)
+                if message.event_name == AGENT_TEMPLATE_OVERRIDE_DRAFT_SAVED
             ]
             assert_that(len(draft_events), equal_to(1))
             assert_that(draft_events[0].payload["agent_id"], equal_to(str(context.agent.id)))
             assert_that(draft_events[0].payload["draft_id"], equal_to(draft["id"]))
             assert_that(draft_events[0].payload["created"], equal_to(True))
-            assert_that(draft_events[0].payload["actor_display"], equal_to(context.user.full_name or context.user.email))
+            assert_that(
+                draft_events[0].payload["actor_display"], equal_to(context.user.full_name or context.user.email)
+            )
             deliveries = outbox.list_deliveries_for_event(draft_events[0].event_id)
             assert_that(len(deliveries), equal_to(1))
 
@@ -4132,7 +4136,9 @@ def test_agent_configuration_override_lifecycle_emits_domain_events():
 
         with then("an Override Published Domain Event is persisted"):
             published_events = [
-                message for message in _outbox_messages(context) if message.event_name == AGENT_TEMPLATE_OVERRIDE_PUBLISHED
+                message
+                for message in _outbox_messages(context)
+                if message.event_name == AGENT_TEMPLATE_OVERRIDE_PUBLISHED
             ]
             assert_that(len(published_events), equal_to(1))
             assert_that(published_events[0].payload["agent_id"], equal_to(str(context.agent.id)))
@@ -4153,7 +4159,9 @@ def test_agent_configuration_override_lifecycle_emits_domain_events():
 
         with then("an Override Selected Domain Event is persisted"):
             selected_events = [
-                message for message in _outbox_messages(context) if message.event_name == AGENT_TEMPLATE_OVERRIDE_SELECTED
+                message
+                for message in _outbox_messages(context)
+                if message.event_name == AGENT_TEMPLATE_OVERRIDE_SELECTED
             ]
             assert_that(len(selected_events), equal_to(1))
             assert_that(selected_events[0].payload["agent_id"], equal_to(str(context.agent.id)))
