@@ -37,6 +37,8 @@ export function delivery(overrides: Record<string, unknown> = {}) {
     attempt_count: 1,
     dead_letter_reason: null,
     last_error: null,
+    actor_display: null,
+    subject_display: null,
     created_at: "2026-07-31T11:00:00Z",
     enqueued_at: "2026-07-31T11:00:01Z",
     claimed_at: "2026-07-31T11:00:02Z",

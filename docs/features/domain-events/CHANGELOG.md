@@ -6,12 +6,19 @@ Related context: [domain-events feature doc](../domain-events.md), [transactiona
 
 ## Current state
 
-- Delivered: typed Domain Event envelope, code-owned event registry with payload validation, transactional `event_outbox_message` staging, mutable `event_delivery` rows per intended handler with a `PENDING → ENQUEUED → PROCESSING → SUCCEEDED | DEAD_LETTERED` lifecycle, Dramatiq/Redis at-least-once transport behind an adapter, delivery reconciliation with configured stale thresholds, RBAC audit events (AF-219), a Platform Administrator–only read-only Event Delivery Monitor API and Platform View page (AF-247), and broadened `security_audit.projection` coverage for Agent/Template/Organization mutations that previously produced no event at all (AF-167).
+- Delivered: typed Domain Event envelope, code-owned event registry with payload validation, transactional `event_outbox_message` staging, mutable `event_delivery` rows per intended handler with a `PENDING → ENQUEUED → PROCESSING → SUCCEEDED | DEAD_LETTERED` lifecycle, Dramatiq/Redis at-least-once transport behind an adapter, delivery reconciliation with configured stale thresholds, RBAC audit events (AF-219), a Platform Administrator–only read-only Event Delivery Monitor API and Platform View page (AF-247) that also surfaces curated Actor/Subject display strings when the event payload carries them (AF-167), and broadened `security_audit.projection` coverage for Agent/Template/Organization mutations that previously produced no event at all (AF-167).
 - In transition: none; the monitor is strictly read-only and adds no retry/replay/delete surfaces.
 - Next: remaining event/audit slices under AF-218 through AF-221; Organization-scoped or public monitoring is explicitly out of scope for AF-247; the searchable/filterable/exportable audit explorer UI and RBAC-scoped query API belong to AF-249, not this epic's remaining slices.
 - Blockers: none.
 
 ## Changes
+
+### 2026-08-12 — [AF-167](https://aai-labs.atlassian.net/browse/AF-167) — PR #111 — Surface Actor/Subject display on the Event Delivery Monitor
+
+- Delivered: the Event Delivery Monitor now shows `actor_display`/`subject_display` (as "Actor"/"Subject") in each delivery's expanded detail panel, when the event's own payload carries them — absent for the handful of event types that don't set them yet (`agent.created`, `agent.started`/`.stopped`).
+- Changed: this narrows AF-247's original "never expose Event Payload, Actor/Subject Identity" boundary — deliberately, and only for these two curated display strings the payload model already validates and bounds at write time. The raw `actor`/`subject` envelope objects, full `payload`, and `correlation_id`/`causation_id` remain excluded, per `test_explorer_response_excludes_payload_and_identity_fields`. `EventDeliveryRead` gained `actor_display`/`subject_display: str | None`; the explorer query now also selects `OutboxMessage.payload` to read them from.
+- Verified: `test_explorer_surfaces_actor_and_subject_display_when_the_payload_has_them` and `test_explorer_omits_actor_and_subject_display_when_the_payload_lacks_them` in `test_event_delivery_monitor.py`; UI Playwright coverage in `event-deliveries.spec.ts`.
+- Follow-up: none for this slice; the full searchable/filterable/exportable audit explorer (all payload fields, RBAC-scoped) remains AF-249's.
 
 ### 2026-08-05 — [AF-167](https://aai-labs.atlassian.net/browse/AF-167) — PR #111 — Broaden Domain Event coverage for the Security Audit Record projection
 

@@ -143,6 +143,39 @@ test.describe("Event Delivery Monitor (platform_admin)", () => {
     await expect(page.getByText("77777777-7777-4777-8777-777777777777")).not.toBeVisible();
   });
 
+  test("shows actor and subject in the detail panel when the payload carries them, omits them otherwise", async ({
+    page,
+  }) => {
+    await data.eventDeliveries.interceptSummary({ summary: summaryWithCounts() });
+    await data.eventDeliveries.interceptList({
+      items: [
+        delivery({
+          id: "77777777-7777-4777-8777-777777777777",
+          handler_name: "handler.one",
+          actor_display: "Jane Doe",
+          subject_display: "Aria",
+        }),
+        delivery({
+          id: "99999999-9999-4999-8999-999999999999",
+          event_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          handler_name: "handler.two",
+        }),
+      ],
+    });
+
+    await page.goto(MONITOR_URL);
+
+    await page.getByText("handler.one").click();
+    await expect(page.getByText("Actor")).toBeVisible();
+    await expect(page.getByText("Jane Doe")).toBeVisible();
+    await expect(page.getByText("Subject")).toBeVisible();
+    await expect(page.getByText("Aria")).toBeVisible();
+
+    await page.getByText("handler.two").click();
+    await expect(page.getByText("Actor")).not.toBeVisible();
+    await expect(page.getByText("Subject")).not.toBeVisible();
+  });
+
   test("refresh collapses the expanded row and re-fetches summary and deliveries", async ({ page }) => {
     await data.eventDeliveries.interceptSummary({ summary: summaryWithCounts() });
     await data.eventDeliveries.interceptList({ items: [delivery()] });
