@@ -1,8 +1,8 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from injector import inject, singleton
 from sqlalchemy import func
@@ -16,6 +16,14 @@ from api.domains.agents.models import (
     AgentTemplateOverrideVersion,
     AgentTemplateOverrideVersionSkill,
 )
+from api.domains.events import ActorIdentity, SubjectIdentity, SubjectIdentityType
+from api.domains.events.catalog import (
+    AGENT_TEMPLATE_OVERRIDE_DRAFT_SAVED,
+    AGENT_TEMPLATE_OVERRIDE_PUBLISHED,
+    AGENT_TEMPLATE_OVERRIDE_SELECTED,
+    EVENT_REGISTRY,
+)
+from api.domains.events.repository import OutboxMessageRepository
 from api.domains.skills.models import Skill
 from api.domains.templates.models import AgentTemplate, PlatformTemplate
 from api.domains.users.models import User
@@ -153,8 +161,9 @@ class AgentOverrideSnapshot:
 @inject
 @singleton
 class AgentOverrideRepository:
-    def __init__(self, delegate: PostgresRepositoryDelegate):
+    def __init__(self, delegate: PostgresRepositoryDelegate, outbox_repository: OutboxMessageRepository):
         self.delegate = delegate
+        self.outbox_repository = outbox_repository
 
     def get_draft(self, agent_id: UUID, organization_id: UUID) -> AgentTemplateOverrideDraft | None:
         with Session(self.delegate.engine) as session:
@@ -280,6 +289,9 @@ class AgentOverrideRepository:
         *,
         expected_pin_type: str,
         expected_pin_id: UUID,
+        actor: ActorIdentity,
+        actor_display: str,
+        correlation_id: UUID | None = None,
     ) -> AgentTemplateOverrideDraft:
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             agent = self._lock_agent(session, draft.agent_id, draft.organization_id)
@@ -301,6 +313,15 @@ class AgentOverrideRepository:
             session.add(draft)
             session.flush()
             self._replace_draft_skills(session, draft.id, snapshot.required_skill_map)
+            self._stage_draft_saved_event(
+                session,
+                draft,
+                agent,
+                created=True,
+                actor=actor,
+                actor_display=actor_display,
+                correlation_id=correlation_id,
+            )
             session.commit()
             session.refresh(draft)
             return draft
@@ -313,6 +334,9 @@ class AgentOverrideRepository:
         skill_map: Mapping[UUID, str | None] | None,
         *,
         expected_updated_at: datetime,
+        actor: ActorIdentity,
+        actor_display: str,
+        correlation_id: UUID | None = None,
     ) -> AgentTemplateOverrideDraft:
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             agent = self._lock_agent(session, agent_id, organization_id)
@@ -335,6 +359,15 @@ class AgentOverrideRepository:
             session.add(draft)
             if skill_map is not None:
                 self._replace_draft_skills(session, draft.id, skill_map)
+            self._stage_draft_saved_event(
+                session,
+                draft,
+                agent,
+                created=False,
+                actor=actor,
+                actor_display=actor_display,
+                correlation_id=correlation_id,
+            )
             session.commit()
             session.refresh(draft)
             return draft
@@ -346,6 +379,9 @@ class AgentOverrideRepository:
         *,
         actor_user_id: UUID,
         expected_updated_at: datetime,
+        actor: ActorIdentity,
+        actor_display: str,
+        correlation_id: UUID | None = None,
     ) -> AgentTemplateOverrideVersion:
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             agent = self._lock_agent(session, agent_id, organization_id)
@@ -394,6 +430,30 @@ class AgentOverrideRepository:
                 ]
             )
             session.delete(draft)
+            self.outbox_repository.stage(
+                session=session,
+                registry=EVENT_REGISTRY,
+                event=EVENT_REGISTRY.build_event(
+                    event_name=AGENT_TEMPLATE_OVERRIDE_PUBLISHED,
+                    schema_version=1,
+                    occurred_at=datetime.now(UTC),
+                    organization_id=organization_id,
+                    actor=actor,
+                    subject=SubjectIdentity(
+                        type=SubjectIdentityType.AGENT, id=agent_id, organization_id=organization_id
+                    ),
+                    correlation_id=correlation_id or uuid4(),
+                    payload={
+                        "organization_id": organization_id,
+                        "agent_id": agent_id,
+                        "override_version_id": published.id,
+                        "version": published.version,
+                        "template_name": published.template_name,
+                        "actor_display": actor_display,
+                        "subject_display": agent.name,
+                    },
+                ),
+            )
             session.commit()
             session.refresh(published)
             return published
@@ -406,6 +466,11 @@ class AgentOverrideRepository:
         selection_type: str,
         selected_id: UUID,
         expected_agent_updated_at: datetime,
+        actor: ActorIdentity,
+        actor_display: str,
+        template_key: str | None = None,
+        selected_version: int | None = None,
+        correlation_id: UUID | None = None,
     ) -> Agent:
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             agent = self._lock_agent(session, agent_id, organization_id)
@@ -416,9 +481,70 @@ class AgentOverrideRepository:
             agent.agent_template_id = selected_id if selection_type == "organization" else None
             agent.agent_template_override_version_id = selected_id if selection_type == "override" else None
             session.add(agent)
+            self.outbox_repository.stage(
+                session=session,
+                registry=EVENT_REGISTRY,
+                event=EVENT_REGISTRY.build_event(
+                    event_name=AGENT_TEMPLATE_OVERRIDE_SELECTED,
+                    schema_version=1,
+                    occurred_at=datetime.now(UTC),
+                    organization_id=organization_id,
+                    actor=actor,
+                    subject=SubjectIdentity(
+                        type=SubjectIdentityType.AGENT, id=agent_id, organization_id=organization_id
+                    ),
+                    correlation_id=correlation_id or uuid4(),
+                    payload={
+                        "organization_id": organization_id,
+                        "agent_id": agent_id,
+                        "selection_type": selection_type,
+                        "selected_id": selected_id,
+                        "selected_version": selected_version,
+                        "template_key": template_key,
+                        "actor_display": actor_display,
+                        "subject_display": agent.name,
+                    },
+                ),
+            )
             session.commit()
             session.refresh(agent)
             return agent
+
+    def _stage_draft_saved_event(
+        self,
+        session: Session,
+        draft: AgentTemplateOverrideDraft,
+        agent: Agent,
+        *,
+        created: bool,
+        actor: ActorIdentity,
+        actor_display: str,
+        correlation_id: UUID | None,
+    ) -> None:
+        self.outbox_repository.stage(
+            session=session,
+            registry=EVENT_REGISTRY,
+            event=EVENT_REGISTRY.build_event(
+                event_name=AGENT_TEMPLATE_OVERRIDE_DRAFT_SAVED,
+                schema_version=1,
+                occurred_at=datetime.now(UTC),
+                organization_id=draft.organization_id,
+                actor=actor,
+                subject=SubjectIdentity(
+                    type=SubjectIdentityType.AGENT, id=draft.agent_id, organization_id=draft.organization_id
+                ),
+                correlation_id=correlation_id or uuid4(),
+                payload={
+                    "organization_id": draft.organization_id,
+                    "agent_id": draft.agent_id,
+                    "draft_id": draft.id,
+                    "template_name": draft.template_name,
+                    "created": created,
+                    "actor_display": actor_display,
+                    "subject_display": agent.name,
+                },
+            ),
+        )
 
     @staticmethod
     def _lock_agent(session: Session, agent_id: UUID, organization_id: UUID) -> Agent | None:

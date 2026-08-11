@@ -31,7 +31,14 @@ from api.domains.agents.models import (
 from api.domains.agents.override_repository import AgentOverrideRepository
 from api.domains.agents.repository import AgentRepository
 from api.domains.agents.service import AgentService
-from api.domains.events.catalog import AGENT_CREATED, AGENT_STARTED, AGENT_STOPPED
+from api.domains.events.catalog import (
+    AGENT_CREATED,
+    AGENT_STARTED,
+    AGENT_STOPPED,
+    AGENT_TEMPLATE_OVERRIDE_DRAFT_SAVED,
+    AGENT_TEMPLATE_OVERRIDE_PUBLISHED,
+    AGENT_TEMPLATE_OVERRIDE_SELECTED,
+)
 from api.domains.events.models import EventDeliveryStatus, OutboxMessage
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.templates.models import AgentTemplate, PlatformTemplate
@@ -4074,6 +4081,86 @@ def test_agent_configuration_override_draft_publish_and_select_preserves_lineage
             assert_that(second_body["soul_md"], equal_to("# Agent-specific soul"))
             assert_that(second_body["source_template_key"], equal_to(pinned_template.template_key))
             assert_that(second_body["source_template_version"], equal_to(pinned_template.version))
+
+
+def test_agent_configuration_override_lifecycle_emits_domain_events():
+    with given([*_GIVEN, there_is_an_agent(name="Configurable Agent")]) as context:
+        client: TestClient = context.client
+        configuration_url = f"{_BASE}/{context.agent.id}/configuration"
+        outbox = context.injector.get(AgentOverrideRepository).outbox_repository
+
+        with when("I start an Override Draft"):
+            draft = client.post(f"{configuration_url}/draft", headers=_auth(context)).json()
+
+        with then("a Draft Saved Domain Event is persisted with created=True"):
+            draft_events = [
+                message for message in _outbox_messages(context) if message.event_name == AGENT_TEMPLATE_OVERRIDE_DRAFT_SAVED
+            ]
+            assert_that(len(draft_events), equal_to(1))
+            assert_that(draft_events[0].payload["agent_id"], equal_to(str(context.agent.id)))
+            assert_that(draft_events[0].payload["draft_id"], equal_to(draft["id"]))
+            assert_that(draft_events[0].payload["created"], equal_to(True))
+            assert_that(draft_events[0].payload["actor_display"], equal_to(context.user.full_name or context.user.email))
+            deliveries = outbox.list_deliveries_for_event(draft_events[0].event_id)
+            assert_that(len(deliveries), equal_to(1))
+
+        with when("I save a changed artifact"):
+            updated_draft = client.patch(
+                f"{configuration_url}/draft",
+                json={"expected_updated_at": draft["updated_at"], "soul_md": "# Agent-specific soul"},
+                headers=_auth(context),
+            ).json()
+
+        with then("a second Draft Saved Domain Event is persisted with created=False"):
+            draft_events = sorted(
+                (
+                    message
+                    for message in _outbox_messages(context)
+                    if message.event_name == AGENT_TEMPLATE_OVERRIDE_DRAFT_SAVED
+                ),
+                key=lambda message: message.occurred_at,
+            )
+            assert_that(len(draft_events), equal_to(2))
+            assert_that(draft_events[1].payload["created"], equal_to(False))
+
+        with when("I publish the draft"):
+            published = client.post(
+                f"{configuration_url}/draft/publish",
+                json={"expected_updated_at": updated_draft["updated_at"]},
+                headers=_auth(context),
+            ).json()
+
+        with then("an Override Published Domain Event is persisted"):
+            published_events = [
+                message for message in _outbox_messages(context) if message.event_name == AGENT_TEMPLATE_OVERRIDE_PUBLISHED
+            ]
+            assert_that(len(published_events), equal_to(1))
+            assert_that(published_events[0].payload["agent_id"], equal_to(str(context.agent.id)))
+            assert_that(published_events[0].payload["override_version_id"], equal_to(published["id"]))
+            assert_that(published_events[0].payload["version"], equal_to(1))
+
+        with when("I select the published Override Version"):
+            agent_before_select = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+            client.post(
+                f"{configuration_url}/select",
+                json={
+                    "selection_type": "override",
+                    "override_version": 1,
+                    "expected_agent_updated_at": agent_before_select["updated_at"],
+                },
+                headers=_auth(context),
+            )
+
+        with then("an Override Selected Domain Event is persisted"):
+            selected_events = [
+                message for message in _outbox_messages(context) if message.event_name == AGENT_TEMPLATE_OVERRIDE_SELECTED
+            ]
+            assert_that(len(selected_events), equal_to(1))
+            assert_that(selected_events[0].payload["agent_id"], equal_to(str(context.agent.id)))
+            assert_that(selected_events[0].payload["selection_type"], equal_to("override"))
+            assert_that(selected_events[0].payload["selected_id"], equal_to(published["id"]))
+            assert_that(selected_events[0].payload["selected_version"], equal_to(1))
+            assert_that(selected_events[0].payload["template_key"], none())
 
 
 def test_agent_configuration_draft_rejects_stale_update():

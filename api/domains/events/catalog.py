@@ -12,6 +12,9 @@ AGENT_GENERAL_ACCESS_CHANGED = "agent.general_access.changed"
 AGENT_CREATED = "agent.created"
 AGENT_STARTED = "agent.started"
 AGENT_STOPPED = "agent.stopped"
+AGENT_TEMPLATE_OVERRIDE_DRAFT_SAVED = "agent.template_override.draft_saved"
+AGENT_TEMPLATE_OVERRIDE_PUBLISHED = "agent.template_override.published"
+AGENT_TEMPLATE_OVERRIDE_SELECTED = "agent.template_override.selected"
 PLATFORM_USER_PRIVILEGE_GRANTED = "platform.user_privilege.granted"
 PLATFORM_USER_PRIVILEGE_REVOKED = "platform.user_privilege.revoked"
 
@@ -87,6 +90,43 @@ class AgentLifecyclePayload(BaseModel):
     runtime: str
 
 
+class AgentTemplateOverrideDraftSavedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    agent_id: UUID
+    draft_id: UUID
+    template_name: str
+    created: bool
+    actor_display: str
+    subject_display: str
+
+
+class AgentTemplateOverridePublishedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    agent_id: UUID
+    override_version_id: UUID
+    version: int
+    template_name: str
+    actor_display: str
+    subject_display: str
+
+
+class AgentTemplateOverrideSelectedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    agent_id: UUID
+    selection_type: str
+    selected_id: UUID
+    selected_version: int | None
+    template_key: str | None
+    actor_display: str
+    subject_display: str
+
+
 class PlatformUserPrivilegeChangedPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -129,6 +169,20 @@ def build_default_event_registry() -> DomainEventRegistry:
                 schema_version=1,
                 payload_model=AgentLifecyclePayload,
                 handler_names=(AGENT_LIFECYCLE_EMAIL_HANDLER,),
+                event_scope=EventScope.ORGANIZATION,
+            )
+        )
+    for event_name, payload_model in (
+        (AGENT_TEMPLATE_OVERRIDE_DRAFT_SAVED, AgentTemplateOverrideDraftSavedPayload),
+        (AGENT_TEMPLATE_OVERRIDE_PUBLISHED, AgentTemplateOverridePublishedPayload),
+        (AGENT_TEMPLATE_OVERRIDE_SELECTED, AgentTemplateOverrideSelectedPayload),
+    ):
+        registry.register(
+            DomainEventDefinition(
+                event_name=event_name,
+                schema_version=1,
+                payload_model=payload_model,
+                handler_names=(SECURITY_AUDIT_HANDLER,),
                 event_scope=EventScope.ORGANIZATION,
             )
         )

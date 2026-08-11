@@ -967,6 +967,8 @@ class AgentService:
                 snapshot,
                 expected_pin_type=expected_pin_type,
                 expected_pin_id=expected_pin_id,
+                actor=resolve_actor_identity(context, org_id),
+                actor_display=context.user.full_name or context.user.email,
             )
         except AgentOverrideConcurrencyError as exc:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
@@ -1008,6 +1010,8 @@ class AgentService:
                 updated,
                 skill_map,
                 expected_updated_at=data.expected_updated_at,
+                actor=resolve_actor_identity(context, org_id),
+                actor_display=context.user.full_name or context.user.email,
             )
         except AgentOverrideConcurrencyError as exc:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
@@ -1040,6 +1044,8 @@ class AgentService:
                 org_id,
                 actor_user_id=context.user.id,
                 expected_updated_at=data.expected_updated_at,
+                actor=resolve_actor_identity(context, org_id),
+                actor_display=context.user.full_name or context.user.email,
             )
         except AgentOverrideConcurrencyError as exc:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
@@ -1065,6 +1071,8 @@ class AgentService:
             )
 
         selected_id: UUID
+        selected_template_key: str | None
+        selected_version: int | None
         required_map: dict[UUID, str | None]
         if data.selection_type == "platform":
             assert data.template_key is not None and data.template_version is not None
@@ -1075,6 +1083,8 @@ class AgentService:
             if selected is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Platform Template Version not found")
             selected_id = selected.id
+            selected_template_key = selected.template_key
+            selected_version = selected.version
             required_map = self.template_repository.get_required_skill_map_for(selected)
         elif data.selection_type == "organization":
             assert data.template_key is not None and data.template_version is not None
@@ -1089,6 +1099,8 @@ class AgentService:
                     detail="Organization Template Version not found",
                 )
             selected_id = selected.id
+            selected_template_key = selected.template_key
+            selected_version = selected.version
             required_map = self.template_repository.get_required_skill_map_for(selected)
         else:
             assert data.override_version is not None
@@ -1103,6 +1115,8 @@ class AgentService:
                     detail="Agent Template Override Version not found",
                 )
             selected_id = selected_override.id
+            selected_template_key = None
+            selected_version = selected_override.version
             required_map = self.override_repository.get_version_skill_map(selected_override.id)
         self._validate_override_requirements(agent, required_map, org_id)
         try:
@@ -1112,6 +1126,10 @@ class AgentService:
                 selection_type=data.selection_type,
                 selected_id=selected_id,
                 expected_agent_updated_at=data.expected_agent_updated_at,
+                actor=resolve_actor_identity(context, org_id),
+                actor_display=context.user.full_name or context.user.email,
+                template_key=selected_template_key,
+                selected_version=selected_version,
             )
         except AgentOverrideConcurrencyError as exc:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
