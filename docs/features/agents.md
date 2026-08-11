@@ -61,7 +61,7 @@ Template Markdown is not edited as an unversioned per-Agent override. Selecting 
 
 ### Start
 
-Start renders the pinned template, decrypts credentials, selects Hermes/OpenClaw builders, combines explicit skills with provider-derived built-ins, appends integration context, creates a fresh ingest identity, and recreates Kubernetes configuration/deployment resources. A successful transition to `RUNNING` emits `agent.started`; its email handler notifies the Agent Creator and users with Agent Owner access, de-duplicated by email.
+Start renders the pinned template, decrypts credentials, selects Hermes/OpenClaw builders, combines explicit skills with provider-derived built-ins, appends integration context and runtime behaviour policy, creates a fresh ingest identity, and recreates Kubernetes configuration/deployment resources. A successful transition to `RUNNING` emits `agent.started`; its email handler notifies the Agent Creator and users with Agent Owner access, de-duplicated by email.
 
 ### Stop and delete
 
