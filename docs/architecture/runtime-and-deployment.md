@@ -13,10 +13,12 @@ Starting an agent is an API-orchestrated deployment flow:
 3. Decrypt platform and provider credentials.
 4. Select runtime-specific configuration and deployment builders.
 5. Combine explicitly assigned skills with eligible built-in provider skills.
-6. Append tool pointers and integration policy to rendered Markdown.
+6. Append tool pointers, integration policy, and the unconditional runtime behaviour policies (chat commands, role scope) to rendered Markdown.
 7. Generate a fresh ingest key and runtime environment.
 8. Build ConfigMap, Secret, PVC, Service, and Deployment resources.
 9. Apply resources through the Kubernetes client and mark the agent running.
+
+Runtime behaviour policies are appended to `AGENTS.md` rather than stored in a template, because both runtimes auto-load `AGENTS.md` into the startup system prompt. They are unconditional and carry no role-specific wording, so custom and forked templates inherit them and the role-scope policy defers to whatever role the agent's own template defines.
 
 A failed Slack or Telegram credential check or Kubernetes start can place the agent in `ERROR`; successful start clears the prior error.
 
@@ -28,6 +30,26 @@ A failed Slack or Telegram credential check or Kubernetes start can place the ag
 | OpenClaw |   Yes |   Yes |      Yes | OpenClaw overlay and deployment builders     |
 
 Runtime is persisted as `agent_type`; platform is persisted separately. Both runtimes receive rendered template files, skills, integrations, model/LiteLLM settings, and ingest credentials, but their filesystem and configuration shapes differ.
+
+## Mention gating
+
+In a shared channel or group an agent responds only to messages that explicitly mention it. Every agent owns its own bot identity and therefore receives every message in rooms it belongs to, so mention gating is the only thing that keeps an untagged agent from acting on a message addressed to another agent. Gating requires a fresh mention per message: participating earlier in a thread does not entitle an agent to later messages. Direct messages are exempt.
+
+Builders set this per runtime and platform:
+
+| Runtime  | Platform | Generated configuration                                                                       |
+| -------- | -------- | --------------------------------------------------------------------------------------------- |
+| Hermes   | Slack    | `slack.require_mention` and `slack.strict_mention`                                              |
+| Hermes   | Telegram | `telegram.require_mention` and `telegram.exclusive_bot_mentions`                                |
+| OpenClaw | Slack    | `channels.slack.requireMention`, `channels.slack.thread.requireExplicitMention`, and per-channel `requireMention` |
+| OpenClaw | Teams    | `channels.msteams.requireMention`                                                               |
+| OpenClaw | Telegram | `channels.telegram.groups.<chat_id>.requireMention`, or the `*` wildcard group when the group policy is open |
+
+The table covers all five supported runtime/platform pairs. Every value is pinned explicitly rather than left to a runtime default, so an upstream default change cannot silently reopen the gap.
+
+Guarantee strength differs by platform. Slack on both runtimes enforces a fresh mention per message, disabling thread auto-engagement. Teams and Telegram enforce "mention required" but expose no per-message re-mention control, so a direct reply to the agent's own message still reaches it. Those replies remain addressed to exactly one agent, so they do not reopen the cross-agent case.
+
+Runtime configuration is generated at agent start, so a running agent keeps the gating it was started with until it is stopped and started again.
 
 ## Telemetry and costs
 

@@ -20,6 +20,7 @@ import {
   coerceBooleanFields,
   hasIncompleteIntegration,
   expandGithubContent,
+  isAutoConfiguredProvider,
   type IntegrationDraft,
 } from "../integrations";
 import type { Agent, AgentTemplateRead } from "../schemas";
@@ -694,7 +695,9 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
               ];
               setSkillCredentials((prev) => {
                 const existing = new Set(prev.map((c) => c.provider));
-                const toAdd = requiredProviders.filter((p) => !existing.has(p));
+                const toAdd = requiredProviders.filter(
+                  (p) => !isAutoConfiguredProvider(p) && !existing.has(p),
+                );
                 if (toAdd.length === 0) return prev;
                 return [...prev, ...toAdd.map((p) => ({ provider: p, content: {} }))];
               });
