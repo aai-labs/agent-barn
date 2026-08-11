@@ -166,7 +166,6 @@ export function useAgentTemplateSelectionOptions({
       return {
         value,
         selectionType: "override",
-        templateKey: version.sourceTemplateKey,
         overrideVersion: version.version,
         snapshot: version,
         typeLabel: "Agent override",
@@ -214,7 +213,7 @@ export function useAgentTemplateSelectionOptions({
         value: activeValue,
         selectionType: active.pinType === "override" ? "override" : active.sourceType,
         templateKey:
-          active.sourceTemplateKey,
+          active.pinType === "override" ? undefined : active.sourceTemplateKey,
         templateVersion:
           active.pinType === "override" ? undefined : active.sourceTemplateVersion,
         overrideVersion: active.pinType === "override" ? active.version ?? undefined : undefined,

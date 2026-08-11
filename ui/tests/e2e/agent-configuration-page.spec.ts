@@ -105,6 +105,11 @@ test.describe("Agent configuration page", () => {
         await route.fallback();
         return;
       }
+      const body = route.request().postDataJSON() as Record<string, unknown>;
+      expect(body.selection_type).toBe("override");
+      expect(body.override_version).toBe(1);
+      expect(body.template_key).toBeUndefined();
+      expect(body.template_version).toBeUndefined();
       currentAgent = { ...currentAgent, template_pin_type: "override", override_version: 1 };
       configuration = {
         ...configuration,
