@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 
 import { AppErrorState } from "@/components/app-error-state";
+import { DateRangePicker } from "@/components/date-range-picker";
 import { useAllOrganizations } from "@/features/organizations/hooks/use-all-organizations";
 
 import {
@@ -12,7 +13,7 @@ import {
 import { perBucketLabel, withinLabel } from "../format";
 import { DEFAULT_PRESET, PRESETS, type PresetId, presetRange } from "../presets";
 import type { AgentPlatform, StatsFilters, StatsRange } from "../schemas";
-import { PLATFORM_OPTIONS } from "../utils";
+import { MESSAGING_APP_OPTIONS } from "../utils";
 import { AgentsChart } from "./agents-chart";
 import { MessagesChart } from "./messages-chart";
 
@@ -68,7 +69,7 @@ const SELECT_STYLE: React.CSSProperties = {
 export function PlatformStatsPanel() {
   const [preset, setPreset] = useState<PresetId>(DEFAULT_PRESET);
   const [filters, setFilters] = useState<StatsFilters>({});
-  const [custom, setCustom] = useState<{ from?: string; to?: string }>({});
+  const [custom, setCustom] = useState<{ from: string; to: string }>({ from: "", to: "" });
 
   const isCustom = preset === "custom";
   // Memoised because the range is part of the query key: a fresh object with a
@@ -76,11 +77,10 @@ export function PlatformStatsPanel() {
   // in a loop. Only a preset or date change should move it.
   const range: StatsRange = useMemo(() => {
     if (!isCustom) return presetRange(preset) ?? {};
-    // Bare `yyyy-mm-dd` from the date inputs becomes a local-day span, matching
-    // how the presets are computed.
+    // The picker hands back local start-of-day / end-of-day already.
     return {
-      fromDate: custom.from ? new Date(`${custom.from}T00:00:00`).toISOString() : undefined,
-      toDate: custom.to ? new Date(`${custom.to}T23:59:59.999`).toISOString() : undefined,
+      fromDate: custom.from || undefined,
+      toDate: custom.to || undefined,
     };
   }, [isCustom, preset, custom.from, custom.to]);
 
@@ -191,7 +191,7 @@ export function PlatformStatsPanel() {
           </select>
 
           <select
-            aria-label="Filter by chat platform"
+            aria-label="Filter by messaging app"
             className={SELECT_CLASS}
             style={SELECT_STYLE}
             value={filters.platform ?? ""}
@@ -204,8 +204,8 @@ export function PlatformStatsPanel() {
               }))
             }
           >
-            <option value="">All platforms</option>
-            {PLATFORM_OPTIONS.map(({ value, label }) => (
+            <option value="">All messaging apps</option>
+            {MESSAGING_APP_OPTIONS.map(({ value, label }) => (
               <option key={value} value={value}>
                 {label}
               </option>
@@ -227,33 +227,15 @@ export function PlatformStatsPanel() {
           </select>
 
           {isCustom && (
-            <div className="flex items-center gap-1.5">
-              <input
-                type="date"
-                aria-label="From date"
-                className={CONTROL_CLASS}
-                style={{ color: "var(--ink)" }}
-                value={custom.from ?? ""}
-                max={custom.to}
-                onChange={(e) =>
-                  setCustom((c) => ({ ...c, from: e.target.value || undefined }))
-                }
-              />
-              <span className="text-[12px]" style={{ color: "var(--ink-4)" }}>
-                to
-              </span>
-              <input
-                type="date"
-                aria-label="To date"
-                className={CONTROL_CLASS}
-                style={{ color: "var(--ink)" }}
-                value={custom.to ?? ""}
-                min={custom.from}
-                onChange={(e) =>
-                  setCustom((c) => ({ ...c, to: e.target.value || undefined }))
-                }
-              />
-            </div>
+            <DateRangePicker
+              from={custom.from}
+              to={custom.to}
+              onChange={(from, to) => setCustom({ from, to })}
+              placeholder="Pick a range"
+              ariaLabel="Custom date range"
+              className={CONTROL_CLASS}
+              width=""
+            />
           )}
         </div>
       </div>

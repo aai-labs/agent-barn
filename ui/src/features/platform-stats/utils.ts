@@ -18,7 +18,10 @@ export const PERIOD_LABEL: Record<StatsPeriod, string> = {
   NINETY_DAYS: "90 days",
 };
 
-export const PLATFORM_OPTIONS: { value: AgentPlatform; label: string }[] = [
+// "Platform" is taken on this page — Platform View, Platform Administrator,
+// platform stats — so the Slack/Teams/Telegram axis is called the messaging
+// app in the UI. The API field stays `platform`, matching the Agent model.
+export const MESSAGING_APP_OPTIONS: { value: AgentPlatform; label: string }[] = [
   { value: "slack", label: "Slack" },
   { value: "teams", label: "Teams" },
   { value: "telegram", label: "Telegram" },
