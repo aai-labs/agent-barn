@@ -84,7 +84,12 @@ from api.domains.agents.runtime_policy import build_chat_commands_policy_md, bui
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.token_service import SlackConfigTokenService
 from api.domains.events import EventDeliveryDispatcher, resolve_actor_identity
-from api.domains.events.catalog import AGENT_STARTED, AGENT_STOPPED
+from api.domains.events.catalog import (
+    AGENT_SECRET_ADDED,
+    AGENT_SECRET_UPDATED,
+    AGENT_STARTED,
+    AGENT_STOPPED,
+)
 from api.domains.organizations.lookup import OrganizationLookupService
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.shared_credentials.repository import SharedCredentialRepository
@@ -662,18 +667,27 @@ class AgentService:
 
         # Integration secrets are platform-independent. Persist them before any
         # Teams auto-start so they exist if/when the pod is later built.
+        secret_actor = resolve_actor_identity(context, org_id)
+        secret_actor_display = context.user.full_name or context.user.email
         secrets: list[AgentSecret] = []
+        secret_delivery_ids: list[UUID] = []
         for item in data.secrets:
             content = _enrich_atlassian_content(validate_content(item.provider, item.content))
-            saved = self.repository.save_secret(
-                AgentSecret(
-                    agent_id=agent.id,
-                    provider=item.provider,
-                    secret_name=PROVIDER_DISPLAY_NAMES[item.provider],
-                    content=encrypt_content(content, self.config.agent_token_encryption_key),
-                )
+            secret = AgentSecret(
+                agent_id=agent.id,
+                provider=item.provider,
+                secret_name=PROVIDER_DISPLAY_NAMES[item.provider],
+                content=encrypt_content(content, self.config.agent_token_encryption_key),
             )
-            secrets.append(saved)
+            secret_delivery_ids += self.repository.save_secret_with_event(
+                secret,
+                event_name=AGENT_SECRET_ADDED,
+                organization_id=org_id,
+                agent_name=agent.name,
+                actor=secret_actor,
+                actor_display=secret_actor_display,
+            )
+            secrets.append(secret)
 
         # Shared credentials: look up each, verify org ownership, create link rows
         for attach in data.shared_credentials:
@@ -689,16 +703,22 @@ class AgentService:
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Provider {shared_cred.provider} already has a credential in this request",
                 )
-            saved = self.repository.save_secret(
-                AgentSecret(
-                    agent_id=agent.id,
-                    provider=shared_cred.provider,
-                    secret_name=shared_cred.name,
-                    content=None,
-                    shared_credential_id=shared_cred.id,
-                )
+            secret = AgentSecret(
+                agent_id=agent.id,
+                provider=shared_cred.provider,
+                secret_name=shared_cred.name,
+                content=None,
+                shared_credential_id=shared_cred.id,
             )
-            secrets.append(saved)
+            secret_delivery_ids += self.repository.save_secret_with_event(
+                secret,
+                event_name=AGENT_SECRET_ADDED,
+                organization_id=org_id,
+                agent_name=agent.name,
+                actor=secret_actor,
+                actor_display=secret_actor_display,
+            )
+            secrets.append(secret)
 
         # Resolve and validate skills after all other secrets (manual + shared)
         # are known, so the Slack-derive check below sees the final skill set.
@@ -716,21 +736,26 @@ class AgentService:
             SecretProvider.SLACK in skill.required_providers for skill in skills_to_assign
         ):
             slack_content = validate_content(SecretProvider.SLACK, {"token": data.slack_bot_token})
-            secrets.append(
-                self.repository.save_secret(
-                    AgentSecret(
-                        agent_id=agent.id,
-                        provider=SecretProvider.SLACK,
-                        secret_name=PROVIDER_DISPLAY_NAMES[SecretProvider.SLACK],
-                        content=encrypt_content(slack_content, self.config.agent_token_encryption_key),
-                    )
-                )
+            slack_secret = AgentSecret(
+                agent_id=agent.id,
+                provider=SecretProvider.SLACK,
+                secret_name=PROVIDER_DISPLAY_NAMES[SecretProvider.SLACK],
+                content=encrypt_content(slack_content, self.config.agent_token_encryption_key),
             )
+            secret_delivery_ids += self.repository.save_secret_with_event(
+                slack_secret,
+                event_name=AGENT_SECRET_ADDED,
+                organization_id=org_id,
+                agent_name=agent.name,
+                actor=secret_actor,
+                actor_display=secret_actor_display,
+            )
+            secrets.append(slack_secret)
 
         if skills_to_assign:
             self.repository.save_skills([AgentSkill(agent_id=agent.id, skill_id=s.id) for s in skills_to_assign])
 
-        self.event_delivery_dispatcher.enqueue_immediate(created_delivery_ids)
+        self.event_delivery_dispatcher.enqueue_immediate(created_delivery_ids + secret_delivery_ids)
 
         if data.platform == AgentPlatform.TEAMS:
             return self.start_agent(agent.id, context)
@@ -1017,6 +1042,10 @@ class AgentService:
         if data.skill_ids or data.removed_secret_providers:
             self._validate_skill_update(agent, data, org_id)
 
+        secret_actor = resolve_actor_identity(context, org_id)
+        secret_actor_display = context.user.full_name or context.user.email
+        secret_delivery_ids: list[UUID] = []
+
         # Integration secrets: platform-independent. Remove first, then upsert
         # (the AgentUpdate validator already forbids a provider in both lists).
         # Validate and encrypt all upserts before touching the DB so that a
@@ -1034,22 +1063,42 @@ class AgentService:
                 for item in data.secrets or []
             ]
             for provider in updated.get("removed_secret_providers") or []:
-                self.repository.delete_secret(agent.id, provider)
+                secret_delivery_ids += self.repository.delete_secret_with_event(
+                    agent.id,
+                    provider,
+                    organization_id=org_id,
+                    agent_name=agent.name,
+                    actor=secret_actor,
+                    actor_display=secret_actor_display,
+                )
             for item, encrypted in upserts:
                 existing = self.repository.get_secret(agent.id, item.provider)
                 if existing:
                     existing.content = encrypted
                     existing.shared_credential_id = None
                     existing.secret_name = PROVIDER_DISPLAY_NAMES[item.provider]
-                    self.repository.save_secret(existing)
+                    secret_delivery_ids += self.repository.save_secret_with_event(
+                        existing,
+                        event_name=AGENT_SECRET_UPDATED,
+                        organization_id=org_id,
+                        agent_name=agent.name,
+                        actor=secret_actor,
+                        actor_display=secret_actor_display,
+                    )
                 else:
-                    self.repository.save_secret(
-                        AgentSecret(
-                            agent_id=agent.id,
-                            provider=item.provider,
-                            secret_name=PROVIDER_DISPLAY_NAMES[item.provider],
-                            content=encrypted,
-                        )
+                    secret = AgentSecret(
+                        agent_id=agent.id,
+                        provider=item.provider,
+                        secret_name=PROVIDER_DISPLAY_NAMES[item.provider],
+                        content=encrypted,
+                    )
+                    secret_delivery_ids += self.repository.save_secret_with_event(
+                        secret,
+                        event_name=AGENT_SECRET_ADDED,
+                        organization_id=org_id,
+                        agent_name=agent.name,
+                        actor=secret_actor,
+                        actor_display=secret_actor_display,
                     )
 
         # Shared credential attachments
@@ -1080,16 +1129,29 @@ class AgentService:
                     existing.content = None
                     existing.shared_credential_id = shared_cred.id
                     existing.secret_name = shared_cred.name
-                    self.repository.save_secret(existing)
+                    secret_delivery_ids += self.repository.save_secret_with_event(
+                        existing,
+                        event_name=AGENT_SECRET_UPDATED,
+                        organization_id=org_id,
+                        agent_name=agent.name,
+                        actor=secret_actor,
+                        actor_display=secret_actor_display,
+                    )
                 else:
-                    self.repository.save_secret(
-                        AgentSecret(
-                            agent_id=agent.id,
-                            provider=shared_cred.provider,
-                            secret_name=shared_cred.name,
-                            content=None,
-                            shared_credential_id=shared_cred.id,
-                        )
+                    secret = AgentSecret(
+                        agent_id=agent.id,
+                        provider=shared_cred.provider,
+                        secret_name=shared_cred.name,
+                        content=None,
+                        shared_credential_id=shared_cred.id,
+                    )
+                    secret_delivery_ids += self.repository.save_secret_with_event(
+                        secret,
+                        event_name=AGENT_SECRET_ADDED,
+                        organization_id=org_id,
+                        agent_name=agent.name,
+                        actor=secret_actor,
+                        actor_display=secret_actor_display,
                     )
 
         # Apply skill changes
@@ -1104,6 +1166,9 @@ class AgentService:
         # anymore (covers skill removal). Runs last, after every other
         # secret/skill validation and persistence step above, so a failure
         # earlier in this method never leaves this mirrored secret orphaned.
+        # Goes through the event-emitting secret methods (not plain save/delete)
+        # so this mirrored write gets the same agent.secret.* audit coverage as
+        # every other secret mutation in this method.
         if agent.platform == AgentPlatform.SLACK and (
             data.skill_ids or data.removed_skill_ids or "slack_bot_token" in updated
         ):
@@ -1128,21 +1193,43 @@ class AgentService:
                     existing_slack_secret = self.repository.get_secret(agent.id, SecretProvider.SLACK)
                     if existing_slack_secret:
                         existing_slack_secret.content = slack_secret_content
-                        self.repository.save_secret(existing_slack_secret)
+                        secret_delivery_ids += self.repository.save_secret_with_event(
+                            existing_slack_secret,
+                            event_name=AGENT_SECRET_UPDATED,
+                            organization_id=org_id,
+                            agent_name=agent.name,
+                            actor=secret_actor,
+                            actor_display=secret_actor_display,
+                        )
                     else:
-                        self.repository.save_secret(
+                        secret_delivery_ids += self.repository.save_secret_with_event(
                             AgentSecret(
                                 agent_id=agent.id,
                                 provider=SecretProvider.SLACK,
                                 secret_name=PROVIDER_DISPLAY_NAMES[SecretProvider.SLACK],
                                 content=slack_secret_content,
-                            )
+                            ),
+                            event_name=AGENT_SECRET_ADDED,
+                            organization_id=org_id,
+                            agent_name=agent.name,
+                            actor=secret_actor,
+                            actor_display=secret_actor_display,
                         )
             else:
-                self.repository.delete_secret(agent.id, SecretProvider.SLACK)
+                secret_delivery_ids += self.repository.delete_secret_with_event(
+                    agent.id,
+                    SecretProvider.SLACK,
+                    organization_id=org_id,
+                    agent_name=agent.name,
+                    actor=secret_actor,
+                    actor_display=secret_actor_display,
+                )
 
-        self.repository.save(agent)
-        return self._get_agent_read(agent, context)
+        update_result = self.repository.update_scalar_fields_with_event(
+            agent, actor=secret_actor, actor_display=secret_actor_display
+        )
+        self.event_delivery_dispatcher.enqueue_immediate(update_result.delivery_ids + secret_delivery_ids)
+        return self._get_agent_read(update_result.agent, context)
 
     def start_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
         org_id = self._org_id(context)
@@ -1731,8 +1818,12 @@ class AgentService:
             slack_config.bot_token_hash = None
             self.repository.save_slack_config(slack_config)
 
-        agent.deleted_at = dt.datetime.now(dt.UTC)
-        self.repository.save(agent)
+        delete_result = self.repository.soft_delete_with_event(
+            agent,
+            actor=resolve_actor_identity(context, agent.organization_id),
+            actor_display=context.user.full_name or context.user.email,
+        )
+        self.event_delivery_dispatcher.enqueue_immediate(delete_result.delivery_ids)
 
         if agent.litellm_key_encrypted:
             try:
