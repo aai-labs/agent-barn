@@ -4,13 +4,19 @@ import {
   Area,
   CartesianGrid,
   ComposedChart,
-  Legend,
   Line,
-  ResponsiveContainer,
-  Tooltip,
   XAxis,
   YAxis,
 } from "recharts";
+
+import {
+  type ChartConfig,
+  ChartContainer,
+  ChartLegend,
+  ChartLegendContent,
+  ChartTooltip,
+  ChartTooltipContent,
+} from "@/components/ui/chart";
 
 import { formatBucket, formatBucketLong } from "../format";
 import type { Granularity, PlatformAgentSeriesPoint } from "../schemas";
@@ -21,44 +27,15 @@ interface AgentsChartProps {
   granularity: Granularity;
 }
 
-
-interface TooltipPayload {
-  value: number;
-  payload: PlatformAgentSeriesPoint;
-}
-
-interface CustomTooltipProps {
-  active?: boolean;
-  payload?: TooltipPayload[];
-  label?: string;
-  granularity: Granularity;
-}
-
-function CustomTooltip({ active, payload, label, granularity }: CustomTooltipProps) {
-  if (!active || !payload?.length) return null;
-  const point = payload[0].payload;
-  return (
-    <div className="bg-white border border-gray-200 rounded-xl shadow-lg px-4 py-3 text-sm">
-      <div className="text-gray-500 font-medium mb-1">
-        {label ? formatBucketLong(label, granularity) : ""}
-      </div>
-      <div className="text-gray-900 font-semibold text-[15px]">
-        {point.existing.toLocaleString()} agents
-      </div>
-      <div className="text-gray-500">
-        {point.active.toLocaleString()} active
-      </div>
-      {point.created > 0 && (
-        <div className="text-gray-500">+{point.created} created</div>
-      )}
-    </div>
-  );
-}
+const CHART_CONFIG = {
+  existing: { label: "Agents", color: "var(--ink-4)" },
+  active: { label: "Active", color: "var(--ink)" },
+} satisfies ChartConfig;
 
 export function AgentsChart({ series, granularity }: AgentsChartProps) {
   if (series.length === 0) {
     return (
-      <div className="flex items-center justify-center h-[200px] text-[14px] text-gray-400">
+      <div className="flex h-[200px] items-center justify-center text-[14px] text-muted-foreground">
         No agents in this period.
       </div>
     );
@@ -67,63 +44,78 @@ export function AgentsChart({ series, granularity }: AgentsChartProps) {
   const ticks = evenlySpacedTicks(series.map((d) => d.bucket));
 
   return (
-    <ResponsiveContainer width="100%" height={200}>
+    <ChartContainer config={CHART_CONFIG} className="h-[200px] w-full">
       <ComposedChart
         data={series}
         margin={{ top: 8, right: 16, left: 0, bottom: 0 }}
       >
-        <CartesianGrid
-          strokeDasharray="3 3"
-          stroke="#f1f5f9"
-          vertical={false}
-        />
+        <CartesianGrid strokeDasharray="3 3" vertical={false} />
         <XAxis
           dataKey="bucket"
           tickFormatter={(v: string) => formatBucket(v, granularity)}
-          tick={{ fontSize: 11, fill: "var(--ink-4)" }}
-          axisLine={false}
           tickLine={false}
+          axisLine={false}
           ticks={ticks}
           interval={0}
+          tick={{ fontSize: 11 }}
         />
         <YAxis
-          tick={{ fontSize: 11, fill: "var(--ink-4)" }}
-          axisLine={false}
           tickLine={false}
+          axisLine={false}
           width={48}
           allowDecimals={false}
+          tick={{ fontSize: 11 }}
         />
-        <Tooltip content={<CustomTooltip granularity={granularity} />} cursor={{ fill: "#f8fafc" }} />
-        <Legend
-          verticalAlign="top"
-          align="right"
-          height={28}
-          iconType="circle"
-          iconSize={8}
-          wrapperStyle={{ fontSize: 12, color: "var(--ink-3)" }}
+        <ChartTooltip
+          content={
+            <ChartTooltipContent
+              labelFormatter={(value) =>
+                formatBucketLong(String(value), granularity)
+              }
+              // `created` is carried in the data but drawn as no series, so the
+              // default tooltip would never surface it. Append it to the last
+              // row, and only when something was actually created.
+              formatter={(value, name, item, index) => {
+                const created = (item?.payload as PlatformAgentSeriesPoint | undefined)?.created ?? 0;
+                const label = CHART_CONFIG[name as keyof typeof CHART_CONFIG]?.label ?? name;
+                return (
+                  <>
+                    <span className="text-muted-foreground">{label}</span>
+                    <span className="ml-auto font-mono font-medium tabular-nums text-foreground">
+                      {Number(value).toLocaleString()}
+                    </span>
+                    {index === 1 && created > 0 && (
+                      <div className="text-muted-foreground basis-full">
+                        +{created.toLocaleString()} created
+                      </div>
+                    )}
+                  </>
+                );
+              }}
+            />
+          }
         />
+        <ChartLegend content={<ChartLegendContent />} verticalAlign="top" />
         <Area
-          isAnimationActive={false}
           type="stepAfter"
           dataKey="existing"
-          name="Agents"
-          stroke="var(--ink-4)"
-          fill="var(--ink-4)"
-          fillOpacity={0.14}
+          stroke="var(--color-existing)"
+          fill="var(--color-existing)"
+          fillOpacity={0.15}
           strokeWidth={1.5}
+          isAnimationActive={false}
         />
         {/* Linear, not monotone: a smoothed curve would draw values between
-            days that the daily counts never claim. */}
+            buckets that the counts never claim. */}
         <Line
-          isAnimationActive={false}
           type="linear"
           dataKey="active"
-          name="Active"
-          stroke="var(--ink)"
+          stroke="var(--color-active)"
           strokeWidth={2}
           dot={false}
+          isAnimationActive={false}
         />
       </ComposedChart>
-    </ResponsiveContainer>
+    </ChartContainer>
   );
 }
