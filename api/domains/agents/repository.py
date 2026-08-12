@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
+import sqlalchemy as sa
 from injector import inject, singleton
 from sqlalchemy import exists, func, or_
 from sqlalchemy.exc import IntegrityError
@@ -15,6 +16,7 @@ from api.domains.agents.models import (
     AgentFilter,
     AgentLifecycleEmailReceipt,
     AgentLogSnapshot,
+    AgentPlatform,
     AgentSecret,
     AgentSkill,
     AgentSlackConfig,
@@ -143,6 +145,166 @@ class AgentRepository:
                 .where(col(Agent.deleted_at).is_(None))
             )
             return session.scalar(count_query) or 0
+
+    def _stats_predicates(
+        self,
+        organization_id: UUID | None,
+        agent_id: UUID | None,
+        created_by_user_id: UUID | None,
+        platform: AgentPlatform | None,
+    ) -> list[Any]:
+        """Shared narrowing for the stats aggregates (AF-256). Deliberately does
+        not include a deleted_at predicate — callers decide that, since inventory
+        over time has to see Agents that were later deleted."""
+        predicates: list[Any] = []
+        if organization_id is not None:
+            predicates.append(col(Agent.organization_id) == organization_id)
+        if agent_id is not None:
+            predicates.append(col(Agent.id) == agent_id)
+        if created_by_user_id is not None:
+            predicates.append(col(Agent.created_by_user_id) == created_by_user_id)
+        if platform is not None:
+            predicates.append(col(Agent.platform) == platform)
+        return predicates
+
+    def count_agents_for_stats(
+        self,
+        *,
+        organization_id: UUID | None = None,
+        agent_id: UUID | None = None,
+        created_by_user_id: UUID | None = None,
+        platform: AgentPlatform | None = None,
+    ) -> tuple[int, int, int, int]:
+        """(total, running, stopped, errored) Agent counts for the stats
+        surfaces (AF-256).
+
+        Unscoped by default and only ever reached through
+        `require_platform_admin`, like `count_agents_in_error`; org-scoped reads
+        keep using AuthorizationScope. `organization_id` narrows the same
+        aggregate so a future Organization dashboard reuses this query.
+
+        Every number composes with `deleted_at IS NULL`, so a soft-deleted Agent
+        whose status was never transitioned cannot inflate any of them. The
+        three status counts partition `total`, since AgentStatus has exactly
+        these three values.
+        """
+        predicates = self._stats_predicates(organization_id, agent_id, created_by_user_id, platform)
+        live = [col(Agent.deleted_at).is_(None), *predicates]
+        with Session(self.delegate.engine) as session:
+            total, running, stopped, errored = session.exec(
+                select(
+                    func.count(),
+                    func.count().filter(col(Agent.status) == AgentStatus.RUNNING),
+                    func.count().filter(col(Agent.status) == AgentStatus.STOPPED),
+                    func.count().filter(col(Agent.status) == AgentStatus.ERROR),
+                )
+                .select_from(Agent)
+                .where(*live)
+            ).one()
+            return int(total or 0), int(running or 0), int(stopped or 0), int(errored or 0)
+
+    def agent_inventory_since(
+        self,
+        window_start: datetime,
+        window_end: datetime,
+        *,
+        unit: str = "day",
+        organization_id: UUID | None = None,
+        agent_id: UUID | None = None,
+        created_by_user_id: UUID | None = None,
+        platform: AgentPlatform | None = None,
+    ) -> list[tuple[datetime, int, int]]:
+        """(bucket_start, existing, created) Agent inventory for the stats
+        surfaces (AF-256), reconstructed exactly from created_at/deleted_at.
+
+        `existing` counts Agents live at the end of each bucket: created on or
+        before it, and either never deleted or deleted after it. That is why the
+        deleted_at predicate cannot live in `_stats_predicates` — an Agent
+        deleted last week still existed in the buckets before.
+
+        `unit` is a postgres date_trunc unit ('hour' | 'day' | 'week'), chosen
+        from the window span so a one-day window is not a single bar and a
+        two-year one is not seven hundred. It also drives the generate_series
+        step, so the empty buckets are filled in at the same resolution.
+        """
+        predicates = self._stats_predicates(organization_id, agent_id, created_by_user_id, platform)
+        step = sa.text(f"interval '1 {unit}'")
+        created_utc = sa.func.timezone("UTC", col(Agent.created_at))
+        deleted_utc = sa.func.timezone("UTC", col(Agent.deleted_at))
+
+        with Session(self.delegate.engine) as session:
+            buckets = select(
+                func.generate_series(
+                    func.date_trunc(unit, sa.func.timezone("UTC", sa.literal(window_start))),
+                    func.date_trunc(unit, sa.func.timezone("UTC", sa.literal(window_end))),
+                    step,
+                ).label("bucket")
+            ).subquery()
+            bucket_col = buckets.c.bucket
+
+            # Inventory is a running total, not a per-bucket recount. Joining
+            # every Agent to every bucket and counting the survivors is
+            # O(buckets x agents) — 721 hourly buckets over 300 Agents already
+            # materialises 200k rows, and it grows with both the window and the
+            # fleet. Instead: how many were alive when the window opened, plus
+            # creations minus deletions as we walk forward.
+            alive_at_start = (
+                select(func.count())
+                .select_from(Agent)
+                .where(
+                    col(Agent.created_at) < window_start,
+                    sa.or_(col(Agent.deleted_at).is_(None), col(Agent.deleted_at) >= window_start),
+                    *predicates,
+                )
+                .scalar_subquery()
+            )
+
+            created_per_bucket = (
+                select(
+                    func.date_trunc(unit, created_utc).label("bucket"),
+                    func.count().label("created"),
+                )
+                .where(
+                    col(Agent.created_at) >= window_start,
+                    col(Agent.created_at) < window_end,
+                    *predicates,
+                )
+                .group_by(sa.text("1"))
+                .subquery()
+            )
+
+            deleted_per_bucket = (
+                select(
+                    func.date_trunc(unit, deleted_utc).label("bucket"),
+                    func.count().label("deleted"),
+                )
+                .where(
+                    col(Agent.deleted_at).is_not(None),
+                    col(Agent.deleted_at) >= window_start,
+                    col(Agent.deleted_at) < window_end,
+                    *predicates,
+                )
+                .group_by(sa.text("1"))
+                .subquery()
+            )
+
+            created = func.coalesce(created_per_bucket.c.created, 0)
+            deleted = func.coalesce(deleted_per_bucket.c.deleted, 0)
+            running = func.sum(created - deleted).over(order_by=bucket_col)
+
+            query = (
+                select(
+                    sa.func.timezone("UTC", bucket_col).label("bucket"),
+                    (alive_at_start + running).label("existing"),
+                    created.label("created"),
+                )
+                .select_from(buckets)
+                .outerjoin(created_per_bucket, created_per_bucket.c.bucket == bucket_col)
+                .outerjoin(deleted_per_bucket, deleted_per_bucket.c.bucket == bucket_col)
+                .order_by(bucket_col)
+            )
+            rows = session.exec(query).all()  # type: ignore[call-overload]
+            return [(row[0], int(row[1]), int(row[2])) for row in rows]
 
     def find_all_active(
         self,

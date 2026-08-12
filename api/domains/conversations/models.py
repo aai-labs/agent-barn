@@ -28,6 +28,10 @@ class AgentChatMessage(BaseModel, table=True):
         sa.UniqueConstraint("agent_id", "openclaw_msg_id", name="uq_agent_chat_message_agent_msg"),
         sa.Index("ix_agent_chat_message_agent_channel", "agent_id", "channel_id"),
         sa.Index("ix_agent_chat_message_agent_session", "agent_id", "session_key"),
+        # Platform View stats (AF-256) read a trailing time window across all
+        # Agents, which neither agent_id-prefixed index above can serve. agent_id
+        # trails so the distinct-active-Agents query stays index-only too.
+        sa.Index("ix_agent_chat_message_occurred_at_direction", "occurred_at", "direction", "agent_id"),
     )
 
     agent_id: UUID = SqlField(foreign_key="agent.id", nullable=False, ondelete="CASCADE")
