@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import ClassVar
@@ -19,6 +20,8 @@ from api.infrastructure.email.exceptions import (
     TerminalEmailSendingException,
 )
 from api.infrastructure.email.service import EmailService
+
+logger = logging.getLogger(__name__)
 
 
 @inject
@@ -60,6 +63,11 @@ class AgentLifecycleEmailHandler:
                 continue
             except TerminalEmailSendingException:
                 terminal_recipients.append(recipient.email)
+                continue
+            except Exception:
+                # Unclassified failure: retry rather than drop the notification.
+                logger.exception("Unexpected error sending agent lifecycle email to %s", recipient.email)
+                retryable_recipients.append(recipient.email)
                 continue
             self.repository.record_lifecycle_email_recipient_notified(context.delivery_id, recipient.email)
         # A retryable failure anywhere wins: rescheduling gives the terminal recipients no

@@ -123,6 +123,20 @@ def test_terminal_send_failure_dead_letters_instead_of_burning_retries():
     assert_that(repository.recorded, empty())
 
 
+def test_unclassified_failure_is_treated_as_retryable():
+    # An exception the client never classified (a bug, an unhandled transport case) must
+    # reschedule rather than escape the handler and lose the notification.
+    repository = _FakeRepository(["a@example.com"])
+    service = _FakeEmailService({"a@example.com": RuntimeError("simulated failure")})
+    event, context = _event_and_context()
+
+    assert_that(
+        calling(_handler(repository, service).handle).with_args(event, context),
+        raises(RetryableEventHandlerError),
+    )
+    assert_that(repository.recorded, empty())
+
+
 def test_retryable_wins_when_failures_are_mixed():
     # Rescheduling rescues the transient recipient; the terminal one is re-classified on
     # the next attempt rather than being retried indefinitely.

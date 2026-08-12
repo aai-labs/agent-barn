@@ -63,6 +63,14 @@ AGENT_TOKEN_ENCRYPTION_KEY=
 PLATFORM_ADMIN_CREDENTIALS=admin@example.com:
 ENVIRONMENT=local
 
+# ── Transactional email (Cloudflare Email Sending) ───────────────────────────
+# Leave blank to disable email delivery; sends are logged and no-op. All three are
+# required for delivery. The token needs the "Email Sending: Edit" permission, and
+# SENDER_EMAIL's domain must be a Verified sending domain in the Cloudflare account.
+CLOUDFLARE_ACCOUNT_ID=
+CLOUDFLARE_API_TOKEN=
+SENDER_EMAIL=
+
 # ── URLs / ingress hosts ─────────────────────────────────────────────────────
 # Hostnames the ingress serves. Point DNS (or /etc/hosts) at the cluster.
 API_HOST=api.agentfarm.local
