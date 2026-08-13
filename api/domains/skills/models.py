@@ -204,6 +204,7 @@ class SkillSummaryRead(SkillRead):
     """A skill as the Skills UI sees it: lineage plus its currently published version."""
 
     version: int
+    has_draft: bool
 
 
 class SkillDetailRead(SkillSummaryRead):

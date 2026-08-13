@@ -1,6 +1,10 @@
 import { createQueryKeyStructure } from "@/shared/query-keys";
 
 export const skillsKey = createQueryKeyStructure("skills");
+export const skillDraftKey = (skillId: string) => [...skillsKey.detail(skillId), "draft"] as const;
+export const skillVersionsKey = (skillId: string) => [...skillsKey.detail(skillId), "versions"] as const;
+export const skillVersionKey = (skillId: string, version: number) =>
+  [...skillsKey.detail(skillId), "versions", version] as const;
 export const SKILLS_PAGE_SIZE = 15;
 
 export const SKILL_PROVIDER_LABELS: Record<string, string> = {

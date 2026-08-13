@@ -19,7 +19,7 @@ import { SHARED_CREDENTIAL_PROVIDER_LABELS } from "@/features/shared-credentials
 import { useSkills } from "@/features/skills/hooks/use-skills";
 import { SKILL_PROVIDER_LABELS } from "@/features/skills/utils";
 import type { Skill } from "@/features/skills/schemas";
-import { SkillSourceBadge } from "@/features/skills/components/skill-drawer";
+import { SkillSourceBadge } from "@/features/skills/components/skill-source-badge";
 
 import {
   INTEGRATION_PROVIDERS,

@@ -6,7 +6,7 @@ import { api } from "@/shared/api";
 import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
 
 import { SkillDraftSchema, SkillSchema, type Skill, type SkillDraft } from "../schemas";
-import { skillsKey } from "../utils";
+import { skillDraftKey, skillsKey } from "../utils";
 
 export type SkillFilePayload = {
   path: string;
@@ -61,8 +61,6 @@ export function useUpdateSkill() {
   });
 }
 
-const draftKey = (skillId: string) => [...skillsKey.detail(skillId), "draft"] as const;
-
 /** Get-or-create the in-flight draft. Pass sourceVersion to seed it from an older
  * published version instead of the latest (rollback); omit to continue editing. */
 export function useStartSkillDraft() {
@@ -80,7 +78,7 @@ export function useStartSkillDraft() {
       return response.data;
     },
     onSuccess: (draft) => {
-      queryClient.setQueryData(draftKey(draft.skillId), draft);
+      queryClient.setQueryData(skillDraftKey(draft.skillId), draft);
     },
   });
 }
@@ -99,7 +97,7 @@ export function useUpdateSkillDraft() {
       return response.data;
     },
     onSuccess: (draft) => {
-      queryClient.setQueryData(draftKey(draft.skillId), draft);
+      queryClient.setQueryData(skillDraftKey(draft.skillId), draft);
     },
   });
 }
@@ -113,7 +111,7 @@ export function useDiscardSkillDraft() {
       await api.delete(`${orgApiBase}/skills/${skillId}/draft`);
     },
     onSuccess: (_data, skillId) => {
-      queryClient.removeQueries({ queryKey: draftKey(skillId) });
+      queryClient.removeQueries({ queryKey: skillDraftKey(skillId) });
     },
   });
 }
@@ -132,7 +130,7 @@ export function usePublishSkillDraft() {
       return response.data;
     },
     onSuccess: (skill) => {
-      queryClient.removeQueries({ queryKey: draftKey(skill.id) });
+      queryClient.removeQueries({ queryKey: skillDraftKey(skill.id) });
       void queryClient.invalidateQueries({ queryKey: skillsKey.all });
     },
   });

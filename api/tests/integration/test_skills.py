@@ -753,6 +753,39 @@ def test_start_skill_draft_is_get_or_create():
             assert_that(response.json()["files"], equal_to([{"path": "SKILL.md", "content": "# In progress"}]))
 
 
+def test_skill_reads_expose_has_draft():
+    with given([*_GIVEN, there_is_a_skill(name="Versioned Skill")]) as context:
+        client: TestClient = context.client
+
+        with when("no draft exists yet"):
+            get_response = client.get(f"{_BASE}/{context.skill.id}", headers=_auth(context))
+            list_response = client.get(_BASE, headers=_auth(context))
+
+        with then("has_draft is false everywhere"):
+            assert_that(get_response.json()["has_draft"], equal_to(False))
+            listed = next(s for s in list_response.json()["items"] if s["id"] == str(context.skill.id))
+            assert_that(listed["has_draft"], equal_to(False))
+
+        client.post(f"{_BASE}/{context.skill.id}/draft", headers=_auth(context))
+
+        with when("a draft is in progress"):
+            get_response = client.get(f"{_BASE}/{context.skill.id}", headers=_auth(context))
+            list_response = client.get(_BASE, headers=_auth(context))
+
+        with then("has_draft is true everywhere"):
+            assert_that(get_response.json()["has_draft"], equal_to(True))
+            listed = next(s for s in list_response.json()["items"] if s["id"] == str(context.skill.id))
+            assert_that(listed["has_draft"], equal_to(True))
+
+        client.post(f"{_BASE}/{context.skill.id}/draft/publish", headers=_auth(context))
+
+        with when("the draft is published"):
+            get_response = client.get(f"{_BASE}/{context.skill.id}", headers=_auth(context))
+
+        with then("has_draft goes back to false"):
+            assert_that(get_response.json()["has_draft"], equal_to(False))
+
+
 def test_start_skill_draft_with_source_version_seeds_from_that_version():
     with given([*_GIVEN, there_is_a_skill(name="Versioned Skill")]) as context:
         client: TestClient = context.client

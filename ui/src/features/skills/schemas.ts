@@ -15,6 +15,7 @@ export const SkillSchema = z.object({
   requiredProviders: z.array(z.string()),
   toolsPointer: z.string().nullable(),
   version: z.number().int().min(1),
+  hasDraft: z.boolean(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });

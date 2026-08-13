@@ -149,6 +149,15 @@ class SkillRepository:
             query = select(SkillDraft).where(col(SkillDraft.skill_id) == skill_id)
             return session.exec(query).first()
 
+    def get_draft_skill_ids(self, skill_ids: list[UUID]) -> set[UUID]:
+        """Which of these skills have an in-flight draft, for list/detail reads
+        that need to show a "Draft in progress" indicator without probing."""
+        if not skill_ids:
+            return set()
+        with Session(self.delegate.engine) as session:
+            query = select(SkillDraft.skill_id).where(col(SkillDraft.skill_id).in_(skill_ids))
+            return set(session.exec(query).all())
+
     def get_draft_files(self, draft_id: UUID) -> list[SkillDraftFile]:
         with Session(self.delegate.engine) as session:
             query = (

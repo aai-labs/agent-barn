@@ -11,7 +11,7 @@ import { useSharedManualSwitch } from "@/features/shared-credentials/hooks/use-s
 import { SHARED_CREDENTIAL_PROVIDER_LABELS } from "@/features/shared-credentials/utils";
 import { useSkills } from "@/features/skills/hooks/use-skills";
 import { SKILL_PROVIDER_LABELS } from "@/features/skills/utils";
-import { SkillSourceBadge } from "@/features/skills/components/skill-drawer";
+import { SkillSourceBadge } from "@/features/skills/components/skill-source-badge";
 import type { Skill } from "@/features/skills/schemas";
 
 import {

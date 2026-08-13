@@ -61,11 +61,13 @@ class SkillService:
             suffix += 1
         return f"{base}-{suffix}"
 
-    def _to_read(self, skill: Skill, version: int | None = None) -> SkillSummaryRead:
+    def _to_read(self, skill: Skill, version: int | None = None, has_draft: bool | None = None) -> SkillSummaryRead:
         if version is None:
             latest = self.repository.get_latest_version(skill.id)
             version = latest.version if latest else 1
-        return SkillSummaryRead.model_validate({**skill.model_dump(), "version": version})
+        if has_draft is None:
+            has_draft = self.repository.get_draft(skill.id) is not None
+        return SkillSummaryRead.model_validate({**skill.model_dump(), "version": version, "has_draft": has_draft})
 
     def _get_or_404(self, skill_id: UUID, org_id: UUID) -> Skill:
         skill = self.repository.get_by_id(skill_id)
@@ -95,7 +97,7 @@ class SkillService:
         )
         self.repository.save(skill)
         version = self.repository.publish_version(skill.id, files, created_by=context.user.id)
-        return self._to_read(skill, version.version)
+        return self._to_read(skill, version.version, has_draft=False)
 
     def update_skill(self, skill_id: UUID, data: SkillUpdate, context: CurrentUserContext) -> SkillSummaryRead:
         """Metadata-only: name, description, required providers. Content changes
@@ -243,7 +245,7 @@ class SkillService:
         published = self.repository.publish_draft(
             skill.id, draft.id, files, created_by=context.user.id, restored_from_version=draft.source_version
         )
-        return self._to_read(skill, published.version)
+        return self._to_read(skill, published.version, has_draft=False)
 
     def delete_skill(self, skill_id: UUID, context: CurrentUserContext) -> None:
         org_id = self._org_id(context)
@@ -298,9 +300,17 @@ class SkillService:
         return self._to_reads(self.repository.find_all_global())
 
     def _to_reads(self, skills: list[Skill]) -> list[SkillSummaryRead]:
-        """Batch the version lookup so listing N skills stays at one extra query."""
-        versions = self.repository.get_latest_version_numbers([s.id for s in skills])
+        """Batch the version and draft lookups so listing N skills stays at two extra queries."""
+        skill_ids = [s.id for s in skills]
+        versions = self.repository.get_latest_version_numbers(skill_ids)
+        draft_skill_ids = self.repository.get_draft_skill_ids(skill_ids)
         return [
-            SkillSummaryRead.model_validate({**skill.model_dump(), "version": versions.get(skill.id, 1)})
+            SkillSummaryRead.model_validate(
+                {
+                    **skill.model_dump(),
+                    "version": versions.get(skill.id, 1),
+                    "has_draft": skill.id in draft_skill_ids,
+                }
+            )
             for skill in skills
         ]

@@ -29,5 +29,6 @@ export function useSkillFiles(skillId: string | null) {
     files: query.data?.files ?? [],
     isLoading: query.isPending,
     error: query.error,
+    refetch: query.refetch,
   };
 }

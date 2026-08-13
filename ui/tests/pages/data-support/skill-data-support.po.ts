@@ -18,6 +18,7 @@ export const mockPlatformSkill = {
   requiredProviders: ["github"],
   toolsPointer: null,
   version: 1,
+  hasDraft: false,
   createdAt: "2026-01-01T00:00:00Z",
   updatedAt: "2026-01-01T00:00:00Z",
 };
@@ -34,6 +35,7 @@ export const mockCustomSkill = {
   requiredProviders: [],
   toolsPointer: null,
   version: 1,
+  hasDraft: false,
   createdAt: "2026-01-01T00:00:00Z",
   updatedAt: "2026-01-01T00:00:00Z",
 };
@@ -50,6 +52,7 @@ export const mockJiraSkill = {
   requiredProviders: ["jira"],
   toolsPointer: null,
   version: 1,
+  hasDraft: false,
   createdAt: "2026-01-01T00:00:00Z",
   updatedAt: "2026-01-01T00:00:00Z",
 };
@@ -66,6 +69,7 @@ export const mockGmailSkill = {
   requiredProviders: ["gmail"],
   toolsPointer: null,
   version: 1,
+  hasDraft: false,
   createdAt: "2026-01-01T00:00:00Z",
   updatedAt: "2026-01-01T00:00:00Z",
 };
@@ -82,6 +86,7 @@ export const mockBitbucketSkill = {
   requiredProviders: ["bitbucket"],
   toolsPointer: null,
   version: 1,
+  hasDraft: false,
   createdAt: "2026-01-01T00:00:00Z",
   updatedAt: "2026-01-01T00:00:00Z",
 };
@@ -175,7 +180,7 @@ export class SkillDataSupport {
     status?: number;
     files?: { path: string; content: string }[];
   } = {}) {
-    await this.page.route(`**/api/v1/organizations/*/skills/${skillId}/draft`, async (route) => {
+    await this.page.route(`**/api/v1/organizations/*/skills/${skillId}/draft*`, async (route) => {
       if (route.request().method() !== "POST") {
         await route.fallback();
         return;
@@ -193,6 +198,192 @@ export class SkillDataSupport {
                 created_at: "2026-01-01T00:00:00Z",
                 updated_at: "2026-01-01T00:00:00Z",
               }),
+      });
+    });
+  }
+
+  async interceptCreateSkillRequest({
+    status = 201,
+    detail = "Unable to create skill",
+    skill,
+  }: {
+    status?: number;
+    detail?: string;
+    skill?: Record<string, unknown>;
+  } = {}) {
+    await this.page.route("**/api/v1/organizations/*/skills", async (route) => {
+      if (route.request().method() !== "POST") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status,
+        contentType: "application/json",
+        body:
+          status >= 400
+            ? JSON.stringify({ detail })
+            : JSON.stringify(skill ?? { ...mockCustomSkill, id: "cccccccc-1111-4ccc-8ccc-cccccccccccc" }),
+      });
+    });
+  }
+
+  async interceptUpdateSkillRequest({
+    skillId = MOCK_CUSTOM_SKILL_ID,
+    status = 200,
+    detail = "Unable to update skill",
+    skill,
+  }: {
+    skillId?: string;
+    status?: number;
+    detail?: string;
+    skill?: Record<string, unknown>;
+  } = {}) {
+    await this.page.route(`**/api/v1/organizations/*/skills/${skillId}`, async (route) => {
+      if (route.request().method() !== "PATCH") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status,
+        contentType: "application/json",
+        body: status >= 400 ? JSON.stringify({ detail }) : JSON.stringify(skill ?? mockCustomSkill),
+      });
+    });
+  }
+
+  async interceptGetSkillVersionsRequest({
+    skillId = MOCK_CUSTOM_SKILL_ID,
+    status = 200,
+    versions = [
+      { version: 1, created_by: null, created_at: "2026-01-01T00:00:00Z", restored_from_version: null },
+    ],
+  }: {
+    skillId?: string;
+    status?: number;
+    versions?: Record<string, unknown>[];
+  } = {}) {
+    await this.page.route(`**/api/v1/organizations/*/skills/${skillId}/versions`, async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status,
+        contentType: "application/json",
+        body: status >= 400 ? JSON.stringify({ detail: "Unable to load versions" }) : JSON.stringify(versions),
+      });
+    });
+  }
+
+  async interceptGetSkillVersionRequest({
+    skillId = MOCK_CUSTOM_SKILL_ID,
+    version = 1,
+    status = 200,
+    files = [{ path: "SKILL.md", content: "# My tool" }],
+    restoredFromVersion = null,
+  }: {
+    skillId?: string;
+    version?: number;
+    status?: number;
+    files?: { path: string; content: string }[];
+    restoredFromVersion?: number | null;
+  } = {}) {
+    await this.page.route(`**/api/v1/organizations/*/skills/${skillId}/versions/${version}`, async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status,
+        contentType: "application/json",
+        body:
+          status >= 400
+            ? JSON.stringify({ detail: "Unable to load version" })
+            : JSON.stringify({
+                version,
+                created_by: null,
+                created_at: "2026-01-01T00:00:00Z",
+                restored_from_version: restoredFromVersion,
+                files,
+              }),
+      });
+    });
+  }
+
+  async interceptUpdateSkillDraftRequest({
+    skillId = MOCK_CUSTOM_SKILL_ID,
+    status = 200,
+    files = [{ path: "SKILL.md", content: "# My tool" }],
+    sourceVersion = null,
+  }: {
+    skillId?: string;
+    status?: number;
+    files?: { path: string; content: string }[];
+    sourceVersion?: number | null;
+  } = {}) {
+    await this.page.route(`**/api/v1/organizations/*/skills/${skillId}/draft*`, async (route) => {
+      if (route.request().method() !== "PATCH") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status,
+        contentType: "application/json",
+        body:
+          status >= 400
+            ? JSON.stringify({ detail: "Unable to update draft" })
+            : JSON.stringify({
+                skill_id: skillId,
+                files,
+                source_version: sourceVersion,
+                created_at: "2026-01-01T00:00:00Z",
+                updated_at: "2026-01-01T00:00:00Z",
+              }),
+      });
+    });
+  }
+
+  async interceptDiscardSkillDraftRequest({
+    skillId = MOCK_CUSTOM_SKILL_ID,
+    status = 204,
+  }: {
+    skillId?: string;
+    status?: number;
+  } = {}) {
+    await this.page.route(`**/api/v1/organizations/*/skills/${skillId}/draft*`, async (route) => {
+      if (route.request().method() !== "DELETE") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status,
+        contentType: "application/json",
+        body: status >= 400 ? JSON.stringify({ detail: "Unable to discard draft" }) : "",
+      });
+    });
+  }
+
+  async interceptPublishSkillDraftRequest({
+    skillId = MOCK_CUSTOM_SKILL_ID,
+    status = 201,
+    skill,
+  }: {
+    skillId?: string;
+    status?: number;
+    skill?: Record<string, unknown>;
+  } = {}) {
+    await this.page.route(`**/api/v1/organizations/*/skills/${skillId}/draft/publish`, async (route) => {
+      if (route.request().method() !== "POST") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status,
+        contentType: "application/json",
+        body:
+          status >= 400
+            ? JSON.stringify({ detail: "Unable to publish draft" })
+            : JSON.stringify(skill ?? { ...mockCustomSkill, version: 2, hasDraft: false }),
       });
     });
   }

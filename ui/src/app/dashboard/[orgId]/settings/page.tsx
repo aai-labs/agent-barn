@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { parseAsStringEnum, useQueryState } from "nuqs";
 import { PROVIDERS } from "@/features/agents/data";
 import { TemplatesPanel } from "@/features/agents/components/templates-panel";
 import { SkillsPanel } from "@/features/skills/components/skills-panel";
@@ -36,9 +37,16 @@ const SECTIONS: [SectionKey, string, string, boolean, boolean][] = [
   ["advanced",  "Advanced",        "Power-user flags. Touch carefully.",                           false, false],
 ];
 
+const SECTION_KEYS = SECTIONS.map(([key]) => key) as SectionKey[];
+
 export default function SettingsPage() {
   const { canManage } = useActiveOrgRole();
-  const [tab, setTab] = useState<SectionKey>("templates");
+  const [tab, setTab] = useQueryState(
+    "tab",
+    parseAsStringEnum<SectionKey>(SECTION_KEYS)
+      .withDefault("templates")
+      .withOptions({ scroll: false, history: "replace" }),
+  );
   const visibleSections = SECTIONS.filter(([,,,real, adminOnly]) => real && (!adminOnly || canManage));
   const current = visibleSections.find((s) => s[0] === tab) ?? visibleSections[0];
 
@@ -55,7 +63,7 @@ export default function SettingsPage() {
                 color: tab === k ? "var(--ink)" : "var(--ink-3)",
                 fontWeight: tab === k ? 600 : 500,
               }}
-              onClick={() => setTab(k)}
+              onClick={() => { void setTab(k); }}
             >
               {l}
             </button>
