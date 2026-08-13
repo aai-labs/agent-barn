@@ -6,6 +6,7 @@ from sqlalchemy import and_, func
 from sqlalchemy.orm import aliased
 from sqlmodel import Session, col, or_, select
 
+from api.domains.events.repository import OutboxMessageRepository
 from api.domains.organizations.exceptions import OrganizationCreationLimitReached
 from api.domains.organizations.models import (
     Organization,
@@ -27,6 +28,7 @@ from api.infrastructure.shared.models import PaginatedItems, Pagination
 @dataclass
 class OrganizationRepository:
     delegate: PostgresRepositoryDelegate
+    outbox_repository: OutboxMessageRepository
 
     @staticmethod
     def _to_organization_read(

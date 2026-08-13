@@ -107,6 +107,7 @@ def test_organization_service_update_not_found_raises_404():
         organization_repository=repo,
         agent_service=Mock(),
         permission_policy=Mock(),
+        event_delivery_dispatcher=Mock(),
     )
     platform_admin = User(email="root@example.com", hashed_password="x", is_platform_admin=True)
     context = CurrentUserContext(user=platform_admin)

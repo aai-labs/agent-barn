@@ -4,16 +4,28 @@ from api.domains.agents.event_handlers import AgentLifecycleEmailHandler
 from api.domains.events.catalog import (
     AGENT_ACCESS_GRANTED,
     AGENT_ACCESS_REVOKED,
+    AGENT_DELETED,
     AGENT_GENERAL_ACCESS_CHANGED,
+    AGENT_SECRET_ADDED,
+    AGENT_SECRET_REMOVED,
+    AGENT_SECRET_UPDATED,
     AGENT_STARTED,
     AGENT_STOPPED,
     AGENT_TEMPLATE_OVERRIDE_DRAFT_SAVED,
     AGENT_TEMPLATE_OVERRIDE_PUBLISHED,
     AGENT_TEMPLATE_OVERRIDE_SELECTED,
+    AGENT_UPDATED,
     EVENT_REGISTRY,
+    ORGANIZATION_MEMBER_ADDED,
+    ORGANIZATION_MEMBER_REMOVED,
+    ORGANIZATION_MODEL_ALLOWLIST_CHANGED,
+    ORGANIZATION_OWNERSHIP_TRANSFERRED,
     ORGANIZATION_ROLE_CHANGED,
     PLATFORM_USER_PRIVILEGE_GRANTED,
     PLATFORM_USER_PRIVILEGE_REVOKED,
+    TEMPLATE_CREATED,
+    TEMPLATE_DELETED,
+    TEMPLATE_UPDATED,
 )
 from api.domains.events.handlers import EventHandlerRegistry
 from api.domains.events.security_audit import SecurityAuditProjection
@@ -46,6 +58,18 @@ def test_every_catalog_handler_name_has_a_registered_handler():
         AGENT_TEMPLATE_OVERRIDE_SELECTED,
         PLATFORM_USER_PRIVILEGE_GRANTED,
         PLATFORM_USER_PRIVILEGE_REVOKED,
+        AGENT_UPDATED,
+        AGENT_DELETED,
+        AGENT_SECRET_ADDED,
+        AGENT_SECRET_UPDATED,
+        AGENT_SECRET_REMOVED,
+        TEMPLATE_CREATED,
+        TEMPLATE_UPDATED,
+        TEMPLATE_DELETED,
+        ORGANIZATION_MODEL_ALLOWLIST_CHANGED,
+        ORGANIZATION_MEMBER_ADDED,
+        ORGANIZATION_MEMBER_REMOVED,
+        ORGANIZATION_OWNERSHIP_TRANSFERRED,
     ):
         for handler_name in EVENT_REGISTRY.handler_names_for(event_name, 1):
             assert handlers.supports(handler_name, event_name, 1)

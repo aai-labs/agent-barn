@@ -160,3 +160,6 @@ helm/monitoring/tests/generated/
 .scratch
 docs/agents
 docs/plans
+
+# Internal implementation plan docs (Jira links, design notes) — not for the repo.
+*_plan.md

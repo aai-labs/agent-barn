@@ -102,7 +102,12 @@ from api.domains.agents.runtime_policy import build_chat_commands_policy_md, bui
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.token_service import SlackConfigTokenService
 from api.domains.events import EventDeliveryDispatcher, resolve_actor_identity
-from api.domains.events.catalog import AGENT_STARTED, AGENT_STOPPED
+from api.domains.events.catalog import (
+    AGENT_SECRET_ADDED,
+    AGENT_SECRET_UPDATED,
+    AGENT_STARTED,
+    AGENT_STOPPED,
+)
 from api.domains.organizations.lookup import OrganizationLookupService
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.shared_credentials.repository import SharedCredentialRepository
@@ -112,6 +117,7 @@ from api.domains.templates.models import AgentTemplate, PlatformTemplate, Templa
 from api.domains.templates.renderer import render_template
 from api.domains.templates.repository import TemplateRepository
 from api.domains.templates.requirements import effective_required_ids, split_requirements
+from api.domains.users.models import User
 from api.infrastructure.crypto import decrypt_token, encrypt_token
 from api.infrastructure.integration_validators import (
     PROVIDER_VALIDATORS,
@@ -698,18 +704,27 @@ class AgentService:
 
         # Integration secrets are platform-independent. Persist them before any
         # Teams auto-start so they exist if/when the pod is later built.
+        secret_actor = resolve_actor_identity(context, org_id)
+        secret_actor_display = context.user.full_name or context.user.email
         secrets: list[AgentSecret] = []
+        secret_delivery_ids: list[UUID] = []
         for item in data.secrets:
             content = _enrich_atlassian_content(validate_content(item.provider, item.content))
-            saved = self.repository.save_secret(
-                AgentSecret(
-                    agent_id=agent.id,
-                    provider=item.provider,
-                    secret_name=PROVIDER_DISPLAY_NAMES[item.provider],
-                    content=encrypt_content(content, self.config.agent_token_encryption_key),
-                )
+            secret = AgentSecret(
+                agent_id=agent.id,
+                provider=item.provider,
+                secret_name=PROVIDER_DISPLAY_NAMES[item.provider],
+                content=encrypt_content(content, self.config.agent_token_encryption_key),
             )
-            secrets.append(saved)
+            secret_delivery_ids += self.repository.save_secret_with_event(
+                secret,
+                event_name=AGENT_SECRET_ADDED,
+                organization_id=org_id,
+                agent_name=agent.name,
+                actor=secret_actor,
+                actor_display=secret_actor_display,
+            )
+            secrets.append(secret)
 
         # Shared credentials: look up each, verify org ownership, create link rows
         for attach in data.shared_credentials:
@@ -725,16 +740,22 @@ class AgentService:
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Provider {shared_cred.provider} already has a credential in this request",
                 )
-            saved = self.repository.save_secret(
-                AgentSecret(
-                    agent_id=agent.id,
-                    provider=shared_cred.provider,
-                    secret_name=shared_cred.name,
-                    content=None,
-                    shared_credential_id=shared_cred.id,
-                )
+            secret = AgentSecret(
+                agent_id=agent.id,
+                provider=shared_cred.provider,
+                secret_name=shared_cred.name,
+                content=None,
+                shared_credential_id=shared_cred.id,
             )
-            secrets.append(saved)
+            secret_delivery_ids += self.repository.save_secret_with_event(
+                secret,
+                event_name=AGENT_SECRET_ADDED,
+                organization_id=org_id,
+                agent_name=agent.name,
+                actor=secret_actor,
+                actor_display=secret_actor_display,
+            )
+            secrets.append(secret)
 
         # Resolve and validate skills after all other secrets (manual + shared)
         # are known, so the Slack-derive check below sees the final skill set.
@@ -752,21 +773,26 @@ class AgentService:
             SecretProvider.SLACK in skill.required_providers for skill in skills_to_assign
         ):
             slack_content = validate_content(SecretProvider.SLACK, {"token": data.slack_bot_token})
-            secrets.append(
-                self.repository.save_secret(
-                    AgentSecret(
-                        agent_id=agent.id,
-                        provider=SecretProvider.SLACK,
-                        secret_name=PROVIDER_DISPLAY_NAMES[SecretProvider.SLACK],
-                        content=encrypt_content(slack_content, self.config.agent_token_encryption_key),
-                    )
-                )
+            slack_secret = AgentSecret(
+                agent_id=agent.id,
+                provider=SecretProvider.SLACK,
+                secret_name=PROVIDER_DISPLAY_NAMES[SecretProvider.SLACK],
+                content=encrypt_content(slack_content, self.config.agent_token_encryption_key),
             )
+            secret_delivery_ids += self.repository.save_secret_with_event(
+                slack_secret,
+                event_name=AGENT_SECRET_ADDED,
+                organization_id=org_id,
+                agent_name=agent.name,
+                actor=secret_actor,
+                actor_display=secret_actor_display,
+            )
+            secrets.append(slack_secret)
 
         if skills_to_assign:
             self.repository.save_skills([AgentSkill(agent_id=agent.id, skill_id=s.id) for s in skills_to_assign])
 
-        self.event_delivery_dispatcher.enqueue_immediate(created_delivery_ids)
+        self.event_delivery_dispatcher.enqueue_immediate(created_delivery_ids + secret_delivery_ids)
 
         if data.platform == AgentPlatform.TEAMS:
             return self.start_agent(agent.id, context)
@@ -818,7 +844,7 @@ class AgentService:
 
     def _get_available_source_update(
         self,
-        agent_id: UUID,
+        agent: Agent,
         organization_id: UUID,
         active: AgentTemplateOverrideVersion,
     ) -> AgentConfigurationVersionRead | None:
@@ -855,7 +881,7 @@ class AgentService:
             return None
         return self._shared_configuration_read(
             latest,
-            agent_id,
+            agent,
             self.template_repository.get_required_skills_for(latest),
         )
 
@@ -873,46 +899,63 @@ class AgentService:
                 detail=f"Agent {agent_id} has no pinned template",
             )
 
+        draft = self.override_repository.get_draft(agent.id, org_id)
+        versions = self.override_repository.get_versions(agent.id, org_id)
+        override_version_ids = [version.id for version in versions]
+        if isinstance(active, AgentTemplateOverrideVersion) and active.id not in override_version_ids:
+            override_version_ids.append(active.id)
+        skills_by_version = self.override_repository.get_skills_for_versions(override_version_ids)
+
+        author_ids = {version.created_by_user_id for version in versions if version.created_by_user_id is not None}
+        if isinstance(active, AgentTemplateOverrideVersion) and active.created_by_user_id is not None:
+            author_ids.add(active.created_by_user_id)
+        if draft is not None and draft.created_by_user_id is not None:
+            author_ids.add(draft.created_by_user_id)
+        authors_by_id = self.override_repository.get_authors(author_ids)
+
         if isinstance(active, AgentTemplateOverrideVersion):
             active_read = self._active_override_read(
                 active,
-                skills=self.override_repository.get_skills_for_version(active.id),
+                skills=skills_by_version.get(active.id, []),
+                author=authors_by_id.get(active.created_by_user_id) if active.created_by_user_id is not None else None,
             )
             shared_key = active.source_template_key
         else:
             active_read = self._shared_configuration_read(
                 active,
-                agent.id,
+                agent,
                 self.template_repository.get_required_skills_for(active),
             )
             shared_key = active.template_key
 
-        draft = self.override_repository.get_draft(agent.id, org_id)
         draft_read = (
             self._override_draft_read(
                 draft,
                 skills=self.override_repository.get_skills_for_draft(draft.id),
+                author=authors_by_id.get(draft.created_by_user_id) if draft.created_by_user_id is not None else None,
             )
             if draft is not None
             else None
         )
         source_update = (
-            self._get_available_source_update(agent.id, org_id, active)
+            self._get_available_source_update(agent, org_id, active)
             if isinstance(active, AgentTemplateOverrideVersion)
             else None
         )
-        versions = self.override_repository.get_versions(agent.id, org_id)
         version_reads = [
             self._override_version_read(
                 version,
-                skills=self.override_repository.get_skills_for_version(version.id),
+                skills=skills_by_version.get(version.id, []),
+                author=authors_by_id.get(version.created_by_user_id)
+                if version.created_by_user_id is not None
+                else None,
             )
             for version in versions
         ]
         shared_reads = [
             self._shared_configuration_read(
                 shared,
-                agent.id,
+                agent,
                 self.template_repository.get_required_skills_for(shared),
             )
             for shared in self.template_repository.get_shared_versions(org_id, shared_key)
@@ -938,6 +981,7 @@ class AgentService:
             return self._override_draft_read(
                 existing,
                 skills=self.override_repository.get_skills_for_draft(existing.id),
+                author=self.override_repository.get_author(existing.created_by_user_id),
             )
 
         active = self.template_repository.get_pinned_template(agent)
@@ -977,6 +1021,7 @@ class AgentService:
         return self._override_draft_read(
             saved,
             skills=self.override_repository.get_skills_for_draft(saved.id),
+            author=self.override_repository.get_author(saved.created_by_user_id),
         )
 
     def update_agent_override_draft(
@@ -1022,6 +1067,7 @@ class AgentService:
         return self._override_draft_read(
             saved,
             skills=self.override_repository.get_skills_for_draft(saved.id),
+            author=self.override_repository.get_author(saved.created_by_user_id),
         )
 
     def publish_agent_override(
@@ -1056,6 +1102,7 @@ class AgentService:
         return self._override_version_read(
             published,
             skills=self.override_repository.get_skills_for_version(published.id),
+            author=self.override_repository.get_author(published.created_by_user_id),
         )
 
     def select_agent_template(
@@ -1186,6 +1233,7 @@ class AgentService:
         draft: AgentTemplateOverrideDraft,
         *,
         skills: list[tuple[Skill, str | None]],
+        author: User | None,
     ) -> AgentTemplateOverrideDraftRead:
         return AgentTemplateOverrideDraftRead(
             **self._override_snapshot_values(
@@ -1193,6 +1241,7 @@ class AgentService:
                 agent_id=draft.agent_id,
                 version=None,
                 skills=skills,
+                author=author,
             ),
         )
 
@@ -1201,12 +1250,14 @@ class AgentService:
         version: AgentTemplateOverrideVersion,
         *,
         skills: list[tuple[Skill, str | None]],
+        author: User | None,
     ) -> AgentTemplateOverrideVersionRead:
         values = self._override_snapshot_values(
             version,
             agent_id=version.agent_id,
             version=version.version,
             skills=skills,
+            author=author,
         )
         return AgentTemplateOverrideVersionRead(**values)
 
@@ -1215,6 +1266,7 @@ class AgentService:
         version: AgentTemplateOverrideVersion,
         *,
         skills: list[tuple[Skill, str | None]],
+        author: User | None,
     ) -> AgentConfigurationVersionRead:
         return AgentConfigurationVersionRead(
             **self._override_snapshot_values(
@@ -1222,6 +1274,7 @@ class AgentService:
                 agent_id=version.agent_id,
                 version=version.version,
                 skills=skills,
+                author=author,
             ),
             state="active",
             pin_type=AgentTemplatePinType.OVERRIDE,
@@ -1255,8 +1308,8 @@ class AgentService:
         agent_id: UUID,
         version: int | None,
         skills: list[tuple[Skill, str | None]],
+        author: User | None,
     ) -> dict[str, Any]:
-        author = self.override_repository.get_author(snapshot.created_by_user_id)
         return {
             "id": snapshot.id,
             "agent_id": agent_id,
@@ -1295,7 +1348,7 @@ class AgentService:
     def _shared_configuration_read(
         self,
         template: AgentTemplate | PlatformTemplate,
-        agent_id: UUID,
+        agent: Agent,
         skills: list[tuple[Skill, str | None]],
     ) -> AgentConfigurationVersionRead:
         source_type = (
@@ -1305,7 +1358,7 @@ class AgentService:
         )
         return AgentConfigurationVersionRead(
             id=template.id,
-            agent_id=agent_id,
+            agent_id=agent.id,
             version=template.version,
             template_key=template.template_key,
             template_name=template.template_name,
@@ -1328,14 +1381,14 @@ class AgentService:
             required_skills=[self._required_skill_read(skill, group_key) for skill, group_key in skills],
             created_at=template.created_at,
             updated_at=template.updated_at,
-            state="active" if self._is_active_shared_pin(agent_id, template.id) else "published",
+            state="active" if self._is_active_shared_pin(agent, template.id) else "published",
             pin_type=AgentTemplatePinType.SHARED,
             template_source="pre-defined" if isinstance(template, PlatformTemplate) else "custom",
         )
 
-    def _is_active_shared_pin(self, agent_id: UUID, template_id: UUID) -> bool:
-        agent = self.repository.get_by_id(agent_id)
-        return bool(agent and template_id in {agent.platform_template_id, agent.agent_template_id})
+    @staticmethod
+    def _is_active_shared_pin(agent: Agent, template_id: UUID) -> bool:
+        return template_id in {agent.platform_template_id, agent.agent_template_id}
 
     def list_agents(
         self,
@@ -1591,6 +1644,10 @@ class AgentService:
         if data.skill_ids or data.removed_secret_providers:
             self._validate_skill_update(agent, data, org_id)
 
+        secret_actor = resolve_actor_identity(context, org_id)
+        secret_actor_display = context.user.full_name or context.user.email
+        secret_delivery_ids: list[UUID] = []
+
         # Integration secrets: platform-independent. Remove first, then upsert
         # (the AgentUpdate validator already forbids a provider in both lists).
         # Validate and encrypt all upserts before touching the DB so that a
@@ -1608,22 +1665,42 @@ class AgentService:
                 for item in data.secrets or []
             ]
             for provider in updated.get("removed_secret_providers") or []:
-                self.repository.delete_secret(agent.id, provider)
+                secret_delivery_ids += self.repository.delete_secret_with_event(
+                    agent.id,
+                    provider,
+                    organization_id=org_id,
+                    agent_name=agent.name,
+                    actor=secret_actor,
+                    actor_display=secret_actor_display,
+                )
             for item, encrypted in upserts:
                 existing = self.repository.get_secret(agent.id, item.provider)
                 if existing:
                     existing.content = encrypted
                     existing.shared_credential_id = None
                     existing.secret_name = PROVIDER_DISPLAY_NAMES[item.provider]
-                    self.repository.save_secret(existing)
+                    secret_delivery_ids += self.repository.save_secret_with_event(
+                        existing,
+                        event_name=AGENT_SECRET_UPDATED,
+                        organization_id=org_id,
+                        agent_name=agent.name,
+                        actor=secret_actor,
+                        actor_display=secret_actor_display,
+                    )
                 else:
-                    self.repository.save_secret(
-                        AgentSecret(
-                            agent_id=agent.id,
-                            provider=item.provider,
-                            secret_name=PROVIDER_DISPLAY_NAMES[item.provider],
-                            content=encrypted,
-                        )
+                    secret = AgentSecret(
+                        agent_id=agent.id,
+                        provider=item.provider,
+                        secret_name=PROVIDER_DISPLAY_NAMES[item.provider],
+                        content=encrypted,
+                    )
+                    secret_delivery_ids += self.repository.save_secret_with_event(
+                        secret,
+                        event_name=AGENT_SECRET_ADDED,
+                        organization_id=org_id,
+                        agent_name=agent.name,
+                        actor=secret_actor,
+                        actor_display=secret_actor_display,
                     )
 
         # Shared credential attachments
@@ -1654,16 +1731,29 @@ class AgentService:
                     existing.content = None
                     existing.shared_credential_id = shared_cred.id
                     existing.secret_name = shared_cred.name
-                    self.repository.save_secret(existing)
+                    secret_delivery_ids += self.repository.save_secret_with_event(
+                        existing,
+                        event_name=AGENT_SECRET_UPDATED,
+                        organization_id=org_id,
+                        agent_name=agent.name,
+                        actor=secret_actor,
+                        actor_display=secret_actor_display,
+                    )
                 else:
-                    self.repository.save_secret(
-                        AgentSecret(
-                            agent_id=agent.id,
-                            provider=shared_cred.provider,
-                            secret_name=shared_cred.name,
-                            content=None,
-                            shared_credential_id=shared_cred.id,
-                        )
+                    secret = AgentSecret(
+                        agent_id=agent.id,
+                        provider=shared_cred.provider,
+                        secret_name=shared_cred.name,
+                        content=None,
+                        shared_credential_id=shared_cred.id,
+                    )
+                    secret_delivery_ids += self.repository.save_secret_with_event(
+                        secret,
+                        event_name=AGENT_SECRET_ADDED,
+                        organization_id=org_id,
+                        agent_name=agent.name,
+                        actor=secret_actor,
+                        actor_display=secret_actor_display,
                     )
 
         # Apply skill changes
@@ -1678,6 +1768,9 @@ class AgentService:
         # anymore (covers skill removal). Runs last, after every other
         # secret/skill validation and persistence step above, so a failure
         # earlier in this method never leaves this mirrored secret orphaned.
+        # Goes through the event-emitting secret methods (not plain save/delete)
+        # so this mirrored write gets the same agent.secret.* audit coverage as
+        # every other secret mutation in this method.
         if agent.platform == AgentPlatform.SLACK and (
             data.skill_ids or data.removed_skill_ids or "slack_bot_token" in updated
         ):
@@ -1702,21 +1795,43 @@ class AgentService:
                     existing_slack_secret = self.repository.get_secret(agent.id, SecretProvider.SLACK)
                     if existing_slack_secret:
                         existing_slack_secret.content = slack_secret_content
-                        self.repository.save_secret(existing_slack_secret)
+                        secret_delivery_ids += self.repository.save_secret_with_event(
+                            existing_slack_secret,
+                            event_name=AGENT_SECRET_UPDATED,
+                            organization_id=org_id,
+                            agent_name=agent.name,
+                            actor=secret_actor,
+                            actor_display=secret_actor_display,
+                        )
                     else:
-                        self.repository.save_secret(
+                        secret_delivery_ids += self.repository.save_secret_with_event(
                             AgentSecret(
                                 agent_id=agent.id,
                                 provider=SecretProvider.SLACK,
                                 secret_name=PROVIDER_DISPLAY_NAMES[SecretProvider.SLACK],
                                 content=slack_secret_content,
-                            )
+                            ),
+                            event_name=AGENT_SECRET_ADDED,
+                            organization_id=org_id,
+                            agent_name=agent.name,
+                            actor=secret_actor,
+                            actor_display=secret_actor_display,
                         )
             else:
-                self.repository.delete_secret(agent.id, SecretProvider.SLACK)
+                secret_delivery_ids += self.repository.delete_secret_with_event(
+                    agent.id,
+                    SecretProvider.SLACK,
+                    organization_id=org_id,
+                    agent_name=agent.name,
+                    actor=secret_actor,
+                    actor_display=secret_actor_display,
+                )
 
-        self.repository.save(agent)
-        return self._get_agent_read(agent, context)
+        update_result = self.repository.update_scalar_fields_with_event(
+            agent, actor=secret_actor, actor_display=secret_actor_display
+        )
+        self.event_delivery_dispatcher.enqueue_immediate(update_result.delivery_ids + secret_delivery_ids)
+        return self._get_agent_read(update_result.agent, context)
 
     def start_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
         org_id = self._org_id(context)
@@ -2305,8 +2420,12 @@ class AgentService:
             slack_config.bot_token_hash = None
             self.repository.save_slack_config(slack_config)
 
-        agent.deleted_at = dt.datetime.now(dt.UTC)
-        self.repository.save(agent)
+        delete_result = self.repository.soft_delete_with_event(
+            agent,
+            actor=resolve_actor_identity(context, agent.organization_id),
+            actor_display=context.user.full_name or context.user.email,
+        )
+        self.event_delivery_dispatcher.enqueue_immediate(delete_result.delivery_ids)
 
         if agent.litellm_key_encrypted:
             try:

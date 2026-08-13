@@ -264,12 +264,13 @@ _PROFILE_BUILDERS: dict[SecretProvider, Callable[..., str]] = {
 }
 
 
-_TOOL_CONTEXT_PROVIDERS = {
-    SecretProvider.GITHUB,
-    SecretProvider.JIRA,
-    SecretProvider.CONFLUENCE,
-    SecretProvider.BITBUCKET,
-}
+# Every provider reachable through an aai-cli --profile gets a "Configured Integrations"
+# line. This was previously limited to the four repo/issue trackers, which left Slack,
+# Gmail, Zoho Mail, Pipedrive, and the calendars with no "credentials are already in
+# place" note at all — so those agents would tell the user they had no access, or ask for
+# a token that was already mounted. Keyed off PROFILE_SLUGS so a new provider is covered
+# the moment it gets a profile.
+_TOOL_CONTEXT_PROVIDERS = frozenset(PROFILE_SLUGS)
 
 
 def build_tool_context_md(decrypted: Mapping[SecretProvider, SecretContent]) -> str:
@@ -291,7 +292,7 @@ def build_tool_context_md(decrypted: Mapping[SecretProvider, SecretContent]) -> 
     ]
     for provider in SecretProvider:
         content = decrypted.get(provider)
-        if content is None:
+        if content is None or provider not in PROFILE_SLUGS:
             continue
         if isinstance(content, GithubContent):
             base = PROFILE_SLUGS[SecretProvider.GITHUB]
@@ -323,6 +324,11 @@ def build_tool_context_md(decrypted: Mapping[SecretProvider, SecretContent]) -> 
                     f"- **Bitbucket** (`{base}`): workspace `{content.workspace}` "
                     f"({content.email}) — no repository configured; pass --repo explicitly"
                 )
+        else:
+            # Providers with no site/repo metadata worth printing still belong here: the
+            # point of this block is "credentials are already in place", which is exactly
+            # what a Slack- or Gmail-only agent was missing.
+            lines.append(f"- **{_INTEGRATION_LABELS[provider]}** (`{PROFILE_SLUGS[provider]}`)")
     return "\n".join(lines) + "\n"
 
 
@@ -400,6 +406,28 @@ _INTEGRATION_LABELS: dict[SecretProvider, str] = {
     SecretProvider.PIPEDRIVE: "Pipedrive",
 }
 
+# One-clause summary of what each integration can actually do, appended to its agents_md
+# line. Without it the always-loaded context named a --profile slug and nothing else, so
+# an agent asked "are there files in this channel?" had no token in context linking the
+# question to `slack-work` and would answer that it had no access — the profile slug alone
+# never told it what the profile was *for*. Sourced from the command surface documented in
+# each ``aai_cli_skills/<provider>.py``; keep in sync when commands are added. Providers
+# with no aai-cli skill doc (the calendars) are omitted and render as before.
+_INTEGRATION_CAPABILITIES: dict[SecretProvider, str] = {
+    SecretProvider.GITHUB: "PRs (diff, files, reviews, comments), issues, branches, repo source, Actions runs",
+    SecretProvider.JIRA: "issues (comments, attachments), sprints, boards, projects, users",
+    SecretProvider.CONFLUENCE: "pages (comments, attachments), spaces",
+    SecretProvider.BITBUCKET: "PRs (diff, comments), commits, branches, repo source, pipelines",
+    SecretProvider.GMAIL: "read and search mail (read-only)",
+    SecretProvider.GOOGLE_SHEETS: "list and read spreadsheets, read/update/clear cell ranges",
+    SecretProvider.ZOHO_MAIL: "read and search mail (read-only)",
+    SecretProvider.SLACK: (
+        "read channel data: list channels, list and download files and attachments, "
+        "read bookmarks, links, canvases (read-only)"
+    ),
+    SecretProvider.PIPEDRIVE: "deals, leads, persons, organizations, activities, notes, mailbox",
+}
+
 
 def _repo_scoped_profile_line(label: str, base: str, scope: str, scope_kind: str, repos: list[str]) -> str:
     """Render the agents_md line for a repo-scoped provider (GitHub/Bitbucket).
@@ -430,7 +458,9 @@ def build_integrations_policy_md(
     line, the nested command grammar with one worked example (agents otherwise burn
     turns guessing subcommands), one line per configured provider (GitHub/Bitbucket map
     each --profile slug to the repo it targets, or say to pass ``--repo`` when the
-    profile has none), and a read-the-file pointer to the on-demand skill docs. Full command
+    profile has none) closing with a one-clause summary of what that integration can do —
+    a bare slug left agents unable to connect a user's question to the profile that
+    answers it — and a read-the-file pointer to the on-demand skill docs. Full command
     syntax stays in the per-service
     ``./skills/aai-cli/<service>_skill.md`` files and TOOLS.md. Returns "" when no
     integrations are configured.
@@ -458,11 +488,13 @@ def build_integrations_policy_md(
             continue
         base = PROFILE_SLUGS[provider]
         if isinstance(content, GithubContent):
-            lines.append(_repo_scoped_profile_line("GitHub", base, content.owner, "owner", content.repos))
+            line = _repo_scoped_profile_line("GitHub", base, content.owner, "owner", content.repos)
         elif isinstance(content, BitbucketContent):
-            lines.append(_repo_scoped_profile_line("Bitbucket", base, content.workspace, "workspace", content.repos))
+            line = _repo_scoped_profile_line("Bitbucket", base, content.workspace, "workspace", content.repos)
         else:
-            lines.append(f"- **{_INTEGRATION_LABELS[provider]}**: `--profile {base}`")
+            line = f"- **{_INTEGRATION_LABELS[provider]}**: `--profile {base}`"
+        capability = _INTEGRATION_CAPABILITIES.get(provider)
+        lines.append(f"{line} — {capability}" if capability else line)
     return "\n".join(lines) + "\n"
 
 

@@ -14,6 +14,11 @@ from hamcrest import (
 from starlette.testclient import TestClient
 
 from api.domains.agents.repository import AgentRepository
+from api.domains.events.catalog import TEMPLATE_CREATED, TEMPLATE_DELETED, TEMPLATE_UPDATED
+from api.domains.events.models import OutboxMessage
+from api.domains.events.processor import EventDeliveryProcessor
+from api.domains.events.repository import OutboxMessageRepository
+from api.domains.events.security_audit import SecurityAuditRepository
 from api.domains.organizations.models import Organization
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.rbac.catalog import PermissionKey
@@ -25,6 +30,7 @@ from api.domains.templates.predefined import PREDEFINED_TEMPLATES
 from api.domains.templates.repository import TemplateRepository
 from api.domains.templates.service import TemplateService
 from api.domains.users.organization_users.models import OrganizationRole
+from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
     create_test_client,
@@ -2001,3 +2007,113 @@ def test_agent_repin_moves_only_that_agent():
 
 def test_default_soul_md_is_nonempty():
     assert_that(DEFAULT_SOUL_MD, contains_string("SOUL"))
+
+
+# --- domain events (AF-167) ---
+
+
+def _outbox_messages(context) -> list[OutboxMessage]:
+    return context.injector.get(PostgresRepositoryDelegate).find_all(OutboxMessage)
+
+
+def test_create_template_emits_created_domain_event():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I create a template"):
+            response = client.post(_BASE, json={"template_name": "My Template"}, headers=_auth(context))
+
+        with then("a template.created Domain Event is persisted"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            messages = _outbox_messages(context)
+            created_events = [m for m in messages if m.event_name == TEMPLATE_CREATED]
+            assert_that(len(created_events), equal_to(1))
+            # Org templates now get an opaque generated key (see
+            # docs/adr/2026-08-04-opaque-template-keys.md), not a deterministic
+            # slug derived from the name — assert it matches the response's own
+            # key rather than a hardcoded literal.
+            assert_that(created_events[0].payload["template_key"], equal_to(response.json()["template_key"]))
+            assert_that(created_events[0].payload["template_key"], matches_regexp(r"^tpl-[0-9a-f]{12}$"))
+            assert_that(created_events[0].payload["version"], equal_to(1))
+            # Regression: actor_display must be the acting user's name, not the
+            # ActorIdentity type string ("MEMBERSHIP"/"USER").
+            assert_that(created_events[0].payload["actor_display"], equal_to("Test User"))
+
+
+def test_update_template_description_emits_updated_domain_event_with_field_changes():
+    with given([*_GIVEN, there_is_a_template(template_key="alpha", name="Alpha")]) as context:
+        client: TestClient = context.client
+        client.patch(f"{_BASE}/alpha", json={"description": "Old description"}, headers=_auth(context))
+
+        with when("I update only the description again"):
+            response = client.patch(
+                f"{_BASE}/alpha",
+                json={"description": "New description"},
+                headers=_auth(context),
+            )
+
+        with then("a template.updated Domain Event carries the before/after description"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            messages = _outbox_messages(context)
+            # Two template.updated events exist: setting the description the first
+            # time (v1->v2, from the setup PATCH above) and this test's own change
+            # (v2->v3) — select the latter by its new_version.
+            updated_events = [m for m in messages if m.event_name == TEMPLATE_UPDATED]
+            assert_that(len(updated_events), equal_to(2))
+            event = next(m for m in updated_events if m.payload["new_version"] == 3)
+            field_changes = event.payload["field_changes"]
+            assert_that(field_changes["description"]["previous"], equal_to("Old description"))
+            assert_that(field_changes["description"]["new"], equal_to("New description"))
+            assert_that(event.payload["previous_version"], equal_to(2))
+
+
+def test_update_template_body_only_emits_no_updated_event():
+    with given([*_GIVEN, there_is_a_template(template_key="alpha", name="Alpha", soul_md="# Old")]) as context:
+        client: TestClient = context.client
+
+        with when("I update only a markdown body, not name/description"):
+            response = client.patch(f"{_BASE}/alpha", json={"soul_md": "# New"}, headers=_auth(context))
+
+        with then("no template.updated Domain Event is staged"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            messages = _outbox_messages(context)
+            updated_events = [m for m in messages if m.event_name == TEMPLATE_UPDATED]
+            assert_that(len(updated_events), equal_to(0))
+
+
+def test_delete_template_emits_deleted_domain_event():
+    with given([*_GIVEN, there_is_a_template(template_key="doomed", name="Doomed")]) as context:
+        client: TestClient = context.client
+
+        with when("I delete the template"):
+            response = client.delete(f"{_BASE}/doomed", headers=_auth(context))
+
+        with then("a template.deleted Domain Event is persisted"):
+            assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+            messages = _outbox_messages(context)
+            deleted_events = [m for m in messages if m.event_name == TEMPLATE_DELETED]
+            assert_that(len(deleted_events), equal_to(1))
+            assert_that(deleted_events[0].payload["template_key"], equal_to("doomed"))
+            assert_that(deleted_events[0].payload["versions_deleted"], equal_to([1]))
+
+
+def test_template_created_event_projects_to_durable_security_audit_record():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I create a template and the delivery is processed"):
+            response = client.post(_BASE, json={"template_name": "My Template"}, headers=_auth(context))
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            outbox_repository = context.injector.get(OutboxMessageRepository)
+            messages = _outbox_messages(context)
+            created_event = next(m for m in messages if m.event_name == TEMPLATE_CREATED)
+            delivery = outbox_repository.list_deliveries_for_event(created_event.event_id)[0]
+            outbox_repository.mark_delivery_enqueued(delivery.id)
+            processed = context.injector.get(EventDeliveryProcessor).process(delivery.id)
+
+        with then("a durable Security Audit Record is projected"):
+            assert_that(processed, equal_to(True))
+            audit_record = context.injector.get(SecurityAuditRepository).get_by_event_id(created_event.event_id)
+            assert_that(audit_record, is_not(none()))
+            assert audit_record is not None
+            assert_that(audit_record.action, equal_to(TEMPLATE_CREATED))

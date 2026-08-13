@@ -158,8 +158,8 @@ def downgrade() -> None:
     op.create_check_constraint(
         "ck_agent_template_pin_state",
         "agent",
-        "deleted_at IS NOT NULL OR ((platform_template_id IS NOT NULL)::integer "
-        "+ (agent_template_id IS NOT NULL)::integer = 1)",
+        "((deleted_at IS NOT NULL) AND platform_template_id IS NULL AND agent_template_id IS NULL) "
+        "OR ((platform_template_id IS NULL) <> (agent_template_id IS NULL))",
     )
 
     op.drop_index(

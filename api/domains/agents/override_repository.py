@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -263,24 +263,43 @@ class AgentOverrideRepository:
             )
 
     def get_skills_for_version(self, version_id: UUID) -> list[tuple[Skill, str | None]]:
+        return self.get_skills_for_versions([version_id]).get(version_id, [])
+
+    def get_skills_for_versions(
+        self,
+        version_ids: Collection[UUID],
+    ) -> dict[UUID, list[tuple[Skill, str | None]]]:
+        ids = list(version_ids)
+        result: dict[UUID, list[tuple[Skill, str | None]]] = {version_id: [] for version_id in ids}
+        if not ids:
+            return result
         with Session(self.delegate.engine) as session:
-            return list(
-                session.exec(
-                    select(Skill, AgentTemplateOverrideVersionSkill.group_key)
-                    .join(
-                        AgentTemplateOverrideVersionSkill,
-                        col(AgentTemplateOverrideVersionSkill.skill_id) == col(Skill.id),
-                    )
-                    .where(col(AgentTemplateOverrideVersionSkill.version_id) == version_id)
-                    .order_by(col(AgentTemplateOverrideVersionSkill.group_key).nulls_first(), col(Skill.name))
-                ).all()
-            )
+            rows = session.exec(
+                select(AgentTemplateOverrideVersionSkill, Skill)
+                .join(Skill, col(AgentTemplateOverrideVersionSkill.skill_id) == col(Skill.id))
+                .where(col(AgentTemplateOverrideVersionSkill.version_id).in_(ids))
+                .order_by(
+                    col(AgentTemplateOverrideVersionSkill.version_id),
+                    col(AgentTemplateOverrideVersionSkill.group_key).nulls_first(),
+                    col(Skill.name),
+                )
+            ).all()
+            for link, skill in rows:
+                result[link.version_id].append((skill, link.group_key))
+        return result
 
     def get_author(self, user_id: UUID | None) -> User | None:
         if user_id is None:
             return None
+        return self.get_authors([user_id]).get(user_id)
+
+    def get_authors(self, user_ids: Collection[UUID]) -> dict[UUID, User]:
+        ids = list(user_ids)
+        if not ids:
+            return {}
         with Session(self.delegate.engine) as session:
-            return session.get(User, user_id)
+            users = session.exec(select(User).where(col(User.id).in_(ids))).all()
+        return {user.id: user for user in users}
 
     def create_draft(
         self,
