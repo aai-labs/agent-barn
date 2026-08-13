@@ -227,9 +227,11 @@ class EmailService:
         )
         try:
             email = self.create_email(email_template)
-        except EmailRenderingException as e:
-            # A template that won't render won't render on retry either.
-            logger.error(f"Unable to render agent lifecycle email for {receiver_email} : {traceback.format_exc()}")
+        except Exception as e:
+            logger.error(
+                f"Unable to build agent lifecycle email for {receiver_email} "
+                f"from {email_template.file_name} : {traceback.format_exc()}"
+            )
             raise TerminalEmailSendingException(str(e), email=receiver_email) from e
 
         self.client.send(email)

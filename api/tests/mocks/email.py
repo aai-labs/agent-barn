@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from typing import cast
 
 from injector import Module, provider, singleton
@@ -5,6 +6,22 @@ from injector import Module, provider, singleton
 from api.infrastructure.email.client import EmailClient
 from api.infrastructure.email.models import Email
 from api.infrastructure.email.service import EmailService
+
+_BLOCKED_HOST = "api.cloudflare.com"
+
+
+def make_email_blocking_post(real_post: Callable) -> Callable:
+    def _guarded_post(*args, **kwargs):
+        url = str(args[0] if args else kwargs.get("url", ""))
+        if _BLOCKED_HOST in url:
+            raise RuntimeError(
+                f"Test attempted to call {_BLOCKED_HOST}. Patch "
+                "api.infrastructure.email.client.httpx.post or bind MockEmailModule "
+                "if this send is intentional."
+            )
+        return real_post(*args, **kwargs)
+
+    return _guarded_post
 
 
 class MockEmailModule(Module):

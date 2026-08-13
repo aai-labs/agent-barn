@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 from unittest.mock import patch
 
+import httpx
 import pytest
 from alembic import command
 from alembic.config import Config
@@ -12,6 +13,7 @@ from testcontainers.postgres import PostgresContainer
 from api.core.config import get_config
 from api.infrastructure.openrouter.client import clear_models_cache
 from api.infrastructure.slack.client import clear_directory_cache
+from api.tests.mocks.email import make_email_blocking_post
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -74,15 +76,9 @@ def clear_openrouter_models_cache():
 
 @pytest.fixture(autouse=True)
 def block_outbound_email():
-    """Only one integration test binds MockEmailModule, so every other test that triggers an
-    invite reaches the real EmailClient. Block the transport for the whole suite: a test that
-    genuinely exercises sending patches this target itself, which overrides this fixture."""
-
-    def _refuse(*args, **kwargs):
-        raise RuntimeError(
-            "Outbound email attempted in tests. Patch api.infrastructure.email.client.httpx.post "
-            "or bind MockEmailModule if this send is intentional."
-        )
-
-    with patch("api.infrastructure.email.client.httpx.post", side_effect=_refuse):
+    """Blocks outbound email; tests that exercise sending patch this target themselves."""
+    with patch(
+        "api.infrastructure.email.client.httpx.post",
+        new=make_email_blocking_post(httpx.post),
+    ):
         yield

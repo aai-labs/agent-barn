@@ -32,9 +32,8 @@ _LOGO_PATH = os.path.join(os.path.dirname(__file__), "assets", "logo.png")
 
 _SEND_URL = "https://api.cloudflare.com/client/v4/accounts/{account_id}/email/sending/send"
 
-# Split timeouts rather than one flat budget: sync FastAPI routes run in a threadpool, so a
-# slow Cloudflare must not pin a worker for the whole window.
-_TIMEOUT = httpx.Timeout(connect=5.0, read=10.0, write=10.0, pool=5.0)
+_CONNECT_TIMEOUT, _READ_TIMEOUT, _WRITE_TIMEOUT, _POOL_TIMEOUT = 5.0, 10.0, 10.0, 5.0
+_TOTAL_BUDGET_SECONDS = 30.0
 _MAX_ATTEMPTS = 3
 _BACKOFF_SECONDS = (0.5, 1.5)
 # Beyond this, waiting out a Retry-After would hold a worker longer than it is worth;
@@ -47,6 +46,15 @@ _ERROR_BODY_LOG_LIMIT = 500
 def _load_logo_bytes() -> bytes:
     with open(_LOGO_PATH, "rb") as f:
         return f.read()
+
+
+def _timeout_for(remaining: float) -> httpx.Timeout:
+    return httpx.Timeout(
+        connect=min(_CONNECT_TIMEOUT, remaining),
+        read=min(_READ_TIMEOUT, remaining),
+        write=min(_WRITE_TIMEOUT, remaining),
+        pool=min(_POOL_TIMEOUT, remaining),
+    )
 
 
 def _parse_retry_after(response: httpx.Response) -> float | None:
@@ -90,11 +98,17 @@ class EmailClient:
         # All retry state stays local to the call — this client is a singleton shared
         # across request threads, so instance attributes here would be a real race.
         last_error = "no attempt completed"
+        deadline = time.monotonic() + _TOTAL_BUDGET_SECONDS
 
         for attempt in range(1, _MAX_ATTEMPTS + 1):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                last_error = f"{last_error} (budget of {_TOTAL_BUDGET_SECONDS}s exhausted)"
+                break
+
             delay: float | None = None
             try:
-                response = httpx.post(url, headers=headers, json=payload, timeout=_TIMEOUT)
+                response = httpx.post(url, headers=headers, json=payload, timeout=_timeout_for(remaining))
             except (httpx.TimeoutException, httpx.TransportError) as e:
                 last_error = f"{type(e).__name__}: {e}"
             else:
@@ -129,6 +143,9 @@ class EmailClient:
             if delay is None:
                 base = _BACKOFF_SECONDS[min(attempt - 1, len(_BACKOFF_SECONDS) - 1)]
                 delay = base * random.uniform(0.8, 1.2)
+            if time.monotonic() + delay >= deadline:
+                last_error = f"{last_error} (no budget left to retry)"
+                break
             time.sleep(delay)
 
         self._log_failure(email, "exhausted retries", last_error)

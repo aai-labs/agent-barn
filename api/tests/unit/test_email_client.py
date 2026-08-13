@@ -23,11 +23,15 @@ from hamcrest import (
     has_length,
     is_not,
     less_than,
+    less_than_or_equal_to,
     raises,
 )
 
 from api.core.config import Config
 from api.infrastructure.email.client import (
+    _CONNECT_TIMEOUT,
+    _MAX_ATTEMPTS,
+    _READ_TIMEOUT,
     LOGO_CONTENT_ID,
     EmailClient,
 )
@@ -36,6 +40,7 @@ from api.infrastructure.email.exceptions import (
     TerminalEmailSendingException,
 )
 from api.infrastructure.email.models import Email
+from api.tests.mocks.email import make_email_blocking_post
 
 ACCOUNT_ID = "acct-123"
 API_TOKEN = "tok-secret-abc"
@@ -311,6 +316,75 @@ def test_total_backoff_stays_within_budget():
     total = sum(call.args[0] for call in sleep.call_args_list)
     assert_that(total, greater_than(0))
     assert_that(total, less_than(5))
+
+
+def test_deadline_stops_retrying_once_the_budget_is_spent():
+    clock = iter([0.0, 0.0, 1000.0, 1000.0, 1000.0])
+
+    with patch("api.infrastructure.email.client.time.monotonic", side_effect=lambda: next(clock)):
+        with patch("api.infrastructure.email.client.httpx.post", side_effect=httpx.TimeoutException("slow")) as post:
+            with patch("api.infrastructure.email.client.time.sleep") as sleep:
+                assert_that(
+                    calling(_client().send).with_args(_email()),
+                    raises(RetryableEmailSendingException),
+                )
+
+    assert_that(post.call_count, equal_to(1))
+    sleep.assert_not_called()
+
+
+def test_per_attempt_timeout_is_clamped_to_remaining_budget():
+    response = _response(500, text="boom")
+
+    with patch("api.infrastructure.email.client.httpx.post", return_value=response) as post:
+        with patch("api.infrastructure.email.client.time.sleep"):
+            assert_that(
+                calling(_client().send).with_args(_email()),
+                raises(RetryableEmailSendingException),
+            )
+
+    for call in post.call_args_list:
+        timeout = call.kwargs["timeout"]
+        assert_that(timeout.read, less_than_or_equal_to(_READ_TIMEOUT))
+        assert_that(timeout.connect, less_than_or_equal_to(_CONNECT_TIMEOUT))
+
+
+def test_fast_failures_still_get_every_attempt():
+    response = _response(429, text="slow down")
+
+    with patch("api.infrastructure.email.client.httpx.post", return_value=response) as post:
+        with patch("api.infrastructure.email.client.time.sleep"):
+            assert_that(
+                calling(_client().send).with_args(_email()),
+                raises(RetryableEmailSendingException),
+            )
+
+    assert_that(post.call_count, equal_to(_MAX_ATTEMPTS))
+
+
+def test_email_guard_refuses_the_cloudflare_send_url():
+    calls = []
+    guard = make_email_blocking_post(lambda *a, **k: calls.append((a, k)))
+
+    assert_that(calling(guard).with_args(SEND_URL, json={}), raises(RuntimeError))
+    assert_that(calls, has_length(0))
+
+
+@pytest.mark.parametrize("as_keyword", [False, True])
+def test_email_guard_delegates_non_email_urls(as_keyword):
+    calls = []
+
+    def _real_post(*args, **kwargs):
+        calls.append((args, kwargs))
+        return "delegated"
+
+    guard = make_email_blocking_post(_real_post)
+    url = "https://api.openrouter.ai/v1/thing"
+
+    result = guard(url=url) if as_keyword else guard(url)
+
+    assert_that(result, equal_to("delegated"))
+    assert_that(calls, has_length(1))
 
 
 def test_failure_logs_response_body_without_leaking_token():
