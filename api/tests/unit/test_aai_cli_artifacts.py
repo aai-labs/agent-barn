@@ -431,28 +431,28 @@ def test_tool_context_md_lists_bitbucket_profile():
     assert "my-workspace/my-repo" in md
 
 
-def test_tool_context_md_omits_non_aai_cli_providers():
+def test_tool_context_md_lists_providers_without_metadata():
+    # Providers with no per-secret metadata worth printing (no site URL, no
+    # owner/workspace) are still listed. The block's job is "credentials are already in
+    # place", and that matters most for exactly these: a Gmail- or Slack-only agent used
+    # to get no block at all and would tell the user it had no access.
     md = build_tool_context_md({SecretProvider.GMAIL: _GMAIL})
-    assert md == ""
+    assert "- **Gmail** (`gmail-work`)" in md
 
 
 def test_tool_context_md_empty_when_only_firecrawl():
+    # Firecrawl has no aai-cli profile, so it is not an "integration" in this sense.
     md = build_tool_context_md({SecretProvider.FIRECRAWL: FirecrawlContent(api_key="fc-x")})
     assert md == ""
 
 
-def test_tool_context_md_omits_slack():
-    # Slack has no per-secret metadata worth surfacing (unlike site URL/owner for
-    # Jira/GitHub/etc.) — deliberately excluded from _TOOL_CONTEXT_PROVIDERS, same as
-    # Gmail/Zoho Mail.
-    assert build_tool_context_md({SecretProvider.SLACK: _SLACK}) == ""
+def test_tool_context_md_lists_slack():
+    assert "- **Slack** (`slack-work`)" in build_tool_context_md({SecretProvider.SLACK: _SLACK})
 
 
-def test_tool_context_md_empty_when_only_pipedrive():
-    # Pipedrive is deliberately excluded from _TOOL_CONTEXT_PROVIDERS — no per-secret
-    # metadata (site URL, owner/workspace) worth surfacing beyond "configured".
+def test_tool_context_md_lists_pipedrive():
     md = build_tool_context_md({SecretProvider.PIPEDRIVE: _PIPEDRIVE})
-    assert md == ""
+    assert "- **Pipedrive** (`pipedrive-work`)" in md
 
 
 def test_tool_context_md_never_leaks_tokens():
@@ -511,6 +511,40 @@ def test_integrations_policy_md_includes_nested_command_grammar():
 def test_integrations_policy_md_emits_profile_line_per_provider():
     md = build_integrations_policy_md({SecretProvider.JIRA: _JIRA})
     assert "--profile jira-work" in md
+
+
+def test_integrations_policy_md_states_what_slack_can_do():
+    # A bare `--profile slack-work` gave the agent nothing to match a user's question
+    # against, so it would deny having Slack access while holding a working profile.
+    # The line has to name the capability, not just the slug.
+    md = build_integrations_policy_md({SecretProvider.SLACK: _SLACK})
+    assert "--profile slack-work" in md
+    assert "files" in md
+    assert "canvases" in md
+    assert "read-only" in md
+
+
+def test_integrations_policy_md_appends_capability_to_repo_scoped_line():
+    # The GitHub/Bitbucket lines are built by a different branch than the rest; the
+    # capability has to survive that path too, without losing the repo mapping.
+    github = validate_content(
+        SecretProvider.GITHUB,
+        {"token": "ghp_tok", "owner": "acme", "org": "acme", "repos": ["web"]},
+    )
+    md = build_integrations_policy_md({SecretProvider.GITHUB: github})
+    assert "`--profile github-work` → acme/web" in md
+    assert "Actions runs" in md
+
+
+def test_integrations_policy_md_omits_capability_for_providers_without_one():
+    # Calendars ship no aai-cli skill doc, so there is no verified command surface to
+    # describe — the line renders exactly as before rather than inventing one.
+    calendar = validate_content(
+        SecretProvider.GOOGLE_CALENDAR,
+        {"calendar_id": "primary", "access_token": "ya29.tok"},
+    )
+    md = build_integrations_policy_md({SecretProvider.GOOGLE_CALENDAR: calendar})
+    assert "- **Google Calendar**: `--profile google-calendar-work`\n" in md
 
 
 def test_integrations_policy_md_github_multi_repo_lists_all_profiles():
