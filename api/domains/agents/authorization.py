@@ -5,7 +5,7 @@ from uuid import UUID
 from fastapi import HTTPException, status
 from injector import inject, singleton
 
-from api.domains.agents.models import Agent, AgentStatus
+from api.domains.agents.models import Agent
 from api.domains.agents.repository import AgentRepository
 from api.domains.auth.models import CurrentUserContext
 from api.domains.rbac.catalog import (
@@ -122,19 +122,9 @@ class AgentAuthorization:
                 permission
                 for permission in _AGENT_ACTION_PERMISSIONS
                 if permission in permissions_by_agent.get(agent.id, set())
-                and self._state_allows(agent.status, permission)
             ]
             for agent in agents
         }
-
-    @staticmethod
-    def _state_allows(status_value: AgentStatus, permission: PermissionKey) -> bool:
-        if permission in (
-            PermissionKey.AGENT_UPDATE,
-            PermissionKey.AGENT_SECRET_MANAGE,
-        ):
-            return status_value != AgentStatus.RUNNING
-        return True
 
     @staticmethod
     def _raise_not_found(agent_id: UUID) -> NoReturn:

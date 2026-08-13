@@ -13,15 +13,15 @@ export class AgentDetailPage {
   }
 
   configureButton(): Locator {
-    return this.page.getByRole("button", { name: /configure/i });
+    return this.page.getByRole("link", { name: "Configuration", exact: true });
   }
 
   configDrawerHeading(): Locator {
-    return this.page.getByRole("heading", { name: /configure agent/i });
+    return this.page.getByRole("heading", { name: "Configuration", exact: true });
   }
 
-  configDrawerCloseButton(): Locator {
-    return this.page.locator("aside").getByRole("button").first();
+  editButton(): Locator {
+    return this.page.getByRole("button", { name: "Edit", exact: true });
   }
 
   hireButton(): Locator {
@@ -37,21 +37,19 @@ export class AgentDetailPage {
   }
 
   channelsTab(): Locator {
-    return this.page.getByRole("button", { name: /^channels$/i });
+    return this.page.getByRole("button", { name: /^(channels & endpoint|chats & endpoint)$/i });
   }
 
   groupPolicySelect(): Locator {
-    return this.page.locator("aside").getByLabel(/channel access/i);
+    return this.page.getByLabel(/channel access/i);
   }
 
   dmPolicySelect(): Locator {
-    return this.page.locator("aside").getByLabel(/direct messages/i);
+    return this.page.getByLabel(/direct messages/i);
   }
 
   channelSearchInput(): Locator {
-    return this.page
-      .locator("aside")
-      .getByPlaceholder(/search channels|loading channels/i);
+    return this.page.getByPlaceholder(/search channels|loading channels/i);
   }
 
   skillsTab(): Locator {
@@ -75,15 +73,20 @@ export class AgentDetailPage {
   }
 
   cancelSkillButton(): Locator {
-    return this.page.getByRole("button", { name: "Cancel" });
+    return this.page
+      .getByText("· Adding", { exact: true })
+      .locator("../..")
+      .getByRole("button", { name: "Cancel", exact: true });
   }
 
   saveSkillsButton(): Locator {
-    return this.page.getByRole("button", { name: "Save changes" });
+    return this.page
+      .locator('section[aria-label="Skills"] footer')
+      .getByRole("button", { name: /^Apply(?: & Restart)?$/i });
   }
 
   keysTab(): Locator {
-    return this.page.getByRole("button", { name: /^keys$/i });
+    return this.page.getByRole("button", { name: "Keys & integrations", exact: true });
   }
 
   appTokenInput(): Locator {
@@ -95,11 +98,19 @@ export class AgentDetailPage {
   }
 
   saveTokensButton(): Locator {
-    return this.page.getByRole("button", { name: "Save tokens" });
+    return this.page
+      .locator('section[aria-label="Keys & integrations"] footer')
+      .getByRole("button", { name: /^Apply(?: & Restart)?$/i });
   }
 
   saveIntegrationsButton(): Locator {
-    return this.page.getByRole("button", { name: "Save integrations" });
+    return this.saveTokensButton();
+  }
+
+  applyAndRestartConfirmationButton(): Locator {
+    return this.page
+      .getByRole("dialog")
+      .getByRole("button", { name: /^Apply(?: & Restart)?$/i });
   }
 
   removeCredentialButton(): Locator {

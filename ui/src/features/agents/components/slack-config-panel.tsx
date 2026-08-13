@@ -1,14 +1,17 @@
 "use client";
 
-import { useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useState } from "react";
 import { SlackIcon, XIcon, PlusIcon, LockIcon } from "@/components/icons";
 import type { Agent } from "../schemas";
 import { useSlackChannels } from "../hooks/use-slack-channels";
 import { useSlackUsers } from "../hooks/use-slack-users";
 import { useUpdateAgent } from "../hooks/use-update-agent";
+import type { AgentConfigurationEditHandle } from "./agent-configuration-utils";
 
 interface SlackConfigPanelProps {
   agent: Agent;
+  isRunning?: boolean;
+  onDirtyChange?: (isDirty: boolean) => void;
   onSaved?: () => void;
 }
 
@@ -19,12 +22,15 @@ function userLabel(u: { displayName: string; realName: string; name: string }) {
   return u.displayName || u.realName || u.name;
 }
 
-export function SlackConfigPanel({ agent, onSaved }: SlackConfigPanelProps) {
+export const SlackConfigPanel = forwardRef<
+  AgentConfigurationEditHandle,
+  SlackConfigPanelProps
+>(function SlackConfigPanel({ agent, isRunning: isRunningOverride, onDirtyChange, onSaved }, ref) {
   const { channels, isLoading: chLoading } = useSlackChannels(agent.id);
   const { users, isLoading: uLoading } = useSlackUsers(agent.id);
   const updateAgent = useUpdateAgent();
 
-  const isRunning = agent.status === "RUNNING";
+  const isRunning = isRunningOverride ?? agent.status === "RUNNING";
 
   const [channelIds, setChannelIds] = useState<string[]>(agent.slackConfig?.channelIds ?? []);
   const [userIds, setUserIds] = useState<string[]>(agent.slackConfig?.dmUserIds ?? []);
@@ -35,9 +41,18 @@ export function SlackConfigPanel({ agent, onSaved }: SlackConfigPanelProps) {
   const [userSearch, setUserSearch] = useState("");
   const [channelFocused, setChannelFocused] = useState(false);
   const [userFocused, setUserFocused] = useState(false);
-  const [saved, setSaved] = useState(false);
   const shouldShowHermesHomeChannelMessage =
     agent.agentType === "hermes" && channelIds.length === 0;
+  const isDirty =
+    JSON.stringify(channelIds) !== JSON.stringify(agent.slackConfig?.channelIds ?? []) ||
+    JSON.stringify(userIds) !== JSON.stringify(agent.slackConfig?.dmUserIds ?? []) ||
+    groupPolicy !== (agent.slackConfig?.groupPolicy ?? "open") ||
+    dmPolicy !== (agent.slackConfig?.dmPolicy ?? "off") ||
+    verboseMode !== (agent.slackConfig?.verboseMode ?? true);
+
+  useEffect(() => {
+    onDirtyChange?.(isDirty);
+  }, [isDirty, onDirtyChange]);
 
   const selectedChannels = channelIds
     .map((id) => channels.find((c) => c.id === id))
@@ -59,22 +74,31 @@ export function SlackConfigPanel({ agent, onSaved }: SlackConfigPanelProps) {
   );
 
   async function handleSave() {
-    try {
-      await updateAgent.mutateAsync({
-        agentId: agent.id,
-        slackChannelIds: channelIds,
-        slackDmUserIds: userIds,
-        slackGroupPolicy: groupPolicy,
-        slackDmPolicy: dmPolicy,
-        ...(agent.agentType === "hermes" ? { slackVerboseMode: verboseMode } : {}),
-      });
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-      onSaved?.();
-    } catch {
-      // error shown via updateAgent.error
-    }
+    await updateAgent.mutateAsync({
+      agentId: agent.id,
+      slackChannelIds: channelIds,
+      slackDmUserIds: userIds,
+      slackGroupPolicy: groupPolicy,
+      slackDmPolicy: dmPolicy,
+      ...(agent.agentType === "hermes" ? { slackVerboseMode: verboseMode } : {}),
+    });
+    onSaved?.();
   }
+
+  function resetForm() {
+    setChannelIds(agent.slackConfig?.channelIds ?? []);
+    setUserIds(agent.slackConfig?.dmUserIds ?? []);
+    setGroupPolicy(agent.slackConfig?.groupPolicy ?? "open");
+    setDmPolicy(agent.slackConfig?.dmPolicy ?? "off");
+    setVerboseMode(agent.slackConfig?.verboseMode ?? true);
+    setChannelSearch("");
+    setUserSearch("");
+    setChannelFocused(false);
+    setUserFocused(false);
+    updateAgent.reset();
+  }
+
+  useImperativeHandle(ref, () => ({ apply: handleSave, cancel: resetForm }));
 
   return (
     <div className="flex flex-col gap-5">
@@ -332,21 +356,21 @@ export function SlackConfigPanel({ agent, onSaved }: SlackConfigPanelProps) {
         </section>
       )}
 
-      <div className="flex items-center gap-2">
+      {updateAgent.error && (
+        <span className="text-xs" style={{ color: "var(--err)" }}>
+          {updateAgent.error instanceof Error ? updateAgent.error.message : "Save failed"}
+        </span>
+      )}
+      {onSaved && (
         <button
-          className="af-btn af-btn-sm"
+          type="button"
+          className="af-btn af-btn-sm self-start"
           disabled={isRunning || updateAgent.isPending}
-          title={isRunning ? "Stop the agent before saving changes" : undefined}
-          onClick={() => { void handleSave(); }}
+          onClick={() => void handleSave()}
         >
-          {updateAgent.isPending ? "Saving…" : saved ? "Saved!" : "Save"}
+          {updateAgent.isPending ? "Saving…" : "Save"}
         </button>
-        {updateAgent.error && (
-          <span className="text-xs" style={{ color: "var(--err)" }}>
-            {updateAgent.error instanceof Error ? updateAgent.error.message : "Save failed"}
-          </span>
-        )}
-      </div>
+      )}
     </div>
   );
-}
+});

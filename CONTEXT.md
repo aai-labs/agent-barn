@@ -77,7 +77,7 @@ The user who originally created an Agent, retained as immutable provenance. Crea
 _Avoid_: Organization Owner, permanent Agent authority
 
 **Agent**:
-An organization-owned AI worker configured from a pinned template version and executed by one runtime on one chat platform.
+An organization-owned AI worker configured from one active shared Template Version or Agent Template Override Version, and executed by one Runtime on one Platform.
 _Avoid_: bot, pod
 
 **Configured Model**:
@@ -105,8 +105,32 @@ An immutable, server-generated opaque identifier for a Template lineage, normall
 _Avoid_: template slug, editable identifier
 
 **Template Version**:
-A numbered configuration within a template lineage. An agent pins a specific version rather than following the latest automatically.
+A numbered configuration within a Template lineage. An Agent pins a specific version rather than following the latest automatically.
 _Avoid_: template revision
+
+**Agent Template Override**:
+An Agent-scoped version lineage containing private customizations of a Template. Its versions are available only through that Agent and can be selected independently of the shared Template lineage.
+_Avoid_: per-Agent prompt, unversioned override, shared fork
+
+**Agent Template Override Version**:
+A published immutable full snapshot in an Agent Template Override lineage, including Template metadata, behavior, and required-skill requirements. It retains the Override Source Version from which the Agent's private lineage originated.
+_Avoid_: mutable override, shared Template Version, live prompt
+
+**Agent Template Override Draft**:
+The one mutable Agent-scoped working snapshot created from the Agent's exact active pinned shared Template Version or Agent Template Override Version for editing. It is not a Template Version, cannot be pinned or run, and remains independent of selecting or rolling back published versions; publishing freezes it as the next immutable Agent Template Override Version while retaining the active version's source lineage.
+_Avoid_: pending version, live override, mutable history
+
+**Override Source Version**:
+The exact Platform or Organization Template Version from which an Agent Template Override Draft or Version was copied. It identifies the source lineage and baseline used to determine whether a newer source update is available; later private versions inherit this lineage from the active Override Version.
+_Avoid_: parent template, base prompt, merge base
+
+**Override Author**:
+The user whose action created an Agent Template Override Draft or Version, retained as immutable provenance for published versions and shown with a pending draft so later editors can assess an in-flight change.
+_Avoid_: current editor, Agent Creator, last viewer
+
+**Agent Override Update**:
+A user-initiated action that selects a newer direct Platform or Organization Override Source Version as the Agent's shared pin, leaving any existing Agent Template Override Draft untouched. A stopped Agent repins immediately; a running Agent applies the selection through Apply & Restart.
+_Avoid_: merge, automatic sync, rollback
 
 **Draft Template Version**:
 An unpublished, in-progress next version of a Platform Template lineage, editable only by a Platform Administrator and invisible to every Organization. A lineage has at most one Draft Template Version at a time; publishing it produces the next immutable Platform Template Version.
@@ -204,7 +228,7 @@ _Avoid_: webhook
 - A **Membership** links one user to one **Organization** with one **Organization Role**.
 - An **Organization Role** grants **Permissions** for Organization capabilities.
 - An **Agent Access Role** grants **Permissions** for one Agent aggregate.
-- An **Agent** belongs to one **Organization**, has one original **Agent Creator**, pins one **Template Version**, uses one **Runtime**, and connects to one **Platform**.
+- An **Agent** belongs to one **Organization**, has one original **Agent Creator**, pins one active shared **Template Version** or **Agent Template Override Version**, uses one **Runtime**, and connects to one **Platform**.
 - An **Agent** has one current **Configured Model** and may have **Observed Model Usage** for multiple models over time.
 - A **Membership** may have **Agent Access** to many Agents, and each relationship carries one **Agent Access Role**; creating an Agent grants its creator explicit Agent Owner access without transferring Organization ownership.
 - An **Agent** has one **Agent General Access** setting whose Permissions combine with (never subtract from) explicit Agent Access grants.
@@ -212,7 +236,10 @@ _Avoid_: webhook
 - A Platform Template lineage has at most one **Draft Template Version**, authored only by a **Platform Administrator**; publishing it exposes the next Platform Template Version to every Organization.
 - A **Platform Administrator** can inspect any immutable Platform Template Version and use a **Template Restore** to seed a new Draft Template Version from it; the restore leaves version history and existing Agent pins unchanged.
 - An Organization Template fork tracks a **Fork Baseline Version**; the first fork is Organization v1 and a **Template Update** clones its origin's newer Platform Template snapshot into the next organization version.
-- Editing an Agent's configuration from the Agent's own screen forks (or updates the existing fork of) its pinned Platform Template and repins that one Agent to the resulting Organization Template Version; other Agents still pinned to the prior version are unaffected. Running agents reject configuration updates, so the Agent must be stopped first.
+- Editing an Agent's Template from the Agent's own screen creates or updates one **Agent Template Override Draft** as a snapshot of the exact active shared Template Version or Agent Template Override Version, retaining its **Override Source Version** lineage; other Agents and the shared source lineage are unaffected. Selecting or rolling back a published version does not modify or discard that draft.
+- Publishing the draft validates it and creates the next immutable **Agent Template Override Version** without changing the Agent's pin. Selecting a published shared or Override Version changes the active pin immediately for a stopped Agent; a running Agent uses the explicit **Apply & Restart** workflow, which stops, selects, and starts it without a pending pin.
+- An **Agent Template Override** tracks one **Override Source Version** from a Platform or Organization Template lineage. An **Agent Override Update** copies a newer source snapshot into the draft, replacing local override changes; publishing preserves earlier versions for rollback.
+- Each Agent Template Override Draft or Version exposes its **Override Author** to users with Agent visibility; published version provenance is immutable.
 - An **Agent** may have multiple **Skills** and **Agent Secrets**.
 - Agent runtimes send **Telemetry Events** through **Ingest**, where they become **Conversation Messages** or **Tool Calls**.
 - A **Domain Event** has one **Event Scope**. A committed Domain Event is persisted as one **Outbox Message** and may have many **Event Deliveries**, one per intended handler.

@@ -156,6 +156,10 @@ helm/monitoring/tests/generated/
 
 .kube
 .pi*
+.agents
+.scratch
+docs/agents
+docs/plans
 
 # Internal implementation plan docs (Jira links, design notes) — not for the repo.
 *_plan.md

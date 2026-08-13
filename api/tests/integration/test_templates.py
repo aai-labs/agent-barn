@@ -1,3 +1,4 @@
+from typing import cast
 from uuid import uuid7
 
 from fastapi import status
@@ -24,7 +25,7 @@ from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import AuthorizationScope
 from api.domains.skills.repository import SkillRepository
 from api.domains.templates.defaults import DEFAULT_SOUL_MD
-from api.domains.templates.models import PlatformTemplate, TemplateSource
+from api.domains.templates.models import AgentTemplate, PlatformTemplate, TemplateSource
 from api.domains.templates.predefined import PREDEFINED_TEMPLATES
 from api.domains.templates.repository import TemplateRepository
 from api.domains.templates.service import TemplateService
@@ -527,7 +528,10 @@ def test_get_template_reports_in_use():
     with given([*_GIVEN, there_is_an_agent(name="Pinned")]) as context:
         client: TestClient = context.client
         repository: TemplateRepository = context.injector.get(TemplateRepository)
-        template = repository.get_pinned_template(context.agent)
+        template = cast(
+            AgentTemplate | PlatformTemplate,
+            repository.get_pinned_template(context.agent),
+        )
         assert template is not None
 
         with when("I get the template the agent is pinned to"):
@@ -636,7 +640,10 @@ def test_list_template_versions_reports_in_use_for_every_version():
     with given([*_GIVEN, there_is_an_agent(name="Pinned")]) as context:
         client: TestClient = context.client
         repository: TemplateRepository = context.injector.get(TemplateRepository)
-        template = repository.get_pinned_template(context.agent)
+        template = cast(
+            AgentTemplate | PlatformTemplate,
+            repository.get_pinned_template(context.agent),
+        )
         assert template is not None
         there_is_a_template(template_key=template.template_key, name="Pinned", version=2)(context)
 
@@ -1377,7 +1384,10 @@ def test_delete_template_used_by_live_agent_returns_409():
     with given([*_GIVEN, there_is_an_agent(name="Pinned")]) as context:
         client: TestClient = context.client
         repository: TemplateRepository = context.injector.get(TemplateRepository)
-        template = repository.get_pinned_template(context.agent)
+        template = cast(
+            AgentTemplate | PlatformTemplate,
+            repository.get_pinned_template(context.agent),
+        )
         assert template is not None
         there_is_a_template(template_key=template.template_key, name="Pinned", version=2)(context)
 
@@ -1393,7 +1403,10 @@ def test_delete_template_referenced_by_soft_deleted_agent_returns_204():
     with given([*_GIVEN, there_is_an_agent(name="Ghost", deleted=True)]) as context:
         client: TestClient = context.client
         repository: TemplateRepository = context.injector.get(TemplateRepository)
-        template = repository.get_pinned_template(context.agent)
+        template = cast(
+            AgentTemplate | PlatformTemplate,
+            repository.get_pinned_template(context.agent),
+        )
         assert template is not None
 
         with when("I delete the template only a soft-deleted agent references"):
@@ -1443,7 +1456,10 @@ def test_list_templates_reports_in_use():
     ) as context:
         client: TestClient = context.client
         repository: TemplateRepository = context.injector.get(TemplateRepository)
-        template = repository.get_pinned_template(context.agent)
+        template = cast(
+            AgentTemplate | PlatformTemplate,
+            repository.get_pinned_template(context.agent),
+        )
         assert template is not None
 
         with when("I list templates"):

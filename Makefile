@@ -2,7 +2,7 @@ COMPOSE := docker compose -f compose.yml
 
 .PHONY: \
 	setup \
-	dev-api dev-ui dev-worker reconcile seed-event-deliveries migrate merge-heads rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring fix-api test check fix \
+	dev-api dev-ui dev-worker reconcile seed-event-deliveries seed-agent-overrides migrate merge-heads rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring fix-api test check fix \
 	up down restart logs build clean db-up db-down db-logs db-restart redis-up redis-down redis-logs worker-logs
 
 # One-time project bootstrap: installs deps for api + ui and creates a local
@@ -32,6 +32,13 @@ reconcile:
 # manually exercising the Platform Event Delivery Monitor UI. Safe to re-run.
 seed-event-deliveries:
 	api/.venv/bin/python -m api.scripts.seed_event_delivery_monitor_fixtures --count 200
+
+# Local-only: create stopped Telegram Agents for manually exercising Agent-owned
+# template override authoring. Set SEED_AGENT_ORGANIZATION_ID before invoking.
+seed-agent-overrides:
+	api/.venv/bin/python -m api.scripts.seed_agent_override_fixtures \
+		--organization-id "$${SEED_AGENT_ORGANIZATION_ID:?Set SEED_AGENT_ORGANIZATION_ID}" \
+		--count "$${SEED_AGENT_COUNT:-3}"
 
 migrate:
 	cd api && uv run python -m alembic upgrade head

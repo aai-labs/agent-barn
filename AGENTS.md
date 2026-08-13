@@ -61,3 +61,13 @@ API dependencies flow routes → services → repositories. UI code is feature-f
 - Agent-facing context remains accurate and discoverable.
 - Release versions follow `docs/guidelines/operations.md` when applicable.
 - The diff contains no unrelated churn.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs live as markdown files under `.scratch/<feature-slug>/`. See `.agents/issue-tracker.md`.
+
+### Domain docs
+
+Single-context — one `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
