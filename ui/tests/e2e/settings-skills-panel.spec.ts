@@ -159,6 +159,8 @@ test.describe("Settings — Skills panel", () => {
   test("clicking Edit skill in drawer shows edit form pre-populated with skill name", async ({
     page,
   }) => {
+    await dataSupportPage.skills.interceptStartSkillDraftRequest();
+
     await page.getByRole("button", { name: "View" }).nth(1).click();
     await page.getByRole("button", { name: "Edit skill" }).click();
 
@@ -166,12 +168,25 @@ test.describe("Settings — Skills panel", () => {
     await expect(page.getByPlaceholder("e.g. my-tool")).toHaveValue(mockCustomSkill.name);
   });
 
-  test("edit form in drawer loads the published files", async ({ page }) => {
+  test("edit form in drawer loads the draft, seeded from the published files", async ({ page }) => {
+    await dataSupportPage.skills.interceptStartSkillDraftRequest();
+
     await page.getByRole("button", { name: "View" }).nth(1).click();
     await page.getByRole("button", { name: "Edit skill" }).click();
 
     await expect(page.getByRole("button", { name: "SKILL.md" })).toBeVisible();
     await expect(page.getByLabel("Content of SKILL.md")).toHaveValue("# My tool");
+  });
+
+  test("editing shows Discard, Save draft, and Publish actions", async ({ page }) => {
+    await dataSupportPage.skills.interceptStartSkillDraftRequest();
+
+    await page.getByRole("button", { name: "View" }).nth(1).click();
+    await page.getByRole("button", { name: "Edit skill" }).click();
+
+    await expect(page.getByRole("button", { name: "Discard" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Save draft" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Publish" })).toBeVisible();
   });
 
   test("built-in skill files are readable but not editable", async ({ page }) => {

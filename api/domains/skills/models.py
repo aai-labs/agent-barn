@@ -103,6 +103,40 @@ class SkillFile(BaseModel, table=True):
     content: str = SqlField(sa_column=Column(sa.Text(), nullable=False))
 
 
+class SkillDraft(BaseModel, table=True):
+    """An unpublished, in-progress set of file edits for a skill lineage.
+
+    At most one per lineage (enforced by the unique constraint), mutated in place
+    while editing. Publishing turns its files into the next immutable skill_version
+    and deletes this row. Metadata (name, description, required providers) isn't
+    draft-gated: it lives on the skill row and edits apply immediately, since it
+    isn't versioned content.
+    """
+
+    __tablename__: str = "skill_draft"
+
+    __table_args__ = (sa.UniqueConstraint("skill_id", name="uq_skill_draft_skill_id"),)
+
+    skill_id: UUID = SqlField(foreign_key="skill.id", nullable=False, ondelete="CASCADE")
+    # Set when the draft was seeded from an older published version (a rollback in
+    # progress) rather than from the latest one; carried onto the published
+    # version's restored_from_version so history records where it came from.
+    source_version: int | None = SqlField(default=None, nullable=True)
+
+
+class SkillDraftFile(BaseModel, table=True):
+    __tablename__: str = "skill_draft_file"
+
+    __table_args__ = (
+        sa.UniqueConstraint("skill_draft_id", "path", name="uq_skill_draft_file_draft_path"),
+        sa.Index("ix_skill_draft_file_draft_id", "skill_draft_id"),
+    )
+
+    skill_draft_id: UUID = SqlField(foreign_key="skill_draft.id", nullable=False, ondelete="CASCADE")
+    path: str = SqlField(nullable=False, max_length=512)
+    content: str = SqlField(sa_column=Column(sa.Text(), nullable=False))
+
+
 def derive_tools_pointer(skill: Skill) -> str:
     """The line appended to TOOLS.md telling the agent this skill exists.
 
@@ -136,11 +170,11 @@ class SkillCreate(PydanticBaseModel):
 
 
 class SkillUpdate(PydanticBaseModel):
+    """Metadata-only edit. Content changes go through the draft/publish flow."""
+
     name: str | None = Field(default=None, min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=2000)
     required_providers: list[SecretProvider] | None = Field(default=None)
-    # Omit to leave content untouched; supplying it publishes the next version.
-    files: list[SkillFileInput] | None = Field(default=None, min_length=1)
 
 
 class SkillRead(PydanticBaseModel):
@@ -190,6 +224,20 @@ class SkillVersionRead(PydanticBaseModel):
 
 class SkillVersionDetailRead(SkillVersionRead):
     files: list[SkillFileRead]
+
+
+class SkillDraftRead(PydanticBaseModel):
+    skill_id: UUID
+    files: list[SkillFileRead]
+    source_version: int | None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SkillDraftUpdate(PydanticBaseModel):
+    files: list[SkillFileInput] = Field(min_length=1)
 
 
 class SkillFilter(PydanticBaseModel):

@@ -166,6 +166,37 @@ export class SkillDataSupport {
     });
   }
 
+  async interceptStartSkillDraftRequest({
+    skillId = MOCK_CUSTOM_SKILL_ID,
+    status = 201,
+    files = [{ path: "SKILL.md", content: "# My tool" }],
+  }: {
+    skillId?: string;
+    status?: number;
+    files?: { path: string; content: string }[];
+  } = {}) {
+    await this.page.route(`**/api/v1/organizations/*/skills/${skillId}/draft`, async (route) => {
+      if (route.request().method() !== "POST") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status,
+        contentType: "application/json",
+        body:
+          status >= 400
+            ? JSON.stringify({ detail: "Unable to start draft" })
+            : JSON.stringify({
+                skill_id: skillId,
+                files,
+                source_version: null,
+                created_at: "2026-01-01T00:00:00Z",
+                updated_at: "2026-01-01T00:00:00Z",
+              }),
+      });
+    });
+  }
+
   async interceptDeleteSkillRequest({
     skillId = MOCK_CUSTOM_SKILL_ID,
     status = 204,

@@ -29,6 +29,22 @@ export const SkillDetailSchema = SkillSchema.extend({
   files: z.array(SkillFileSchema),
 });
 
+export const SkillVersionSchema = z.object({
+  version: z.number().int().min(1),
+  createdBy: z.string().uuid().nullable(),
+  createdAt: z.string(),
+  restoredFromVersion: z.number().int().min(1).nullable(),
+});
+
+export const SkillDraftSchema = z.object({
+  skillId: z.string().uuid(),
+  files: z.array(SkillFileSchema),
+  // Set when the draft was seeded from an older version rather than the latest.
+  sourceVersion: z.number().int().min(1).nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
 export const PaginatedSkillsSchema = z.object({
   page: z.number().int().min(1),
   pageSize: z.number().int().min(1),
@@ -39,5 +55,7 @@ export const PaginatedSkillsSchema = z.object({
 export type Skill = z.infer<typeof SkillSchema>;
 export type SkillFile = z.infer<typeof SkillFileSchema>;
 export type SkillDetail = z.infer<typeof SkillDetailSchema>;
+export type SkillVersion = z.infer<typeof SkillVersionSchema>;
+export type SkillDraft = z.infer<typeof SkillDraftSchema>;
 export type SkillSource = z.infer<typeof SkillSourceSchema>;
 export type PaginatedSkills = z.infer<typeof PaginatedSkillsSchema>;

@@ -12,7 +12,11 @@ import {
   type SkillUpdatePayload,
   useCreateSkill,
   useDeleteSkill,
+  useDiscardSkillDraft,
+  usePublishSkillDraft,
+  useStartSkillDraft,
   useUpdateSkill,
+  useUpdateSkillDraft,
 } from "../hooks/use-skill-mutations";
 import type { Skill } from "../schemas";
 import { ALL_PROVIDERS, DEFAULT_ENTRY_PATH, NEW_SKILL_TEMPLATE, SKILL_PROVIDER_LABELS } from "../utils";
@@ -55,10 +59,10 @@ export function SkillDrawer({ mode, canManage, onClose }: SkillDrawerProps) {
   const [selectedProviders, setSelectedProviders] = useState<string[]>(
     skill?.requiredProviders ?? [],
   );
-  // Edits are held separately from the fetched files rather than copied into state, so
-  // a background refetch cannot clobber what the user typed and null unambiguously
-  // means "unchanged" — which is also what decides whether a new version is published.
-  const [draftFiles, setDraftFiles] = useState<SkillFilePayload[] | null>(
+  // Local edits to the draft's files, held separately from the fetched draft so a
+  // background refetch cannot clobber what the user typed. Populated once the draft
+  // is started/loaded; null means "no draft loaded into the editor yet".
+  const [localFiles, setLocalFiles] = useState<SkillFilePayload[] | null>(
     isCreate ? [{ path: DEFAULT_ENTRY_PATH, content: NEW_SKILL_TEMPLATE }] : null,
   );
   const [fileError, setFileError] = useState<string | null>(null);
@@ -66,19 +70,25 @@ export function SkillDrawer({ mode, canManage, onClose }: SkillDrawerProps) {
   const entryPath = skill?.entryPath ?? DEFAULT_ENTRY_PATH;
   const { files: publishedFiles, isLoading: filesLoading } = useSkillFiles(skill?.id ?? null);
 
-  const files =
-    draftFiles ?? publishedFiles.map((f) => ({ path: f.path, content: f.content }));
-  const filesDirty = draftFiles !== null;
+  const files = editing
+    ? (localFiles ?? [])
+    : publishedFiles.map((f) => ({ path: f.path, content: f.content }));
 
   const createSkill = useCreateSkill();
   const updateSkill = useUpdateSkill();
   const deleteSkill = useDeleteSkill();
+  const startDraft = useStartSkillDraft();
+  const updateDraft = useUpdateSkillDraft();
+  const discardDraft = useDiscardSkillDraft();
+  const publishDraft = usePublishSkillDraft();
 
-  const isPending = createSkill.isPending || updateSkill.isPending;
-  const mutationError = createSkill.error ?? updateSkill.error;
+  const isSavingMetadata = createSkill.isPending || updateSkill.isPending;
+  const isPending = isSavingMetadata || startDraft.isPending || updateDraft.isPending || publishDraft.isPending;
+  const mutationError =
+    createSkill.error ?? updateSkill.error ?? startDraft.error ?? updateDraft.error ?? publishDraft.error;
 
   function handleFilesChange(next: SkillFilePayload[]) {
-    setDraftFiles(next);
+    setLocalFiles(next);
     setFileError(null);
   }
 
@@ -88,22 +98,64 @@ export function SkillDrawer({ mode, canManage, onClose }: SkillDrawerProps) {
     );
   }
 
-  function handleStartEdit() {
+  async function handleStartEdit() {
     if (!canManage) return;
+    if (skill) {
+      try {
+        const draft = await startDraft.mutateAsync({ skillId: skill.id });
+        setLocalFiles(draft.files);
+      } catch {
+        return;
+      }
+    }
     setEditing(true);
   }
 
-  function handleCancelEdit() {
-    setEditing(false);
+  function resetToPublished() {
     setFileError(null);
-    // Reset form back to current skill values
     setName(skill?.name ?? "");
     setDescription(skill?.description ?? "");
     setSelectedProviders(skill?.requiredProviders ?? []);
-    setDraftFiles(null);
+    setLocalFiles(null);
   }
 
-  async function handleSave() {
+  async function handleDiscardDraft() {
+    if (skill) {
+      try {
+        await discardDraft.mutateAsync(skill.id);
+      } catch {
+        return;
+      }
+    }
+    resetToPublished();
+    setEditing(false);
+  }
+
+  async function handleSaveDraft() {
+    if (!skill) return;
+    setFileError(null);
+    if (!files.some((f) => f.path === entryPath)) {
+      setFileError(`A skill must include its entry point, ${entryPath}.`);
+      return;
+    }
+    try {
+      const metadataPayload: SkillUpdatePayload = {
+        skillId: skill.id,
+        name: name.trim() || undefined,
+        description: description.trim() || undefined,
+        requiredProviders: selectedProviders,
+      };
+      const [, draft] = await Promise.all([
+        updateSkill.mutateAsync(metadataPayload),
+        updateDraft.mutateAsync({ skillId: skill.id, files }),
+      ]);
+      setLocalFiles(draft.files);
+    } catch {
+      // error displayed via mutationError
+    }
+  }
+
+  async function handlePublish() {
     setFileError(null);
 
     if (!files.some((f) => f.path === entryPath)) {
@@ -113,19 +165,18 @@ export function SkillDrawer({ mode, canManage, onClose }: SkillDrawerProps) {
 
     try {
       if (skill) {
-        const payload: SkillUpdatePayload = {
+        const metadataPayload: SkillUpdatePayload = {
           skillId: skill.id,
           name: name.trim() || undefined,
           description: description.trim() || undefined,
           requiredProviders: selectedProviders,
         };
-        // Only send content when it actually changed, so a metadata-only edit does
-        // not publish a redundant version.
-        if (filesDirty) {
-          payload.files = files;
-        }
-        await updateSkill.mutateAsync(payload);
-        setDraftFiles(null);
+        await Promise.all([
+          updateSkill.mutateAsync(metadataPayload),
+          updateDraft.mutateAsync({ skillId: skill.id, files }),
+        ]);
+        await publishDraft.mutateAsync(skill.id);
+        setLocalFiles(null);
         setEditing(false);
       } else {
         const payload: SkillCreatePayload = {
@@ -378,22 +429,46 @@ export function SkillDrawer({ mode, canManage, onClose }: SkillDrawerProps) {
           className="px-6 py-4 flex items-center gap-2 flex-shrink-0"
           style={{ borderTop: "1px solid var(--line)" }}
         >
-          {editing ? (
+          {editing && isCreate ? (
             <>
-              <button
-                type="button"
-                className="af-btn af-btn-ghost"
-                onClick={isCreate ? onClose : handleCancelEdit}
-              >
+              <button type="button" className="af-btn af-btn-ghost" onClick={onClose}>
                 Cancel
               </button>
               <button
                 type="button"
                 className="af-btn af-btn-primary ml-auto"
                 disabled={isPending}
-                onClick={() => { void handleSave(); }}
+                onClick={() => { void handlePublish(); }}
               >
-                {isPending ? "Saving…" : isCreate ? "Create skill" : "Save changes"}
+                {isPending ? "Creating…" : "Create skill"}
+              </button>
+            </>
+          ) : editing ? (
+            <>
+              <button
+                type="button"
+                className="af-btn af-btn-ghost"
+                style={{ color: "var(--err)" }}
+                disabled={isPending}
+                onClick={() => { void handleDiscardDraft(); }}
+              >
+                Discard
+              </button>
+              <button
+                type="button"
+                className="af-btn af-btn-ghost ml-auto"
+                disabled={isPending}
+                onClick={() => { void handleSaveDraft(); }}
+              >
+                {updateDraft.isPending || isSavingMetadata ? "Saving…" : "Save draft"}
+              </button>
+              <button
+                type="button"
+                className="af-btn af-btn-primary"
+                disabled={isPending}
+                onClick={() => { void handlePublish(); }}
+              >
+                {publishDraft.isPending ? "Publishing…" : "Publish"}
               </button>
             </>
           ) : confirming ? (
@@ -438,7 +513,7 @@ export function SkillDrawer({ mode, canManage, onClose }: SkillDrawerProps) {
               </button>
               <button
                 className="af-btn af-btn-primary ml-auto"
-                onClick={handleStartEdit}
+                onClick={() => { void handleStartEdit(); }}
               >
                 Edit skill
               </button>

@@ -12,6 +12,9 @@ from api.domains.skills.models import (
     Skill,
     SkillCreate,
     SkillDetailRead,
+    SkillDraft,
+    SkillDraftRead,
+    SkillDraftUpdate,
     SkillFileRead,
     SkillFilter,
     SkillSource,
@@ -95,6 +98,8 @@ class SkillService:
         return self._to_read(skill, version.version)
 
     def update_skill(self, skill_id: UUID, data: SkillUpdate, context: CurrentUserContext) -> SkillSummaryRead:
+        """Metadata-only: name, description, required providers. Content changes
+        go through the draft/publish flow instead."""
         org_id = self._org_id(context)
         skill = self._get_or_404(skill_id, org_id)
         self.permission_policy.require_organization(context, org_id, PermissionKey.SKILL_MANAGE)
@@ -114,12 +119,7 @@ class SkillService:
         if "required_providers" in updated:
             skill.required_providers = updated["required_providers"]
         self.repository.save(skill)
-
-        version_number = None
-        if updated.get("files") is not None:
-            files = self._validated_files(data.files or [], skill.entry_path)
-            version_number = self.repository.publish_version(skill.id, files, created_by=context.user.id).version
-        return self._to_read(skill, version_number)
+        return self._to_read(skill)
 
     def get_skill_detail(self, skill_id: UUID, context: CurrentUserContext) -> SkillDetailRead:
         """A skill plus the files of its published version, for the editor/viewer."""
@@ -155,13 +155,13 @@ class SkillService:
             {**skill_version.model_dump(), "files": [SkillFileRead.model_validate(f) for f in files]}
         )
 
-    def restore_skill_version(self, skill_id: UUID, version: int, context: CurrentUserContext) -> SkillSummaryRead:
-        """Publish a new version whose content is copied from an older one.
+    def _draft_to_read(self, draft: SkillDraft) -> SkillDraftRead:
+        files = self.repository.get_draft_files(draft.id)
+        return SkillDraftRead.model_validate(
+            {**draft.model_dump(), "files": [SkillFileRead.model_validate(f) for f in files]}
+        )
 
-        History is append-only: this never rewrites the target version, it just
-        makes its content current again under the next version number.
-        """
-        org_id = self._org_id(context)
+    def _require_draftable_skill(self, skill_id: UUID, org_id: UUID, context: CurrentUserContext) -> Skill:
         skill = self._get_or_404(skill_id, org_id)
         self.permission_policy.require_organization(context, org_id, PermissionKey.SKILL_MANAGE)
         if skill.source == SkillSource.AAI_CLI:
@@ -169,14 +169,79 @@ class SkillService:
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Cannot modify built-in skills",
             )
-        source_version = self.repository.get_version(skill.id, version)
-        if source_version is None:
+        return skill
+
+    def get_skill_draft(self, skill_id: UUID, context: CurrentUserContext) -> SkillDraftRead:
+        org_id = self._org_id(context)
+        skill = self._get_or_404(skill_id, org_id)
+        self.permission_policy.require_organization(context, org_id, PermissionKey.SKILL_READ)
+        draft = self.repository.get_draft(skill.id)
+        if draft is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"No draft for skill {skill_id}")
+        return self._draft_to_read(draft)
+
+    def start_skill_draft(
+        self, skill_id: UUID, context: CurrentUserContext, source_version: int | None = None
+    ) -> SkillDraftRead:
+        """Get-or-create the single in-flight draft for a skill, seeded from a
+        selected published version or, by default, the latest version.
+
+        Selecting an older version here is how "rollback" works: it seeds the
+        draft with that version's content for review, and publishing turns it
+        into the next version rather than mutating history.
+        """
+        org_id = self._org_id(context)
+        skill = self._require_draftable_skill(skill_id, org_id, context)
+
+        existing = self.repository.get_draft(skill.id)
+        if existing is not None:
+            if source_version is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="A draft already exists; discard it before restoring another version",
+                )
+            return self._draft_to_read(existing)
+
+        source = (
+            self.repository.get_version(skill.id, source_version)
+            if source_version is not None
+            else self.repository.get_latest_version(skill.id)
+        )
+        if source is None:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail=f"Version {version} not found for skill {skill_id}"
+                status_code=status.HTTP_404_NOT_FOUND, detail=f"Version {source_version} not found for skill"
             )
-        files = [(f.path, f.content) for f in self.repository.get_files(source_version.id)]
-        published = self.repository.publish_version(
-            skill.id, files, created_by=context.user.id, restored_from_version=version
+        files = [(f.path, f.content) for f in self.repository.get_files(source.id)]
+        draft = self.repository.save_new_draft(skill.id, files, source_version=source_version)
+        return self._draft_to_read(draft)
+
+    def update_skill_draft(self, skill_id: UUID, data: SkillDraftUpdate, context: CurrentUserContext) -> SkillDraftRead:
+        org_id = self._org_id(context)
+        skill = self._require_draftable_skill(skill_id, org_id, context)
+        draft = self.repository.get_draft(skill.id)
+        if draft is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"No draft for skill {skill_id}")
+        files = self._validated_files(data.files, skill.entry_path)
+        draft = self.repository.update_draft_files(draft.id, files)
+        return self._draft_to_read(draft)
+
+    def discard_skill_draft(self, skill_id: UUID, context: CurrentUserContext) -> None:
+        org_id = self._org_id(context)
+        skill = self._require_draftable_skill(skill_id, org_id, context)
+        draft = self.repository.get_draft(skill.id)
+        if draft is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"No draft for skill {skill_id}")
+        self.repository.delete_draft(draft.id)
+
+    def publish_skill_draft(self, skill_id: UUID, context: CurrentUserContext) -> SkillSummaryRead:
+        org_id = self._org_id(context)
+        skill = self._require_draftable_skill(skill_id, org_id, context)
+        draft = self.repository.get_draft(skill.id)
+        if draft is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"No draft for skill {skill_id}")
+        files = [(f.path, f.content) for f in self.repository.get_draft_files(draft.id)]
+        published = self.repository.publish_draft(
+            skill.id, draft.id, files, created_by=context.user.id, restored_from_version=draft.source_version
         )
         return self._to_read(skill, published.version)
 

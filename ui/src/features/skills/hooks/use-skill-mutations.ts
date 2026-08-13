@@ -5,7 +5,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/shared/api";
 import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
 
-import { SkillSchema, type Skill } from "../schemas";
+import { SkillDraftSchema, SkillSchema, type Skill, type SkillDraft } from "../schemas";
 import { skillsKey } from "../utils";
 
 export type SkillFilePayload = {
@@ -24,8 +24,6 @@ export type SkillUpdatePayload = {
   skillId: string;
   name?: string;
   description?: string;
-  // Omit to leave content untouched; supplying it publishes the next version.
-  files?: SkillFilePayload[];
   requiredProviders?: string[];
 };
 
@@ -58,6 +56,83 @@ export function useUpdateSkill() {
       return response.data;
     },
     onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: skillsKey.all });
+    },
+  });
+}
+
+const draftKey = (skillId: string) => [...skillsKey.detail(skillId), "draft"] as const;
+
+/** Get-or-create the in-flight draft. Pass sourceVersion to seed it from an older
+ * published version instead of the latest (rollback); omit to continue editing. */
+export function useStartSkillDraft() {
+  const queryClient = useQueryClient();
+  const orgApiBase = useOrganizationApiBase();
+
+  return useMutation({
+    mutationFn: async ({ skillId, sourceVersion }: { skillId: string; sourceVersion?: number }) => {
+      const query = sourceVersion === undefined ? "" : `?source_version=${sourceVersion}`;
+      const response = await api.post<SkillDraft>(
+        `${orgApiBase}/skills/${skillId}/draft${query}`,
+        {},
+        { schema: SkillDraftSchema },
+      );
+      return response.data;
+    },
+    onSuccess: (draft) => {
+      queryClient.setQueryData(draftKey(draft.skillId), draft);
+    },
+  });
+}
+
+export function useUpdateSkillDraft() {
+  const queryClient = useQueryClient();
+  const orgApiBase = useOrganizationApiBase();
+
+  return useMutation({
+    mutationFn: async ({ skillId, files }: { skillId: string; files: SkillFilePayload[] }) => {
+      const response = await api.patch<SkillDraft>(
+        `${orgApiBase}/skills/${skillId}/draft`,
+        { files },
+        { schema: SkillDraftSchema },
+      );
+      return response.data;
+    },
+    onSuccess: (draft) => {
+      queryClient.setQueryData(draftKey(draft.skillId), draft);
+    },
+  });
+}
+
+export function useDiscardSkillDraft() {
+  const queryClient = useQueryClient();
+  const orgApiBase = useOrganizationApiBase();
+
+  return useMutation({
+    mutationFn: async (skillId: string) => {
+      await api.delete(`${orgApiBase}/skills/${skillId}/draft`);
+    },
+    onSuccess: (_data, skillId) => {
+      queryClient.removeQueries({ queryKey: draftKey(skillId) });
+    },
+  });
+}
+
+export function usePublishSkillDraft() {
+  const queryClient = useQueryClient();
+  const orgApiBase = useOrganizationApiBase();
+
+  return useMutation({
+    mutationFn: async (skillId: string) => {
+      const response = await api.post<Skill>(
+        `${orgApiBase}/skills/${skillId}/draft/publish`,
+        {},
+        { schema: SkillSchema },
+      );
+      return response.data;
+    },
+    onSuccess: (skill) => {
+      queryClient.removeQueries({ queryKey: draftKey(skill.id) });
       void queryClient.invalidateQueries({ queryKey: skillsKey.all });
     },
   });

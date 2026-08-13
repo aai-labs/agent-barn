@@ -590,68 +590,10 @@ def test_update_aai_cli_skill_returns_403():
             assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
-def test_update_skill_with_path_traversal_returns_400():
-    with given([*_GIVEN, there_is_a_skill(name="Valid Skill")]) as context:
-        client: TestClient = context.client
-
-        with when("I update the skill with a file escaping the skill root"):
-            response = client.patch(
-                f"{_BASE}/{context.skill.id}",
-                json={
-                    "files": [
-                        {"path": "SKILL.md", "content": "# Skill"},
-                        {"path": "../../../etc/passwd", "content": "root:x:0:0:"},
-                    ]
-                },
-                headers=_auth(context),
-            )
-
-        with then("it returns 400"):
-            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
-
-
-def test_update_skill_with_oversized_file_returns_400():
-    with given([*_GIVEN, there_is_a_skill(name="Valid Skill")]) as context:
-        client: TestClient = context.client
-
-        with when("I update the skill with a file above the 1 MB limit"):
-            response = client.patch(
-                f"{_BASE}/{context.skill.id}",
-                json={"files": _files(content="x" * (1024 * 1024 + 1))},
-                headers=_auth(context),
-            )
-
-        with then("it returns 400"):
-            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
-
-
-def test_update_skill_publishes_a_new_version():
-    with given([*_GIVEN, there_is_a_skill(name="Versioned Skill")]) as context:
-        client: TestClient = context.client
-
-        with when("I update the skill content"):
-            response = client.patch(
-                f"{_BASE}/{context.skill.id}",
-                json={"files": _files(content="# Rewritten")},
-                headers=_auth(context),
-            )
-
-        with then("the published version advances and serves the new content"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            assert_that(response.json()["version"], equal_to(2))
-
-            files_response = client.get(
-                f"{_BASE}/{context.skill.id}/files",
-                headers=_auth(context),
-            )
-            body = files_response.json()
-            assert_that(body["version"], equal_to(2))
-            assert_that(body["files"], equal_to([{"path": "SKILL.md", "content": "# Rewritten"}]))
-
-
 def test_update_skill_metadata_only_does_not_publish_a_version():
-    """Renaming is not a content change; it must not inflate version history or make
-    running agents look out of date."""
+    """PATCH /{skill_id} is metadata-only; content changes go through the draft
+    flow, so it must never inflate version history or make running agents look
+    out of date."""
     with given([*_GIVEN, there_is_a_skill(name="Stable Skill")]) as context:
         client: TestClient = context.client
 
@@ -715,14 +657,21 @@ def test_update_skill_requires_auth():
             assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
 
 
+def _publish_new_version(client: TestClient, context, content: str) -> None:
+    """Draft -> update -> publish, the only path to a new skill version."""
+    client.post(f"{_BASE}/{context.skill.id}/draft", headers=_auth(context))
+    client.patch(
+        f"{_BASE}/{context.skill.id}/draft",
+        json={"files": _files(content=content)},
+        headers=_auth(context),
+    )
+    client.post(f"{_BASE}/{context.skill.id}/draft/publish", headers=_auth(context))
+
+
 def test_list_skill_versions_returns_newest_first():
     with given([*_GIVEN, there_is_a_skill(name="Versioned Skill")]) as context:
         client: TestClient = context.client
-        client.patch(
-            f"{_BASE}/{context.skill.id}",
-            json={"files": _files(content="# v2")},
-            headers=_auth(context),
-        )
+        _publish_new_version(client, context, "# v2")
 
         with when("I list the skill's versions"):
             response = client.get(f"{_BASE}/{context.skill.id}/versions", headers=_auth(context))
@@ -772,66 +721,257 @@ def test_get_skill_version_not_found_returns_404():
             assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
-def test_restore_skill_version_publishes_the_old_content_as_a_new_version():
+def test_start_skill_draft_seeds_from_latest_version():
     with given([*_GIVEN, there_is_a_skill(name="Versioned Skill")]) as context:
         client: TestClient = context.client
+
+        with when("I start a draft with no source version"):
+            response = client.post(f"{_BASE}/{context.skill.id}/draft", headers=_auth(context))
+
+        with then("it is seeded from the latest published version"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            body = response.json()
+            assert_that(body["files"], equal_to([{"path": "SKILL.md", "content": "# Versioned Skill"}]))
+            assert_that(body["source_version"], equal_to(None))
+
+
+def test_start_skill_draft_is_get_or_create():
+    with given([*_GIVEN, there_is_a_skill(name="Versioned Skill")]) as context:
+        client: TestClient = context.client
+        client.post(f"{_BASE}/{context.skill.id}/draft", headers=_auth(context))
         client.patch(
-            f"{_BASE}/{context.skill.id}",
-            json={"files": _files(content="# v2")},
+            f"{_BASE}/{context.skill.id}/draft",
+            json={"files": _files(content="# In progress")},
             headers=_auth(context),
         )
 
-        with when("I restore version 1"):
-            response = client.post(f"{_BASE}/{context.skill.id}/versions/1/restore", headers=_auth(context))
+        with when("I start a draft again"):
+            response = client.post(f"{_BASE}/{context.skill.id}/draft", headers=_auth(context))
 
-        with then("a new version 3 is published with version 1's content"):
+        with then("the existing in-progress draft is returned unchanged"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(response.json()["files"], equal_to([{"path": "SKILL.md", "content": "# In progress"}]))
+
+
+def test_start_skill_draft_with_source_version_seeds_from_that_version():
+    with given([*_GIVEN, there_is_a_skill(name="Versioned Skill")]) as context:
+        client: TestClient = context.client
+        _publish_new_version(client, context, "# v2")
+
+        with when("I start a draft seeded from version 1"):
+            response = client.post(
+                f"{_BASE}/{context.skill.id}/draft",
+                params={"source_version": 1},
+                headers=_auth(context),
+            )
+
+        with then("it carries version 1's content and remembers where it came from"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            body = response.json()
+            assert_that(body["files"], equal_to([{"path": "SKILL.md", "content": "# Versioned Skill"}]))
+            assert_that(body["source_version"], equal_to(1))
+
+
+def test_start_skill_draft_with_source_version_conflicts_when_a_draft_exists():
+    with given([*_GIVEN, there_is_a_skill(name="Versioned Skill")]) as context:
+        client: TestClient = context.client
+        client.post(f"{_BASE}/{context.skill.id}/draft", headers=_auth(context))
+
+        with when("I try to restore a version while a draft is already in progress"):
+            response = client.post(
+                f"{_BASE}/{context.skill.id}/draft",
+                params={"source_version": 1},
+                headers=_auth(context),
+            )
+
+        with then("it returns 409"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+
+
+def test_start_skill_draft_for_aai_cli_skill_returns_403():
+    with given([*_GIVEN, there_is_a_skill(global_skill=True)]) as context:
+        client: TestClient = context.client
+
+        with when("I try to draft a built-in aai-cli skill"):
+            response = client.post(f"{_BASE}/{context.skill.id}/draft", headers=_auth(context))
+
+        with then("it returns 403"):
+            assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_member_cannot_start_skill_draft():
+    with given([*_GIVEN, there_is_a_skill(name="Member Cannot Draft"), _there_is_a_member_actor()]) as context:
+        response = context.client.post(f"{_BASE}/{context.skill.id}/draft", headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_get_skill_draft_not_found_returns_404():
+    with given([*_GIVEN, there_is_a_skill(name="Versioned Skill")]) as context:
+        client: TestClient = context.client
+
+        with when("I fetch a draft that doesn't exist"):
+            response = client.get(f"{_BASE}/{context.skill.id}/draft", headers=_auth(context))
+
+        with then("it returns 404"):
+            assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_update_skill_draft_replaces_its_files():
+    with given([*_GIVEN, there_is_a_skill(name="Versioned Skill")]) as context:
+        client: TestClient = context.client
+        client.post(f"{_BASE}/{context.skill.id}/draft", headers=_auth(context))
+
+        with when("I update the draft's content"):
+            response = client.patch(
+                f"{_BASE}/{context.skill.id}/draft",
+                json={"files": _files(content="# Edited")},
+                headers=_auth(context),
+            )
+
+        with then("the draft carries the new content, and nothing is published yet"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            assert_that(response.json()["version"], equal_to(3))
+            assert_that(response.json()["files"], equal_to([{"path": "SKILL.md", "content": "# Edited"}]))
+
+            skill_response = client.get(f"{_BASE}/{context.skill.id}", headers=_auth(context))
+            assert_that(skill_response.json()["version"], equal_to(1))
+
+
+def test_update_skill_draft_with_path_traversal_returns_400():
+    with given([*_GIVEN, there_is_a_skill(name="Versioned Skill")]) as context:
+        client: TestClient = context.client
+        client.post(f"{_BASE}/{context.skill.id}/draft", headers=_auth(context))
+
+        with when("I update the draft with a file escaping the skill root"):
+            response = client.patch(
+                f"{_BASE}/{context.skill.id}/draft",
+                json={
+                    "files": [
+                        {"path": "SKILL.md", "content": "# Skill"},
+                        {"path": "../../../etc/passwd", "content": "root:x:0:0:"},
+                    ]
+                },
+                headers=_auth(context),
+            )
+
+        with then("it returns 400"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+
+
+def test_update_skill_draft_with_oversized_file_returns_400():
+    with given([*_GIVEN, there_is_a_skill(name="Versioned Skill")]) as context:
+        client: TestClient = context.client
+        client.post(f"{_BASE}/{context.skill.id}/draft", headers=_auth(context))
+
+        with when("I update the draft with a file above the 1 MB limit"):
+            response = client.patch(
+                f"{_BASE}/{context.skill.id}/draft",
+                json={"files": _files(content="x" * (1024 * 1024 + 1))},
+                headers=_auth(context),
+            )
+
+        with then("it returns 400"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+
+
+def test_update_skill_draft_not_found_returns_404():
+    with given([*_GIVEN, there_is_a_skill(name="Versioned Skill")]) as context:
+        client: TestClient = context.client
+
+        with when("I update a draft that doesn't exist"):
+            response = client.patch(
+                f"{_BASE}/{context.skill.id}/draft",
+                json={"files": _files()},
+                headers=_auth(context),
+            )
+
+        with then("it returns 404"):
+            assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_discard_skill_draft_removes_it():
+    with given([*_GIVEN, there_is_a_skill(name="Versioned Skill")]) as context:
+        client: TestClient = context.client
+        client.post(f"{_BASE}/{context.skill.id}/draft", headers=_auth(context))
+
+        with when("I discard the draft"):
+            response = client.delete(f"{_BASE}/{context.skill.id}/draft", headers=_auth(context))
+
+        with then("it is gone"):
+            assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+            get_response = client.get(f"{_BASE}/{context.skill.id}/draft", headers=_auth(context))
+            assert_that(get_response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_discard_skill_draft_not_found_returns_404():
+    with given([*_GIVEN, there_is_a_skill(name="Versioned Skill")]) as context:
+        client: TestClient = context.client
+
+        with when("I discard a draft that doesn't exist"):
+            response = client.delete(f"{_BASE}/{context.skill.id}/draft", headers=_auth(context))
+
+        with then("it returns 404"):
+            assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_publish_skill_draft_creates_the_next_version_and_clears_the_draft():
+    with given([*_GIVEN, there_is_a_skill(name="Versioned Skill")]) as context:
+        client: TestClient = context.client
+        client.post(f"{_BASE}/{context.skill.id}/draft", headers=_auth(context))
+        client.patch(
+            f"{_BASE}/{context.skill.id}/draft",
+            json={"files": _files(content="# Rewritten")},
+            headers=_auth(context),
+        )
+
+        with when("I publish the draft"):
+            response = client.post(f"{_BASE}/{context.skill.id}/draft/publish", headers=_auth(context))
+
+        with then("the published version advances, serves the new content, and the draft is cleared"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(response.json()["version"], equal_to(2))
 
             files_response = client.get(f"{_BASE}/{context.skill.id}/files", headers=_auth(context))
             body = files_response.json()
-            assert_that(body["version"], equal_to(3))
-            assert_that(body["files"], equal_to([{"path": "SKILL.md", "content": "# Versioned Skill"}]))
+            assert_that(body["version"], equal_to(2))
+            assert_that(body["files"], equal_to([{"path": "SKILL.md", "content": "# Rewritten"}]))
+
+            draft_response = client.get(f"{_BASE}/{context.skill.id}/draft", headers=_auth(context))
+            assert_that(draft_response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_publish_skill_draft_seeded_from_an_older_version_records_restored_from_version():
+    with given([*_GIVEN, there_is_a_skill(name="Versioned Skill")]) as context:
+        client: TestClient = context.client
+        _publish_new_version(client, context, "# v2")
+        client.post(f"{_BASE}/{context.skill.id}/draft", params={"source_version": 1}, headers=_auth(context))
+
+        with when("I publish the rollback draft"):
+            response = client.post(f"{_BASE}/{context.skill.id}/draft/publish", headers=_auth(context))
+
+        with then("version 3 is published, carrying version 1's content and the restore marker"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(response.json()["version"], equal_to(3))
 
             versions_response = client.get(f"{_BASE}/{context.skill.id}/versions", headers=_auth(context))
             restored_entry = next(v for v in versions_response.json() if v["version"] == 3)
             assert_that(restored_entry["restored_from_version"], equal_to(1))
 
 
-def test_restore_skill_version_not_found_returns_404():
+def test_publish_skill_draft_not_found_returns_404():
     with given([*_GIVEN, there_is_a_skill(name="Versioned Skill")]) as context:
         client: TestClient = context.client
 
-        with when("I restore a version that was never published"):
-            response = client.post(f"{_BASE}/{context.skill.id}/versions/99/restore", headers=_auth(context))
+        with when("I publish a draft that doesn't exist"):
+            response = client.post(f"{_BASE}/{context.skill.id}/draft/publish", headers=_auth(context))
 
         with then("it returns 404"):
             assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
-def test_restore_aai_cli_skill_version_returns_403():
-    with given([*_GIVEN, there_is_a_skill(global_skill=True)]) as context:
-        client: TestClient = context.client
-
-        with when("I try to restore a built-in aai-cli skill's version"):
-            response = client.post(f"{_BASE}/{context.skill.id}/versions/1/restore", headers=_auth(context))
-
-        with then("it returns 403"):
-            assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
-
-
-def test_member_cannot_restore_skill_version():
-    with given(
-        [
-            *_GIVEN,
-            there_is_a_skill(name="Member Cannot Restore"),
-            _there_is_a_member_actor(),
-        ]
-    ) as context:
-        response = context.client.post(
-            f"{_BASE}/{context.skill.id}/versions/1/restore",
-            headers=_auth(context),
-        )
+def test_member_cannot_publish_skill_draft():
+    with given([*_GIVEN, there_is_a_skill(name="Member Cannot Publish"), _there_is_a_member_actor()]) as context:
+        response = context.client.post(f"{_BASE}/{context.skill.id}/draft/publish", headers=_auth(context))
 
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 

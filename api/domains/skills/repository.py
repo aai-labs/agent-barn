@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from uuid import UUID
 
 from injector import inject, singleton
@@ -6,7 +7,15 @@ from sqlalchemy import func
 from sqlmodel import Session, col, delete, or_, select
 
 from api.domains.agents.models import Agent, AgentSkill, AgentTemplateSkill, PlatformTemplateSkill
-from api.domains.skills.models import Skill, SkillFile, SkillFilter, SkillSource, SkillVersion
+from api.domains.skills.models import (
+    Skill,
+    SkillDraft,
+    SkillDraftFile,
+    SkillFile,
+    SkillFilter,
+    SkillSource,
+    SkillVersion,
+)
 from api.domains.templates.models import AgentTemplate, PlatformTemplate
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.infrastructure.shared.models import Pagination
@@ -126,6 +135,88 @@ class SkillRepository:
             session.flush()
             for path, content in files:
                 session.add(SkillFile(skill_version_id=version.id, path=path, content=content))
+            session.commit()
+            session.refresh(version)
+            return version
+
+    # --- draft -----------------------------------------------------------
+    #
+    # At most one draft per lineage: a get-or-create slot for in-progress file
+    # edits, mutated in place until it's published or discarded.
+
+    def get_draft(self, skill_id: UUID) -> SkillDraft | None:
+        with Session(self.delegate.engine) as session:
+            query = select(SkillDraft).where(col(SkillDraft.skill_id) == skill_id)
+            return session.exec(query).first()
+
+    def get_draft_files(self, draft_id: UUID) -> list[SkillDraftFile]:
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(SkillDraftFile)
+                .where(col(SkillDraftFile.skill_draft_id) == draft_id)
+                .order_by(col(SkillDraftFile.path).asc())
+            )
+            return list(session.exec(query).all())
+
+    def save_new_draft(
+        self, skill_id: UUID, files: list[tuple[str, str]], *, source_version: int | None = None
+    ) -> SkillDraft:
+        with Session(self.delegate.engine) as session:
+            draft = SkillDraft(skill_id=skill_id, source_version=source_version)
+            session.add(draft)
+            session.flush()
+            for path, content in files:
+                session.add(SkillDraftFile(skill_draft_id=draft.id, path=path, content=content))
+            session.commit()
+            session.refresh(draft)
+            return draft
+
+    def update_draft_files(self, draft_id: UUID, files: list[tuple[str, str]]) -> SkillDraft:
+        with Session(self.delegate.engine) as session:
+            draft = session.get(SkillDraft, draft_id)
+            assert draft is not None
+            session.exec(  # type: ignore[call-overload]
+                delete(SkillDraftFile).where(col(SkillDraftFile.skill_draft_id) == draft_id)
+            )
+            for path, content in files:
+                session.add(SkillDraftFile(skill_draft_id=draft_id, path=path, content=content))
+            draft.updated_at = datetime.now(UTC)
+            session.add(draft)
+            session.commit()
+            session.refresh(draft)
+            return draft
+
+    def delete_draft(self, draft_id: UUID) -> None:
+        with Session(self.delegate.engine) as session:
+            session.exec(delete(SkillDraft).where(col(SkillDraft.id) == draft_id))  # type: ignore[call-overload]
+            session.commit()
+
+    def publish_draft(
+        self,
+        skill_id: UUID,
+        draft_id: UUID,
+        files: list[tuple[str, str]],
+        *,
+        created_by: UUID | None = None,
+        restored_from_version: int | None = None,
+    ) -> SkillVersion:
+        """Publish a draft's files as the next immutable version, then clear the
+        draft slot, atomically."""
+        with Session(self.delegate.engine) as session:
+            current = session.exec(
+                select(func.max(col(SkillVersion.version))).where(col(SkillVersion.skill_id) == skill_id)
+            ).one()
+            version = SkillVersion(
+                skill_id=skill_id,
+                version=(current or 0) + 1,
+                created_by=created_by,
+                restored_from_version=restored_from_version,
+            )
+            session.add(version)
+            session.flush()
+            for path, content in files:
+                session.add(SkillFile(skill_version_id=version.id, path=path, content=content))
+            session.exec(delete(SkillDraft).where(col(SkillDraft.id) == draft_id))  # type: ignore[call-overload]
             session.commit()
             session.refresh(version)
             return version

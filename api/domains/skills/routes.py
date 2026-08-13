@@ -9,6 +9,8 @@ from api.domains.auth.utils import get_current_user, require_platform_admin
 from api.domains.skills.models import (
     SkillCreate,
     SkillDetailRead,
+    SkillDraftRead,
+    SkillDraftUpdate,
     SkillFilter,
     SkillSummaryRead,
     SkillUpdate,
@@ -103,15 +105,54 @@ def get_skill_version(
     return service.get_skill_version_detail(skill_id, version, context)
 
 
-@skills_router.post("/{skill_id}/versions/{version}/restore", response_model=SkillSummaryRead)
-def restore_skill_version(
+@skills_router.get("/{skill_id}/draft", response_model=SkillDraftRead)
+def get_skill_draft(
     skill_id: UUID,
-    version: int,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[SkillService, Injected(SkillService)],
 ):
-    """Publish a new version whose content is copied from an older one."""
-    return service.restore_skill_version(skill_id, version, context)
+    return service.get_skill_draft(skill_id, context)
+
+
+@skills_router.post("/{skill_id}/draft", response_model=SkillDraftRead, status_code=status.HTTP_201_CREATED)
+def start_skill_draft(
+    skill_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[SkillService, Injected(SkillService)],
+    source_version: Annotated[int | None, Query(ge=1)] = None,
+):
+    """Get-or-create the in-flight draft. Pass source_version to seed a new draft
+    from an older published version (rollback); omit it to start from latest."""
+    return service.start_skill_draft(skill_id, context, source_version)
+
+
+@skills_router.patch("/{skill_id}/draft", response_model=SkillDraftRead)
+def update_skill_draft(
+    skill_id: UUID,
+    data: SkillDraftUpdate,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[SkillService, Injected(SkillService)],
+):
+    return service.update_skill_draft(skill_id, data, context)
+
+
+@skills_router.delete("/{skill_id}/draft", status_code=status.HTTP_204_NO_CONTENT)
+def discard_skill_draft(
+    skill_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[SkillService, Injected(SkillService)],
+):
+    service.discard_skill_draft(skill_id, context)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@skills_router.post("/{skill_id}/draft/publish", response_model=SkillSummaryRead, status_code=status.HTTP_201_CREATED)
+def publish_skill_draft(
+    skill_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[SkillService, Injected(SkillService)],
+):
+    return service.publish_skill_draft(skill_id, context)
 
 
 @skills_router.delete("/{skill_id}", status_code=status.HTTP_204_NO_CONTENT)
