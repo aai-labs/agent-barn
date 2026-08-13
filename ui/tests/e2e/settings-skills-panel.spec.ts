@@ -5,6 +5,7 @@ import {
   mockCustomSkill,
   mockPlatformSkill,
   MOCK_CUSTOM_SKILL_ID,
+  MOCK_PLATFORM_SKILL_ID,
 } from "../pages/data-support/skill-data-support.po";
 import { DataSupport } from "../pages/data-support/data-support.po";
 
@@ -21,6 +22,13 @@ test.describe("Settings — Skills panel", () => {
     await dataSupportPage.users.interceptGetUserContextRequest();
     await dataSupportPage.users.interceptGetOrganizationsRequest();
     await dataSupportPage.skills.interceptGetSkillsRequest();
+    // The drawer loads a skill's published files when it opens.
+    await dataSupportPage.skills.interceptGetSkillFilesRequest();
+    await dataSupportPage.skills.interceptGetSkillFilesRequest({
+      skillId: MOCK_PLATFORM_SKILL_ID,
+      skill: mockPlatformSkill,
+      files: [{ path: "github_skill.md", content: "# GitHub" }],
+    });
     await dataSupportPage.agents.interceptGetTemplatesRequest();
 
     await page.goto(`/dashboard/${TEST_ORG_ID}/settings`);
@@ -100,12 +108,32 @@ test.describe("Settings — Skills panel", () => {
     await expect(page.getByRole("button", { name: "Create skill" })).toBeVisible();
   });
 
-  test("create skill drawer shows file error when submitted without a zip", async ({ page }) => {
+  test("create skill drawer starts from a SKILL.md entry point", async ({ page }) => {
     await page.getByRole("button", { name: /new skill/i }).click();
     await page.getByPlaceholder("e.g. my-tool").fill("test-skill");
-    await page.getByRole("button", { name: "Create skill" }).click();
 
-    await expect(page.getByText("A zip file is required.")).toBeVisible();
+    await expect(page.getByRole("button", { name: "SKILL.md" })).toBeVisible();
+    await expect(page.getByLabel("Content of SKILL.md")).not.toBeEmpty();
+  });
+
+  test("create skill drawer can add a nested file", async ({ page }) => {
+    await page.getByRole("button", { name: /new skill/i }).click();
+    await page.getByPlaceholder("e.g. my-tool").fill("test-skill");
+
+    await page.getByPlaceholder("helpers/notes.md").fill("helpers/notes.md");
+    await page.getByRole("button", { name: "Add file" }).click();
+
+    await expect(page.getByRole("button", { name: "helpers/notes.md", exact: true })).toBeVisible();
+    await expect(page.getByLabel("Content of helpers/notes.md")).toBeVisible();
+  });
+
+  test("create skill drawer rejects a duplicate file path", async ({ page }) => {
+    await page.getByRole("button", { name: /new skill/i }).click();
+
+    await page.getByPlaceholder("helpers/notes.md").fill("SKILL.md");
+    await page.getByRole("button", { name: "Add file" }).click();
+
+    await expect(page.getByText("A file with that path already exists.")).toBeVisible();
   });
 
   test("create skill drawer can be cancelled", async ({ page }) => {
@@ -138,11 +166,19 @@ test.describe("Settings — Skills panel", () => {
     await expect(page.getByPlaceholder("e.g. my-tool")).toHaveValue(mockCustomSkill.name);
   });
 
-  test("edit form in drawer shows hint to keep existing zip", async ({ page }) => {
+  test("edit form in drawer loads the published files", async ({ page }) => {
     await page.getByRole("button", { name: "View" }).nth(1).click();
     await page.getByRole("button", { name: "Edit skill" }).click();
 
-    await expect(page.getByText("Leave empty to keep the existing zip.")).toBeVisible();
+    await expect(page.getByRole("button", { name: "SKILL.md" })).toBeVisible();
+    await expect(page.getByLabel("Content of SKILL.md")).toHaveValue("# My tool");
+  });
+
+  test("built-in skill files are readable but not editable", async ({ page }) => {
+    await page.getByRole("button", { name: "View" }).first().click();
+
+    await expect(page.getByLabel(/^Content of /)).toHaveAttribute("readonly", "");
+    await expect(page.getByRole("button", { name: "Edit skill" })).not.toBeVisible();
   });
 
   test("clicking Delete in drawer shows confirmation", async ({ page }) => {

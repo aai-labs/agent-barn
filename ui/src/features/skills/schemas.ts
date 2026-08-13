@@ -6,11 +6,27 @@ export const SkillSchema = z.object({
   id: z.string().uuid(),
   organizationId: z.string().uuid().nullable(),
   name: z.string(),
+  slug: z.string(),
+  description: z.string().nullable(),
+  // Directory the skill's files are written to in the agent workspace.
+  rootDir: z.string(),
+  entryPath: z.string(),
   source: SkillSourceSchema,
   requiredProviders: z.array(z.string()),
   toolsPointer: z.string().nullable(),
+  version: z.number().int().min(1),
   createdAt: z.string(),
   updatedAt: z.string(),
+});
+
+export const SkillFileSchema = z.object({
+  // Path relative to the skill root, e.g. "SKILL.md" or "helpers/notes.md".
+  path: z.string(),
+  content: z.string(),
+});
+
+export const SkillDetailSchema = SkillSchema.extend({
+  files: z.array(SkillFileSchema),
 });
 
 export const PaginatedSkillsSchema = z.object({
@@ -21,5 +37,7 @@ export const PaginatedSkillsSchema = z.object({
 });
 
 export type Skill = z.infer<typeof SkillSchema>;
+export type SkillFile = z.infer<typeof SkillFileSchema>;
+export type SkillDetail = z.infer<typeof SkillDetailSchema>;
 export type SkillSource = z.infer<typeof SkillSourceSchema>;
 export type PaginatedSkills = z.infer<typeof PaginatedSkillsSchema>;

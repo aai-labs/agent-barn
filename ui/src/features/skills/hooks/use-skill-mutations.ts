@@ -8,16 +8,24 @@ import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organ
 import { SkillSchema, type Skill } from "../schemas";
 import { skillsKey } from "../utils";
 
+export type SkillFilePayload = {
+  path: string;
+  content: string;
+};
+
 export type SkillCreatePayload = {
   name: string;
-  zipContent: string;
+  description?: string;
+  files: SkillFilePayload[];
   requiredProviders?: string[];
 };
 
 export type SkillUpdatePayload = {
   skillId: string;
   name?: string;
-  zipContent?: string;
+  description?: string;
+  // Omit to leave content untouched; supplying it publishes the next version.
+  files?: SkillFilePayload[];
   requiredProviders?: string[];
 };
 

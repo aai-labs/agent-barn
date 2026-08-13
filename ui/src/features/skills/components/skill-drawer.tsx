@@ -1,18 +1,21 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useState } from "react";
 
 import { XIcon } from "@/components/icons";
 
+import { useSkillFiles } from "../hooks/use-skill-files";
+import { SkillFilesEditor } from "./skill-files-editor";
 import {
   type SkillCreatePayload,
+  type SkillFilePayload,
   type SkillUpdatePayload,
   useCreateSkill,
   useDeleteSkill,
   useUpdateSkill,
 } from "../hooks/use-skill-mutations";
 import type { Skill } from "../schemas";
-import { ALL_PROVIDERS, SKILL_PROVIDER_LABELS, fileToBase64 } from "../utils";
+import { ALL_PROVIDERS, DEFAULT_ENTRY_PATH, NEW_SKILL_TEMPLATE, SKILL_PROVIDER_LABELS } from "../utils";
 
 type DrawerMode =
   | { kind: "create" }
@@ -48,12 +51,24 @@ export function SkillDrawer({ mode, canManage, onClose }: SkillDrawerProps) {
   const [confirming, setConfirming] = useState(false);
 
   const [name, setName] = useState(skill?.name ?? "");
+  const [description, setDescription] = useState(skill?.description ?? "");
   const [selectedProviders, setSelectedProviders] = useState<string[]>(
     skill?.requiredProviders ?? [],
   );
-  const [file, setFile] = useState<File | null>(null);
+  // Edits are held separately from the fetched files rather than copied into state, so
+  // a background refetch cannot clobber what the user typed and null unambiguously
+  // means "unchanged" — which is also what decides whether a new version is published.
+  const [draftFiles, setDraftFiles] = useState<SkillFilePayload[] | null>(
+    isCreate ? [{ path: DEFAULT_ENTRY_PATH, content: NEW_SKILL_TEMPLATE }] : null,
+  );
   const [fileError, setFileError] = useState<string | null>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
+
+  const entryPath = skill?.entryPath ?? DEFAULT_ENTRY_PATH;
+  const { files: publishedFiles, isLoading: filesLoading } = useSkillFiles(skill?.id ?? null);
+
+  const files =
+    draftFiles ?? publishedFiles.map((f) => ({ path: f.path, content: f.content }));
+  const filesDirty = draftFiles !== null;
 
   const createSkill = useCreateSkill();
   const updateSkill = useUpdateSkill();
@@ -61,6 +76,11 @@ export function SkillDrawer({ mode, canManage, onClose }: SkillDrawerProps) {
 
   const isPending = createSkill.isPending || updateSkill.isPending;
   const mutationError = createSkill.error ?? updateSkill.error;
+
+  function handleFilesChange(next: SkillFilePayload[]) {
+    setDraftFiles(next);
+    setFileError(null);
+  }
 
   function toggleProvider(value: string) {
     setSelectedProviders((prev) =>
@@ -76,18 +96,18 @@ export function SkillDrawer({ mode, canManage, onClose }: SkillDrawerProps) {
   function handleCancelEdit() {
     setEditing(false);
     setFileError(null);
-    setFile(null);
-    if (fileRef.current) fileRef.current.value = "";
     // Reset form back to current skill values
     setName(skill?.name ?? "");
+    setDescription(skill?.description ?? "");
     setSelectedProviders(skill?.requiredProviders ?? []);
+    setDraftFiles(null);
   }
 
   async function handleSave() {
     setFileError(null);
 
-    if (isCreate && !file) {
-      setFileError("A zip file is required.");
+    if (!files.some((f) => f.path === entryPath)) {
+      setFileError(`A skill must include its entry point, ${entryPath}.`);
       return;
     }
 
@@ -96,18 +116,22 @@ export function SkillDrawer({ mode, canManage, onClose }: SkillDrawerProps) {
         const payload: SkillUpdatePayload = {
           skillId: skill.id,
           name: name.trim() || undefined,
+          description: description.trim() || undefined,
           requiredProviders: selectedProviders,
         };
-        if (file) {
-          payload.zipContent = await fileToBase64(file);
+        // Only send content when it actually changed, so a metadata-only edit does
+        // not publish a redundant version.
+        if (filesDirty) {
+          payload.files = files;
         }
         await updateSkill.mutateAsync(payload);
+        setDraftFiles(null);
         setEditing(false);
       } else {
-        const zipContent = await fileToBase64(file!);
         const payload: SkillCreatePayload = {
           name: name.trim(),
-          zipContent,
+          description: description.trim() || undefined,
+          files,
           requiredProviders: selectedProviders,
         };
         await createSkill.mutateAsync(payload);
@@ -204,22 +228,37 @@ export function SkillDrawer({ mode, canManage, onClose }: SkillDrawerProps) {
 
               <div className="flex flex-col gap-1.5">
                 <label className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>
-                  Skill zip {isCreate && <span style={{ color: "var(--err)" }}>*</span>}
+                  Description{" "}
+                  <span className="font-normal" style={{ color: "var(--ink-4)" }}>
+                    (optional)
+                  </span>
                 </label>
                 <input
-                  ref={fileRef}
-                  type="file"
-                  accept=".zip"
-                  className="af-input text-[0.8125rem]"
-                  onChange={(e) => {
-                    setFile(e.target.files?.[0] ?? null);
-                    setFileError(null);
-                  }}
+                  className="af-input"
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  maxLength={2000}
+                  placeholder="What this skill helps the agent do"
                 />
-                {skill && (
-                  <span className="text-xs" style={{ color: "var(--ink-4)" }}>
-                    Leave empty to keep the existing zip.
+                <span className="text-xs" style={{ color: "var(--ink-4)" }}>
+                  Shown to the agent alongside the pointer to this skill.
+                </span>
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <label className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>
+                  Files <span style={{ color: "var(--err)" }}>*</span>
+                </label>
+                {filesLoading && !isCreate ? (
+                  <span className="text-[13px]" style={{ color: "var(--ink-4)" }}>
+                    Loading files…
                   </span>
+                ) : (
+                  <SkillFilesEditor
+                    files={files}
+                    onChange={handleFilesChange}
+                    entryPath={entryPath}
+                  />
                 )}
                 {fileError && (
                   <span className="text-xs" style={{ color: "var(--err)" }}>
@@ -273,6 +312,16 @@ export function SkillDrawer({ mode, canManage, onClose }: SkillDrawerProps) {
                   {skill?.name}
                 </div>
               </div>
+              {skill?.description && (
+                <div className="flex flex-col gap-1.5">
+                  <div className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>
+                    Description
+                  </div>
+                  <div className="text-[14px]" style={{ color: "var(--ink)" }}>
+                    {skill.description}
+                  </div>
+                </div>
+              )}
               <div className="flex flex-col gap-1.5">
                 <div className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>
                   Required providers
@@ -297,6 +346,28 @@ export function SkillDrawer({ mode, canManage, onClose }: SkillDrawerProps) {
                   <div className="text-[13px]" style={{ color: "var(--ink-4)" }}>
                     None
                   </div>
+                )}
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <div className="flex items-center justify-between">
+                  <div className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>
+                    Files
+                  </div>
+                  <span className="text-[11px]" style={{ color: "var(--ink-4)" }}>
+                    v{skill?.version} · ./skills/{skill?.rootDir}
+                  </span>
+                </div>
+                {filesLoading ? (
+                  <div className="text-[13px]" style={{ color: "var(--ink-4)" }}>
+                    Loading files…
+                  </div>
+                ) : (
+                  <SkillFilesEditor
+                    files={files}
+                    onChange={handleFilesChange}
+                    entryPath={entryPath}
+                    readOnly
+                  />
                 )}
               </div>
             </div>

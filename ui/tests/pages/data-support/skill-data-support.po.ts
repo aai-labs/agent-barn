@@ -10,9 +10,14 @@ export const mockPlatformSkill = {
   id: MOCK_PLATFORM_SKILL_ID,
   organizationId: null,
   name: "github",
+  slug: "github",
+  description: null,
+  rootDir: "aai-cli",
+  entryPath: "github_skill.md",
   source: "aai_cli",
   requiredProviders: ["github"],
   toolsPointer: null,
+  version: 1,
   createdAt: "2026-01-01T00:00:00Z",
   updatedAt: "2026-01-01T00:00:00Z",
 };
@@ -21,9 +26,14 @@ export const mockCustomSkill = {
   id: MOCK_CUSTOM_SKILL_ID,
   organizationId: "22222222-2222-4222-8222-222222222222",
   name: "my-tool",
+  slug: "my-tool",
+  description: null,
+  rootDir: "my-tool",
+  entryPath: "SKILL.md",
   source: "custom",
   requiredProviders: [],
   toolsPointer: null,
+  version: 1,
   createdAt: "2026-01-01T00:00:00Z",
   updatedAt: "2026-01-01T00:00:00Z",
 };
@@ -32,9 +42,14 @@ export const mockJiraSkill = {
   id: MOCK_JIRA_SKILL_ID,
   organizationId: null,
   name: "jira",
+  slug: "jira",
+  description: null,
+  rootDir: "aai-cli",
+  entryPath: "jira_skill.md",
   source: "aai_cli",
   requiredProviders: ["jira"],
   toolsPointer: null,
+  version: 1,
   createdAt: "2026-01-01T00:00:00Z",
   updatedAt: "2026-01-01T00:00:00Z",
 };
@@ -43,9 +58,14 @@ export const mockGmailSkill = {
   id: MOCK_GMAIL_SKILL_ID,
   organizationId: null,
   name: "gmail",
+  slug: "gmail",
+  description: null,
+  rootDir: "aai-cli",
+  entryPath: "gmail_skill.md",
   source: "aai_cli",
   requiredProviders: ["gmail"],
   toolsPointer: null,
+  version: 1,
   createdAt: "2026-01-01T00:00:00Z",
   updatedAt: "2026-01-01T00:00:00Z",
 };
@@ -54,9 +74,14 @@ export const mockBitbucketSkill = {
   id: MOCK_BITBUCKET_SKILL_ID,
   organizationId: null,
   name: "bitbucket",
+  slug: "bitbucket",
+  description: null,
+  rootDir: "aai-cli",
+  entryPath: "bitbucket_skill.md",
   source: "aai_cli",
   requiredProviders: ["bitbucket"],
   toolsPointer: null,
+  version: 1,
   createdAt: "2026-01-01T00:00:00Z",
   updatedAt: "2026-01-01T00:00:00Z",
 };
@@ -110,6 +135,33 @@ export class SkillDataSupport {
         status,
         contentType: "application/json",
         body: JSON.stringify(responseBody),
+      });
+    });
+  }
+
+  async interceptGetSkillFilesRequest({
+    skillId = MOCK_CUSTOM_SKILL_ID,
+    status = 200,
+    files = [{ path: "SKILL.md", content: "# My tool" }],
+    skill = mockCustomSkill,
+  }: {
+    skillId?: string;
+    status?: number;
+    files?: { path: string; content: string }[];
+    skill?: Record<string, unknown>;
+  } = {}) {
+    await this.page.route(`**/api/v1/organizations/*/skills/${skillId}/files`, async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status,
+        contentType: "application/json",
+        body:
+          status >= 400
+            ? JSON.stringify({ detail: "Unable to load skill files" })
+            : JSON.stringify({ ...skill, files }),
       });
     });
   }

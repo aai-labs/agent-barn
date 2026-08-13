@@ -81,8 +81,8 @@ export function SkillsPanel() {
     <>
       <Hint>
         <ShieldIcon style={{ flexShrink: 0, marginTop: 1 }} />
-        Platform skills are provided by AAI Labs and cannot be modified. Custom skills are uploaded
-        by your organization and can be assigned to agents.
+        Platform skills are provided by AAI Labs and can be viewed but not modified. Custom skills
+        are written by your organization and can be assigned to agents.
       </Hint>
 
       <div className="mb-4 flex items-center gap-2.5">
