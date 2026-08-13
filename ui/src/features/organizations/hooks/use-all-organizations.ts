@@ -33,7 +33,6 @@ export function useAllOrganizations({ enabled }: { enabled: boolean }) {
 
   return {
     organizations: query.data?.items ?? [],
-    total: query.data?.total ?? null,
     isLoading: query.isLoading,
     error: query.error,
   };

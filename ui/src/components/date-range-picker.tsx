@@ -22,6 +22,7 @@ interface DateRangePickerProps {
   width?: string;
   /** Trigger classes, so the control can match the surrounding toolbar. */
   className?: string;
+  /** Optional. Leave unset so the trigger is named by its current value. */
   ariaLabel?: string;
 }
 
@@ -62,7 +63,7 @@ export function DateRangePicker({
       <PopoverTrigger asChild>
         <button
           type="button"
-          aria-label={ariaLabel ?? placeholder}
+          aria-label={ariaLabel}
           className={`${className} flex items-center gap-2`}
           style={width ? { width } : undefined}
         >

@@ -4,7 +4,15 @@ import { useMemo, useState } from "react";
 
 import { AppErrorState } from "@/components/app-error-state";
 import { DateRangePicker } from "@/components/date-range-picker";
-import { useAllOrganizations } from "@/features/organizations/hooks/use-all-organizations";
+import { OrganizationCombobox } from "@/components/organization-combobox";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { useInfiniteOrganizations } from "@/features/organizations/hooks/use-infinite-organizations";
 
 import {
   usePlatformAgentStats,
@@ -48,28 +56,21 @@ function StatTile({
   );
 }
 
-// Native selects paint their arrow hard against the right edge, ignoring
-// padding. appearance-none plus an inline chevron puts it back inside the
-// control's own padding.
-const CHEVRON =
-  "url(\"data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E\")";
-
 const CONTROL_CLASS =
-  "af-card px-2.5 py-1.5 text-[12.5px] rounded-lg border-0 outline-none";
+  "af-card h-[33px] px-2.5 py-1.5 text-[12.5px] rounded-lg border-0 outline-none";
 
-const SELECT_CLASS = `${CONTROL_CLASS} appearance-none pr-7`;
-
-const SELECT_STYLE: React.CSSProperties = {
-  color: "var(--ink)",
-  backgroundImage: CHEVRON,
-  backgroundRepeat: "no-repeat",
-  backgroundPosition: "right 0.6rem center",
-};
+// Radix renders the trigger as a button; match the toolbar and keep the height
+// identical to the combobox and date picker beside it.
+// The Radix trigger sets its height through `data-[size=default]:h-8`, which
+// outranks a plain height class — match the variant to win.
+const TRIGGER_CLASS = `${CONTROL_CLASS} data-[size=default]:h-[33px] gap-2 font-normal shadow-none focus-visible:ring-0`;
 
 export function PlatformStatsPanel() {
   const [preset, setPreset] = useState<PresetId>(DEFAULT_PRESET);
   const [filters, setFilters] = useState<StatsFilters>({});
   const [custom, setCustom] = useState<{ from: string; to: string }>({ from: "", to: "" });
+  // The combobox shows a name, the API takes an id, so both are tracked.
+  const [org, setOrg] = useState<{ id: string; name: string } | null>(null);
 
   const isCustom = preset === "custom";
   // Memoised because the range is part of the query key: a fresh object with a
@@ -86,8 +87,10 @@ export function PlatformStatsPanel() {
 
   const messages = usePlatformMessageStats(filters, range);
   const agents = usePlatformAgentStats(filters, range);
-  const { organizations, total: organizationCount, isLoading: orgsLoading } =
-    useAllOrganizations({ enabled: true });
+  // pageSize 1 because only the total is wanted here — the combobox pages the
+  // list itself. This replaces eagerly fetching 200 Organizations for a count.
+  const { total: organizationCount, isLoading: orgsLoading } =
+    useInfiniteOrganizations({ pageSize: 1 });
 
   const error = messages.error ?? agents.error;
   if (error) {
@@ -170,61 +173,60 @@ export function PlatformStatsPanel() {
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
-          <select
-            aria-label="Filter by organization"
-            className={SELECT_CLASS}
-            style={SELECT_STYLE}
-            value={filters.organizationId ?? ""}
-            onChange={(e) =>
+          <OrganizationCombobox
+            organizationId={org?.id ?? null}
+            organizationName={org?.name ?? null}
+            onChange={(next) => {
+              setOrg(next);
+              setFilters((f) => ({ ...f, organizationId: next?.id }));
+            }}
+            className={CONTROL_CLASS}
+            width=""
+          />
+
+          <Select
+            value={filters.platform ?? "__all__"}
+            onValueChange={(v) =>
               setFilters((f) => ({
                 ...f,
-                organizationId: e.target.value || undefined,
+                platform: v === "__all__" ? undefined : (v as AgentPlatform),
               }))
             }
           >
-            <option value="">All organizations</option>
-            {organizations.map((org) => (
-              <option key={org.id} value={org.id}>
-                {org.name}
-              </option>
-            ))}
-          </select>
+            <SelectTrigger
+              aria-label="Filter by messaging app"
+              className={TRIGGER_CLASS}
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all__">All messaging apps</SelectItem>
+              {MESSAGING_APP_OPTIONS.map(({ value, label }) => (
+                <SelectItem key={value} value={value}>
+                  {label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
 
-          <select
-            aria-label="Filter by messaging app"
-            className={SELECT_CLASS}
-            style={SELECT_STYLE}
-            value={filters.platform ?? ""}
-            onChange={(e) =>
-              setFilters((f) => ({
-                ...f,
-                platform: (e.target.value || undefined) as
-                  | AgentPlatform
-                  | undefined,
-              }))
-            }
-          >
-            <option value="">All messaging apps</option>
-            {MESSAGING_APP_OPTIONS.map(({ value, label }) => (
-              <option key={value} value={value}>
-                {label}
-              </option>
-            ))}
-          </select>
-
-          <select
-            aria-label="Reporting period"
-            className={SELECT_CLASS}
-            style={SELECT_STYLE}
+          <Select
             value={preset}
-            onChange={(e) => setPreset(e.target.value as PresetId)}
+            onValueChange={(v) => setPreset(v as PresetId)}
           >
-            {PRESETS.map(({ id, label }) => (
-              <option key={id} value={id}>
-                {label}
-              </option>
-            ))}
-          </select>
+            <SelectTrigger
+              aria-label="Reporting period"
+              className={TRIGGER_CLASS}
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {PRESETS.map(({ id, label }) => (
+                <SelectItem key={id} value={id}>
+                  {label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
 
           {isCustom && (
             <DateRangePicker
@@ -232,7 +234,6 @@ export function PlatformStatsPanel() {
               to={custom.to}
               onChange={(from, to) => setCustom({ from, to })}
               placeholder="Pick a range"
-              ariaLabel="Custom date range"
               className={CONTROL_CLASS}
               width=""
             />
