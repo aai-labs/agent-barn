@@ -17,6 +17,8 @@ from api.domains.skills.models import (
     SkillSource,
     SkillSummaryRead,
     SkillUpdate,
+    SkillVersionDetailRead,
+    SkillVersionRead,
 )
 from api.domains.skills.repository import SkillRepository
 from api.domains.templates.slug import slugify
@@ -130,6 +132,53 @@ class SkillService:
         return SkillDetailRead.model_validate(
             {**read.model_dump(), "files": [SkillFileRead.model_validate(f) for f in files]}
         )
+
+    def list_skill_versions(self, skill_id: UUID, context: CurrentUserContext) -> list[SkillVersionRead]:
+        org_id = self._org_id(context)
+        skill = self._get_or_404(skill_id, org_id)
+        self.permission_policy.require_organization(context, org_id, PermissionKey.SKILL_READ)
+        return [SkillVersionRead.model_validate(v) for v in self.repository.list_versions(skill.id)]
+
+    def get_skill_version_detail(
+        self, skill_id: UUID, version: int, context: CurrentUserContext
+    ) -> SkillVersionDetailRead:
+        org_id = self._org_id(context)
+        skill = self._get_or_404(skill_id, org_id)
+        self.permission_policy.require_organization(context, org_id, PermissionKey.SKILL_READ)
+        skill_version = self.repository.get_version(skill.id, version)
+        if skill_version is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail=f"Version {version} not found for skill {skill_id}"
+            )
+        files = self.repository.get_files(skill_version.id)
+        return SkillVersionDetailRead.model_validate(
+            {**skill_version.model_dump(), "files": [SkillFileRead.model_validate(f) for f in files]}
+        )
+
+    def restore_skill_version(self, skill_id: UUID, version: int, context: CurrentUserContext) -> SkillSummaryRead:
+        """Publish a new version whose content is copied from an older one.
+
+        History is append-only: this never rewrites the target version, it just
+        makes its content current again under the next version number.
+        """
+        org_id = self._org_id(context)
+        skill = self._get_or_404(skill_id, org_id)
+        self.permission_policy.require_organization(context, org_id, PermissionKey.SKILL_MANAGE)
+        if skill.source == SkillSource.AAI_CLI:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot modify built-in skills",
+            )
+        source_version = self.repository.get_version(skill.id, version)
+        if source_version is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail=f"Version {version} not found for skill {skill_id}"
+            )
+        files = [(f.path, f.content) for f in self.repository.get_files(source_version.id)]
+        published = self.repository.publish_version(
+            skill.id, files, created_by=context.user.id, restored_from_version=version
+        )
+        return self._to_read(skill, published.version)
 
     def delete_skill(self, skill_id: UUID, context: CurrentUserContext) -> None:
         org_id = self._org_id(context)

@@ -715,6 +715,127 @@ def test_update_skill_requires_auth():
             assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
 
 
+def test_list_skill_versions_returns_newest_first():
+    with given([*_GIVEN, there_is_a_skill(name="Versioned Skill")]) as context:
+        client: TestClient = context.client
+        client.patch(
+            f"{_BASE}/{context.skill.id}",
+            json={"files": _files(content="# v2")},
+            headers=_auth(context),
+        )
+
+        with when("I list the skill's versions"):
+            response = client.get(f"{_BASE}/{context.skill.id}/versions", headers=_auth(context))
+
+        with then("both versions are returned, newest first"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            versions = [v["version"] for v in response.json()]
+            assert_that(versions, equal_to([2, 1]))
+
+
+def test_list_skill_versions_requires_read_permission():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Locked Down"),
+            role_lacks_permission(OrganizationRole.MEMBER, PermissionKey.SKILL_READ),
+            _there_is_a_member_actor(),
+        ]
+    ) as context:
+        response = context.client.get(f"{_BASE}/{context.skill.id}/versions", headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_get_skill_version_returns_its_files():
+    with given([*_GIVEN, there_is_a_skill(name="Versioned Skill")]) as context:
+        client: TestClient = context.client
+
+        with when("I fetch version 1"):
+            response = client.get(f"{_BASE}/{context.skill.id}/versions/1", headers=_auth(context))
+
+        with then("it returns that version's content"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            body = response.json()
+            assert_that(body["version"], equal_to(1))
+            assert_that(body["files"], equal_to([{"path": "SKILL.md", "content": "# Versioned Skill"}]))
+
+
+def test_get_skill_version_not_found_returns_404():
+    with given([*_GIVEN, there_is_a_skill(name="Versioned Skill")]) as context:
+        client: TestClient = context.client
+
+        with when("I fetch a version that was never published"):
+            response = client.get(f"{_BASE}/{context.skill.id}/versions/99", headers=_auth(context))
+
+        with then("it returns 404"):
+            assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_restore_skill_version_publishes_the_old_content_as_a_new_version():
+    with given([*_GIVEN, there_is_a_skill(name="Versioned Skill")]) as context:
+        client: TestClient = context.client
+        client.patch(
+            f"{_BASE}/{context.skill.id}",
+            json={"files": _files(content="# v2")},
+            headers=_auth(context),
+        )
+
+        with when("I restore version 1"):
+            response = client.post(f"{_BASE}/{context.skill.id}/versions/1/restore", headers=_auth(context))
+
+        with then("a new version 3 is published with version 1's content"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["version"], equal_to(3))
+
+            files_response = client.get(f"{_BASE}/{context.skill.id}/files", headers=_auth(context))
+            body = files_response.json()
+            assert_that(body["version"], equal_to(3))
+            assert_that(body["files"], equal_to([{"path": "SKILL.md", "content": "# Versioned Skill"}]))
+
+            versions_response = client.get(f"{_BASE}/{context.skill.id}/versions", headers=_auth(context))
+            restored_entry = next(v for v in versions_response.json() if v["version"] == 3)
+            assert_that(restored_entry["restored_from_version"], equal_to(1))
+
+
+def test_restore_skill_version_not_found_returns_404():
+    with given([*_GIVEN, there_is_a_skill(name="Versioned Skill")]) as context:
+        client: TestClient = context.client
+
+        with when("I restore a version that was never published"):
+            response = client.post(f"{_BASE}/{context.skill.id}/versions/99/restore", headers=_auth(context))
+
+        with then("it returns 404"):
+            assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_restore_aai_cli_skill_version_returns_403():
+    with given([*_GIVEN, there_is_a_skill(global_skill=True)]) as context:
+        client: TestClient = context.client
+
+        with when("I try to restore a built-in aai-cli skill's version"):
+            response = client.post(f"{_BASE}/{context.skill.id}/versions/1/restore", headers=_auth(context))
+
+        with then("it returns 403"):
+            assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_member_cannot_restore_skill_version():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Member Cannot Restore"),
+            _there_is_a_member_actor(),
+        ]
+    ) as context:
+        response = context.client.post(
+            f"{_BASE}/{context.skill.id}/versions/1/restore",
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
 def test_member_cannot_delete_skill():
     with given(
         [

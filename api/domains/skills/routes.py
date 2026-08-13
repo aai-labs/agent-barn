@@ -12,6 +12,8 @@ from api.domains.skills.models import (
     SkillFilter,
     SkillSummaryRead,
     SkillUpdate,
+    SkillVersionDetailRead,
+    SkillVersionRead,
     get_skill_filter,
 )
 from api.domains.skills.service import SkillService
@@ -80,6 +82,36 @@ def update_skill(
     service: Annotated[SkillService, Injected(SkillService)],
 ):
     return service.update_skill(skill_id, data, context)
+
+
+@skills_router.get("/{skill_id}/versions", response_model=list[SkillVersionRead])
+def list_skill_versions(
+    skill_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[SkillService, Injected(SkillService)],
+):
+    return service.list_skill_versions(skill_id, context)
+
+
+@skills_router.get("/{skill_id}/versions/{version}", response_model=SkillVersionDetailRead)
+def get_skill_version(
+    skill_id: UUID,
+    version: int,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[SkillService, Injected(SkillService)],
+):
+    return service.get_skill_version_detail(skill_id, version, context)
+
+
+@skills_router.post("/{skill_id}/versions/{version}/restore", response_model=SkillSummaryRead)
+def restore_skill_version(
+    skill_id: UUID,
+    version: int,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[SkillService, Injected(SkillService)],
+):
+    """Publish a new version whose content is copied from an older one."""
+    return service.restore_skill_version(skill_id, version, context)
 
 
 @skills_router.delete("/{skill_id}", status_code=status.HTTP_204_NO_CONTENT)

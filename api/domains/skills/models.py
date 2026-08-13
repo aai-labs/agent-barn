@@ -176,6 +176,22 @@ class SkillDetailRead(SkillSummaryRead):
     files: list[SkillFileRead]
 
 
+class SkillVersionRead(PydanticBaseModel):
+    """One entry in a skill lineage's version history."""
+
+    version: int
+    created_by: UUID | None
+    created_at: datetime
+    # Set when this version was published by restoring an older one.
+    restored_from_version: int | None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SkillVersionDetailRead(SkillVersionRead):
+    files: list[SkillFileRead]
+
+
 class SkillFilter(PydanticBaseModel):
     search: str | None = None
     source: SkillSource | None = None
