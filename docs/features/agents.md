@@ -18,9 +18,9 @@ An Agent is the central operational aggregate. It connects organization tenancy,
 - Explicit Agent Access is granted only to accepted Organization Members in the same Organization. Pending invitees and cross-Organization users are ineligible; removing a Membership cascades its access rows.
 - Agent General Access is an Agent-level setting: Restricted or All Organization Members with one Agent Access Role. It applies only to accepted Memberships and is additive with explicit Agent Access; removing one source leaves the other source intact.
 - Agent read DTOs expose current effective Agent-related Permission keys. The UI uses those keys for lifecycle, configuration, secret, activity, cost, and deletion controls rather than deriving Agent authority from either role family; mutations independently reauthorize and validate current state. AF-150 does not expose access-management UI.
-- Runtime and platform are separate. Hermes supports Slack and Telegram; OpenClaw supports Slack, Teams, and Telegram.
+- Runtime and platform are separate. Hermes supports Slack, Telegram, and Discord; OpenClaw supports Slack, Teams, Telegram, and Discord.
 - Persisted lifecycle states are `STOPPED`, `RUNNING`, and `ERROR`.
-- Slack agents require bot and app tokens. Teams agents require app ID, app password, and tenant ID. Telegram agents require a bot token.
+- Slack agents require bot and app tokens. Teams agents require app ID, app password, and tenant ID. Telegram and Discord agents require a bot token. Discord guild access is allowlisted by default and direct messages are disabled by default.
 - Agents respond in shared channels and groups only to messages that explicitly mention them, on every supported platform. Slack additionally requires that mention on every message rather than inheriting it from earlier thread participation; Teams and Telegram expose no equivalent control. Direct messages are exempt. Gating is generated at start; see [`../architecture/runtime-and-deployment.md`](../architecture/runtime-and-deployment.md).
 - Each active Slack agent must use a distinct bot token (enforced globally); creating or updating with a duplicate returns 409. Deleting an agent releases its token for reuse.
 - Platform is not changed through agent update. Runtime/platform compatibility is schema-validated.
@@ -36,6 +36,7 @@ An Agent is the central operational aggregate. It connects organization tenancy,
 create Slack agent ─────────────────→ STOPPED
 create Teams agent ──── auto-start ─→ RUNNING or ERROR
 create Telegram agent ─ auto-start ─→ RUNNING or ERROR
+create Discord agent ───────────────→ STOPPED
 STOPPED or ERROR ───────── start ───→ RUNNING or ERROR
 RUNNING ────────────────── stop ────→ STOPPED
 any non-deleted state ──── delete ──→ soft-deleted
@@ -47,7 +48,7 @@ Starting an already running agent and stopping an agent that is not running are 
 
 ### Create
 
-Creation requires `agent.create`, resolves the requested template version or the latest version, validates required skills and provider credentials, and atomically persists the Agent with creator provenance and explicit Agent Owner access before platform configuration. It then persists encrypted platform/integration configuration, assigns skills, and creates a per-agent LiteLLM key when configured. Bot token uniqueness is validated across all active agents before persisting Slack credentials. New Agents default Agent General Access to Restricted, so no other Member receives access automatically. Teams and Telegram creation continues into start; Slack creation remains stopped.
+Creation requires `agent.create`, resolves the requested template version or the latest version, validates required skills and provider credentials, and atomically persists the Agent with creator provenance and explicit Agent Owner access before platform configuration. It then persists encrypted platform/integration configuration, assigns skills, and creates a per-agent LiteLLM key when configured. Bot token uniqueness is validated across all active agents before persisting Slack credentials. New Agents default Agent General Access to Restricted, so no other Member receives access automatically. Teams and Telegram creation continues into start; Slack and Discord creation remain stopped.
 
 ### Update
 
@@ -55,7 +56,7 @@ Update is allowed only while not running. It can change runtime-relevant configu
 
 ### Tuning and configuration overrides
 
-The Agent configuration drawer is the per-Agent tuning surface. While an Agent is stopped and the caller has `agent.update`, it can override the Agent name, Configured Model, Command Approval Mode, platform routing (Slack channels/DMs, Teams endpoint, or Telegram chats), pinned Template Version, and explicit Skill assignments. Secret and credential changes additionally require `agent.secret.manage`; secret values remain encrypted and are never returned.
+The Agent configuration drawer is the per-Agent tuning surface. While an Agent is stopped and the caller has `agent.update`, it can override the Agent name, Configured Model, Command Approval Mode, platform routing (Slack channels/DMs, Teams endpoint, Telegram chats, or Discord guilds), pinned Template Version, and explicit Skill assignments. Secret and credential changes additionally require `agent.secret.manage`; secret values remain encrypted and are never returned.
 
 Template Markdown is not edited as an unversioned per-Agent override. Selecting a different Template Version is an explicit repin of that Agent, and the resulting required-skill and provider-credential checks run before the change is accepted. Platform Template publishing and Organization Template Updates never move existing Agent pins automatically. Running Agents reject all configuration overrides, so stop the Agent before applying tuning changes.
 
@@ -94,4 +95,4 @@ Share-management endpoints expose locked Agent Access Roles and one canonical Ag
 
 ## Change impact
 
-Lifecycle, visibility, Agent Access Role, explicit Agent Access assignment, or Agent General Access changes affect Agent API contracts, authorization predicates, Membership deletion behavior, UI schemas and controls, and Agent integration tests. Runtime changes additionally affect both runtime builders, Kubernetes cleanup, and logs/health. Template/skill changes also require checking creation, repinning, update validation, and template/skill integration tests. Platform changes require checking Slack, Teams, and Telegram credential handling separately.
+Lifecycle, visibility, Agent Access Role, explicit Agent Access assignment, or Agent General Access changes affect Agent API contracts, authorization predicates, Membership deletion behavior, UI schemas and controls, and Agent integration tests. Runtime changes additionally affect both runtime builders, Kubernetes cleanup, and logs/health. Template/skill changes also require checking creation, repinning, update validation, and template/skill integration tests. Platform changes require checking Slack, Teams, Telegram, and Discord credential handling separately.

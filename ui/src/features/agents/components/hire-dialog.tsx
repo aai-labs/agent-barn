@@ -11,7 +11,7 @@ import { useTemplateVersions } from "../hooks/use-template-versions";
 import { DialogShell } from "./hire-dialog-primitives";
 import {
   WizardStep, TemplateStep, AgentTypeStep, PlatformChoiceStep, SlackChoiceStep,
-  ConfigTokenStep, BotBuilderStep, SlackTokensStep, TelegramTokenStep,
+  ConfigTokenStep, BotBuilderStep, SlackTokensStep, TelegramTokenStep, DiscordTokenStep,
   DetailsStep, SkillsStep,
 } from "./hire-dialog-steps";
 import { SlackConfigPanel } from "./slack-config-panel";
@@ -45,12 +45,15 @@ const PROVISION_STEPS = [
 
 function getSteps(
   agentType: "openclaw" | "hermes",
-  platform: "slack" | "telegram",
+  platform: "slack" | "telegram" | "discord",
   setupNewBot: boolean,
   configTokenReady: boolean,
 ): WizardStep[] {
   if (platform === "telegram") {
     return ["template", "agent-type", "platform-choice", "telegram-token", "details", "skills"];
+  }
+  if (platform === "discord") {
+    return ["template", "agent-type", "platform-choice", "discord-token", "details", "skills"];
   }
   if (agentType === "hermes") {
     if (!setupNewBot) {
@@ -73,7 +76,7 @@ function getSteps(
 function stepOrdinal(
   step: WizardStep,
   agentType: "openclaw" | "hermes",
-  platform: "slack" | "telegram",
+  platform: "slack" | "telegram" | "discord",
   setupNewBot: boolean,
   configTokenReady: boolean,
 ): string {
@@ -91,6 +94,7 @@ function stepTitle(step: WizardStep): string {
     case "bot-builder": return "Build your Slack bot";
     case "slack-tokens": return "Connect Slack";
     case "telegram-token": return "Connect your Telegram bot";
+    case "discord-token": return "Connect your Discord bot";
     case "details": return "A few details and we'll get them set up.";
     case "skills": return "Assign skills";
   }
@@ -108,7 +112,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
   const [name, setName] = useState<string>(DEFAULT_AGENT_NAME);
   const [model, setModel] = useState<string>("");
-  const [platform, setPlatform] = useState<"slack" | "telegram">("slack");
+  const [platform, setPlatform] = useState<"slack" | "telegram" | "discord">("slack");
   const [setupNewBot, setSetupNewBot] = useState(true);
   const [botName, setBotName] = useState<string>(DEFAULT_AGENT_NAME);
   const [botDescription, setBotDescription] = useState<string>(DEFAULT_BOT_DESCRIPTION);
@@ -128,6 +132,14 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   const [telegramTokenError, setTelegramTokenError] = useState<string | null>(null);
   const [telegramGroupPolicy, setTelegramGroupPolicy] = useState<"open" | "allowlist">("open");
   const [telegramDmPolicy, setTelegramDmPolicy] = useState<"off" | "open" | "allowlist">("open");
+  const [discordBotToken, setDiscordBotToken] = useState("");
+  const [discordApplicationId, setDiscordApplicationId] = useState("");
+  const [discordGuildIds, setDiscordGuildIds] = useState("");
+  const [discordChannelIds, setDiscordChannelIds] = useState("");
+  const [discordAllowedUserIds, setDiscordAllowedUserIds] = useState("");
+  const [discordHomeChannelId, setDiscordHomeChannelId] = useState("");
+  const [showDiscordToken, setShowDiscordToken] = useState(false);
+  const [discordTokenError, setDiscordTokenError] = useState<string | null>(null);
   const [configTokenInput, setConfigTokenInput] = useState("");
   const [configRefreshInput, setConfigRefreshInput] = useState("");
   const [showConfigToken, setShowConfigToken] = useState(false);
@@ -187,6 +199,10 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
 
   function handleAgentTypeChange(v: "openclaw" | "hermes") {
     setAgentType(v);
+  }
+
+  function handlePlatformChange(v: "slack" | "telegram" | "discord") {
+    setPlatform(v);
   }
 
   function handleContinueFromTokens() {
@@ -257,6 +273,14 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
     setStep("details");
   }
 
+  function handleContinueFromDiscordToken() {
+    if (!discordBotToken.trim()) {
+      setDiscordTokenError("Bot token is required.");
+      return;
+    }
+    setStep("details");
+  }
+
   async function startHiring() {
     if (!effectiveTemplate) return;
     setProvisioning(true);
@@ -290,7 +314,17 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
         approvalMode,
         ...(platform === "telegram"
           ? { telegramBotToken, telegramGroupPolicy, telegramDmPolicy }
-          : { slackBotToken, slackAppToken, slackGroupPolicy, slackDmPolicy, slackVerboseMode }),
+          : platform === "discord"
+            ? {
+                discordBotToken,
+                discordGuildIds: discordGuildIds.split(",").map((id) => id.trim()).filter(Boolean),
+                discordAllowedChannelIds: discordChannelIds.split(",").map((id) => id.trim()).filter(Boolean),
+                discordAllowedUserIds: discordAllowedUserIds.split(",").map((id) => id.trim()).filter(Boolean),
+                ...(discordHomeChannelId.trim() ? { discordHomeChannelId: discordHomeChannelId.trim() } : {}),
+                discordRequireMention: true,
+                discordGroupPolicy: "allowlist" as const,
+              }
+            : { slackBotToken, slackAppToken, slackGroupPolicy, slackDmPolicy, slackVerboseMode }),
       });
       setCreatedAgent(agent);
       apiDoneRef.current = true;
@@ -515,7 +549,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
           />
         )}
         {step === "agent-type" && <AgentTypeStep agentType={agentType} onChange={handleAgentTypeChange} />}
-        {step === "platform-choice" && <PlatformChoiceStep platform={platform} onChange={setPlatform} />}
+        {step === "platform-choice" && <PlatformChoiceStep platform={platform} onChange={handlePlatformChange} />}
         {step === "slack-choice" && <SlackChoiceStep setupNewBot={setupNewBot} onChange={setSetupNewBot} />}
         {step === "config-token" && (
           <ConfigTokenStep
@@ -566,6 +600,25 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
             showToken={showTelegramToken}
             onToggleToken={() => setShowTelegramToken((v) => !v)}
             error={telegramTokenError}
+          />
+        )}
+        {step === "discord-token" && (
+          <DiscordTokenStep
+            token={discordBotToken}
+            onTokenChange={(v) => { setDiscordBotToken(v); setDiscordTokenError(null); }}
+            applicationId={discordApplicationId}
+            onApplicationIdChange={setDiscordApplicationId}
+            guildIds={discordGuildIds}
+            onGuildIdsChange={setDiscordGuildIds}
+            channelIds={discordChannelIds}
+            onChannelIdsChange={setDiscordChannelIds}
+            allowedUserIds={discordAllowedUserIds}
+            onAllowedUserIdsChange={setDiscordAllowedUserIds}
+            homeChannelId={discordHomeChannelId}
+            onHomeChannelIdChange={setDiscordHomeChannelId}
+            showToken={showDiscordToken}
+            onToggleToken={() => setShowDiscordToken((v) => !v)}
+            error={discordTokenError}
           />
         )}
         {step === "details" && versionTemplate && (
@@ -638,7 +691,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
           <button
             className="af-btn af-btn-primary af-btn-lg"
             onClick={() => setStep(
-              platform === "telegram" ? "telegram-token" : "slack-choice"
+              platform === "telegram" ? "telegram-token" : platform === "discord" ? "discord-token" : "slack-choice"
             )}
           >
             Continue
@@ -646,6 +699,11 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
         )}
         {step === "telegram-token" && (
           <button className="af-btn af-btn-primary af-btn-lg" onClick={handleContinueFromTelegramToken}>
+            Continue
+          </button>
+        )}
+        {step === "discord-token" && (
+          <button className="af-btn af-btn-primary af-btn-lg" onClick={handleContinueFromDiscordToken}>
             Continue
           </button>
         )}

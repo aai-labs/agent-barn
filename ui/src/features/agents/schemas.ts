@@ -23,6 +23,16 @@ export const AgentTelegramConfigSchema = z.object({
   botUsername: z.string().nullable().optional(),
 });
 
+export const AgentDiscordConfigSchema = z.object({
+  guildIds: z.array(z.string()),
+  allowedChannelIds: z.array(z.string()),
+  allowedUserIds: z.array(z.string()),
+  allowedRoleIds: z.array(z.string()),
+  homeChannelId: z.string().nullable(),
+  requireMention: z.boolean(),
+  groupPolicy: z.enum(["open", "allowlist"]),
+});
+
 export const AgentSecretReadSchema = z.object({
   provider: z.string(),
   secretName: z.string(),
@@ -103,7 +113,7 @@ export const AgentSchema = z.object({
   id: z.string().uuid(),
   name: z.string(),
   status: z.enum(["STOPPED", "RUNNING", "ERROR"]),
-  platform: z.enum(["slack", "teams", "telegram"]),
+  platform: z.enum(["slack", "teams", "telegram", "discord"]),
   agentType: z.enum(["openclaw", "hermes"]).default("openclaw"),
   organizationId: z.string().uuid(),
   templateKey: z.string(),
@@ -113,6 +123,7 @@ export const AgentSchema = z.object({
   slackConfig: AgentSlackConfigSchema.nullable().optional(),
   teamsConfig: AgentTeamsConfigSchema.nullable().optional(),
   telegramConfig: AgentTelegramConfigSchema.nullable().optional(),
+  discordConfig: AgentDiscordConfigSchema.nullable().optional(),
   secrets: z.array(AgentSecretReadSchema).optional(),
   skills: z.array(AgentAssignedSkillSchema).default([]),
   webhookUrl: z.string().nullable().optional(),

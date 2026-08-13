@@ -25,6 +25,14 @@ export type UpdateAgentData = {
   telegramBotToken?: string;
   telegramGroupPolicy?: "open" | "allowlist";
   telegramDmPolicy?: "off" | "open" | "allowlist";
+  discordBotToken?: string;
+  discordGuildIds?: string[];
+  discordAllowedChannelIds?: string[];
+  discordAllowedUserIds?: string[];
+  discordAllowedRoleIds?: string[];
+  discordHomeChannelId?: string | null;
+  discordRequireMention?: boolean;
+  discordGroupPolicy?: "open" | "allowlist";
   telegramAllowedUserIds?: string[];
   telegramAllowedChatIds?: string[];
   teamsAppId?: string;

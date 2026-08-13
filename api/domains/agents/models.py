@@ -33,6 +33,7 @@ class AgentPlatform(str, enum.Enum):
     SLACK = "slack"
     TEAMS = "teams"
     TELEGRAM = "telegram"
+    DISCORD = "discord"
 
 
 class AgentType(str, enum.Enum):
@@ -58,6 +59,11 @@ class TelegramGroupPolicy(str, enum.Enum):
 
 class TelegramDmPolicy(str, enum.Enum):
     OFF = "off"
+    OPEN = "open"
+    ALLOWLIST = "allowlist"
+
+
+class DiscordGroupPolicy(str, enum.Enum):
     OPEN = "open"
     ALLOWLIST = "allowlist"
 
@@ -425,6 +431,38 @@ class AgentTelegramConfig(BaseModel, table=True):
     )
 
 
+class AgentDiscordConfig(BaseModel, table=True):
+    __tablename__: str = "agent_discord_config"
+
+    agent_id: UUID = SqlField(foreign_key="agent.id", nullable=False, unique=True, ondelete="CASCADE")
+    bot_token_encrypted: str = SqlField(nullable=False)
+    guild_ids: list[str] = SqlField(
+        default_factory=list,
+        sa_column=Column(sa.JSON(), nullable=False, server_default="[]"),
+    )
+    allowed_channel_ids: list[str] = SqlField(
+        default_factory=list,
+        sa_column=Column(sa.JSON(), nullable=False, server_default="[]"),
+    )
+    allowed_user_ids: list[str] = SqlField(
+        default_factory=list,
+        sa_column=Column(sa.JSON(), nullable=False, server_default="[]"),
+    )
+    allowed_role_ids: list[str] = SqlField(
+        default_factory=list,
+        sa_column=Column(sa.JSON(), nullable=False, server_default="[]"),
+    )
+    home_channel_id: str | None = SqlField(default=None, nullable=True, max_length=32)
+    require_mention: bool = SqlField(
+        default=True,
+        sa_column=Column(sa.Boolean(), nullable=False, server_default=sa.true()),
+    )
+    group_policy: DiscordGroupPolicy = SqlField(
+        default=DiscordGroupPolicy.ALLOWLIST,
+        sa_column=Column(sa.String(), nullable=False, server_default="allowlist"),
+    )
+
+
 class AgentSecret(BaseModel, table=True):
     __tablename__: str = "agent_secret"
 
@@ -593,6 +631,15 @@ class AgentCreate(PydanticBaseModel):
     telegram_allowed_chat_ids: list[str] = Field(default_factory=list)
     telegram_group_policy: TelegramGroupPolicy = TelegramGroupPolicy.ALLOWLIST
     telegram_dm_policy: TelegramDmPolicy = TelegramDmPolicy.OFF
+    # Discord credentials (required when platform=discord)
+    discord_bot_token: str | None = Field(default=None, min_length=1)
+    discord_guild_ids: list[str] = Field(default_factory=list)
+    discord_allowed_channel_ids: list[str] = Field(default_factory=list)
+    discord_allowed_user_ids: list[str] = Field(default_factory=list)
+    discord_allowed_role_ids: list[str] = Field(default_factory=list)
+    discord_home_channel_id: str | None = Field(default=None, min_length=1)
+    discord_require_mention: bool = True
+    discord_group_policy: DiscordGroupPolicy = DiscordGroupPolicy.ALLOWLIST
     # Template reference. The agent pins to template_version if given, else to
     # the lineage's latest version.
     template_key: str = Field(min_length=1, max_length=255)
@@ -608,7 +655,7 @@ class AgentCreate(PydanticBaseModel):
     @model_validator(mode="after")
     def validate_platform_credentials(self) -> AgentCreate:
         if self.agent_type == AgentType.HERMES and self.platform == AgentPlatform.TEAMS:
-            raise ValueError("Hermes agents do not support the Teams platform")
+            raise ValueError(f"Hermes agents do not support the {self.platform.value.title()} platform")
         if self.platform == AgentPlatform.SLACK and (not self.slack_bot_token or not self.slack_app_token):
             raise ValueError("slack_bot_token and slack_app_token are required for Slack agents")
         elif self.platform == AgentPlatform.TEAMS:
@@ -616,6 +663,8 @@ class AgentCreate(PydanticBaseModel):
                 raise ValueError("teams_app_id, teams_app_password, and teams_tenant_id are required for Teams agents")
         elif self.platform == AgentPlatform.TELEGRAM and not self.telegram_bot_token:
             raise ValueError("telegram_bot_token is required for Telegram agents")
+        elif self.platform == AgentPlatform.DISCORD and not self.discord_bot_token:
+            raise ValueError("discord_bot_token is required for Discord agents")
         return self
 
     @model_validator(mode="after")
@@ -646,6 +695,15 @@ class AgentUpdate(PydanticBaseModel):
     telegram_allowed_chat_ids: list[str] | None = None
     telegram_group_policy: TelegramGroupPolicy | None = None
     telegram_dm_policy: TelegramDmPolicy | None = None
+    # Discord
+    discord_bot_token: str | None = Field(default=None, min_length=1)
+    discord_guild_ids: list[str] | None = None
+    discord_allowed_channel_ids: list[str] | None = None
+    discord_allowed_user_ids: list[str] | None = None
+    discord_allowed_role_ids: list[str] | None = None
+    discord_home_channel_id: str | None = Field(default=None, min_length=1)
+    discord_require_mention: bool | None = None
+    discord_group_policy: DiscordGroupPolicy | None = None
     # Template re-pin: point the agent at a different (key, version). Both must
     # be provided together. Per-agent markdown editing is no longer supported —
     # persona changes happen by editing templates in the catalog.
@@ -720,6 +778,18 @@ class AgentTelegramConfigRead(PydanticBaseModel):
     group_policy: TelegramGroupPolicy
     dm_policy: TelegramDmPolicy
     bot_username: str | None = None
+
+
+class AgentDiscordConfigRead(PydanticBaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    guild_ids: list[str]
+    allowed_channel_ids: list[str]
+    allowed_user_ids: list[str]
+    allowed_role_ids: list[str]
+    home_channel_id: str | None
+    require_mention: bool
+    group_policy: DiscordGroupPolicy
 
 
 class AgentSecretRead(PydanticBaseModel):  # label + provider only — no secret values
@@ -798,6 +868,7 @@ class AgentRead(PydanticBaseModel):
     slack_config: AgentSlackConfigRead | None = None
     teams_config: AgentTeamsConfigRead | None = None
     telegram_config: AgentTelegramConfigRead | None = None
+    discord_config: AgentDiscordConfigRead | None = None
     secrets: list[AgentSecretRead] = Field(default_factory=list)
     skills: list[AgentAssignedSkillRead] = Field(default_factory=list)
     approval_mode: CommandApprovalMode

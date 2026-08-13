@@ -12,6 +12,7 @@ from api.domains.agents.exceptions import BotTokenConflictHTTPException
 from api.domains.agents.models import (
     Agent,
     AgentAccess,
+    AgentDiscordConfig,
     AgentFilter,
     AgentLifecycleEmailReceipt,
     AgentLogSnapshot,
@@ -671,6 +672,24 @@ class AgentRepository:
             return {}
         with Session(self.delegate.engine) as session:
             query = select(AgentTelegramConfig).where(col(AgentTelegramConfig.agent_id).in_(agent_ids))
+            return {c.agent_id: c for c in session.exec(query).all()}
+
+    # --- Discord config ---
+
+    def get_discord_config(self, agent_id: UUID) -> AgentDiscordConfig | None:
+        with Session(self.delegate.engine) as session:
+            query = select(AgentDiscordConfig).where(col(AgentDiscordConfig.agent_id) == agent_id)
+            return session.exec(query).first()
+
+    def save_discord_config(self, config: AgentDiscordConfig) -> AgentDiscordConfig:
+        self.delegate.save(config)
+        return config
+
+    def get_discord_configs_for_agents(self, agent_ids: list[UUID]) -> dict[UUID, AgentDiscordConfig]:
+        if not agent_ids:
+            return {}
+        with Session(self.delegate.engine) as session:
+            query = select(AgentDiscordConfig).where(col(AgentDiscordConfig.agent_id).in_(agent_ids))
             return {c.agent_id: c for c in session.exec(query).all()}
 
     # --- Integration secrets ---

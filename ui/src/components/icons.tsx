@@ -109,6 +109,15 @@ export function TelegramIcon({ size = 14, ...p }: IconProps) {
   );
 }
 
+export function DiscordIcon({ size = 14, ...p }: IconProps) {
+  return (
+    <Svg size={size} {...p}>
+      <path d="M7 7.5C8.5 6.5 10 6 12 6s3.5.5 5 1.5c1 1.8 1.5 3.8 1.5 6-1.2 1.2-2.6 2-4.2 2.5l-.8-1.1M9.5 14.9l-.8 1.1A10.5 10.5 0 0 1 5.5 13.5c0-2.2.5-4.2 1.5-6Z" />
+      <path d="M9.5 12h.01M14.5 12h.01" strokeWidth={2.5} />
+    </Svg>
+  );
+}
+
 export function ChevLeftIcon(p: IconProps) {
   return <Svg {...p}><path d="m15 18-6-6 6-6"/></Svg>;
 }

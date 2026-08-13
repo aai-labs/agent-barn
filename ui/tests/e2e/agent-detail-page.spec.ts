@@ -348,6 +348,34 @@ test.describe("Agent Detail Page — Channels tab", () => {
     await expect(agentDetailPage.dmPolicySelect()).toHaveValue("off");
   });
 
+  test("shows Discord routing and write-only token controls", async ({ page }) => {
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: {
+        ...mockAgent,
+        status: "STOPPED",
+        platform: "discord",
+        slack_config: null,
+        discord_config: {
+          guild_ids: ["guild-1"],
+          allowed_channel_ids: ["channel-1"],
+          allowed_user_ids: ["user-1"],
+          allowed_role_ids: ["role-1"],
+          home_channel_id: "channel-1",
+          require_mention: true,
+          group_policy: "allowlist",
+        },
+      },
+    });
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.configureButton().click();
+    await page.getByRole("button", { name: "Discord", exact: true }).click();
+
+    await expect(page.locator('input[value="guild-1"]')).toBeVisible();
+    await expect(page.locator('input[value="role-1"]')).toBeVisible();
+    await page.getByRole("button", { name: "Keys", exact: true }).click();
+    await expect(page.getByPlaceholder("Leave blank to keep existing token")).toBeVisible();
+  });
+
 
   test("focusing the channel search shows mocked channels in the dropdown", async ({
     page,

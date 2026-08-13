@@ -75,6 +75,25 @@ test.describe("Hire Dialog", () => {
     await expect(page.getByText(/step 2 of/i)).toBeVisible();
   });
 
+  test("should collect Discord identity and routing configuration", async ({ page }) => {
+    await page.getByText("General Purpose", { exact: true }).click();
+    await page.getByRole("button", { name: /continue/i }).click(); // template → agent-type
+    await page.getByRole("button", { name: /continue/i }).click(); // agent-type → platform-choice
+    await page.getByText("Discord", { exact: true }).click();
+    await page.getByRole("button", { name: /continue/i }).click(); // platform-choice → Discord token
+
+    await expect(page.getByText("Connect your Discord bot")).toBeVisible();
+    await page.getByPlaceholder("Discord bot token").fill("discord-token");
+    await page.getByPlaceholder("123456789012345678").first().fill("111111111111111111");
+    await expect(page.getByRole("link", { name: /recommended install link/i })).toHaveAttribute(
+      "href",
+      /client_id=111111111111111111/,
+    );
+    await page.getByRole("button", { name: /continue/i }).click();
+
+    await expect(page.getByLabel("Name them")).toBeVisible();
+  });
+
   test("should skip bot builder when choosing existing app", async ({ page }) => {
     await page.getByText("General Purpose", { exact: true }).click();
     await page.getByRole("button", { name: /continue/i }).click(); // template → agent-type

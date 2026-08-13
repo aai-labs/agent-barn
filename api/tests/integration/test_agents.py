@@ -29,7 +29,9 @@ from api.domains.agents.service import AgentService
 from api.domains.events.catalog import AGENT_CREATED, AGENT_STARTED, AGENT_STOPPED
 from api.domains.events.models import EventDeliveryStatus, OutboxMessage
 from api.domains.organizations.repository import OrganizationRepository
+from api.domains.rbac.catalog import PermissionKey
 from api.domains.templates.repository import TemplateRepository
+from api.infrastructure.crypto import decrypt_token
 from api.infrastructure.kubernetes.client import KubernetesClient
 from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
@@ -79,6 +81,18 @@ _VALID_CREATE_TEAMS = {
     "teams_app_id": "test-app-id-000",
     "teams_app_password": "test-app-password-000",
     "teams_tenant_id": "test-tenant-000",
+    "template_key": "test-template",
+}
+
+_VALID_CREATE_DISCORD = {
+    "name": "My Discord Agent",
+    "platform": "discord",
+    "discord_bot_token": "discord-bot-token",
+    "discord_guild_ids": ["guild-1"],
+    "discord_allowed_channel_ids": ["channel-1"],
+    "discord_allowed_user_ids": ["user-1"],
+    "discord_allowed_role_ids": ["role-1"],
+    "discord_home_channel_id": "channel-1",
     "template_key": "test-template",
 }
 
@@ -1614,6 +1628,117 @@ def test_create_agent_defaults_to_allowlist_groups_dms_off():
             assert_that(body["slack_config"]["channel_ids"], equal_to([]))
             assert_that(body["slack_config"]["dm_user_ids"], equal_to([]))
             assert_that(body["slack_config"]["verbose_mode"], equal_to(True))
+
+
+def test_create_discord_agent_returns_read_safe_configuration():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I create a Discord agent"):
+            response = client.post(_BASE, json=_VALID_CREATE_DISCORD, headers=_auth(context))
+
+        with then("it remains stopped and returns routing configuration without the token"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            body = response.json()
+            assert_that(body["status"], equal_to("STOPPED"))
+            assert_that(body, is_not(has_key("discord_bot_token")))
+            assert_that(
+                body["discord_config"],
+                equal_to(
+                    {
+                        "guild_ids": ["guild-1"],
+                        "allowed_channel_ids": ["channel-1"],
+                        "allowed_user_ids": ["user-1"],
+                        "allowed_role_ids": ["role-1"],
+                        "home_channel_id": "channel-1",
+                        "require_mention": True,
+                        "group_policy": "allowlist",
+                    }
+                ),
+            )
+
+
+def test_patch_discord_agent_updates_routing_and_rotates_token():
+    with given([*_GIVEN, there_is_an_agent(platform=AgentPlatform.DISCORD)]) as context:
+        client: TestClient = context.client
+
+        with when("I update Discord routing and rotate its credential"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={
+                    "discord_bot_token": "rotated-discord-token",
+                    "discord_guild_ids": ["guild-2"],
+                    "discord_allowed_role_ids": ["role-2"],
+                    "discord_home_channel_id": "channel-2",
+                },
+                headers=_auth(context),
+            )
+
+        with then("the update succeeds and persists the encrypted credential"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["discord_config"]["guild_ids"], equal_to(["guild-2"]))
+            repository: AgentRepository = context.injector.get(AgentRepository)
+            config = repository.get_discord_config(context.agent.id)
+            assert config is not None
+            assert_that(
+                decrypt_token(config.bot_token_encrypted, TEST_ENCRYPTION_KEY),
+                equal_to("rotated-discord-token"),
+            )
+
+
+def test_patch_discord_token_requires_secret_management_permission():
+    with given([*_GIVEN, there_is_an_agent(platform=AgentPlatform.DISCORD)]) as context:
+        service: AgentService = context.injector.get(AgentService)
+
+        with (
+            patch.object(
+                service.authorization,
+                "require_action_for_visible",
+                wraps=service.authorization.require_action_for_visible,
+            ) as require_secret_action,
+            when("I rotate a Discord bot token"),
+        ):
+            response = context.client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"discord_bot_token": "rotated-discord-token"},
+                headers=_auth(context),
+            )
+
+        with then("the mutation independently checks agent.secret.manage"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(
+                any(
+                    call.args[-1] == PermissionKey.AGENT_SECRET_MANAGE for call in require_secret_action.call_args_list
+                ),
+                equal_to(True),
+            )
+
+
+def test_start_openclaw_discord_agent_materializes_all_routing_fields():
+    with given([*_GIVEN, there_is_an_agent(platform=AgentPlatform.DISCORD)]) as context:
+        repository: AgentRepository = context.injector.get(AgentRepository)
+        config = repository.get_discord_config(context.agent.id)
+        assert config is not None
+        config.guild_ids = ["guild-1"]
+        config.allowed_channel_ids = ["channel-1"]
+        config.allowed_user_ids = ["user-1"]
+        config.allowed_role_ids = ["role-1"]
+        config.home_channel_id = "channel-1"
+        repository.save_discord_config(config)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("I start the Discord agent"):
+            response = context.client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the OpenClaw overlay contains users, roles, channels, and alert delivery"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            overlay = json.loads(config_map.data["openclaw-config-overlay.json"])
+            guild = overlay["channels"]["discord"]["guilds"]["guild-1"]
+            assert_that(guild["users"], equal_to(["user-1"]))
+            assert_that(guild["roles"], equal_to(["role-1"]))
+            assert_that(guild["channels"], has_key("channel-1"))
+            assert_that(overlay["agents"]["defaults"]["heartbeat"]["to"], equal_to("channel:channel-1"))
 
 
 def test_patch_agent_updates_slack_settings():

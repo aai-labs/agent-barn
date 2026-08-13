@@ -58,6 +58,9 @@ function getTabs(agent: Agent): [TabKey, string, boolean][] {
     ...(agent.platform === "telegram"
       ? [["channels", "Chats", canOpenConfigTab(agent, "channels")] as [TabKey, string, boolean]]
       : []),
+    ...(agent.platform === "discord"
+      ? [["channels", "Discord", canOpenConfigTab(agent, "channels")] as [TabKey, string, boolean]]
+      : []),
     ...(agent.platform === "teams"
       ? [["endpoint", "Endpoint", canOpenConfigTab(agent, "endpoint")] as [TabKey, string, boolean]]
       : []),
@@ -179,6 +182,93 @@ function TelegramChatsTab({ agent, isRunning }: { agent: Agent; isRunning: boole
   );
 }
 
+function DiscordChannelsTab({ agent, isRunning }: { agent: Agent; isRunning: boolean }) {
+  const updateAgent = useUpdateAgent();
+  const dc = agent.discordConfig;
+  const [groupPolicy, setGroupPolicy] = useState(dc?.groupPolicy ?? "allowlist");
+  const [guildIds, setGuildIds] = useState((dc?.guildIds ?? []).join(", "));
+  const [channelIds, setChannelIds] = useState((dc?.allowedChannelIds ?? []).join(", "));
+  const [userIds, setUserIds] = useState((dc?.allowedUserIds ?? []).join(", "));
+  const [roleIds, setRoleIds] = useState((dc?.allowedRoleIds ?? []).join(", "));
+  const [homeChannelId, setHomeChannelId] = useState(dc?.homeChannelId ?? "");
+  const [requireMention, setRequireMention] = useState(dc?.requireMention ?? true);
+  const [saved, setSaved] = useState(false);
+  const ids = (value: string) => value.split(",").map((item) => item.trim()).filter(Boolean);
+
+  async function handleSave() {
+    try {
+      await updateAgent.mutateAsync({
+        agentId: agent.id,
+        discordGroupPolicy: groupPolicy,
+        discordGuildIds: ids(guildIds),
+        discordAllowedChannelIds: ids(channelIds),
+        discordAllowedUserIds: ids(userIds),
+        discordAllowedRoleIds: ids(roleIds),
+        discordHomeChannelId: homeChannelId.trim() || null,
+        discordRequireMention: requireMention,
+      });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch {
+      // error displayed via updateAgent.error
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-5">
+      <Hint>Configure which Discord servers, channels, and operators {agent.name} can interact with. Direct messages stay disabled.</Hint>
+
+      <div className="flex flex-col gap-1.5">
+        <label className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>Server access</label>
+        <select className="af-input" value={groupPolicy} onChange={(e) => setGroupPolicy(e.target.value as "open" | "allowlist")} disabled={isRunning}>
+          <option value="allowlist">Allowlist — only configured servers</option>
+          <option value="open">Open — any server containing this bot</option>
+        </select>
+      </div>
+
+      {groupPolicy === "allowlist" && (
+        <div className="flex flex-col gap-1.5">
+          <label className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>Allowed server IDs</label>
+          <input className="af-input font-mono text-[0.8125rem]" value={guildIds} onChange={(e) => setGuildIds(e.target.value)} placeholder="Comma-separated Discord server IDs" disabled={isRunning} />
+        </div>
+      )}
+
+      <div className="flex flex-col gap-1.5">
+        <label className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>Allowed channel IDs</label>
+        <input className="af-input font-mono text-[0.8125rem]" value={channelIds} onChange={(e) => setChannelIds(e.target.value)} placeholder="Comma-separated channel IDs" disabled={isRunning} />
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="flex flex-col gap-1.5">
+          <label className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>Allowed user IDs</label>
+          <input className="af-input font-mono text-[0.8125rem]" value={userIds} onChange={(e) => setUserIds(e.target.value)} placeholder="Comma-separated user IDs" disabled={isRunning} />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <label className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>Allowed role IDs</label>
+          <input className="af-input font-mono text-[0.8125rem]" value={roleIds} onChange={(e) => setRoleIds(e.target.value)} placeholder="Comma-separated role IDs" disabled={isRunning} />
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <label className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>Alert destination channel ID</label>
+        <input className="af-input font-mono text-[0.8125rem]" value={homeChannelId} onChange={(e) => setHomeChannelId(e.target.value)} placeholder="Optional channel ID" disabled={isRunning} />
+      </div>
+
+      <label className="flex items-center gap-2 text-[0.844rem]" style={{ color: "var(--ink-2)" }}>
+        <input type="checkbox" checked={requireMention} onChange={(e) => setRequireMention(e.target.checked)} disabled={isRunning} />
+        Require an explicit mention in server channels
+      </label>
+
+      <div className="flex gap-2 items-center">
+        <button className="af-btn af-btn-sm" disabled={isRunning || updateAgent.isPending} onClick={() => { void handleSave(); }}>
+          {updateAgent.isPending ? "Saving…" : saved ? "Saved!" : "Save"}
+        </button>
+        {updateAgent.error && <span className="text-xs" style={{ color: "var(--err)" }}>{updateAgent.error instanceof Error ? updateAgent.error.message : "Save failed"}</span>}
+      </div>
+    </div>
+  );
+}
+
 export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigDrawerProps) {
   const router = useRouter();
   const params = useParams();
@@ -208,6 +298,8 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
   const [teamsTenantId, setTeamsTenantId] = useState("");
   const [telegramBotToken, setTelegramBotToken] = useState("");
   const [showTelegramBotToken, setShowTelegramBotToken] = useState(false);
+  const [discordBotToken, setDiscordBotToken] = useState("");
+  const [showDiscordBotToken, setShowDiscordBotToken] = useState(false);
   const [savedTokens, setSavedTokens] = useState(false);
   const [secretDrafts, setSecretDrafts] = useState<IntegrationDraft[]>([]);
   const [removedProviders, setRemovedProviders] = useState<string[]>([]);
@@ -426,6 +518,11 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
         await updateAgent.mutateAsync({
           agentId: agent.id,
           ...(telegramBotToken.trim() ? { telegramBotToken } : {}),
+        });
+      } else if (agent.platform === "discord") {
+        await updateAgent.mutateAsync({
+          agentId: agent.id,
+          ...(discordBotToken.trim() ? { discordBotToken } : {}),
         });
       } else {
         await updateAgent.mutateAsync({
@@ -858,6 +955,9 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
           {tab === "channels" && agent.platform === "telegram" && (
             <TelegramChatsTab agent={agent} isRunning={isRunning} />
           )}
+          {tab === "channels" && agent.platform === "discord" && (
+            <DiscordChannelsTab agent={agent} isRunning={isRunning} />
+          )}
 
           {tab === "skills" && (
             <AgentSkillsTab agent={agent} isRunning={isRunning} />
@@ -1011,6 +1111,29 @@ export function ConfigDrawer({ agent, activeTab, onTabChange, onClose }: ConfigD
                     {updateAgent.error instanceof Error ? updateAgent.error.message : "Save failed"}
                   </span>
                 )}
+              </div>
+            </div>
+          )}
+
+          {tab === "secrets" && agent.platform === "discord" && (
+            <div className="flex flex-col gap-4">
+              <Hint>Bot token is write-only — leave the field blank to keep the existing value.</Hint>
+              <div className="flex flex-col gap-1.5">
+                <label className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>Discord bot token</label>
+                <TokenInput
+                  value={discordBotToken}
+                  onChange={setDiscordBotToken}
+                  visible={showDiscordBotToken}
+                  onToggle={() => setShowDiscordBotToken((value) => !value)}
+                  placeholder="Leave blank to keep existing token"
+                  disabled={isRunning}
+                />
+              </div>
+              <div className="flex gap-2 items-center">
+                <button className="af-btn af-btn-sm" disabled={isRunning || pendingSection === "tokens" || !discordBotToken.trim()} onClick={() => { void handleSaveTokens(); }}>
+                  {pendingSection === "tokens" ? "Saving…" : savedTokens ? "Saved!" : "Save token"}
+                </button>
+                {updateAgent.error && errorSection === "tokens" && <span className="text-xs" style={{ color: "var(--err)" }}>{updateAgent.error instanceof Error ? updateAgent.error.message : "Save failed"}</span>}
               </div>
             </div>
           )}
