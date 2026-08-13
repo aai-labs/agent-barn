@@ -283,25 +283,21 @@ def there_is_a_skill_for_another_org():
         other_org_id = context.organization.id
         context.organization = original_org
 
-        import io
-        import zipfile
-
         from api.domains.skills.models import Skill, SkillSource
         from api.domains.skills.repository import SkillRepository
-
-        buf = io.BytesIO()
-        with zipfile.ZipFile(buf, "w") as zf:
-            zf.writestr("skill.md", "# Other Org Skill")
 
         skill = Skill(
             organization_id=other_org_id,
             name="Other Org Skill",
+            slug="other-org-skill",
+            root_dir="other-org-skill",
+            entry_path="SKILL.md",
             source=SkillSource.CUSTOM,
             required_providers=[],
-            zip_content=buf.getvalue(),
         )
         repo: SkillRepository = context.injector.get(SkillRepository)
         repo.save(skill)
+        repo.publish_version(skill.id, [("SKILL.md", "# Other Org Skill")])
         context.other_org_skill = skill
 
     return step
@@ -314,32 +310,29 @@ def there_is_a_skill(
     tools_pointer: str | None = None,
 ):
     def step(context):
-        import io
-        import zipfile
-
         from api.domains.skills.models import Skill, SkillSource
         from api.domains.skills.repository import SkillRepository
+        from api.domains.templates.slug import slugify
 
         org_id = None if global_skill else context.organization.id
         source = SkillSource.AAI_CLI if global_skill else SkillSource.CUSTOM
-        pointer = tools_pointer
-        if pointer is None and not global_skill:
-            pointer = f'You can use "{name}" skill in the ./skills folder'
-
-        buf = io.BytesIO()
-        with zipfile.ZipFile(buf, "w") as zf:
-            zf.writestr("skill.md", f"# {name}")
+        slug = slugify(name)
 
         skill = Skill(
             organization_id=org_id,
             name=name,
+            slug=slug,
+            # Built-ins share the aai-cli mount directory; custom skills get their own.
+            root_dir="aai-cli" if global_skill else slug,
+            entry_path="SKILL.md",
             source=source,
             required_providers=required_providers or [],
-            zip_content=buf.getvalue(),
-            tools_pointer=pointer,
+            # Custom skills leave this NULL so the pointer is derived from metadata.
+            tools_pointer=tools_pointer,
         )
         repo: SkillRepository = context.injector.get(SkillRepository)
         repo.save(skill)
+        repo.publish_version(skill.id, [("SKILL.md", f"# {name}")])
         context.skill = skill
 
     return step

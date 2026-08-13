@@ -12,8 +12,6 @@ Isolation contract:
 - Platform Administrators use platform routes; org URLs still require real membership.
 """
 
-import io
-import zipfile
 from uuid import UUID, uuid7
 
 from fastapi import status
@@ -100,18 +98,18 @@ def _there_is_a_bare_org(org_id: UUID, name: str):
 
 def _there_is_a_skill_in_org(org_id: UUID):
     def step(context):
-        buf = io.BytesIO()
-        with zipfile.ZipFile(buf, "w") as zf:
-            zf.writestr("skill.md", "# Org B Skill")
         skill = Skill(
             organization_id=org_id,
             name="Org B Skill",
+            slug="org-b-skill",
+            root_dir="org-b-skill",
+            entry_path="SKILL.md",
             source=SkillSource.CUSTOM,
             required_providers=[],
-            zip_content=buf.getvalue(),
         )
         repo: SkillRepository = context.injector.get(SkillRepository)
         repo.save(skill)
+        repo.publish_version(skill.id, [("SKILL.md", "# Org B Skill")])
         context.skill_b = skill
 
     return step

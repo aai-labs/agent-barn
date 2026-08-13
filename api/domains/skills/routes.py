@@ -8,8 +8,9 @@ from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import get_current_user, require_platform_admin
 from api.domains.skills.models import (
     SkillCreate,
+    SkillDetailRead,
     SkillFilter,
-    SkillRead,
+    SkillSummaryRead,
     SkillUpdate,
     get_skill_filter,
 )
@@ -20,7 +21,7 @@ skills_router = APIRouter(prefix="/organizations/{organization_id}/skills", tags
 platform_skills_router = APIRouter(prefix="/platform/skills", tags=["platform-skills"])
 
 
-@platform_skills_router.get("", response_model=list[SkillRead])
+@platform_skills_router.get("", response_model=list[SkillSummaryRead])
 def list_global_skills_for_platform_admin(
     _: Annotated[CurrentUserContext, Depends(require_platform_admin())],
     service: Annotated[SkillService, Injected(SkillService)],
@@ -28,7 +29,7 @@ def list_global_skills_for_platform_admin(
     return service.list_global_skills_for_platform_admin()
 
 
-@skills_router.post("", response_model=SkillRead, status_code=status.HTTP_201_CREATED)
+@skills_router.post("", response_model=SkillSummaryRead, status_code=status.HTTP_201_CREATED)
 def create_skill(
     data: SkillCreate,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
@@ -37,7 +38,7 @@ def create_skill(
     return service.create_skill(data, context)
 
 
-@skills_router.get("", response_model=PaginatedItems[SkillRead])
+@skills_router.get("", response_model=PaginatedItems[SkillSummaryRead])
 def list_skills(
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[SkillService, Injected(SkillService)],
@@ -52,7 +53,7 @@ def list_skills(
     )
 
 
-@skills_router.get("/{skill_id}", response_model=SkillRead)
+@skills_router.get("/{skill_id}", response_model=SkillSummaryRead)
 def get_skill(
     skill_id: UUID,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
@@ -61,7 +62,17 @@ def get_skill(
     return service.get_skill(skill_id, context)
 
 
-@skills_router.patch("/{skill_id}", response_model=SkillRead)
+@skills_router.get("/{skill_id}/files", response_model=SkillDetailRead)
+def get_skill_files(
+    skill_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[SkillService, Injected(SkillService)],
+):
+    """The skill plus the file contents of its published version."""
+    return service.get_skill_detail(skill_id, context)
+
+
+@skills_router.patch("/{skill_id}", response_model=SkillSummaryRead)
 def update_skill(
     skill_id: UUID,
     data: SkillUpdate,

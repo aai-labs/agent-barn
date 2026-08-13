@@ -3122,7 +3122,9 @@ def test_start_agent_with_skill_includes_skills_json_in_configmap():
             assert_that(config_map.data, has_key("skills.json"))
             entries = _json.loads(config_map.data["skills.json"])
             assert_that(len(entries), equal_to(1))
-            assert_that(entries[0]["path"], equal_to("skill.md"))
+            # Files are stored relative to the skill root; root_dir is applied at mount
+            # time, so the workspace path carries the skill's own directory.
+            assert_that(entries[0]["path"], equal_to("mounted-skill/SKILL.md"))
 
 
 def test_start_agent_without_skills_has_no_skills_json_in_configmap():
@@ -3154,12 +3156,14 @@ def test_start_agent_with_skill_pointer_injects_pointer_into_tools_md():
         with when("I start the agent"):
             response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
 
-        with then("the ConfigMap TOOLS.md contains the auto-generated skill pointer"):
+        with then("the ConfigMap TOOLS.md contains the derived skill pointer"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             config_map = k8s.create_config_map.call_args.args[1]
+            # Custom skills store no pointer: it is derived from the skill's name and
+            # entry path, so a rename can never leave a stale pointer behind.
             assert_that(
                 config_map.data["TOOLS.md"],
-                contains_string('You can use "Pointed Skill" skill in the ./skills folder'),
+                contains_string("For Pointed Skill: See ./skills/pointed-skill/SKILL.md"),
             )
 
 
@@ -3200,7 +3204,9 @@ def test_start_agent_auto_attaches_aai_cli_skill_for_configured_provider():
             assert_that(config_map.data, has_key("skills.json"))
             entries = _json.loads(config_map.data["skills.json"])
             assert_that(len(entries), equal_to(1))
-            assert_that(entries[0]["path"], equal_to("skill.md"))
+            # Built-ins share the aai-cli mount directory so their long-published
+            # pointer paths keep resolving.
+            assert_that(entries[0]["path"], equal_to("aai-cli/SKILL.md"))
             assert_that(config_map.data["TOOLS.md"], contains_string(_JIRA_POINTER))
 
 

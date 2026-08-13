@@ -1,11 +1,7 @@
-import base64
-import io
-import zipfile
-from unittest.mock import patch
 from uuid import uuid7
 
 from fastapi import status
-from hamcrest import assert_that, equal_to, has_item, has_items, not_
+from hamcrest import assert_that, contains_string, equal_to, has_item, has_items, not_
 from starlette.testclient import TestClient
 
 from api.domains.rbac.catalog import PermissionKey
@@ -79,79 +75,15 @@ def _there_is_a_member_actor():
     return _there_is_a_role_actor(OrganizationRole.MEMBER)
 
 
-def _make_zip(filename: str = "skill.md", content: str = "# Skill") -> str:
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w") as zf:
-        zf.writestr(filename, content)
-    return base64.b64encode(buf.getvalue()).decode()
-
-
-def _make_zip_with_path_traversal() -> str:
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w") as zf:
-        zf.writestr("../../../etc/passwd", "root:x:0:0:root:/root:/bin/bash")
-    return base64.b64encode(buf.getvalue()).decode()
-
-
-def _make_high_ratio_zip() -> str:
-    # 1 MB of null bytes compresses to ~1 KB → ratio ~1000x, well above the 100x limit.
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("data.bin", b"\x00" * 1_000_000)
-    return base64.b64encode(buf.getvalue()).decode()
-
-
-def _make_encrypted_zip() -> str:
-    # Create a valid zip then set the encryption flag (bit 0) in the central directory
-    # entry so that zipfile reports flag_bits & 0x1 == 1.
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w") as zf:
-        zf.writestr("skill.md", "# Skill")
-    data = bytearray(buf.getvalue())
-    # Central directory entry starts with PK\x01\x02; the general-purpose bit flag
-    # is at byte offset 8 within that entry.
-    cd_sig = b"\x50\x4b\x01\x02"
-    idx = data.find(cd_sig)
-    if idx != -1:
-        data[idx + 8] |= 0x1
-    return base64.b64encode(bytes(data)).decode()
-
-
-def _make_zip_spoofed_uncompressed_size(file_count: int = 3, file_size: int = 500) -> str:
-    # Build a zip whose central-directory file_size fields are zeroed (metadata spoofed
-    # to 0), so the header-based total check sees 0 bytes, but actual extraction of
-    # file_count × file_size bytes exceeds a patched _MAX_UNCOMPRESSED_BYTES limit.
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_STORED) as zf:
-        for i in range(file_count):
-            zf.writestr(f"file_{i}.bin", b"\x00" * file_size)
-    data = bytearray(buf.getvalue())
-    for sig, compressed_off, uncompressed_off in (
-        (b"\x50\x4b\x03\x04", 18, 22),
-        (b"\x50\x4b\x01\x02", 20, 24),
-    ):
-        pos = 0
-        while True:
-            idx = data.find(sig, pos)
-            if idx == -1:
-                break
-            data[idx + compressed_off : idx + compressed_off + 4] = b"\x00\x00\x00\x00"
-            data[idx + uncompressed_off : idx + uncompressed_off + 4] = b"\x00\x00\x00\x00"
-            pos = idx + 1
-    return base64.b64encode(bytes(data)).decode()
-
-
-_VALID_CREATE = {
-    "name": "My Skill",
-    "zip_content": None,
-}
+def _files(path: str = "SKILL.md", content: str = "# Skill") -> list[dict]:
+    return [{"path": path, "content": content}]
 
 
 def test_member_cannot_create_skill():
     with given([*_GIVEN, _there_is_a_member_actor()]) as context:
         response = context.client.post(
             _BASE,
-            json={"name": "Member Skill", "zip_content": _make_zip()},
+            json={"name": "Member Skill", "files": _files()},
             headers=_auth(context),
         )
 
@@ -168,7 +100,7 @@ def test_admin_without_skill_manage_cannot_create_skill():
     ) as context:
         response = context.client.post(
             _BASE,
-            json={"name": "Blocked Admin Skill", "zip_content": _make_zip()},
+            json={"name": "Blocked Admin Skill", "files": _files()},
             headers=_auth(context),
         )
 
@@ -188,7 +120,7 @@ def test_admin_with_assigned_skill_manage_cannot_create_skill():
     ) as context:
         response = context.client.post(
             _BASE,
-            json={"name": "Assigned Admin Skill", "zip_content": _make_zip()},
+            json={"name": "Assigned Admin Skill", "files": _files()},
             headers=_auth(context),
         )
 
@@ -199,7 +131,7 @@ def test_admin_can_create_skill():
     with given([*_GIVEN, _there_is_a_role_actor(OrganizationRole.ADMIN)]) as context:
         response = context.client.post(
             _BASE,
-            json={"name": "Admin Skill", "zip_content": _make_zip()},
+            json={"name": "Admin Skill", "files": _files()},
             headers=_auth(context),
         )
 
@@ -222,7 +154,7 @@ def test_platform_admin_without_skill_manage_permission_cannot_create_skill():
     ) as context:
         response = context.client.post(
             _BASE,
-            json={"name": "Platform administrator Skill", "zip_content": _make_zip()},
+            json={"name": "Platform administrator Skill", "files": _files()},
             headers=_auth(context),
         )
 
@@ -236,7 +168,7 @@ def test_create_skill_returns_201():
         with when("I create a skill"):
             response = client.post(
                 _BASE,
-                json={"name": "My Skill", "zip_content": _make_zip()},
+                json={"name": "My Skill", "files": _files()},
                 headers=_auth(context),
             )
 
@@ -248,34 +180,50 @@ def test_create_skill_returns_201():
             assert_that(body["organization_id"], equal_to(str(context.organization.id)))
 
 
-def test_create_skill_with_invalid_zip_returns_400():
+def test_create_skill_requires_at_least_one_file():
     with given(_GIVEN) as context:
         client: TestClient = context.client
 
-        with when("I create a skill with a non-zip payload"):
+        with when("I create a skill with no files"):
             response = client.post(
                 _BASE,
-                json={
-                    "name": "Bad Skill",
-                    "zip_content": base64.b64encode(b"not a zip").decode(),
-                },
+                json={"name": "Empty Skill", "files": []},
+                headers=_auth(context),
+            )
+
+        with then("it returns 422"):
+            assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_CONTENT))
+
+
+def test_create_skill_requires_a_skill_md_entry_point():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I create a skill whose files omit SKILL.md"):
+            response = client.post(
+                _BASE,
+                json={"name": "No Entry", "files": _files(path="helpers/notes.md")},
                 headers=_auth(context),
             )
 
         with then("it returns 400"):
             assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], contains_string("entry-point"))
 
 
 def test_create_skill_with_path_traversal_returns_400():
     with given(_GIVEN) as context:
         client: TestClient = context.client
 
-        with when("I create a skill with a zip containing path traversal"):
+        with when("I create a skill with a file escaping the skill root"):
             response = client.post(
                 _BASE,
                 json={
                     "name": "Evil Skill",
-                    "zip_content": _make_zip_with_path_traversal(),
+                    "files": [
+                        {"path": "SKILL.md", "content": "# Skill"},
+                        {"path": "../../../etc/passwd", "content": "root:x:0:0:"},
+                    ],
                 },
                 headers=_auth(context),
             )
@@ -284,16 +232,19 @@ def test_create_skill_with_path_traversal_returns_400():
             assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
 
 
-def test_create_skill_with_zip_bomb_returns_400():
+def test_create_skill_with_absolute_path_returns_400():
     with given(_GIVEN) as context:
         client: TestClient = context.client
 
-        with when("I create a skill with a zip bomb"):
+        with when("I create a skill with an absolute file path"):
             response = client.post(
                 _BASE,
                 json={
-                    "name": "Bomb Skill",
-                    "zip_content": _make_high_ratio_zip(),
+                    "name": "Absolute Skill",
+                    "files": [
+                        {"path": "SKILL.md", "content": "# Skill"},
+                        {"path": "/etc/passwd", "content": "root:x:0:0:"},
+                    ],
                 },
                 headers=_auth(context),
             )
@@ -302,55 +253,37 @@ def test_create_skill_with_zip_bomb_returns_400():
             assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
 
 
-def test_create_skill_with_encrypted_zip_returns_400():
+def test_create_skill_with_duplicate_paths_returns_400():
+    """Two entries differing only in case would collide on the agent's Linux filesystem."""
     with given(_GIVEN) as context:
         client: TestClient = context.client
 
-        with when("I create a skill with an encrypted zip entry"):
+        with when("I create a skill with case-colliding paths"):
             response = client.post(
                 _BASE,
                 json={
-                    "name": "Encrypted Skill",
-                    "zip_content": _make_encrypted_zip(),
+                    "name": "Dup Skill",
+                    "files": [
+                        {"path": "SKILL.md", "content": "# Skill"},
+                        {"path": "skill.MD", "content": "# Other"},
+                    ],
                 },
                 headers=_auth(context),
             )
 
         with then("it returns 400"):
             assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], contains_string("Duplicate"))
 
 
-def test_create_skill_with_oversized_zip_returns_400():
+def test_create_skill_with_oversized_file_returns_400():
     with given(_GIVEN) as context:
         client: TestClient = context.client
 
-        with when("I create a skill with a zip exceeding 50 MB"):
+        with when("I create a skill with a file above the 1 MB limit"):
             response = client.post(
                 _BASE,
-                json={
-                    "name": "Big Skill",
-                    "zip_content": _make_zip(content="x" * (51 * 1024 * 1024)),
-                },
-                headers=_auth(context),
-            )
-
-        with then("it returns 400"):
-            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
-
-
-def test_create_skill_with_spoofed_uncompressed_size_returns_400():
-    # The zip's metadata declares 0 bytes per entry (bypassing the header check), but
-    # actual extraction totals 1500 bytes — above the patched 1000-byte limit.
-    with patch("api.domains.skills.service._MAX_UNCOMPRESSED_BYTES", 1000), given(_GIVEN) as context:
-        client: TestClient = context.client
-
-        with when("I create a skill with a zip that has spoofed metadata but oversized content"):
-            response = client.post(
-                _BASE,
-                json={
-                    "name": "Spoofed Skill",
-                    "zip_content": _make_zip_spoofed_uncompressed_size(file_count=3, file_size=500),
-                },
+                json={"name": "Big Skill", "files": _files(content="x" * (1024 * 1024 + 1))},
                 headers=_auth(context),
             )
 
@@ -365,7 +298,7 @@ def test_create_skill_without_auth_returns_401():
         with when("I create a skill without auth"):
             response = client.post(
                 _BASE,
-                json={"name": "Skill", "zip_content": _make_zip()},
+                json={"name": "Skill", "files": _files()},
             )
 
         with then("request is rejected with 401"):
@@ -657,29 +590,19 @@ def test_update_aai_cli_skill_returns_403():
             assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
-def test_update_skill_with_invalid_zip_returns_400():
-    with given([*_GIVEN, there_is_a_skill(name="Valid Skill")]) as context:
-        client: TestClient = context.client
-
-        with when("I update the skill with a non-zip payload"):
-            response = client.patch(
-                f"{_BASE}/{context.skill.id}",
-                json={"zip_content": base64.b64encode(b"not a zip").decode()},
-                headers=_auth(context),
-            )
-
-        with then("it returns 400"):
-            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
-
-
 def test_update_skill_with_path_traversal_returns_400():
     with given([*_GIVEN, there_is_a_skill(name="Valid Skill")]) as context:
         client: TestClient = context.client
 
-        with when("I update the skill with a zip containing path traversal"):
+        with when("I update the skill with a file escaping the skill root"):
             response = client.patch(
                 f"{_BASE}/{context.skill.id}",
-                json={"zip_content": _make_zip_with_path_traversal()},
+                json={
+                    "files": [
+                        {"path": "SKILL.md", "content": "# Skill"},
+                        {"path": "../../../etc/passwd", "content": "root:x:0:0:"},
+                    ]
+                },
                 headers=_auth(context),
             )
 
@@ -687,14 +610,14 @@ def test_update_skill_with_path_traversal_returns_400():
             assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
 
 
-def test_update_skill_with_zip_bomb_returns_400():
+def test_update_skill_with_oversized_file_returns_400():
     with given([*_GIVEN, there_is_a_skill(name="Valid Skill")]) as context:
         client: TestClient = context.client
 
-        with when("I update the skill with a zip bomb"):
+        with when("I update the skill with a file above the 1 MB limit"):
             response = client.patch(
                 f"{_BASE}/{context.skill.id}",
-                json={"zip_content": _make_high_ratio_zip()},
+                json={"files": _files(content="x" * (1024 * 1024 + 1))},
                 headers=_auth(context),
             )
 
@@ -702,35 +625,67 @@ def test_update_skill_with_zip_bomb_returns_400():
             assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
 
 
-def test_update_skill_with_spoofed_uncompressed_size_returns_400():
-    with patch("api.domains.skills.service._MAX_UNCOMPRESSED_BYTES", 1000):
-        with given([*_GIVEN, there_is_a_skill(name="Valid Skill")]) as context:
-            client: TestClient = context.client
-
-            with when("I update the skill with a zip that has spoofed metadata but oversized content"):
-                response = client.patch(
-                    f"{_BASE}/{context.skill.id}",
-                    json={"zip_content": _make_zip_spoofed_uncompressed_size(file_count=3, file_size=500)},
-                    headers=_auth(context),
-                )
-
-            with then("it returns 400"):
-                assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
-
-
-def test_update_skill_with_encrypted_zip_returns_400():
-    with given([*_GIVEN, there_is_a_skill(name="Valid Skill")]) as context:
+def test_update_skill_publishes_a_new_version():
+    with given([*_GIVEN, there_is_a_skill(name="Versioned Skill")]) as context:
         client: TestClient = context.client
 
-        with when("I update the skill with an encrypted zip entry"):
+        with when("I update the skill content"):
             response = client.patch(
                 f"{_BASE}/{context.skill.id}",
-                json={"zip_content": _make_encrypted_zip()},
+                json={"files": _files(content="# Rewritten")},
                 headers=_auth(context),
             )
 
-        with then("it returns 400"):
-            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+        with then("the published version advances and serves the new content"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["version"], equal_to(2))
+
+            files_response = client.get(
+                f"{_BASE}/{context.skill.id}/files",
+                headers=_auth(context),
+            )
+            body = files_response.json()
+            assert_that(body["version"], equal_to(2))
+            assert_that(body["files"], equal_to([{"path": "SKILL.md", "content": "# Rewritten"}]))
+
+
+def test_update_skill_metadata_only_does_not_publish_a_version():
+    """Renaming is not a content change; it must not inflate version history or make
+    running agents look out of date."""
+    with given([*_GIVEN, there_is_a_skill(name="Stable Skill")]) as context:
+        client: TestClient = context.client
+
+        with when("I update only the skill name"):
+            response = client.patch(
+                f"{_BASE}/{context.skill.id}",
+                json={"name": "Renamed Skill"},
+                headers=_auth(context),
+            )
+
+        with then("the version is unchanged"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["version"], equal_to(1))
+
+
+def test_renaming_a_skill_does_not_move_its_mount_directory():
+    """root_dir is baked into pointers and into cross-references inside the skill's own
+    markdown, so a rename must not relocate the files."""
+    with given([*_GIVEN, there_is_a_skill(name="Original Name")]) as context:
+        client: TestClient = context.client
+        original_root = context.skill.root_dir
+
+        with when("I rename the skill"):
+            response = client.patch(
+                f"{_BASE}/{context.skill.id}",
+                json={"name": "Completely Different"},
+                headers=_auth(context),
+            )
+
+        with then("the slug and mount directory are unchanged"):
+            body = response.json()
+            assert_that(body["name"], equal_to("Completely Different"))
+            assert_that(body["root_dir"], equal_to(original_root))
+            assert_that(body["slug"], equal_to(context.skill.slug))
 
 
 def test_update_skill_not_found_returns_404():

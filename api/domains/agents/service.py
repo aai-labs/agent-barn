@@ -20,7 +20,7 @@ from api.domains.agents.aai_cli_artifacts import (
     build_tool_context_md,
     provider_secrets_map,
 )
-from api.domains.agents.aai_cli_skills import build_skills_manifest_from_zips
+from api.domains.agents.aai_cli_skills import build_skills_manifest
 from api.domains.agents.authorization import AgentAuthorization
 from api.domains.agents.builders import (
     build_config_map,
@@ -111,7 +111,7 @@ from api.domains.events.catalog import (
 from api.domains.organizations.lookup import OrganizationLookupService
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.shared_credentials.repository import SharedCredentialRepository
-from api.domains.skills.models import Skill
+from api.domains.skills.models import Skill, derive_tools_pointer
 from api.domains.skills.repository import SkillRepository
 from api.domains.templates.models import AgentTemplate, PlatformTemplate, TemplateRead
 from api.domains.templates.renderer import render_template
@@ -306,7 +306,7 @@ class AgentService:
 
     @staticmethod
     def _build_skill_pointers(skills: list[Skill]) -> str:
-        return "".join(s.tools_pointer for s in skills if s.tools_pointer)
+        return "".join(derive_tools_pointer(s) for s in skills)
 
     def _auto_attached_aai_cli_skills(
         self,
@@ -2184,7 +2184,15 @@ class AgentService:
             set(decrypted.keys()),
             {s.id for s in assigned_skills},
         )
-        skills_json = build_skills_manifest_from_zips(mounted_skills) if mounted_skills else None
+        skills_json = None
+        if mounted_skills:
+            files_by_skill = self.skill_repository.get_latest_files_for_skills([s.id for s in mounted_skills])
+            skills_json, collisions = build_skills_manifest(mounted_skills, files_by_skill)
+            for collision in collisions:
+                # Two skills claiming one workspace path: the loser's file is silently
+                # absent for the agent, so surface it rather than letting the agent
+                # fail to find documentation it was told exists.
+                logger.warning("Agent %s skill file collision: %s", agent.id, collision)
         tools_md = rendered.tools_md + self._build_skill_pointers(mounted_skills) + build_tool_context_md(decrypted)
         # AGENTS.md is auto-loaded into the startup prompt by both runtimes, so the
         # --profile mapping + no-fallback policy is appended here (not just to TOOLS.md).

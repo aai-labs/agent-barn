@@ -6,7 +6,7 @@ from sqlalchemy import func
 from sqlmodel import Session, col, delete, or_, select
 
 from api.domains.agents.models import Agent, AgentSkill, AgentTemplateSkill, PlatformTemplateSkill
-from api.domains.skills.models import Skill, SkillFilter, SkillSource
+from api.domains.skills.models import Skill, SkillFile, SkillFilter, SkillSource, SkillVersion
 from api.domains.templates.models import AgentTemplate, PlatformTemplate
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.infrastructure.shared.models import Pagination
@@ -20,6 +20,115 @@ class SkillRepository:
 
     def get_by_id(self, skill_id: UUID) -> Skill | None:
         return self.delegate.find_by_id(Skill, skill_id)
+
+    # --- versions and files -------------------------------------------------
+    #
+    # The published version of a lineage is always its highest ``version``:
+    # publishing and rollback both append, so "latest" and "current" coincide and
+    # no current-version pointer has to be kept in sync.
+
+    def get_latest_version(self, skill_id: UUID) -> SkillVersion | None:
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(SkillVersion)
+                .where(col(SkillVersion.skill_id) == skill_id)
+                .order_by(col(SkillVersion.version).desc())
+                .limit(1)
+            )
+            return session.exec(query).first()
+
+    def get_latest_version_numbers(self, skill_ids: list[UUID]) -> dict[UUID, int]:
+        """Latest version number per skill, for list/detail responses."""
+        if not skill_ids:
+            return {}
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(SkillVersion.skill_id, func.max(col(SkillVersion.version)))
+                .where(col(SkillVersion.skill_id).in_(skill_ids))
+                .group_by(col(SkillVersion.skill_id))
+            )
+            return {skill_id: version for skill_id, version in session.exec(query).all()}
+
+    def get_version(self, skill_id: UUID, version: int) -> SkillVersion | None:
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(SkillVersion)
+                .where(col(SkillVersion.skill_id) == skill_id)
+                .where(col(SkillVersion.version) == version)
+            )
+            return session.exec(query).first()
+
+    def list_versions(self, skill_id: UUID) -> list[SkillVersion]:
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(SkillVersion)
+                .where(col(SkillVersion.skill_id) == skill_id)
+                .order_by(col(SkillVersion.version).desc())
+            )
+            return list(session.exec(query).all())
+
+    def get_files(self, version_id: UUID) -> list[SkillFile]:
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(SkillFile)
+                .where(col(SkillFile.skill_version_id) == version_id)
+                .order_by(col(SkillFile.path).asc())
+            )
+            return list(session.exec(query).all())
+
+    def get_latest_files_for_skills(self, skill_ids: list[UUID]) -> dict[UUID, list[SkillFile]]:
+        """Files of each skill's latest version, keyed by skill id.
+
+        Used when materializing an agent's skills at start, so mounting costs two
+        queries regardless of how many skills are attached.
+        """
+        if not skill_ids:
+            return {}
+        latest = self.get_latest_version_numbers(skill_ids)
+        if not latest:
+            return {}
+        with Session(self.delegate.engine) as session:
+            version_rows = session.exec(select(SkillVersion).where(col(SkillVersion.skill_id).in_(list(latest)))).all()
+            version_ids = {v.id: v.skill_id for v in version_rows if latest.get(v.skill_id) == v.version}
+            if not version_ids:
+                return {}
+            files = session.exec(
+                select(SkillFile)
+                .where(col(SkillFile.skill_version_id).in_(list(version_ids)))
+                .order_by(col(SkillFile.path).asc())
+            ).all()
+
+        result: dict[UUID, list[SkillFile]] = {}
+        for file in files:
+            result.setdefault(version_ids[file.skill_version_id], []).append(file)
+        return result
+
+    def publish_version(
+        self,
+        skill_id: UUID,
+        files: list[tuple[str, str]],
+        *,
+        created_by: UUID | None = None,
+        restored_from_version: int | None = None,
+    ) -> SkillVersion:
+        """Append the next immutable version of a lineage. History is never mutated."""
+        with Session(self.delegate.engine) as session:
+            current = session.exec(
+                select(func.max(col(SkillVersion.version))).where(col(SkillVersion.skill_id) == skill_id)
+            ).one()
+            version = SkillVersion(
+                skill_id=skill_id,
+                version=(current or 0) + 1,
+                created_by=created_by,
+                restored_from_version=restored_from_version,
+            )
+            session.add(version)
+            session.flush()
+            for path, content in files:
+                session.add(SkillFile(skill_version_id=version.id, path=path, content=content))
+            session.commit()
+            session.refresh(version)
+            return version
 
     def get_aai_cli_skills(self) -> list[Skill]:
         with Session(self.delegate.engine) as session:
