@@ -33,7 +33,7 @@ if [[ -f "${REPO_ROOT}/.env" ]]; then
   set +a
 fi
 
-CLUSTER="agentfarm-dev"
+CLUSTER="${K3D_CLUSTER:-agentfarm-dev}"
 TARGET="${TARGET:-all}"  # all | openclaw | hermes
 APT_MIRROR="${APT_MIRROR:-deb.debian.org}"
 COMPOSE="docker compose -f ${REPO_ROOT}/compose.yml --profile k3d"
@@ -52,6 +52,33 @@ command -v docker >/dev/null 2>&1 || red "docker not found"
 [[ -n "${GH_TOKEN:-}" ]]       || red "GH_TOKEN is not set — needed to clone agent-cli-tools"
 [[ -n "${OPENCLAW_IMAGE:-}" ]] || red "OPENCLAW_IMAGE is not set — source your .env first"
 [[ -n "${HERMES_IMAGE:-}" ]]   || red "HERMES_IMAGE is not set — source your .env first"
+
+# The API launches pods from these env-var refs with imagePullPolicy=IfNotPresent,
+# while CI publishes each base image under exactly its VERSION tag. A tag that
+# doesn't match its VERSION file means building/importing one image and running a
+# different one — so fail loudly here rather than at ErrImagePull time.
+assert_tag_matches_version() {
+  local var_name="$1" image_ref="$2" version_file="$3"
+  local want tag
+  [[ -f "${REPO_ROOT}/${version_file}" ]] || red "${version_file} not found"
+  want="$(tr -d '[:space:]' < "${REPO_ROOT}/${version_file}")"
+  tag="${image_ref##*:}"
+  # No colon at all (or a bare registry:port with no tag) means no tag was pinned.
+  if [[ "${tag}" == "${image_ref}" || "${tag}" == *"/"* ]]; then
+    red "${var_name} has no tag — it must end in ':${want}' to match ${version_file}"
+  fi
+  [[ "${tag}" == "${want}" ]] || red "$(
+    printf '%s tag is %s but %s says %s.\n' "${var_name}" "${tag}" "${version_file}" "${want}"
+    printf '       Update .env so the tag matches, e.g. %s:%s' "${image_ref%:*}" "${want}"
+  )"
+}
+
+if [[ "${TARGET}" == "all" || "${TARGET}" == "openclaw" ]]; then
+  assert_tag_matches_version OPENCLAW_IMAGE "${OPENCLAW_IMAGE}" openclaw-base/VERSION
+fi
+if [[ "${TARGET}" == "all" || "${TARGET}" == "hermes" ]]; then
+  assert_tag_matches_version HERMES_IMAGE "${HERMES_IMAGE}" hermes-base/VERSION
+fi
 
 # Verify the cluster is running (via the k3d-runner container)
 ${COMPOSE} run --rm k3d-runner k3d cluster list 2>/dev/null \

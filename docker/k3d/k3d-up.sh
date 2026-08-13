@@ -25,9 +25,11 @@ if [[ -f "${REPO_ROOT}/.env" ]]; then
   set +a
 fi
 
-CLUSTER="agentfarm-dev"
-K8S_API_PORT=16443
-LITELLM_HOST_PORT=7070
+# Overridable so a second worktree can run its own cluster alongside the first
+# (the defaults are the single-cluster values this flow has always used).
+CLUSTER="${K3D_CLUSTER:-agentfarm-dev}"
+K8S_API_PORT="${K3D_API_PORT:-16443}"
+LITELLM_HOST_PORT="${LITELLM_PORT:-7070}"
 # Host port the ingest API is reachable on, for the telemetry pods push back to.
 # Kept in step with INGEST_PORT in compose.yml and the Makefile.
 INGEST_HOST_PORT="${INGEST_PORT:-8001}"
@@ -78,8 +80,14 @@ if ${COMPOSE} run --rm k3d-runner k3d cluster list 2>/dev/null \
   green "  Cluster running"
 else
   echo "  Creating cluster…"
+  # --tls-san host.docker.internal: kubeconfig-internal.yaml (below) points the
+  # API container at https://host.docker.internal:${K8S_API_PORT} and verifies
+  # the server certificate, so that name must be in the cert's SAN list or every
+  # request fails with an x509 hostname error. k3d only adds it automatically on
+  # Docker Desktop; a native Linux engine needs it passed explicitly.
   ${COMPOSE} run --rm k3d-runner k3d cluster create "${CLUSTER}" \
     --api-port "0.0.0.0:${K8S_API_PORT}" \
+    --k3s-arg "--tls-san=host.docker.internal@server:0" \
     --wait
   green "  Cluster created"
 fi

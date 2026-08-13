@@ -13,7 +13,11 @@ REDIS_PORT=6379
 REDIS_URL=redis://localhost:6379/0
 
 SECRET_SIGNING_KEY=replace_with_a_secure_random_value
-PLATFORM_ADMIN_CREDENTIALS=admin@example.com:replace_with_secure_password
+# The password must satisfy the API's own policy — at least 8 characters with an
+# uppercase letter, a lowercase letter and a digit (see
+# api/domains/auth/password_validation.py). A non-compliant value fails startup
+# with "500: Error while initializing startup data".
+PLATFORM_ADMIN_CREDENTIALS=admin@example.com:Replace_With_Secure_Password1
 
 # Optional: if unset, email delivery is disabled and send attempts are logged.
 EMAIL_SERVER_CREDENTIAL=

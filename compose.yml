@@ -159,7 +159,7 @@ services:
   # Agents running inside k3d reach LiteLLM via host.docker.internal:7070.
   litellm-db:
     image: postgres:16
-    container_name: aai_litellm_db
+    container_name: ${LITELLM_DB_CONTAINER_NAME:-aai_litellm_db}
     profiles: ["k3d"]
     restart: unless-stopped
     environment:
@@ -176,7 +176,7 @@ services:
 
   litellm:
     image: ghcr.io/berriai/litellm:main-v1.83.14-stable.patch.3
-    container_name: aai_litellm
+    container_name: ${LITELLM_CONTAINER_NAME:-aai_litellm}
     profiles: ["k3d"]
     restart: unless-stopped
     depends_on:
@@ -192,7 +192,7 @@ services:
       # reach LiteLLM through the host on Linux, where host.docker.internal maps
       # to the bridge gateway IP rather than 127.0.0.1. Safe for local dev on a
       # personal machine: the proxy is gated by LITELLM_MASTER_KEY.
-      - "7070:4000"
+      - "${LITELLM_PORT:-7070}:4000"
     volumes:
       - ./docker/litellm/config.yaml:/app/config.yaml:ro
 

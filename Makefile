@@ -167,6 +167,9 @@ worker-logs:
 # Requires: Docker running. No host k3d or helm install needed.
 # kubeconfigs are written to ./.k3d/ (host + in-container variants).
 # Ports: LiteLLM → 127.0.0.1:7070 | k8s API → 127.0.0.1:16443
+# K3D_CLUSTER/K3D_API_PORT/LITELLM_PORT override the cluster name and host ports
+# so a second worktree can run its own cluster side by side.
+K3D_CLUSTER ?= agentfarm-dev
 
 cluster-up:
 	@bash docker/k3d/k3d-up.sh
@@ -175,14 +178,14 @@ cluster-up:
 # redis-down stop rather than destroy). Imported base images, the namespace and
 # any running agents survive, and cluster-up brings it back in seconds.
 cluster-down:
-	$(COMPOSE) --profile k3d run --rm k3d-runner k3d cluster stop agentfarm-dev
+	$(COMPOSE) --profile k3d run --rm k3d-runner k3d cluster stop $(K3D_CLUSTER)
 	$(COMPOSE) --profile k3d stop litellm litellm-db
 
 # Destroys the cluster: imported images and every workload in it are lost, and
 # the next cluster-up rebuilds from scratch (re-run k3d-load-images afterwards).
 # Reach for this when a stopped cluster comes back unhealthy.
 cluster-delete:
-	$(COMPOSE) --profile k3d run --rm k3d-runner k3d cluster delete agentfarm-dev
+	$(COMPOSE) --profile k3d run --rm k3d-runner k3d cluster delete $(K3D_CLUSTER)
 	$(COMPOSE) --profile k3d stop litellm litellm-db
 
 cluster-reset: cluster-delete cluster-up
