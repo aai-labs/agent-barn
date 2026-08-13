@@ -28,6 +28,7 @@ export function IntegrationFields({
   namePrefix = "",
   showScopeNote = false,
   disabled,
+  secretNote,
 }: {
   provider: IntegrationProvider;
   draft: IntegrationDraft;
@@ -37,8 +38,8 @@ export function IntegrationFields({
   namePrefix?: string;
   showScopeNote?: boolean;
   disabled?: boolean;
+  secretNote?: string;
 }) {
-  // Per-field secret visibility, keyed by field so one toggle can't reveal another.
   const [visible, setVisible] = useState<Record<string, boolean>>({});
 
   return (
@@ -94,6 +95,11 @@ export function IntegrationFields({
                 placeholder={field.placeholder}
                 disabled={disabled}
               />
+              {secretNote && (
+                <span className="text-xs" style={{ color: "var(--ink-4)" }}>
+                  {secretNote}
+                </span>
+              )}
             </FormField>
           );
         }
