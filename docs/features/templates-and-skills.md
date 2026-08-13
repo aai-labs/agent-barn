@@ -2,7 +2,7 @@
 
 ## Read when
 
-Read before changing template versioning, predefined template seeding, template Markdown fields, Agent Template Overrides, required skills, skill archives, skill provider requirements, or agent skill mounting.
+Read before changing template versioning, predefined template seeding, template Markdown fields, Agent Template Overrides, required skills, skill versioning, skill file storage, skill provider requirements, or agent skill mounting.
 
 ## Role in the system
 
@@ -26,7 +26,12 @@ Templates provide versioned agent configuration; Skills provide packaged instruc
 
 - Built-in `aai_cli` skills are global Platform Resources; custom skills belong to one organization.
 - Built-in skills cannot be updated or deleted through normal skill CRUD.
-- Custom skill content is stored as a ZIP and validated for archive size, expanded size, entry count, encryption, compression ratio, absolute paths, and path traversal.
+- A Skill row is a *lineage*: stable identity, name, slug, and mount location. Content lives in append-only `skill_version` rows, each owning a flat set of `skill_file` rows. The published version is always the lineage's highest `version`, so "latest" and "current" coincide and no current-version pointer exists. Rollback publishes a *new* version copied from an older one; history is never mutated.
+- Agents and templates reference a skill *lineage*, never a version. `TemplateRequiredSkillRead` therefore carries no version, while the Skills UI reads `SkillSummaryRead`/`SkillDetailRead`, which do.
+- Skill files are text, addressed by a path relative to the skill root. Directories are implied by the path and never stored. Paths are validated for traversal, absolute paths, archive metadata, disallowed characters, case-insensitive duplicates, and per-file/total size caps (`api/domains/skills/files.py`).
+- `root_dir` is the workspace directory a skill's files are written to, and is *not* derived from the slug at mount time. Custom skills use their slug; all ten built-ins deliberately share `aai-cli` so their published pointer paths (`./skills/aai-cli/jira_skill.md`) keep resolving. Renaming a skill never moves its files.
+- Two skills sharing a `root_dir` can claim the same workspace path. The manifest builder applies skills in a stable order (by name), first claim wins, and losing claims are returned as collisions and logged against the agent at start.
+- `tools_pointer` is a curated override carried only by built-ins. For every other skill the pointer is derived from name, description, and entry path, so a rename or description edit cannot leave a stale pointer behind.
 - A custom skill cannot be deleted while assigned to an agent or required by a latest template version.
 - Template-required skills must be explicitly present on the agent: standalone (ungrouped) required skills must all be present; for a required-skill group, at least one member must be present. A group member only becomes individually "required" (cannot be removed) once it is the agent's sole assigned member of that group.
 - Agent create/update validates assigned-skill provider requirements against Agent Secrets. Editing a skill's required providers does not revalidate existing agent assignments, and start does not repeat that validation.
@@ -59,7 +64,7 @@ An Agent Override may show an update only from the direct Platform or Organizati
 
 ### Assign and mount skills
 
-Explicit assignments are persisted after organization access and provider requirements pass. Agent start loads those skills, adds eligible built-in provider skills, builds the runtime skill manifest, and appends skill pointers to rendered tool context.
+Explicit assignments are persisted after organization access and provider requirements pass. Agent start loads those skills, adds eligible built-in provider skills, loads each skill's latest-version files, builds the runtime skill manifest (prefixing every path with the skill's `root_dir` and reporting collisions), and appends skill pointers to rendered tool context.
 
 ### Author Platform Templates
 
@@ -73,7 +78,9 @@ Platform Administrators use the Platform View's Platform Templates catalog (`/da
 | Template versioning and seeding     | `../../api/domains/templates/service.py`, `../../api/domains/templates/predefined/`                                                                         |
 | Template persistence                | `../../api/domains/templates/repository.py`                                                                                     |
 | Skill model and DTOs                | `../../api/domains/skills/models.py`                                                                                            |
-| Skill archive and CRUD rules        | `../../api/domains/skills/service.py`                                                                                           |
+| Skill file path rules               | `../../api/domains/skills/files.py`                                                                                             |
+| Skill versioning and CRUD rules     | `../../api/domains/skills/service.py`, `../../api/domains/skills/repository.py`                                                       |
+| Skill manifest and collision check  | `../../api/domains/agents/aai_cli_skills/__init__.py`                                                                           |
 | Built-in skill seeding              | `../../api/domains/skills/skill_seeder.py`, `../../api/domains/agents/aai_cli_skills/`                                                |
 | Assignment enforcement and mounting | `../../api/domains/agents/service.py`                                                                                           |
 | UI template surface                 | `../../ui/src/features/agents/components/templates-panel.tsx`, `../../ui/src/features/platform-templates/`                     |
@@ -82,6 +89,6 @@ Platform Administrators use the Platform View's Platform Templates catalog (`/da
 
 ## Change impact
 
-Template changes affect agent pinning/rendering, predefined seeds, required skills, UI template schemas, and existing-version behavior. Changes to predefined v1 requirements must account for already-pinned agents. Agent Template Override changes additionally affect Agent-owned snapshot persistence, source update discovery, pin selection, restart activation, rollback, and sibling isolation. Skill changes affect ZIP validation, assignment/deletion guards, agent start manifests, provider requirements, templates, and the Skills UI; provider-requirement edits must account for existing assignments. Verify all three domain test suites when their relationship changes.
+Template changes affect agent pinning/rendering, predefined seeds, required skills, UI template schemas, and existing-version behavior. Changes to predefined v1 requirements must account for already-pinned agents. Agent Template Override changes additionally affect Agent-owned snapshot persistence, source update discovery, pin selection, restart activation, rollback, and sibling isolation. Skill changes affect file path validation, version publishing, assignment/deletion guards, agent start manifests, provider requirements, templates, and the Skills UI; provider-requirement edits must account for existing assignments. Deletion cascades version and file rows while the lineage-level guards stay in place. Verify all three domain test suites when their relationship changes.
 
 Required-skill *group* changes (the `group_key` column and the "at least one of" model) affect: agent create/update validation (group membership, the never-drop-to-zero grandfathering rule), predefined seeding idempotency (a group's seeded membership can be a subset when not all member skills exist yet), the hire dialog (multi-select group UI, gates Hire until a choice is made), the template editor (group authoring: create/add/remove member/dissolve), and the canonical Agent configuration page's Template selection flow (group choice re-derived against the new template's groups). Changes here must be verified against both `agent_template_skill` and `platform_template_skill` groups.
