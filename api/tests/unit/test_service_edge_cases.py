@@ -35,8 +35,9 @@ def build_user_service() -> tuple[
         db_connection_url=cast(PostgresDsn, "postgresql://postgres:postgres@localhost:5432/test"),
         secret_signing_key="x" * 32,
         platform_admin_credentials="admin@example.com:StrongPass123",
-        email_server_credential="noreply@example.com:password",
-        email_smtp_server="smtp.example.com",
+        cloudflare_account_id="test-account-id",
+        cloudflare_api_token="test-api-token",
+        sender_email="noreply@example.com",
     )
     service = UserService(
         user_repository=cast(UserRepository, user_repository),
