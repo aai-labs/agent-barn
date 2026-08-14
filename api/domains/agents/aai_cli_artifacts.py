@@ -340,7 +340,8 @@ def build_tool_context_md(decrypted: Mapping[SecretProvider, SecretContent]) -> 
 # exists. Listed only when the skill is actually mounted, since these are opt-in.
 CREDENTIAL_FREE_TOOLS: dict[str, str] = {
     "Excel": (
-        "- **Excel / CSV** (local files): `aai-cli excel <resource> <verb>` — read and write "
+        "- **Excel / CSV** (local files): `aai-cli excel <resource> <verb>` — create workbooks, "
+        "add/delete/rename sheet tabs, and read and write cell ranges in "
         "`.xlsx`/`.xlsm` and `.csv`/`.tsv` on disk (`.xls`/`.xlsb`/`.ods` are read-only). "
         "**This is the only supported way to build or edit a spreadsheet.** Do not write "
         "Python, and do not reach for `openpyxl`, `pandas`, `xlsxwriter` or a hand-rolled "
@@ -419,7 +420,9 @@ _INTEGRATION_CAPABILITIES: dict[SecretProvider, str] = {
     SecretProvider.CONFLUENCE: "pages (comments, attachments), spaces",
     SecretProvider.BITBUCKET: "PRs (diff, comments), commits, branches, repo source, pipelines",
     SecretProvider.GMAIL: "read and search mail (read-only)",
-    SecretProvider.GOOGLE_SHEETS: "list and read spreadsheets, read/update/clear cell ranges",
+    SecretProvider.GOOGLE_SHEETS: (
+        "create and list spreadsheets, add/delete/rename sheet tabs, read/update/clear cell ranges"
+    ),
     SecretProvider.ZOHO_MAIL: "read and search mail (read-only)",
     SecretProvider.SLACK: (
         "read channel data: list channels, list and download files and attachments, "
