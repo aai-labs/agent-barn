@@ -39,7 +39,7 @@ test.describe("Settings — Skills panel", () => {
   });
 
   test("shows New skill button right-aligned in toolbar", async ({ page }) => {
-    await expect(page.getByRole("button", { name: /new skill/i })).toBeVisible();
+    await expect(page.getByRole("link", { name: /new skill/i })).toBeVisible();
   });
 
   test("shows platform skill as a card labeled Built in", async ({ page }) => {
@@ -96,66 +96,11 @@ test.describe("Settings — Skills panel", () => {
     await expect(page.getByRole("heading", { name: mockCustomSkill.name })).toBeVisible();
   });
 
-  test("clicking New skill opens create drawer", async ({ page }) => {
-    await page.getByRole("button", { name: /new skill/i }).click();
+  test("clicking New skill navigates to the new-skill page", async ({ page }) => {
+    await page.getByRole("link", { name: /new skill/i }).click();
 
+    await expect(page).toHaveURL(new RegExp(`/settings/skills/new$`));
     await expect(page.getByRole("heading", { name: "New skill" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Create skill" })).toBeVisible();
-  });
-
-  test("create skill drawer starts from a SKILL.md entry point", async ({ page }) => {
-    await page.getByRole("button", { name: /new skill/i }).click();
-    await page.getByPlaceholder("e.g. my-tool").fill("test-skill");
-
-    await expect(page.getByRole("button", { name: "SKILL.md" })).toBeVisible();
-    await expect(page.getByLabel("Content of SKILL.md")).not.toBeEmpty();
-  });
-
-  test("create skill drawer can add a nested file", async ({ page }) => {
-    await page.getByRole("button", { name: /new skill/i }).click();
-    await page.getByPlaceholder("e.g. my-tool").fill("test-skill");
-
-    await page.getByPlaceholder("helpers/notes.md").fill("helpers/notes.md");
-    await page.getByRole("button", { name: "Add file" }).click();
-
-    await expect(page.getByRole("button", { name: "helpers/notes.md", exact: true })).toBeVisible();
-    await expect(page.getByLabel("Content of helpers/notes.md")).toBeVisible();
-  });
-
-  test("create skill drawer rejects a duplicate file path", async ({ page }) => {
-    await page.getByRole("button", { name: /new skill/i }).click();
-
-    await page.getByPlaceholder("helpers/notes.md").fill("SKILL.md");
-    await page.getByRole("button", { name: "Add file" }).click();
-
-    await expect(page.getByText("A file with that path already exists.")).toBeVisible();
-  });
-
-  test("create skill drawer can be cancelled", async ({ page }) => {
-    await page.getByRole("button", { name: /new skill/i }).click();
-    await expect(page.getByRole("heading", { name: "New skill" })).toBeVisible();
-
-    await page.getByRole("button", { name: "Cancel" }).click();
-
-    await expect(page.getByRole("heading", { name: "New skill" })).not.toBeVisible();
-  });
-
-  test("creating a skill navigates to its detail page", async ({ page }) => {
-    const newSkillId = "cccccccc-1111-4ccc-8ccc-cccccccccccc";
-    await dataSupportPage.skills.interceptCreateSkillRequest({
-      skill: { ...mockCustomSkill, id: newSkillId, name: "test-skill", slug: "test-skill" },
-    });
-    await dataSupportPage.skills.interceptGetSkillFilesRequest({
-      skillId: newSkillId,
-      skill: { ...mockCustomSkill, id: newSkillId, name: "test-skill", slug: "test-skill" },
-    });
-    await dataSupportPage.skills.interceptGetSkillVersionsRequest({ skillId: newSkillId });
-
-    await page.getByRole("button", { name: /new skill/i }).click();
-    await page.getByPlaceholder("e.g. my-tool").fill("test-skill");
-    await page.getByRole("button", { name: "Create skill" }).click();
-
-    await expect(page).toHaveURL(new RegExp(`/settings/skills/${newSkillId}$`));
   });
 });
 

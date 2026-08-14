@@ -31,9 +31,9 @@ import {
   useUpdateSkill,
   useUpdateSkillDraft,
 } from "../hooks/use-skill-mutations";
-import { ALL_PROVIDERS } from "../utils";
 import { SkillDetailSidebar, type SkillDetailSection } from "./skill-detail-sidebar";
 import { SkillFileBrowser } from "./skill-file-browser";
+import { SkillMetadataFields } from "./skill-metadata-fields";
 import { SkillRequiredProviders } from "./skill-required-providers";
 import { SkillSourceBadge } from "./skill-source-badge";
 import { SkillVersionHistory } from "./skill-version-history";
@@ -360,58 +360,14 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
               </div>
 
               <div className="px-6 py-6 flex flex-col gap-6">
-                <section className="flex flex-col gap-4">
-                  <label
-                    className="flex flex-col gap-1.5 text-[13px] font-medium"
-                    style={{ color: "var(--ink-2)" }}
-                  >
-                    Name
-                    <input
-                      className="af-input"
-                      value={name}
-                      onChange={(e) => setName(e.target.value)}
-                      maxLength={255}
-                    />
-                  </label>
-                  <label
-                    className="flex flex-col gap-1.5 text-[13px] font-medium"
-                    style={{ color: "var(--ink-2)" }}
-                  >
-                    Description
-                    <input
-                      className="af-input"
-                      value={description}
-                      onChange={(e) => setDescription(e.target.value)}
-                      maxLength={2000}
-                      placeholder="What this skill helps the agent do"
-                    />
-                  </label>
-                  <div className="flex flex-col gap-2">
-                    <span className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>
-                      Required providers
-                    </span>
-                    <div className="flex flex-wrap gap-1.5">
-                      {ALL_PROVIDERS.map(({ value, label }) => {
-                        const selected = selectedProviders.includes(value);
-                        return (
-                          <button
-                            key={value}
-                            type="button"
-                            onClick={() => toggleProvider(value)}
-                            className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium transition-colors"
-                            style={
-                              selected
-                                ? { background: "var(--ink)", color: "var(--bg)", border: "1px solid var(--ink)" }
-                                : { background: "var(--bg-soft)", color: "var(--ink-3)", border: "1px solid var(--line)" }
-                            }
-                          >
-                            {label}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </section>
+                <SkillMetadataFields
+                  name={name}
+                  onNameChange={setName}
+                  description={description}
+                  onDescriptionChange={setDescription}
+                  selectedProviders={selectedProviders}
+                  onToggleProvider={toggleProvider}
+                />
 
                 <section className="flex flex-col gap-3">
                   <h3 className="text-[14px] font-semibold m-0" style={{ color: "var(--ink)" }}>

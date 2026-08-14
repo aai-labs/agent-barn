@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import Link from "next/link";
+import { useParams } from "next/navigation";
 import { ChevronDownIcon } from "lucide-react";
 
 import { AppErrorState } from "@/components/app-error-state";
@@ -20,7 +21,6 @@ import { type SkillSource } from "../schemas";
 import { useSkills } from "../hooks/use-skills";
 import { SKILLS_PAGE_SIZE } from "../utils";
 import { SkillCard } from "./skill-card";
-import { SkillCreateDrawer } from "./skill-create-drawer";
 
 const SOURCE_FILTERS: Array<{ value: SkillSource | ""; label: string }> = [
   { value: "", label: "All sources" },
@@ -41,13 +41,11 @@ function Hint({ children }: { children: React.ReactNode }) {
 
 export function SkillsPanel() {
   const { canManage } = useActiveOrgRole();
-  const router = useRouter();
   const params = useParams();
   const orgId = typeof params?.orgId === "string" ? params.orgId : null;
   const [search, setSearch] = useState("");
   const [sourceFilter, setSourceFilter] = useState<SkillSource | "">("");
   const [page, setPage] = useState(1);
-  const [creating, setCreating] = useState(false);
 
   const { skills, total, isLoading, error, refetch } = useSkills({
     search: search || undefined,
@@ -70,6 +68,8 @@ export function SkillsPanel() {
   function skillHref(skillId: string) {
     return orgId ? `/dashboard/${orgId}/settings/skills/${skillId}` : "#";
   }
+
+  const newSkillHref = orgId ? `/dashboard/${orgId}/settings/skills/new` : "#";
 
   return (
     <>
@@ -115,9 +115,9 @@ export function SkillsPanel() {
           </DropdownMenu>
         </div>
         {canManage && (
-          <button className="af-btn af-btn-primary ml-auto" onClick={() => setCreating(true)}>
+          <Link href={newSkillHref} className="af-btn af-btn-primary ml-auto">
             <PlusIcon /> New skill
-          </button>
+          </Link>
         )}
       </div>
 
@@ -168,16 +168,6 @@ export function SkillsPanel() {
       <div className="pt-4">
         <Pagination page={page} totalPages={totalPages} onPageChange={setPage} />
       </div>
-
-      {creating && (
-        <SkillCreateDrawer
-          onClose={() => setCreating(false)}
-          onCreated={(skillId) => {
-            setCreating(false);
-            router.push(skillHref(skillId));
-          }}
-        />
-      )}
     </>
   );
 }
