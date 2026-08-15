@@ -525,7 +525,11 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
               </div>
 
               <div className="px-6 py-6 flex flex-col gap-6">
-                {detail.description && (
+                {/* Metadata (description, required integrations) is lineage-level
+                  and saved immediately on "Save draft", not deferred to publish.
+                  Hide it in the Published view when a draft exists so the Published
+                  tab doesn't show the draft's un-published metadata edits. */}
+                {showDraftPreview && detail.description && (
                   <section>
                     <h2 className="text-[14px] font-semibold m-0 mb-2" style={{ color: "var(--ink)" }}>
                       Description
@@ -536,25 +540,38 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
                   </section>
                 )}
 
-                <section>
-                  <h2 className="text-[14px] font-semibold m-0 mb-2" style={{ color: "var(--ink)" }}>
-                    Required integrations
-                  </h2>
-                  <SkillRequiredProviders providers={detail.requiredProviders} />
-                </section>
+                {showDraftPreview && (
+                  <section>
+                    <h2 className="text-[14px] font-semibold m-0 mb-2" style={{ color: "var(--ink)" }}>
+                      Required integrations
+                    </h2>
+                    <SkillRequiredProviders providers={detail.requiredProviders} />
+                  </section>
+                )}
 
-                <section className="flex flex-col gap-3">
-                  <h2 className="text-[14px] font-semibold m-0" style={{ color: "var(--ink)" }}>
-                    Files
-                  </h2>
-                  {viewingHistorical && historicalLoading ? (
-                    <div className="text-[13px]" style={{ color: "var(--ink-3)" }}>
-                      Loading version…
-                    </div>
-                  ) : (
+                {showDraftPreview && (
+                  <section className="flex flex-col gap-3">
+                    <h2 className="text-[14px] font-semibold m-0" style={{ color: "var(--ink)" }}>
+                      Draft files
+                    </h2>
                     <SkillFileBrowser files={displayedFiles} entryPath={detail.entryPath} readOnly />
-                  )}
-                </section>
+                  </section>
+                )}
+
+                {!showDraftPreview && (
+                  <section className="flex flex-col gap-3">
+                    <h2 className="text-[14px] font-semibold m-0" style={{ color: "var(--ink)" }}>
+                      Files
+                    </h2>
+                    {viewingHistorical && historicalLoading ? (
+                      <div className="text-[13px]" style={{ color: "var(--ink-3)" }}>
+                        Loading version…
+                      </div>
+                    ) : (
+                      <SkillFileBrowser files={displayedFiles} entryPath={detail.entryPath} readOnly />
+                    )}
+                  </section>
+                )}
               </div>
             </div>
           )}
