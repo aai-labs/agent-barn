@@ -199,6 +199,7 @@ test.describe("Settings — Skill detail page", () => {
       });
     });
     await dataSupportPage.skills.interceptGetSkillVersionsRequest();
+    await dataSupportPage.skills.interceptGetSkillDraftRequest();
     await page.route(`**/api/v1/organizations/*/skills/${MOCK_CUSTOM_SKILL_ID}/draft/publish`, async (route) => {
       if (route.request().method() !== "POST") {
         await route.fallback();
@@ -215,12 +216,12 @@ test.describe("Settings — Skill detail page", () => {
     await page.goto(`/dashboard/${TEST_ORG_ID}/settings/skills/${MOCK_CUSTOM_SKILL_ID}`);
 
     await expect(page.getByRole("button", { name: "Edit" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Publish" })).toBeVisible();
-    await page.getByRole("button", { name: "Publish" }).click();
+    await expect(page.getByRole("button", { name: "Publish", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Publish", exact: true }).click();
     await page.getByRole("button", { name: "Publish this version" }).click();
 
     await expect(page.getByRole("button", { name: "Edit" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Publish" })).not.toBeVisible();
+    await expect(page.getByRole("button", { name: "Publish", exact: true })).not.toBeVisible();
   });
 
   test("version selector switches to a historical version's read-only content", async ({ page }) => {

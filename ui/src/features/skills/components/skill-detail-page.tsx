@@ -71,6 +71,7 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const [deletingVersion, setDeletingVersion] = useState<number | null>(null);
   const [draftApplied, setDraftApplied] = useState(false);
+  const [viewingDraft, setViewingDraft] = useState(false);
 
   const startDraft = useStartSkillDraft();
   const updateDraft = useUpdateSkillDraft();
@@ -80,9 +81,9 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
   const updateSkill = useUpdateSkill();
   const deleteSkillVersion = useDeleteSkillVersion();
 
-  // When ?edit=1, fetch the persisted draft so the editor seeds from it (not
-  // the published version). Only enabled when a draft is known to exist.
-  const { draft: existingDraft } = useSkillDraft(skillId, autoOpenEditor && !!detail?.hasDraft);
+  // Fetch the persisted draft whenever one is known to exist, so the
+  // read-only view can preview it and ?edit=1 can hydrate from it.
+  const { draft: existingDraft } = useSkillDraft(skillId, !!detail?.hasDraft);
 
   // Seed the auto-opened editor. When the draft query resolves, replace the
   // editor content with the persisted draft so unpublished edits survive a
@@ -150,7 +151,13 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
   const isCustom = detail.source === "custom";
   const isBuiltIn = detail.source === "aai_cli";
   const canEdit = isCustom && canManage;
-  const displayedFiles = viewingHistorical ? historicalFiles : detail.files;
+  const draftFiles = existingDraft?.files.map((f) => ({ path: f.path, content: f.content })) ?? [];
+  const showDraftPreview = !editing && viewingDraft && existingDraft;
+  const displayedFiles = showDraftPreview
+    ? draftFiles
+    : viewingHistorical
+      ? historicalFiles
+      : detail.files;
 
   function toggleProvider(value: string) {
     setSelectedProviders((prev) =>
@@ -167,6 +174,7 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
       setSelectedProviders(detail!.requiredProviders);
       setFileError(null);
       setEditing(true);
+      setViewingDraft(false);
       setSection("files");
       setSelectedVersion(null);
     } catch {
@@ -178,6 +186,7 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
     setEditing(false);
     setLocalFiles(null);
     setFileError(null);
+    setDraftApplied(false);
   }
 
   function handleDiscard() {
@@ -457,10 +466,43 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
                 className="border-b px-6 py-5 flex flex-wrap items-center justify-between gap-3"
                 style={{ borderColor: "var(--line)" }}
               >
-                <p className="text-[13px] leading-[1.5] m-0" style={{ color: "var(--ink-3)" }}>
-                  This published version is read-only.
-                </p>
-                {versions.length > 0 && (
+                <div className="flex items-center gap-3">
+                  {detail.hasDraft && (
+                    <div className="inline-flex rounded-lg" style={{ border: "1px solid var(--line)" }}>
+                      <button
+                        type="button"
+                        className="px-3 py-1 text-[12.5px] font-medium transition-colors"
+                        style={{
+                          background: !viewingDraft ? "var(--bg-soft)" : "transparent",
+                          color: !viewingDraft ? "var(--ink)" : "var(--ink-3)",
+                        }}
+                        onClick={() => setViewingDraft(false)}
+                      >
+                        Published v{latestVersion}
+                      </button>
+                      <button
+                        type="button"
+                        className="px-3 py-1 text-[12.5px] font-medium transition-colors"
+                        style={{
+                          background: viewingDraft ? "var(--bg-soft)" : "transparent",
+                          color: viewingDraft ? "var(--ink)" : "var(--ink-3)",
+                        }}
+                        onClick={() => {
+                          setViewingDraft(true);
+                          setSelectedVersion(null);
+                        }}
+                      >
+                        Draft
+                      </button>
+                    </div>
+                  )}
+                  {(!detail.hasDraft || !viewingDraft) && (
+                    <p className="text-[13px] leading-[1.5] m-0" style={{ color: "var(--ink-3)" }}>
+                      {showDraftPreview ? "Unpublished draft — read-only preview." : "This published version is read-only."}
+                    </p>
+                  )}
+                </div>
+                {(!detail.hasDraft || !viewingDraft) && versions.length > 0 && (
                   <Select
                     value={String(selectedVersion ?? latestVersion)}
                     onValueChange={(value) => setSelectedVersion(Number(value))}
@@ -483,7 +525,7 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
               </div>
 
               <div className="px-6 py-6 flex flex-col gap-6">
-                {detail.description && (
+                {!showDraftPreview && detail.description && (
                   <section>
                     <h2 className="text-[14px] font-semibold m-0 mb-2" style={{ color: "var(--ink)" }}>
                       Description
@@ -494,12 +536,14 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
                   </section>
                 )}
 
-                <section>
-                  <h2 className="text-[14px] font-semibold m-0 mb-2" style={{ color: "var(--ink)" }}>
-                    Required integrations
-                  </h2>
-                  <SkillRequiredProviders providers={detail.requiredProviders} />
-                </section>
+                {!showDraftPreview && (
+                  <section>
+                    <h2 className="text-[14px] font-semibold m-0 mb-2" style={{ color: "var(--ink)" }}>
+                      Required integrations
+                    </h2>
+                    <SkillRequiredProviders providers={detail.requiredProviders} />
+                  </section>
+                )}
 
                 <section className="flex flex-col gap-3">
                   <h2 className="text-[14px] font-semibold m-0" style={{ color: "var(--ink)" }}>
