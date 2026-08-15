@@ -249,9 +249,13 @@ def skill_is_assigned_to_agent():
     def step(context):
         from api.domains.agents.models import AgentSkill
         from api.domains.agents.repository import AgentRepository
+        from api.domains.skills.repository import SkillRepository
 
+        skill_repo: SkillRepository = context.injector.get(SkillRepository)
+        latest = skill_repo.get_latest_version(context.skill.id)
+        pinned = latest.version if latest else 1
         repo: AgentRepository = context.injector.get(AgentRepository)
-        repo.save_skills([AgentSkill(agent_id=context.agent.id, skill_id=context.skill.id)])
+        repo.save_skills([AgentSkill(agent_id=context.agent.id, skill_id=context.skill.id, pinned_version=pinned)])
 
     return step
 

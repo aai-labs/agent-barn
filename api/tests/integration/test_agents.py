@@ -2673,6 +2673,111 @@ def test_create_agent_with_valid_skill_assigns_it():
             assert_that(body["skills"][0]["name"], equal_to("My Skill"))
 
 
+def _publish_skill_version(client: TestClient, context, content: str) -> None:
+    """Draft -> update -> publish a new skill version through the public API."""
+    skill_base = f"/api/v1/organizations/{context.organization.id}/skills/{context.skill.id}"
+    client.post(f"{skill_base}/draft", headers=_auth(context))
+    client.patch(
+        f"{skill_base}/draft",
+        json={"files": [{"path": "SKILL.md", "content": content}]},
+        headers=_auth(context),
+    )
+    client.post(f"{skill_base}/draft/publish", headers=_auth(context))
+
+
+def test_create_agent_pins_skill_to_latest_by_default():
+    with given([*_GIVEN, there_is_a_skill(name="My Skill")]) as context:
+        client: TestClient = context.client
+        payload = {**_VALID_CREATE, "skill_ids": [str(context.skill.id)]}
+
+        with when("I create an agent with a skill and no explicit version"):
+            response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("the skill is pinned to its latest version and the read exposes it"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            body = response.json()
+            assert_that(body["skills"][0]["version"], equal_to(1))
+            repository: AgentRepository = context.injector.get(AgentRepository)
+            from uuid import UUID
+
+            agent_skills = repository.get_skills_for_agent(UUID(body["id"]))
+            assert_that(agent_skills[0].pinned_version, equal_to(1))
+
+
+def test_create_agent_pins_skill_to_explicit_version():
+    with given([*_GIVEN, there_is_a_skill(name="My Skill")]) as context:
+        client: TestClient = context.client
+        _publish_skill_version(client, context, "# v2")
+
+        with when("I create an agent pinning the skill to version 1"):
+            payload = {
+                **_VALID_CREATE,
+                "skill_ids": [str(context.skill.id)],
+                "skill_versions": [{"skill_id": str(context.skill.id), "version": 1}],
+            }
+            response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("the skill is pinned to version 1 even though v2 is latest"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(response.json()["skills"][0]["version"], equal_to(1))
+
+
+def test_create_agent_with_invalid_skill_version_returns_404():
+    with given([*_GIVEN, there_is_a_skill(name="My Skill")]) as context:
+        client: TestClient = context.client
+        payload = {
+            **_VALID_CREATE,
+            "skill_ids": [str(context.skill.id)],
+            "skill_versions": [{"skill_id": str(context.skill.id), "version": 99}],
+        }
+
+        with when("I create an agent pinning a version that was never published"):
+            response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("it returns 404"):
+            assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_create_agent_with_skill_pin_for_unassigned_skill_returns_400():
+    with given([*_GIVEN, there_is_a_skill(name="My Skill")]) as context:
+        client: TestClient = context.client
+        payload = {
+            **_VALID_CREATE,
+            "skill_ids": [],
+            "skill_versions": [{"skill_id": str(context.skill.id), "version": 1}],
+        }
+
+        with when("I create an agent pinning a skill it doesn't assign"):
+            response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("it returns 400"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+
+
+def test_update_agent_re_pins_existing_skill_to_newer_version():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(),
+            there_is_a_skill(name="My Skill"),
+            skill_is_assigned_to_agent(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        _publish_skill_version(client, context, "# v2")
+
+        with when("I re-pin the skill to version 2"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"skill_versions": [{"skill_id": str(context.skill.id), "version": 2}]},
+                headers=_auth(context),
+            )
+
+        with then("the agent's read reflects the new pin"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["skills"][0]["version"], equal_to(2))
+
+
 def test_create_agent_with_skill_from_other_org_returns_404():
     with given([*_GIVEN, there_is_a_skill_for_another_org()]) as context:
         client: TestClient = context.client
@@ -3165,6 +3270,31 @@ def test_start_agent_with_skill_pointer_injects_pointer_into_tools_md():
                 config_map.data["TOOLS.md"],
                 contains_string("For Pointed Skill: See ./skills/pointed-skill/SKILL.md"),
             )
+
+
+def test_start_agent_mounts_pinned_skill_version():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(),
+            there_is_a_skill(name="Pinned Skill"),
+            skill_is_assigned_to_agent(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        # Agent is pinned to v1 (assigned before v2 existed); publish v2 so a
+        # newer version exists that the pin must ignore.
+        _publish_skill_version(client, context, "# v2 content")
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("I start the agent while a newer skill version exists"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the mounted skills.json carries the pinned v1 content, not v2"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            assert_that(config_map.data["skills.json"], contains_string("# Pinned Skill"))
+            assert_that(config_map.data["skills.json"], is_not(contains_string("# v2 content")))
 
 
 # --- aai-cli skills auto-attach from configured providers ---

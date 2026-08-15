@@ -85,22 +85,27 @@ class SkillRepository:
             )
             return list(session.exec(query).all())
 
-    def get_latest_files_for_skills(self, skill_ids: list[UUID]) -> dict[UUID, list[SkillFile]]:
-        """Files of each skill's latest version, keyed by skill id.
+    def get_files_for_skill_versions(self, pins: list[tuple[UUID, int]]) -> dict[UUID, list[SkillFile]]:
+        """Files of each skill's *pinned* version, keyed by skill id.
 
-        Used when materializing an agent's skills at start, so mounting costs two
-        queries regardless of how many skills are attached.
+        Used when materializing an agent's skills at start, so mounting resolves
+        the exact version an agent pinned rather than the lineage's latest.
         """
-        if not skill_ids:
-            return {}
-        latest = self.get_latest_version_numbers(skill_ids)
-        if not latest:
+        if not pins:
             return {}
         with Session(self.delegate.engine) as session:
-            version_rows = session.exec(select(SkillVersion).where(col(SkillVersion.skill_id).in_(list(latest)))).all()
-            version_ids = {v.id: v.skill_id for v in version_rows if latest.get(v.skill_id) == v.version}
-            if not version_ids:
+            version_rows = []
+            for skill_id, version in dict.fromkeys(pins):
+                row = session.exec(
+                    select(SkillVersion)
+                    .where(col(SkillVersion.skill_id) == skill_id)
+                    .where(col(SkillVersion.version) == version)
+                ).first()
+                if row is not None:
+                    version_rows.append(row)
+            if not version_rows:
                 return {}
+            version_ids = {v.id: v.skill_id for v in version_rows}
             files = session.exec(
                 select(SkillFile)
                 .where(col(SkillFile.skill_version_id).in_(list(version_ids)))
@@ -112,15 +117,26 @@ class SkillRepository:
             result.setdefault(version_ids[file.skill_version_id], []).append(file)
         return result
 
+    def is_skill_version_pinned(self, skill_id: UUID, version: int) -> bool:
+        """Whether any non-soft-deleted agent pins this exact skill version."""
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(AgentSkill)
+                .join(Agent, col(AgentSkill.agent_id) == col(Agent.id))
+                .where(col(AgentSkill.skill_id) == skill_id)
+                .where(col(AgentSkill.pinned_version) == version)
+                .where(col(Agent.deleted_at).is_(None))
+            )
+            return session.exec(query).first() is not None
+
     def publish_version(
         self,
         skill_id: UUID,
         files: list[tuple[str, str]],
         *,
         created_by: UUID | None = None,
-        restored_from_version: int | None = None,
     ) -> SkillVersion:
-        """Append the next immutable version of a lineage. History is never mutated."""
+        """Append the next immutable version of a lineage. History is never mutated in place."""
         with Session(self.delegate.engine) as session:
             current = session.exec(
                 select(func.max(col(SkillVersion.version))).where(col(SkillVersion.skill_id) == skill_id)
@@ -422,4 +438,19 @@ class SkillRepository:
             result: dict[UUID, list[Skill]] = {}
             for agent_skill, skill in session.exec(query).all():
                 result.setdefault(agent_skill.agent_id, []).append(skill)
+            return result
+
+    def get_skills_for_agents_with_versions(self, agent_ids: list[UUID]) -> dict[UUID, list[tuple[Skill, int]]]:
+        """Each agent's assigned skills alongside their explicit pinned version."""
+        if not agent_ids:
+            return {}
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(AgentSkill, Skill)
+                .join(Skill, col(AgentSkill.skill_id) == col(Skill.id))
+                .where(col(AgentSkill.agent_id).in_(agent_ids))
+            )
+            result: dict[UUID, list[tuple[Skill, int]]] = {}
+            for agent_skill, skill in session.exec(query).all():
+                result.setdefault(agent_skill.agent_id, []).append((skill, agent_skill.pinned_version))
             return result
