@@ -84,7 +84,7 @@ def test_readable_entries_skips_duplicate_paths_case_insensitive():
 
 
 def test_readable_entries_enforces_file_count_limit():
-    more_than_max = {"SKILL.md": "# Entry"}
+    more_than_max: dict[str, bytes | str] = {"SKILL.md": "# Entry"}
     more_than_max.update({f"file_{i}.md": "x" for i in range(migration._MAX_FILES + 4)})
     entries, skipped = migration._readable_entries(_zip(more_than_max))
 

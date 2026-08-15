@@ -1218,6 +1218,7 @@ def test_composite_fk_blocks_db_level_delete_of_pinned_version():
                 version_row = session.exec(
                     select(SkillVersion).where(col(SkillVersion.skill_id) == context.skill.id)
                 ).first()
+                assert version_row is not None
 
                 with then("the composite FK raises IntegrityError"):
                     try:
