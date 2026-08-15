@@ -525,7 +525,7 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
               </div>
 
               <div className="px-6 py-6 flex flex-col gap-6">
-                {!showDraftPreview && detail.description && (
+                {detail.description && (
                   <section>
                     <h2 className="text-[14px] font-semibold m-0 mb-2" style={{ color: "var(--ink)" }}>
                       Description
@@ -536,14 +536,12 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
                   </section>
                 )}
 
-                {!showDraftPreview && (
-                  <section>
-                    <h2 className="text-[14px] font-semibold m-0 mb-2" style={{ color: "var(--ink)" }}>
-                      Required integrations
-                    </h2>
-                    <SkillRequiredProviders providers={detail.requiredProviders} />
-                  </section>
-                )}
+                <section>
+                  <h2 className="text-[14px] font-semibold m-0 mb-2" style={{ color: "var(--ink)" }}>
+                    Required integrations
+                  </h2>
+                  <SkillRequiredProviders providers={detail.requiredProviders} />
+                </section>
 
                 <section className="flex flex-col gap-3">
                   <h2 className="text-[14px] font-semibold m-0" style={{ color: "var(--ink)" }}>
