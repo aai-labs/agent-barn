@@ -214,6 +214,10 @@ class SkillVersionRead(PydanticBaseModel):
     version: int
     created_by: UUID | None
     created_at: datetime
+    # Whether any non-soft-deleted agent pins this exact version. The UI uses
+    # it to disable the per-version Delete button — the backend enforces the
+    # same guard independently.
+    is_pinned_by_agent: bool
 
     model_config = ConfigDict(from_attributes=True)
 

@@ -3,6 +3,7 @@ from uuid import UUID
 
 from fastapi import HTTPException, status
 from injector import inject, singleton
+from sqlalchemy.exc import IntegrityError
 
 from api.domains.auth.models import CurrentUserContext
 from api.domains.rbac.catalog import PermissionKey
@@ -84,8 +85,8 @@ class SkillService:
         return SkillSummaryRead.model_validate({**skill.model_dump(), "version": version, "has_draft": has_draft})
 
     def _get_or_404(self, skill_id: UUID, org_id: UUID) -> Skill:
-        skill = self.repository.get_by_id(skill_id)
-        if skill is None or (skill.organization_id is not None and skill.organization_id != org_id):
+        skill = self.repository.get_by_id_for_org(skill_id, org_id)
+        if skill is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Skill {skill_id} not found",
@@ -207,7 +208,12 @@ class SkillService:
         org_id = self._org_id(context)
         skill = self._get_or_404(skill_id, org_id)
         self.permission_policy.require_organization(context, org_id, PermissionKey.SKILL_READ)
-        return [SkillVersionRead.model_validate(v) for v in self.repository.list_versions(skill.id)]
+        versions = self.repository.list_versions(skill.id)
+        pinned = self.repository.get_pinned_versions_for_skill(skill.id)
+        return [
+            SkillVersionRead.model_validate({**v.model_dump(), "is_pinned_by_agent": v.version in pinned})
+            for v in versions
+        ]
 
     def get_skill_version_detail(
         self, skill_id: UUID, version: int, context: CurrentUserContext
@@ -221,8 +227,13 @@ class SkillService:
                 status_code=status.HTTP_404_NOT_FOUND, detail=f"Version {version} not found for skill {skill_id}"
             )
         files = self.repository.get_files(skill_version.id)
+        pinned = self.repository.get_pinned_versions_for_skill(skill.id)
         return SkillVersionDetailRead.model_validate(
-            {**skill_version.model_dump(), "files": [SkillFileRead.model_validate(f) for f in files]}
+            {
+                **skill_version.model_dump(),
+                "files": [SkillFileRead.model_validate(f) for f in files],
+                "is_pinned_by_agent": version in pinned,
+            }
         )
 
     def _draft_to_read(self, draft: SkillDraft) -> SkillDraftRead:
@@ -244,7 +255,7 @@ class SkillService:
     def get_skill_draft(self, skill_id: UUID, context: CurrentUserContext) -> SkillDraftRead:
         org_id = self._org_id(context)
         skill = self._get_or_404(skill_id, org_id)
-        self.permission_policy.require_organization(context, org_id, PermissionKey.SKILL_READ)
+        self.permission_policy.require_organization(context, org_id, PermissionKey.SKILL_MANAGE)
         draft = self.repository.get_draft(skill.id)
         if draft is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"No draft for skill {skill_id}")
@@ -333,7 +344,16 @@ class SkillService:
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Cannot delete a version that is pinned by an agent",
             )
-        self.repository.delete_version_by_id(skill_version.id)
+        try:
+            self.repository.delete_version_by_id(skill_version.id)
+        except IntegrityError:
+            # Safety net for the concurrent delete/pin race: the composite FK
+            # on agent_skill(skill_id, pinned_version) blocks the delete if an
+            # agent pinned this version between the check above and the delete.
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Cannot delete a version that is pinned by an agent",
+            ) from None
 
     def get_skill(self, skill_id: UUID, context: CurrentUserContext) -> SkillSummaryRead:
         org_id = self._org_id(context)

@@ -74,6 +74,16 @@ def _there_is_a_member_actor():
     return _there_is_a_role_actor(OrganizationRole.MEMBER)
 
 
+def _there_is_a_skill_draft():
+    def step(context):
+        from api.domains.skills.repository import SkillRepository
+
+        repo: SkillRepository = context.injector.get(SkillRepository)
+        repo.save_new_draft(context.skill.id, [("SKILL.md", "# Draft")])
+
+    return step
+
+
 def _files(path: str = "SKILL.md", content: str = "# Skill") -> list[dict]:
     return [{"path": path, "content": content}]
 
@@ -530,6 +540,24 @@ def test_get_skill_from_another_org_returns_404():
             assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
+def test_draft_endpoints_for_another_org_skill_return_404():
+    with given([*_GIVEN, there_is_a_skill_for_another_org()]) as context:
+        client: TestClient = context.client
+        skill_id = context.other_org_skill.id
+
+        with when("I start a draft for another org's skill"):
+            post_response = client.post(f"{_BASE}/{skill_id}/draft", headers=_auth(context))
+
+        with then("it returns 404, not 403"):
+            assert_that(post_response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+        with when("I fetch a draft for another org's skill"):
+            get_response = client.get(f"{_BASE}/{skill_id}/draft", headers=_auth(context))
+
+        with then("it returns 404"):
+            assert_that(get_response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
 def test_get_skill_requires_auth():
     with given([*_GIVEN, there_is_a_skill()]) as context:
         client: TestClient = context.client
@@ -883,6 +911,24 @@ def test_member_cannot_start_skill_draft():
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
+def test_member_cannot_read_skill_draft():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Member Cannot Read Draft"),
+            _there_is_a_skill_draft(),
+            _there_is_a_member_actor(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("a member fetches the draft"):
+            response = client.get(f"{_BASE}/{context.skill.id}/draft", headers=_auth(context))
+
+        with then("it returns 403"):
+            assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
 def test_get_skill_draft_not_found_returns_404():
     with given([*_GIVEN, there_is_a_skill(name="Versioned Skill")]) as context:
         client: TestClient = context.client
@@ -1145,3 +1191,40 @@ def test_delete_skill_version_when_only_version_returns_409():
                 client.get(f"{_BASE}/{context.skill.id}/versions", headers=_auth(context)).json(),
                 has_items(has_item("version")),
             )
+
+
+def test_composite_fk_blocks_db_level_delete_of_pinned_version():
+    """The composite FK on agent_skill(skill_id, pinned_version) is the DB-level
+    safety net for the concurrent delete/pin race — bypassing the service's
+    application-level check, a raw DELETE on a pinned skill_version must fail."""
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(),
+            there_is_a_skill(name="Pinned Skill"),
+            skill_is_assigned_to_agent(),
+        ]
+    ) as context:
+        from sqlalchemy.exc import IntegrityError
+        from sqlmodel import Session, col, delete, select
+
+        from api.domains.skills.models import SkillVersion
+        from api.domains.skills.repository import SkillRepository
+
+        repo: SkillRepository = context.injector.get(SkillRepository)
+
+        with when("I try to delete the pinned version at the DB level"):
+            with Session(repo.delegate.engine) as session:
+                version_row = session.exec(
+                    select(SkillVersion).where(col(SkillVersion.skill_id) == context.skill.id)
+                ).first()
+
+                with then("the composite FK raises IntegrityError"):
+                    try:
+                        session.exec(  # type: ignore[call-overload]
+                            delete(SkillVersion).where(col(SkillVersion.id) == version_row.id)
+                        )
+                        session.commit()
+                        raise AssertionError("Expected IntegrityError")
+                    except IntegrityError:
+                        session.rollback()

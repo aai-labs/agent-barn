@@ -57,6 +57,68 @@ def test_readable_entries_counts_undecodable_entries_instead_of_failing():
     assert skipped == 1
 
 
+def test_readable_entries_skips_path_traversal():
+    """A legacy archive with ``../`` segments could escape the skill root on disk;
+    the migration must skip those entries rather than persisting unsafe paths."""
+    blob = _zip({"SKILL.md": "# Fine", "../etc/passwd": "root"})
+    entries, skipped = migration._readable_entries(blob)
+
+    assert entries == [("SKILL.md", "# Fine")]
+    assert skipped == 1
+
+
+def test_readable_entries_skips_absolute_paths():
+    blob = _zip({"SKILL.md": "# Fine", "/etc/hosts": "root"})
+    entries, skipped = migration._readable_entries(blob)
+
+    assert entries == [("SKILL.md", "# Fine")]
+    assert skipped == 1
+
+
+def test_readable_entries_skips_duplicate_paths_case_insensitive():
+    blob = _zip({"SKILL.md": "# First", "skill.md": "# Second"})
+    entries, skipped = migration._readable_entries(blob)
+
+    assert entries == [("SKILL.md", "# First")]
+    assert skipped == 1
+
+
+def test_readable_entries_enforces_file_count_limit():
+    more_than_max = {"SKILL.md": "# Entry"}
+    more_than_max.update({f"file_{i}.md": "x" for i in range(migration._MAX_FILES + 4)})
+    entries, skipped = migration._readable_entries(_zip(more_than_max))
+
+    assert len(entries) == migration._MAX_FILES
+    assert skipped == 5
+
+
+def test_readable_entries_enforces_per_file_size_limit():
+    big = "x" * (migration._MAX_FILE_BYTES + 1)
+    blob = _zip({"SKILL.md": "# Fine", "big.md": big})
+    entries, skipped = migration._readable_entries(blob)
+
+    assert entries == [("SKILL.md", "# Fine")]
+    assert skipped == 1
+
+
+def test_readable_entries_enforces_total_size_limit():
+    """When cumulative content exceeds the total cap, remaining entries are skipped."""
+    chunk = "x" * migration._MAX_FILE_BYTES  # exactly at the per-file limit
+    blob = _zip({f"file_{i}.md": chunk for i in range(6)})
+    entries, skipped = migration._readable_entries(blob)
+
+    assert len(entries) == 5  # 5 * 1 MB = 5 MB total (exactly at the cap)
+    assert skipped == 1
+
+
+def test_normalize_path_matches_application_contract():
+    """The migration's inline copy must not drift from the shared contract."""
+    from api.domains.skills.files import normalize_path
+
+    for path in ["SKILL.md", "helpers/x.md", "./a/b.md", "a//b.md"]:
+        assert migration._normalize_path(path) == normalize_path(path)
+
+
 def test_split_root_peels_a_shared_top_level_directory():
     """Today's archives carry their mount directory as the first segment, and root_dir
     now supplies it at mount time, so it must not be stored twice."""

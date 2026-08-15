@@ -484,7 +484,15 @@ class AgentSecret(BaseModel, table=True):
 class AgentSkill(BaseModel, table=True):
     __tablename__: str = "agent_skill"
 
-    __table_args__ = (sa.UniqueConstraint("agent_id", "skill_id", name="uq_agent_skill_agent_skill"),)
+    __table_args__ = (
+        sa.UniqueConstraint("agent_id", "skill_id", name="uq_agent_skill_agent_skill"),
+        sa.ForeignKeyConstraint(
+            ["skill_id", "pinned_version"],
+            ["skill_version.skill_id", "skill_version.version"],
+            ondelete="RESTRICT",
+            name="fk_agent_skill_pinned_version",
+        ),
+    )
 
     agent_id: UUID = SqlField(foreign_key="agent.id", nullable=False, ondelete="CASCADE")
     skill_id: UUID = SqlField(foreign_key="skill.id", nullable=False, ondelete="CASCADE")

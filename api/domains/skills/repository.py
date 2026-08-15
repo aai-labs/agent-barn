@@ -29,6 +29,19 @@ class SkillRepository:
     def get_by_id(self, skill_id: UUID) -> Skill | None:
         return self.delegate.find_by_id(Skill, skill_id)
 
+    def get_by_id_for_org(self, skill_id: UUID, org_id: UUID) -> Skill | None:
+        """Tenant-scoped lookup: a custom skill belongs to ``org_id``, a built-in
+        (organization_id IS NULL) is globally visible. Other orgs' skills are
+        concealed so callers can distinguish 404 from 403 without post-fetch
+        filtering."""
+        with Session(self.delegate.engine) as session:
+            return session.exec(
+                select(Skill).where(
+                    col(Skill.id) == skill_id,
+                    or_(col(Skill.organization_id) == org_id, col(Skill.organization_id).is_(None)),
+                )
+            ).first()
+
     # --- versions and files -------------------------------------------------
     #
     # The published version of a lineage is always its highest ``version``:
@@ -127,6 +140,18 @@ class SkillRepository:
                 .where(col(Agent.deleted_at).is_(None))
             )
             return session.exec(query).first() is not None
+
+    def get_pinned_versions_for_skill(self, skill_id: UUID) -> set[int]:
+        """Every version number of this skill that at least one non-soft-deleted
+        agent pins. Used to annotate ``SkillVersionRead`` for the UI."""
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(col(AgentSkill.pinned_version))
+                .join(Agent, col(AgentSkill.agent_id) == col(Agent.id))
+                .where(col(AgentSkill.skill_id) == skill_id)
+                .where(col(Agent.deleted_at).is_(None))
+            )
+            return set(session.exec(query).all())
 
     def publish_version(
         self,
@@ -356,14 +381,20 @@ class SkillRepository:
             return result
 
     def get_skills_for_agents_with_versions(self, agent_ids: list[UUID]) -> dict[UUID, list[tuple[Skill, int]]]:
-        """Each agent's assigned skills alongside their explicit pinned version."""
+        """Each agent's assigned skills alongside their explicit pinned version.
+
+        Joins ``Agent`` with ``deleted_at IS NULL`` so the batch load cannot
+        leak skills belonging to soft-deleted agents even if stale ids are
+        passed."""
         if not agent_ids:
             return {}
         with Session(self.delegate.engine) as session:
             query = (
                 select(AgentSkill, Skill)
                 .join(Skill, col(AgentSkill.skill_id) == col(Skill.id))
+                .join(Agent, col(AgentSkill.agent_id) == col(Agent.id))
                 .where(col(AgentSkill.agent_id).in_(agent_ids))
+                .where(col(Agent.deleted_at).is_(None))
             )
             result: dict[UUID, list[tuple[Skill, int]]] = {}
             for agent_skill, skill in session.exec(query).all():

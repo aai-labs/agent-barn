@@ -694,6 +694,11 @@ class AgentService:
                     detail=f"At least one of these template skills must be included in skill_ids: {', '.join(names)}",
                 )
 
+        # Preflight skill version pins before any persistence so an invalid pin
+        # (nonexistent version, pin for a skill not in the request) is rejected
+        # atomically rather than after the agent, configs, and secrets are saved.
+        resolved_pins = self._resolve_skill_pins(data.skill_ids, data.skill_versions, set(), [])
+
         # The creator always gets an explicit Owner AgentAccess row, even if they
         # currently have implicit full access as an Org Owner/Admin: it's what keeps
         # them able to manage the Agent if they're later demoted to Member (see
@@ -859,7 +864,6 @@ class AgentService:
             )
             secrets.append(slack_secret)
 
-        resolved_pins = self._resolve_skill_pins(data.skill_ids, data.skill_versions, set(), [])
         if skills_to_assign:
             self.repository.save_skills(
                 [
@@ -1558,6 +1562,15 @@ class AgentService:
                     detail=f"Cannot set {label} fields on a {agent.platform.title()} agent",
                 )
 
+        # Preflight skill version pins before any persistence (template re-pin,
+        # config updates, secret updates) so an invalid pin is rejected atomically
+        # rather than after config/secrets are already saved.
+        current_skill_rows = self.repository.get_skills_for_agent(agent.id)
+        current_skill_ids = {row.skill_id for row in current_skill_rows}
+        resolved_skill_pins = self._resolve_skill_pins(
+            data.skill_ids, data.skill_versions, current_skill_ids, data.removed_skill_ids
+        )
+
         # Re-pin the agent to a different template (key, version). The model
         # validator guarantees both keys appear together.
         effective_template = None
@@ -1592,7 +1605,7 @@ class AgentService:
         )
         if required_map:
             standalone_ids, required_groups = split_requirements(required_map)
-            existing_skill_ids = {s.id for _, s in self.skill_repository.get_agent_skills_with_details(agent.id)}
+            existing_skill_ids = current_skill_ids
             effective_skill_ids = (existing_skill_ids | set(data.skill_ids)) - set(data.removed_skill_ids)
             # Block removal of required skills.
             if data.removed_skill_ids:
@@ -1833,12 +1846,7 @@ class AgentService:
                         actor_display=secret_actor_display,
                     )
 
-        # Apply skill changes
-        current_skill_rows = self.repository.get_skills_for_agent(agent.id)
-        current_skill_ids = {row.skill_id for row in current_skill_rows}
-        resolved_skill_pins = self._resolve_skill_pins(
-            data.skill_ids, data.skill_versions, current_skill_ids, data.removed_skill_ids
-        )
+        # Apply skill changes (pins were preflighted before persistence above)
         for skill_id in data.removed_skill_ids:
             self.repository.remove_skill(agent.id, skill_id)
         for skill_id, version in resolved_skill_pins.items():
@@ -2270,6 +2278,14 @@ class AgentService:
                     version = latest.version if latest else 1
                 pins_to_mount.append((skill.id, version))
             files_by_skill = self.skill_repository.get_files_for_skill_versions(pins_to_mount)
+            for skill_id, version in pins_to_mount:
+                if skill_id not in files_by_skill:
+                    logger.warning(
+                        "Agent %s skill %s pinned version %s has no files; the version may have been removed",
+                        agent.id,
+                        skill_id,
+                        version,
+                    )
             skills_json, collisions = build_skills_manifest(mounted_skills, files_by_skill)
             for collision in collisions:
                 # Two skills claiming one workspace path: the loser's file is silently

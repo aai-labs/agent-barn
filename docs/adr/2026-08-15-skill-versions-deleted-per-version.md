@@ -15,9 +15,9 @@ Skills originally offered only whole-lineage deletion (guarded by agent-assignme
 ## Decision
 
 - Remove the whole-lineage `DELETE /{skill_id}` endpoint, the service method, the UI Delete action, and their tests. A lineage cannot be deleted.
-- Add `DELETE /{skill_id}/versions/{version}` to remove one immutable version snapshot. Protections: built-ins are never modified (403); the last remaining version is never deletable (409); the currently published (latest) version is deletable only while no non-soft-deleted agent is assigned the skill (409 otherwise), because deleting the latest would silently change what those agents mount on their next restart. Historical versions are always prunable — agents resolve the lineage's latest version, never a specific one.
-- `SkillDetailRead` now exposes `is_assigned_to_agent` so the UI can disable deleting the current version while agents use the skill.
-- Remove `restored_from_version` from `skill_version` and `source_version` from `skill_draft` (columns, DTOs, UI, and the migration). A restore still seeds the draft from the selected version via the `?source_version=N` query parameter, but the provenance is not persisted on the resulting version.
+- Add `DELETE /{skill_id}/versions/{version}` to remove one immutable version snapshot. Protections: built-ins are never modified (403); the last remaining version is never deletable (409); a version pinned by any non-soft-deleted agent is never deletable (409), because deleting a pinned snapshot would break that agent's explicit pin. Historical versions no agent pins are always prunable, because agents mount the exact version they pin, never the lineage's latest.
+- `SkillVersionRead` exposes `is_pinned_by_agent` so the UI can disable the Delete button on a per-version basis and show a "Pinned by agent" badge.
+- Remove `restored_from_version` from `skill_version` and `source_version` from `skill_draft` (columns, DTOs, UI, and the migration). Restore-as-draft is removed entirely; recovering from a bad version is a per-agent concern handled by re-pinning the agent's assigned skill version.
 
 ## Consequences
 

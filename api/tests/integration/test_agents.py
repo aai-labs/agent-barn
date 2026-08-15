@@ -2722,7 +2722,7 @@ def test_create_agent_pins_skill_to_explicit_version():
             assert_that(response.json()["skills"][0]["version"], equal_to(1))
 
 
-def test_create_agent_with_invalid_skill_version_returns_404():
+def test_create_agent_with_invalid_skill_version_returns_404_and_leaves_no_partial_state():
     with given([*_GIVEN, there_is_a_skill(name="My Skill")]) as context:
         client: TestClient = context.client
         payload = {
@@ -2734,8 +2734,10 @@ def test_create_agent_with_invalid_skill_version_returns_404():
         with when("I create an agent pinning a version that was never published"):
             response = client.post(_BASE, json=payload, headers=_auth(context))
 
-        with then("it returns 404"):
+        with then("it returns 404 and no agent is persisted"):
             assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+            agents = client.get(_BASE, headers=_auth(context)).json()["items"]
+            assert_that(len(agents), equal_to(0))
 
 
 def test_create_agent_with_skill_pin_for_unassigned_skill_returns_400():
@@ -2776,6 +2778,34 @@ def test_update_agent_re_pins_existing_skill_to_newer_version():
         with then("the agent's read reflects the new pin"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             assert_that(response.json()["skills"][0]["version"], equal_to(2))
+
+
+def test_update_agent_with_invalid_skill_pin_leaves_config_intact():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(),
+            there_is_a_skill(name="My Skill"),
+            skill_is_assigned_to_agent(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        original_name = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()["name"]
+
+        with when("I update the agent name and pin a nonexistent version"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={
+                    "name": "Renamed Agent",
+                    "skill_versions": [{"skill_id": str(context.skill.id), "version": 99}],
+                },
+                headers=_auth(context),
+            )
+
+        with then("it returns 404 and the name change was not applied"):
+            assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+            current_name = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()["name"]
+            assert_that(current_name, equal_to(original_name))
 
 
 def test_create_agent_with_skill_from_other_org_returns_404():

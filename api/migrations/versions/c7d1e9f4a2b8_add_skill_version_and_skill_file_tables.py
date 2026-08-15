@@ -36,25 +36,104 @@ logger = logging.getLogger("alembic.runtime.migration")
 _NON_SLUG_CHARS = re.compile(r"[^a-z0-9]+")
 _JUNK_PREFIXES = ("__MACOSX/", "._")
 
+# Path-validation constants — must match api.domains.skills.files. The migration
+# cannot import application code (the code at HEAD may not match the schema being
+# migrated), so these are inlined and drift-tested in the unit suite.
+_MAX_FILES = 200
+_MAX_FILE_BYTES = 1 * 1024 * 1024  # 1 MB per file
+_MAX_TOTAL_BYTES = 5 * 1024 * 1024  # 5 MB per version
+_MAX_PATH_LENGTH = 512
+_SEGMENT_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def _normalize_path(raw: str) -> str:
+    """Validate a POSIX path relative to the skill root.
+
+    Mirrors ``api.domains.skills.files.normalize_path``. Raises ``ValueError``
+    when the path is unsafe; the caller skips the entry and counts it.
+    """
+    path = raw.strip().replace("\\", "/")
+    path = path.removeprefix("./")
+    while "//" in path:
+        path = path.replace("//", "/")
+
+    if not path:
+        raise ValueError("empty")
+    if len(path) > _MAX_PATH_LENGTH:
+        raise ValueError("too long")
+    if path.startswith("/"):
+        raise ValueError("absolute")
+    if path.endswith("/"):
+        raise ValueError("directory")
+    segments = path.split("/")
+    for segment in segments:
+        if segment in ("", ".", ".."):
+            raise ValueError("invalid segment")
+        if not _SEGMENT_RE.match(segment):
+            raise ValueError("bad characters")
+        if segment.startswith("._"):
+            raise ValueError("junk")
+    if path.startswith(_JUNK_PREFIXES):
+        raise ValueError("junk")
+    return path
+
 
 def _slugify(name: str) -> str:
     return _NON_SLUG_CHARS.sub("-", name.lower()).strip("-")[:64].strip("-")
 
 
 def _readable_entries(blob: bytes) -> tuple[list[tuple[str, str]], int]:
-    """Return (path, content) pairs from a skill zip, plus a count of skipped entries."""
-    entries: list[tuple[str, str]] = []
+    """Return validated (path, content) pairs from a skill zip, plus a count of
+    skipped entries.
+
+    Each surviving entry is normalized through the path contract (traversal,
+    absolute paths, disallowed characters, junk metadata) and the set is
+    checked for case-insensitive duplicates, per-file size, total size, and
+    file-count limits — the same rules that apply at the API boundary.
+    Entries that fail are skipped and counted so an invalid legacy archive
+    never creates unsafe or unmountable data.
+    """
+    raw: list[tuple[str, str]] = []
     skipped = 0
     with zipfile.ZipFile(io.BytesIO(blob)) as zf:
         for name in zf.namelist():
             if name.endswith("/") or name.startswith(_JUNK_PREFIXES) or "/._" in name:
                 continue
             try:
-                entries.append((name.replace("\\", "/"), zf.read(name).decode()))
+                raw.append((name.replace("\\", "/"), zf.read(name).decode()))
             except UnicodeDecodeError:
                 # Binary content has never been usable: the manifest builder always
                 # decoded as UTF-8, so such an entry would already crash agent start.
                 skipped += 1
+
+    if len(raw) > _MAX_FILES:
+        skipped += len(raw) - _MAX_FILES
+        logger.warning("Skill zip has %d entries; keeping the first %d", len(raw), _MAX_FILES)
+        raw = raw[:_MAX_FILES]
+
+    seen: dict[str, str] = {}
+    total = 0
+    entries: list[tuple[str, str]] = []
+    for raw_path, content in raw:
+        try:
+            path = _normalize_path(raw_path)
+        except ValueError:
+            skipped += 1
+            continue
+        lowered = path.lower()
+        if lowered in seen:
+            skipped += 1
+            continue
+        size = len(content.encode())
+        if size > _MAX_FILE_BYTES:
+            skipped += 1
+            continue
+        total += size
+        if total > _MAX_TOTAL_BYTES:
+            skipped += 1
+            break
+        seen[lowered] = path
+        entries.append((path, content))
     return entries, skipped
 
 
