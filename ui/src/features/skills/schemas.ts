@@ -37,6 +37,7 @@ export const SkillVersionSchema = z.object({
   version: z.number().int().min(1),
   createdBy: z.string().uuid().nullable(),
   createdAt: z.string(),
+  isPinnedByAgent: z.boolean(),
 });
 
 export const SkillDraftSchema = z.object({

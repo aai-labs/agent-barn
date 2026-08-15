@@ -8,7 +8,6 @@ interface SkillVersionHistoryProps {
   versions: SkillVersion[];
   isLoading: boolean;
   canManage: boolean;
-  isAssigned: boolean;
   onDelete: (version: number) => void;
   deletingVersion: number | null;
 }
@@ -17,7 +16,6 @@ export function SkillVersionHistory({
   versions,
   isLoading,
   canManage,
-  isAssigned,
   onDelete,
   deletingVersion,
 }: SkillVersionHistoryProps) {
@@ -43,13 +41,14 @@ export function SkillVersionHistory({
     <div className="flex flex-col gap-2">
       {versions.map((v) => {
         const isCurrent = v.version === latest;
-        // The currently published version is protected while agents are assigned;
-        // the last remaining version is never deletable.
-        const deleteBlocked = versions.length <= 1 || (isCurrent && isAssigned);
+        // The last remaining version is never deletable; a version pinned by any
+        // agent is never deletable (recover by re-pinning, not by deleting a
+        // pinned snapshot).
+        const deleteBlocked = versions.length <= 1 || v.isPinnedByAgent;
         const deleteTitle = deleteBlocked
           ? versions.length <= 1
             ? "A skill must keep at least one version"
-            : "Unassign this skill from agents before deleting the current version"
+            : "This version is pinned by an agent — re-pin the agent before deleting it"
           : undefined;
         return (
           <div
@@ -69,6 +68,7 @@ export function SkillVersionHistory({
                   Version {v.version}
                 </span>
                 {isCurrent && <Badge variant="ok">Current</Badge>}
+                {v.isPinnedByAgent && <Badge>Pinned by agent</Badge>}
               </div>
               <div className="text-[12px] mt-0.5" style={{ color: "var(--ink-3)" }}>
                 {new Date(v.createdAt).toLocaleString()}

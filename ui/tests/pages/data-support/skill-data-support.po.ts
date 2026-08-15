@@ -211,6 +211,37 @@ export class SkillDataSupport {
     });
   }
 
+  async interceptGetSkillDraftRequest({
+    skillId = MOCK_CUSTOM_SKILL_ID,
+    status = 200,
+    files = [{ path: "SKILL.md", content: "# My tool" }],
+  }: {
+    skillId?: string;
+    status?: number;
+    files?: { path: string; content: string }[];
+  } = {}) {
+    await this.page.route(`**/api/v1/organizations/*/skills/${skillId}/draft`, async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      if (status >= 400) {
+        await route.fulfill({ status, contentType: "application/json", body: JSON.stringify({ detail: "No draft" }) });
+        return;
+      }
+      await route.fulfill({
+        status,
+        contentType: "application/json",
+        body: JSON.stringify({
+          skill_id: skillId,
+          files,
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+        }),
+      });
+    });
+  }
+
   async interceptStartSkillDraftRequest({
     skillId = MOCK_CUSTOM_SKILL_ID,
     status = 201,
@@ -294,7 +325,7 @@ export class SkillDataSupport {
     skillId = MOCK_CUSTOM_SKILL_ID,
     status = 200,
     versions = [
-      { version: 1, created_by: null, created_at: "2026-01-01T00:00:00Z" },
+      { version: 1, created_by: null, created_at: "2026-01-01T00:00:00Z", is_pinned_by_agent: false },
     ],
   }: {
     skillId?: string;
@@ -340,6 +371,7 @@ export class SkillDataSupport {
                 version,
                 created_by: null,
                 created_at: "2026-01-01T00:00:00Z",
+                is_pinned_by_agent: false,
                 files,
               }),
       });

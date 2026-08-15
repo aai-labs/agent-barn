@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/select";
 import { useActiveOrgRole } from "@/features/organizations/hooks/use-active-org-role";
 
+import { useSkillDraft } from "../hooks/use-skill-draft";
 import { useSkillFiles } from "../hooks/use-skill-files";
 import { useSkillVersions } from "../hooks/use-skill-versions";
 import { useSkillVersionDetail } from "../hooks/use-skill-version-detail";
@@ -52,10 +53,10 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
   const { detail, isLoading, error, refetch } = useSkillFiles(skillId);
   const { versions, isLoading: versionsLoading } = useSkillVersions(skillId);
 
-  // After forking a built-in, the router lands here with ?edit=1 and the fork
-  // already carries an in-flight draft, so the editor opens immediately without
-  // calling the get-or-create draft mutation (calling mutateAsync from an effect
-  // would leave its isPending stuck true and disable the footer actions).
+  // After forking a built-in, the router lands here with ?edit=1. The editor
+  // opens immediately, seeded from the persisted draft (fetched via useSkillDraft)
+  // rather than the published version, so a page reload preserves unpublished
+  // edits instead of overwriting them.
   const searchParams = useSearchParams();
   const autoOpenEditor = searchParams.get("edit") === "1";
 
@@ -69,6 +70,7 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
   const [fileError, setFileError] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const [deletingVersion, setDeletingVersion] = useState<number | null>(null);
+  const [draftApplied, setDraftApplied] = useState(false);
 
   const startDraft = useStartSkillDraft();
   const updateDraft = useUpdateSkillDraft();
@@ -78,15 +80,26 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
   const updateSkill = useUpdateSkill();
   const deleteSkillVersion = useDeleteSkillVersion();
 
-  // Seed the auto-opened editor from the fork's published version, which is
-  // identical to its in-flight draft right after forking. Guarded setState during
-  // render (the React-recommended "adjust state when a prop arrives" pattern):
-  // it re-renders once localFiles is seeded, so it runs exactly once.
+  // When ?edit=1, fetch the persisted draft so the editor seeds from it (not
+  // the published version). Only enabled when a draft is known to exist.
+  const { draft: existingDraft } = useSkillDraft(skillId, autoOpenEditor && !!detail?.hasDraft);
+
+  // Seed the auto-opened editor. When the draft query resolves, replace the
+  // editor content with the persisted draft so unpublished edits survive a
+  // reload. Guarded setState during render (the React "adjust state when a
+  // prop arrives" pattern): the initial seed runs once when detail arrives,
+  // and the draft seed runs once when the draft arrives, each guarded by a
+  // distinct condition so user edits are never overwritten.
   if (editing && localFiles === null && detail) {
     setLocalFiles(detail.files);
     setName(detail.name);
     setDescription(detail.description ?? "");
     setSelectedProviders(detail.requiredProviders);
+  }
+  if (editing && existingDraft && localFiles !== null && !draftApplied) {
+    const draftFiles = existingDraft.files.map((f) => ({ path: f.path, content: f.content }));
+    setLocalFiles(draftFiles);
+    setDraftApplied(true);
   }
 
   const latestVersion = Math.max(0, ...versions.map((v) => v.version));
@@ -196,7 +209,7 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
       const metadataPayload: SkillUpdatePayload = {
         skillId,
         name: name.trim() || undefined,
-        description: description.trim() || undefined,
+        description: description.trim(),
         requiredProviders: selectedProviders,
       };
       const [, draft] = await Promise.all([
@@ -379,7 +392,6 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
                 versions={versions}
                 isLoading={versionsLoading}
                 canManage={canEdit}
-                isAssigned={detail.isAssignedToAgent}
                 onDelete={handleDeleteVersion}
                 deletingVersion={deletingVersion}
               />

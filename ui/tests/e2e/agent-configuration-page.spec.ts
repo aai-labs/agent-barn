@@ -445,8 +445,8 @@ test.describe("Agent configuration page", () => {
         status: 200,
         contentType: "application/json",
         body: JSON.stringify([
-          { version: 2, created_by: null, created_at: "2026-01-02T00:00:00Z" },
-          { version: 1, created_by: null, created_at: "2026-01-01T00:00:00Z" },
+          { version: 2, created_by: null, created_at: "2026-01-02T00:00:00Z", is_pinned_by_agent: false },
+          { version: 1, created_by: null, created_at: "2026-01-01T00:00:00Z", is_pinned_by_agent: false },
         ]),
       });
     });

@@ -52,6 +52,10 @@ test.describe("Settings — Skill detail page", () => {
       files: [{ path: "github_skill.md", content: "# GitHub" }],
     });
     await dataSupportPage.skills.interceptGetSkillVersionsRequest();
+    await dataSupportPage.skills.interceptGetSkillDraftRequest({
+      skillId: MOCK_CUSTOM_SKILL_ID,
+      files: [{ path: "github_skill.md", content: "# GitHub" }],
+    });
     await dataSupportPage.skills.interceptUpdateSkillRequest();
     await dataSupportPage.skills.interceptUpdateSkillDraftRequest({
       files: [{ path: "github_skill.md", content: "# Edited fork" }],
@@ -71,6 +75,23 @@ test.describe("Settings — Skill detail page", () => {
     await expect(fileInput).toHaveValue("# Edited fork");
     await saveDraft.click();
     await expect(fileInput).toHaveValue("# Edited fork");
+  });
+
+  test("reloading ?edit=1 hydrates the editor from the persisted draft, not the published version", async ({ page }) => {
+    await dataSupportPage.skills.interceptGetSkillFilesRequest({
+      skill: { ...mockCustomSkill, hasDraft: true },
+      files: [{ path: "SKILL.md", content: "# Published" }],
+    });
+    await dataSupportPage.skills.interceptGetSkillVersionsRequest();
+    await dataSupportPage.skills.interceptGetSkillDraftRequest({
+      files: [{ path: "SKILL.md", content: "# Unsaved draft edits" }],
+    });
+
+    await page.goto(`/dashboard/${TEST_ORG_ID}/settings/skills/${MOCK_CUSTOM_SKILL_ID}?edit=1`);
+
+    const fileInput = page.getByLabel("Content of SKILL.md");
+    await expect(fileInput).toHaveValue("# Unsaved draft edits");
+    await expect(page.getByRole("button", { name: "Discard" })).toBeVisible();
   });
 
   test("custom skill shows Edit action with no lineage Delete", async ({ page }) => {
@@ -206,8 +227,8 @@ test.describe("Settings — Skill detail page", () => {
     await dataSupportPage.skills.interceptGetSkillFilesRequest();
     await dataSupportPage.skills.interceptGetSkillVersionsRequest({
       versions: [
-        { version: 2, created_by: null, created_at: "2026-01-02T00:00:00Z" },
-        { version: 1, created_by: null, created_at: "2026-01-01T00:00:00Z" },
+        { version: 2, created_by: null, created_at: "2026-01-02T00:00:00Z", is_pinned_by_agent: false },
+        { version: 1, created_by: null, created_at: "2026-01-01T00:00:00Z", is_pinned_by_agent: false },
       ],
     });
     await dataSupportPage.skills.interceptGetSkillVersionRequest({
@@ -226,8 +247,8 @@ test.describe("Settings — Skill detail page", () => {
     await dataSupportPage.skills.interceptGetSkillFilesRequest();
     await dataSupportPage.skills.interceptGetSkillVersionsRequest({
       versions: [
-        { version: 2, created_by: null, created_at: "2026-01-02T00:00:00Z" },
-        { version: 1, created_by: null, created_at: "2026-01-01T00:00:00Z" },
+        { version: 2, created_by: null, created_at: "2026-01-02T00:00:00Z", is_pinned_by_agent: false },
+        { version: 1, created_by: null, created_at: "2026-01-01T00:00:00Z", is_pinned_by_agent: false },
       ],
     });
 
@@ -243,8 +264,8 @@ test.describe("Settings — Skill detail page", () => {
   test("history section deletes a historical version after confirmation", async ({ page }) => {
     await dataSupportPage.skills.interceptGetSkillFilesRequest();
     let versions: Record<string, unknown>[] = [
-      { version: 2, created_by: null, created_at: "2026-01-02T00:00:00Z" },
-      { version: 1, created_by: null, created_at: "2026-01-01T00:00:00Z" },
+      { version: 2, created_by: null, created_at: "2026-01-02T00:00:00Z", is_pinned_by_agent: false },
+      { version: 1, created_by: null, created_at: "2026-01-01T00:00:00Z", is_pinned_by_agent: false },
     ];
     await page.route(`**/api/v1/organizations/*/skills/${MOCK_CUSTOM_SKILL_ID}/versions`, async (route) => {
       if (route.request().method() !== "GET") {

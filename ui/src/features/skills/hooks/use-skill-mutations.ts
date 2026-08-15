@@ -99,6 +99,7 @@ export function useStartSkillDraft() {
     },
     onSuccess: (draft) => {
       queryClient.setQueryData(skillDraftKey(draft.skillId), draft);
+      void queryClient.invalidateQueries({ queryKey: skillsKey.all });
     },
   });
 }
@@ -132,6 +133,7 @@ export function useDiscardSkillDraft() {
     },
     onSuccess: (_data, skillId) => {
       queryClient.removeQueries({ queryKey: skillDraftKey(skillId) });
+      void queryClient.invalidateQueries({ queryKey: skillsKey.all });
     },
   });
 }

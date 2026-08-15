@@ -8,6 +8,7 @@ import { SearchIcon } from "@/components/icons";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
   SelectTrigger,
   SelectValue,
@@ -116,6 +117,11 @@ export const AgentSkillsTab = forwardRef<
 
   function markForRemoval(skillId: string) {
     setPendingRemoveIds((prev) => [...prev, skillId]);
+    setPendingPins((prev) => {
+      const next = { ...prev };
+      delete next[skillId];
+      return next;
+    });
   }
 
   function undoRemoval(skillId: string) {
@@ -178,7 +184,9 @@ export const AgentSkillsTab = forwardRef<
       removedSkillIds: pendingRemoveIds,
       ...(Object.keys(pendingPins).length > 0
         ? {
-            skillVersions: Object.entries(pendingPins).map(([skillId, version]) => ({ skillId, version })),
+            skillVersions: Object.entries(pendingPins)
+              .filter(([skillId]) => !pendingRemoveIds.includes(skillId))
+              .map(([skillId, version]) => ({ skillId, version })),
           }
         : {}),
       ...(orphanedProviders.length > 0 ? { removedSecretProviders: orphanedProviders } : {}),
@@ -514,11 +522,13 @@ function AssignedSkillRow({
           <SelectValue placeholder="Version" />
         </SelectTrigger>
         <SelectContent>
-          {versions.map((v) => (
-            <SelectItem key={v.version} value={String(v.version)}>
-              Version v{v.version}
-            </SelectItem>
-          ))}
+          <SelectGroup>
+            {versions.map((v) => (
+              <SelectItem key={v.version} value={String(v.version)}>
+                Version v{v.version}
+              </SelectItem>
+            ))}
+          </SelectGroup>
         </SelectContent>
       </Select>
       {skill.required ? (
