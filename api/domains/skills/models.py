@@ -27,8 +27,9 @@ class Skill(BaseModel, table=True):
     Content lives in append-only ``skill_version`` rows rather than on this row, so
     agent-skill and template-skill assignments keep pointing at a lineage instead of
     a frozen snapshot of its prose. The published version is always the highest
-    ``version`` for the lineage — rollback publishes a *new* version copied from an
-    older one, so history is never mutated and no current-version pointer is needed.
+    ``version`` for the lineage — restoring an older version as a draft and
+    publishing it produces a *new* version copied from the older one, so history
+    is never mutated and no current-version pointer is needed.
     """
 
     __tablename__: str = "skill"
@@ -79,9 +80,6 @@ class SkillVersion(BaseModel, table=True):
     skill_id: UUID = SqlField(foreign_key="skill.id", nullable=False, ondelete="CASCADE")
     version: int = SqlField(nullable=False)
     created_by: UUID | None = SqlField(default=None, foreign_key="user.id", nullable=True, ondelete="SET NULL")
-    # Set when this version was published by restoring an older one, for audit and
-    # for the "restored from v2" label in version history.
-    restored_from_version: int | None = SqlField(default=None, nullable=True)
 
 
 class SkillFile(BaseModel, table=True):
@@ -118,10 +116,6 @@ class SkillDraft(BaseModel, table=True):
     __table_args__ = (sa.UniqueConstraint("skill_id", name="uq_skill_draft_skill_id"),)
 
     skill_id: UUID = SqlField(foreign_key="skill.id", nullable=False, ondelete="CASCADE")
-    # Set when the draft was seeded from an older published version (a rollback in
-    # progress) rather than from the latest one; carried onto the published
-    # version's restored_from_version so history records where it came from.
-    source_version: int | None = SqlField(default=None, nullable=True)
 
 
 class SkillDraftFile(BaseModel, table=True):
@@ -209,6 +203,9 @@ class SkillSummaryRead(SkillRead):
 
 class SkillDetailRead(SkillSummaryRead):
     files: list[SkillFileRead]
+    # Whether any non-soft-deleted agent currently has this skill assigned. The
+    # UI uses it to gate deleting the currently published version.
+    is_assigned_to_agent: bool
 
 
 class SkillVersionRead(PydanticBaseModel):
@@ -217,8 +214,6 @@ class SkillVersionRead(PydanticBaseModel):
     version: int
     created_by: UUID | None
     created_at: datetime
-    # Set when this version was published by restoring an older one.
-    restored_from_version: int | None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -230,7 +225,6 @@ class SkillVersionDetailRead(SkillVersionRead):
 class SkillDraftRead(PydanticBaseModel):
     skill_id: UUID
     files: list[SkillFileRead]
-    source_version: int | None
     created_at: datetime
     updated_at: datetime
 

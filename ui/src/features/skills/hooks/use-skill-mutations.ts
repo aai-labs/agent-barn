@@ -5,7 +5,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/shared/api";
 import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
 
-import { SkillDraftSchema, SkillSchema, type Skill, type SkillDraft } from "../schemas";
+import { SkillDetailSchema, SkillDraftSchema, SkillSchema, type Skill, type SkillDetail, type SkillDraft } from "../schemas";
 import { skillDraftKey, skillsKey } from "../utils";
 
 export type SkillFilePayload = {
@@ -44,6 +44,28 @@ export function useCreateSkill() {
   });
 }
 
+/** Fork a built-in skill into an org-scoped custom skill, seeded from the
+ * built-in's latest version with an in-flight draft ready to edit. */
+export function useForkSkill() {
+  const queryClient = useQueryClient();
+  const orgApiBase = useOrganizationApiBase();
+
+  return useMutation({
+    mutationFn: async (skillId: string) => {
+      const response = await api.post<SkillDetail>(
+        `${orgApiBase}/skills/${skillId}/fork`,
+        {},
+        { schema: SkillDetailSchema },
+      );
+      return response.data;
+    },
+    onSuccess: (skill) => {
+      queryClient.setQueryData(skillsKey.detail(skill.id), skill);
+      void queryClient.invalidateQueries({ queryKey: skillsKey.all });
+    },
+  });
+}
+
 export function useUpdateSkill() {
   const queryClient = useQueryClient();
   const orgApiBase = useOrganizationApiBase();
@@ -61,17 +83,15 @@ export function useUpdateSkill() {
   });
 }
 
-/** Get-or-create the in-flight draft. Pass sourceVersion to seed it from an older
- * published version instead of the latest (rollback); omit to continue editing. */
+/** Get-or-create the in-flight draft, seeded from the latest published version. */
 export function useStartSkillDraft() {
   const queryClient = useQueryClient();
   const orgApiBase = useOrganizationApiBase();
 
   return useMutation({
-    mutationFn: async ({ skillId, sourceVersion }: { skillId: string; sourceVersion?: number }) => {
-      const query = sourceVersion === undefined ? "" : `?source_version=${sourceVersion}`;
+    mutationFn: async (skillId: string) => {
       const response = await api.post<SkillDraft>(
-        `${orgApiBase}/skills/${skillId}/draft${query}`,
+        `${orgApiBase}/skills/${skillId}/draft`,
         {},
         { schema: SkillDraftSchema },
       );
@@ -136,13 +156,13 @@ export function usePublishSkillDraft() {
   });
 }
 
-export function useDeleteSkill() {
+export function useDeleteSkillVersion() {
   const queryClient = useQueryClient();
   const orgApiBase = useOrganizationApiBase();
 
   return useMutation({
-    mutationFn: async (skillId: string) => {
-      await api.delete(`${orgApiBase}/skills/${skillId}`);
+    mutationFn: async ({ skillId, version }: { skillId: string; version: number }) => {
+      await api.delete(`${orgApiBase}/skills/${skillId}/versions/${version}`);
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: skillsKey.all });

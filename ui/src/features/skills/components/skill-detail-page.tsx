@@ -2,8 +2,9 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft, Loader2, Pencil, Save, Trash2, Upload, X } from "lucide-react";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { ArrowLeft, GitFork, Loader2, Pencil, Save, Trash2, Upload, X } from "lucide-react";
+import { toast } from "sonner";
 
 import { AppErrorState } from "@/components/app-error-state";
 import { Badge } from "@/components/badge";
@@ -24,8 +25,9 @@ import { useSkillVersionDetail } from "../hooks/use-skill-version-detail";
 import {
   type SkillFilePayload,
   type SkillUpdatePayload,
-  useDeleteSkill,
+  useDeleteSkillVersion,
   useDiscardSkillDraft,
+  useForkSkill,
   usePublishSkillDraft,
   useStartSkillDraft,
   useUpdateSkill,
@@ -38,7 +40,7 @@ import { SkillRequiredProviders } from "./skill-required-providers";
 import { SkillSourceBadge } from "./skill-source-badge";
 import { SkillVersionHistory } from "./skill-version-history";
 
-type Confirmation = "discard" | "publish" | "delete";
+type Confirmation = "discard" | "publish" | "delete-version" | "fork";
 
 export function SkillDetailPage({ skillId }: { skillId: string }) {
   const { canManage } = useActiveOrgRole();
@@ -50,8 +52,15 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
   const { detail, isLoading, error, refetch } = useSkillFiles(skillId);
   const { versions, isLoading: versionsLoading } = useSkillVersions(skillId);
 
+  // After forking a built-in, the router lands here with ?edit=1 and the fork
+  // already carries an in-flight draft, so the editor opens immediately without
+  // calling the get-or-create draft mutation (calling mutateAsync from an effect
+  // would leave its isPending stuck true and disable the footer actions).
+  const searchParams = useSearchParams();
+  const autoOpenEditor = searchParams.get("edit") === "1";
+
   const [section, setSection] = useState<SkillDetailSection>("files");
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditing] = useState(autoOpenEditor);
   const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
   const [localFiles, setLocalFiles] = useState<SkillFilePayload[] | null>(null);
   const [name, setName] = useState("");
@@ -59,14 +68,26 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
   const [selectedProviders, setSelectedProviders] = useState<string[]>([]);
   const [fileError, setFileError] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
-  const [restoringVersion, setRestoringVersion] = useState<number | null>(null);
+  const [deletingVersion, setDeletingVersion] = useState<number | null>(null);
 
   const startDraft = useStartSkillDraft();
   const updateDraft = useUpdateSkillDraft();
   const discardDraft = useDiscardSkillDraft();
   const publishDraft = usePublishSkillDraft();
+  const forkSkill = useForkSkill();
   const updateSkill = useUpdateSkill();
-  const deleteSkill = useDeleteSkill();
+  const deleteSkillVersion = useDeleteSkillVersion();
+
+  // Seed the auto-opened editor from the fork's published version, which is
+  // identical to its in-flight draft right after forking. Guarded setState during
+  // render (the React-recommended "adjust state when a prop arrives" pattern):
+  // it re-renders once localFiles is seeded, so it runs exactly once.
+  if (editing && localFiles === null && detail) {
+    setLocalFiles(detail.files);
+    setName(detail.name);
+    setDescription(detail.description ?? "");
+    setSelectedProviders(detail.requiredProviders);
+  }
 
   const latestVersion = Math.max(0, ...versions.map((v) => v.version));
   const viewingHistorical = selectedVersion !== null && selectedVersion !== latestVersion;
@@ -78,7 +99,7 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
   const isPending =
     startDraft.isPending || updateDraft.isPending || discardDraft.isPending || publishDraft.isPending || updateSkill.isPending;
   const mutationError =
-    startDraft.error ?? updateDraft.error ?? discardDraft.error ?? publishDraft.error ?? updateSkill.error;
+    startDraft.error ?? updateDraft.error ?? discardDraft.error ?? publishDraft.error ?? updateSkill.error ?? forkSkill.error ?? deleteSkillVersion.error;
 
   if (isLoading) {
     return (
@@ -114,6 +135,7 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
   }
 
   const isCustom = detail.source === "custom";
+  const isBuiltIn = detail.source === "aai_cli";
   const canEdit = isCustom && canManage;
   const displayedFiles = viewingHistorical ? historicalFiles : detail.files;
 
@@ -123,9 +145,9 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
     );
   }
 
-  async function enterEditing(sourceVersion?: number) {
+  async function enterEditing() {
     try {
-      const draft = await startDraft.mutateAsync({ skillId, sourceVersion });
+      const draft = await startDraft.mutateAsync(skillId);
       setLocalFiles(draft.files);
       setName(detail!.name);
       setDescription(detail!.description ?? "");
@@ -136,14 +158,7 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
       setSelectedVersion(null);
     } catch {
       // error rendered via mutationError
-    } finally {
-      setRestoringVersion(null);
     }
-  }
-
-  function handleRestoreVersion(version: number) {
-    setRestoringVersion(version);
-    void enterEditing(version);
   }
 
   function exitEditing() {
@@ -189,48 +204,55 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
         updateDraft.mutateAsync({ skillId, files: localFiles }),
       ]);
       setLocalFiles(draft.files);
+      toast.success("Draft saved.");
     } catch {
       // error rendered via mutationError
     }
   }
 
   function handlePublish() {
-    if (!localFiles || !validateEntry(localFiles)) return;
     setConfirmation("publish");
   }
 
   async function confirmPublish() {
-    if (!localFiles) return;
     setConfirmation(null);
     try {
-      const metadataPayload: SkillUpdatePayload = {
-        skillId,
-        name: name.trim() || undefined,
-        description: description.trim() || undefined,
-        requiredProviders: selectedProviders,
-      };
-      await Promise.all([
-        updateSkill.mutateAsync(metadataPayload),
-        updateDraft.mutateAsync({ skillId, files: localFiles }),
-      ]);
-      await publishDraft.mutateAsync(skillId);
-      exitEditing();
+      const published = await publishDraft.mutateAsync(skillId);
+      toast.success(`${detail!.name} v${published.version} published.`);
     } catch {
       // error rendered via mutationError
     }
   }
 
-  function handleDelete() {
-    setConfirmation("delete");
+  function handleFork() {
+    setConfirmation("fork");
   }
 
-  async function confirmDelete() {
+  async function confirmFork() {
     setConfirmation(null);
     try {
-      await deleteSkill.mutateAsync(skillId);
-      router.push(skillsHref);
+      const fork = await forkSkill.mutateAsync(skillId);
+      router.push(orgId ? `/dashboard/${orgId}/settings/skills/${fork.id}?edit=1` : "/dashboard");
     } catch {
-      // error rendered via deleteSkill.error
+      // error rendered via mutationError
+    }
+  }
+
+  function handleDeleteVersion(version: number) {
+    setDeletingVersion(version);
+    setConfirmation("delete-version");
+  }
+
+  async function confirmDeleteVersion() {
+    setConfirmation(null);
+    const version = deletingVersion;
+    setDeletingVersion(null);
+    if (version === null) return;
+    try {
+      await deleteSkillVersion.mutateAsync({ skillId, version });
+      toast.success(`Version ${version} deleted.`);
+    } catch {
+      // error rendered via mutationError
     }
   }
 
@@ -253,21 +275,31 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
             confirmLabel: "Publish this version",
             pendingLabel: "Publishing…",
             onConfirm: confirmPublish,
-            isPending: publishDraft.isPending || updateDraft.isPending || updateSkill.isPending,
+            isPending: publishDraft.isPending,
             icon: <Upload size={18} />,
           }
-        : confirmation === "delete"
+        : confirmation === "delete-version"
           ? {
-              title: "Delete this skill?",
-              description: `Delete ${detail.name}? This cannot be undone.`,
-              confirmLabel: "Delete skill",
+              title: `Delete version ${deletingVersion}?`,
+              description: `Permanently remove version ${deletingVersion} of ${detail.name} from its history? This cannot be undone.`,
+              confirmLabel: "Delete version",
               pendingLabel: "Deleting…",
-              onConfirm: confirmDelete,
-              isPending: deleteSkill.isPending,
+              onConfirm: confirmDeleteVersion,
+              isPending: deleteSkillVersion.isPending,
               variant: "destructive" as const,
               icon: <Trash2 size={18} />,
             }
-          : null;
+          : confirmation === "fork"
+            ? {
+                title: "Fork this built-in skill?",
+                description: `Create an editable copy of ${detail.name} for your organization? It publishes as its own custom skill version and opens a draft. The built-in skill stays read-only.`,
+                confirmLabel: "Fork skill",
+                pendingLabel: "Forking…",
+                onConfirm: confirmFork,
+                isPending: forkSkill.isPending,
+                icon: <GitFork size={18} />,
+              }
+            : null;
 
   return (
     <div className="af-page">
@@ -298,23 +330,25 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
             <button className="af-btn" onClick={exitEditing} disabled={isPending}>
               <X size={14} /> Close
             </button>
-          ) : (
-            canEdit && (
-              <>
-                <button
-                  className="af-btn"
-                  style={{ borderColor: "var(--err)", color: "var(--err)" }}
-                  onClick={handleDelete}
-                >
-                  <Trash2 size={14} /> Delete
+          ) : canEdit ? (
+            <>
+              <button className="af-btn" onClick={() => void enterEditing()} disabled={isPending}>
+                {startDraft.isPending ? <Loader2 size={14} className="animate-spin" /> : <Pencil size={14} />}
+                Edit
+              </button>
+              {detail.hasDraft && (
+                <button className="af-btn af-btn-primary" onClick={handlePublish} disabled={publishDraft.isPending}>
+                  {publishDraft.isPending ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
+                  Publish
                 </button>
-                <button className="af-btn af-btn-primary" onClick={() => void enterEditing()} disabled={isPending}>
-                  {startDraft.isPending ? <Loader2 size={14} className="animate-spin" /> : <Pencil size={14} />}
-                  {detail.hasDraft ? "Continue editing draft" : "Edit"}
-                </button>
-              </>
-            )
-          )}
+              )}
+            </>
+          ) : isBuiltIn && canManage ? (
+            <button className="af-btn" onClick={handleFork} disabled={forkSkill.isPending}>
+              {forkSkill.isPending ? <Loader2 size={14} className="animate-spin" /> : <GitFork size={14} />}
+              Fork
+            </button>
+          ) : null}
         </div>
       </div>
 
@@ -345,9 +379,9 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
                 versions={versions}
                 isLoading={versionsLoading}
                 canManage={canEdit}
-                hasDraft={detail.hasDraft}
-                onRestore={handleRestoreVersion}
-                restoringVersion={restoringVersion}
+                isAssigned={detail.isAssignedToAgent}
+                onDelete={handleDeleteVersion}
+                deletingVersion={deletingVersion}
               />
             </div>
           ) : editing ? (
@@ -394,20 +428,14 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
                   <button className="af-btn af-btn-danger" onClick={handleDiscard} disabled={isPending}>
                     <Trash2 size={14} /> Discard
                   </button>
-                  <div className="flex items-center gap-2">
-                    <button className="af-btn" onClick={() => void handleSaveDraft()} disabled={isPending}>
-                      {updateDraft.isPending || updateSkill.isPending ? (
-                        <Loader2 size={14} className="animate-spin" />
-                      ) : (
-                        <Save size={14} />
-                      )}{" "}
-                      Save draft
-                    </button>
-                    <button className="af-btn af-btn-primary" onClick={handlePublish} disabled={isPending}>
-                      {publishDraft.isPending ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}{" "}
-                      Publish
-                    </button>
-                  </div>
+                  <button className="af-btn" onClick={() => void handleSaveDraft()} disabled={isPending}>
+                    {updateDraft.isPending || updateSkill.isPending ? (
+                      <Loader2 size={14} className="animate-spin" />
+                    ) : (
+                      <Save size={14} />
+                    )}{" "}
+                    Save draft
+                  </button>
                 </div>
               </div>
             </div>

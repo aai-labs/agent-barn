@@ -19,6 +19,7 @@ export const mockPlatformSkill = {
   toolsPointer: null,
   version: 1,
   hasDraft: false,
+  isAssignedToAgent: false,
   createdAt: "2026-01-01T00:00:00Z",
   updatedAt: "2026-01-01T00:00:00Z",
 };
@@ -36,6 +37,7 @@ export const mockCustomSkill = {
   toolsPointer: null,
   version: 1,
   hasDraft: false,
+  isAssignedToAgent: false,
   createdAt: "2026-01-01T00:00:00Z",
   updatedAt: "2026-01-01T00:00:00Z",
 };
@@ -53,6 +55,7 @@ export const mockJiraSkill = {
   toolsPointer: null,
   version: 1,
   hasDraft: false,
+  isAssignedToAgent: false,
   createdAt: "2026-01-01T00:00:00Z",
   updatedAt: "2026-01-01T00:00:00Z",
 };
@@ -70,6 +73,7 @@ export const mockGmailSkill = {
   toolsPointer: null,
   version: 1,
   hasDraft: false,
+  isAssignedToAgent: false,
   createdAt: "2026-01-01T00:00:00Z",
   updatedAt: "2026-01-01T00:00:00Z",
 };
@@ -87,6 +91,7 @@ export const mockBitbucketSkill = {
   toolsPointer: null,
   version: 1,
   hasDraft: false,
+  isAssignedToAgent: false,
   createdAt: "2026-01-01T00:00:00Z",
   updatedAt: "2026-01-01T00:00:00Z",
 };
@@ -171,6 +176,41 @@ export class SkillDataSupport {
     });
   }
 
+  async interceptForkSkillRequest({
+    skillId = MOCK_PLATFORM_SKILL_ID,
+    status = 201,
+    detail = "Unable to fork skill",
+    skill,
+  }: {
+    skillId?: string;
+    status?: number;
+    detail?: string;
+    skill?: Record<string, unknown>;
+  } = {}) {
+    await this.page.route(`**/api/v1/organizations/*/skills/${skillId}/fork`, async (route) => {
+      if (route.request().method() !== "POST") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status,
+        contentType: "application/json",
+        body:
+          status >= 400
+            ? JSON.stringify({ detail })
+            : JSON.stringify(
+                skill ?? {
+                  ...mockCustomSkill,
+                  name: mockPlatformSkill.name,
+                  entryPath: mockPlatformSkill.entryPath,
+                  files: [{ path: mockPlatformSkill.entryPath, content: "# GitHub" }],
+                  hasDraft: true,
+                },
+              ),
+      });
+    });
+  }
+
   async interceptStartSkillDraftRequest({
     skillId = MOCK_CUSTOM_SKILL_ID,
     status = 201,
@@ -194,7 +234,6 @@ export class SkillDataSupport {
             : JSON.stringify({
                 skill_id: skillId,
                 files,
-                source_version: null,
                 created_at: "2026-01-01T00:00:00Z",
                 updated_at: "2026-01-01T00:00:00Z",
               }),
@@ -255,7 +294,7 @@ export class SkillDataSupport {
     skillId = MOCK_CUSTOM_SKILL_ID,
     status = 200,
     versions = [
-      { version: 1, created_by: null, created_at: "2026-01-01T00:00:00Z", restored_from_version: null },
+      { version: 1, created_by: null, created_at: "2026-01-01T00:00:00Z" },
     ],
   }: {
     skillId?: string;
@@ -280,13 +319,11 @@ export class SkillDataSupport {
     version = 1,
     status = 200,
     files = [{ path: "SKILL.md", content: "# My tool" }],
-    restoredFromVersion = null,
   }: {
     skillId?: string;
     version?: number;
     status?: number;
     files?: { path: string; content: string }[];
-    restoredFromVersion?: number | null;
   } = {}) {
     await this.page.route(`**/api/v1/organizations/*/skills/${skillId}/versions/${version}`, async (route) => {
       if (route.request().method() !== "GET") {
@@ -303,7 +340,6 @@ export class SkillDataSupport {
                 version,
                 created_by: null,
                 created_at: "2026-01-01T00:00:00Z",
-                restored_from_version: restoredFromVersion,
                 files,
               }),
       });
@@ -314,12 +350,10 @@ export class SkillDataSupport {
     skillId = MOCK_CUSTOM_SKILL_ID,
     status = 200,
     files = [{ path: "SKILL.md", content: "# My tool" }],
-    sourceVersion = null,
   }: {
     skillId?: string;
     status?: number;
     files?: { path: string; content: string }[];
-    sourceVersion?: number | null;
   } = {}) {
     await this.page.route(`**/api/v1/organizations/*/skills/${skillId}/draft*`, async (route) => {
       if (route.request().method() !== "PATCH") {
@@ -335,7 +369,6 @@ export class SkillDataSupport {
             : JSON.stringify({
                 skill_id: skillId,
                 files,
-                source_version: sourceVersion,
                 created_at: "2026-01-01T00:00:00Z",
                 updated_at: "2026-01-01T00:00:00Z",
               }),
@@ -384,28 +417,6 @@ export class SkillDataSupport {
           status >= 400
             ? JSON.stringify({ detail: "Unable to publish draft" })
             : JSON.stringify(skill ?? { ...mockCustomSkill, version: 2, hasDraft: false }),
-      });
-    });
-  }
-
-  async interceptDeleteSkillRequest({
-    skillId = MOCK_CUSTOM_SKILL_ID,
-    status = 204,
-    detail = "Unable to delete skill",
-  }: {
-    skillId?: string;
-    status?: number;
-    detail?: string;
-  } = {}) {
-    await this.page.route(`**/api/v1/organizations/*/skills/${skillId}`, async (route) => {
-      if (route.request().method() !== "DELETE") {
-        await route.fallback();
-        return;
-      }
-      await route.fulfill({
-        status,
-        contentType: "application/json",
-        body: status >= 400 ? JSON.stringify({ detail }) : "",
       });
     });
   }

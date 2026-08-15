@@ -86,6 +86,17 @@ def update_skill(
     return service.update_skill(skill_id, data, context)
 
 
+@skills_router.post("/{skill_id}/fork", response_model=SkillDetailRead, status_code=status.HTTP_201_CREATED)
+def fork_skill(
+    skill_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[SkillService, Injected(SkillService)],
+):
+    """Create an org-scoped custom skill seeded from a built-in's latest version,
+    with an in-flight draft so the author lands directly in the editor."""
+    return service.fork_skill(skill_id, context)
+
+
 @skills_router.get("/{skill_id}/versions", response_model=list[SkillVersionRead])
 def list_skill_versions(
     skill_id: UUID,
@@ -119,11 +130,9 @@ def start_skill_draft(
     skill_id: UUID,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[SkillService, Injected(SkillService)],
-    source_version: Annotated[int | None, Query(ge=1)] = None,
 ):
-    """Get-or-create the in-flight draft. Pass source_version to seed a new draft
-    from an older published version (rollback); omit it to start from latest."""
-    return service.start_skill_draft(skill_id, context, source_version)
+    """Get-or-create the in-flight draft, seeded from the latest published version."""
+    return service.start_skill_draft(skill_id, context)
 
 
 @skills_router.patch("/{skill_id}/draft", response_model=SkillDraftRead)
@@ -155,11 +164,15 @@ def publish_skill_draft(
     return service.publish_skill_draft(skill_id, context)
 
 
-@skills_router.delete("/{skill_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_skill(
+@skills_router.delete("/{skill_id}/versions/{version}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_skill_version(
     skill_id: UUID,
+    version: int,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[SkillService, Injected(SkillService)],
 ):
-    service.delete_skill(skill_id, context)
+    """Delete one immutable version from a skill's history. The currently published
+    version is protected while any agent is assigned the skill; the last remaining
+    version is never deletable."""
+    service.delete_skill_version(skill_id, version, context)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

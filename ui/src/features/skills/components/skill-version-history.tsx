@@ -1,4 +1,4 @@
-import { History as HistoryIcon, RotateCcw } from "lucide-react";
+import { History as HistoryIcon, Trash2 } from "lucide-react";
 
 import { Badge } from "@/components/badge";
 
@@ -8,18 +8,18 @@ interface SkillVersionHistoryProps {
   versions: SkillVersion[];
   isLoading: boolean;
   canManage: boolean;
-  hasDraft: boolean;
-  onRestore: (version: number) => void;
-  restoringVersion: number | null;
+  isAssigned: boolean;
+  onDelete: (version: number) => void;
+  deletingVersion: number | null;
 }
 
 export function SkillVersionHistory({
   versions,
   isLoading,
   canManage,
-  hasDraft,
-  onRestore,
-  restoringVersion,
+  isAssigned,
+  onDelete,
+  deletingVersion,
 }: SkillVersionHistoryProps) {
   const latest = Math.max(0, ...versions.map((v) => v.version));
 
@@ -43,6 +43,14 @@ export function SkillVersionHistory({
     <div className="flex flex-col gap-2">
       {versions.map((v) => {
         const isCurrent = v.version === latest;
+        // The currently published version is protected while agents are assigned;
+        // the last remaining version is never deletable.
+        const deleteBlocked = versions.length <= 1 || (isCurrent && isAssigned);
+        const deleteTitle = deleteBlocked
+          ? versions.length <= 1
+            ? "A skill must keep at least one version"
+            : "Unassign this skill from agents before deleting the current version"
+          : undefined;
         return (
           <div
             key={v.version}
@@ -61,24 +69,23 @@ export function SkillVersionHistory({
                   Version {v.version}
                 </span>
                 {isCurrent && <Badge variant="ok">Current</Badge>}
-                {v.restoredFromVersion !== null && (
-                  <Badge>Restored from v{v.restoredFromVersion}</Badge>
-                )}
               </div>
               <div className="text-[12px] mt-0.5" style={{ color: "var(--ink-3)" }}>
                 {new Date(v.createdAt).toLocaleString()}
               </div>
             </div>
-            {canManage && !isCurrent && (
+            {canManage && (
               <button
                 type="button"
                 className="af-btn af-btn-sm flex-shrink-0"
-                disabled={hasDraft || restoringVersion !== null}
-                title={hasDraft ? "Discard the in-progress draft before restoring another version" : undefined}
-                onClick={() => onRestore(v.version)}
+                style={{ borderColor: "var(--err)", color: "var(--err)" }}
+                disabled={deleteBlocked || deletingVersion !== null}
+                title={deleteTitle}
+                aria-label={`Delete version ${v.version}`}
+                onClick={() => onDelete(v.version)}
               >
-                <RotateCcw size={13} />
-                {restoringVersion === v.version ? "Restoring…" : "Restore as draft"}
+                <Trash2 size={13} />
+                {deletingVersion === v.version ? "Deleting…" : "Delete"}
               </button>
             )}
           </div>

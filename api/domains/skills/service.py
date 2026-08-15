@@ -61,6 +61,20 @@ class SkillService:
             suffix += 1
         return f"{base}-{suffix}"
 
+    def _allocate_fork_name(self, base: str, org_id: UUID) -> str:
+        """A fork keeps the built-in's name when it's free in the organization and
+        gains a ``(fork)`` suffix when the org already has a same-named skill, so
+        the org-scoped ``(organization_id, name)`` uniqueness holds."""
+        taken = {s.name for s in self.repository.find_accessible_for_org(org_id) if s.organization_id == org_id}
+        if base not in taken:
+            return base
+        candidate = f"{base} (fork)"
+        suffix = 2
+        while candidate in taken:
+            candidate = f"{base} (fork {suffix})"
+            suffix += 1
+        return candidate
+
     def _to_read(self, skill: Skill, version: int | None = None, has_draft: bool | None = None) -> SkillSummaryRead:
         if version is None:
             latest = self.repository.get_latest_version(skill.id)
@@ -99,6 +113,56 @@ class SkillService:
         version = self.repository.publish_version(skill.id, files, created_by=context.user.id)
         return self._to_read(skill, version.version, has_draft=False)
 
+    def fork_skill(self, skill_id: UUID, context: CurrentUserContext) -> SkillDetailRead:
+        """Create an org-scoped custom skill seeded from a built-in's latest version.
+
+        The fork publishes its own v1 immediately (so it is a real, assignable
+        lineage from the start) and then opens an in-flight draft seeded from that
+        v1, so the author lands directly in the editor. The built-in lineage stays
+        read-only and untouched; this is a one-time snapshot with no update tracking.
+        """
+        org_id = self._org_id(context)
+        self.permission_policy.require_organization(context, org_id, PermissionKey.SKILL_MANAGE)
+        source = self._get_or_404(skill_id, org_id)
+        if source.source != SkillSource.AAI_CLI:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Only built-in skills can be forked; edit custom skills directly",
+            )
+        latest = self.repository.get_latest_version(source.id)
+        if latest is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail=f"No published version for skill {skill_id}"
+            )
+        files = [(f.path, f.content) for f in self.repository.get_files(latest.id)]
+
+        name = self._allocate_fork_name(source.name, org_id)
+        slug = self._allocate_slug(name, org_id)
+        skill = Skill(
+            organization_id=org_id,
+            name=name,
+            slug=slug,
+            description=source.description,
+            # The fork mounts under its own directory, so it can't collide with
+            # the built-in's shared aai-cli root at manifest time. Entry path and
+            # provider requirements carry over so the copied content keeps working.
+            root_dir=slug,
+            entry_path=source.entry_path,
+            source=SkillSource.CUSTOM,
+            required_providers=source.required_providers,
+        )
+        self.repository.save(skill)
+        version = self.repository.publish_version(skill.id, files, created_by=context.user.id)
+        self.repository.save_new_draft(skill.id, files)
+        read = self._to_read(skill, version.version, has_draft=True)
+        return SkillDetailRead.model_validate(
+            {
+                **read.model_dump(),
+                "files": [SkillFileRead(path=path, content=content) for path, content in files],
+                "is_assigned_to_agent": False,
+            }
+        )
+
     def update_skill(self, skill_id: UUID, data: SkillUpdate, context: CurrentUserContext) -> SkillSummaryRead:
         """Metadata-only: name, description, required providers. Content changes
         go through the draft/publish flow instead."""
@@ -132,7 +196,11 @@ class SkillService:
         files = self.repository.get_files(latest.id) if latest else []
         read = self._to_read(skill, latest.version if latest else 1)
         return SkillDetailRead.model_validate(
-            {**read.model_dump(), "files": [SkillFileRead.model_validate(f) for f in files]}
+            {
+                **read.model_dump(),
+                "files": [SkillFileRead.model_validate(f) for f in files],
+                "is_assigned_to_agent": self.repository.is_assigned_to_any_agent(skill.id),
+            }
         )
 
     def list_skill_versions(self, skill_id: UUID, context: CurrentUserContext) -> list[SkillVersionRead]:
@@ -182,39 +250,25 @@ class SkillService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"No draft for skill {skill_id}")
         return self._draft_to_read(draft)
 
-    def start_skill_draft(
-        self, skill_id: UUID, context: CurrentUserContext, source_version: int | None = None
-    ) -> SkillDraftRead:
-        """Get-or-create the single in-flight draft for a skill, seeded from a
-        selected published version or, by default, the latest version.
-
-        Selecting an older version here is how "rollback" works: it seeds the
-        draft with that version's content for review, and publishing turns it
-        into the next version rather than mutating history.
-        """
+    def start_skill_draft(self, skill_id: UUID, context: CurrentUserContext) -> SkillDraftRead:
+        """Get-or-create the single in-flight draft for a skill, seeded from the
+        latest published version. Recovering from a bad version is a per-agent
+        concern handled by re-pinning the agent's assigned skill version, never a
+        lineage-level restore."""
         org_id = self._org_id(context)
         skill = self._require_draftable_skill(skill_id, org_id, context)
 
         existing = self.repository.get_draft(skill.id)
         if existing is not None:
-            if source_version is not None:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="A draft already exists; discard it before restoring another version",
-                )
             return self._draft_to_read(existing)
 
-        source = (
-            self.repository.get_version(skill.id, source_version)
-            if source_version is not None
-            else self.repository.get_latest_version(skill.id)
-        )
+        source = self.repository.get_latest_version(skill.id)
         if source is None:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail=f"Version {source_version} not found for skill"
+                status_code=status.HTTP_404_NOT_FOUND, detail=f"No published version for skill {skill_id}"
             )
         files = [(f.path, f.content) for f in self.repository.get_files(source.id)]
-        draft = self.repository.save_new_draft(skill.id, files, source_version=source_version)
+        draft = self.repository.save_new_draft(skill.id, files)
         return self._draft_to_read(draft)
 
     def update_skill_draft(self, skill_id: UUID, data: SkillDraftUpdate, context: CurrentUserContext) -> SkillDraftRead:
@@ -242,37 +296,44 @@ class SkillService:
         if draft is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"No draft for skill {skill_id}")
         files = [(f.path, f.content) for f in self.repository.get_draft_files(draft.id)]
-        published = self.repository.publish_draft(
-            skill.id, draft.id, files, created_by=context.user.id, restored_from_version=draft.source_version
-        )
+        published = self.repository.publish_draft(skill.id, draft.id, files, created_by=context.user.id)
         return self._to_read(skill, published.version, has_draft=False)
 
-    def delete_skill(self, skill_id: UUID, context: CurrentUserContext) -> None:
+    def delete_skill_version(self, skill_id: UUID, version: int, context: CurrentUserContext) -> None:
+        """Delete one immutable version snapshot from a skill's history.
+
+        Protections: built-ins are never modified; the last remaining version can't
+        be removed (the lineage must keep content); and a version pinned by any
+        agent can't be removed, because deleting it would break that agent's
+        explicit pin (recover from a bad version by re-pinning, never by deleting
+        a pinned snapshot). Historical versions no agent pins are always safe to
+        prune.
+        """
         org_id = self._org_id(context)
         skill = self._get_or_404(skill_id, org_id)
         self.permission_policy.require_organization(context, org_id, PermissionKey.SKILL_MANAGE)
         if skill.source == SkillSource.AAI_CLI:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Cannot delete built-in skills",
+                detail="Cannot modify built-in skills",
             )
-        if self.repository.is_assigned_to_any_agent(skill_id):
+        skill_version = self.repository.get_version(skill.id, version)
+        if skill_version is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail=f"Version {version} not found for skill {skill_id}"
+            )
+        versions = self.repository.list_versions(skill.id)
+        if len(versions) <= 1:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="Skill is currently assigned to one or more agents",
+                detail="Cannot delete the only version of a skill",
             )
-        blocking_templates = self.repository.get_latest_template_keys_requiring_skill(skill_id, org_id)
-        if blocking_templates:
-            template_keys = ", ".join(blocking_templates)
+        if self.repository.is_skill_version_pinned(skill.id, version):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    f"Skill is required by template(s): {template_keys}. "
-                    "Remove it from those templates before deleting."
-                ),
+                detail="Cannot delete a version that is pinned by an agent",
             )
-        self.repository.delete_stale_template_skill_refs(skill_id, org_id)
-        self.repository.delete(skill)
+        self.repository.delete_version_by_id(skill_version.id)
 
     def get_skill(self, skill_id: UUID, context: CurrentUserContext) -> SkillSummaryRead:
         org_id = self._org_id(context)

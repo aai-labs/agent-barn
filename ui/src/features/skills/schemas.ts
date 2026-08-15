@@ -28,20 +28,20 @@ export const SkillFileSchema = z.object({
 
 export const SkillDetailSchema = SkillSchema.extend({
   files: z.array(SkillFileSchema),
+  // Whether any non-soft-deleted agent currently has this skill assigned; gates
+  // deleting the currently published version.
+  isAssignedToAgent: z.boolean(),
 });
 
 export const SkillVersionSchema = z.object({
   version: z.number().int().min(1),
   createdBy: z.string().uuid().nullable(),
   createdAt: z.string(),
-  restoredFromVersion: z.number().int().min(1).nullable(),
 });
 
 export const SkillDraftSchema = z.object({
   skillId: z.string().uuid(),
   files: z.array(SkillFileSchema),
-  // Set when the draft was seeded from an older version rather than the latest.
-  sourceVersion: z.number().int().min(1).nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });

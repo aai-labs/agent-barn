@@ -6,7 +6,7 @@ from injector import inject, singleton
 from sqlalchemy import func
 from sqlmodel import Session, col, delete, or_, select
 
-from api.domains.agents.models import Agent, AgentSkill, AgentTemplateSkill, PlatformTemplateSkill
+from api.domains.agents.models import Agent, AgentSkill
 from api.domains.skills.models import (
     Skill,
     SkillDraft,
@@ -16,7 +16,6 @@ from api.domains.skills.models import (
     SkillSource,
     SkillVersion,
 )
-from api.domains.templates.models import AgentTemplate, PlatformTemplate
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.infrastructure.shared.models import Pagination
 
@@ -33,7 +32,7 @@ class SkillRepository:
     # --- versions and files -------------------------------------------------
     #
     # The published version of a lineage is always its highest ``version``:
-    # publishing and rollback both append, so "latest" and "current" coincide and
+    # publishing and restoring both append, so "latest" and "current" coincide and
     # no current-version pointer has to be kept in sync.
 
     def get_latest_version(self, skill_id: UUID) -> SkillVersion | None:
@@ -145,7 +144,6 @@ class SkillRepository:
                 skill_id=skill_id,
                 version=(current or 0) + 1,
                 created_by=created_by,
-                restored_from_version=restored_from_version,
             )
             session.add(version)
             session.flush()
@@ -183,11 +181,9 @@ class SkillRepository:
             )
             return list(session.exec(query).all())
 
-    def save_new_draft(
-        self, skill_id: UUID, files: list[tuple[str, str]], *, source_version: int | None = None
-    ) -> SkillDraft:
+    def save_new_draft(self, skill_id: UUID, files: list[tuple[str, str]]) -> SkillDraft:
         with Session(self.delegate.engine) as session:
-            draft = SkillDraft(skill_id=skill_id, source_version=source_version)
+            draft = SkillDraft(skill_id=skill_id)
             session.add(draft)
             session.flush()
             for path, content in files:
@@ -223,7 +219,6 @@ class SkillRepository:
         files: list[tuple[str, str]],
         *,
         created_by: UUID | None = None,
-        restored_from_version: int | None = None,
     ) -> SkillVersion:
         """Publish a draft's files as the next immutable version, then clear the
         draft slot, atomically."""
@@ -235,7 +230,6 @@ class SkillRepository:
                 skill_id=skill_id,
                 version=(current or 0) + 1,
                 created_by=created_by,
-                restored_from_version=restored_from_version,
             )
             session.add(version)
             session.flush()
@@ -245,6 +239,16 @@ class SkillRepository:
             session.commit()
             session.refresh(version)
             return version
+
+    def delete_version_by_id(self, version_id: UUID) -> None:
+        """Delete one immutable version snapshot and its files (FK cascade).
+
+        Protections (latest-assigned, last remaining) are enforced by the service
+        before this is called.
+        """
+        with Session(self.delegate.engine) as session:
+            session.exec(delete(SkillVersion).where(col(SkillVersion.id) == version_id))  # type: ignore[call-overload]
+            session.commit()
 
     def get_aai_cli_skills(self) -> list[Skill]:
         with Session(self.delegate.engine) as session:
@@ -324,95 +328,6 @@ class SkillRepository:
                 .where(col(Agent.deleted_at).is_(None))
             )
             return session.exec(query).first() is not None
-
-    def get_latest_template_keys_requiring_skill(self, skill_id: UUID, org_id: UUID) -> list[str]:
-        """Return template keys whose *latest* version lists this skill as required.
-
-        Considers org-scoped agent_template versions (custom + forks) and global
-        platform_template versions, so a skill required by any template visible
-        to the org blocks deletion.
-        """
-        template_keys: set[str] = set()
-        with Session(self.delegate.engine) as session:
-            latest_org = (
-                select(AgentTemplate.id)
-                .distinct(col(AgentTemplate.template_key))
-                .where(col(AgentTemplate.organization_id) == org_id)
-                .order_by(
-                    col(AgentTemplate.template_key).asc(),
-                    col(AgentTemplate.version).desc(),
-                )
-                .subquery()
-            )
-            org_q = (
-                select(AgentTemplate.template_key)
-                .join(AgentTemplateSkill, col(AgentTemplate.id) == col(AgentTemplateSkill.template_id))
-                .where(col(AgentTemplate.id).in_(select(latest_org.c.id)))
-                .where(col(AgentTemplateSkill.skill_id) == skill_id)
-            )
-            template_keys.update(session.exec(org_q).all())
-
-            latest_platform = (
-                select(PlatformTemplate.id)
-                .distinct(col(PlatformTemplate.template_key))
-                .order_by(
-                    col(PlatformTemplate.template_key).asc(),
-                    col(PlatformTemplate.version).desc(),
-                )
-                .subquery()
-            )
-            platform_q = (
-                select(PlatformTemplate.template_key)
-                .join(
-                    PlatformTemplateSkill,
-                    col(PlatformTemplate.id) == col(PlatformTemplateSkill.template_id),
-                )
-                .where(col(PlatformTemplate.id).in_(select(latest_platform.c.id)))
-                .where(col(PlatformTemplateSkill.skill_id) == skill_id)
-            )
-            template_keys.update(session.exec(platform_q).all())
-        return list(template_keys)
-
-    def delete_stale_template_skill_refs(self, skill_id: UUID, org_id: UUID) -> None:
-        """Delete template-skill join rows for non-latest template versions.
-
-        When deletion is allowed (latest version no longer requires the skill),
-        historical join rows from superseded versions must be removed first to
-        satisfy the RESTRICT FK constraint on skill.id. Handles org-scoped
-        agent_template versions and global platform_template versions.
-        """
-        with Session(self.delegate.engine) as session:
-            latest_org = (
-                select(AgentTemplate.id)
-                .distinct(col(AgentTemplate.template_key))
-                .where(col(AgentTemplate.organization_id) == org_id)
-                .order_by(
-                    col(AgentTemplate.template_key).asc(),
-                    col(AgentTemplate.version).desc(),
-                )
-                .subquery()
-            )
-            session.exec(  # type: ignore[call-overload]
-                delete(AgentTemplateSkill)
-                .where(col(AgentTemplateSkill.skill_id) == skill_id)
-                .where(col(AgentTemplateSkill.template_id).not_in(select(latest_org.c.id)))
-            )
-
-            latest_platform = (
-                select(PlatformTemplate.id)
-                .distinct(col(PlatformTemplate.template_key))
-                .order_by(
-                    col(PlatformTemplate.template_key).asc(),
-                    col(PlatformTemplate.version).desc(),
-                )
-                .subquery()
-            )
-            session.exec(  # type: ignore[call-overload]
-                delete(PlatformTemplateSkill)
-                .where(col(PlatformTemplateSkill.skill_id) == skill_id)
-                .where(col(PlatformTemplateSkill.template_id).not_in(select(latest_platform.c.id)))
-            )
-            session.commit()
 
     def get_agent_skills_with_details(self, agent_id: UUID) -> list[tuple[AgentSkill, Skill]]:
         with Session(self.delegate.engine) as session:

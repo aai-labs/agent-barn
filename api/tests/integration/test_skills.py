@@ -28,7 +28,6 @@ from api.tests.steps.organization import (
     there_is_an_organization_with_user_and_access_token,
 )
 from api.tests.steps.rbac import role_lacks_permission
-from api.tests.steps.template import there_is_a_template, there_is_a_template_skill
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
 
 _BASE = "/api/v1/organizations/{organization_id}/skills"
@@ -732,7 +731,6 @@ def test_start_skill_draft_seeds_from_latest_version():
             assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             body = response.json()
             assert_that(body["files"], equal_to([{"path": "SKILL.md", "content": "# Versioned Skill"}]))
-            assert_that(body["source_version"], equal_to(None))
 
 
 def test_start_skill_draft_is_get_or_create():
@@ -786,47 +784,93 @@ def test_skill_reads_expose_has_draft():
             assert_that(get_response.json()["has_draft"], equal_to(False))
 
 
-def test_start_skill_draft_with_source_version_seeds_from_that_version():
-    with given([*_GIVEN, there_is_a_skill(name="Versioned Skill")]) as context:
-        client: TestClient = context.client
-        _publish_new_version(client, context, "# v2")
-
-        with when("I start a draft seeded from version 1"):
-            response = client.post(
-                f"{_BASE}/{context.skill.id}/draft",
-                params={"source_version": 1},
-                headers=_auth(context),
-            )
-
-        with then("it carries version 1's content and remembers where it came from"):
-            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
-            body = response.json()
-            assert_that(body["files"], equal_to([{"path": "SKILL.md", "content": "# Versioned Skill"}]))
-            assert_that(body["source_version"], equal_to(1))
-
-
-def test_start_skill_draft_with_source_version_conflicts_when_a_draft_exists():
-    with given([*_GIVEN, there_is_a_skill(name="Versioned Skill")]) as context:
-        client: TestClient = context.client
-        client.post(f"{_BASE}/{context.skill.id}/draft", headers=_auth(context))
-
-        with when("I try to restore a version while a draft is already in progress"):
-            response = client.post(
-                f"{_BASE}/{context.skill.id}/draft",
-                params={"source_version": 1},
-                headers=_auth(context),
-            )
-
-        with then("it returns 409"):
-            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
-
-
 def test_start_skill_draft_for_aai_cli_skill_returns_403():
     with given([*_GIVEN, there_is_a_skill(global_skill=True)]) as context:
         client: TestClient = context.client
 
         with when("I try to draft a built-in aai-cli skill"):
             response = client.post(f"{_BASE}/{context.skill.id}/draft", headers=_auth(context))
+
+        with then("it returns 403"):
+            assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_fork_builtin_skill_creates_org_custom_skill_seeded_from_the_builtin():
+    with given([*_GIVEN, there_is_a_skill(name="Built-in Tool", global_skill=True)]) as context:
+        client: TestClient = context.client
+        builtin_id = str(context.skill.id)
+
+        with when("I fork the built-in skill"):
+            response = client.post(f"{_BASE}/{builtin_id}/fork", headers=_auth(context))
+
+        with then("it creates an org-scoped custom skill seeded from the built-in"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            body = response.json()
+            assert_that(body["source"], equal_to("custom"))
+            assert_that(body["organization_id"], equal_to(str(context.organization.id)))
+            assert_that(body["name"], equal_to("Built-in Tool"))
+            assert_that(body["root_dir"], equal_to(body["slug"]))
+            assert_that(body["root_dir"], not_(equal_to("aai-cli")))
+            assert_that(body["files"], equal_to([{"path": "SKILL.md", "content": "# Built-in Tool"}]))
+            assert_that(body["version"], equal_to(1))
+            assert_that(body["has_draft"], equal_to(True))
+
+        with then("the fork is its own lineage and the built-in stays untouched"):
+            fork = next(s for s in client.get(_BASE, headers=_auth(context)).json()["items"] if s["id"] == body["id"])
+            assert_that(fork["source"], equal_to("custom"))
+            builtin = client.get(f"{_BASE}/{builtin_id}", headers=_auth(context)).json()
+            assert_that(builtin["source"], equal_to("aai_cli"))
+            assert_that(builtin["version"], equal_to(1))
+            assert_that(builtin["has_draft"], equal_to(False))
+
+
+def test_fork_builtin_skill_opens_a_draft_seeded_from_the_fork():
+    with given([*_GIVEN, there_is_a_skill(name="Built-in Tool", global_skill=True)]) as context:
+        client: TestClient = context.client
+        forked = client.post(f"{_BASE}/{context.skill.id}/fork", headers=_auth(context)).json()
+
+        with when("I fetch the fork's in-flight draft"):
+            draft = client.get(f"{_BASE}/{forked['id']}/draft", headers=_auth(context))
+
+        with then("it carries the built-in's content, ready to edit"):
+            assert_that(draft.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(draft.json()["files"], equal_to([{"path": "SKILL.md", "content": "# Built-in Tool"}]))
+
+
+def test_fork_builtin_skill_disambiguates_name_when_org_already_has_one():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Built-in Tool"),
+            there_is_a_skill(name="Built-in Tool", global_skill=True),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("I fork the built-in into an org that already has a same-named skill"):
+            response = client.post(f"{_BASE}/{context.skill.id}/fork", headers=_auth(context))
+
+        with then("the fork's name is disambiguated"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(response.json()["name"], equal_to("Built-in Tool (fork)"))
+            assert_that(response.json()["root_dir"], equal_to(response.json()["slug"]))
+
+
+def test_fork_custom_skill_returns_400():
+    with given([*_GIVEN, there_is_a_skill(name="Custom Tool")]) as context:
+        with when("I try to fork a custom skill"):
+            response = context.client.post(f"{_BASE}/{context.skill.id}/fork", headers=_auth(context))
+
+        with then("it returns 400 because custom skills are edited directly"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+
+
+def test_member_cannot_fork_builtin_skill():
+    with given(
+        [*_GIVEN, there_is_a_skill(name="Built-in Tool", global_skill=True), _there_is_a_member_actor()]
+    ) as context:
+        with when("a Member tries to fork a built-in skill"):
+            response = context.client.post(f"{_BASE}/{context.skill.id}/fork", headers=_auth(context))
 
         with then("it returns 403"):
             assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
@@ -973,24 +1017,6 @@ def test_publish_skill_draft_creates_the_next_version_and_clears_the_draft():
             assert_that(draft_response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
-def test_publish_skill_draft_seeded_from_an_older_version_records_restored_from_version():
-    with given([*_GIVEN, there_is_a_skill(name="Versioned Skill")]) as context:
-        client: TestClient = context.client
-        _publish_new_version(client, context, "# v2")
-        client.post(f"{_BASE}/{context.skill.id}/draft", params={"source_version": 1}, headers=_auth(context))
-
-        with when("I publish the rollback draft"):
-            response = client.post(f"{_BASE}/{context.skill.id}/draft/publish", headers=_auth(context))
-
-        with then("version 3 is published, carrying version 1's content and the restore marker"):
-            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
-            assert_that(response.json()["version"], equal_to(3))
-
-            versions_response = client.get(f"{_BASE}/{context.skill.id}/versions", headers=_auth(context))
-            restored_entry = next(v for v in versions_response.json() if v["version"] == 3)
-            assert_that(restored_entry["restored_from_version"], equal_to(1))
-
-
 def test_publish_skill_draft_not_found_returns_404():
     with given([*_GIVEN, there_is_a_skill(name="Versioned Skill")]) as context:
         client: TestClient = context.client
@@ -1009,120 +1035,113 @@ def test_member_cannot_publish_skill_draft():
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
-def test_member_cannot_delete_skill():
-    with given(
-        [
-            *_GIVEN,
-            there_is_a_skill(name="Member Cannot Delete"),
-            _there_is_a_member_actor(),
-        ]
-    ) as context:
-        response = context.client.delete(f"{_BASE}/{context.skill.id}", headers=_auth(context))
+def test_member_cannot_delete_skill_version():
+    with given([*_GIVEN, there_is_a_skill(name="Versioned Skill"), _there_is_a_member_actor()]) as context:
+        response = context.client.delete(f"{_BASE}/{context.skill.id}/versions/1", headers=_auth(context))
 
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
-def test_delete_skill_returns_204():
-    with given([*_GIVEN, there_is_a_skill()]) as context:
+def test_delete_skill_version_requires_auth():
+    with given([*_GIVEN, there_is_a_skill(name="Versioned Skill")]) as context:
+        response = context.client.delete(f"{_BASE}/{context.skill.id}/versions/1")
+
+        assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
+
+
+def test_delete_skill_version_not_found_returns_404():
+    with given([*_GIVEN, there_is_a_skill(name="Versioned Skill")]) as context:
         client: TestClient = context.client
 
-        with when("I delete the skill"):
-            response = client.delete(f"{_BASE}/{context.skill.id}", headers=_auth(context))
-
-        with then("it returns 204"):
-            assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
-
-
-def test_delete_skill_not_found_returns_404():
-    with given(_GIVEN) as context:
-        client: TestClient = context.client
-        from uuid import uuid4
-
-        with when("I delete a non-existent skill"):
-            response = client.delete(f"{_BASE}/{uuid4()}", headers=_auth(context))
+        with when("I delete a version that was never published"):
+            response = client.delete(f"{_BASE}/{context.skill.id}/versions/99", headers=_auth(context))
 
         with then("it returns 404"):
             assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
-def test_delete_aai_cli_skill_returns_403():
-    with given([*_GIVEN, there_is_a_skill(global_skill=True)]) as context:
+def test_delete_skill_version_for_aai_cli_skill_returns_403():
+    with given([*_GIVEN, there_is_a_skill(name="Versioned Skill", global_skill=True)]) as context:
         client: TestClient = context.client
 
-        with when("I try to delete a built-in aai-cli skill"):
-            response = client.delete(f"{_BASE}/{context.skill.id}", headers=_auth(context))
+        with when("I try to delete a built-in skill's version"):
+            response = client.delete(f"{_BASE}/{context.skill.id}/versions/1", headers=_auth(context))
 
         with then("it returns 403"):
             assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
-def test_delete_skill_assigned_to_agent_returns_409():
+def test_delete_historical_skill_version_returns_204():
+    with given([*_GIVEN, there_is_a_skill(name="Versioned Skill")]) as context:
+        client: TestClient = context.client
+        _publish_new_version(client, context, "# v2")
+
+        with when("I delete the historical version 1"):
+            response = client.delete(f"{_BASE}/{context.skill.id}/versions/1", headers=_auth(context))
+
+        with then("version 1 is gone and version 2 remains current"):
+            assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+            versions = client.get(f"{_BASE}/{context.skill.id}/versions", headers=_auth(context)).json()
+            assert_that([v["version"] for v in versions], equal_to([2]))
+            assert_that(
+                client.get(f"{_BASE}/{context.skill.id}", headers=_auth(context)).json()["version"], equal_to(2)
+            )
+
+
+def test_delete_latest_skill_version_when_unassigned_returns_204():
+    with given([*_GIVEN, there_is_a_skill(name="Versioned Skill")]) as context:
+        client: TestClient = context.client
+        _publish_new_version(client, context, "# v2")
+
+        with when("I delete the latest version 2 while no agent uses the skill"):
+            response = client.delete(f"{_BASE}/{context.skill.id}/versions/2", headers=_auth(context))
+
+        with then("it is removed and version 1 becomes current"):
+            assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+            versions = client.get(f"{_BASE}/{context.skill.id}/versions", headers=_auth(context)).json()
+            assert_that([v["version"] for v in versions], equal_to([1]))
+            assert_that(
+                client.get(f"{_BASE}/{context.skill.id}", headers=_auth(context)).json()["version"], equal_to(1)
+            )
+
+
+def test_delete_skill_version_pinned_by_agent_returns_409():
     with given(
         [
             *_GIVEN,
             there_is_an_agent(),
-            there_is_a_skill(),
+            there_is_a_skill(name="Versioned Skill"),
             skill_is_assigned_to_agent(),
         ]
     ) as context:
         client: TestClient = context.client
+        _publish_new_version(client, context, "# v2")
+        from api.domains.agents.repository import AgentRepository
 
-        with when("I try to delete a skill that is assigned to an agent"):
-            response = client.delete(f"{_BASE}/{context.skill.id}", headers=_auth(context))
+        agent_repo: AgentRepository = context.injector.get(AgentRepository)
+        agent_repo.re_pin_skill(context.agent.id, context.skill.id, 2)
 
-        with then("it returns 409"):
+        with when("I try to delete a version the agent is pinned to"):
+            response = client.delete(f"{_BASE}/{context.skill.id}/versions/2", headers=_auth(context))
+
+        with then("it returns 409 and the version stays"):
             assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+            assert_that(response.json()["detail"], contains_string("pinned by an agent"))
+            versions = client.get(f"{_BASE}/{context.skill.id}/versions", headers=_auth(context)).json()
+            assert_that([v["version"] for v in versions], equal_to([2, 1]))
 
 
-def test_delete_skill_requires_auth():
-    with given([*_GIVEN, there_is_a_skill()]) as context:
+def test_delete_skill_version_when_only_version_returns_409():
+    with given([*_GIVEN, there_is_a_skill(name="Versioned Skill")]) as context:
         client: TestClient = context.client
 
-        with when("I delete a skill without auth"):
-            response = client.delete(f"{_BASE}/{context.skill.id}")
+        with when("I try to delete a skill's only version"):
+            response = client.delete(f"{_BASE}/{context.skill.id}/versions/1", headers=_auth(context))
 
-        with then("request is rejected with 401"):
-            assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
-
-
-def test_delete_skill_required_by_template_returns_409():
-    with given(
-        [
-            *_GIVEN,
-            there_is_a_skill(),
-            there_is_a_template(),
-            there_is_a_template_skill(),
-        ]
-    ) as context:
-        client: TestClient = context.client
-
-        with when("I try to delete a skill required by a template"):
-            response = client.delete(f"{_BASE}/{context.skill.id}", headers=_auth(context))
-
-        with then("it returns 409 naming the blocking template"):
+        with then("it returns 409 and the version stays"):
             assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+            assert_that(response.json()["detail"], contains_string("only version"))
             assert_that(
-                response.json()["detail"],
-                equal_to(
-                    "Skill is required by template(s): test-template. Remove it from those templates before deleting."
-                ),
+                client.get(f"{_BASE}/{context.skill.id}/versions", headers=_auth(context)).json(),
+                has_items(has_item("version")),
             )
-
-
-def test_delete_skill_no_longer_required_by_latest_template_returns_204():
-    with given(
-        [
-            *_GIVEN,
-            there_is_a_skill(),
-            there_is_a_template(template_key="test-template", version=1),
-            there_is_a_template_skill(),
-            there_is_a_template(template_key="test-template", version=2),
-        ]
-    ) as context:
-        client: TestClient = context.client
-
-        with when("I delete a skill that was required by an old template version but not the latest"):
-            response = client.delete(f"{_BASE}/{context.skill.id}", headers=_auth(context))
-
-        with then("it returns 204 because only the latest version is checked"):
-            assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
