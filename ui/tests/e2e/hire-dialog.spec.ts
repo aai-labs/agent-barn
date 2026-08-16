@@ -76,6 +76,22 @@ test.describe("Hire Dialog", () => {
   });
 
   test("should collect Discord identity and routing configuration", async ({ page }) => {
+    await dataSupportPage.agents.interceptCreateAgentRequest({
+      body: {
+        ...mockAgent,
+        platform: "discord",
+        status: "STOPPED",
+        discord_config: {
+          guild_ids: ["guild-1"],
+          allowed_channel_ids: ["channel-1"],
+          allowed_user_ids: ["user-1"],
+          allowed_role_ids: ["987654321098765432"],
+          home_channel_id: null,
+          require_mention: true,
+          group_policy: "allowlist",
+        },
+      },
+    });
     await page.getByText("General Purpose", { exact: true }).click();
     await page.getByRole("button", { name: /continue/i }).click(); // template → agent-type
     await page.getByRole("button", { name: /continue/i }).click(); // agent-type → platform-choice
@@ -85,6 +101,7 @@ test.describe("Hire Dialog", () => {
     await expect(page.getByText("Connect your Discord bot")).toBeVisible();
     await page.getByPlaceholder("Discord bot token").fill("discord-token");
     await page.getByPlaceholder("123456789012345678").first().fill("111111111111111111");
+    await page.getByPlaceholder("987654321098765432").fill("987654321098765432");
     await expect(page.getByRole("link", { name: /recommended install link/i })).toHaveAttribute(
       "href",
       /client_id=111111111111111111/,
@@ -92,6 +109,13 @@ test.describe("Hire Dialog", () => {
     await page.getByRole("button", { name: /continue/i }).click();
 
     await expect(page.getByLabel("Name them")).toBeVisible();
+    await page.getByRole("button", { name: /continue/i }).click();
+    const createRequest = page.waitForRequest(
+      (request) => request.url().includes("/agents") && request.method() === "POST",
+    );
+    await page.getByRole("button", { name: "Hire Aria" }).click();
+    const body = (await createRequest).postDataJSON();
+    expect(body.discord_allowed_role_ids).toEqual(["987654321098765432"]);
   });
 
   test("should skip bot builder when choosing existing app", async ({ page }) => {

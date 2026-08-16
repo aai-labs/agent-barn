@@ -137,6 +137,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   const [discordGuildIds, setDiscordGuildIds] = useState("");
   const [discordChannelIds, setDiscordChannelIds] = useState("");
   const [discordAllowedUserIds, setDiscordAllowedUserIds] = useState("");
+  const [discordAllowedRoleIds, setDiscordAllowedRoleIds] = useState("");
   const [discordHomeChannelId, setDiscordHomeChannelId] = useState("");
   const [showDiscordToken, setShowDiscordToken] = useState(false);
   const [discordTokenError, setDiscordTokenError] = useState<string | null>(null);
@@ -320,6 +321,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
                 discordGuildIds: discordGuildIds.split(",").map((id) => id.trim()).filter(Boolean),
                 discordAllowedChannelIds: discordChannelIds.split(",").map((id) => id.trim()).filter(Boolean),
                 discordAllowedUserIds: discordAllowedUserIds.split(",").map((id) => id.trim()).filter(Boolean),
+                discordAllowedRoleIds: discordAllowedRoleIds.split(",").map((id) => id.trim()).filter(Boolean),
                 ...(discordHomeChannelId.trim() ? { discordHomeChannelId: discordHomeChannelId.trim() } : {}),
                 discordRequireMention: true,
                 discordGroupPolicy: "allowlist" as const,
@@ -614,6 +616,8 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
             onChannelIdsChange={setDiscordChannelIds}
             allowedUserIds={discordAllowedUserIds}
             onAllowedUserIdsChange={setDiscordAllowedUserIds}
+            allowedRoleIds={discordAllowedRoleIds}
+            onAllowedRoleIdsChange={setDiscordAllowedRoleIds}
             homeChannelId={discordHomeChannelId}
             onHomeChannelIdChange={setDiscordHomeChannelId}
             showToken={showDiscordToken}

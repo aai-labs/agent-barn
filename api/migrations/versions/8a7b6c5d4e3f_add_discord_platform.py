@@ -26,6 +26,7 @@ def upgrade() -> None:
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("agent_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("bot_token_encrypted", sa.Text(), nullable=False),
+        sa.Column("bot_token_hash", sa.Text(), nullable=True),
         sa.Column("guild_ids", sa.JSON(), nullable=False, server_default="[]"),
         sa.Column("allowed_channel_ids", sa.JSON(), nullable=False, server_default="[]"),
         sa.Column("allowed_user_ids", sa.JSON(), nullable=False, server_default="[]"),
@@ -36,6 +37,13 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["agent_id"], ["agent.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("agent_id", name="uq_agent_discord_config_agent_id"),
+    )
+    op.create_index(
+        "ix_agent_discord_config_bot_token_hash",
+        "agent_discord_config",
+        ["bot_token_hash"],
+        unique=True,
+        postgresql_where=sa.text("bot_token_hash IS NOT NULL"),
     )
 
 

@@ -821,9 +821,9 @@ export function TelegramTokenStep({
 }
 
 export function DiscordTokenStep({
-  token, onTokenChange, applicationId, onApplicationIdChange, guildIds, onGuildIdsChange, channelIds, onChannelIdsChange, allowedUserIds, onAllowedUserIdsChange, homeChannelId, onHomeChannelIdChange, showToken, onToggleToken, error,
+  token, onTokenChange, applicationId, onApplicationIdChange, guildIds, onGuildIdsChange, channelIds, onChannelIdsChange, allowedUserIds, onAllowedUserIdsChange, allowedRoleIds, onAllowedRoleIdsChange, homeChannelId, onHomeChannelIdChange, showToken, onToggleToken, error,
 }: {
-  token: string; onTokenChange: (v: string) => void; applicationId: string; onApplicationIdChange: (v: string) => void; guildIds: string; onGuildIdsChange: (v: string) => void; channelIds: string; onChannelIdsChange: (v: string) => void; allowedUserIds: string; onAllowedUserIdsChange: (v: string) => void; homeChannelId: string; onHomeChannelIdChange: (v: string) => void; showToken: boolean; onToggleToken: () => void; error: string | null;
+  token: string; onTokenChange: (v: string) => void; applicationId: string; onApplicationIdChange: (v: string) => void; guildIds: string; onGuildIdsChange: (v: string) => void; channelIds: string; onChannelIdsChange: (v: string) => void; allowedUserIds: string; onAllowedUserIdsChange: (v: string) => void; allowedRoleIds: string; onAllowedRoleIdsChange: (v: string) => void; homeChannelId: string; onHomeChannelIdChange: (v: string) => void; showToken: boolean; onToggleToken: () => void; error: string | null;
 }) {
   return (
     <form autoComplete="off" className="flex flex-col gap-5" onSubmit={(e) => e.preventDefault()}>
@@ -834,6 +834,7 @@ export function DiscordTokenStep({
         <FormField label="Allowed server IDs" hint="Comma-separated Discord server (guild) IDs. Leave blank to configure later through the API."><input className="af-input font-mono text-[0.8125rem]" value={guildIds} onChange={(e) => onGuildIdsChange(e.target.value)} placeholder="123456789012345678" /></FormField>
         <FormField label="Allowed channel IDs" hint="The channels this agent may read or post in."><input className="af-input font-mono text-[0.8125rem]" value={channelIds} onChange={(e) => onChannelIdsChange(e.target.value)} placeholder="123456789012345678" /></FormField>
         <FormField label="Allowed operator IDs" hint="Optional for outbound-only agents; required for interactive Hermes agents."><input className="af-input font-mono text-[0.8125rem]" value={allowedUserIds} onChange={(e) => onAllowedUserIdsChange(e.target.value)} placeholder="123456789012345678" /></FormField>
+        <FormField label="Allowed role IDs" hint="Members with any listed Discord role may interact with the agent."><input className="af-input font-mono text-[0.8125rem]" value={allowedRoleIds} onChange={(e) => onAllowedRoleIdsChange(e.target.value)} placeholder="987654321098765432" /></FormField>
         <FormField label="Alert destination channel ID" hint="Optional. Hermes posts scheduled and proactive updates here."><input className="af-input font-mono text-[0.8125rem]" value={homeChannelId} onChange={(e) => onHomeChannelIdChange(e.target.value)} placeholder="123456789012345678" /></FormField>
         {error && <div className="text-[0.8125rem]" style={{ color: "var(--err)" }}>{error}</div>}
       </div>

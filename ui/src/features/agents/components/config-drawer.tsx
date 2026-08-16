@@ -9,6 +9,14 @@ import { useUpdateAgent } from "../hooks/use-update-agent";
 import { useDeleteAgent } from "../hooks/use-delete-agent";
 import { useValidateIntegration } from "../hooks/use-validate-integration";
 import { XIcon, LockIcon } from "@/components/icons";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { TokenInput } from "./hire-dialog-primitives";
 import { IntegrationsStep, TemplateSourceBadge, VersionSelect } from "./hire-dialog-steps";
 import { IntegrationFields } from "./integration-fields";
@@ -219,11 +227,22 @@ function DiscordChannelsTab({ agent, isRunning }: { agent: Agent; isRunning: boo
       <Hint>Configure which Discord servers, channels, and operators {agent.name} can interact with. Direct messages stay disabled.</Hint>
 
       <div className="flex flex-col gap-1.5">
-        <label className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>Server access</label>
-        <select className="af-input" value={groupPolicy} onChange={(e) => setGroupPolicy(e.target.value as "open" | "allowlist")} disabled={isRunning}>
-          <option value="allowlist">Allowlist — only configured servers</option>
-          <option value="open">Open — any server containing this bot</option>
-        </select>
+        <label htmlFor="discord-group-policy" className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>Server access</label>
+        <Select
+          value={groupPolicy}
+          onValueChange={(value) => setGroupPolicy(value as "open" | "allowlist")}
+          disabled={isRunning}
+        >
+          <SelectTrigger id="discord-group-policy" className="w-full">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              <SelectItem value="allowlist">Allowlist — only configured servers</SelectItem>
+              <SelectItem value="open">Open — any server containing this bot</SelectItem>
+            </SelectGroup>
+          </SelectContent>
+        </Select>
       </div>
 
       {groupPolicy === "allowlist" && (
@@ -1429,4 +1448,3 @@ function ValidationBadge({
     </span>
   );
 }
-

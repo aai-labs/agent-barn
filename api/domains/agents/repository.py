@@ -682,8 +682,27 @@ class AgentRepository:
             return session.exec(query).first()
 
     def save_discord_config(self, config: AgentDiscordConfig) -> AgentDiscordConfig:
-        self.delegate.save(config)
+        try:
+            self.delegate.save(config)
+        except IntegrityError as e:
+            if "ix_agent_discord_config_bot_token_hash" in str(e).lower():
+                raise BotTokenConflictHTTPException("another agent", platform="Discord")
+            raise
         return config
+
+    def find_active_discord_agent_by_bot_token_hash(
+        self, bot_token_hash: str, exclude_agent_id: UUID | None = None
+    ) -> Agent | None:
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(Agent)
+                .join(AgentDiscordConfig, col(AgentDiscordConfig.agent_id) == col(Agent.id))
+                .where(col(AgentDiscordConfig.bot_token_hash) == bot_token_hash)
+                .where(col(Agent.deleted_at).is_(None))
+            )
+            if exclude_agent_id is not None:
+                query = query.where(col(Agent.id) != exclude_agent_id)
+            return session.exec(query).first()
 
     def get_discord_configs_for_agents(self, agent_ids: list[UUID]) -> dict[UUID, AgentDiscordConfig]:
         if not agent_ids:

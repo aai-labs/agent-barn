@@ -22,7 +22,7 @@ An Agent is the central operational aggregate. It connects organization tenancy,
 - Persisted lifecycle states are `STOPPED`, `RUNNING`, and `ERROR`.
 - Slack agents require bot and app tokens. Teams agents require app ID, app password, and tenant ID. Telegram and Discord agents require a bot token. Discord guild access is allowlisted by default and direct messages are disabled by default.
 - Agents respond in shared channels and groups only to messages that explicitly mention them, on every supported platform. Slack additionally requires that mention on every message rather than inheriting it from earlier thread participation; Teams and Telegram expose no equivalent control. Direct messages are exempt. Gating is generated at start; see [`../architecture/runtime-and-deployment.md`](../architecture/runtime-and-deployment.md).
-- Each active Slack agent must use a distinct bot token (enforced globally); creating or updating with a duplicate returns 409. Deleting an agent releases its token for reuse.
+- Each active Slack or Discord agent must use a distinct bot token within its platform (enforced globally); creating or updating with a duplicate returns 409. Deleting an agent releases its token for reuse.
 - Platform is not changed through agent update. Runtime/platform compatibility is schema-validated.
 - Running agents reject configuration updates.
 - Template-required skills are validated as explicit assignments during agent create, update, and repin, and cannot be removed while currently required.
@@ -48,7 +48,7 @@ Starting an already running agent and stopping an agent that is not running are 
 
 ### Create
 
-Creation requires `agent.create`, resolves the requested template version or the latest version, validates required skills and provider credentials, and atomically persists the Agent with creator provenance and explicit Agent Owner access before platform configuration. It then persists encrypted platform/integration configuration, assigns skills, and creates a per-agent LiteLLM key when configured. Bot token uniqueness is validated across all active agents before persisting Slack credentials. New Agents default Agent General Access to Restricted, so no other Member receives access automatically. Teams and Telegram creation continues into start; Slack and Discord creation remain stopped.
+Creation requires `agent.create`, resolves the requested template version or the latest version, validates required skills and provider credentials, and atomically persists the Agent with creator provenance and explicit Agent Owner access before platform configuration. It then persists encrypted platform/integration configuration, assigns skills, and creates a per-agent LiteLLM key when configured. Bot token uniqueness is validated against active Agents on the same platform before persisting Slack or Discord credentials. New Agents default Agent General Access to Restricted, so no other Member receives access automatically. Teams and Telegram creation continues into start; Slack and Discord creation remain stopped.
 
 ### Update
 

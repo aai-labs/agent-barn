@@ -21,7 +21,7 @@ The separately served Ingest API receives authenticated runtime telemetry. It pe
 - Product API conversation and tool-call reads require `activity.read` and are scoped through an accessible, organization-owned, non-deleted Agent. Assigned Members cannot bypass Agent Access through activity endpoints.
 - Runtime Ingest writes use Agent identity plus ingest-key authentication rather than a human Membership or Agent Access check.
 - Telemetry Events are runtime-originated operational facts. They are not Domain Events, Outbox Messages, Event Deliveries, or Security Audit Records.
-- Slack channel and sender names may be enriched best-effort; Telegram chat names are cached with a 10-minute TTL. Teams activity has no equivalent directory enrichment in this domain.
+- Slack channel and sender names may be enriched best-effort. Telegram chat names and Discord channel/user names are resolved through their bot APIs and cached with a 10-minute TTL. Teams activity has no equivalent directory enrichment in this domain.
 
 ## Data flow
 

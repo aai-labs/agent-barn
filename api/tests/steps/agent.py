@@ -151,9 +151,11 @@ def there_is_an_agent(
             )
             repository.save_telegram_config(telegram_config)
         elif platform == AgentPlatform.DISCORD:
+            effective_bot_token = bot_token or TEST_DISCORD_BOT_TOKEN
             discord_config = AgentDiscordConfig(
                 agent_id=agent.id,
-                bot_token_encrypted=encrypt_token(bot_token or TEST_DISCORD_BOT_TOKEN, TEST_ENCRYPTION_KEY),
+                bot_token_encrypted=encrypt_token(effective_bot_token, TEST_ENCRYPTION_KEY),
+                bot_token_hash=None if deleted else compute_bot_token_hash(effective_bot_token),
             )
             repository.save_discord_config(discord_config)
 

@@ -73,7 +73,6 @@ from api.domains.agents.models import (
     AgentType,
     AgentUpdate,
     ConfluenceContent,
-    DiscordGroupPolicy,
     FirecrawlContent,
     GmailContent,
     JiraContent,
@@ -549,6 +548,10 @@ class AgentService:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=reason)
             self._ensure_bot_token_unique(data.slack_bot_token, org_id)
 
+        if data.platform == AgentPlatform.DISCORD:
+            assert data.discord_bot_token is not None
+            self._ensure_discord_bot_token_unique(data.discord_bot_token, org_id)
+
         telegram_bot_username: str | None = None
         if data.platform == AgentPlatform.TELEGRAM:
             assert data.telegram_bot_token is not None
@@ -692,6 +695,7 @@ class AgentService:
                 bot_token_encrypted=encrypt_token(
                     cast(str, data.discord_bot_token), self.config.agent_token_encryption_key
                 ),
+                bot_token_hash=compute_bot_token_hash(cast(str, data.discord_bot_token)),
                 guild_ids=data.discord_guild_ids,
                 allowed_channel_ids=data.discord_allowed_channel_ids,
                 allowed_user_ids=data.discord_allowed_user_ids,
@@ -700,7 +704,11 @@ class AgentService:
                 require_mention=data.discord_require_mention,
                 group_policy=data.discord_group_policy,
             )
-            self.repository.save_discord_config(discord_config)
+            try:
+                self.repository.save_discord_config(discord_config)
+            except BotTokenConflictHTTPException:
+                self.repository.hard_delete(agent.id)
+                raise
 
         # Integration secrets are platform-independent. Persist them before any
         # Teams auto-start so they exist if/when the pod is later built.
@@ -1068,12 +1076,15 @@ class AgentService:
 
         # Discord config updates
         if agent.platform == AgentPlatform.DISCORD and (_DISCORD_CONFIG_FIELDS & updated.keys()):
+            if "discord_bot_token" in updated:
+                self._ensure_discord_bot_token_unique(updated["discord_bot_token"], org_id, exclude_agent_id=agent.id)
             discord_config = self.repository.get_discord_config(agent.id)
             if discord_config:
                 if "discord_bot_token" in updated:
                     discord_config.bot_token_encrypted = encrypt_token(
                         updated["discord_bot_token"], self.config.agent_token_encryption_key
                     )
+                    discord_config.bot_token_hash = compute_bot_token_hash(updated["discord_bot_token"])
                 if "discord_guild_ids" in updated:
                     discord_config.guild_ids = updated["discord_guild_ids"]
                 if "discord_allowed_channel_ids" in updated:
@@ -1487,11 +1498,7 @@ class AgentService:
                     litellm_key,
                     llm_proxy_url,
                     api_server_key,
-                    (
-                        discord_config.allowed_channel_ids
-                        if discord_config.group_policy == DiscordGroupPolicy.ALLOWLIST
-                        else []
-                    ),
+                    discord_config.allowed_channel_ids,
                     discord_config.allowed_user_ids,
                     discord_config.allowed_role_ids,
                     discord_config.home_channel_id,
@@ -1858,6 +1865,11 @@ class AgentService:
             slack_config.bot_token_hash = None
             self.repository.save_slack_config(slack_config)
 
+        discord_config = self.repository.get_discord_config(agent.id)
+        if discord_config:
+            discord_config.bot_token_hash = None
+            self.repository.save_discord_config(discord_config)
+
         agent.deleted_at = dt.datetime.now(dt.UTC)
         self.repository.save(agent)
 
@@ -1939,6 +1951,20 @@ class AgentService:
         if conflicting:
             name = conflicting.name if conflicting.organization_id == org_id else "another agent"
             raise BotTokenConflictHTTPException(name)
+
+    def _ensure_discord_bot_token_unique(
+        self,
+        bot_token: str,
+        org_id: UUID,
+        exclude_agent_id: UUID | None = None,
+    ) -> None:
+        token_hash = compute_bot_token_hash(bot_token)
+        conflicting = self.repository.find_active_discord_agent_by_bot_token_hash(
+            token_hash, exclude_agent_id=exclude_agent_id
+        )
+        if conflicting:
+            name = conflicting.name if conflicting.organization_id == org_id else "another agent"
+            raise BotTokenConflictHTTPException(name, platform="Discord")
 
     def _join_public_channels(self, bot_token: str, channel_ids: list[str]) -> None:
         client = SlackClient(bot_token)

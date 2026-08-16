@@ -7,7 +7,7 @@ from fastapi import status
 from hamcrest import assert_that, equal_to, has_length
 from starlette.testclient import TestClient
 
-from api.domains.agents.models import AgentStatus
+from api.domains.agents.models import AgentPlatform, AgentStatus
 from api.domains.conversations.models import AgentChatMessage, MessageDirection
 from api.domains.conversations.repository import ConversationRepository
 from api.domains.conversations.service import ConversationService
@@ -176,6 +176,31 @@ def test_list_channels_idle_agent_resolves_null_channel_names_from_directory():
             by_id = {c["channel_id"]: c["channel_name"] for c in response.json()}
             assert_that(by_id["CBBB"], equal_to("ops-alerts"))
             assert_that(by_id["CAAA"], equal_to("general"))
+
+
+def test_list_channels_resolves_discord_channel_names():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(platform=AgentPlatform.DISCORD, status=AgentStatus.STOPPED),
+        ]
+    ) as context:
+        _seed_message(
+            context,
+            direction=MessageDirection.OUTBOUND,
+            channel_id="123456789012345678",
+            content="Discord alert",
+        )
+
+        with patch("api.domains.conversations.service.DiscordClient") as client_class:
+            client_class.return_value.get_channel_display_name.return_value = "ops-alerts"
+            response = context.client.get(
+                f"{_BASE}/{context.agent.id}/conversations/channels",
+                headers=_auth(context),
+            )
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(response.json()[0]["channel_name"], equal_to("ops-alerts"))
 
 
 def test_list_channels_returns_db_channels():

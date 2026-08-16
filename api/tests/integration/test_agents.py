@@ -2,6 +2,7 @@ import json
 from unittest.mock import MagicMock, patch
 
 import httpx
+import yaml
 from fastapi import status
 from hamcrest import (
     assert_that,
@@ -19,6 +20,7 @@ from api.domains.agents.models import (
     AgentSecret,
     AgentStatus,
     AgentType,
+    DiscordGroupPolicy,
     SecretProvider,
     SlackContent,
     encrypt_content,
@@ -1739,6 +1741,97 @@ def test_start_openclaw_discord_agent_materializes_all_routing_fields():
             assert_that(guild["roles"], equal_to(["role-1"]))
             assert_that(guild["channels"], has_key("channel-1"))
             assert_that(overlay["agents"]["defaults"]["heartbeat"]["to"], equal_to("channel:channel-1"))
+
+
+def test_start_hermes_discord_open_policy_preserves_channel_restrictions():
+    with given(
+        [
+            *_GIVEN_WITH_HERMES_IMAGE,
+            there_is_an_agent(platform=AgentPlatform.DISCORD, agent_type=AgentType.HERMES),
+        ]
+    ) as context:
+        repository: AgentRepository = context.injector.get(AgentRepository)
+        config = repository.get_discord_config(context.agent.id)
+        assert config is not None
+        config.group_policy = DiscordGroupPolicy.OPEN
+        config.guild_ids = ["guild-1"]
+        config.allowed_channel_ids = ["channel-1"]
+        repository.save_discord_config(config)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("I start an open-policy Hermes Discord agent"):
+            response = context.client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("guild access is open while the configured channel boundary remains enforced"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            hermes_config = yaml.safe_load(config_map.data["hermes-config.yaml"])
+            assert_that("discord-guild-allowlist" in hermes_config["plugins"]["enabled"], equal_to(False))
+            secret = k8s.create_secret.call_args.args[1]
+            assert_that(secret.string_data["DISCORD_ALLOWED_CHANNELS"], equal_to("channel-1"))
+            assert_that(secret.string_data["DISCORD_ALLOW_ALL_USERS"], equal_to("false"))
+
+
+def test_create_discord_agent_duplicate_bot_token_returns_409():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(
+                platform=AgentPlatform.DISCORD,
+                bot_token=str(_VALID_CREATE_DISCORD["discord_bot_token"]),
+            ),
+        ]
+    ) as context:
+        with when("I create a second Discord agent with the same bot token"):
+            response = context.client.post(_BASE, json=_VALID_CREATE_DISCORD, headers=_auth(context))
+
+        with then("the duplicate identity is rejected without creating an orphan"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+            assert_that(response.json()["detail"], contains_string("Discord bot token is already in use"))
+            agents = context.client.get(_BASE, headers=_auth(context)).json()["items"]
+            assert_that(len(agents), equal_to(1))
+
+
+def test_update_discord_agent_duplicate_bot_token_returns_409():
+    with given(_GIVEN) as context:
+        agent_a = context.client.post(_BASE, json=_VALID_CREATE_DISCORD, headers=_auth(context)).json()
+        agent_b = context.client.post(
+            _BASE,
+            json={
+                **_VALID_CREATE_DISCORD,
+                "name": "Discord Agent B",
+                "discord_bot_token": "discord-bot-token-b",
+            },
+            headers=_auth(context),
+        ).json()
+
+        with when("I rotate agent B to agent A's Discord token"):
+            response = context.client.patch(
+                f"{_BASE}/{agent_b['id']}",
+                json={"discord_bot_token": _VALID_CREATE_DISCORD["discord_bot_token"]},
+                headers=_auth(context),
+            )
+
+        with then("the shared bot identity is rejected"):
+            assert_that(agent_a["id"], is_not(equal_to(agent_b["id"])))
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+
+
+def test_delete_discord_agent_releases_bot_token():
+    with given(_GIVEN) as context:
+        created = context.client.post(_BASE, json=_VALID_CREATE_DISCORD, headers=_auth(context)).json()
+        deleted = context.client.delete(f"{_BASE}/{created['id']}", headers=_auth(context))
+
+        with when("I reuse the deleted Discord agent's token"):
+            response = context.client.post(
+                _BASE,
+                json={**_VALID_CREATE_DISCORD, "name": "Replacement Discord Agent"},
+                headers=_auth(context),
+            )
+
+        with then("the released token can be assigned again"):
+            assert_that(deleted.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
 
 
 def test_patch_agent_updates_slack_settings():
