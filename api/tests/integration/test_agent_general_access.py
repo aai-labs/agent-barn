@@ -1,11 +1,11 @@
 from uuid import UUID, uuid7
 
 from fastapi import status
-from hamcrest import assert_that, contains_inanyorder, equal_to, has_item, is_not, none
+from hamcrest import assert_that, contains_inanyorder, equal_to, has_item, is_in, is_not, none
 
 from api.domains.agents.models import AgentAccess
 from api.domains.agents.repository import AgentRepository
-from api.domains.events.models import OutboxMessage
+from api.domains.events.models import EventDelivery, EventDeliveryStatus, OutboxMessage
 from api.domains.organizations.models import Organization
 from api.domains.rbac.catalog import (
     AGENT_EDITOR_ROLE_ID,
@@ -71,6 +71,11 @@ def _access_settings_url(agent_id: UUID) -> str:
 def _outbox_messages(context) -> list[OutboxMessage]:
     repository: AgentRepository = context.injector.get(AgentRepository)
     return repository.delegate.find_all(OutboxMessage)
+
+
+def _event_deliveries(context) -> list[EventDelivery]:
+    repository: AgentRepository = context.injector.get(AgentRepository)
+    return repository.delegate.find_all(EventDelivery)
 
 
 def test_general_access_defaults_to_restricted():
@@ -570,8 +575,104 @@ def test_access_settings_snapshot_replaces_general_and_direct_access():
         assert_that(granted.payload["membership_id"], equal_to(str(second_membership.id)))
         assert_that(revoked.payload["membership_id"], equal_to(str(first_membership.id)))
         assert_that(general.payload["new_access_role_id"], equal_to(str(AGENT_VIEWER_ROLE_ID)))
-        assert_that(granted.payload["actor_display"], equal_to("Test User"))
+        assert_that(granted.payload["actor_display"], equal_to("admin@example.com"))
         assert_that(granted.payload["subject_display"], equal_to(context.agent.name))
+        # subject_display names the Agent (the event's Subject); member_display is a
+        # separate write-time snapshot of the target member's own name, so the audit
+        # trail can answer "who was granted/revoked access" without a live join once
+        # the membership or user is later deleted.
+        assert_that(granted.payload["member_display"], equal_to(second_member.full_name))
+        assert_that(revoked.payload["member_display"], equal_to(first_member.full_name))
+        # Regression: replace_access_settings must attempt to enqueue its staged
+        # deliveries immediately, like every other event-emitting mutation, instead of
+        # leaving them stuck at PENDING forever with no enqueue attempt at all. The
+        # immediate enqueue itself is best-effort (falls back to background
+        # reconciliation on failure), so whether it's already ENQUEUED here depends on
+        # Redis being reachable — see test_agents.py::test_start_agent_emits_started_
+        # domain_event_and_delivery for the same pattern.
+        event_ids = {message.event_id for message in messages}
+        deliveries = [delivery for delivery in _event_deliveries(context) if delivery.event_id in event_ids]
+        assert_that(len(deliveries), equal_to(3))
+        for delivery in deliveries:
+            assert_that(delivery.status, is_in([EventDeliveryStatus.PENDING, EventDeliveryStatus.ENQUEUED]))
+
+
+def test_access_settings_role_change_for_existing_member_emits_granted_event():
+    with given(_GIVEN) as context:
+        agent_id = context.agent.id
+        member, membership = _add_target_member(context)
+        repository: AgentRepository = context.injector.get(AgentRepository)
+        repository.delegate.save(
+            AgentAccess(
+                organization_id=context.organization.id,
+                membership_id=membership.id,
+                agent_id=agent_id,
+                access_role_id=AGENT_VIEWER_ROLE_ID,
+            )
+        )
+
+        response = context.client.put(
+            _access_settings_url(agent_id),
+            json={
+                "general_access_role_id": None,
+                "assignments": [
+                    {
+                        "user_id": str(member.id),
+                        "access_role_id": str(AGENT_EDITOR_ROLE_ID),
+                    }
+                ],
+            },
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(
+            [item["access_role"]["id"] for item in response.json()["assignments"]],
+            contains_inanyorder(str(AGENT_EDITOR_ROLE_ID)),
+        )
+        # Regression: changing an already-assigned member's role must itself be
+        # audited — before this fix, the repository silently updated AgentAccess
+        # in place with no event staged at all, so role changes for existing
+        # assignments left no audit trail (unlike brand-new grants or revocations).
+        messages = _outbox_messages(context)
+        assert_that([message.event_name for message in messages], equal_to(["agent.access.granted"]))
+        granted = messages[0]
+        assert_that(granted.payload["membership_id"], equal_to(str(membership.id)))
+        assert_that(granted.payload["access_role_id"], equal_to(str(AGENT_EDITOR_ROLE_ID)))
+        assert_that(granted.payload["previous_access_role_id"], equal_to(str(AGENT_VIEWER_ROLE_ID)))
+        assert_that(granted.payload["member_display"], equal_to(member.full_name))
+
+
+def test_access_settings_role_change_to_same_role_emits_no_event():
+    with given(_GIVEN) as context:
+        agent_id = context.agent.id
+        member, membership = _add_target_member(context)
+        repository: AgentRepository = context.injector.get(AgentRepository)
+        repository.delegate.save(
+            AgentAccess(
+                organization_id=context.organization.id,
+                membership_id=membership.id,
+                agent_id=agent_id,
+                access_role_id=AGENT_VIEWER_ROLE_ID,
+            )
+        )
+
+        response = context.client.put(
+            _access_settings_url(agent_id),
+            json={
+                "general_access_role_id": None,
+                "assignments": [
+                    {
+                        "user_id": str(member.id),
+                        "access_role_id": str(AGENT_VIEWER_ROLE_ID),
+                    }
+                ],
+            },
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(_outbox_messages(context), equal_to([]))
 
 
 def test_access_settings_rolls_back_when_snapshot_is_invalid():

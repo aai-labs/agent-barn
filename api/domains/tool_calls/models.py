@@ -26,6 +26,12 @@ class ToolCall(BaseModel, table=True):
     __table_args__ = (
         Index("ix_tool_call_agent_occurred", "agent_id", "occurred_at"),
         Index("ix_tool_call_agent_tool", "agent_id", "tool_name"),
+        # Platform View stats (AF-256) read a trailing window across all Agents,
+        # which the agent_id-prefixed indexes above can only serve by walking
+        # the whole index. organization_id trails so an Organization-filtered
+        # read stays index-only — tool_call carries its own org rather than
+        # joining Agent, and nothing else indexes that column.
+        Index("ix_tool_call_occurred_at_agent", "occurred_at", "agent_id", "organization_id"),
         UniqueConstraint("agent_id", "external_id", name="uq_tool_call_agent_external"),
     )
 

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { BuildingIcon, ServerIcon, UsersIcon } from "@/components/icons";
 import { PlatformAdminOnly } from "@/auth/components/platform-admin-only";
+import { PlatformStatsPanel } from "@/features/platform-stats/components/platform-stats-panel";
 import { FileText } from "lucide-react";
 
 const platformLinks = [
@@ -49,7 +50,7 @@ export default function PlatformPage() {
         </div>
 
         <div
-          className="grid gap-4"
+          className="grid gap-4 mb-10"
           style={{
             gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
           }}
@@ -78,6 +79,8 @@ export default function PlatformPage() {
             </Link>
           ))}
         </div>
+
+        <PlatformStatsPanel />
       </div>
     </PlatformAdminOnly>
   );

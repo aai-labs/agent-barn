@@ -133,17 +133,24 @@ function GoogleGlyph({ size = 16 }: { size?: number }) {
 
 /**
  * "Authenticate with Google" button that runs the OAuth popup flow and hands the
- * captured Gmail refresh token to the caller via onConnected. Replaces manual client
- * id/secret/refresh-token entry for the Gmail integration.
+ * captured refresh token to the caller via onConnected. Replaces manual client
+ * id/secret/refresh-token entry for the Google integrations.
+ *
+ * ``provider`` picks which integration is being connected, and so which scopes Google
+ * is asked for; ``connectedNote`` describes the access that was granted.
  */
 export function GoogleAuthButton({
   connected,
   onConnected,
   disabled,
+  provider = "gmail",
+  connectedNote = "read-only Gmail access granted",
 }: {
   connected: boolean;
   onConnected: (result: GoogleOAuthResult) => void;
   disabled?: boolean;
+  provider?: string;
+  connectedNote?: string;
 }) {
   const { connectGoogle, isConnecting } = useGoogleOAuth();
   const [error, setError] = useState<string | null>(null);
@@ -171,7 +178,7 @@ export function GoogleAuthButton({
     }
     const creds = id && secret ? { clientId: id, clientSecret: secret } : undefined;
     try {
-      const result = await connectGoogle(creds);
+      const result = await connectGoogle(creds, provider);
       onConnected(result);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Authentication failed.");
@@ -195,7 +202,7 @@ export function GoogleAuthButton({
       </button>
       {connected && !isConnecting && (
         <span className="text-[0.75rem] font-medium" style={{ color: "var(--ok, #2f855a)" }}>
-          ✓ Connected — read-only Gmail access granted
+          ✓ Connected — {connectedNote}
         </span>
       )}
       {error && (

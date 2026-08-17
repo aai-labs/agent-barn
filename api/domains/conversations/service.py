@@ -1,5 +1,6 @@
 import logging
 from dataclasses import dataclass
+from datetime import datetime
 from uuid import UUID
 
 from injector import inject, singleton
@@ -54,6 +55,31 @@ class ConversationService:
             ConversationChannelRead(channel_id=cid, channel_name=name, conversation_type=ctype)
             for cid, (name, ctype) in sorted(merged.items())
         ]
+
+    def platform_daily_message_counts(
+        self, window_start: datetime, window_end: datetime, **kwargs
+    ) -> list[tuple[datetime, int, int]]:
+        """Cross-Organization daily (iso_date, inbound, outbound) counts for the
+        Platform View stats surface (AF-256).
+
+        No CurrentUserContext and no authorization scope: Platform Privilege is
+        enforced at the platform route via `require_platform_admin`, and no
+        Active Organization exists to scope against. Every other read on this
+        service deliberately goes through AgentAuthorization instead. Passing
+        organization_id narrows the same aggregate for a future Organization
+        dashboard, which will bring its own route, DTO, and authorization.
+        """
+        return self.repository.daily_direction_counts_since(window_start, window_end, **kwargs)
+
+    def platform_daily_active_agent_ids(
+        self, window_start: datetime, window_end: datetime, **kwargs
+    ) -> dict[datetime, set[UUID]]:
+        """{iso_date: {agent_id}} for Agents that exchanged a message (AF-256).
+
+        Identities rather than counts: the caller unions this with tool-call
+        activity, and an Agent doing both must be counted once.
+        """
+        return self.repository.daily_active_agent_ids_since(window_start, window_end, **kwargs)
 
     def _resolve_channel_names(
         self,

@@ -93,11 +93,6 @@ class SharedCredentialRepository:
             return session.scalar(query) or 0
 
     def count_agent_references_for_ids(self, credential_ids: list[UUID], org_id: UUID) -> dict[UUID, int]:
-        """Reference counts for a page of credentials in one grouped query.
-
-        Credentials with no live references are absent from the result — callers
-        supply the 0 default.
-        """
         if not credential_ids:
             return {}
         with Session(self.delegate.engine) as session:

@@ -165,10 +165,81 @@ export const mockAgentTemplate = {
   updated_at: "2026-05-14T09:14:00Z",
 };
 
+const mockOverrideSourceFields = {
+  template_key: MOCK_TEMPLATE_KEY,
+  template_name: "Maya",
+  description: "Agent-specific configuration",
+  soul_md: "# Soul\nYou are a helpful assistant.",
+  identity_md: "# Identity\nYou are an AI embedded in Slack.",
+  user_md: "# Users\nTeam members.",
+  tools_md: "# Tools\n- slack",
+  agents_md: "",
+  boot_md: "",
+  bootstrap_md: "",
+  heartbeat_md: "",
+  source_type: "organization",
+  source_template_key: MOCK_TEMPLATE_KEY,
+  source_template_version: 1,
+  source_platform_template_id: null,
+  source_agent_template_id: MOCK_TEMPLATE_ID,
+  created_by_user_id: "88888888-8888-4888-8888-888888888888",
+  author: {
+    user_id: "88888888-8888-4888-8888-888888888888",
+    email: "editor@example.com",
+    full_name: "Ada Lovelace",
+  },
+  required_skills: [],
+  created_at: "2026-05-14T09:14:00Z",
+  updated_at: "2026-05-14T09:14:00Z",
+};
+
+export const mockAgentOverrideDraft = {
+  id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  agent_id: MOCK_AGENT_ID,
+  version: null,
+  ...mockOverrideSourceFields,
+  state: "draft",
+  pin_type: "override",
+};
+
+export const mockAgentOverrideVersion = {
+  id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+  agent_id: MOCK_AGENT_ID,
+  version: 1,
+  ...mockOverrideSourceFields,
+  state: "published",
+  pin_type: "override",
+};
+
+export const mockAgentConfiguration = {
+  agent_id: MOCK_AGENT_ID,
+  active: {
+    ...mockAgentTemplate,
+    id: MOCK_TEMPLATE_ID,
+    agent_id: MOCK_AGENT_ID,
+    version: 1,
+    description: null,
+    source_type: "organization",
+    source_template_key: MOCK_TEMPLATE_KEY,
+    source_template_version: 1,
+    source_platform_template_id: null,
+    source_agent_template_id: MOCK_TEMPLATE_ID,
+    created_by_user_id: null,
+    author: null,
+    state: "active",
+    pin_type: "shared",
+    template_source: "custom",
+  },
+  draft: null,
+  shared_versions: [],
+  override_versions: [],
+};
+
 export const mockTemplates = [
   {
     ...mockAgentTemplate,
     id: "55555555-5555-4555-8555-555555555551",
+    organization_id: null,
     template_key: "general-purpose",
     template_name: "General Purpose",
     template_source: "pre-defined",
@@ -176,6 +247,7 @@ export const mockTemplates = [
   {
     ...mockAgentTemplate,
     id: "55555555-5555-4555-8555-555555555552",
+    organization_id: null,
     template_key: "scrum-master",
     template_name: "Scrum Master",
     template_source: "pre-defined",
@@ -305,6 +377,141 @@ export class AgentDataSupport {
           body: JSON.stringify(
             status >= 400 ? { detail } : (body ?? mockAgentTemplate),
           ),
+        });
+      },
+    );
+  }
+
+  async interceptGetAgentConfigurationRequest({
+    agentId = MOCK_AGENT_ID,
+    status = 200,
+    detail = "Unable to load agent configuration",
+    body,
+  }: {
+    agentId?: string;
+    status?: number;
+    detail?: string;
+    body?: unknown;
+  } = {}) {
+    await this.page.route(
+      `**/api/v1/organizations/*/agents/${agentId}/configuration`,
+      async (route) => {
+        if (route.request().method() !== "GET") {
+          await route.fallback();
+          return;
+        }
+        await route.fulfill({
+          status,
+          contentType: "application/json",
+          body: JSON.stringify(status >= 400 ? { detail } : (body ?? mockAgentConfiguration)),
+        });
+      },
+    );
+  }
+
+  async interceptStartAgentOverrideDraftRequest({
+    agentId = MOCK_AGENT_ID,
+    status = 201,
+    detail = "Unable to create override draft",
+    body,
+  }: {
+    agentId?: string;
+    status?: number;
+    detail?: string;
+    body?: unknown;
+  } = {}) {
+    await this.page.route(
+      `**/api/v1/organizations/*/agents/${agentId}/configuration/draft`,
+      async (route) => {
+        if (route.request().method() !== "POST") {
+          await route.fallback();
+          return;
+        }
+        await route.fulfill({
+          status,
+          contentType: "application/json",
+          body: JSON.stringify(status >= 400 ? { detail } : (body ?? mockAgentOverrideDraft)),
+        });
+      },
+    );
+  }
+
+  async interceptUpdateAgentOverrideDraftRequest({
+    agentId = MOCK_AGENT_ID,
+    status = 200,
+    detail = "Unable to update override draft",
+    body,
+  }: {
+    agentId?: string;
+    status?: number;
+    detail?: string;
+    body?: unknown;
+  } = {}) {
+    await this.page.route(
+      `**/api/v1/organizations/*/agents/${agentId}/configuration/draft`,
+      async (route) => {
+        if (route.request().method() !== "PATCH") {
+          await route.fallback();
+          return;
+        }
+        await route.fulfill({
+          status,
+          contentType: "application/json",
+          body: JSON.stringify(status >= 400 ? { detail } : (body ?? mockAgentOverrideDraft)),
+        });
+      },
+    );
+  }
+
+  async interceptPublishAgentOverrideRequest({
+    agentId = MOCK_AGENT_ID,
+    status = 201,
+    detail = "Unable to publish override",
+    body,
+  }: {
+    agentId?: string;
+    status?: number;
+    detail?: string;
+    body?: unknown;
+  } = {}) {
+    await this.page.route(
+      `**/api/v1/organizations/*/agents/${agentId}/configuration/draft/publish`,
+      async (route) => {
+        if (route.request().method() !== "POST") {
+          await route.fallback();
+          return;
+        }
+        await route.fulfill({
+          status,
+          contentType: "application/json",
+          body: JSON.stringify(status >= 400 ? { detail } : (body ?? mockAgentOverrideVersion)),
+        });
+      },
+    );
+  }
+
+  async interceptSelectAgentTemplateRequest({
+    agentId = MOCK_AGENT_ID,
+    status = 200,
+    detail = "Unable to select configuration",
+    body,
+  }: {
+    agentId?: string;
+    status?: number;
+    detail?: string;
+    body?: unknown;
+  } = {}) {
+    await this.page.route(
+      `**/api/v1/organizations/*/agents/${agentId}/configuration/select`,
+      async (route) => {
+        if (route.request().method() !== "POST") {
+          await route.fallback();
+          return;
+        }
+        await route.fulfill({
+          status,
+          contentType: "application/json",
+          body: JSON.stringify(status >= 400 ? { detail } : (body ?? { ...mockAgent, template_pin_type: "override", override_version: 1 })),
         });
       },
     );

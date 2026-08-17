@@ -55,6 +55,13 @@ class _PlatformSamplePayload(BaseModel):
     marker: str
 
 
+class _SamplePayloadWithDisplay(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    actor_display: str
+    subject_display: str
+
+
 def _registry(handler_names: tuple[str, ...] = ("handler.one", "handler.two")) -> DomainEventRegistry:
     registry = DomainEventRegistry()
     registry.register(
@@ -62,6 +69,19 @@ def _registry(handler_names: tuple[str, ...] = ("handler.one", "handler.two")) -
             event_name="monitor.sampled",
             schema_version=1,
             payload_model=_SamplePayload,
+            handler_names=handler_names,
+        )
+    )
+    return registry
+
+
+def _registry_with_display(handler_names: tuple[str, ...] = ("handler.one", "handler.two")) -> DomainEventRegistry:
+    registry = DomainEventRegistry()
+    registry.register(
+        DomainEventDefinition(
+            event_name="monitor.sampled.with_display",
+            schema_version=1,
+            payload_model=_SamplePayloadWithDisplay,
             handler_names=handler_names,
         )
     )
@@ -536,6 +556,9 @@ def test_explorer_response_excludes_payload_and_identity_fields():
         response = client.get(MONITOR_BASE, headers=_auth_headers(context))
 
         item = response.json()["items"][0]
+        # actor_display/subject_display are the one deliberate exception: curated
+        # strings the event's own payload model already exposes, not the raw
+        # actor/subject envelope (still forbidden below) or the full payload.
         for forbidden_key in (
             "payload",
             "actor",
@@ -544,6 +567,50 @@ def test_explorer_response_excludes_payload_and_identity_fields():
             "causation_id",
         ):
             assert_that(forbidden_key in item, equal_to(False))
+
+
+def test_explorer_surfaces_actor_and_subject_display_when_the_payload_has_them():
+    with given(_base_given()) as context:
+        client: TestClient = context.client
+        repository: OutboxMessageRepository = context.injector.get(OutboxMessageRepository)
+        organization_repository: OrganizationRepository = context.injector.get(OrganizationRepository)
+        organization = Organization(name="Display Org")
+        organization_repository.save(organization)
+        registry = _registry_with_display(handler_names=("handler.one",))
+        event = registry.build_event(
+            event_name="monitor.sampled.with_display",
+            schema_version=1,
+            occurred_at=datetime.now(UTC),
+            organization_id=organization.id,
+            actor=ActorIdentity(type=ActorIdentityType.USER, id=uuid4(), organization_id=organization.id),
+            subject=SubjectIdentity(type=SubjectIdentityType.AGENT, id=uuid4(), organization_id=organization.id),
+            correlation_id=uuid4(),
+            payload={"actor_display": "Jane Doe", "subject_display": "Aria"},
+        )
+        repository.create(event, registry)
+
+        response = client.get(MONITOR_BASE, headers=_auth_headers(context))
+
+        item = response.json()["items"][0]
+        assert_that(item["actor_display"], equal_to("Jane Doe"))
+        assert_that(item["subject_display"], equal_to("Aria"))
+
+
+def test_explorer_omits_actor_and_subject_display_when_the_payload_lacks_them():
+    with given(_base_given()) as context:
+        client: TestClient = context.client
+        repository: OutboxMessageRepository = context.injector.get(OutboxMessageRepository)
+        organization_repository: OrganizationRepository = context.injector.get(OrganizationRepository)
+        organization = Organization(name="No Display Org")
+        organization_repository.save(organization)
+        registry = _registry(handler_names=("handler.one",))
+        _create_deliveries(repository, registry, organization.id)
+
+        response = client.get(MONITOR_BASE, headers=_auth_headers(context))
+
+        item = response.json()["items"][0]
+        assert_that(item["actor_display"], none())
+        assert_that(item["subject_display"], none())
 
 
 def test_status_since_derives_from_the_matching_state_clock():

@@ -1,15 +1,24 @@
 import fnmatch
 import logging
 from dataclasses import dataclass
-from uuid import UUID
+from datetime import UTC, datetime
+from uuid import UUID, uuid4
 
 from fastapi import HTTPException, status
 from injector import inject, singleton
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from api.core.config import get_config
 from api.domains.agents.service import AgentService
 from api.domains.auth.models import CurrentUserContext
+from api.domains.events import (
+    EventDelivery,
+    EventDeliveryDispatcher,
+    SubjectIdentity,
+    SubjectIdentityType,
+    resolve_actor_identity,
+)
+from api.domains.events.catalog import EVENT_REGISTRY, ORGANIZATION_MODEL_ALLOWLIST_CHANGED
 from api.domains.organizations.exceptions import OrganizationCreationLimitReached
 from api.domains.organizations.models import (
     Organization,
@@ -34,6 +43,7 @@ class OrganizationService:
     organization_repository: OrganizationRepository
     agent_service: AgentService
     permission_policy: PermissionPolicy
+    event_delivery_dispatcher: EventDeliveryDispatcher
 
     def get_organization(self, organization_id: UUID, context: CurrentUserContext) -> OrganizationRead:
         # Any member (or a platform administrator in explicit Organization context) may
@@ -191,6 +201,7 @@ class OrganizationService:
             )
 
         dump = organization_data.model_dump(exclude_unset=True)
+        delivery_ids: list[UUID] = []
 
         # Mutate and commit inside a single live session
         # so SQLAlchemy properly tracks list mutations and flushes the UPDATE.
@@ -199,6 +210,9 @@ class OrganizationService:
 
             from sqlalchemy.orm.attributes import flag_modified
 
+            added_models: list[str] = []
+            removed_models: list[str] = []
+            allowlist_changed = False
             if "allowed_models" in dump:
                 if dump["allowed_models"] is None:
                     # An explicit null is a no-op: allowed_models is non-nullable at
@@ -207,12 +221,49 @@ class OrganizationService:
                 else:
                     self._validate_allowed_models(dump["allowed_models"], existing=organization.allowed_models)
                     dump["allowed_models"] = [m.removeprefix("litellm/openrouter/") for m in dump["allowed_models"]]
+                    previous_set = set(organization.allowed_models)
+                    new_set = set(dump["allowed_models"])
+                    added_models = sorted(new_set - previous_set)
+                    removed_models = sorted(previous_set - new_set)
+                    allowlist_changed = bool(added_models or removed_models)
                     flag_modified(organization, "allowed_models")
 
             for key, value in dump.items():
                 setattr(organization, key, value)
+            session.flush()
+
+            if allowlist_changed:
+                actor = resolve_actor_identity(context, organization_id)
+                event = EVENT_REGISTRY.build_event(
+                    event_name=ORGANIZATION_MODEL_ALLOWLIST_CHANGED,
+                    schema_version=1,
+                    occurred_at=datetime.now(UTC),
+                    organization_id=organization_id,
+                    actor=actor,
+                    subject=SubjectIdentity(
+                        type=SubjectIdentityType.ORGANIZATION,
+                        id=organization_id,
+                        organization_id=organization_id,
+                    ),
+                    correlation_id=uuid4(),
+                    payload={
+                        "organization_id": organization_id,
+                        "added": added_models,
+                        "removed": removed_models,
+                        "actor_display": context.user.full_name or context.user.email,
+                        "subject_display": organization.name,
+                    },
+                )
+                self.organization_repository.outbox_repository.stage(
+                    session=session, registry=EVENT_REGISTRY, event=event
+                )
+                delivery_ids = list(
+                    session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id))
+                )
 
             session.commit()
+
+        self.event_delivery_dispatcher.enqueue_immediate(delivery_ids)
 
         organization_read = self.organization_repository.get_read(organization_id)
         if not organization_read:

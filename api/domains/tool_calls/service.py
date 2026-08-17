@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import datetime
 from uuid import UUID
 
 from injector import inject, singleton
@@ -30,3 +31,15 @@ class ToolCallService:
             context, agent, PermissionKey.ACTIVITY_READ
         )
         return self.repository.find_by_agent(agent_id, tool_call_filter, pagination, activity_scope)
+
+    def platform_daily_active_agent_ids(
+        self, window_start: datetime, window_end: datetime, **kwargs
+    ) -> dict[datetime, set[UUID]]:
+        """{iso_date: {agent_id}} for Agents that ran a tool (AF-256).
+
+        No CurrentUserContext and no authorization scope: Platform Privilege is
+        enforced at the platform route, and no Active Organization exists to
+        scope against. `list_tool_calls` above keeps going through
+        AgentAuthorization as usual.
+        """
+        return self.repository.daily_active_agent_ids_since(window_start, window_end, **kwargs)

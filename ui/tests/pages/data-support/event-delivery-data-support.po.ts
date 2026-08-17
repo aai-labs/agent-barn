@@ -37,6 +37,8 @@ export function delivery(overrides: Record<string, unknown> = {}) {
     attempt_count: 1,
     dead_letter_reason: null,
     last_error: null,
+    actor_display: null,
+    subject_display: null,
     created_at: "2026-07-31T11:00:00Z",
     enqueued_at: "2026-07-31T11:00:01Z",
     claimed_at: "2026-07-31T11:00:02Z",
@@ -98,11 +100,13 @@ export class EventDeliveryDataSupport {
 
   async interceptList({
     items,
+    total,
     status = 200,
     detail = "Unable to load Event Deliveries",
     delayMs = 0,
   }: {
     items?: unknown[];
+    total?: number;
     status?: number;
     detail?: string;
     delayMs?: number;
@@ -114,13 +118,14 @@ export class EventDeliveryDataSupport {
         return;
       }
       if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+      const page = Number(new URL(route.request().url()).searchParams.get("page") ?? "1");
       await route.fulfill({
         status,
         contentType: "application/json",
         body: JSON.stringify(
           status >= 400
             ? { detail }
-            : { page: 1, page_size: 50, total: list.length, items: list },
+            : { page, page_size: 50, total: total ?? list.length, items: list },
         ),
       });
     });
