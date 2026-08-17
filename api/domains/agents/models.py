@@ -462,8 +462,6 @@ class AgentSecret(BaseModel, table=True):
             "(shared_credential_id IS NOT NULL AND content IS NULL)",
             name="ck_agent_secret_content_xor_shared",
         ),
-        # Postgres does not index the referencing side of an FK; without this,
-        # reference counts and RESTRICT enforcement both scan the table.
         sa.Index("ix_agent_secret_shared_credential_id", "shared_credential_id"),
     )
 
