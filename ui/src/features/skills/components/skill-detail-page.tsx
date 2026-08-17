@@ -25,13 +25,11 @@ import { useSkillVersions } from "../hooks/use-skill-versions";
 import { useSkillVersionDetail } from "../hooks/use-skill-version-detail";
 import {
   type SkillFilePayload,
-  type SkillUpdatePayload,
   useDeleteSkillVersion,
   useDiscardSkillDraft,
   useForkSkill,
   usePublishSkillDraft,
   useStartSkillDraft,
-  useUpdateSkill,
   useUpdateSkillDraft,
 } from "../hooks/use-skill-mutations";
 import { SkillDetailSidebar, type SkillDetailSection } from "./skill-detail-sidebar";
@@ -78,7 +76,6 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
   const discardDraft = useDiscardSkillDraft();
   const publishDraft = usePublishSkillDraft();
   const forkSkill = useForkSkill();
-  const updateSkill = useUpdateSkill();
   const deleteSkillVersion = useDeleteSkillVersion();
 
   // Fetch the persisted draft whenever one is known to exist, so the
@@ -111,9 +108,9 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
   );
 
   const isPending =
-    startDraft.isPending || updateDraft.isPending || discardDraft.isPending || publishDraft.isPending || updateSkill.isPending;
+    startDraft.isPending || updateDraft.isPending || discardDraft.isPending || publishDraft.isPending;
   const mutationError =
-    startDraft.error ?? updateDraft.error ?? discardDraft.error ?? publishDraft.error ?? updateSkill.error ?? forkSkill.error ?? deleteSkillVersion.error;
+    startDraft.error ?? updateDraft.error ?? discardDraft.error ?? publishDraft.error ?? forkSkill.error ?? deleteSkillVersion.error;
 
   if (isLoading) {
     return (
@@ -152,7 +149,7 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
   const isBuiltIn = detail.source === "aai_cli";
   const canEdit = isCustom && canManage;
   const draftFiles = existingDraft?.files.map((f) => ({ path: f.path, content: f.content })) ?? [];
-  const showDraftPreview = !editing && viewingDraft && existingDraft;
+  const showDraftPreview = !editing && viewingDraft && existingDraft && detail.hasDraft;
   const displayedFiles = showDraftPreview
     ? draftFiles
     : viewingHistorical
@@ -215,17 +212,13 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
     if (!localFiles || !validateEntry(localFiles)) return;
     setFileError(null);
     try {
-      const metadataPayload: SkillUpdatePayload = {
+      const draft = await updateDraft.mutateAsync({
         skillId,
-        name: name.trim() || undefined,
+        files: localFiles,
         description: description.trim(),
         requiredProviders: selectedProviders,
-      };
-      const [, draft] = await Promise.all([
-        updateSkill.mutateAsync(metadataPayload),
-        updateDraft.mutateAsync({ skillId, files: localFiles }),
-      ]);
-      setLocalFiles(draft.files);
+      });
+      setLocalFiles(draft.files.map((f) => ({ path: f.path, content: f.content })));
       toast.success("Draft saved.");
     } catch {
       // error rendered via mutationError
@@ -348,24 +341,7 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
         </div>
 
         <div className="flex items-center gap-2 flex-shrink-0">
-          {editing ? (
-            <button className="af-btn" onClick={exitEditing} disabled={isPending}>
-              <X size={14} /> Close
-            </button>
-          ) : canEdit ? (
-            <>
-              <button className="af-btn" onClick={() => void enterEditing()} disabled={isPending}>
-                {startDraft.isPending ? <Loader2 size={14} className="animate-spin" /> : <Pencil size={14} />}
-                Edit
-              </button>
-              {detail.hasDraft && (
-                <button className="af-btn af-btn-primary" onClick={handlePublish} disabled={publishDraft.isPending}>
-                  {publishDraft.isPending ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
-                  Publish
-                </button>
-              )}
-            </>
-          ) : isBuiltIn && canManage ? (
+          {isBuiltIn && canManage && !editing ? (
             <button className="af-btn" onClick={handleFork} disabled={forkSkill.isPending}>
               {forkSkill.isPending ? <Loader2 size={14} className="animate-spin" /> : <GitFork size={14} />}
               Fork
@@ -407,11 +383,14 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
             </div>
           ) : editing ? (
             <div className="af-card overflow-hidden">
-              <div className="border-b px-6 py-5" style={{ borderColor: "var(--line)" }}>
+              <div className="border-b px-6 py-5 flex items-center justify-between gap-3" style={{ borderColor: "var(--line)" }}>
                 <p className="text-[13px] leading-[1.5] m-0" style={{ color: "var(--ink-3)" }}>
                   Agents currently using this skill will keep running the published version until
                   they are restarted after you publish.
                 </p>
+                <button className="af-btn flex-shrink-0" onClick={exitEditing} disabled={isPending}>
+                  <X size={14} /> Close
+                </button>
               </div>
 
               <div className="px-6 py-6 flex flex-col gap-6">
@@ -450,7 +429,7 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
                     <Trash2 size={14} /> Discard
                   </button>
                   <button className="af-btn" onClick={() => void handleSaveDraft()} disabled={isPending}>
-                    {updateDraft.isPending || updateSkill.isPending ? (
+                    {updateDraft.isPending ? (
                       <Loader2 size={14} className="animate-spin" />
                     ) : (
                       <Save size={14} />
@@ -498,67 +477,99 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
                   )}
                   {(!detail.hasDraft || !viewingDraft) && (
                     <p className="text-[13px] leading-[1.5] m-0" style={{ color: "var(--ink-3)" }}>
-                      {showDraftPreview ? "Unpublished draft — read-only preview." : "This published version is read-only."}
+                      This published version is read-only.
                     </p>
                   )}
                 </div>
-                {(!detail.hasDraft || !viewingDraft) && versions.length > 0 && (
-                  <Select
-                    value={String(selectedVersion ?? latestVersion)}
-                    onValueChange={(value) => setSelectedVersion(Number(value))}
-                  >
-                    <SelectTrigger className="w-auto min-w-32" aria-label="Version">
-                      <SelectValue placeholder="Select version" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        {versions.map((v) => (
-                          <SelectItem key={v.version} value={String(v.version)}>
-                            Version v{v.version}
-                            {v.version === latestVersion ? " (current)" : ""}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                )}
+                {/* Right side of the header: version selector (Published) or
+                  Edit/Publish (Draft). Wrapped in a min-height container so
+                  switching tabs doesn't cause a layout jump. */}
+                <div className="flex items-center gap-2 min-h-[36px]">
+                  {(!detail.hasDraft || !viewingDraft) && versions.length > 0 && (
+                    <>
+                      <Select
+                        value={String(selectedVersion ?? latestVersion)}
+                        onValueChange={(value) => setSelectedVersion(Number(value))}
+                      >
+                        <SelectTrigger className="w-auto min-w-32" aria-label="Version">
+                          <SelectValue placeholder="Select version" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectGroup>
+                            {versions.map((v) => (
+                              <SelectItem key={v.version} value={String(v.version)}>
+                                Version v{v.version}
+                                {v.version === latestVersion ? " (current)" : ""}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                      {canEdit && !detail.hasDraft && (
+                        <button className="af-btn" onClick={() => void enterEditing()} disabled={isPending}>
+                          {startDraft.isPending ? <Loader2 size={14} className="animate-spin" /> : <Pencil size={14} />}
+                          Edit
+                        </button>
+                      )}
+                    </>
+                  )}
+                  {showDraftPreview && canEdit && (
+                    <>
+                      <button className="af-btn" onClick={() => void enterEditing()} disabled={isPending}>
+                        {startDraft.isPending ? <Loader2 size={14} className="animate-spin" /> : <Pencil size={14} />}
+                        Edit
+                      </button>
+                      <button className="af-btn af-btn-primary" onClick={handlePublish} disabled={publishDraft.isPending}>
+                        {publishDraft.isPending ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
+                        Publish
+                      </button>
+                    </>
+                  )}
+                </div>
               </div>
 
               <div className="px-6 py-6 flex flex-col gap-6">
-                {/* Metadata (description, required integrations) is lineage-level
-                  and saved immediately on "Save draft", not deferred to publish.
-                  Hide it in the Published view when a draft exists so the Published
-                  tab doesn't show the draft's un-published metadata edits. */}
-                {showDraftPreview && detail.description && (
-                  <section>
-                    <h2 className="text-[14px] font-semibold m-0 mb-2" style={{ color: "var(--ink)" }}>
-                      Description
-                    </h2>
-                    <p className="text-[13.5px] leading-[1.6] m-0" style={{ color: "var(--ink-2)" }}>
-                      {detail.description}
-                    </p>
-                  </section>
-                )}
+                {/* Published tab: show the skill row's metadata (the last-published
+                  values). Draft tab: show the draft's staged metadata. */}
+                {showDraftPreview
+                  ? existingDraft?.description && (
+                      <section>
+                        <h2 className="text-[14px] font-semibold m-0 mb-2" style={{ color: "var(--ink)" }}>
+                          Description
+                        </h2>
+                        <p className="text-[13.5px] leading-[1.6] m-0" style={{ color: "var(--ink-2)" }}>
+                          {existingDraft.description}
+                        </p>
+                      </section>
+                    )
+                  : detail.description && (
+                      <section>
+                        <h2 className="text-[14px] font-semibold m-0 mb-2" style={{ color: "var(--ink)" }}>
+                          Description
+                        </h2>
+                        <p className="text-[13.5px] leading-[1.6] m-0" style={{ color: "var(--ink-2)" }}>
+                          {detail.description}
+                        </p>
+                      </section>
+                    )}
 
-                {showDraftPreview && (
-                  <section>
-                    <h2 className="text-[14px] font-semibold m-0 mb-2" style={{ color: "var(--ink)" }}>
-                      Required integrations
-                    </h2>
-                    <SkillRequiredProviders providers={detail.requiredProviders} />
-                  </section>
-                )}
+                <section>
+                  <h2 className="text-[14px] font-semibold m-0 mb-2" style={{ color: "var(--ink)" }}>
+                    Required integrations
+                  </h2>
+                  <SkillRequiredProviders
+                    providers={showDraftPreview ? existingDraft?.requiredProviders ?? [] : detail.requiredProviders}
+                  />
+                </section>
 
-                {showDraftPreview && (
+                {showDraftPreview ? (
                   <section className="flex flex-col gap-3">
                     <h2 className="text-[14px] font-semibold m-0" style={{ color: "var(--ink)" }}>
                       Draft files
                     </h2>
                     <SkillFileBrowser files={displayedFiles} entryPath={detail.entryPath} readOnly />
                   </section>
-                )}
-
-                {!showDraftPreview && (
+                ) : (
                   <section className="flex flex-col gap-3">
                     <h2 className="text-[14px] font-semibold m-0" style={{ color: "var(--ink)" }}>
                       Files

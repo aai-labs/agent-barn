@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ChevronRight, File, Folder } from "lucide-react";
+import { ChevronRight, File, Folder, Pencil } from "lucide-react";
 
 import { XIcon } from "@/components/icons";
 
@@ -49,6 +49,7 @@ function TreeRow({
   onToggle,
   onSelect,
   onRemove,
+  onRename,
 }: {
   node: TreeNode;
   depth: number;
@@ -58,6 +59,7 @@ function TreeRow({
   onToggle: (path: string) => void;
   onSelect: (path: string) => void;
   onRemove?: (path: string) => void;
+  onRename?: (oldPath: string, newPath: string) => void;
 }) {
   const indent = 10 + depth * 16;
 
@@ -93,6 +95,7 @@ function TreeRow({
                 onToggle={onToggle}
                 onSelect={onSelect}
                 onRemove={onRemove}
+                onRename={onRename}
               />
             ))}
           </div>
@@ -101,8 +104,56 @@ function TreeRow({
     );
   }
 
-  const isActive = node.path === activePath;
-  const isEntry = node.path === entryPath;
+  return (
+    <FileTreeRow
+      node={node}
+      indent={indent}
+      isActive={node.path === activePath}
+      isEntry={node.path === entryPath}
+      onSelect={onSelect}
+      onRemove={onRemove}
+      onRename={onRename}
+    />
+  );
+}
+
+function FileTreeRow({
+  node,
+  indent,
+  isActive,
+  isEntry,
+  onSelect,
+  onRemove,
+  onRename,
+}: {
+  node: TreeNode & { kind: "file" };
+  indent: number;
+  isActive: boolean;
+  isEntry: boolean;
+  onSelect: (path: string) => void;
+  onRemove?: (path: string) => void;
+  onRename?: (oldPath: string, newPath: string) => void;
+}) {
+  const [renaming, setRenaming] = useState(false);
+  const [renameValue, setRenameValue] = useState(node.name);
+
+  function commitRename() {
+    const trimmed = renameValue.trim();
+    if (!trimmed || trimmed === node.name) {
+      setRenaming(false);
+      return;
+    }
+    if (/\s/.test(trimmed)) {
+      setRenaming(false);
+      return;
+    }
+    if (onRename) {
+      const dir = node.path.includes("/") ? node.path.slice(0, node.path.lastIndexOf("/") + 1) : "";
+      onRename(node.path, dir + trimmed);
+    }
+    setRenaming(false);
+  }
+
   return (
     <div
       className="flex items-center gap-1.5 rounded-lg py-1.5"
@@ -112,36 +163,78 @@ function TreeRow({
         background: isActive ? "var(--bg-soft)" : "transparent",
       }}
     >
-      <button
-        type="button"
-        className="flex-1 flex items-center gap-1.5 text-left min-w-0"
-        onClick={() => onSelect(node.path)}
-      >
-        <File size={13} style={{ color: "var(--ink-4)", flexShrink: 0 }} />
-        <span
-          className="text-[12.5px] font-mono truncate"
-          style={{ color: isActive ? "var(--ink)" : "var(--ink-3)" }}
-        >
-          {node.name}
-        </span>
-      </button>
-      {isEntry && (
-        <span
-          className="flex-shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium"
-          style={{ background: "var(--bg)", color: "var(--ink-3)", border: "1px solid var(--line)" }}
-        >
-          entry
-        </span>
-      )}
-      {onRemove && !isEntry && (
-        <button
-          type="button"
-          className="af-btn af-btn-ghost af-btn-icon af-btn-sm flex-shrink-0"
-          aria-label={`Remove ${node.path}`}
-          onClick={() => onRemove(node.path)}
-        >
-          <XIcon />
-        </button>
+      {renaming ? (
+        <>
+          <File size={13} style={{ color: "var(--ink-4)", flexShrink: 0 }} />
+          <input
+            autoFocus
+            className="af-input text-[12.5px] font-mono flex-1 min-w-0 py-0.5 px-1"
+            value={renameValue}
+            spellCheck={false}
+            onChange={(e) => setRenameValue(e.target.value)}
+            onBlur={commitRename}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                commitRename();
+              } else if (e.key === "Escape") {
+                setRenameValue(node.name);
+                setRenaming(false);
+              }
+            }}
+          />
+        </>
+      ) : (
+        <>
+          <button
+            type="button"
+            className="flex-1 flex items-center gap-1.5 text-left min-w-0"
+            onClick={() => onSelect(node.path)}
+          >
+            <File size={13} style={{ color: "var(--ink-4)", flexShrink: 0 }} />
+            <span
+              className="text-[12.5px] font-mono truncate"
+              style={{ color: isActive ? "var(--ink)" : "var(--ink-3)" }}
+            >
+              {node.name}
+            </span>
+          </button>
+          {isEntry && (
+            <span
+              className="flex-shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium"
+              style={{ background: "var(--bg)", color: "var(--ink-3)", border: "1px solid var(--line)" }}
+            >
+              entry
+            </span>
+          )}
+          {onRemove && (
+            <>
+              {onRename && (
+                <button
+                  type="button"
+                  className="af-btn af-btn-ghost af-btn-icon af-btn-sm flex-shrink-0"
+                  aria-label={`Rename ${node.path}`}
+                  onClick={() => {
+                    setRenameValue(node.name);
+                    setRenaming(true);
+                  }}
+                >
+                  <Pencil size={11} />
+                </button>
+              )}
+              {!isEntry && (
+                <button
+                  type="button"
+                  className="af-btn af-btn-ghost af-btn-icon af-btn-sm flex-shrink-0"
+                  aria-label={`Remove ${node.path}`}
+                  onClick={() => onRemove(node.path)}
+                >
+                  <XIcon />
+                </button>
+              )}
+            </>
+          )}
+        </>
       )}
     </div>
   );
@@ -153,10 +246,11 @@ interface SkillFileTreeProps {
   entryPath: string;
   onSelect: (path: string) => void;
   onRemove?: (path: string) => void;
+  onRename?: (oldPath: string, newPath: string) => void;
 }
 
 /** Folds a skill's flat file-path list into a collapsible folder tree. */
-export function SkillFileTree({ files, activePath, entryPath, onSelect, onRemove }: SkillFileTreeProps) {
+export function SkillFileTree({ files, activePath, entryPath, onSelect, onRemove, onRename }: SkillFileTreeProps) {
   const tree = useMemo(() => buildTree(files.map((f) => f.path)), [files]);
   // Track collapsed (not expanded) folders, so folders default open — including ones
   // that didn't exist yet when this component mounted — without syncing via an effect.
@@ -184,6 +278,7 @@ export function SkillFileTree({ files, activePath, entryPath, onSelect, onRemove
           onToggle={toggle}
           onSelect={onSelect}
           onRemove={onRemove}
+          onRename={onRename}
         />
       ))}
     </div>

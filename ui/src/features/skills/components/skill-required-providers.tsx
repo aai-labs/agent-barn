@@ -31,11 +31,11 @@ export function SkillRequiredProviders({ providers }: { providers: string[] }) {
   }
 
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className="flex flex-wrap gap-2">
       {providers.map((provider) => (
         <div
           key={provider}
-          className="flex items-center gap-2.5 rounded-xl px-3 py-2"
+          className="flex items-center gap-2 rounded-xl px-3 py-2"
           style={{ border: "1px solid var(--line)", background: "var(--bg-elev)" }}
         >
           <div

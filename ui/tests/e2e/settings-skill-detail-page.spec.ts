@@ -215,12 +215,15 @@ test.describe("Settings — Skill detail page", () => {
 
     await page.goto(`/dashboard/${TEST_ORG_ID}/settings/skills/${MOCK_CUSTOM_SKILL_ID}`);
 
+    // Edit and Publish are in the Files card header, shown only on the Draft tab
+    await page.getByRole("button", { name: "Draft" }).click();
     await expect(page.getByRole("button", { name: "Edit" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Publish", exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Publish", exact: true }).click();
     await page.getByRole("button", { name: "Publish this version" }).click();
 
-    await expect(page.getByRole("button", { name: "Edit" })).toBeVisible();
+    // After publish, the draft is gone so the Draft tab and Publish button disappear
+    await expect(page.getByRole("button", { name: "Draft" })).not.toBeVisible();
     await expect(page.getByRole("button", { name: "Publish", exact: true })).not.toBeVisible();
   });
 

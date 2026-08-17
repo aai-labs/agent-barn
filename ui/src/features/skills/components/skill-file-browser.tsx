@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { SkillFileTree } from "./skill-file-tree";
 
@@ -16,17 +16,21 @@ interface SkillFileBrowserProps {
   onFilesChange?: (files: FileEntry[]) => void;
 }
 
+const TREE_MIN = 160;
+const TREE_MAX = 480;
+const TREE_DEFAULT = 224;
+
 /** Tree browser (left) + content viewer/editor (right) for a skill's files.
  * Read-only when onFilesChange is omitted; otherwise supports adding, removing,
- * and editing file content. */
+ * renaming, and editing file content. The split between tree and editor is
+ * draggable. */
 export function SkillFileBrowser({ files, entryPath, readOnly = false, onFilesChange }: SkillFileBrowserProps) {
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [newPath, setNewPath] = useState("");
   const [addError, setAddError] = useState<string | null>(null);
+  const [treeWidth, setTreeWidth] = useState(TREE_DEFAULT);
+  const draggingRef = useRef(false);
 
-  // Falls back to the first file whenever the explicit selection isn't (or is no
-  // longer) among the current files, e.g. on first render or after a removal —
-  // derived on every render instead of synced via an effect.
   const activePath = files.some((f) => f.path === selectedPath) ? selectedPath : (files[0]?.path ?? null);
   const active = files.find((f) => f.path === activePath) ?? null;
 
@@ -39,6 +43,10 @@ export function SkillFileBrowser({ files, entryPath, readOnly = false, onFilesCh
     if (!onFilesChange) return;
     const path = newPath.trim();
     if (!path) return;
+    if (/\s/.test(path)) {
+      setAddError("File paths cannot contain spaces.");
+      return;
+    }
     if (files.some((f) => f.path.toLowerCase() === path.toLowerCase())) {
       setAddError("A file with that path already exists.");
       return;
@@ -54,9 +62,60 @@ export function SkillFileBrowser({ files, entryPath, readOnly = false, onFilesCh
     onFilesChange(files.filter((f) => f.path !== path));
   }
 
+  function handleRename(oldPath: string, newPath: string) {
+    if (!onFilesChange) return;
+    if (files.some((f) => f.path.toLowerCase() === newPath.toLowerCase())) {
+      return;
+    }
+    onFilesChange(files.map((f) => (f.path === oldPath ? { ...f, path: newPath } : f)));
+    setSelectedPath(newPath);
+  }
+
+  const onPointerMove = useRef<(e: PointerEvent) => void>(() => {});
+  useEffect(() => {
+    onPointerMove.current = (e: PointerEvent) => {
+      if (!draggingRef.current) return;
+      const container = containerRef.current;
+      if (!container) return;
+      const rect = container.getBoundingClientRect();
+      const raw = e.clientX - rect.left;
+      setTreeWidth(Math.max(TREE_MIN, Math.min(TREE_MAX, raw)));
+    };
+  });
+
+  const stopDraggingRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    stopDraggingRef.current = () => {
+      draggingRef.current = false;
+      document.removeEventListener("pointermove", onPointerMove.current);
+      document.removeEventListener("pointerup", stopDraggingRef.current);
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
+    };
+  });
+
+  function startResize(e: React.PointerEvent) {
+    e.preventDefault();
+    draggingRef.current = true;
+    document.addEventListener("pointermove", onPointerMove.current);
+    document.addEventListener("pointerup", stopDraggingRef.current);
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "col-resize";
+  }
+
+  const containerRef = useRef<HTMLDivElement>(null);
+  const treePanelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!treePanelRef.current) return;
+    const isDesktop = window.matchMedia("(min-width: 768px)").matches;
+    treePanelRef.current.style.width = isDesktop ? `${treeWidth}px` : "100%";
+  }, [treeWidth]);
+
   return (
-    <div className="flex flex-col md:flex-row gap-4">
-      <div className="w-full md:w-56 flex-shrink-0 flex flex-col gap-2">
+    <div ref={containerRef} className="flex flex-col md:flex-row md:overflow-hidden">
+      {/* File tree panel — draggable width on desktop, full width on mobile */}
+      <div ref={treePanelRef} className="flex flex-col gap-2 flex-shrink-0 w-full md:min-w-0">
         <div
           className="rounded-xl p-2 overflow-auto"
           style={{ border: "1px solid var(--line)", background: "var(--bg-elev)", maxHeight: 420 }}
@@ -67,13 +126,14 @@ export function SkillFileBrowser({ files, entryPath, readOnly = false, onFilesCh
             entryPath={entryPath}
             onSelect={setSelectedPath}
             onRemove={onFilesChange ? handleRemove : undefined}
+            onRename={onFilesChange ? handleRename : undefined}
           />
         </div>
         {onFilesChange && (
-          <div className="flex flex-col gap-1">
+          <div className="flex flex-col gap-1 mt-2">
             <div className="flex items-center gap-1.5">
               <input
-                className="af-input text-[0.78rem] font-mono flex-1"
+                className="af-input text-[0.78rem] font-mono flex-1 min-w-0"
                 value={newPath}
                 placeholder="helpers/notes.md"
                 onChange={(e) => {
@@ -87,7 +147,7 @@ export function SkillFileBrowser({ files, entryPath, readOnly = false, onFilesCh
                   }
                 }}
               />
-              <button type="button" className="af-btn af-btn-sm" onClick={handleAdd}>
+              <button type="button" className="af-btn af-btn-sm flex-shrink-0" onClick={handleAdd}>
                 Add file
               </button>
             </div>
@@ -100,24 +160,49 @@ export function SkillFileBrowser({ files, entryPath, readOnly = false, onFilesCh
         )}
       </div>
 
-      <div className="flex-1 min-w-0">
+      {/* Resizer (desktop only) */}
+      <div
+        className="hidden md:flex flex-shrink-0 cursor-col-resize items-center justify-center"
+        style={{ width: 6, background: "transparent" }}
+        onPointerDown={startResize}
+      >
+        <div style={{ width: 2, height: 32, background: "var(--line)", borderRadius: 2 }} />
+      </div>
+
+      {/* Editor panel */}
+      <div className="flex-1 min-w-0 flex flex-col gap-2 md:overflow-hidden">
         {active ? (
-          readOnly ? (
-            <pre
-              className="af-input min-h-[360px] overflow-auto whitespace-pre-wrap font-mono text-[12.5px] leading-[1.65] m-0"
-              aria-label={`Content of ${active.path}`}
-            >
-              {active.content}
-            </pre>
-          ) : (
-            <textarea
-              className="af-input font-mono text-[12.5px] leading-[1.65] resize-y min-h-[360px] w-full"
-              aria-label={`Content of ${active.path}`}
-              value={active.content}
-              spellCheck={false}
-              onChange={(e) => updateContent(e.target.value)}
-            />
-          )
+          <>
+            <div className="flex items-center gap-2 px-1">
+              <span className="text-[12px] font-mono truncate" style={{ color: "var(--ink-3)" }}>
+                {active.path}
+              </span>
+              {active.path === entryPath && (
+                <span
+                  className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium flex-shrink-0"
+                  style={{ background: "var(--bg)", color: "var(--ink-3)", border: "1px solid var(--line)" }}
+                >
+                  entry
+                </span>
+              )}
+            </div>
+            {readOnly ? (
+              <pre
+                className="af-input min-h-[360px] overflow-auto whitespace-pre-wrap font-mono text-[12.5px] leading-[1.65] m-0"
+                aria-label={`Content of ${active.path}`}
+              >
+                {active.content}
+              </pre>
+            ) : (
+              <textarea
+                className="af-input font-mono text-[12.5px] leading-[1.65] resize-y min-h-[360px] w-full"
+                aria-label={`Content of ${active.path}`}
+                value={active.content}
+                spellCheck={false}
+                onChange={(e) => updateContent(e.target.value)}
+              />
+            )}
+          </>
         ) : (
           <div className="text-[13px]" style={{ color: "var(--ink-4)" }}>
             No files.
