@@ -10,6 +10,8 @@ from hamcrest import (
     assert_that,
     contains_string,
     equal_to,
+    greater_than,
+    has_item,
     has_key,
     is_in,
     is_not,
@@ -143,6 +145,27 @@ _GIVEN = [
     there_is_an_organization_with_user_and_access_token(),
     use_org_for_auth(),
     there_is_a_template(),
+]
+
+
+# Same as _GIVEN but with no server-owned Google OAuth client. Set here rather than in a
+# later step because Config is built (and cached) when the injector is prepared, and a
+# developer's root .env may define real Google credentials.
+_GIVEN_WITHOUT_GOOGLE_CLIENT = [
+    set_env_variable(
+        {
+            "AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY,
+            "LITELLM_BASE_URL": "http://litellm:4000",
+            "LITELLM_SECRET_NAME": "litellm",
+            "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
+            "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
+            "API_EXTERNAL_URL": "https://api.test.com",
+            "SKIP_SLACK_TOKEN_VALIDATION": "true",
+            "GOOGLE_CLOUD_CLIENT_ID": "",
+            "GOOGLE_CLOUD_CLIENT_SECRET": "",
+        }
+    ),
+    *_GIVEN[1:],
 ]
 
 
@@ -5329,3 +5352,156 @@ def test_agent_configuration_override_history_retained_after_soft_delete():
             retained = override_repository.get_version(agent_id, context.organization.id, published["version"])
             assert retained is not None
             assert_that(retained.soul_md, equal_to(published["soul_md"]))
+
+
+# ---------------------------------------------------------------------------
+# Google Workspace (gog) integration
+# ---------------------------------------------------------------------------
+
+_GWS_CONTENT = {
+    "email": "user@example.com",
+    "services": ["gmail", "calendar"],
+    "scopes": ["https://www.googleapis.com/auth/gmail.readonly"],
+    "refresh_token": "gws-refresh-token",
+    "client_id": "client-id.apps.googleusercontent.com",
+    "client_secret": "GOCSPX-secret",
+}
+
+
+def _configure_gws(client: TestClient, context, content: dict | None = None):
+    return client.patch(
+        f"{_BASE}/{context.agent.id}",
+        json={"secrets": [{"provider": "google_workspace", "content": content or _GWS_CONTENT}]},
+        headers=_auth(context),
+    )
+
+
+def test_patch_agent_accepts_google_workspace_secret():
+    """Covers the enum member, the content schema, and the DB check constraint."""
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I configure a Google Workspace credential"):
+            response = _configure_gws(client, context)
+
+        with then("it is stored and listed without exposing its contents"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            providers = [s["provider"] for s in response.json()["secrets"]]
+            assert_that(providers, has_item("google_workspace"))
+            assert_that(response.text, is_not(contains_string("gws-refresh-token")))
+
+
+def test_patch_agent_rejects_unsupported_google_workspace_service():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I ask for a service gog's v1 allowlist does not cover"):
+            response = _configure_gws(client, context, {**_GWS_CONTENT, "services": ["gmail", "youtube"]})
+
+        with then("it is rejected"):
+            assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_CONTENT))
+
+
+def test_start_agent_materializes_gog_env_and_setup_script():
+    import json as _json
+
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("I start an agent with a Google Workspace credential"):
+            _configure_gws(client, context)
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the pod secret carries everything gog needs to rebuild its state"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            secret = k8s.create_secret.call_args.args[1]
+            assert_that(secret.string_data["GOG_HOME"], equal_to("/home/node/.config/gogcli"))
+            assert_that(secret.string_data["GOG_KEYRING_BACKEND"], equal_to("file"))
+            assert_that(len(secret.string_data["GOG_KEYRING_PASSWORD"]), greater_than(0))
+            assert_that(secret.string_data["GOG_ACCOUNT_EMAIL"], equal_to("user@example.com"))
+            token = _json.loads(secret.string_data["GOG_TOKEN_JSON"])
+            assert_that(token["refresh_token"], equal_to("gws-refresh-token"))
+            assert_that(token["services"], equal_to(["gmail", "calendar"]))
+            client_json = _json.loads(secret.string_data["GOG_CLIENT_JSON"])
+            assert_that(client_json["web"]["client_id"], equal_to("client-id.apps.googleusercontent.com"))
+
+        with then("the setup script is mounted and the agent is told how to use gog"):
+            config_map = k8s.create_config_map.call_args.args[1]
+            assert_that(config_map.data, has_key("gog-setup.sh"))
+            assert_that(config_map.data["gog-setup.sh"], contains_string("gog auth tokens import -"))
+            assert_that(config_map.data["AGENTS.md"], contains_string("Google Workspace (gog)"))
+            assert_that(config_map.data["AGENTS.md"], contains_string("user@example.com"))
+
+
+def test_start_agent_gog_state_is_not_on_the_hermes_pvc():
+    """Hermes' PVC is /opt/data (where aai-cli lives); gog's state is deliberately
+    ephemeral, since it is rebuilt from the credential on every boot."""
+    with given([*_GIVEN_WITH_HERMES_IMAGE, there_is_an_agent(agent_type=AgentType.HERMES)]) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("I start a Hermes agent with a Google Workspace credential"):
+            _configure_gws(client, context)
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("GOG_HOME is under the container home, not the PVC"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            secret = k8s.create_secret.call_args.args[1]
+            assert_that(secret.string_data["GOG_HOME"], equal_to("/home/hermes/.config/gogcli"))
+            config_map = k8s.create_config_map.call_args.args[1]
+            assert_that(config_map.data, has_key("gog-setup.sh"))
+
+
+def test_start_agent_without_google_workspace_has_no_gog_artifacts():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("I start an agent with no Google Workspace credential"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("no gog script or env is injected"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            assert_that(config_map.data, is_not(has_key("gog-setup.sh")))
+            secret = k8s.create_secret.call_args.args[1]
+            assert_that(secret.string_data, is_not(has_key("GOG_TOKEN_JSON")))
+            assert_that(config_map.data["AGENTS.md"], is_not(contains_string("Google Workspace (gog)")))
+
+
+def test_start_agent_with_only_google_workspace_omits_aai_cli_policy():
+    """gog takes no --profile, so the aai-cli block must not claim to cover it."""
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("Google Workspace is the agent's only integration"):
+            _configure_gws(client, context)
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the aai-cli integrations block and config.toml are absent"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            assert_that(config_map.data["AGENTS.md"], is_not(contains_string("Integrations (aai-cli)")))
+            assert_that(config_map.data, is_not(has_key("aai-cli-config.toml")))
+
+
+def test_start_agent_rejects_google_workspace_without_a_client():
+    """The credential must name the OAuth client its refresh token was issued under;
+    with no server-owned client configured either, starting has to fail loudly.
+
+    The empty client config is explicit: a developer's root .env may define real Google
+    client credentials, which would otherwise be backfilled and let this pass.
+    """
+    with given([*_GIVEN_WITHOUT_GOOGLE_CLIENT, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("the stored credential has no client id/secret"):
+            content = {k: v for k, v in _GWS_CONTENT.items() if k not in ("client_id", "client_secret")}
+            _configure_gws(client, context, content)
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the start is rejected with a reconnect hint"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], contains_string("Google Workspace credential"))

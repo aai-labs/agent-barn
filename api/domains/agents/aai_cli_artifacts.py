@@ -467,8 +467,13 @@ def build_integrations_policy_md(
     syntax stays in the per-service
     ``./skills/aai-cli/<service>_skill.md`` files and TOOLS.md. Returns "" when no
     integrations are configured.
+
+    Gated on providers that actually have a profile, not on ``decrypted`` being non-empty:
+    an agent whose only integrations are profile-less (google_workspace, firecrawl) would
+    otherwise be told "aai-cli is the only way to reach them — always pass --profile"
+    above an empty list, which contradicts the guidance those tools ship with.
     """
-    if not decrypted:
+    if not (decrypted.keys() & set(PROFILE_SLUGS)):
         return ""
 
     lines: list[str] = [

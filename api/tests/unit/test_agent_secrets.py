@@ -11,6 +11,7 @@ from api.domains.agents.models import (
     FirecrawlContent,
     GithubContent,
     GmailContent,
+    GoogleWorkspaceContent,
     JiraContent,
     PipedriveContent,
     SecretProvider,
@@ -334,3 +335,64 @@ def test_slack_encrypt_decrypt_round_trip():
     blob = encrypt_content(original, _KEY)
     assert "xoxb-test-token" not in blob
     assert decrypt_content(SecretProvider.SLACK, blob, _KEY) == original
+
+
+# --- google_workspace ---
+
+_GOOGLE_WORKSPACE_BASE = {
+    "email": "user@example.com",
+    "services": ["gmail", "calendar"],
+    "scopes": ["https://www.googleapis.com/auth/gmail.readonly"],
+    "refresh_token": "rt-123",
+}
+
+
+def test_google_workspace_parses_and_defaults():
+    content = validate_content(SecretProvider.GOOGLE_WORKSPACE, _GOOGLE_WORKSPACE_BASE)
+    assert isinstance(content, GoogleWorkspaceContent)
+    assert content.services == ["gmail", "calendar"]
+    # Full access and a server-backfilled client are the defaults.
+    assert content.read_only is False
+    assert content.client_id == ""
+    assert content.client_secret == ""
+
+
+def test_google_workspace_rejects_unknown_service():
+    with pytest.raises(ValidationError):
+        validate_content(
+            SecretProvider.GOOGLE_WORKSPACE,
+            {**_GOOGLE_WORKSPACE_BASE, "services": ["gmail", "youtube"]},
+        )
+
+
+def test_google_workspace_rejects_empty_services():
+    # A credential covering nothing would consent to nothing and confuse the agent.
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.GOOGLE_WORKSPACE, {**_GOOGLE_WORKSPACE_BASE, "services": []})
+
+
+def test_google_workspace_deduplicates_services_preserving_order():
+    content = validate_content(
+        SecretProvider.GOOGLE_WORKSPACE,
+        {**_GOOGLE_WORKSPACE_BASE, "services": ["sheets", "gmail", "sheets"]},
+    )
+    assert isinstance(content, GoogleWorkspaceContent)
+    assert content.services == ["sheets", "gmail"]
+
+
+def test_google_workspace_requires_refresh_token():
+    payload = {k: v for k, v in _GOOGLE_WORKSPACE_BASE.items() if k != "refresh_token"}
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.GOOGLE_WORKSPACE, payload)
+
+
+def test_google_workspace_rejects_unknown_field():
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.GOOGLE_WORKSPACE, {**_GOOGLE_WORKSPACE_BASE, "client_json": "{}"})
+
+
+def test_google_workspace_encrypt_decrypt_round_trip():
+    original = validate_content(SecretProvider.GOOGLE_WORKSPACE, _GOOGLE_WORKSPACE_BASE)
+    blob = encrypt_content(original, _KEY)
+    assert "rt-123" not in blob
+    assert decrypt_content(SecretProvider.GOOGLE_WORKSPACE, blob, _KEY) == original

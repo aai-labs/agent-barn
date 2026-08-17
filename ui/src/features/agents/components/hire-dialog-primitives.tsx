@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import { EyeIcon, EyeOffIcon, PlusIcon, XIcon } from "@/components/icons";
 import { useGoogleOAuth, type GoogleOAuthResult } from "../hooks/use-google-oauth";
 
@@ -143,14 +143,25 @@ export function GoogleAuthButton({
   connected,
   onConnected,
   disabled,
+  disabledNote,
   provider = "gmail",
   connectedNote = "read-only Gmail access granted",
+  authorizeParams,
+  requireEmail = false,
 }: {
   connected: boolean;
   onConnected: (result: GoogleOAuthResult) => void;
   disabled?: boolean;
+  // Why the button is unavailable, e.g. a prerequisite field is still empty.
+  disabledNote?: string;
   provider?: string;
   connectedNote?: string;
+  // Extra query params for /authorize-url (google_workspace derives its scopes from
+  // the selected services rather than having a fixed per-provider scope list).
+  authorizeParams?: Record<string, string>;
+  // Providers whose stored credential is keyed by account email (google_workspace)
+  // cannot accept a connection that didn't report one.
+  requireEmail?: boolean;
 }) {
   const { connectGoogle, isConnecting } = useGoogleOAuth();
   const [error, setError] = useState<string | null>(null);
@@ -158,11 +169,41 @@ export function GoogleAuthButton({
   const [clientId, setClientId] = useState("");
   const [clientSecret, setClientSecret] = useState("");
   const [showSecret, setShowSecret] = useState(false);
+  const clientFileRef = useRef<HTMLInputElement>(null);
+  // google_workspace expects the user's own OAuth client, so its help text is the full
+  // setup walkthrough rather than gmail's "optional" aside.
+  const ownClientRequired = provider === "google_workspace";
 
   const redirectUri =
     typeof window !== "undefined"
       ? `${window.location.origin}/api/v1/integrations/google/callback`
       : "";
+
+  async function handleClientFile(file: File) {
+    setError(null);
+    try {
+      const parsed = JSON.parse(await file.text()) as {
+        web?: { client_id?: string; client_secret?: string };
+        installed?: unknown;
+      };
+      if (!parsed.web && parsed.installed) {
+        setError(
+          "That's a Desktop client. Create an OAuth client of type “Web application” instead, with this app's redirect URI.",
+        );
+        return;
+      }
+      const id = parsed.web?.client_id?.trim();
+      const secret = parsed.web?.client_secret?.trim();
+      if (!id || !secret) {
+        setError("That file has no web client_id/client_secret. Download it again from the Cloud Console.");
+        return;
+      }
+      setClientId(id);
+      setClientSecret(secret);
+    } catch {
+      setError("Could not read that file — it must be the JSON downloaded from the Cloud Console.");
+    }
+  }
 
   async function handleClick() {
     setError(null);
@@ -176,9 +217,18 @@ export function GoogleAuthButton({
       );
       return;
     }
+    if (ownClientRequired && (!id || !secret)) {
+      setShowCustom(true);
+      setError("Upload your Google OAuth client JSON (or paste its client ID and secret) first.");
+      return;
+    }
     const creds = id && secret ? { clientId: id, clientSecret: secret } : undefined;
     try {
-      const result = await connectGoogle(creds, provider);
+      const result = await connectGoogle(creds, provider, authorizeParams);
+      if (requireEmail && !result.email) {
+        setError("Google did not report the account's email address. Please reconnect.");
+        return;
+      }
       onConnected(result);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Authentication failed.");
@@ -205,6 +255,11 @@ export function GoogleAuthButton({
           ✓ Connected — {connectedNote}
         </span>
       )}
+      {disabled && disabledNote && !isConnecting && (
+        <span className="text-[0.75rem]" style={{ color: "var(--ink-4)" }}>
+          {disabledNote}
+        </span>
+      )}
       {error && (
         <span className="text-[0.75rem]" style={{ color: "var(--danger, #c53030)" }}>
           {error}
@@ -218,25 +273,75 @@ export function GoogleAuthButton({
         onClick={() => setShowCustom((v) => !v)}
         disabled={disabled || isConnecting}
       >
-        {showCustom ? "▾" : "▸"} Use your own Google client (optional)
+        {showCustom ? "▾" : "▸"}{" "}
+        {ownClientRequired ? "Your Google OAuth client (required)" : "Use your own Google client (optional)"}
       </button>
       {showCustom && (
         <div className="flex flex-col gap-2.5 pl-3" style={{ borderLeft: "2px solid var(--line)" }}>
-          <p className="text-[0.75rem] leading-[1.5]" style={{ color: "var(--ink-4)" }}>
-            In the{" "}
-            <a
-              href="https://console.cloud.google.com/apis/credentials"
-              target="_blank"
-              rel="noreferrer"
-              className="underline"
-            >
-              Google Cloud Console
-            </a>{" "}
-            create an OAuth 2.0 Client ID of type <strong>Web application</strong>, enable the
-            Gmail API, request the <code>gmail.readonly</code> scope, and add{" "}
-            <code className="break-all">{redirectUri}</code> as an authorized redirect URI. Then
-            paste the client ID and secret below — leave both blank to use the shared app client.
-          </p>
+          {ownClientRequired ? (
+            <div className="text-[0.75rem] leading-[1.5] flex flex-col gap-1.5" style={{ color: "var(--ink-4)" }}>
+              <p>
+                This integration uses <strong>your own</strong> Google OAuth client, so the access
+                stays inside your Google project. One-time setup in the{" "}
+                <a
+                  href="https://console.cloud.google.com/apis/credentials"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="underline"
+                >
+                  Google Cloud Console
+                </a>
+                :
+              </p>
+              <ol className="list-decimal pl-4 flex flex-col gap-1">
+                <li>Create (or pick) a Google Cloud project.</li>
+                <li>Enable the APIs for the services you selected above — Gmail, Calendar, Drive, Sheets.</li>
+                <li>
+                  On the OAuth consent screen, set publishing status to <strong>Production</strong>{" "}
+                  (or <strong>Internal</strong> for a Workspace org). Leaving it in{" "}
+                  <em>Testing</em> makes Google expire the connection every 7 days.
+                </li>
+                <li>
+                  Create an OAuth client ID of type <strong>Web application</strong> and add{" "}
+                  <code className="break-all">{redirectUri}</code> as an authorized redirect URI.
+                </li>
+                <li>Download its JSON and upload it below.</li>
+              </ol>
+              <p>
+                On first connect Google will warn that the app is unverified — that app is your own,
+                so continue past it.
+              </p>
+            </div>
+          ) : (
+            <p className="text-[0.75rem] leading-[1.5]" style={{ color: "var(--ink-4)" }}>
+              In the{" "}
+              <a
+                href="https://console.cloud.google.com/apis/credentials"
+                target="_blank"
+                rel="noreferrer"
+                className="underline"
+              >
+                Google Cloud Console
+              </a>{" "}
+              create an OAuth 2.0 Client ID of type <strong>Web application</strong>, enable the
+              Gmail API, request the <code>gmail.readonly</code> scope, and add{" "}
+              <code className="break-all">{redirectUri}</code> as an authorized redirect URI. Then
+              paste the client ID and secret below — leave both blank to use the shared app client.
+            </p>
+          )}
+          <FormField label="Client JSON" hint="Reads the client ID and secret out of the downloaded file.">
+            <input
+              ref={clientFileRef}
+              type="file"
+              accept=".json,application/json"
+              className="af-input text-[0.8125rem]"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) void handleClientFile(file);
+              }}
+              disabled={disabled || isConnecting}
+            />
+          </FormField>
           <FormField label="Client ID">
             <input
               className="af-input font-mono text-[0.8125rem]"

@@ -151,6 +151,17 @@ export const AgentSkillsTab = forwardRef<
     );
   }
 
+  /** Apply several keys at once — the OAuth flow writes its whole result together. */
+  function setFields(provider: string, patch: Record<string, string | string[]>) {
+    setNewSecretDrafts((prev) =>
+      prev.map((d) =>
+        d.provider === provider
+          ? { ...d, content: { ...d.content, ...patch } }
+          : d,
+      ),
+    );
+  }
+
   const { switchToShared, switchToManual, handlePickShared } = useSharedManualSwitch(
     newSecretDrafts,
     setNewSecretDrafts,
@@ -419,10 +430,8 @@ export const AgentSkillsTab = forwardRef<
                     namePrefix="tab-"
                     onFieldChange={(key, value) => setField(providerId, key, value)}
                     onReposChange={(key, repos) => setRepos(providerId, key, repos)}
-                    onOAuthConnected={({ refreshToken, clientId, clientSecret }) => {
-                      setField(providerId, "refreshToken", refreshToken);
-                      setField(providerId, "clientId", clientId);
-                      setField(providerId, "clientSecret", clientSecret);
+                    onOAuthConnected={({ refreshToken, clientId, clientSecret, email, scopes }) => {
+                      setFields(providerId, { refreshToken, clientId, clientSecret, email, scopes });
                     }}
                   />
                 )}

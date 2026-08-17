@@ -13,6 +13,7 @@ from api.domains.agents.models import (
     GithubContent,
     GmailContent,
     GoogleSheetsContent,
+    GoogleWorkspaceContent,
     JiraContent,
     PipedriveContent,
     SlackContent,
@@ -22,6 +23,7 @@ from api.infrastructure.integration_validators.confluence import validate_conflu
 from api.infrastructure.integration_validators.github import validate_github
 from api.infrastructure.integration_validators.gmail import validate_gmail
 from api.infrastructure.integration_validators.google_sheets import validate_google_sheets
+from api.infrastructure.integration_validators.google_workspace import validate_google_workspace
 from api.infrastructure.integration_validators.jira import validate_jira
 from api.infrastructure.integration_validators.pipedrive import validate_pipedrive
 from api.infrastructure.integration_validators.result import IntegrationValidationResult
@@ -1120,3 +1122,131 @@ def test_pipedrive_network_error_returns_error():
     assert result.valid is False
     assert result.error is not None
     assert "pipedrive" in result.error.lower()
+
+
+# ── Google Workspace (gog) ────────────────────────────────────────────────────
+
+_GWS_TOKEN_MOD = "api.infrastructure.integration_validators.google_workspace.httpx.post"
+_GWS_USERINFO_MOD = "api.infrastructure.integration_validators.google_workspace.httpx.get"
+
+_GWS_SCOPES = [
+    "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/calendar",
+]
+_GWS = GoogleWorkspaceContent(
+    email="alice@example.com",
+    services=["gmail", "calendar"],
+    scopes=_GWS_SCOPES,
+    refresh_token="rt-123",
+    client_id="client-id",
+    client_secret="client-secret",
+)
+
+
+def _gws_token_ok(scope: str | None = None) -> dict:
+    return {
+        "access_token": "at-123",
+        "scope": " ".join(_GWS_SCOPES) if scope is None else scope,
+        "token_type": "Bearer",
+    }
+
+
+def test_google_workspace_valid_refresh_token_returns_identity():
+    with (
+        patch(_GWS_TOKEN_MOD, return_value=_resp(_gws_token_ok())),
+        patch(_GWS_USERINFO_MOD, return_value=_resp({"email": "alice@example.com"})),
+    ):
+        result = validate_google_workspace(_GWS)
+
+    assert result.valid is True
+    assert result.identity == "alice@example.com"
+    assert result.missing_scopes == []
+    assert result.error is None
+
+
+def test_google_workspace_missing_client_credentials_returns_error():
+    no_client = GoogleWorkspaceContent(
+        email="alice@example.com",
+        services=["gmail"],
+        refresh_token="rt-123",
+    )
+    with patch(_GWS_TOKEN_MOD) as mock_post:
+        result = validate_google_workspace(no_client)
+
+    assert result.valid is False
+    assert "configured" in (result.error or "").lower()
+    mock_post.assert_not_called()
+
+
+def test_google_workspace_invalid_grant_mentions_reconnect_and_testing_status():
+    """Testing-status OAuth apps expire refresh tokens weekly — the likeliest cause."""
+    with patch(_GWS_TOKEN_MOD, return_value=_resp({"error": "invalid_grant"}, status=400)):
+        result = validate_google_workspace(_GWS)
+
+    assert result.valid is False
+    assert "reconnect" in (result.error or "").lower()
+    assert "testing" in (result.error or "").lower()
+
+
+def test_google_workspace_reports_scopes_revoked_after_consent():
+    # The user trimmed the grant at myaccount.google.com; gog will fail on calendar.
+    narrowed = _gws_token_ok(scope="https://www.googleapis.com/auth/gmail.readonly")
+    with (
+        patch(_GWS_TOKEN_MOD, return_value=_resp(narrowed)),
+        patch(_GWS_USERINFO_MOD, return_value=_resp({"email": "alice@example.com"})),
+    ):
+        result = validate_google_workspace(_GWS)
+
+    assert result.valid is True  # warning, not a hard failure
+    assert result.missing_scopes == ["https://www.googleapis.com/auth/calendar"]
+
+
+def test_google_workspace_flags_identity_drift():
+    # A refresh token that now resolves to a different account would silently act as
+    # the wrong user, and gog's stored token is keyed by the recorded email.
+    with (
+        patch(_GWS_TOKEN_MOD, return_value=_resp(_gws_token_ok())),
+        patch(_GWS_USERINFO_MOD, return_value=_resp({"email": "bob@example.com"})),
+    ):
+        result = validate_google_workspace(_GWS)
+
+    assert result.valid is False
+    assert result.identity == "bob@example.com"
+    assert "bob@example.com" in (result.error or "")
+
+
+def test_google_workspace_identity_comparison_ignores_case():
+    with (
+        patch(_GWS_TOKEN_MOD, return_value=_resp(_gws_token_ok())),
+        patch(_GWS_USERINFO_MOD, return_value=_resp({"email": "Alice@Example.com"})),
+    ):
+        result = validate_google_workspace(_GWS)
+
+    assert result.valid is True
+
+
+def test_google_workspace_falls_back_to_stored_email_when_userinfo_fails():
+    with (
+        patch(_GWS_TOKEN_MOD, return_value=_resp(_gws_token_ok())),
+        patch(_GWS_USERINFO_MOD, side_effect=_connect_error()),
+    ):
+        result = validate_google_workspace(_GWS)
+
+    assert result.valid is True
+    assert result.identity == "alice@example.com"
+
+
+def test_google_workspace_network_error_returns_error():
+    with patch(_GWS_TOKEN_MOD, side_effect=_connect_error()):
+        result = validate_google_workspace(_GWS)
+
+    assert result.valid is False
+    assert "google" in (result.error or "").lower()
+
+
+def test_google_workspace_unexpected_status_returns_error():
+    with patch(_GWS_TOKEN_MOD, return_value=_resp({}, status=500)):
+        result = validate_google_workspace(_GWS)
+
+    assert result.valid is False
+    assert "500" in (result.error or "")

@@ -488,6 +488,26 @@ def test_integrations_policy_md_empty_when_no_secrets():
     assert build_integrations_policy_md({}) == ""
 
 
+def test_integrations_policy_md_empty_when_no_provider_has_a_profile():
+    """Providers reached by other means (gog, Firecrawl) must not produce a bare header.
+
+    The block opens with "aai-cli is the only way to reach them — always pass --profile",
+    which contradicts those tools' own guidance when no aai-cli profile follows it.
+    """
+    decrypted = {
+        SecretProvider.GOOGLE_WORKSPACE: validate_content(
+            SecretProvider.GOOGLE_WORKSPACE,
+            {
+                "email": "user@example.com",
+                "services": ["gmail"],
+                "refresh_token": "rt-123",
+            },
+        ),
+        SecretProvider.FIRECRAWL: FirecrawlContent(api_key="fc-x"),
+    }
+    assert build_integrations_policy_md(decrypted) == ""
+
+
 def test_integrations_policy_md_includes_no_fallback_policy():
     md = build_integrations_policy_md({SecretProvider.JIRA: _JIRA})
     # aai-cli is the only path; always pass --profile; no browser/curl/HTTP fallback;

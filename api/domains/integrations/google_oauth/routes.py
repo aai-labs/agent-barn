@@ -41,7 +41,7 @@ from jwt.exceptions import InvalidTokenError
 from pydantic import BaseModel
 
 from api.core.config import Config
-from api.domains.agents.models import SecretProvider
+from api.domains.agents.models import GOOGLE_WORKSPACE_SERVICES, SecretProvider
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.service import JWT_ENCODING_ALGORITHM
 from api.domains.auth.utils import get_current_user
@@ -60,6 +60,83 @@ PROVIDER_SCOPES: dict[str, tuple[str, ...]] = {
     ),
 }
 DEFAULT_PROVIDER = SecretProvider.GMAIL.value
+
+_SCOPE_PREFIX = "https://www.googleapis.com/auth/"
+
+# Per-service (full, read-only) scope sets for the google_workspace provider, mirroring
+# gog v0.37.0's own derivation (internal/googleauth/service.go: serviceInfoByService plus
+# scopesForServiceWithOptions). They must match, because the services recorded in the
+# credential are re-declared to gog at agent start and it will expect these scopes to be
+# present. Keep in sync when the pinned gog version in the base images changes.
+_WORKSPACE_SERVICE_SCOPES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    "gmail": (
+        (
+            f"{_SCOPE_PREFIX}gmail.modify",
+            f"{_SCOPE_PREFIX}gmail.settings.basic",
+            f"{_SCOPE_PREFIX}gmail.settings.sharing",
+        ),
+        (f"{_SCOPE_PREFIX}gmail.readonly",),
+    ),
+    "calendar": (
+        (f"{_SCOPE_PREFIX}calendar",),
+        (f"{_SCOPE_PREFIX}calendar.readonly",),
+    ),
+    "drive": (
+        (f"{_SCOPE_PREFIX}drive",),
+        (f"{_SCOPE_PREFIX}drive.readonly",),
+    ),
+    # gog's sheets service pulls in Drive too (it exports/discovers through Drive).
+    "sheets": (
+        (f"{_SCOPE_PREFIX}drive", f"{_SCOPE_PREFIX}spreadsheets"),
+        (f"{_SCOPE_PREFIX}drive.readonly", f"{_SCOPE_PREFIX}spreadsheets.readonly"),
+    ),
+}
+
+# gog appends these to every authorization; we need them too, because the account email
+# is read out of the resulting id_token (gog keys its stored tokens by email).
+_IDENTITY_SCOPES: tuple[str, ...] = ("openid", "email", f"{_SCOPE_PREFIX}userinfo.email")
+
+# Providers a signed state may name. google_workspace derives its scopes per request, so
+# it has no PROVIDER_SCOPES entry — without this the callback would reject every
+# workspace state as invalid.
+_VALID_PROVIDERS: frozenset[str] = frozenset(PROVIDER_SCOPES) | {SecretProvider.GOOGLE_WORKSPACE.value}
+
+GOOGLE_USERINFO_ENDPOINT = "https://openidconnect.googleapis.com/v1/userinfo"
+
+
+def _parse_services(raw: str | None) -> list[str]:
+    """Parse and validate the comma-separated ``services`` parameter (400 on bad input)."""
+    services = [s.strip() for s in (raw or "").split(",") if s.strip()]
+    if not services:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="At least one Google service must be selected.",
+        )
+    unknown = [s for s in services if s not in GOOGLE_WORKSPACE_SERVICES]
+    if unknown:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Unsupported Google service(s): {', '.join(unknown)}. "
+                f"Supported: {', '.join(GOOGLE_WORKSPACE_SERVICES)}"
+            ),
+        )
+    return list(dict.fromkeys(services))
+
+
+def workspace_scopes(services: list[str], read_only: bool) -> tuple[str, ...]:
+    """Union of the per-service scope sets, deduped and sorted.
+
+    Sorted for a deterministic authorize URL (and stable tests); deduped because service
+    scope sets overlap — selecting both sheets and drive would otherwise request the Drive
+    scope twice.
+    """
+    collected: set[str] = set(_IDENTITY_SCOPES)
+    for service in services:
+        full, readonly = _WORKSPACE_SERVICE_SCOPES[service]
+        collected.update(readonly if read_only else full)
+    return tuple(sorted(collected))
+
 
 GOOGLE_AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
@@ -102,7 +179,7 @@ def _provider_from_state(state: str, config: Config) -> str | None:
         return None
     # States signed before the provider claim existed were all gmail.
     provider = payload.get("provider", DEFAULT_PROVIDER)
-    return provider if provider in PROVIDER_SCOPES else None
+    return provider if provider in _VALID_PROVIDERS else None
 
 
 def _post_message_html(
@@ -163,6 +240,8 @@ def google_authorize_url(
     # the Query sentinel; FastAPI still parses these as optional query parameters.
     client_id: str | None = None,
     provider: str = DEFAULT_PROVIDER,
+    services: str | None = None,
+    read_only: bool = False,
     config: Config = Injected(Config),
 ):
     """Return the Google OAuth authorize URL for the popup to navigate to.
@@ -170,17 +249,31 @@ def google_authorize_url(
     ``provider`` selects which Google integration is being connected, and so which scopes
     are requested; it defaults to gmail for callers predating the other providers.
 
+    ``services`` (comma-separated) and ``read_only`` apply to ``google_workspace`` only,
+    whose scopes are derived per request from the user's service selection rather than
+    being fixed per provider. They are rejected for the other providers instead of being
+    silently ignored, so a mis-wired caller fails loudly.
+
     ``client_id`` (optional) selects a user-supplied Google client; when omitted the
     app-owned client from config is used. Only the client id is needed here — it is
     public and travels in the authorize URL — while the matching secret is supplied
     later, to ``/token``.
     """
-    scopes = PROVIDER_SCOPES.get(provider)
-    if scopes is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Unsupported Google provider: {provider}",
-        )
+    if provider == SecretProvider.GOOGLE_WORKSPACE.value:
+        scopes = workspace_scopes(_parse_services(services), read_only)
+    else:
+        if services is not None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"'services' is only supported for the {SecretProvider.GOOGLE_WORKSPACE.value} provider.",
+            )
+        provider_scopes = PROVIDER_SCOPES.get(provider)
+        if provider_scopes is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unsupported Google provider: {provider}",
+            )
+        scopes = provider_scopes
     resolved_client_id = client_id or config.google_cloud_client_id
     # For the app-owned client, also require its secret to be configured so we fail
     # before opening consent. A custom client carries its own secret to /token.
@@ -234,6 +327,24 @@ def google_callback(
     return _post_message_html(config, provider=provider, code=code)
 
 
+def _email_from_id_token(id_token: str | None) -> str | None:
+    """Read the ``email`` claim out of Google's id_token, or None if unavailable.
+
+    The signature is intentionally not verified: this token was just received in our own
+    server-to-server, TLS-protected exchange with Google's token endpoint, not presented
+    by a client, so there is no untrusted party between issuance and this line. Verifying
+    would mean fetching and caching Google's JWKS for no security gain here.
+    """
+    if not id_token:
+        return None
+    try:
+        claims = jwt.decode(id_token, options={"verify_signature": False})
+    except InvalidTokenError:
+        return None
+    email = claims.get("email")
+    return email if isinstance(email, str) and email else None
+
+
 class GoogleTokenExchangeRequest(BaseModel):
     code: str
     # Optional user-supplied client. When omitted, the app-owned client from config is
@@ -254,6 +365,10 @@ def google_token_exchange(
     Uses the caller-supplied client id/secret when present (a user's own Google client),
     otherwise the app-owned client from config. The secret is read from the request body
     — it never appears in a URL, the authorize request, or our logs.
+
+    Also returns the scopes Google actually granted and, when an ``openid`` scope was
+    requested, the account's email address. Both are additive: callers predating them
+    (gmail, google_sheets) still read ``refresh_token`` and get ``email: null``.
     """
     client_id = body.client_id or config.google_cloud_client_id
     client_secret = body.client_secret or config.google_cloud_client_secret
@@ -287,7 +402,8 @@ def google_token_exchange(
             detail="Google rejected the token exchange. Please try again.",
         )
 
-    refresh_token = resp.json().get("refresh_token")
+    payload = resp.json()
+    refresh_token = payload.get("refresh_token")
     if not refresh_token:
         # Google only returns a refresh token on first consent; prompt=consent should force
         # it, but if the app's access was previously granted without offline access the user
@@ -300,4 +416,8 @@ def google_token_exchange(
             ),
         )
 
-    return {"refresh_token": refresh_token}
+    return {
+        "refresh_token": refresh_token,
+        "granted_scopes": str(payload.get("scope", "")).split(),
+        "email": _email_from_id_token(payload.get("id_token")),
+    }

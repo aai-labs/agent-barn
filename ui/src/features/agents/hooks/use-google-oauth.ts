@@ -6,7 +6,13 @@ import { z } from "zod";
 import { api } from "@/shared/api";
 
 const AuthorizeUrlSchema = z.object({ authorizeUrl: z.string().url() });
-const TokenSchema = z.object({ refreshToken: z.string().min(1) });
+// email/grantedScopes are additive: providers that don't request the openid scopes
+// (gmail, google_sheets) get null/absent values.
+const TokenSchema = z.object({
+  refreshToken: z.string().min(1),
+  email: z.string().nullish(),
+  grantedScopes: z.array(z.string()).optional(),
+});
 
 // Must match the message contract the backend callback posts (google_oauth/routes.py).
 const MESSAGE_TYPE = "google-oauth";
@@ -33,6 +39,12 @@ export type GoogleOAuthResult = {
   refreshToken: string;
   clientId: string;
   clientSecret: string;
+  // Connected account's email, when the flow requested the openid scopes. Stored with
+  // the credential for providers keyed by account (google_workspace).
+  email: string;
+  // Scopes Google actually granted — may be narrower than requested, since the consent
+  // screen lets the user uncheck individual ones.
+  scopes: string[];
 };
 
 /**
@@ -55,6 +67,9 @@ export function useGoogleOAuth() {
       // Which Google integration is being connected — decides the scopes the backend
       // requests. Defaults to gmail, the only provider this flow originally served.
       provider: string = "gmail",
+      // Extra authorize-url query params. google_workspace derives its scopes from the
+      // user's service selection, so it passes services + read_only here.
+      authorizeParams?: Record<string, string>,
     ): Promise<GoogleOAuthResult> => {
       setIsConnecting(true);
       const popup = window.open("about:blank", "google-oauth", POPUP_FEATURES);
@@ -68,8 +83,12 @@ export function useGoogleOAuth() {
           "/api/v1/integrations/google/authorize-url",
           {
             schema: AuthorizeUrlSchema,
-            // Query params are sent as-is (not decamelized), so use the snake_case key.
-            params: creds?.clientId ? { provider, client_id: creds.clientId } : { provider },
+            // Query params are sent as-is (not decamelized), so use snake_case keys.
+            params: {
+              provider,
+              ...(creds?.clientId ? { client_id: creds.clientId } : {}),
+              ...authorizeParams,
+            },
           },
         );
         popup.location.href = data.authorizeUrl;
@@ -131,7 +150,11 @@ export function useGoogleOAuth() {
 
         // Exchange the code for a refresh token server-side. The client secret (if the
         // user supplied their own client) rides only in this authenticated request body.
-        const { data } = await api.post<{ refreshToken: string }>(
+        const { data } = await api.post<{
+          refreshToken: string;
+          email?: string | null;
+          grantedScopes?: string[];
+        }>(
           "/api/v1/integrations/google/token",
           creds
             ? { code, clientId: creds.clientId, clientSecret: creds.clientSecret }
@@ -143,6 +166,8 @@ export function useGoogleOAuth() {
           refreshToken: data.refreshToken,
           clientId: creds?.clientId ?? "",
           clientSecret: creds?.clientSecret ?? "",
+          email: data.email ?? "",
+          scopes: data.grantedScopes ?? [],
         };
       } finally {
         setIsConnecting(false);

@@ -191,7 +191,9 @@ def test_token_exchange_success_uses_config_client(monkeypatch):
 
     monkeypatch.setattr(oauth.httpx, "post", fake_post)
     result = oauth.google_token_exchange(body=_token_request(), _context=_NO_CONTEXT, config=cfg)
-    assert result == {"refresh_token": "rt-123"}
+    # Providers that don't request the openid scopes get no email, and the legacy
+    # refresh_token key stays exactly where callers expect it.
+    assert result == {"refresh_token": "rt-123", "granted_scopes": [], "email": None}
 
 
 def test_token_exchange_prefers_custom_client(monkeypatch):
@@ -210,7 +212,7 @@ def test_token_exchange_prefers_custom_client(monkeypatch):
         _context=_NO_CONTEXT,
         config=cfg,
     )
-    assert result == {"refresh_token": "rt-x"}
+    assert result["refresh_token"] == "rt-x"
 
 
 def test_token_exchange_requires_configured_client(monkeypatch):
@@ -248,3 +250,141 @@ def test_token_exchange_errors_on_non_200(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         oauth.google_token_exchange(body=_token_request(), _context=_NO_CONTEXT, config=_config())
     assert exc.value.status_code == 400
+
+
+# --- google_workspace: per-request scope derivation ---
+
+_WORKSPACE = "google_workspace"
+
+
+def _workspace_url(services: str, read_only: bool = False, **cfg_overrides) -> str:
+    return oauth.google_authorize_url(
+        _context=_NO_CONTEXT,
+        provider=_WORKSPACE,
+        services=services,
+        read_only=read_only,
+        config=_config(**cfg_overrides),
+    )["authorize_url"]
+
+
+def test_workspace_scopes_are_derived_from_selected_services():
+    assert oauth.workspace_scopes(["gmail", "calendar"], read_only=False) == (
+        "email",
+        "https://www.googleapis.com/auth/calendar",
+        "https://www.googleapis.com/auth/gmail.modify",
+        "https://www.googleapis.com/auth/gmail.settings.basic",
+        "https://www.googleapis.com/auth/gmail.settings.sharing",
+        "https://www.googleapis.com/auth/userinfo.email",
+        "openid",
+    )
+
+
+def test_workspace_scopes_read_only_uses_readonly_variants():
+    scopes = oauth.workspace_scopes(["gmail", "calendar", "drive"], read_only=True)
+    assert "https://www.googleapis.com/auth/gmail.readonly" in scopes
+    assert "https://www.googleapis.com/auth/calendar.readonly" in scopes
+    assert "https://www.googleapis.com/auth/drive.readonly" in scopes
+    # No write scope may slip through when the user asked for read-only.
+    assert not any(s.endswith(("gmail.modify", "auth/calendar", "auth/drive")) for s in scopes)
+
+
+def test_workspace_scopes_dedupe_overlapping_services():
+    # gog's sheets service also needs Drive, so sheets+drive must not repeat it.
+    scopes = oauth.workspace_scopes(["sheets", "drive"], read_only=False)
+    assert scopes.count("https://www.googleapis.com/auth/drive") == 1
+    assert "https://www.googleapis.com/auth/spreadsheets" in scopes
+
+
+def test_workspace_scopes_always_include_identity_scopes():
+    # The account email is read out of the id_token, so these are non-negotiable.
+    for service in ("gmail", "calendar", "drive", "sheets"):
+        scopes = oauth.workspace_scopes([service], read_only=False)
+        assert {"openid", "email", "https://www.googleapis.com/auth/userinfo.email"} <= set(scopes)
+
+
+def test_workspace_authorize_url_includes_derived_scopes():
+    url = _workspace_url("gmail,drive")
+    assert "gmail.modify" in url
+    assert "auth%2Fdrive" in url
+    assert "openid" in url
+
+
+def test_workspace_authorize_url_rejects_empty_services():
+    with pytest.raises(HTTPException) as exc:
+        _workspace_url("")
+    assert exc.value.status_code == 400
+
+
+def test_workspace_authorize_url_rejects_unknown_service():
+    with pytest.raises(HTTPException) as exc:
+        _workspace_url("gmail,youtube")
+    assert exc.value.status_code == 400
+    assert "youtube" in exc.value.detail
+
+
+def test_authorize_url_rejects_services_for_non_workspace_provider():
+    # Silently ignoring them would hand out a token with the wrong scopes.
+    with pytest.raises(HTTPException) as exc:
+        oauth.google_authorize_url(
+            _context=_NO_CONTEXT,
+            provider="gmail",
+            services="gmail,drive",
+            config=_config(),
+        )
+    assert exc.value.status_code == 400
+
+
+def test_state_round_trips_workspace_provider():
+    cfg = _config()
+    state = oauth._encode_state(cfg, _WORKSPACE)
+    assert oauth._provider_from_state(state, cfg) == _WORKSPACE
+
+
+def test_callback_echoes_workspace_provider():
+    cfg = _config()
+    # error=None explicitly: direct-calling the route leaves the Query() sentinel in
+    # place otherwise, and it reads as truthy.
+    resp = oauth.google_callback(
+        config=cfg,
+        code="abc",
+        state=oauth._encode_state(cfg, _WORKSPACE),
+        error=None,
+    )
+    msg = _extract_message(resp.body.decode())
+    assert msg["provider"] == _WORKSPACE
+    assert msg["code"] == "abc"
+
+
+def test_token_exchange_returns_email_and_granted_scopes(monkeypatch):
+    # Signed with an unrelated key on purpose: the route decodes without verifying,
+    # because the token came straight from Google over TLS in our own request.
+    id_token = jwt.encode({"email": "user@example.com"}, "irrelevant", algorithm=JWT_ENCODING_ALGORITHM)
+    monkeypatch.setattr(
+        oauth.httpx,
+        "post",
+        lambda *a, **k: SimpleNamespace(
+            status_code=200,
+            json=lambda: {
+                "refresh_token": "rt-ws",
+                "scope": "openid https://www.googleapis.com/auth/gmail.readonly",
+                "id_token": id_token,
+            },
+        ),
+    )
+    result = oauth.google_token_exchange(body=_token_request(), _context=_NO_CONTEXT, config=_config())
+    assert result["refresh_token"] == "rt-ws"
+    assert result["email"] == "user@example.com"
+    assert result["granted_scopes"] == ["openid", "https://www.googleapis.com/auth/gmail.readonly"]
+
+
+def test_token_exchange_tolerates_unreadable_id_token(monkeypatch):
+    monkeypatch.setattr(
+        oauth.httpx,
+        "post",
+        lambda *a, **k: SimpleNamespace(
+            status_code=200,
+            json=lambda: {"refresh_token": "rt", "id_token": "not-a-jwt"},
+        ),
+    )
+    result = oauth.google_token_exchange(body=_token_request(), _context=_NO_CONTEXT, config=_config())
+    assert result["email"] is None

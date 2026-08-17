@@ -7,7 +7,7 @@
 // (smtp/imap host+port, folders, …) are NOT inputs here — the backend fills them
 // as schema defaults.
 
-export type IntegrationFieldType = "text" | "secret" | "repo-list" | "radio";
+export type IntegrationFieldType = "text" | "secret" | "repo-list" | "radio" | "checkbox-list";
 
 export interface IntegrationField {
   key: string;
@@ -141,6 +141,40 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
   //   ],
   // },
   {
+    id: "google_workspace",
+    label: "Google Workspace",
+    authMethod: "google_oauth",
+    scopeNote:
+      "One Google sign-in covering the services you pick, via the gog CLI. Requires your own Google OAuth client (Web application type) — see the setup steps below.",
+    oauthConnectedNote: "Google account connected",
+    fields: [
+      {
+        key: "services",
+        label: "Services",
+        type: "checkbox-list",
+        required: true,
+        options: [
+          { label: "Gmail", value: "gmail" },
+          { label: "Calendar", value: "calendar" },
+          { label: "Drive", value: "drive" },
+          { label: "Sheets", value: "sheets" },
+        ],
+        hint: "Pick these before connecting — they decide what Google asks you to approve. Changing them later requires reconnecting.",
+      },
+      {
+        key: "readOnly",
+        label: "Access level",
+        type: "radio",
+        required: true,
+        options: [
+          { label: "Full access", value: "false" },
+          { label: "Read-only", value: "true" },
+        ],
+        hint: "Read-only requests view-only scopes; Google enforces this, so writes are refused even if the agent tries.",
+      },
+    ],
+  },
+  {
     id: "zoho_mail",
     label: "Zoho Mail",
     scopeNote: "OAuth 2.0 client credentials with ZohoMail.messages.READ scope",
@@ -201,7 +235,7 @@ export function expandGithubContent(
 // "radio" control can only emit the strings "true"/"false" (see IntegrationField.type).
 // The axios request interceptor decamelizes keys but leaves values untouched, so this
 // is the one place these get converted back to real booleans before submission.
-const BOOLEAN_FIELD_KEYS = new Set(["useScopedToken"]);
+const BOOLEAN_FIELD_KEYS = new Set(["useScopedToken", "readOnly"]);
 
 export function coerceBooleanFields(
   content: Record<string, string | string[]>,
@@ -228,11 +262,12 @@ export function hasIncompleteIntegration(integrations: IntegrationDraft[]): bool
     if (draft.sharedCredentialId) return false;
     const provider = getIntegrationProvider(draft.provider);
     if (!provider) return true;
-    // OAuth providers have no manual fields; they're complete once connected.
-    if (provider.authMethod === "google_oauth") return !isOAuthConnected(draft);
+    // An OAuth provider must be connected, and — for those that also collect fields
+    // (google_workspace picks services before consent) — still have them filled in.
+    if (provider.authMethod === "google_oauth" && !isOAuthConnected(draft)) return true;
     return provider.fields.some((f) => {
       if (!f.required) return false;
-      
+
       // If the field depends on another field, check if the condition is met
       if (f.dependsOn) {
         const dependentValue = draft.content[f.dependsOn.key];
@@ -242,6 +277,11 @@ export function hasIncompleteIntegration(integrations: IntegrationDraft[]): bool
       }
 
       const value = draft.content[f.key];
+      // List-valued controls (repo-list, checkbox-list) satisfy "required" with at
+      // least one entry; text-like controls need a non-blank string.
+      if (f.type === "checkbox-list" || f.type === "repo-list") {
+        return !Array.isArray(value) || value.length === 0;
+      }
       return typeof value !== "string" || value.trim().length === 0;
     });
   });

@@ -8,7 +8,7 @@ from uuid import UUID
 import sqlalchemy as sa
 from fastapi import Query
 from pydantic import BaseModel as PydanticBaseModel
-from pydantic import ConfigDict, Field, model_validator
+from pydantic import ConfigDict, Field, field_validator, model_validator
 from sqlmodel import Column, Enum, Index
 from sqlmodel import Field as SqlField
 
@@ -95,6 +95,13 @@ class SecretProvider(str, enum.Enum):
     FIRECRAWL = "firecrawl"
     SLACK = "slack"
     PIPEDRIVE = "pipedrive"
+    GOOGLE_WORKSPACE = "google_workspace"
+
+
+# Google services a google_workspace credential may cover, as named by the gog CLI.
+# Single source of truth: the content validator, the OAuth scope derivation, and the
+# gog runtime artifacts all read this.
+GOOGLE_WORKSPACE_SERVICES: tuple[str, ...] = ("gmail", "calendar", "drive", "sheets")
 
 
 # Predefined display labels — NOT user-entered; the backend stamps these by provider.
@@ -111,6 +118,7 @@ PROVIDER_DISPLAY_NAMES: dict[SecretProvider, str] = {
     SecretProvider.FIRECRAWL: "Firecrawl credential",
     SecretProvider.SLACK: "Slack credential",
     SecretProvider.PIPEDRIVE: "Pipedrive credential",
+    SecretProvider.GOOGLE_WORKSPACE: "Google Workspace credential",
 }
 
 
@@ -192,6 +200,41 @@ class GoogleSheetsContent(SecretContent):
     refresh_token: str
 
 
+class GoogleWorkspaceContent(SecretContent):
+    """Credential for the gog CLI: one refresh token covering several Google services.
+
+    Unlike the per-service Google providers above, one consent covers every service in
+    ``services``. ``scopes`` records what Google actually granted (the token response's
+    ``scope``), which is what the validator compares against on re-check — the user can
+    uncheck individual scopes on the consent screen, so requested != granted.
+
+    ``client_id``/``client_secret`` follow the GmailContent convention: empty means the
+    server-owned client is backfilled from config at agent-start time.
+    """
+
+    email: str
+    services: list[str]
+    scopes: list[str] = Field(default_factory=list)
+    refresh_token: str
+    read_only: bool = False
+    client_id: str = ""
+    client_secret: str = ""
+
+    @field_validator("services")
+    @classmethod
+    def _validate_services(cls, value: list[str]) -> list[str]:
+        if not value:
+            raise ValueError("at least one service is required")
+        unknown = [s for s in value if s not in GOOGLE_WORKSPACE_SERVICES]
+        if unknown:
+            raise ValueError(
+                f"unsupported service(s): {', '.join(unknown)}. Supported: {', '.join(GOOGLE_WORKSPACE_SERVICES)}"
+            )
+        # Deduplicate while keeping the caller's order so the stored list, the consent
+        # scopes, and GOG_TOKEN_JSON all agree.
+        return list(dict.fromkeys(value))
+
+
 class ZohoMailContent(SecretContent):
     email: str
     account_id: str
@@ -237,6 +280,7 @@ PROVIDER_CONTENT_MODELS: dict[SecretProvider, type[SecretContent]] = {
     SecretProvider.FIRECRAWL: FirecrawlContent,
     SecretProvider.SLACK: SlackContent,
     SecretProvider.PIPEDRIVE: PipedriveContent,
+    SecretProvider.GOOGLE_WORKSPACE: GoogleWorkspaceContent,
 }
 
 
