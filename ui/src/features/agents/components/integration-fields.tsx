@@ -28,17 +28,15 @@ export function IntegrationFields({
   namePrefix = "",
   showScopeNote = false,
   disabled,
-  secretNote,
 }: {
   provider: IntegrationProvider;
   draft: IntegrationDraft;
   onFieldChange: (key: string, value: string) => void;
   onReposChange: (key: string, repos: string[]) => void;
-  onOAuthConnected: (result: GoogleOAuthResult) => void;
+  onOAuthConnected?: (result: GoogleOAuthResult) => void;
   namePrefix?: string;
   showScopeNote?: boolean;
   disabled?: boolean;
-  secretNote?: string;
 }) {
   const [visible, setVisible] = useState<Record<string, boolean>>({});
 
@@ -50,7 +48,7 @@ export function IntegrationFields({
         </p>
       )}
 
-      {provider.authMethod === "google_oauth" && (
+      {provider.authMethod === "google_oauth" && onOAuthConnected && (
         <GoogleAuthButton
           connected={isOAuthConnected(draft)}
           onConnected={onOAuthConnected}
@@ -95,11 +93,6 @@ export function IntegrationFields({
                 placeholder={field.placeholder}
                 disabled={disabled}
               />
-              {secretNote && (
-                <span className="text-xs" style={{ color: "var(--ink-4)" }}>
-                  {secretNote}
-                </span>
-              )}
             </FormField>
           );
         }

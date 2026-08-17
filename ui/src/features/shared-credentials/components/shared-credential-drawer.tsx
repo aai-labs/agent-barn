@@ -6,6 +6,7 @@ import { IntegrationFields } from "@/features/agents/components/integration-fiel
 import {
   coerceBooleanFields,
   expandGithubContent,
+  hasIncompleteIntegration,
   INTEGRATION_PROVIDERS,
   type IntegrationProvider,
 } from "@/features/agents/integrations";
@@ -65,6 +66,17 @@ export function SharedCredentialDrawer({
   const isPending = createMutation.isPending || updateMutation.isPending;
   const mutationError = createMutation.error ?? updateMutation.error;
 
+  const hasContent = Object.values(content).some((v) =>
+    Array.isArray(v) ? v.length > 0 : v.trim().length > 0,
+  );
+  // The API validates the full provider schema on every write, so content is
+  // all-or-nothing: required on create, and on edit only once a field is touched.
+  const contentRequired = isCreate || hasContent;
+  const canSave =
+    !!provider &&
+    !!name.trim() &&
+    (!contentRequired || !hasIncompleteIntegration([{ provider, content }]));
+
   function handleProviderChange(value: string) {
     setProvider(value);
     setContent({});
@@ -95,9 +107,6 @@ export function SharedCredentialDrawer({
         if (trimmedName && trimmedName !== credential.name) {
           payload.name = trimmedName;
         }
-        const hasContent = Object.values(content).some((v) =>
-          Array.isArray(v) ? v.length > 0 : v.trim().length > 0,
-        );
         if (hasContent) {
           payload.content = coerceBooleanFields(
             credential.provider === "github" ? expandGithubContent(content) : content,
@@ -212,8 +221,10 @@ export function SharedCredentialDrawer({
                     color: "var(--ink-3)",
                   }}
                 >
-                  Agents using this credential will pick up content changes on
-                  their next start.
+                  Changing credentials replaces every field, so fill in all of
+                  them — partial updates are rejected. Leave them all empty to
+                  rename without touching the credential. Agents pick up content
+                  changes on their next start.
                 </div>
               )}
 
@@ -274,12 +285,8 @@ export function SharedCredentialDrawer({
                     provider={providerSpec}
                     draft={{ provider, content }}
                     namePrefix="shared-"
-                    secretNote={
-                      credential ? "Leave empty to keep the current value." : undefined
-                    }
                     onFieldChange={(key, value) => setField(key, value)}
                     onReposChange={(key, repos) => setField(key, repos)}
-                    onOAuthConnected={() => {}}
                   />
                 </div>
               )}
@@ -371,7 +378,7 @@ export function SharedCredentialDrawer({
               <button
                 type="button"
                 className="af-btn af-btn-primary ml-auto"
-                disabled={isPending || !provider || !name.trim()}
+                disabled={isPending || !canSave}
                 onClick={() => {
                   void handleSave();
                 }}
