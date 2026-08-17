@@ -81,8 +81,9 @@ function drawerOf(page: Page) {
     siteUrl: drawer.getByPlaceholder("https://your-domain.atlassian.net"),
     email: drawer.getByPlaceholder("you@example.com"),
     apiToken: drawer.locator('input[type="password"]'),
-    scoped: drawer.getByRole("radio", { name: "Scoped token" }),
-    nonScoped: drawer.getByRole("radio", { name: "Non-scoped token" }),
+    // exact: "Scoped token" otherwise also matches "Non-scoped token".
+    scoped: drawer.getByRole("radio", { name: "Scoped token", exact: true }),
+    nonScoped: drawer.getByRole("radio", { name: "Non-scoped token", exact: true }),
   };
 }
 
