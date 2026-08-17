@@ -11,6 +11,7 @@ from sqlmodel import Session, col, select
 
 from api.domains.agents.models import Agent, AgentPlatform
 from api.domains.agents.repository import agent_scope_predicates
+from api.domains.platform_admin.models import StatsGranularity
 from api.domains.rbac.policy import AuthorizationScope
 from api.domains.tool_calls.models import (
     ToolCall,
@@ -143,7 +144,7 @@ class ToolCallRepository:
         window_start: datetime.datetime,
         window_end: datetime.datetime,
         *,
-        unit: str = "day",
+        unit: StatsGranularity = StatsGranularity.DAY,
         organization_id: UUID | None = None,
         agent_id: UUID | None = None,
         created_by_user_id: UUID | None = None,
@@ -163,7 +164,7 @@ class ToolCallRepository:
         organization_id directly, so that filter needs no join.
         """
         occurred_at_utc = sa.func.timezone("UTC", col(ToolCall.occurred_at))
-        day = sa.func.date_trunc(unit, occurred_at_utc).label("day")
+        day = sa.func.date_trunc(unit.value, occurred_at_utc).label("day")
 
         with self.get_session() as session:
             query = select(sa.func.timezone("UTC", day), col(ToolCall.agent_id)).where(

@@ -22,7 +22,7 @@ of the build (~0.75us/row). If these tables grow large enough for that stall to
 drop telemetry, recreate them concurrently outside a migration.
 
 Revision ID: c4d1e8f2a730
-Revises: a3d7f5e91c62
+Revises: 8c68a090f9c7
 Create Date: 2026-08-10 17:05:00.000000
 
 """
@@ -33,7 +33,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "c4d1e8f2a730"
-down_revision: str | Sequence[str] | None = "a3d7f5e91c62"
+down_revision: str | Sequence[str] | None = "8c68a090f9c7"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

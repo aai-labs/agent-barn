@@ -16,6 +16,7 @@ from api.domains.conversations.models import (
     ConversationType,
     MessageDirection,
 )
+from api.domains.platform_admin.models import StatsGranularity
 from api.domains.rbac.policy import AuthorizationScope
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
@@ -69,7 +70,7 @@ class ConversationRepository:
         window_start: datetime,
         window_end: datetime,
         *,
-        unit: str = "day",
+        unit: StatsGranularity = StatsGranularity.DAY,
         organization_id: UUID | None = None,
         agent_id: UUID | None = None,
         created_by_user_id: UUID | None = None,
@@ -100,8 +101,8 @@ class ConversationRepository:
         deterministic regardless of who is asking.
         """
         occurred_at_utc = sa.func.timezone("UTC", col(AgentChatMessage.occurred_at))
-        message_bucket = sa.func.date_trunc(unit, occurred_at_utc)
-        step = sa.text(f"interval '1 {unit}'")
+        message_bucket = sa.func.date_trunc(unit.value, occurred_at_utc)
+        step = sa.text(f"interval '1 {unit.value}'")
 
         message_predicates = [
             col(AgentChatMessage.occurred_at) >= window_start,
@@ -125,8 +126,8 @@ class ConversationRepository:
             # that happened to see traffic.
             buckets = select(
                 sa.func.generate_series(
-                    sa.func.date_trunc(unit, sa.func.timezone("UTC", sa.literal(window_start))),
-                    sa.func.date_trunc(unit, sa.func.timezone("UTC", sa.literal(window_end))),
+                    sa.func.date_trunc(unit.value, sa.func.timezone("UTC", sa.literal(window_start))),
+                    sa.func.date_trunc(unit.value, sa.func.timezone("UTC", sa.literal(window_end))),
                     step,
                 ).label("bucket")
             ).subquery()
@@ -167,7 +168,7 @@ class ConversationRepository:
         window_start: datetime,
         window_end: datetime,
         *,
-        unit: str = "day",
+        unit: StatsGranularity = StatsGranularity.DAY,
         organization_id: UUID | None = None,
         agent_id: UUID | None = None,
         created_by_user_id: UUID | None = None,
@@ -182,7 +183,7 @@ class ConversationRepository:
         service, which is also the only place allowed to see both domains.
         """
         occurred_at_utc = sa.func.timezone("UTC", col(AgentChatMessage.occurred_at))
-        day = sa.func.date_trunc(unit, occurred_at_utc).label("day")
+        day = sa.func.date_trunc(unit.value, occurred_at_utc).label("day")
 
         agent_predicates = []
         if organization_id is not None:

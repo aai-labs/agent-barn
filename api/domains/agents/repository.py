@@ -37,6 +37,7 @@ from api.domains.events.catalog import (
     EVENT_REGISTRY,
 )
 from api.domains.events.repository import OutboxMessageRepository
+from api.domains.platform_admin.models import StatsGranularity
 from api.domains.rbac.catalog import (
     AGENT_OWNER_ROLE_ID,
     PERMISSION_ID_BY_KEY,
@@ -211,7 +212,7 @@ class AgentRepository:
         window_start: datetime,
         window_end: datetime,
         *,
-        unit: str = "day",
+        unit: StatsGranularity = StatsGranularity.DAY,
         organization_id: UUID | None = None,
         agent_id: UUID | None = None,
         created_by_user_id: UUID | None = None,
@@ -231,15 +232,15 @@ class AgentRepository:
         step, so the empty buckets are filled in at the same resolution.
         """
         predicates = self._stats_predicates(organization_id, agent_id, created_by_user_id, platform)
-        step = sa.text(f"interval '1 {unit}'")
+        step = sa.text(f"interval '1 {unit.value}'")
         created_utc = sa.func.timezone("UTC", col(Agent.created_at))
         deleted_utc = sa.func.timezone("UTC", col(Agent.deleted_at))
 
         with Session(self.delegate.engine) as session:
             buckets = select(
                 func.generate_series(
-                    func.date_trunc(unit, sa.func.timezone("UTC", sa.literal(window_start))),
-                    func.date_trunc(unit, sa.func.timezone("UTC", sa.literal(window_end))),
+                    func.date_trunc(unit.value, sa.func.timezone("UTC", sa.literal(window_start))),
+                    func.date_trunc(unit.value, sa.func.timezone("UTC", sa.literal(window_end))),
                     step,
                 ).label("bucket")
             ).subquery()
@@ -264,7 +265,7 @@ class AgentRepository:
 
             created_per_bucket = (
                 select(
-                    func.date_trunc(unit, created_utc).label("bucket"),
+                    func.date_trunc(unit.value, created_utc).label("bucket"),
                     func.count().label("created"),
                 )
                 .where(
@@ -278,7 +279,7 @@ class AgentRepository:
 
             deleted_per_bucket = (
                 select(
-                    func.date_trunc(unit, deleted_utc).label("bucket"),
+                    func.date_trunc(unit.value, deleted_utc).label("bucket"),
                     func.count().label("deleted"),
                 )
                 .where(

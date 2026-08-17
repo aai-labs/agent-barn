@@ -40,7 +40,7 @@ class PlatformStatsService:
         rows = self.conversation_service.platform_daily_message_counts(
             window.start,
             window.end,
-            unit=window.granularity.value,
+            unit=window.granularity,
             **stats_filter.model_dump(),
         )
         series = [
@@ -69,7 +69,7 @@ class PlatformStatsService:
         filters = stats_filter.model_dump()
 
         total, running, stopped, errored = self.agent_service.count_agents_for_stats(**filters)
-        unit = window.granularity.value
+        unit = window.granularity
         rows = self.agent_service.agent_inventory(window.start, window.end, unit=unit, **filters)
 
         # Activity is the union of the two telemetry streams, deduplicated per
