@@ -11,6 +11,7 @@ helmDefaults:
   # namespaces. So helm must never attempt to create it — the target namespace
   # always already exists.
   createNamespace: false
+  timeout: 600
 
 releases:
   - name: postgres-app
