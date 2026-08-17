@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { File } from "lucide-react";
 
 import { SkillFileTree } from "./skill-file-tree";
 
@@ -16,9 +17,9 @@ interface SkillFileBrowserProps {
   onFilesChange?: (files: FileEntry[]) => void;
 }
 
-const TREE_MIN = 160;
-const TREE_MAX = 480;
-const TREE_DEFAULT = 224;
+const TREE_MIN = 180;
+const TREE_MAX = 520;
+const TREE_DEFAULT = 252;
 
 /** Tree browser (left) + content viewer/editor (right) for a skill's files.
  * Read-only when onFilesChange is omitted; otherwise supports adding, removing,
@@ -117,17 +118,30 @@ export function SkillFileBrowser({ files, entryPath, readOnly = false, onFilesCh
       {/* File tree panel — draggable width on desktop, full width on mobile */}
       <div ref={treePanelRef} className="flex flex-col gap-2 flex-shrink-0 w-full md:min-w-0">
         <div
-          className="rounded-xl p-2 overflow-auto"
+          className="rounded-xl overflow-hidden flex flex-col"
           style={{ border: "1px solid var(--line)", background: "var(--bg-elev)", maxHeight: 420 }}
         >
-          <SkillFileTree
-            files={files}
-            activePath={activePath}
-            entryPath={entryPath}
-            onSelect={setSelectedPath}
-            onRemove={onFilesChange ? handleRemove : undefined}
-            onRename={onFilesChange ? handleRename : undefined}
-          />
+          <div
+            className="flex items-center justify-between px-3 flex-shrink-0"
+            style={{ height: 37, borderBottom: "1px solid var(--line)", background: "var(--bg-soft)" }}
+          >
+            <span className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: "var(--ink-4)" }}>
+              Files
+            </span>
+            <span className="text-[11px] font-mono" style={{ color: "var(--ink-4)" }}>
+              {files.length}
+            </span>
+          </div>
+          <div className="p-2 overflow-auto">
+            <SkillFileTree
+              files={files}
+              activePath={activePath}
+              entryPath={entryPath}
+              onSelect={setSelectedPath}
+              onRemove={onFilesChange ? handleRemove : undefined}
+              onRename={onFilesChange ? handleRename : undefined}
+            />
+          </div>
         </div>
         {onFilesChange && (
           <div className="flex flex-col gap-1 mt-2">
@@ -162,18 +176,28 @@ export function SkillFileBrowser({ files, entryPath, readOnly = false, onFilesCh
 
       {/* Resizer (desktop only) */}
       <div
-        className="hidden md:flex flex-shrink-0 cursor-col-resize items-center justify-center"
-        style={{ width: 6, background: "transparent" }}
+        className="group hidden md:flex flex-shrink-0 cursor-col-resize items-center justify-center"
+        style={{ width: 10, background: "transparent" }}
         onPointerDown={startResize}
       >
-        <div style={{ width: 2, height: 32, background: "var(--line)", borderRadius: 2 }} />
+        <div
+          className="transition-colors group-hover:bg-[var(--ink-4)]"
+          style={{ width: 2, height: 32, background: "var(--line-strong)", borderRadius: 2 }}
+        />
       </div>
 
       {/* Editor panel */}
-      <div className="flex-1 min-w-0 flex flex-col gap-2 md:overflow-hidden">
+      <div className="flex-1 min-w-0 flex flex-col md:overflow-hidden">
         {active ? (
-          <>
-            <div className="flex items-center gap-2 px-1">
+          <div
+            className="rounded-xl overflow-hidden flex flex-col flex-1 min-h-0 transition-colors focus-within:border-[var(--ink)]"
+            style={{ border: "1px solid var(--line)", background: "var(--bg-elev)" }}
+          >
+            <div
+              className="flex items-center gap-2 px-3 flex-shrink-0"
+              style={{ height: 37, borderBottom: "1px solid var(--line)", background: "var(--bg-soft)" }}
+            >
+              <File size={12} style={{ color: "var(--ink-4)", flexShrink: 0 }} />
               <span className="text-[12px] font-mono truncate" style={{ color: "var(--ink-3)" }}>
                 {active.path}
               </span>
@@ -188,23 +212,28 @@ export function SkillFileBrowser({ files, entryPath, readOnly = false, onFilesCh
             </div>
             {readOnly ? (
               <pre
-                className="af-input min-h-[360px] overflow-auto whitespace-pre-wrap font-mono text-[12.5px] leading-[1.65] m-0"
+                className="min-h-[360px] overflow-auto whitespace-pre-wrap font-mono text-[12.5px] leading-[1.65] m-0 p-3 flex-1"
+                style={{ color: "var(--ink)" }}
                 aria-label={`Content of ${active.path}`}
               >
                 {active.content}
               </pre>
             ) : (
               <textarea
-                className="af-input font-mono text-[12.5px] leading-[1.65] resize-y min-h-[360px] w-full"
+                className="font-mono text-[12.5px] leading-[1.65] resize-y min-h-[360px] w-full p-3 flex-1 outline-none"
+                style={{ color: "var(--ink)", background: "transparent" }}
                 aria-label={`Content of ${active.path}`}
                 value={active.content}
                 spellCheck={false}
                 onChange={(e) => updateContent(e.target.value)}
               />
             )}
-          </>
+          </div>
         ) : (
-          <div className="text-[13px]" style={{ color: "var(--ink-4)" }}>
+          <div
+            className="rounded-xl flex items-center justify-center min-h-[360px] text-[13px]"
+            style={{ border: "1px dashed var(--line-strong)", color: "var(--ink-4)" }}
+          >
             No files.
           </div>
         )}

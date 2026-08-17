@@ -72,9 +72,11 @@ function TreeRow({
           className="w-full flex items-center gap-1.5 rounded-lg py-1.5 text-left transition-colors hover:bg-[var(--bg-soft)]"
           style={{ paddingLeft: indent, paddingRight: 8 }}
           onClick={() => onToggle(node.path)}
+          title={node.name}
         >
           <ChevronRight
             size={13}
+            className="flex-shrink-0"
             style={{ color: "var(--ink-4)", transform: isOpen ? "rotate(90deg)" : "none", transition: "transform .12s" }}
           />
           <Folder size={13} style={{ color: "var(--ink-4)", flexShrink: 0 }} />
@@ -156,7 +158,9 @@ function FileTreeRow({
 
   return (
     <div
-      className="flex items-center gap-1.5 rounded-lg py-1.5"
+      className={`group/row flex items-center gap-1.5 rounded-lg py-1.5 transition-colors ${
+        isActive ? "" : "hover:bg-[var(--bg-soft)]"
+      }`}
       style={{
         paddingLeft: indent + 17,
         paddingRight: 8,
@@ -190,11 +194,12 @@ function FileTreeRow({
             type="button"
             className="flex-1 flex items-center gap-1.5 text-left min-w-0"
             onClick={() => onSelect(node.path)}
+            title={node.name}
           >
-            <File size={13} style={{ color: "var(--ink-4)", flexShrink: 0 }} />
+            <File size={13} style={{ color: isActive ? "var(--ink-3)" : "var(--ink-4)", flexShrink: 0 }} />
             <span
               className="text-[12.5px] font-mono truncate"
-              style={{ color: isActive ? "var(--ink)" : "var(--ink-3)" }}
+              style={{ color: isActive ? "var(--ink)" : "var(--ink-3)", fontWeight: isActive ? 500 : 400 }}
             >
               {node.name}
             </span>
@@ -208,11 +213,12 @@ function FileTreeRow({
             </span>
           )}
           {onRemove && (
-            <>
+            <div className="flex items-center gap-0.5 flex-shrink-0 opacity-0 group-hover/row:opacity-100 focus-within:opacity-100 transition-opacity">
               {onRename && (
                 <button
                   type="button"
-                  className="af-btn af-btn-ghost af-btn-icon af-btn-sm flex-shrink-0"
+                  className="af-btn af-btn-ghost flex-shrink-0 justify-center"
+                  style={{ width: 22, height: 22, padding: 0 }}
                   aria-label={`Rename ${node.path}`}
                   onClick={() => {
                     setRenameValue(node.name);
@@ -225,14 +231,15 @@ function FileTreeRow({
               {!isEntry && (
                 <button
                   type="button"
-                  className="af-btn af-btn-ghost af-btn-icon af-btn-sm flex-shrink-0"
+                  className="af-btn af-btn-ghost flex-shrink-0 justify-center"
+                  style={{ width: 22, height: 22, padding: 0 }}
                   aria-label={`Remove ${node.path}`}
                   onClick={() => onRemove(node.path)}
                 >
                   <XIcon />
                 </button>
               )}
-            </>
+            </div>
           )}
         </>
       )}
