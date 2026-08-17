@@ -15,6 +15,7 @@ from api.domains.agents.aai_cli_artifacts import (
     build_config_toml,
     build_env,
     build_integrations_policy_md,
+    build_local_tools_policy_md,
     build_setup_sh,
     build_tool_context_md,
     provider_secrets_map,
@@ -45,12 +46,15 @@ from api.domains.agents.models import (
     PROVIDER_DISPLAY_NAMES,
     Agent,
     AgentAssignedSkillRead,
+    AgentConfigurationRead,
+    AgentConfigurationVersionRead,
     AgentCreate,
     AgentFilter,
     AgentHealthRead,
     AgentLogHistoryRead,
     AgentLogSnapshot,
     AgentLogsRead,
+    AgentOverrideAuthorRead,
     AgentPlatform,
     AgentRead,
     AgentSecret,
@@ -64,11 +68,22 @@ from api.domains.agents.models import (
     AgentTeamsConfigRead,
     AgentTelegramConfig,
     AgentTelegramConfigRead,
+    AgentTemplateOverrideDraft,
+    AgentTemplateOverrideDraftRead,
+    AgentTemplateOverrideDraftUpdate,
+    AgentTemplateOverridePublish,
+    AgentTemplateOverrideRequiredSkillRead,
+    AgentTemplateOverrideSourceType,
+    AgentTemplateOverrideVersion,
+    AgentTemplateOverrideVersionRead,
+    AgentTemplatePinType,
+    AgentTemplateSelection,
     AgentType,
     AgentUpdate,
     ConfluenceContent,
     FirecrawlContent,
     GmailContent,
+    GoogleSheetsContent,
     JiraContent,
     PairRequest,
     SecretProvider,
@@ -77,12 +92,22 @@ from api.domains.agents.models import (
     encrypt_content,
     validate_content,
 )
+from api.domains.agents.override_repository import (
+    AgentOverrideConcurrencyError,
+    AgentOverrideRepository,
+    AgentOverrideSnapshot,
+)
 from api.domains.agents.repository import AgentRepository
 from api.domains.agents.runtime_policy import build_chat_commands_policy_md, build_role_scope_policy_md
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.token_service import SlackConfigTokenService
 from api.domains.events import EventDeliveryDispatcher, resolve_actor_identity
-from api.domains.events.catalog import AGENT_STARTED, AGENT_STOPPED
+from api.domains.events.catalog import (
+    AGENT_SECRET_ADDED,
+    AGENT_SECRET_UPDATED,
+    AGENT_STARTED,
+    AGENT_STOPPED,
+)
 from api.domains.organizations.lookup import OrganizationLookupService
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.shared_credentials.repository import SharedCredentialRepository
@@ -92,6 +117,7 @@ from api.domains.templates.models import AgentTemplate, PlatformTemplate, Templa
 from api.domains.templates.renderer import render_template
 from api.domains.templates.repository import TemplateRepository
 from api.domains.templates.requirements import effective_required_ids, split_requirements
+from api.domains.users.models import User
 from api.infrastructure.crypto import decrypt_token, encrypt_token
 from api.infrastructure.integration_validators import (
     PROVIDER_VALIDATORS,
@@ -221,6 +247,7 @@ def is_model_allowed(model: str, allowlist: list[str]) -> bool:
 @dataclass
 class AgentService:
     repository: AgentRepository
+    override_repository: AgentOverrideRepository
     authorization: AgentAuthorization
     template_repository: TemplateRepository
     k8s: KubernetesClient
@@ -239,6 +266,7 @@ class AgentService:
     @staticmethod
     def _set_pin(agent: Agent, template: AgentTemplate | PlatformTemplate) -> None:
         """Point an agent at a resolved template via the right mutually-exclusive FK."""
+        agent.agent_template_override_version_id = None
         if isinstance(template, PlatformTemplate):
             agent.platform_template_id = template.id
             agent.agent_template_id = None
@@ -248,6 +276,18 @@ class AgentService:
 
     def count_agents_in_error(self) -> int:
         return self.repository.count_agents_in_error()
+
+    def count_agents_for_stats(self, **filters) -> tuple[int, int, int, int]:
+        """(total, running, stopped, errored) Agent counts for the stats surfaces (AF-256).
+        Authority is enforced at the platform route; passing organization_id
+        narrows the same aggregate for a future Organization dashboard."""
+        return self.repository.count_agents_for_stats(**filters)
+
+    def agent_inventory(
+        self, window_start: dt.datetime, window_end: dt.datetime, **kwargs
+    ) -> list[tuple[dt.datetime, int, int]]:
+        """(bucket_start, existing, created) Agent inventory (AF-256)."""
+        return self.repository.agent_inventory_since(window_start, window_end, **kwargs)
 
     def _ensure_model_allowed(self, model: str | None, org_id: UUID) -> None:
         """Rejects models outside the allowlist. litellm is cluster-internal, so
@@ -404,6 +444,8 @@ class AgentService:
         allowed_actions: list[PermissionKey] | None = None,
         template_key: str = "",
         template_version: int = 0,
+        template_pin_type: AgentTemplatePinType = AgentTemplatePinType.SHARED,
+        override_version: int | None = None,
     ) -> AgentRead:
         slack_config_read = AgentSlackConfigRead.model_validate(slack_config) if slack_config else None
         if slack_config_read and slack_config:
@@ -443,6 +485,8 @@ class AgentService:
             organization_id=agent.organization_id,
             template_key=template_key,
             template_version=template_version,
+            template_pin_type=template_pin_type,
+            override_version=override_version,
             model=agent.model,
             approval_mode=agent.approval_mode,
             slack_config=slack_config_read,
@@ -471,6 +515,16 @@ class AgentService:
         template = self.template_repository.get_pinned_template(agent)
         required_map = self.template_repository.get_required_skill_map_for(template) if template else {}
         allowed_actions = self.authorization.allowed_actions(context, [agent])[agent.id]
+        pin_type = (
+            AgentTemplatePinType.OVERRIDE
+            if isinstance(template, AgentTemplateOverrideVersion)
+            else AgentTemplatePinType.SHARED
+        )
+        template_key = ""
+        if isinstance(template, AgentTemplateOverrideVersion):
+            template_key = template.source_template_key
+        elif template is not None:
+            template_key = template.template_key
         return self._build_agent_read(
             agent,
             slack_config,
@@ -480,8 +534,10 @@ class AgentService:
             skills,
             required_map,
             allowed_actions,
-            template_key=template.template_key if template else "",
+            template_key=template_key,
             template_version=template.version if template else 0,
+            template_pin_type=pin_type,
+            override_version=template.version if isinstance(template, AgentTemplateOverrideVersion) else None,
         )
 
     def _get_bot_display_name(self, agent_id: str, slack_config: AgentSlackConfig) -> str | None:
@@ -660,18 +716,27 @@ class AgentService:
 
         # Integration secrets are platform-independent. Persist them before any
         # Teams auto-start so they exist if/when the pod is later built.
+        secret_actor = resolve_actor_identity(context, org_id)
+        secret_actor_display = context.user.full_name or context.user.email
         secrets: list[AgentSecret] = []
+        secret_delivery_ids: list[UUID] = []
         for item in data.secrets:
             content = _enrich_atlassian_content(validate_content(item.provider, item.content))
-            saved = self.repository.save_secret(
-                AgentSecret(
-                    agent_id=agent.id,
-                    provider=item.provider,
-                    secret_name=PROVIDER_DISPLAY_NAMES[item.provider],
-                    content=encrypt_content(content, self.config.agent_token_encryption_key),
-                )
+            secret = AgentSecret(
+                agent_id=agent.id,
+                provider=item.provider,
+                secret_name=PROVIDER_DISPLAY_NAMES[item.provider],
+                content=encrypt_content(content, self.config.agent_token_encryption_key),
             )
-            secrets.append(saved)
+            secret_delivery_ids += self.repository.save_secret_with_event(
+                secret,
+                event_name=AGENT_SECRET_ADDED,
+                organization_id=org_id,
+                agent_name=agent.name,
+                actor=secret_actor,
+                actor_display=secret_actor_display,
+            )
+            secrets.append(secret)
 
         # Shared credentials: look up each, verify org ownership, create link rows
         for attach in data.shared_credentials:
@@ -687,16 +752,22 @@ class AgentService:
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Provider {shared_cred.provider} already has a credential in this request",
                 )
-            saved = self.repository.save_secret(
-                AgentSecret(
-                    agent_id=agent.id,
-                    provider=shared_cred.provider,
-                    secret_name=shared_cred.name,
-                    content=None,
-                    shared_credential_id=shared_cred.id,
-                )
+            secret = AgentSecret(
+                agent_id=agent.id,
+                provider=shared_cred.provider,
+                secret_name=shared_cred.name,
+                content=None,
+                shared_credential_id=shared_cred.id,
             )
-            secrets.append(saved)
+            secret_delivery_ids += self.repository.save_secret_with_event(
+                secret,
+                event_name=AGENT_SECRET_ADDED,
+                organization_id=org_id,
+                agent_name=agent.name,
+                actor=secret_actor,
+                actor_display=secret_actor_display,
+            )
+            secrets.append(secret)
 
         # Resolve and validate skills after all other secrets (manual + shared)
         # are known, so the Slack-derive check below sees the final skill set.
@@ -714,21 +785,26 @@ class AgentService:
             SecretProvider.SLACK in skill.required_providers for skill in skills_to_assign
         ):
             slack_content = validate_content(SecretProvider.SLACK, {"token": data.slack_bot_token})
-            secrets.append(
-                self.repository.save_secret(
-                    AgentSecret(
-                        agent_id=agent.id,
-                        provider=SecretProvider.SLACK,
-                        secret_name=PROVIDER_DISPLAY_NAMES[SecretProvider.SLACK],
-                        content=encrypt_content(slack_content, self.config.agent_token_encryption_key),
-                    )
-                )
+            slack_secret = AgentSecret(
+                agent_id=agent.id,
+                provider=SecretProvider.SLACK,
+                secret_name=PROVIDER_DISPLAY_NAMES[SecretProvider.SLACK],
+                content=encrypt_content(slack_content, self.config.agent_token_encryption_key),
             )
+            secret_delivery_ids += self.repository.save_secret_with_event(
+                slack_secret,
+                event_name=AGENT_SECRET_ADDED,
+                organization_id=org_id,
+                agent_name=agent.name,
+                actor=secret_actor,
+                actor_display=secret_actor_display,
+            )
+            secrets.append(slack_secret)
 
         if skills_to_assign:
             self.repository.save_skills([AgentSkill(agent_id=agent.id, skill_id=s.id) for s in skills_to_assign])
 
-        self.event_delivery_dispatcher.enqueue_immediate(created_delivery_ids)
+        self.event_delivery_dispatcher.enqueue_immediate(created_delivery_ids + secret_delivery_ids)
 
         if data.platform == AgentPlatform.TEAMS:
             return self.start_agent(agent.id, context)
@@ -759,6 +835,17 @@ class AgentService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Agent {agent_id} has no pinned template",
             )
+        if isinstance(pinned, AgentTemplateOverrideVersion):
+            if pinned.version != version:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Template version {version} not found for agent {agent_id}",
+                )
+            return self.template_repository.to_override_read(
+                pinned,
+                org_id,
+                self.template_repository.get_required_skills_for(pinned),
+            )
         template = self.template_repository.resolve_template(org_id, pinned.template_key, version)
         if not template:
             raise HTTPException(
@@ -766,6 +853,554 @@ class AgentService:
                 detail=f"Template version {version} not found for agent {agent_id}",
             )
         return self.template_repository.to_read(template, self.template_repository.get_required_skills_for(template))
+
+    def _get_available_source_update(
+        self,
+        agent: Agent,
+        organization_id: UUID,
+        active: AgentTemplateOverrideVersion,
+    ) -> AgentConfigurationVersionRead | None:
+        """Resolve a newer row in the Override's direct source lineage.
+
+        Source IDs are checked before looking for a newer version. If the
+        original source row was removed, the Override remains self-contained but
+        there is no update candidate to display.
+        """
+        baseline = active
+        if baseline.source_type == AgentTemplateOverrideSourceType.PLATFORM:
+            if baseline.source_platform_template_id is None:
+                return None
+            source = self.template_repository.get_platform_template_by_id(baseline.source_platform_template_id)
+            latest = self.template_repository.get_latest_platform_template(baseline.source_template_key)
+        else:
+            if baseline.source_agent_template_id is None:
+                return None
+            source = self.template_repository.get_org_template_by_id(
+                organization_id,
+                baseline.source_agent_template_id,
+            )
+            latest = self.template_repository.get_latest_org_template(
+                organization_id,
+                baseline.source_template_key,
+            )
+        if (
+            source is None
+            or source.template_key != baseline.source_template_key
+            or source.version != baseline.source_template_version
+            or latest is None
+            or latest.version <= baseline.source_template_version
+        ):
+            return None
+        return self._shared_configuration_read(
+            latest,
+            agent,
+            self.template_repository.get_required_skills_for(latest),
+        )
+
+    def get_agent_configuration(
+        self,
+        agent_id: UUID,
+        context: CurrentUserContext,
+    ) -> AgentConfigurationRead:
+        org_id = self._org_id(context)
+        agent = self.authorization.require_visible(context, agent_id)
+        active = self.template_repository.get_pinned_template(agent)
+        if active is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Agent {agent_id} has no pinned template",
+            )
+
+        draft = self.override_repository.get_draft(agent.id, org_id)
+        versions = self.override_repository.get_versions(agent.id, org_id)
+        override_version_ids = [version.id for version in versions]
+        if isinstance(active, AgentTemplateOverrideVersion) and active.id not in override_version_ids:
+            override_version_ids.append(active.id)
+        skills_by_version = self.override_repository.get_skills_for_versions(override_version_ids)
+
+        author_ids = {version.created_by_user_id for version in versions if version.created_by_user_id is not None}
+        if isinstance(active, AgentTemplateOverrideVersion) and active.created_by_user_id is not None:
+            author_ids.add(active.created_by_user_id)
+        if draft is not None and draft.created_by_user_id is not None:
+            author_ids.add(draft.created_by_user_id)
+        authors_by_id = self.override_repository.get_authors(author_ids)
+
+        if isinstance(active, AgentTemplateOverrideVersion):
+            active_read = self._active_override_read(
+                active,
+                skills=skills_by_version.get(active.id, []),
+                author=authors_by_id.get(active.created_by_user_id) if active.created_by_user_id is not None else None,
+            )
+            shared_key = active.source_template_key
+        else:
+            active_read = self._shared_configuration_read(
+                active,
+                agent,
+                self.template_repository.get_required_skills_for(active),
+            )
+            shared_key = active.template_key
+
+        draft_read = (
+            self._override_draft_read(
+                draft,
+                skills=self.override_repository.get_skills_for_draft(draft.id),
+                author=authors_by_id.get(draft.created_by_user_id) if draft.created_by_user_id is not None else None,
+            )
+            if draft is not None
+            else None
+        )
+        source_update = (
+            self._get_available_source_update(agent, org_id, active)
+            if isinstance(active, AgentTemplateOverrideVersion)
+            else None
+        )
+        version_reads = [
+            self._override_version_read(
+                version,
+                skills=skills_by_version.get(version.id, []),
+                author=authors_by_id.get(version.created_by_user_id)
+                if version.created_by_user_id is not None
+                else None,
+            )
+            for version in versions
+        ]
+        shared_reads = [
+            self._shared_configuration_read(
+                shared,
+                agent,
+                self.template_repository.get_required_skills_for(shared),
+            )
+            for shared in self.template_repository.get_shared_versions(org_id, shared_key)
+        ]
+        return AgentConfigurationRead(
+            agent_id=agent.id,
+            active=active_read,
+            draft=draft_read,
+            source_update=source_update,
+            shared_versions=shared_reads,
+            override_versions=version_reads,
+        )
+
+    def start_agent_override_draft(
+        self,
+        agent_id: UUID,
+        context: CurrentUserContext,
+    ) -> AgentTemplateOverrideDraftRead:
+        org_id = self._org_id(context)
+        agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
+        existing = self.override_repository.get_draft(agent.id, org_id)
+        if existing is not None:
+            return self._override_draft_read(
+                existing,
+                skills=self.override_repository.get_skills_for_draft(existing.id),
+                author=self.override_repository.get_author(existing.created_by_user_id),
+            )
+
+        active = self.template_repository.get_pinned_template(agent)
+        if active is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Agent {agent_id} has no pinned template",
+            )
+        if isinstance(active, AgentTemplateOverrideVersion):
+            required_map = self.override_repository.get_version_skill_map(active.id)
+            snapshot = AgentOverrideSnapshot.from_override_version(active, required_map)
+            expected_pin_type = "override"
+            expected_pin_id = active.id
+        else:
+            required_map = self.template_repository.get_required_skill_map_for(active)
+            snapshot = AgentOverrideSnapshot.from_template(active, required_map)
+            expected_pin_type = "platform" if isinstance(active, PlatformTemplate) else "organization"
+            expected_pin_id = active.id
+
+        draft = AgentTemplateOverrideDraft(
+            organization_id=org_id,
+            agent_id=agent.id,
+            created_by_user_id=context.user.id,
+            **snapshot.model_values(),
+        )
+        try:
+            saved = self.override_repository.create_draft(
+                draft,
+                snapshot,
+                expected_pin_type=expected_pin_type,
+                expected_pin_id=expected_pin_id,
+                actor=resolve_actor_identity(context, org_id),
+                actor_display=context.user.full_name or context.user.email,
+            )
+        except AgentOverrideConcurrencyError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        return self._override_draft_read(
+            saved,
+            skills=self.override_repository.get_skills_for_draft(saved.id),
+            author=self.override_repository.get_author(saved.created_by_user_id),
+        )
+
+    def update_agent_override_draft(
+        self,
+        agent_id: UUID,
+        data: AgentTemplateOverrideDraftUpdate,
+        context: CurrentUserContext,
+    ) -> AgentTemplateOverrideDraftRead:
+        org_id = self._org_id(context)
+        agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
+        updated = data.model_dump(exclude_unset=True, exclude={"expected_updated_at"})
+        skill_map = None
+        if data.required_skill_ids is not None or data.required_skill_groups is not None:
+            existing_map = self.override_repository.get_draft_skill_map_for_agent(agent.id, org_id)
+            if data.required_skill_ids is None:
+                standalone_ids = {skill_id for skill_id, group_key in existing_map.items() if group_key is None}
+            else:
+                standalone_ids = set(data.required_skill_ids)
+            if data.required_skill_groups is None:
+                groups_map = {
+                    skill_id: group_key for skill_id, group_key in existing_map.items() if group_key is not None
+                }
+            else:
+                groups_map = {
+                    skill_id: group.group_key for group in data.required_skill_groups for skill_id in group.skill_ids
+                }
+            skill_map = {skill_id: None for skill_id in standalone_ids} | groups_map
+            self._validate_override_requirements(agent, skill_map, org_id)
+        try:
+            saved = self.override_repository.update_draft(
+                agent.id,
+                org_id,
+                updated,
+                skill_map,
+                expected_updated_at=data.expected_updated_at,
+                actor=resolve_actor_identity(context, org_id),
+                actor_display=context.user.full_name or context.user.email,
+            )
+        except AgentOverrideConcurrencyError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        return self._override_draft_read(
+            saved,
+            skills=self.override_repository.get_skills_for_draft(saved.id),
+            author=self.override_repository.get_author(saved.created_by_user_id),
+        )
+
+    def publish_agent_override(
+        self,
+        agent_id: UUID,
+        data: AgentTemplateOverridePublish,
+        context: CurrentUserContext,
+    ) -> AgentTemplateOverrideVersionRead:
+        org_id = self._org_id(context)
+        agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
+        draft = self.override_repository.get_draft(agent.id, org_id)
+        if draft is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"No Override Draft for agent {agent_id}")
+        self._validate_override_requirements(
+            agent,
+            self.override_repository.get_draft_skill_map(draft.id),
+            org_id,
+        )
+        try:
+            published = self.override_repository.publish_draft(
+                agent.id,
+                org_id,
+                actor_user_id=context.user.id,
+                expected_updated_at=data.expected_updated_at,
+                actor=resolve_actor_identity(context, org_id),
+                actor_display=context.user.full_name or context.user.email,
+            )
+        except AgentOverrideConcurrencyError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        return self._override_version_read(
+            published,
+            skills=self.override_repository.get_skills_for_version(published.id),
+            author=self.override_repository.get_author(published.created_by_user_id),
+        )
+
+    def select_agent_template(
+        self,
+        agent_id: UUID,
+        data: AgentTemplateSelection,
+        context: CurrentUserContext,
+    ) -> AgentRead:
+        org_id = self._org_id(context)
+        agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
+        if agent.status == AgentStatus.RUNNING:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Agent {agent_id} must be stopped before selecting a Template Version",
+            )
+
+        selected_id: UUID
+        selected_template_key: str | None
+        selected_version: int | None
+        required_map: dict[UUID, str | None]
+        if data.selection_type == "platform":
+            assert data.template_key is not None and data.template_version is not None
+            selected = self.template_repository.get_platform_template_by_key_version(
+                data.template_key,
+                data.template_version,
+            )
+            if selected is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Platform Template Version not found")
+            selected_id = selected.id
+            selected_template_key = selected.template_key
+            selected_version = selected.version
+            required_map = self.template_repository.get_required_skill_map_for(selected)
+        elif data.selection_type == "organization":
+            assert data.template_key is not None and data.template_version is not None
+            selected = self.template_repository.get_org_template_by_key_version(
+                org_id,
+                data.template_key,
+                data.template_version,
+            )
+            if selected is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Organization Template Version not found",
+                )
+            selected_id = selected.id
+            selected_template_key = selected.template_key
+            selected_version = selected.version
+            required_map = self.template_repository.get_required_skill_map_for(selected)
+        else:
+            assert data.override_version is not None
+            selected_override = self.override_repository.get_version(
+                agent.id,
+                org_id,
+                data.override_version,
+            )
+            if selected_override is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Agent Template Override Version not found",
+                )
+            selected_id = selected_override.id
+            selected_template_key = None
+            selected_version = selected_override.version
+            required_map = self.override_repository.get_version_skill_map(selected_override.id)
+        self._validate_override_requirements(agent, required_map, org_id)
+        try:
+            selected_agent = self.override_repository.select_pin(
+                agent.id,
+                org_id,
+                selection_type=data.selection_type,
+                selected_id=selected_id,
+                expected_agent_updated_at=data.expected_agent_updated_at,
+                actor=resolve_actor_identity(context, org_id),
+                actor_display=context.user.full_name or context.user.email,
+                template_key=selected_template_key,
+                selected_version=selected_version,
+            )
+        except AgentOverrideConcurrencyError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        return self._get_agent_read(selected_agent, context)
+
+    def _validate_override_requirements(
+        self,
+        agent: Agent,
+        required_map: dict[UUID, str | None],
+        org_id: UUID,
+    ) -> None:
+        if not required_map:
+            return
+        accessible = {skill.id: skill for skill in self.skill_repository.find_accessible_for_org(org_id)}
+        missing_ids = set(required_map) - accessible.keys()
+        if missing_ids:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Override requires a Skill that is no longer available to this Organization",
+            )
+        assigned_ids = {skill.id for _, skill in self.skill_repository.get_agent_skills_with_details(agent.id)}
+        standalone_ids, groups = split_requirements(required_map)
+        if standalone_ids - assigned_ids:
+            missing = ", ".join(sorted(accessible[skill_id].name for skill_id in standalone_ids - assigned_ids))
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Required template skills must be assigned to the Agent: {missing}",
+            )
+        for group_key, member_ids in sorted(groups.items()):
+            if not member_ids & assigned_ids:
+                names = ", ".join(sorted(accessible[skill_id].name for skill_id in member_ids))
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"At least one of these template skills must be assigned to the Agent: {names}",
+                )
+        providers = {secret.provider for secret in self.repository.get_secrets_for_agent(agent.id)}
+        if agent.platform == AgentPlatform.SLACK:
+            providers.add(SecretProvider.SLACK)
+        for skill_id in required_map:
+            missing_providers = set(accessible[skill_id].required_providers) - providers
+            if missing_providers:
+                names = ", ".join(sorted(provider.value for provider in missing_providers))
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Required Skill '{accessible[skill_id].name}' needs configured providers: {names}",
+                )
+
+    def _override_draft_read(
+        self,
+        draft: AgentTemplateOverrideDraft,
+        *,
+        skills: list[tuple[Skill, str | None]],
+        author: User | None,
+    ) -> AgentTemplateOverrideDraftRead:
+        return AgentTemplateOverrideDraftRead(
+            **self._override_snapshot_values(
+                draft,
+                agent_id=draft.agent_id,
+                version=None,
+                skills=skills,
+                author=author,
+            ),
+        )
+
+    def _override_version_read(
+        self,
+        version: AgentTemplateOverrideVersion,
+        *,
+        skills: list[tuple[Skill, str | None]],
+        author: User | None,
+    ) -> AgentTemplateOverrideVersionRead:
+        values = self._override_snapshot_values(
+            version,
+            agent_id=version.agent_id,
+            version=version.version,
+            skills=skills,
+            author=author,
+        )
+        return AgentTemplateOverrideVersionRead(**values)
+
+    def _active_override_read(
+        self,
+        version: AgentTemplateOverrideVersion,
+        *,
+        skills: list[tuple[Skill, str | None]],
+        author: User | None,
+    ) -> AgentConfigurationVersionRead:
+        return AgentConfigurationVersionRead(
+            **self._override_snapshot_values(
+                version,
+                agent_id=version.agent_id,
+                version=version.version,
+                skills=skills,
+                author=author,
+            ),
+            state="active",
+            pin_type=AgentTemplatePinType.OVERRIDE,
+        )
+
+    @staticmethod
+    def _required_skill_read(
+        skill: Skill,
+        group_key: str | None,
+    ) -> AgentTemplateOverrideRequiredSkillRead:
+        source = skill.source.value if hasattr(skill.source, "value") else skill.source
+        required_providers = [
+            provider.value if hasattr(provider, "value") else provider for provider in skill.required_providers
+        ]
+        return AgentTemplateOverrideRequiredSkillRead(
+            id=skill.id,
+            organization_id=skill.organization_id,
+            name=skill.name,
+            source=source,
+            required_providers=required_providers,
+            tools_pointer=skill.tools_pointer,
+            group_key=group_key,
+            created_at=skill.created_at,
+            updated_at=skill.updated_at,
+        )
+
+    def _override_snapshot_values(
+        self,
+        snapshot: AgentTemplateOverrideDraft | AgentTemplateOverrideVersion,
+        *,
+        agent_id: UUID,
+        version: int | None,
+        skills: list[tuple[Skill, str | None]],
+        author: User | None,
+    ) -> dict[str, Any]:
+        return {
+            "id": snapshot.id,
+            "agent_id": agent_id,
+            "version": version,
+            "template_key": snapshot.source_template_key,
+            "template_name": snapshot.template_name,
+            "description": snapshot.description,
+            "soul_md": snapshot.soul_md,
+            "identity_md": snapshot.identity_md,
+            "user_md": snapshot.user_md,
+            "tools_md": snapshot.tools_md,
+            "agents_md": snapshot.agents_md,
+            "boot_md": snapshot.boot_md,
+            "bootstrap_md": snapshot.bootstrap_md,
+            "heartbeat_md": snapshot.heartbeat_md,
+            "source_type": snapshot.source_type,
+            "source_template_key": snapshot.source_template_key,
+            "source_template_version": snapshot.source_template_version,
+            "source_platform_template_id": snapshot.source_platform_template_id,
+            "source_agent_template_id": snapshot.source_agent_template_id,
+            "created_by_user_id": snapshot.created_by_user_id,
+            "author": (
+                AgentOverrideAuthorRead(
+                    user_id=author.id,
+                    email=str(author.email),
+                    full_name=author.full_name,
+                )
+                if author is not None
+                else None
+            ),
+            "required_skills": [self._required_skill_read(skill, group_key) for skill, group_key in skills],
+            "created_at": snapshot.created_at,
+            "updated_at": snapshot.updated_at,
+        }
+
+    def _shared_configuration_read(
+        self,
+        template: AgentTemplate | PlatformTemplate,
+        agent: Agent,
+        skills: list[tuple[Skill, str | None]],
+    ) -> AgentConfigurationVersionRead:
+        source_type = (
+            AgentTemplateOverrideSourceType.PLATFORM
+            if isinstance(template, PlatformTemplate)
+            else AgentTemplateOverrideSourceType.ORGANIZATION
+        )
+        return AgentConfigurationVersionRead(
+            id=template.id,
+            agent_id=agent.id,
+            version=template.version,
+            template_key=template.template_key,
+            template_name=template.template_name,
+            description=template.description,
+            soul_md=template.soul_md,
+            identity_md=template.identity_md,
+            user_md=template.user_md,
+            tools_md=template.tools_md,
+            agents_md=template.agents_md,
+            boot_md=template.boot_md,
+            bootstrap_md=template.bootstrap_md,
+            heartbeat_md=template.heartbeat_md,
+            source_type=source_type,
+            source_template_key=template.template_key,
+            source_template_version=template.version,
+            source_platform_template_id=template.id if isinstance(template, PlatformTemplate) else None,
+            source_agent_template_id=template.id if isinstance(template, AgentTemplate) else None,
+            created_by_user_id=None,
+            author=None,
+            required_skills=[self._required_skill_read(skill, group_key) for skill, group_key in skills],
+            created_at=template.created_at,
+            updated_at=template.updated_at,
+            state="active" if self._is_active_shared_pin(agent, template.id) else "published",
+            pin_type=AgentTemplatePinType.SHARED,
+            template_source="pre-defined" if isinstance(template, PlatformTemplate) else "custom",
+        )
+
+    @staticmethod
+    def _is_active_shared_pin(agent: Agent, template_id: UUID) -> bool:
+        return template_id in {agent.platform_template_id, agent.agent_template_id}
 
     def list_agents(
         self,
@@ -797,8 +1432,14 @@ class AgentService:
                 skills_by_agent.get(agent.id, []),
                 req_maps_by_agent.get(agent.id, {}),
                 allowed_actions.get(agent.id, []),
-                template_key=pin_info.get(agent.id, ("", 0))[0],
-                template_version=pin_info.get(agent.id, ("", 0))[1],
+                template_key=pin_info.get(agent.id, ("", 0, "shared", None))[0],
+                template_version=pin_info.get(agent.id, ("", 0, "shared", None))[1],
+                template_pin_type=(
+                    AgentTemplatePinType.OVERRIDE
+                    if pin_info.get(agent.id, ("", 0, "shared", None))[2] == "override"
+                    else AgentTemplatePinType.SHARED
+                ),
+                override_version=pin_info.get(agent.id, ("", 0, "shared", None))[3],
             )
             for agent in agents
         ]
@@ -1015,6 +1656,10 @@ class AgentService:
         if data.skill_ids or data.removed_secret_providers:
             self._validate_skill_update(agent, data, org_id)
 
+        secret_actor = resolve_actor_identity(context, org_id)
+        secret_actor_display = context.user.full_name or context.user.email
+        secret_delivery_ids: list[UUID] = []
+
         # Integration secrets: platform-independent. Remove first, then upsert
         # (the AgentUpdate validator already forbids a provider in both lists).
         # Validate and encrypt all upserts before touching the DB so that a
@@ -1032,22 +1677,42 @@ class AgentService:
                 for item in data.secrets or []
             ]
             for provider in updated.get("removed_secret_providers") or []:
-                self.repository.delete_secret(agent.id, provider)
+                secret_delivery_ids += self.repository.delete_secret_with_event(
+                    agent.id,
+                    provider,
+                    organization_id=org_id,
+                    agent_name=agent.name,
+                    actor=secret_actor,
+                    actor_display=secret_actor_display,
+                )
             for item, encrypted in upserts:
                 existing = self.repository.get_secret(agent.id, item.provider)
                 if existing:
                     existing.content = encrypted
                     existing.shared_credential_id = None
                     existing.secret_name = PROVIDER_DISPLAY_NAMES[item.provider]
-                    self.repository.save_secret(existing)
+                    secret_delivery_ids += self.repository.save_secret_with_event(
+                        existing,
+                        event_name=AGENT_SECRET_UPDATED,
+                        organization_id=org_id,
+                        agent_name=agent.name,
+                        actor=secret_actor,
+                        actor_display=secret_actor_display,
+                    )
                 else:
-                    self.repository.save_secret(
-                        AgentSecret(
-                            agent_id=agent.id,
-                            provider=item.provider,
-                            secret_name=PROVIDER_DISPLAY_NAMES[item.provider],
-                            content=encrypted,
-                        )
+                    secret = AgentSecret(
+                        agent_id=agent.id,
+                        provider=item.provider,
+                        secret_name=PROVIDER_DISPLAY_NAMES[item.provider],
+                        content=encrypted,
+                    )
+                    secret_delivery_ids += self.repository.save_secret_with_event(
+                        secret,
+                        event_name=AGENT_SECRET_ADDED,
+                        organization_id=org_id,
+                        agent_name=agent.name,
+                        actor=secret_actor,
+                        actor_display=secret_actor_display,
                     )
 
         # Shared credential attachments
@@ -1078,16 +1743,29 @@ class AgentService:
                     existing.content = None
                     existing.shared_credential_id = shared_cred.id
                     existing.secret_name = shared_cred.name
-                    self.repository.save_secret(existing)
+                    secret_delivery_ids += self.repository.save_secret_with_event(
+                        existing,
+                        event_name=AGENT_SECRET_UPDATED,
+                        organization_id=org_id,
+                        agent_name=agent.name,
+                        actor=secret_actor,
+                        actor_display=secret_actor_display,
+                    )
                 else:
-                    self.repository.save_secret(
-                        AgentSecret(
-                            agent_id=agent.id,
-                            provider=shared_cred.provider,
-                            secret_name=shared_cred.name,
-                            content=None,
-                            shared_credential_id=shared_cred.id,
-                        )
+                    secret = AgentSecret(
+                        agent_id=agent.id,
+                        provider=shared_cred.provider,
+                        secret_name=shared_cred.name,
+                        content=None,
+                        shared_credential_id=shared_cred.id,
+                    )
+                    secret_delivery_ids += self.repository.save_secret_with_event(
+                        secret,
+                        event_name=AGENT_SECRET_ADDED,
+                        organization_id=org_id,
+                        agent_name=agent.name,
+                        actor=secret_actor,
+                        actor_display=secret_actor_display,
                     )
 
         # Apply skill changes
@@ -1102,6 +1780,9 @@ class AgentService:
         # anymore (covers skill removal). Runs last, after every other
         # secret/skill validation and persistence step above, so a failure
         # earlier in this method never leaves this mirrored secret orphaned.
+        # Goes through the event-emitting secret methods (not plain save/delete)
+        # so this mirrored write gets the same agent.secret.* audit coverage as
+        # every other secret mutation in this method.
         if agent.platform == AgentPlatform.SLACK and (
             data.skill_ids or data.removed_skill_ids or "slack_bot_token" in updated
         ):
@@ -1126,21 +1807,43 @@ class AgentService:
                     existing_slack_secret = self.repository.get_secret(agent.id, SecretProvider.SLACK)
                     if existing_slack_secret:
                         existing_slack_secret.content = slack_secret_content
-                        self.repository.save_secret(existing_slack_secret)
+                        secret_delivery_ids += self.repository.save_secret_with_event(
+                            existing_slack_secret,
+                            event_name=AGENT_SECRET_UPDATED,
+                            organization_id=org_id,
+                            agent_name=agent.name,
+                            actor=secret_actor,
+                            actor_display=secret_actor_display,
+                        )
                     else:
-                        self.repository.save_secret(
+                        secret_delivery_ids += self.repository.save_secret_with_event(
                             AgentSecret(
                                 agent_id=agent.id,
                                 provider=SecretProvider.SLACK,
                                 secret_name=PROVIDER_DISPLAY_NAMES[SecretProvider.SLACK],
                                 content=slack_secret_content,
-                            )
+                            ),
+                            event_name=AGENT_SECRET_ADDED,
+                            organization_id=org_id,
+                            agent_name=agent.name,
+                            actor=secret_actor,
+                            actor_display=secret_actor_display,
                         )
             else:
-                self.repository.delete_secret(agent.id, SecretProvider.SLACK)
+                secret_delivery_ids += self.repository.delete_secret_with_event(
+                    agent.id,
+                    SecretProvider.SLACK,
+                    organization_id=org_id,
+                    agent_name=agent.name,
+                    actor=secret_actor,
+                    actor_display=secret_actor_display,
+                )
 
-        self.repository.save(agent)
-        return self._get_agent_read(agent, context)
+        update_result = self.repository.update_scalar_fields_with_event(
+            agent, actor=secret_actor, actor_display=secret_actor_display
+        )
+        self.event_delivery_dispatcher.enqueue_immediate(update_result.delivery_ids + secret_delivery_ids)
+        return self._get_agent_read(update_result.agent, context)
 
     def start_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
         org_id = self._org_id(context)
@@ -1404,17 +2107,20 @@ class AgentService:
                 ciphertext = s.content
             assert ciphertext is not None
             decrypted[provider] = decrypt_content(provider, ciphertext, key)
-        self._backfill_gmail_client_credentials(decrypted)
-        gmail = decrypted.get(SecretProvider.GMAIL)
-        if isinstance(gmail, GmailContent) and (not gmail.client_id or not gmail.client_secret):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    "Gmail credential is missing a client id/secret and Google OAuth is "
-                    "not configured on this server. Reconnect via Authenticate with "
-                    "Google, or configure google_cloud_client_id/secret."
-                ),
-            )
+        self._backfill_google_client_credentials(decrypted)
+        for google_provider in (SecretProvider.GMAIL, SecretProvider.GOOGLE_SHEETS):
+            content = decrypted.get(google_provider)
+            if not isinstance(content, (GmailContent, GoogleSheetsContent)):
+                continue
+            if not content.client_id or not content.client_secret:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        f"{PROVIDER_DISPLAY_NAMES[google_provider]} is missing a client id/secret "
+                        "and Google OAuth is not configured on this server. Reconnect via "
+                        "Authenticate with Google, or configure google_cloud_client_id/secret."
+                    ),
+                )
         store = {p: c for p, c in decrypted.items() if p.value in provider_secrets_map}
         aai_home = "/opt/data" if agent.agent_type == AgentType.HERMES else "/home/node"
         aai_config_toml = build_config_toml(decrypted, home_dir=aai_home) if decrypted else None
@@ -1485,9 +2191,13 @@ class AgentService:
         # The chat-commands and role-scope policies ride along unconditionally — they
         # apply to every agent, integrations or not, and to custom templates we don't
         # control.
+        # Credential-free tools ride in their own block: the integrations policy is built
+        # from configured secrets, so a tool with no provider would otherwise be invisible
+        # in the auto-loaded prompt no matter that its skill is mounted.
         agents_md = (
             rendered.agents_md
             + build_integrations_policy_md(decrypted)
+            + build_local_tools_policy_md(s.name for s in mounted_skills)
             + build_chat_commands_policy_md()
             + build_role_scope_policy_md()
         )
@@ -1722,8 +2432,12 @@ class AgentService:
             slack_config.bot_token_hash = None
             self.repository.save_slack_config(slack_config)
 
-        agent.deleted_at = dt.datetime.now(dt.UTC)
-        self.repository.save(agent)
+        delete_result = self.repository.soft_delete_with_event(
+            agent,
+            actor=resolve_actor_identity(context, agent.organization_id),
+            actor_display=context.user.full_name or context.user.email,
+        )
+        self.event_delivery_dispatcher.enqueue_immediate(delete_result.delivery_ids)
 
         if agent.litellm_key_encrypted:
             try:
@@ -1893,17 +2607,19 @@ class AgentService:
                 detail="Could not load Slack users right now. Please try again.",
             ) from exc
 
-    def _backfill_gmail_client_credentials(self, decrypted: dict[SecretProvider, Any]) -> None:
-        """Gmail secrets created via the OAuth flow store only the refresh token; inject
+    def _backfill_google_client_credentials(self, decrypted: dict[SecretProvider, Any]) -> None:
+        """Secrets created via the Google OAuth flow store only the refresh token; inject
         the app-owned client id/secret from config. Backfill only when empty so legacy
         secrets (which carry their own client the refresh token was issued under) keep
         working."""
-        gmail = decrypted.get(SecretProvider.GMAIL)
-        if isinstance(gmail, GmailContent):
-            if not gmail.client_id:
-                gmail.client_id = self.config.google_cloud_client_id
-            if not gmail.client_secret:
-                gmail.client_secret = self.config.google_cloud_client_secret
+        for provider in (SecretProvider.GMAIL, SecretProvider.GOOGLE_SHEETS):
+            content = decrypted.get(provider)
+            if not isinstance(content, (GmailContent, GoogleSheetsContent)):
+                continue
+            if not content.client_id:
+                content.client_id = self.config.google_cloud_client_id
+            if not content.client_secret:
+                content.client_secret = self.config.google_cloud_client_secret
 
     def validate_integration(self, agent_id: UUID, provider: SecretProvider, context: CurrentUserContext) -> dict:
         """Validate an existing secret on demand. Never persists — returns result directly."""
@@ -1933,7 +2649,7 @@ class AgentService:
             ciphertext = secret.content
         assert ciphertext is not None
         content = decrypt_content(provider, ciphertext, self.config.agent_token_encryption_key)
-        self._backfill_gmail_client_credentials({provider: content})
+        self._backfill_google_client_credentials({provider: content})
         result = validator(content)  # type: ignore[arg-type]
         return format_validation_result(result)
 

@@ -15,9 +15,15 @@ REDIS_URL=redis://localhost:6379/0
 SECRET_SIGNING_KEY=replace_with_a_secure_random_value
 PLATFORM_ADMIN_CREDENTIALS=admin@example.com:replace_with_secure_password
 
-# Optional: if unset, email delivery is disabled and send attempts are logged.
-EMAIL_SERVER_CREDENTIAL=
-EMAIL_SMTP_SERVER=
+# Optional: if unset, email delivery is disabled and send attempts are logged. All three
+# are required for delivery. Transactional mail goes through Cloudflare Email Sending.
+# The token needs the "Email Sending: Edit" permission on the account below, and
+# SENDER_EMAIL's domain must be onboarded and Verified there or Cloudflare rejects sends.
+# Each environment sends from its own `mail.`-style subdomain to keep sending reputation
+# off the root domain. Example: noreply@mail.agentbarn.dev
+CLOUDFLARE_ACCOUNT_ID=
+CLOUDFLARE_API_TOKEN=
+SENDER_EMAIL=
 
 # Optional: shared Google OAuth 2.0 "Web application" client for the Gmail
 # "Authenticate with Google" flow. If unset, the flow is disabled. Register

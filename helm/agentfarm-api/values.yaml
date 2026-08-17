@@ -33,12 +33,14 @@ agentTokenEncryptionKey: ""
 environment: ""
 webAppUrl: ""
 
-# Transactional email (invites, password reset, verification). Leave blank to disable
-# email delivery — the app logs a warning and no-ops sends. Both credential and SMTP
-# server must be set for delivery to be enabled.
-emailServerCredential: ""
-emailSmtpServer: ""
-emailFromAddress: ""
+# Transactional email (invites, password reset, verification) via Cloudflare Email
+# Sending. Leave blank to disable email delivery — the app logs a warning and no-ops
+# sends. All three must be set for delivery to be enabled. senderEmail's domain must be
+# onboarded and Verified for Email Sending in the Cloudflare account, and each environment
+# sends from its own `mail.`-style subdomain (e.g. noreply@mail.agentbarn.dev).
+cloudflareAccountId: ""
+cloudflareApiToken: ""
+senderEmail: ""
 
 # Shared Google OAuth 2.0 "Web application" client for the Gmail "Authenticate with
 # Google" flow. Leave blank to disable the flow. Registered redirect URI must be

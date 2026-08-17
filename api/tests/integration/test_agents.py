@@ -1,5 +1,7 @@
 import json
+from typing import cast
 from unittest.mock import MagicMock, patch
+from uuid import uuid7
 
 import httpx
 from fastapi import status
@@ -18,17 +20,36 @@ from api.domains.agents.models import (
     AgentPlatform,
     AgentSecret,
     AgentStatus,
+    AgentTemplateOverrideSourceType,
+    AgentTemplateOverrideVersion,
     AgentType,
     SecretProvider,
     SlackContent,
     encrypt_content,
     validate_content,
 )
+from api.domains.agents.override_repository import AgentOverrideRepository
 from api.domains.agents.repository import AgentRepository
 from api.domains.agents.service import AgentService
-from api.domains.events.catalog import AGENT_CREATED, AGENT_STARTED, AGENT_STOPPED
+from api.domains.events.catalog import (
+    AGENT_CREATED,
+    AGENT_DELETED,
+    AGENT_SECRET_ADDED,
+    AGENT_SECRET_REMOVED,
+    AGENT_SECRET_UPDATED,
+    AGENT_STARTED,
+    AGENT_STOPPED,
+    AGENT_TEMPLATE_OVERRIDE_DRAFT_SAVED,
+    AGENT_TEMPLATE_OVERRIDE_PUBLISHED,
+    AGENT_TEMPLATE_OVERRIDE_SELECTED,
+    AGENT_UPDATED,
+)
 from api.domains.events.models import EventDeliveryStatus, OutboxMessage
+from api.domains.events.processor import EventDeliveryProcessor
+from api.domains.events.repository import OutboxMessageRepository
+from api.domains.events.security_audit import SecurityAuditRepository
 from api.domains.organizations.repository import OrganizationRepository
+from api.domains.templates.models import AgentTemplate, PlatformTemplate
 from api.domains.templates.repository import TemplateRepository
 from api.infrastructure.kubernetes.client import KubernetesClient
 from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
@@ -111,6 +132,39 @@ def _auth(context) -> dict:
 
 def _outbox_messages(context) -> list[OutboxMessage]:
     return context.injector.get(PostgresRepositoryDelegate).find_all(OutboxMessage)
+
+
+def _pin_override_to_source(
+    context, source: AgentTemplate | PlatformTemplate, source_type: AgentTemplateOverrideSourceType
+):
+    version = AgentTemplateOverrideVersion(
+        organization_id=context.agent.organization_id,
+        agent_id=context.agent.id,
+        version=1,
+        created_by_user_id=context.user.id,
+        source_type=source_type,
+        source_template_key=source.template_key,
+        source_template_version=source.version,
+        source_platform_template_id=source.id if source_type == AgentTemplateOverrideSourceType.PLATFORM else None,
+        source_agent_template_id=source.id if source_type == AgentTemplateOverrideSourceType.ORGANIZATION else None,
+        template_name=source.template_name,
+        description=source.description,
+        soul_md=source.soul_md,
+        identity_md=source.identity_md,
+        user_md=source.user_md,
+        tools_md=source.tools_md,
+        agents_md=source.agents_md,
+        boot_md=source.boot_md,
+        bootstrap_md=source.bootstrap_md,
+        heartbeat_md=source.heartbeat_md,
+    )
+    delegate = context.injector.get(PostgresRepositoryDelegate)
+    delegate.save(version)
+    context.agent.platform_template_id = None
+    context.agent.agent_template_id = None
+    context.agent.agent_template_override_version_id = version.id
+    context.injector.get(AgentRepository).save(context.agent)
+    return version
 
 
 def test_create_slack_agent_returns_201_stopped():
@@ -538,6 +592,36 @@ def test_patch_agent_adds_secret():
             assert_that(jira["secret_name"], equal_to("Jira credential"))
 
 
+def test_patch_agent_adds_google_sheets_secret():
+    """Exercises the provider check constraint: a provider missing from the migration
+    is rejected by the database, not by validation, so this only passes once both the
+    enum and the constraint know about google_sheets."""
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I patch the agent with a google sheets secret"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={
+                    "secrets": [
+                        {
+                            "provider": "google_sheets",
+                            "content": {"refresh_token": "rt-sheets"},
+                        }
+                    ]
+                },
+                headers=_auth(context),
+            )
+
+        with then("it returns 200 and the agent exposes the google sheets secret"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(_providers(response), equal_to(["google_sheets"]))
+            sheets = response.json()["secrets"][0]
+            assert_that(sheets["secret_name"], equal_to("Google Sheets credential"))
+            # Read APIs return provider and label, never credential contents.
+            assert_that("content" in sheets, equal_to(False))
+
+
 def test_patch_agent_upserts_existing_secret():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         client: TestClient = context.client
@@ -952,6 +1036,160 @@ def test_stop_agent_emits_stopped_domain_event_and_delivery():
             # after is best-effort (falls back to background reconciliation on failure),
             # so whether it's already ENQUEUED here depends on Redis being reachable.
             assert_that(deliveries[0].status, is_in([EventDeliveryStatus.PENDING, EventDeliveryStatus.ENQUEUED]))
+
+
+def test_update_agent_emits_updated_domain_event_with_field_changes():
+    with given([*_GIVEN, there_is_an_agent(name="Old Name")]) as context:
+        client: TestClient = context.client
+
+        with when("I rename the agent"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"name": "New Name"},
+                headers=_auth(context),
+            )
+
+        with then("an agent.updated Domain Event carries the before/after name"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            messages = _outbox_messages(context)
+            updated_events = [message for message in messages if message.event_name == AGENT_UPDATED]
+            assert_that(len(updated_events), equal_to(1))
+            field_changes = updated_events[0].payload["field_changes"]
+            assert_that(field_changes["name"]["previous"], equal_to("Old Name"))
+            assert_that(field_changes["name"]["new"], equal_to("New Name"))
+            # Regression: actor_display must be the acting user's name, not the
+            # ActorIdentity type string ("MEMBERSHIP"/"USER").
+            assert_that(updated_events[0].payload["actor_display"], equal_to("Test User"))
+
+
+def test_update_agent_with_no_tracked_field_change_emits_no_updated_event():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I patch the agent with only a secret, no tracked scalar field"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"secrets": [{"provider": "jira", "content": _JIRA_CONTENT}]},
+                headers=_auth(context),
+            )
+
+        with then("no agent.updated Domain Event is staged"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            messages = _outbox_messages(context)
+            updated_events = [message for message in messages if message.event_name == AGENT_UPDATED]
+            assert_that(len(updated_events), equal_to(0))
+
+
+def test_delete_agent_emits_deleted_domain_event():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I delete the agent"):
+            response = client.delete(f"{_BASE}/{context.agent.id}", headers=_auth(context))
+
+        with then("an agent.deleted Domain Event is persisted"):
+            assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+            messages = _outbox_messages(context)
+            deleted_events = [message for message in messages if message.event_name == AGENT_DELETED]
+            assert_that(len(deleted_events), equal_to(1))
+            assert_that(deleted_events[0].payload["agent_id"], equal_to(str(context.agent.id)))
+            assert_that(deleted_events[0].payload["actor_display"], equal_to("Test User"))
+
+
+def test_patch_agent_add_secret_emits_secret_added_domain_event():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I add a jira secret"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"secrets": [{"provider": "jira", "content": _JIRA_CONTENT}]},
+                headers=_auth(context),
+            )
+
+        with then("an agent.secret.added Domain Event is persisted without secret content"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            messages = _outbox_messages(context)
+            added_events = [message for message in messages if message.event_name == AGENT_SECRET_ADDED]
+            assert_that(len(added_events), equal_to(1))
+            assert_that(added_events[0].payload["provider"], equal_to("jira"))
+            assert_that(added_events[0].payload, is_not(has_key("content")))
+            assert_that(added_events[0].payload["actor_display"], equal_to("Test User"))
+
+
+def test_patch_agent_update_secret_emits_secret_updated_domain_event():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I patch the same provider twice with different content"):
+            client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"secrets": [{"provider": "jira", "content": _JIRA_CONTENT}]},
+                headers=_auth(context),
+            )
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"secrets": [{"provider": "jira", "content": {**_JIRA_CONTENT, "api_token": "new-tok"}}]},
+                headers=_auth(context),
+            )
+
+        with then("an agent.secret.updated Domain Event is persisted"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            messages = _outbox_messages(context)
+            updated_events = [message for message in messages if message.event_name == AGENT_SECRET_UPDATED]
+            assert_that(len(updated_events), equal_to(1))
+            assert_that(updated_events[0].payload["provider"], equal_to("jira"))
+
+
+def test_patch_agent_remove_secret_emits_secret_removed_domain_event():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I add then remove a jira secret"):
+            client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"secrets": [{"provider": "jira", "content": _JIRA_CONTENT}]},
+                headers=_auth(context),
+            )
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"removed_secret_providers": ["jira"]},
+                headers=_auth(context),
+            )
+
+        with then("an agent.secret.removed Domain Event is persisted"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            messages = _outbox_messages(context)
+            removed_events = [message for message in messages if message.event_name == AGENT_SECRET_REMOVED]
+            assert_that(len(removed_events), equal_to(1))
+            assert_that(removed_events[0].payload["provider"], equal_to("jira"))
+
+
+def test_agent_updated_event_projects_to_durable_security_audit_record():
+    with given([*_GIVEN, there_is_an_agent(name="Old Name")]) as context:
+        client: TestClient = context.client
+
+        with when("I rename the agent and the delivery is processed"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"name": "New Name"},
+                headers=_auth(context),
+            )
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            outbox_repository = context.injector.get(OutboxMessageRepository)
+            messages = _outbox_messages(context)
+            updated_event = next(m for m in messages if m.event_name == AGENT_UPDATED)
+            delivery = outbox_repository.list_deliveries_for_event(updated_event.event_id)[0]
+            outbox_repository.mark_delivery_enqueued(delivery.id)
+            processed = context.injector.get(EventDeliveryProcessor).process(delivery.id)
+
+        with then("a durable Security Audit Record is projected"):
+            assert_that(processed, equal_to(True))
+            audit_record = context.injector.get(SecurityAuditRepository).get_by_event_id(updated_event.event_id)
+            assert_that(audit_record, is_not(none()))
+            assert audit_record is not None
+            assert_that(audit_record.action, equal_to(AGENT_UPDATED))
+            assert_that(audit_record.subject_id, equal_to(str(context.agent.id)))
 
 
 def test_stop_non_running_agent_returns_409():
@@ -2754,7 +2992,7 @@ def test_patch_agent_removes_slack_skill_deletes_mirrored_secret():
         ]
     ) as context:
         repository: AgentRepository = context.injector.get(AgentRepository)
-        repository.save_secret(
+        repository.delegate.save(
             AgentSecret(
                 agent_id=context.agent.id,
                 provider=SecretProvider.SLACK,
@@ -2791,7 +3029,7 @@ def test_patch_agent_rotates_slack_bot_token_resyncs_mirrored_secret():
         from api.domains.agents.models import decrypt_content
 
         repository: AgentRepository = context.injector.get(AgentRepository)
-        repository.save_secret(
+        repository.delegate.save(
             AgentSecret(
                 agent_id=context.agent.id,
                 provider=SecretProvider.SLACK,
@@ -2964,6 +3202,41 @@ def test_start_agent_auto_attaches_aai_cli_skill_for_configured_provider():
             assert_that(len(entries), equal_to(1))
             assert_that(entries[0]["path"], equal_to("skill.md"))
             assert_that(config_map.data["TOOLS.md"], contains_string(_JIRA_POINTER))
+
+
+def test_start_agent_does_not_auto_attach_credential_free_skill():
+    """A skill with no required providers (Excel works on local files) must stay opt-in.
+
+    Auto-mount keys off provider coverage, and an empty requirement list is trivially
+    satisfied — so without an explicit guard every agent would silently get this skill.
+    """
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(),
+            there_is_a_skill(
+                name="Excel",
+                required_providers=[],
+                global_skill=True,
+                tools_pointer="\nFor Excel (.xlsx) files, use the aai-cli tool.\n",
+            ),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("a jira secret is configured and the excel skill is not assigned"):
+            client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"secrets": [{"provider": "jira", "content": _JIRA_CONTENT}]},
+                headers=_auth(context),
+            )
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the excel skill is not mounted"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            assert_that("For Excel" in config_map.data.get("TOOLS.md", ""), equal_to(False))
 
 
 def test_start_agent_does_not_auto_attach_skill_for_unconfigured_provider():
@@ -3968,3 +4241,649 @@ def test_start_hermes_agent_secret_has_litellm_proxy_target():
         with then("the secret routes LLM traffic through the local proxy"):
             assert_that(secret.string_data["OPENAI_BASE_URL"], equal_to("http://localhost:8090"))
             assert_that(secret.string_data["OPENROUTER_BASE_URL"], equal_to("http://localhost:8090"))
+
+
+def test_agent_configuration_override_draft_publish_and_select_preserves_lineage():
+    with given([*_GIVEN, there_is_an_agent(name="Configurable Agent")]) as context:
+        client: TestClient = context.client
+        configuration_url = f"{_BASE}/{context.agent.id}/configuration"
+        template_repository: TemplateRepository = context.injector.get(TemplateRepository)
+        pinned_template = cast(
+            AgentTemplate | PlatformTemplate,
+            template_repository.get_pinned_template(context.agent),
+        )
+        assert pinned_template is not None
+
+        with when("I read the Agent configuration"):
+            initial = client.get(configuration_url, headers=_auth(context))
+
+        with then("the active shared snapshot and source lineage are returned"):
+            assert_that(initial.status_code, equal_to(status.HTTP_200_OK))
+            initial_body = initial.json()
+            assert_that(initial_body["active"]["pin_type"], equal_to("shared"))
+            assert_that(initial_body["active"]["source_type"], equal_to("organization"))
+            assert_that(initial_body["active"]["source_template_key"], equal_to(pinned_template.template_key))
+            assert_that(initial_body["draft"], none())
+
+        with when("I start an Override Draft"):
+            draft_response = client.post(f"{configuration_url}/draft", headers=_auth(context))
+
+        with then("the draft is a complete copy of the pinned snapshot"):
+            assert_that(draft_response.status_code, equal_to(status.HTTP_201_CREATED))
+            draft = draft_response.json()
+            assert_that(draft["state"], equal_to("draft"))
+            assert_that(draft["source_template_key"], equal_to(pinned_template.template_key))
+            assert_that(draft["source_template_version"], equal_to(pinned_template.version))
+            assert_that(draft["soul_md"], equal_to(pinned_template.soul_md))
+            assert_that(draft["user_md"], equal_to(pinned_template.user_md))
+
+        with when("I save a changed artifact"):
+            update_response = client.patch(
+                f"{configuration_url}/draft",
+                json={
+                    "expected_updated_at": draft["updated_at"],
+                    "soul_md": "# Agent-specific soul",
+                },
+                headers=_auth(context),
+            )
+
+        with then("the draft keeps the source lineage and changed content"):
+            assert_that(update_response.status_code, equal_to(status.HTTP_200_OK))
+            updated_draft = update_response.json()
+            assert_that(updated_draft["soul_md"], equal_to("# Agent-specific soul"))
+            assert_that(updated_draft["source_template_key"], equal_to(pinned_template.template_key))
+
+        with when("I publish the draft"):
+            publish_response = client.post(
+                f"{configuration_url}/draft/publish",
+                json={"expected_updated_at": updated_draft["updated_at"]},
+                headers=_auth(context),
+            )
+
+        with then("it creates immutable Override Version 1 without changing the active pin"):
+            assert_that(publish_response.status_code, equal_to(status.HTTP_201_CREATED))
+            published = publish_response.json()
+            assert_that(published["version"], equal_to(1))
+            assert_that(published["state"], equal_to("published"))
+            assert_that(published["soul_md"], equal_to("# Agent-specific soul"))
+            still_shared = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+            assert_that(still_shared["template_pin_type"], equal_to("shared"))
+            assert_that(still_shared["override_version"], none())
+
+        with when("I select the published Override Version"):
+            select_response = client.post(
+                f"{configuration_url}/select",
+                json={
+                    "selection_type": "override",
+                    "override_version": 1,
+                    "expected_agent_updated_at": still_shared["updated_at"],
+                },
+                headers=_auth(context),
+            )
+
+        with then("the Agent points at the Override while the shared source remains available"):
+            assert_that(select_response.status_code, equal_to(status.HTTP_200_OK))
+            selected = select_response.json()
+            assert_that(selected["template_pin_type"], equal_to("override"))
+            assert_that(selected["override_version"], equal_to(1))
+            after_select = client.get(configuration_url, headers=_auth(context)).json()
+            assert_that(after_select["active"]["pin_type"], equal_to("override"))
+            assert_that(after_select["active"]["state"], equal_to("active"))
+            assert_that(after_select["active"]["soul_md"], equal_to("# Agent-specific soul"))
+            assert_that(len(after_select["shared_versions"]), equal_to(1))
+            assert_that(after_select["draft"], none())
+
+        with when("I start another draft from the active Override"):
+            second_draft = client.post(f"{configuration_url}/draft", headers=_auth(context))
+
+        with then("the new draft clones the active Override and retains its original source lineage"):
+            assert_that(second_draft.status_code, equal_to(status.HTTP_201_CREATED))
+            second_body = second_draft.json()
+            assert_that(second_body["soul_md"], equal_to("# Agent-specific soul"))
+            assert_that(second_body["source_template_key"], equal_to(pinned_template.template_key))
+            assert_that(second_body["source_template_version"], equal_to(pinned_template.version))
+
+
+def test_agent_configuration_override_lifecycle_emits_domain_events():
+    with given([*_GIVEN, there_is_an_agent(name="Configurable Agent")]) as context:
+        client: TestClient = context.client
+        configuration_url = f"{_BASE}/{context.agent.id}/configuration"
+        outbox = context.injector.get(AgentOverrideRepository).outbox_repository
+
+        with when("I start an Override Draft"):
+            draft = client.post(f"{configuration_url}/draft", headers=_auth(context)).json()
+
+        with then("a Draft Saved Domain Event is persisted with created=True"):
+            draft_events = [
+                message
+                for message in _outbox_messages(context)
+                if message.event_name == AGENT_TEMPLATE_OVERRIDE_DRAFT_SAVED
+            ]
+            assert_that(len(draft_events), equal_to(1))
+            assert_that(draft_events[0].payload["agent_id"], equal_to(str(context.agent.id)))
+            assert_that(draft_events[0].payload["draft_id"], equal_to(draft["id"]))
+            assert_that(draft_events[0].payload["created"], equal_to(True))
+            assert_that(
+                draft_events[0].payload["actor_display"], equal_to(context.user.full_name or context.user.email)
+            )
+            deliveries = outbox.list_deliveries_for_event(draft_events[0].event_id)
+            assert_that(len(deliveries), equal_to(1))
+
+        with when("I save a changed artifact"):
+            updated_draft = client.patch(
+                f"{configuration_url}/draft",
+                json={"expected_updated_at": draft["updated_at"], "soul_md": "# Agent-specific soul"},
+                headers=_auth(context),
+            ).json()
+
+        with then("a second Draft Saved Domain Event is persisted with created=False"):
+            draft_events = sorted(
+                (
+                    message
+                    for message in _outbox_messages(context)
+                    if message.event_name == AGENT_TEMPLATE_OVERRIDE_DRAFT_SAVED
+                ),
+                key=lambda message: message.occurred_at,
+            )
+            assert_that(len(draft_events), equal_to(2))
+            assert_that(draft_events[1].payload["created"], equal_to(False))
+
+        with when("I publish the draft"):
+            published = client.post(
+                f"{configuration_url}/draft/publish",
+                json={"expected_updated_at": updated_draft["updated_at"]},
+                headers=_auth(context),
+            ).json()
+
+        with then("an Override Published Domain Event is persisted"):
+            published_events = [
+                message
+                for message in _outbox_messages(context)
+                if message.event_name == AGENT_TEMPLATE_OVERRIDE_PUBLISHED
+            ]
+            assert_that(len(published_events), equal_to(1))
+            assert_that(published_events[0].payload["agent_id"], equal_to(str(context.agent.id)))
+            assert_that(published_events[0].payload["override_version_id"], equal_to(published["id"]))
+            assert_that(published_events[0].payload["version"], equal_to(1))
+
+        with when("I select the published Override Version"):
+            agent_before_select = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+            client.post(
+                f"{configuration_url}/select",
+                json={
+                    "selection_type": "override",
+                    "override_version": 1,
+                    "expected_agent_updated_at": agent_before_select["updated_at"],
+                },
+                headers=_auth(context),
+            )
+
+        with then("an Override Selected Domain Event is persisted"):
+            selected_events = [
+                message
+                for message in _outbox_messages(context)
+                if message.event_name == AGENT_TEMPLATE_OVERRIDE_SELECTED
+            ]
+            assert_that(len(selected_events), equal_to(1))
+            assert_that(selected_events[0].payload["agent_id"], equal_to(str(context.agent.id)))
+            assert_that(selected_events[0].payload["selection_type"], equal_to("override"))
+            assert_that(selected_events[0].payload["selected_id"], equal_to(published["id"]))
+            assert_that(selected_events[0].payload["selected_version"], equal_to(1))
+            assert_that(selected_events[0].payload["template_key"], none())
+
+
+def test_agent_configuration_draft_rejects_stale_update():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        configuration_url = f"{_BASE}/{context.agent.id}/configuration"
+        draft = client.post(f"{configuration_url}/draft", headers=_auth(context)).json()
+        first_update = client.patch(
+            f"{configuration_url}/draft",
+            json={"expected_updated_at": draft["updated_at"], "description": "first writer"},
+            headers=_auth(context),
+        )
+        assert_that(first_update.status_code, equal_to(status.HTTP_200_OK))
+
+        stale = client.patch(
+            f"{configuration_url}/draft",
+            json={"expected_updated_at": draft["updated_at"], "description": "stale writer"},
+            headers=_auth(context),
+        )
+
+    assert_that(stale.status_code, equal_to(status.HTTP_409_CONFLICT))
+
+
+def test_agent_configuration_override_isolated_per_agent():
+    with given([*_GIVEN, there_is_an_agent(name="First Agent")]) as context:
+        client: TestClient = context.client
+        first_agent = context.agent
+        there_is_an_agent(name="Second Agent")(context)
+        second_agent = context.agent
+        first_url = f"{_BASE}/{first_agent.id}/configuration"
+
+        draft = client.post(f"{first_url}/draft", headers=_auth(context)).json()
+        published_response = client.post(
+            f"{first_url}/draft/publish",
+            json={"expected_updated_at": draft["updated_at"]},
+            headers=_auth(context),
+        )
+        published = published_response.json()
+        first_read = client.get(f"{_BASE}/{first_agent.id}", headers=_auth(context)).json()
+        selected = client.post(
+            f"{first_url}/select",
+            json={
+                "selection_type": "override",
+                "override_version": published["version"],
+                "expected_agent_updated_at": first_read["updated_at"],
+            },
+            headers=_auth(context),
+        )
+
+        first_configuration = client.get(first_url, headers=_auth(context)).json()
+        second_configuration = client.get(
+            f"{_BASE}/{second_agent.id}/configuration",
+            headers=_auth(context),
+        ).json()
+
+        assert_that(selected.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(first_configuration["active"]["pin_type"], equal_to("override"))
+        assert_that(second_configuration["active"]["pin_type"], equal_to("shared"))
+        assert_that(second_configuration["draft"], none())
+
+
+def test_agent_configuration_draft_and_publish_are_safe_while_running():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        client: TestClient = context.client
+        configuration_url = f"{_BASE}/{context.agent.id}/configuration"
+        draft_response = client.post(
+            f"{configuration_url}/draft",
+            headers=_auth(context),
+        )
+        assert_that(draft_response.status_code, equal_to(status.HTTP_201_CREATED))
+        draft = draft_response.json()
+
+        publish_response = client.post(
+            f"{configuration_url}/draft/publish",
+            json={"expected_updated_at": draft["updated_at"]},
+            headers=_auth(context),
+        )
+
+        assert_that(publish_response.status_code, equal_to(status.HTTP_201_CREATED))
+        selection_response = client.post(
+            f"{configuration_url}/select",
+            json={
+                "selection_type": "override",
+                "override_version": 1,
+                "expected_agent_updated_at": context.agent.updated_at.isoformat(),
+            },
+            headers=_auth(context),
+        )
+        assert_that(selection_response.status_code, equal_to(status.HTTP_409_CONFLICT))
+        agent = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+        assert_that(agent["template_pin_type"], equal_to("shared"))
+
+
+def test_agent_override_platform_source_update_repins_without_changing_draft():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+        source_v1 = PlatformTemplate(
+            template_key="direct-platform-source",
+            template_name="Direct Platform Source",
+            version=1,
+            description="platform v1",
+            soul_md="platform soul v1",
+            identity_md="platform identity v1",
+            user_md="platform user v1",
+            tools_md="platform tools v1",
+            agents_md="platform agents v1",
+            boot_md="platform boot v1",
+            bootstrap_md="platform bootstrap v1",
+            heartbeat_md="platform heartbeat v1",
+        )
+        delegate.save(source_v1)
+        _pin_override_to_source(context, source_v1, AgentTemplateOverrideSourceType.PLATFORM)
+        source_v2 = PlatformTemplate(
+            template_key=source_v1.template_key,
+            template_name=source_v1.template_name,
+            version=2,
+            description="platform v2",
+            soul_md="platform soul v2",
+            identity_md=source_v1.identity_md,
+            user_md=source_v1.user_md,
+            tools_md=source_v1.tools_md,
+            agents_md=source_v1.agents_md,
+            boot_md=source_v1.boot_md,
+            bootstrap_md=source_v1.bootstrap_md,
+            heartbeat_md=source_v1.heartbeat_md,
+        )
+        delegate.save(source_v2)
+        configuration_url = f"{_BASE}/{context.agent.id}/configuration"
+
+        configuration = client.get(configuration_url, headers=_auth(context)).json()
+        assert_that(configuration["source_update"]["source_type"], equal_to("platform"))
+        assert_that(configuration["source_update"]["source_template_version"], equal_to(2))
+        assert_that(configuration["source_update"]["soul_md"], equal_to("platform soul v2"))
+
+        draft = client.post(f"{configuration_url}/draft", headers=_auth(context)).json()
+        local_edit = client.patch(
+            f"{configuration_url}/draft",
+            json={"expected_updated_at": draft["updated_at"], "soul_md": "local change"},
+            headers=_auth(context),
+        ).json()
+        agent_before_select = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+        selected = client.post(
+            f"{configuration_url}/select",
+            json={
+                "selection_type": "platform",
+                "template_key": source_v1.template_key,
+                "template_version": 2,
+                "expected_agent_updated_at": agent_before_select["updated_at"],
+            },
+            headers=_auth(context),
+        )
+        assert_that(selected.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(selected.json()["template_pin_type"], equal_to("shared"))
+        assert_that(selected.json()["override_version"], none())
+
+        after_select = client.get(configuration_url, headers=_auth(context)).json()
+        assert_that(after_select["active"]["source_type"], equal_to("platform"))
+        assert_that(after_select["active"]["source_template_version"], equal_to(2))
+        assert_that(after_select["draft"]["source_template_version"], equal_to(1))
+        assert_that(after_select["draft"]["soul_md"], equal_to("local change"))
+        assert_that(after_select["draft"]["updated_at"], equal_to(local_edit["updated_at"]))
+
+
+def test_agent_override_organization_source_update_is_labeled_and_can_be_selected():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+        template_repository = context.injector.get(TemplateRepository)
+        source_v1 = cast(AgentTemplate, template_repository.get_pinned_template(context.agent))
+        source_v2 = AgentTemplate(
+            organization_id=source_v1.organization_id,
+            template_key=source_v1.template_key,
+            template_name=source_v1.template_name,
+            template_source=source_v1.template_source,
+            version=2,
+            description="organization v2",
+            soul_md="organization soul v2",
+            identity_md=source_v1.identity_md,
+            user_md=source_v1.user_md,
+            tools_md=source_v1.tools_md,
+            agents_md=source_v1.agents_md,
+            boot_md=source_v1.boot_md,
+            bootstrap_md=source_v1.bootstrap_md,
+            heartbeat_md=source_v1.heartbeat_md,
+        )
+        delegate.save(source_v2)
+        _pin_override_to_source(context, source_v1, AgentTemplateOverrideSourceType.ORGANIZATION)
+        configuration_url = f"{_BASE}/{context.agent.id}/configuration"
+
+        configuration = client.get(configuration_url, headers=_auth(context)).json()
+        assert_that(configuration["source_update"]["source_type"], equal_to("organization"))
+        assert_that(configuration["source_update"]["source_template_version"], equal_to(2))
+        assert_that(configuration["source_update"]["soul_md"], equal_to("organization soul v2"))
+
+        draft = client.post(f"{configuration_url}/draft", headers=_auth(context)).json()
+        local_edit = client.patch(
+            f"{configuration_url}/draft",
+            json={"expected_updated_at": draft["updated_at"], "soul_md": "organization local change"},
+            headers=_auth(context),
+        ).json()
+        agent_before_select = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+        selected = client.post(
+            f"{configuration_url}/select",
+            json={
+                "selection_type": "organization",
+                "template_key": source_v1.template_key,
+                "template_version": 2,
+                "expected_agent_updated_at": agent_before_select["updated_at"],
+            },
+            headers=_auth(context),
+        )
+        assert_that(selected.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(selected.json()["template_pin_type"], equal_to("shared"))
+        assert_that(selected.json()["override_version"], none())
+
+        after_select = client.get(configuration_url, headers=_auth(context)).json()
+        assert_that(after_select["active"]["source_type"], equal_to("organization"))
+        assert_that(after_select["active"]["source_template_version"], equal_to(2))
+        assert_that(after_select["draft"]["source_template_version"], equal_to(1))
+        assert_that(after_select["draft"]["soul_md"], equal_to("organization local change"))
+        assert_that(after_select["draft"]["updated_at"], equal_to(local_edit["updated_at"]))
+
+
+def test_agent_override_source_update_has_no_candidate_when_source_is_unavailable():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+        source = PlatformTemplate(
+            template_key="unavailable-platform-source",
+            template_name="Unavailable Platform Source",
+            version=1,
+            description="platform v1",
+            soul_md="platform soul v1",
+            identity_md="platform identity v1",
+            user_md="platform user v1",
+            tools_md="platform tools v1",
+            agents_md="platform agents v1",
+            boot_md="platform boot v1",
+            bootstrap_md="platform bootstrap v1",
+            heartbeat_md="platform heartbeat v1",
+        )
+        delegate.save(source)
+        delegate.save(source.model_copy(update={"id": uuid7(), "version": 2, "soul_md": "platform soul v2"}))
+        _pin_override_to_source(context, source, AgentTemplateOverrideSourceType.PLATFORM)
+        delegate.delete_one(PlatformTemplate, source.id)
+
+        configuration = context.client.get(
+            f"{_BASE}/{context.agent.id}/configuration",
+            headers=_auth(context),
+        )
+        assert_that(configuration.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(configuration.json()["source_update"], none())
+        active_agent = context.client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context))
+        assert_that(active_agent.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(active_agent.json()["override_version"], equal_to(1))
+
+
+def test_agent_configuration_select_rolls_back_to_prior_version_and_preserves_independent_draft():
+    with given([*_GIVEN, there_is_an_agent(name="Rollback Agent")]) as context:
+        client: TestClient = context.client
+        configuration_url = f"{_BASE}/{context.agent.id}/configuration"
+
+        with when("I publish and select Override Version 1"):
+            draft_v1 = client.post(f"{configuration_url}/draft", headers=_auth(context)).json()
+            client.patch(
+                f"{configuration_url}/draft",
+                json={"expected_updated_at": draft_v1["updated_at"], "soul_md": "# Soul v1"},
+                headers=_auth(context),
+            )
+            draft_v1 = client.get(configuration_url, headers=_auth(context)).json()["draft"]
+            publish_v1 = client.post(
+                f"{configuration_url}/draft/publish",
+                json={"expected_updated_at": draft_v1["updated_at"]},
+                headers=_auth(context),
+            ).json()
+            agent_after_v1 = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+            select_v1 = client.post(
+                f"{configuration_url}/select",
+                json={
+                    "selection_type": "override",
+                    "override_version": publish_v1["version"],
+                    "expected_agent_updated_at": agent_after_v1["updated_at"],
+                },
+                headers=_auth(context),
+            )
+            assert_that(select_v1.status_code, equal_to(status.HTTP_200_OK))
+
+        with when("I publish and select Override Version 2"):
+            draft_v2 = client.post(f"{configuration_url}/draft", headers=_auth(context)).json()
+            client.patch(
+                f"{configuration_url}/draft",
+                json={"expected_updated_at": draft_v2["updated_at"], "soul_md": "# Soul v2"},
+                headers=_auth(context),
+            )
+            draft_v2 = client.get(configuration_url, headers=_auth(context)).json()["draft"]
+            publish_v2 = client.post(
+                f"{configuration_url}/draft/publish",
+                json={"expected_updated_at": draft_v2["updated_at"]},
+                headers=_auth(context),
+            ).json()
+            agent_after_v2 = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+            select_v2 = client.post(
+                f"{configuration_url}/select",
+                json={
+                    "selection_type": "override",
+                    "override_version": publish_v2["version"],
+                    "expected_agent_updated_at": agent_after_v2["updated_at"],
+                },
+                headers=_auth(context),
+            )
+            assert_that(select_v2.status_code, equal_to(status.HTTP_200_OK))
+
+        with when("I start an independent draft and then roll back to Override Version 1"):
+            rollback_draft = client.post(f"{configuration_url}/draft", headers=_auth(context)).json()
+            client.patch(
+                f"{configuration_url}/draft",
+                json={"expected_updated_at": rollback_draft["updated_at"], "soul_md": "# Independent draft"},
+                headers=_auth(context),
+            )
+            agent_after_draft = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+            rollback = client.post(
+                f"{configuration_url}/select",
+                json={
+                    "selection_type": "override",
+                    "override_version": publish_v1["version"],
+                    "expected_agent_updated_at": agent_after_draft["updated_at"],
+                },
+                headers=_auth(context),
+            )
+
+        with then("the Agent points back at Override Version 1 and the independent draft is preserved"):
+            assert_that(rollback.status_code, equal_to(status.HTTP_200_OK))
+            rolled_back = rollback.json()
+            assert_that(rolled_back["template_pin_type"], equal_to("override"))
+            assert_that(rolled_back["override_version"], equal_to(publish_v1["version"]))
+            after_rollback = client.get(configuration_url, headers=_auth(context)).json()
+            assert_that(after_rollback["active"]["soul_md"], equal_to("# Soul v1"))
+            assert_that(after_rollback["draft"], is_not(none()))
+            assert_that(after_rollback["draft"]["soul_md"], equal_to("# Independent draft"))
+
+
+def test_agent_configuration_select_rejects_stale_agent_update():
+    with given([*_GIVEN, there_is_an_agent(name="Stale Select Agent")]) as context:
+        client: TestClient = context.client
+        configuration_url = f"{_BASE}/{context.agent.id}/configuration"
+
+        draft = client.post(f"{configuration_url}/draft", headers=_auth(context)).json()
+        publish = client.post(
+            f"{configuration_url}/draft/publish",
+            json={"expected_updated_at": draft["updated_at"]},
+            headers=_auth(context),
+        ).json()
+        stale_agent = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+
+        with when("I select the Override Version once, then retry with the same stale timestamp"):
+            first_select = client.post(
+                f"{configuration_url}/select",
+                json={
+                    "selection_type": "override",
+                    "override_version": publish["version"],
+                    "expected_agent_updated_at": stale_agent["updated_at"],
+                },
+                headers=_auth(context),
+            )
+            assert_that(first_select.status_code, equal_to(status.HTTP_200_OK))
+
+            second_draft = client.post(f"{configuration_url}/draft", headers=_auth(context)).json()
+            client.patch(
+                f"{configuration_url}/draft",
+                json={"expected_updated_at": second_draft["updated_at"], "soul_md": "# Second"},
+                headers=_auth(context),
+            )
+            second_draft = client.get(configuration_url, headers=_auth(context)).json()["draft"]
+            second_publish = client.post(
+                f"{configuration_url}/draft/publish",
+                json={"expected_updated_at": second_draft["updated_at"]},
+                headers=_auth(context),
+            ).json()
+
+            stale_select = client.post(
+                f"{configuration_url}/select",
+                json={
+                    "selection_type": "override",
+                    "override_version": second_publish["version"],
+                    "expected_agent_updated_at": stale_agent["updated_at"],
+                },
+                headers=_auth(context),
+            )
+
+        with then("the stale selection is rejected with 409"):
+            assert_that(stale_select.status_code, equal_to(status.HTTP_409_CONFLICT))
+
+
+def test_agent_configuration_publish_rejects_unassigned_required_skill():
+    with given(
+        [*_GIVEN, there_is_an_agent(name="Missing Required Skill Agent"), there_is_a_skill(name="Jira")]
+    ) as context:
+        client: TestClient = context.client
+        configuration_url = f"{_BASE}/{context.agent.id}/configuration"
+        skill_id = str(context.skill.id)
+
+        with when("I mark a Skill required on the draft while it is still assigned to the Agent"):
+            assign = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"skill_ids": [skill_id]},
+                headers=_auth(context),
+            )
+            assert_that(assign.status_code, equal_to(status.HTTP_200_OK))
+
+            draft = client.post(f"{configuration_url}/draft", headers=_auth(context)).json()
+            marked = client.patch(
+                f"{configuration_url}/draft",
+                json={"expected_updated_at": draft["updated_at"], "required_skill_ids": [skill_id]},
+                headers=_auth(context),
+            )
+            assert_that(marked.status_code, equal_to(status.HTTP_200_OK))
+            marked_body = marked.json()
+
+        with when("the required Skill is removed from the Agent before publishing"):
+            unassign = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"removed_skill_ids": [skill_id]},
+                headers=_auth(context),
+            )
+            assert_that(unassign.status_code, equal_to(status.HTTP_200_OK))
+
+        with then("publishing without the required Skill assigned is rejected with 400"):
+            publish = client.post(
+                f"{configuration_url}/draft/publish",
+                json={"expected_updated_at": marked_body["updated_at"]},
+                headers=_auth(context),
+            )
+            assert_that(publish.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+
+
+def test_agent_configuration_override_history_retained_after_soft_delete():
+    with given([*_GIVEN, there_is_an_agent(name="Retention Agent")]) as context:
+        client: TestClient = context.client
+        configuration_url = f"{_BASE}/{context.agent.id}/configuration"
+        agent_id = context.agent.id
+
+        draft = client.post(f"{configuration_url}/draft", headers=_auth(context)).json()
+        published = client.post(
+            f"{configuration_url}/draft/publish",
+            json={"expected_updated_at": draft["updated_at"]},
+            headers=_auth(context),
+        ).json()
+
+        with when("I soft-delete the Agent"):
+            delete_response = client.delete(f"{_BASE}/{agent_id}", headers=_auth(context))
+            assert_that(delete_response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+
+        with then("the Override Version remains retained"):
+            override_repository: AgentOverrideRepository = context.injector.get(AgentOverrideRepository)
+            retained = override_repository.get_version(agent_id, context.organization.id, published["version"])
+            assert retained is not None
+            assert_that(retained.soul_md, equal_to(published["soul_md"]))

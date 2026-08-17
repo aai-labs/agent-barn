@@ -6,7 +6,7 @@ from hamcrest import assert_that, contains_inanyorder, equal_to, has_item, is_no
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
-from api.domains.agents.models import Agent, AgentAccess, AgentFilter
+from api.domains.agents.models import Agent, AgentAccess, AgentFilter, AgentStatus
 from api.domains.agents.repository import AgentRepository
 from api.domains.events import ActorIdentity, ActorIdentityType
 from api.domains.organizations.models import Organization
@@ -288,6 +288,64 @@ def test_visible_agent_without_update_permission_returns_403():
 
         assert_that(visible.status_code, equal_to(status.HTTP_200_OK))
         assert_that(forbidden.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_running_agent_exposes_configuration_permissions_for_restart_flow():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        response = context.client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        actions = response.json()["allowed_actions"]
+        assert_that(actions, has_item(PermissionKey.AGENT_UPDATE.value))
+        assert_that(actions, has_item(PermissionKey.AGENT_SECRET_MANAGE.value))
+
+
+def test_visible_agent_viewer_can_read_but_not_author_or_select_configuration():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(),
+            _switch_to_member(),
+            there_is_agent_access(access_role_id=AGENT_VIEWER_ROLE_ID),
+        ]
+    ) as context:
+        configuration_url = f"{_BASE}/{context.agent.id}/configuration"
+        expected_agent_updated_at = context.agent.updated_at.isoformat()
+
+        visible = context.client.get(configuration_url, headers=_auth(context))
+        start_forbidden = context.client.post(
+            f"{configuration_url}/draft",
+            headers=_auth(context),
+        )
+        update_forbidden = context.client.patch(
+            f"{configuration_url}/draft",
+            json={
+                "expected_updated_at": expected_agent_updated_at,
+                "description": "Forbidden",
+            },
+            headers=_auth(context),
+        )
+        publish_forbidden = context.client.post(
+            f"{configuration_url}/draft/publish",
+            json={"expected_updated_at": expected_agent_updated_at},
+            headers=_auth(context),
+        )
+        select_forbidden = context.client.post(
+            f"{configuration_url}/select",
+            json={
+                "selection_type": "organization",
+                "template_key": "test-template",
+                "template_version": 1,
+                "expected_agent_updated_at": expected_agent_updated_at,
+            },
+            headers=_auth(context),
+        )
+
+        assert_that(visible.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(start_forbidden.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+        assert_that(update_forbidden.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+        assert_that(publish_forbidden.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+        assert_that(select_forbidden.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
 def test_assigned_activity_and_cost_endpoints_cannot_be_bypassed():

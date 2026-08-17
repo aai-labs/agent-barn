@@ -10,12 +10,18 @@ from api.domains.agents.models import (
     AgentAccessRoleRead,
     AgentAccessSettingsRead,
     AgentAccessSettingsUpdate,
+    AgentConfigurationRead,
     AgentCreate,
     AgentFilter,
     AgentHealthRead,
     AgentLogHistoryRead,
     AgentLogsRead,
     AgentRead,
+    AgentTemplateOverrideDraftRead,
+    AgentTemplateOverrideDraftUpdate,
+    AgentTemplateOverridePublish,
+    AgentTemplateOverrideVersionRead,
+    AgentTemplateSelection,
     AgentUpdate,
     PairRequest,
     SecretProvider,
@@ -141,6 +147,65 @@ def get_agent(
     service: Annotated[AgentService, Injected(AgentService)],
 ):
     return service.get_agent(agent_id, context)
+
+
+@agents_router.get("/{agent_id}/configuration", response_model=AgentConfigurationRead)
+def get_agent_configuration(
+    agent_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentService, Injected(AgentService)],
+):
+    return service.get_agent_configuration(agent_id, context)
+
+
+@agents_router.post(
+    "/{agent_id}/configuration/draft",
+    response_model=AgentTemplateOverrideDraftRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def start_agent_override_draft(
+    agent_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentService, Injected(AgentService)],
+):
+    return service.start_agent_override_draft(agent_id, context)
+
+
+@agents_router.patch(
+    "/{agent_id}/configuration/draft",
+    response_model=AgentTemplateOverrideDraftRead,
+)
+def update_agent_override_draft(
+    agent_id: UUID,
+    data: AgentTemplateOverrideDraftUpdate,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentService, Injected(AgentService)],
+):
+    return service.update_agent_override_draft(agent_id, data, context)
+
+
+@agents_router.post(
+    "/{agent_id}/configuration/draft/publish",
+    response_model=AgentTemplateOverrideVersionRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def publish_agent_override(
+    agent_id: UUID,
+    data: AgentTemplateOverridePublish,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentService, Injected(AgentService)],
+):
+    return service.publish_agent_override(agent_id, data, context)
+
+
+@agents_router.post("/{agent_id}/configuration/select", response_model=AgentRead)
+def select_agent_template(
+    agent_id: UUID,
+    data: AgentTemplateSelection,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentService, Injected(AgentService)],
+):
+    return service.select_agent_template(agent_id, data, context)
 
 
 @agents_router.get("/{agent_id}/template/{version}", response_model=TemplateRead)

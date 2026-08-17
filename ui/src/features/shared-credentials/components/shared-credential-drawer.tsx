@@ -2,8 +2,11 @@
 
 import { useState } from "react";
 import { CheckIcon, XIcon } from "@/components/icons";
+import { IntegrationFields } from "@/features/agents/components/integration-fields";
 import {
+  coerceBooleanFields,
   expandGithubContent,
+  hasIncompleteIntegration,
   INTEGRATION_PROVIDERS,
   type IntegrationProvider,
 } from "@/features/agents/integrations";
@@ -63,6 +66,17 @@ export function SharedCredentialDrawer({
   const isPending = createMutation.isPending || updateMutation.isPending;
   const mutationError = createMutation.error ?? updateMutation.error;
 
+  const hasContent = Object.values(content).some((v) =>
+    Array.isArray(v) ? v.length > 0 : v.trim().length > 0,
+  );
+  // The API validates the full provider schema on every write, so content is
+  // all-or-nothing: required on create, and on edit only once a field is touched.
+  const contentRequired = isCreate || hasContent;
+  const canSave =
+    !!provider &&
+    !!name.trim() &&
+    (!contentRequired || !hasIncompleteIntegration([{ provider, content }]));
+
   function handleProviderChange(value: string) {
     setProvider(value);
     setContent({});
@@ -82,18 +96,21 @@ export function SharedCredentialDrawer({
   async function handleSave() {
     try {
       if (credential) {
-        const payload: { credentialId: string; name?: string; content?: Record<string, string | string[]> } = {
+        const payload: {
+          credentialId: string;
+          name?: string;
+          content?: Record<string, string | string[] | boolean>;
+        } = {
           credentialId: credential.id,
         };
         const trimmedName = name.trim();
         if (trimmedName && trimmedName !== credential.name) {
           payload.name = trimmedName;
         }
-        const hasContent = Object.values(content).some((v) =>
-          Array.isArray(v) ? v.length > 0 : v.trim().length > 0,
-        );
         if (hasContent) {
-          payload.content = credential.provider === "github" ? expandGithubContent(content) : content;
+          payload.content = coerceBooleanFields(
+            credential.provider === "github" ? expandGithubContent(content) : content,
+          );
         }
         await updateMutation.mutateAsync(payload);
         setEditing(false);
@@ -101,7 +118,9 @@ export function SharedCredentialDrawer({
         await createMutation.mutateAsync({
           provider,
           name: name.trim(),
-          content: provider === "github" ? expandGithubContent(content) : content,
+          content: coerceBooleanFields(
+            provider === "github" ? expandGithubContent(content) : content,
+          ),
         });
         onClose();
       }
@@ -202,8 +221,10 @@ export function SharedCredentialDrawer({
                     color: "var(--ink-3)",
                   }}
                 >
-                  Agents using this credential will pick up content changes on
-                  their next start.
+                  Changing credentials replaces every field, so fill in all of
+                  them — partial updates are rejected. Leave them all empty to
+                  rename without touching the credential. Agents pick up content
+                  changes on their next start.
                 </div>
               )}
 
@@ -260,66 +281,13 @@ export function SharedCredentialDrawer({
                       {providerSpec.scopeNote}
                     </div>
                   )}
-                  {providerSpec.fields.map((field) => (
-                    <div key={field.key} className="flex flex-col gap-1.5">
-                      <label
-                        className="font-medium text-[0.844rem]"
-                        style={{ color: "var(--ink)" }}
-                      >
-                        {field.label}{" "}
-                        {field.required && !credential && (
-                          <span style={{ color: "var(--err)" }}>*</span>
-                        )}
-                      </label>
-                      {field.type === "repo-list" ? (
-                        <input
-                          className="af-input"
-                          placeholder={field.placeholder}
-                          value={
-                            Array.isArray(content[field.key])
-                              ? (content[field.key] as string[]).join(", ")
-                              : (content[field.key] as string) ?? ""
-                          }
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            setField(
-                              field.key,
-                              val
-                                ? val
-                                    .split(",")
-                                    .map((s) => s.trim())
-                                    .filter(Boolean)
-                                : [],
-                            );
-                          }}
-                        />
-                      ) : (
-                        <input
-                          className="af-input"
-                          type={field.type === "secret" ? "password" : "text"}
-                          placeholder={field.placeholder}
-                          value={(content[field.key] as string) ?? ""}
-                          onChange={(e) => setField(field.key, e.target.value)}
-                        />
-                      )}
-                      {field.hint && (
-                        <span
-                          className="text-xs"
-                          style={{ color: "var(--ink-4)" }}
-                        >
-                          {field.hint}
-                        </span>
-                      )}
-                      {credential && field.type === "secret" && (
-                        <span
-                          className="text-xs"
-                          style={{ color: "var(--ink-4)" }}
-                        >
-                          Leave empty to keep the current value.
-                        </span>
-                      )}
-                    </div>
-                  ))}
+                  <IntegrationFields
+                    provider={providerSpec}
+                    draft={{ provider, content }}
+                    namePrefix="shared-"
+                    onFieldChange={(key, value) => setField(key, value)}
+                    onReposChange={(key, repos) => setField(key, repos)}
+                  />
                 </div>
               )}
 
@@ -410,7 +378,7 @@ export function SharedCredentialDrawer({
               <button
                 type="button"
                 className="af-btn af-btn-primary ml-auto"
-                disabled={isPending || !provider || !name.trim()}
+                disabled={isPending || !canSave}
                 onClick={() => {
                   void handleSave();
                 }}

@@ -101,9 +101,11 @@ def test_explicit_owner_can_manage_access_regardless_of_creator_provenance():
         equal_to(
             [
                 PermissionKey.AGENT_READ,
+                PermissionKey.AGENT_UPDATE,
                 PermissionKey.AGENT_DELETE,
                 PermissionKey.AGENT_LIFECYCLE_MANAGE,
                 PermissionKey.AGENT_ACCESS_MANAGE,
+                PermissionKey.AGENT_SECRET_MANAGE,
             ]
         ),
     )

@@ -14,10 +14,16 @@ _EXPECTED_PROVIDER_NAMES = {
     "GitHub",
     "Bitbucket",
     "Gmail",
+    "Google Sheets",
+    "Excel",
     "Zoho Mail",
     "Slack",
     "Pipedrive",
 }
+
+# Skills that intentionally need no credential. Excel operates on local .xlsx files, so
+# gating it on a provider would make it unreachable.
+_CREDENTIAL_FREE_SKILLS = {"Excel"}
 
 
 def test_aai_cli_provider_skills_has_expected_entries():
@@ -27,7 +33,17 @@ def test_aai_cli_provider_skills_has_expected_entries():
 
 def test_each_provider_skill_has_required_providers():
     for skill_def in AAI_CLI_PROVIDER_SKILLS:
+        if skill_def["name"] in _CREDENTIAL_FREE_SKILLS:
+            continue
         assert skill_def["required_providers"], f"No required_providers for {skill_def['name']}"
+
+
+def test_credential_free_skills_declare_no_providers():
+    """The empty list is the whole point — it keeps the skill selectable while stopping
+    _auto_mount_skills from attaching it to every agent."""
+    for skill_def in AAI_CLI_PROVIDER_SKILLS:
+        if skill_def["name"] in _CREDENTIAL_FREE_SKILLS:
+            assert skill_def["required_providers"] == []
 
 
 def test_each_provider_skill_has_non_empty_files():

@@ -5,6 +5,7 @@ from api.infrastructure.integration_validators.bitbucket import validate_bitbuck
 from api.infrastructure.integration_validators.confluence import validate_confluence
 from api.infrastructure.integration_validators.github import validate_github
 from api.infrastructure.integration_validators.gmail import validate_gmail
+from api.infrastructure.integration_validators.google_sheets import validate_google_sheets
 from api.infrastructure.integration_validators.jira import validate_jira
 from api.infrastructure.integration_validators.pipedrive import validate_pipedrive
 from api.infrastructure.integration_validators.result import IntegrationValidationResult
@@ -16,6 +17,7 @@ PROVIDER_VALIDATORS: dict[SecretProvider, Any] = {
     SecretProvider.CONFLUENCE: validate_confluence,
     SecretProvider.BITBUCKET: validate_bitbucket,
     SecretProvider.GMAIL: validate_gmail,
+    SecretProvider.GOOGLE_SHEETS: validate_google_sheets,
     SecretProvider.SLACK: validate_slack,
     SecretProvider.PIPEDRIVE: validate_pipedrive,
 }
@@ -44,6 +46,7 @@ __all__ = [
     "validate_confluence",
     "validate_github",
     "validate_gmail",
+    "validate_google_sheets",
     "validate_jira",
     "validate_pipedrive",
     "validate_slack",

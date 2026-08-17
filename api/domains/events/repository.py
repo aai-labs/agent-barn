@@ -60,6 +60,13 @@ def bound_delivery_error(error: BaseException | str | None) -> str | None:
     return f"{message[: MAX_DELIVERY_ERROR_CHARS - 13]}...[truncated]"
 
 
+def _display_str(value: Any) -> str | None:
+    """Payload values are typed str by their Pydantic payload model at write time,
+    but the read path treats the stored JSONB as untrusted, same as bound_delivery_error
+    above — a non-str value here shouldn't fail the whole monitor response."""
+    return value if isinstance(value, str) else None
+
+
 @inject
 @singleton
 @dataclass
@@ -420,8 +427,9 @@ class OutboxMessageRepository:
         event_name_col = col(OutboxMessage.event_name).label("event_name")
         schema_version_col = col(OutboxMessage.schema_version).label("schema_version")
         organization_name_col = col(Organization.name).label("organization_name")
+        payload_col = col(OutboxMessage.payload).label("payload")
         return self._delivery_explorer_joins(
-            select(EventDelivery, event_name_col, schema_version_col, organization_name_col)
+            select(EventDelivery, event_name_col, schema_version_col, organization_name_col).add_columns(payload_col)
         )
 
     def _apply_delivery_explorer_filters(self, query, delivery_filter: EventDeliveryFilter):
@@ -466,6 +474,7 @@ class OutboxMessageRepository:
         event_name: str,
         schema_version: int,
         organization_name: str | None,
+        payload: dict[str, Any],
         observed_at: datetime,
     ) -> EventDeliveryRead:
         return EventDeliveryRead(
@@ -486,6 +495,8 @@ class OutboxMessageRepository:
             completed_at=delivery.completed_at,
             status_since=self._status_since(delivery),
             observed_at=observed_at,
+            actor_display=_display_str(payload.get("actor_display")),
+            subject_display=_display_str(payload.get("subject_display")),
         )
 
     def find_delivery_explorer_page(
@@ -519,9 +530,10 @@ class OutboxMessageRepository:
                     event_name=event_name,
                     schema_version=schema_version,
                     organization_name=organization_name,
+                    payload=payload,
                     observed_at=observed_at,
                 )
-                for delivery, event_name, schema_version, organization_name in rows
+                for delivery, event_name, schema_version, organization_name, payload in rows
             ]
 
         return PaginatedItems(

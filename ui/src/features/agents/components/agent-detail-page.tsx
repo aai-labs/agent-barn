@@ -21,12 +21,7 @@ import { LogsTab } from "./logs-tab";
 import { WorkTab } from "./work-tab";
 import { AboutTab } from "./about-tab";
 import { ShareDialog } from "./share-dialog";
-import {
-  canOpenConfigTab,
-  ConfigDrawer,
-  defaultConfigTab,
-  DRAWER_TAB_KEYS,
-} from "./config-drawer";
+import { AgentDetailHeaderSkeleton } from "./agent-detail-header-skeleton";
 
 interface AgentDetailPageProps {
   agentId: string;
@@ -34,19 +29,6 @@ interface AgentDetailPageProps {
 
 type Tab = "conversations" | "tool-calls" | "logs" | "work" | "about";
 const VALID_TABS: Tab[] = ["conversations", "tool-calls", "logs", "work", "about"];
-
-function HeaderSkeleton() {
-  return (
-    <div className="flex items-center gap-5.5 pb-8 animate-pulse">
-      <div className="w-18 h-18 rounded-full flex-shrink-0" style={{ background: "var(--bg-soft)" }} />
-      <div className="flex-1 flex flex-col gap-2">
-        <div className="h-9 w-48 rounded-lg" style={{ background: "var(--bg-soft)" }} />
-        <div className="h-3.5 w-32 rounded-md" style={{ background: "var(--bg-soft)" }} />
-        <div className="h-3.5 w-20 rounded-md" style={{ background: "var(--bg-soft)" }} />
-      </div>
-    </div>
-  );
-}
 
 export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   const { agent, isLoading, error, refetch } = useAgent(agentId);
@@ -62,10 +44,6 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
     parseAsStringEnum<Tab>(VALID_TABS)
       .withDefault("conversations")
       .withOptions({ scroll: false, history: "replace" }),
-  );
-  const [configTab, setConfigTab] = useQueryState(
-    "configTab",
-    parseAsStringEnum(DRAWER_TAB_KEYS).withOptions({ history: "replace" }),
   );
   const [, setChannel] = useQueryState(
     "channel",
@@ -95,10 +73,6 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   const canManageLifecycle = canAgent(agent, "agent.lifecycle.manage");
   const canManageAccess = canAgent(agent, "agent.access.manage");
   const [shareOpen, setShareOpen] = useState(false);
-  const initialConfigTab = agent ? defaultConfigTab(agent) : null;
-  const canConfigure = initialConfigTab !== null;
-  const authorizedConfigTab =
-    agent && configTab && canOpenConfigTab(agent, configTab) ? configTab : null;
 
   const params = useParams();
   const orgId = typeof params?.orgId === "string" ? params.orgId : null;
@@ -116,7 +90,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
           Your team
         </Link>
 
-        {isLoading && <HeaderSkeleton />}
+        {isLoading && <AgentDetailHeaderSkeleton />}
 
         {error && (
           <AppErrorState
@@ -174,11 +148,9 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
                     <PlayIcon /> {startAgent.isPending ? "Starting…" : "Start"}
                   </button>
                 )}
-                {canConfigure && initialConfigTab && (
-                  <button className="af-btn" onClick={() => { void setConfigTab(initialConfigTab); }}>
-                    <CogIcon /> Configure
-                  </button>
-                )}
+                <Link href={`${homeHref}/agents/${agent.id}/configuration`} className="af-btn">
+                  <CogIcon /> Configuration
+                </Link>
                 {canManageAccess && (
                   <button className="af-btn" onClick={() => setShareOpen(true)}>
                     <ShareIcon /> Share
@@ -217,27 +189,11 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
             {resolvedTab === "logs" && <LogsTab agent={agent} />}
             {resolvedTab === "work" && <WorkTab agent={agent} />}
             {resolvedTab === "about" && (
-              <AboutTab
-                agent={agent}
-                onConfigure={
-                  canConfigure && initialConfigTab
-                    ? () => { void setConfigTab(initialConfigTab); }
-                    : undefined
-                }
-              />
+              <AboutTab />
             )}
           </>
         )}
       </div>
-
-      {authorizedConfigTab && agent && (
-        <ConfigDrawer
-          agent={agent}
-          activeTab={authorizedConfigTab}
-          onTabChange={(t) => { void setConfigTab(t); }}
-          onClose={() => { void setConfigTab(null); }}
-        />
-      )}
 
       {agent && canManageAccess && (
         <ShareDialog

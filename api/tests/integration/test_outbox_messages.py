@@ -788,6 +788,67 @@ def test_role_change_repository_operation_emits_audit_domain_event(
         assert_that(changed.delivery_ids, equal_to([deliveries[0].id]))
 
 
+def test_member_removed_repository_operation_emits_audit_domain_event(
+    delegate: PostgresRepositoryDelegate,
+    repository: OutboxMessageRepository,
+    organization_id: UUID,
+):
+    user = User(email="member-removed@example.com", hashed_password="hash")
+    delegate.save(user)
+    membership = OrganizationUser(user_id=user.id, organization_id=organization_id, role=OrganizationRole.MEMBER)
+    delegate.save(membership)
+    org_user_repository = OrganizationUserRepository(delegate=delegate, outbox_repository=repository)
+
+    with when("a member is removed through the domain-specific repository operation"):
+        delivery_ids = org_user_repository.delete_with_event(
+            membership,
+            actor=ActorIdentity(type=ActorIdentityType.USER, id=user.id, organization_id=organization_id),
+        )
+
+    with then("the membership deletion and audit Domain Event rows commit together"):
+        assert_that(repository.count(), equal_to(1))
+        messages = delegate.find_all(OutboxMessage)
+        assert_that(messages[0].event_name, equal_to("organization.member.removed"))
+        assert_that(messages[0].payload["user_id"], equal_to(str(user.id)))
+        deliveries = repository.list_deliveries_for_event(messages[0].event_id)
+        assert_that([delivery.handler_name for delivery in deliveries], equal_to(["security_audit.projection"]))
+        assert_that(delivery_ids, equal_to([deliveries[0].id]))
+
+
+def test_ownership_transfer_repository_operation_emits_audit_domain_event(
+    delegate: PostgresRepositoryDelegate,
+    repository: OutboxMessageRepository,
+    organization_id: UUID,
+):
+    owner_user = User(email="owner-transfer@example.com", hashed_password="hash")
+    new_owner_user = User(email="new-owner-transfer@example.com", hashed_password="hash")
+    delegate.save(owner_user)
+    delegate.save(new_owner_user)
+    delegate.save(OrganizationUser(user_id=owner_user.id, organization_id=organization_id, role=OrganizationRole.OWNER))
+    delegate.save(
+        OrganizationUser(user_id=new_owner_user.id, organization_id=organization_id, role=OrganizationRole.ADMIN)
+    )
+    org_user_repository = OrganizationUserRepository(delegate=delegate, outbox_repository=repository)
+
+    with when("ownership is transferred through the domain-specific repository operation"):
+        delivery_ids = org_user_repository.transfer_ownership_with_event(
+            organization_id=organization_id,
+            current_owner_id=owner_user.id,
+            new_owner_id=new_owner_user.id,
+            actor=ActorIdentity(type=ActorIdentityType.USER, id=owner_user.id, organization_id=organization_id),
+        )
+
+    with then("the ownership swap and audit Domain Event rows commit together"):
+        assert_that(repository.count(), equal_to(1))
+        messages = delegate.find_all(OutboxMessage)
+        assert_that(messages[0].event_name, equal_to("organization.ownership_transferred"))
+        assert_that(messages[0].payload["previous_owner_user_id"], equal_to(str(owner_user.id)))
+        assert_that(messages[0].payload["new_owner_user_id"], equal_to(str(new_owner_user.id)))
+        deliveries = repository.list_deliveries_for_event(messages[0].event_id)
+        assert_that([delivery.handler_name for delivery in deliveries], equal_to(["security_audit.projection"]))
+        assert_that(delivery_ids, equal_to([deliveries[0].id]))
+
+
 def test_outbox_message_rows_are_immutable(
     delegate: PostgresRepositoryDelegate,
     repository: OutboxMessageRepository,

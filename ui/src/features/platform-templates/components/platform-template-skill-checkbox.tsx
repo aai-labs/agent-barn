@@ -6,19 +6,22 @@ export function PlatformTemplateSkillCheckbox({
   skill,
   checked,
   onChange,
+  disabled = false,
 }: {
   skill: PlatformSkill;
   checked: boolean;
   onChange: () => void;
+  disabled?: boolean;
 }) {
   return (
     <label
-      className="flex items-center gap-3 rounded-xl px-3 py-2.5 cursor-pointer"
+      className={`flex items-center gap-3 rounded-xl px-3 py-2.5 ${disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}
       style={{ border: "1px solid var(--line)" }}
     >
       <input
         type="checkbox"
         checked={checked}
+        disabled={disabled}
         onChange={onChange}
         className="accent-[var(--accent-color)]"
       />

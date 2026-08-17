@@ -258,8 +258,15 @@ class OrganizationUserService:
                     status_code=status.HTTP_409_CONFLICT,
                     detail=f"User {e.user_id} is already part of organization {e.organization_id}",
                 )
+            delivery_ids = self.organization_user_repository.stage_member_added_event(
+                session,
+                membership,
+                actor=resolve_actor_identity(context, organization_id),
+                actor_display=context.user.full_name or context.user.email,
+            )
             session.commit()
 
+        self.event_delivery_dispatcher.enqueue_immediate(delivery_ids)
         self.auth_service.send_prepared_invite(prepared)
         return self._to_member_read(membership), prepared.invite_link
 
@@ -330,7 +337,12 @@ class OrganizationUserService:
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Only an owner can remove an admin",
             )
-        self.organization_user_repository.delete(membership)
+        delivery_ids = self.organization_user_repository.delete_with_event(
+            membership,
+            actor=resolve_actor_identity(context, organization_id),
+            actor_display=context.user.full_name or context.user.email,
+        )
+        self.event_delivery_dispatcher.enqueue_immediate(delivery_ids)
 
         # Rescinding a still-pending member's access must also kill their invite link,
         # which otherwise stays valid (it's tied to the user, not the membership).
@@ -354,11 +366,14 @@ class OrganizationUserService:
             )
         if current_owner.id == new_owner_membership.user_id:
             return
-        self.organization_user_repository.transfer_ownership(
+        delivery_ids = self.organization_user_repository.transfer_ownership_with_event(
             organization_id=organization_id,
             current_owner_id=current_owner.id,
             new_owner_id=data.user_id,
+            actor=resolve_actor_identity(context, organization_id),
+            actor_display=context.user.full_name or context.user.email,
         )
+        self.event_delivery_dispatcher.enqueue_immediate(delivery_ids)
 
     def resend_invite(self, context: CurrentUserContext, organization_id: UUID, user_id: UUID) -> str:
         self.permission_policy.require_organization(
