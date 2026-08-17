@@ -24,12 +24,20 @@ A failed Slack or Telegram credential check or Kubernetes start can place the ag
 
 ## Runtime/platform matrix
 
-| Runtime  | Slack | Teams | Telegram | Runtime configuration                        |
-| -------- | ----: | ----: | -------: | -------------------------------------------- |
-| Hermes   |   Yes |    No |      Yes | Hermes config and Hermes deployment builders |
-| OpenClaw |   Yes |   Yes |      Yes | OpenClaw overlay and deployment builders     |
+| Runtime  | Slack | Teams | Telegram | Discord | Runtime configuration                        |
+| -------- | ----: | ----: | -------: | ------: | -------------------------------------------- |
+| Hermes   |   Yes |    No |      Yes |     Yes | Hermes config and Hermes deployment builders |
+| OpenClaw |   Yes |   Yes |      Yes |     Yes | OpenClaw overlay and deployment builders     |
 
 Runtime is persisted as `agent_type`; platform is persisted separately. Both runtimes receive rendered template files, skills, integrations, model/LiteLLM settings, and ingest credentials, but their filesystem and configuration shapes differ.
+
+## Future platform-extension boundary
+
+Platform support currently follows explicit, platform-specific models, repository methods, service branches, and runtime builders. This keeps Slack, Teams, Telegram, and Discord contracts typed and locally discoverable, and is the preferred approach for a small number of materially different platforms.
+
+Adding a platform therefore touches persistence, API contracts, service orchestration, one or more runtime builders, Kubernetes Secret materialization, UI onboarding, tests, and this documentation. Do not introduce a generic adapter or untyped configuration blob solely to reduce the size of one platform change.
+
+Revisit a platform-adapter boundary when repeated platform additions create substantial duplicated lifecycle wiring. The candidate shape is a typed platform configuration adapter that owns credential validation, read-safe configuration, onboarding metadata, and runtime-specific materialization, while Agent Service retains authorization, lifecycle, templates, Skills, and Kubernetes orchestration. Any such change must preserve encrypted credential handling, the current Agent Access checks, and runtime-specific configuration validation.
 
 ## Mention gating
 
@@ -44,12 +52,16 @@ Builders set this per runtime and platform:
 | OpenClaw | Slack    | `channels.slack.requireMention`, `channels.slack.thread.requireExplicitMention`, and per-channel `requireMention` |
 | OpenClaw | Teams    | `channels.msteams.requireMention`                                                               |
 | OpenClaw | Telegram | `channels.telegram.groups.<chat_id>.requireMention`, or the `*` wildcard group when the group policy is open |
+| Hermes | Discord | `discord.require_mention` and `discord.thread_require_mention` |
+| OpenClaw | Discord | `channels.discord.guilds.<guild_id>.requireMention`, or the `*` wildcard guild when the group policy is open |
 
-The table covers all five supported runtime/platform pairs. Every value is pinned explicitly rather than left to a runtime default, so an upstream default change cannot silently reopen the gap.
+The table covers all seven supported runtime/platform pairs. Every value is pinned explicitly rather than left to a runtime default, so an upstream default change cannot silently reopen the gap.
 
-Guarantee strength differs by platform. Slack on both runtimes enforces a fresh mention per message, disabling thread auto-engagement. Teams and Telegram enforce "mention required" but expose no per-message re-mention control, so a direct reply to the agent's own message still reaches it. Those replies remain addressed to exactly one agent, so they do not reopen the cross-agent case.
+Guarantee strength differs by platform. Slack on both runtimes enforces a fresh mention per message, disabling thread auto-engagement. Teams, Telegram, and Discord enforce "mention required" but expose no per-message re-mention control, so a direct reply to the agent's own message still reaches it. Those replies remain addressed to exactly one agent, so they do not reopen the cross-agent case.
 
 Runtime configuration is generated at agent start, so a running agent keeps the gating it was started with until it is stopped and started again.
+
+Discord guild policy and channel restrictions are independent. An open guild policy allows the bot to operate in any guild containing it, while configured channel, user, and role restrictions continue to narrow access within those guilds in both runtimes.
 
 ## Telemetry and costs
 

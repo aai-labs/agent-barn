@@ -6,6 +6,7 @@ import { useAgentApplyAndRestart } from "../hooks/use-agent-apply-and-restart";
 import type { Agent } from "../schemas";
 import { AgentConfigurationSection } from "./agent-configuration-section";
 import type { AgentConfigurationEditHandle } from "./agent-configuration-utils";
+import { DiscordConfigPanel } from "./discord-config-panel";
 import { SlackConfigPanel } from "./slack-config-panel";
 import { TelegramConfigPanel } from "./telegram-config-panel";
 
@@ -27,6 +28,7 @@ export function AgentChannelSettings({
   const editable = canEdit && agent.platform !== "teams";
   const telegram = agent.telegramConfig;
   const slack = agent.slackConfig;
+  const discord = agent.discordConfig;
 
   async function applyChanges() {
     const action = panelRef.current;
@@ -68,8 +70,14 @@ export function AgentChannelSettings({
             isRunning={false}
             onDirtyChange={setIsDirty}
           />
-        ) : (
+        ) : agent.platform === "telegram" ? (
           <TelegramConfigPanel
+            ref={panelRef}
+            agent={agent}
+            onDirtyChange={setIsDirty}
+          />
+        ) : (
+          <DiscordConfigPanel
             ref={panelRef}
             agent={agent}
             onDirtyChange={setIsDirty}
@@ -119,6 +127,35 @@ export function AgentChannelSettings({
             </dl>
           )}
 
+          {agent.platform === "discord" && discord && (
+            <dl className="grid gap-x-8 gap-y-4 sm:grid-cols-2">
+              <div>
+                <dt className="text-[0.72rem] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Server access</dt>
+                <dd className="mb-0 mt-1 text-[0.9rem]" style={{ color: "var(--ink-2)" }}>{discord.groupPolicy === "open" ? "Open" : "Allowlist"}</dd>
+              </div>
+              <div>
+                <dt className="text-[0.72rem] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Allowed servers</dt>
+                <dd className="mb-0 mt-1 text-[0.9rem]" style={{ color: "var(--ink-2)" }}>{discord.guildIds.length || "None"}</dd>
+              </div>
+              <div>
+                <dt className="text-[0.72rem] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Allowed channels</dt>
+                <dd className="mb-0 mt-1 text-[0.9rem]" style={{ color: "var(--ink-2)" }}>{discord.allowedChannelIds.length || "None"}</dd>
+              </div>
+              <div>
+                <dt className="text-[0.72rem] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Allowed operators</dt>
+                <dd className="mb-0 mt-1 text-[0.9rem]" style={{ color: "var(--ink-2)" }}>{discord.allowedUserIds.length} users · {discord.allowedRoleIds.length} roles</dd>
+              </div>
+              <div>
+                <dt className="text-[0.72rem] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Mention gating</dt>
+                <dd className="mb-0 mt-1 text-[0.9rem]" style={{ color: "var(--ink-2)" }}>{discord.requireMention ? "Required" : "Not required"}</dd>
+              </div>
+              <div>
+                <dt className="text-[0.72rem] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Alert destination</dt>
+                <dd className="mb-0 mt-1 break-all font-mono text-[0.84rem]" style={{ color: "var(--ink-2)" }}>{discord.homeChannelId || "None"}</dd>
+              </div>
+            </dl>
+          )}
+
           {agent.platform === "teams" && (
             <div className="flex flex-col gap-3">
               <p className="m-0 text-[0.84rem]" style={{ color: "var(--ink-3)" }}>
@@ -135,7 +172,7 @@ export function AgentChannelSettings({
             </div>
           )}
 
-          {agent.platform !== "teams" && !slack && !telegram && (
+          {agent.platform !== "teams" && !slack && !telegram && !discord && (
             <p className="m-0 text-[0.84rem]" style={{ color: "var(--ink-4)" }}>No channel configuration has been recorded.</p>
           )}
         </div>

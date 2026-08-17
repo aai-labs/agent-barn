@@ -26,13 +26,17 @@ from api.domains.agents.builders import (
     build_config_map,
     build_deployment,
     build_hermes_config,
+    build_hermes_config_discord,
     build_hermes_config_map,
     build_hermes_config_telegram,
     build_hermes_deployment,
     build_openclaw_config_overlay,
+    build_openclaw_config_overlay_discord,
     build_openclaw_config_overlay_teams,
     build_openclaw_config_overlay_telegram,
     build_pvc,
+    build_secret_discord,
+    build_secret_hermes_discord,
     build_secret_hermes_slack,
     build_secret_hermes_telegram,
     build_secret_slack,
@@ -49,6 +53,8 @@ from api.domains.agents.models import (
     AgentConfigurationRead,
     AgentConfigurationVersionRead,
     AgentCreate,
+    AgentDiscordConfig,
+    AgentDiscordConfigRead,
     AgentFilter,
     AgentHealthRead,
     AgentLogHistoryRead,
@@ -172,6 +178,7 @@ _CREDENTIAL_FIELDS = frozenset(
         "slack_app_token",
         "teams_app_id",
         "teams_app_password",
+        "discord_bot_token",
         "secrets",
         "shared_credentials",
         "removed_secret_providers",
@@ -185,6 +192,19 @@ _TELEGRAM_CONFIG_FIELDS = frozenset(
         "telegram_allowed_chat_ids",
         "telegram_group_policy",
         "telegram_dm_policy",
+    }
+)
+
+_DISCORD_CONFIG_FIELDS = frozenset(
+    {
+        "discord_bot_token",
+        "discord_guild_ids",
+        "discord_allowed_channel_ids",
+        "discord_allowed_user_ids",
+        "discord_allowed_role_ids",
+        "discord_home_channel_id",
+        "discord_require_mention",
+        "discord_group_policy",
     }
 )
 
@@ -438,6 +458,7 @@ class AgentService:
         slack_config: AgentSlackConfig | None = None,
         teams_config: AgentTeamsConfig | None = None,
         telegram_config: AgentTelegramConfig | None = None,
+        discord_config: AgentDiscordConfig | None = None,
         secrets: list[AgentSecret] | None = None,
         skills: list[Skill] | None = None,
         required_skill_map: dict[UUID, str | None] | None = None,
@@ -452,6 +473,7 @@ class AgentService:
             slack_config_read.bot_display_name = self._get_bot_display_name(str(agent.id), slack_config)
         teams_config_read = AgentTeamsConfigRead.model_validate(teams_config) if teams_config else None
         telegram_config_read = AgentTelegramConfigRead.model_validate(telegram_config) if telegram_config else None
+        discord_config_read = AgentDiscordConfigRead.model_validate(discord_config) if discord_config else None
         shared_ids = [s.shared_credential_id for s in (secrets or []) if s.shared_credential_id is not None]
         shared_creds_by_id = {}
         if shared_ids:
@@ -492,6 +514,7 @@ class AgentService:
             slack_config=slack_config_read,
             teams_config=teams_config_read,
             telegram_config=telegram_config_read,
+            discord_config=discord_config_read,
             secrets=secrets_read,
             skills=skills_read,
             webhook_url=webhook_url,
@@ -504,12 +527,15 @@ class AgentService:
         slack_config = None
         teams_config = None
         telegram_config = None
+        discord_config = None
         if agent.platform == AgentPlatform.SLACK:
             slack_config = self.repository.get_slack_config(agent.id)
         elif agent.platform == AgentPlatform.TEAMS:
             teams_config = self.repository.get_teams_config(agent.id)
         elif agent.platform == AgentPlatform.TELEGRAM:
             telegram_config = self.repository.get_telegram_config(agent.id)
+        elif agent.platform == AgentPlatform.DISCORD:
+            discord_config = self.repository.get_discord_config(agent.id)
         secrets = self.repository.get_secrets_for_agent(agent.id)
         skills = [s for _, s in self.skill_repository.get_agent_skills_with_details(agent.id)]
         template = self.template_repository.get_pinned_template(agent)
@@ -530,6 +556,7 @@ class AgentService:
             slack_config,
             teams_config,
             telegram_config,
+            discord_config,
             secrets,
             skills,
             required_map,
@@ -576,6 +603,10 @@ class AgentService:
             if not ok:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=reason)
             self._ensure_bot_token_unique(data.slack_bot_token, org_id)
+
+        if data.platform == AgentPlatform.DISCORD:
+            assert data.discord_bot_token is not None
+            self._ensure_discord_bot_token_unique(data.discord_bot_token, org_id)
 
         telegram_bot_username: str | None = None
         if data.platform == AgentPlatform.TELEGRAM:
@@ -658,6 +689,7 @@ class AgentService:
         slack_config = None
         teams_config = None
         telegram_config = None
+        discord_config = None
 
         if data.platform == AgentPlatform.SLACK:
             slack_config = AgentSlackConfig(
@@ -713,6 +745,26 @@ class AgentService:
                 dm_policy=data.telegram_dm_policy,
             )
             self.repository.save_telegram_config(telegram_config)
+        elif data.platform == AgentPlatform.DISCORD:
+            discord_config = AgentDiscordConfig(
+                agent_id=agent.id,
+                bot_token_encrypted=encrypt_token(
+                    cast(str, data.discord_bot_token), self.config.agent_token_encryption_key
+                ),
+                bot_token_hash=compute_bot_token_hash(cast(str, data.discord_bot_token)),
+                guild_ids=data.discord_guild_ids,
+                allowed_channel_ids=data.discord_allowed_channel_ids,
+                allowed_user_ids=data.discord_allowed_user_ids,
+                allowed_role_ids=data.discord_allowed_role_ids,
+                home_channel_id=data.discord_home_channel_id,
+                require_mention=data.discord_require_mention,
+                group_policy=data.discord_group_policy,
+            )
+            try:
+                self.repository.save_discord_config(discord_config)
+            except BotTokenConflictHTTPException:
+                self.repository.hard_delete(agent.id)
+                raise
 
         # Integration secrets are platform-independent. Persist them before any
         # Teams auto-start so they exist if/when the pod is later built.
@@ -814,6 +866,7 @@ class AgentService:
             slack_config,
             teams_config,
             telegram_config,
+            discord_config,
             secrets,
             skills_to_assign,
             required_map,
@@ -1416,6 +1469,7 @@ class AgentService:
         slack_configs = self.repository.get_slack_configs_for_agents(agent_ids)
         teams_configs = self.repository.get_teams_configs_for_agents(agent_ids)
         telegram_configs = self.repository.get_telegram_configs_for_agents(agent_ids)
+        discord_configs = self.repository.get_discord_configs_for_agents(agent_ids)
         secrets_by_agent = self.repository.get_secrets_for_agents(agent_ids)
         skills_by_agent = self.skill_repository.get_skills_for_agents(agent_ids)
 
@@ -1428,6 +1482,7 @@ class AgentService:
                 slack_configs.get(agent.id),
                 teams_configs.get(agent.id),
                 telegram_configs.get(agent.id),
+                discord_configs.get(agent.id),
                 secrets_by_agent.get(agent.id, []),
                 skills_by_agent.get(agent.id, []),
                 req_maps_by_agent.get(agent.id, {}),
@@ -1476,14 +1531,22 @@ class AgentService:
             AgentPlatform.SLACK: [
                 (_TEAMS_CONFIG_FIELDS, "Teams"),
                 (_TELEGRAM_CONFIG_FIELDS, "Telegram"),
+                (_DISCORD_CONFIG_FIELDS, "Discord"),
             ],
             AgentPlatform.TEAMS: [
                 (_SLACK_CONFIG_FIELDS, "Slack"),
                 (_TELEGRAM_CONFIG_FIELDS, "Telegram"),
+                (_DISCORD_CONFIG_FIELDS, "Discord"),
             ],
             AgentPlatform.TELEGRAM: [
                 (_SLACK_CONFIG_FIELDS, "Slack"),
                 (_TEAMS_CONFIG_FIELDS, "Teams"),
+                (_DISCORD_CONFIG_FIELDS, "Discord"),
+            ],
+            AgentPlatform.DISCORD: [
+                (_SLACK_CONFIG_FIELDS, "Slack"),
+                (_TEAMS_CONFIG_FIELDS, "Teams"),
+                (_TELEGRAM_CONFIG_FIELDS, "Telegram"),
             ],
         }
         for fields, label in other_platform_fields.get(agent.platform, []):
@@ -1651,6 +1714,33 @@ class AgentService:
                 if "telegram_dm_policy" in updated:
                     telegram_config.dm_policy = updated["telegram_dm_policy"]
                 self.repository.save_telegram_config(telegram_config)
+
+        # Discord config updates
+        if agent.platform == AgentPlatform.DISCORD and (_DISCORD_CONFIG_FIELDS & updated.keys()):
+            if "discord_bot_token" in updated:
+                self._ensure_discord_bot_token_unique(updated["discord_bot_token"], org_id, exclude_agent_id=agent.id)
+            discord_config = self.repository.get_discord_config(agent.id)
+            if discord_config:
+                if "discord_bot_token" in updated:
+                    discord_config.bot_token_encrypted = encrypt_token(
+                        updated["discord_bot_token"], self.config.agent_token_encryption_key
+                    )
+                    discord_config.bot_token_hash = compute_bot_token_hash(updated["discord_bot_token"])
+                if "discord_guild_ids" in updated:
+                    discord_config.guild_ids = updated["discord_guild_ids"]
+                if "discord_allowed_channel_ids" in updated:
+                    discord_config.allowed_channel_ids = updated["discord_allowed_channel_ids"]
+                if "discord_allowed_user_ids" in updated:
+                    discord_config.allowed_user_ids = updated["discord_allowed_user_ids"]
+                if "discord_allowed_role_ids" in updated:
+                    discord_config.allowed_role_ids = updated["discord_allowed_role_ids"]
+                if "discord_home_channel_id" in updated:
+                    discord_config.home_channel_id = updated["discord_home_channel_id"]
+                if "discord_require_mention" in updated:
+                    discord_config.require_mention = updated["discord_require_mention"]
+                if "discord_group_policy" in updated:
+                    discord_config.group_policy = updated["discord_group_policy"]
+                self.repository.save_discord_config(discord_config)
 
         # Validate skills accessibility and secret coverage
         if data.skill_ids or data.removed_secret_providers:
@@ -2084,6 +2174,59 @@ class AgentService:
                     self.config.openclaw_image,
                     self.config.agent_image_pull_secret,
                 )
+        elif agent.platform == AgentPlatform.DISCORD:
+            discord_config = self.repository.get_discord_config(agent.id)
+            if not discord_config:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Discord config missing for agent {agent_id}",
+                )
+            bot_token = decrypt_token(discord_config.bot_token_encrypted, self.config.agent_token_encryption_key)
+            service = build_service(agent.id, org_id, ns, org_name=org_name, agent_name=agent.name)
+            if agent.agent_type == AgentType.HERMES:
+                api_server_key = secrets.token_urlsafe(32)
+                hermes_cfg = build_hermes_config_discord(
+                    effective_model,
+                    llm_proxy_url,
+                    require_mention=discord_config.require_mention,
+                    group_policy=str(discord_config.group_policy),
+                    approval_mode=str(agent.approval_mode),
+                )
+                secret = build_secret_hermes_discord(
+                    agent.id,
+                    org_id,
+                    ns,
+                    agent.name,
+                    bot_token,
+                    litellm_key,
+                    llm_proxy_url,
+                    api_server_key,
+                    discord_config.allowed_channel_ids,
+                    discord_config.allowed_user_ids,
+                    discord_config.allowed_role_ids,
+                    discord_config.home_channel_id,
+                    discord_config.guild_ids,
+                )
+                deployment = build_hermes_deployment(
+                    agent.id, org_id, ns, self.config.hermes_image, self.config.agent_image_pull_secret
+                )
+            else:
+                overlay = build_openclaw_config_overlay_discord(
+                    effective_model,
+                    llm_proxy_url,
+                    guild_ids=discord_config.guild_ids,
+                    allowed_channel_ids=discord_config.allowed_channel_ids,
+                    allowed_user_ids=discord_config.allowed_user_ids,
+                    allowed_role_ids=discord_config.allowed_role_ids,
+                    home_channel_id=discord_config.home_channel_id,
+                    require_mention=discord_config.require_mention,
+                    group_policy=str(discord_config.group_policy),
+                    approval_mode=str(agent.approval_mode),
+                )
+                secret = build_secret_discord(agent.id, org_id, ns, bot_token, litellm_key, llm_proxy_url)
+                deployment = build_deployment(
+                    agent.id, org_id, ns, self.config.openclaw_image, self.config.agent_image_pull_secret
+                )
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -2432,6 +2575,11 @@ class AgentService:
             slack_config.bot_token_hash = None
             self.repository.save_slack_config(slack_config)
 
+        discord_config = self.repository.get_discord_config(agent.id)
+        if discord_config:
+            discord_config.bot_token_hash = None
+            self.repository.save_discord_config(discord_config)
+
         delete_result = self.repository.soft_delete_with_event(
             agent,
             actor=resolve_actor_identity(context, agent.organization_id),
@@ -2517,6 +2665,20 @@ class AgentService:
         if conflicting:
             name = conflicting.name if conflicting.organization_id == org_id else "another agent"
             raise BotTokenConflictHTTPException(name)
+
+    def _ensure_discord_bot_token_unique(
+        self,
+        bot_token: str,
+        org_id: UUID,
+        exclude_agent_id: UUID | None = None,
+    ) -> None:
+        token_hash = compute_bot_token_hash(bot_token)
+        conflicting = self.repository.find_active_discord_agent_by_bot_token_hash(
+            token_hash, exclude_agent_id=exclude_agent_id
+        )
+        if conflicting:
+            name = conflicting.name if conflicting.organization_id == org_id else "another agent"
+            raise BotTokenConflictHTTPException(name, platform="Discord")
 
     def _join_public_channels(self, bot_token: str, channel_ids: list[str]) -> None:
         client = SlackClient(bot_token)

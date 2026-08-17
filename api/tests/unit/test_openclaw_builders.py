@@ -7,8 +7,10 @@ from api.domains.agents.builders.openclaw import (
     START_SH,
     build_deployment,
     build_openclaw_config_overlay,
+    build_openclaw_config_overlay_discord,
     build_openclaw_config_overlay_teams,
     build_openclaw_config_overlay_telegram,
+    build_secret_discord,
     build_secret_slack,
     build_secret_telegram,
 )
@@ -98,6 +100,51 @@ def test_build_deployment_pod_carries_agent_component_label():
 _AGENT_ID = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
 _ORG_ID = UUID("11111111-2222-3333-4444-555555555555")
 _NS = "agent-farm"
+
+
+# --- Discord overlay --------------------------------------------------------
+
+
+def test_build_openclaw_config_overlay_discord_defaults_to_private_mentions_only():
+    overlay = build_openclaw_config_overlay_discord("litellm/gpt-4o", "http://litellm:4000")
+
+    discord = overlay["channels"]["discord"]
+    assert_that(discord["groupPolicy"], equal_to("allowlist"))
+    assert_that(discord["guilds"], equal_to({}))
+    assert_that(discord["dmPolicy"], equal_to("disabled"))
+    assert_that(discord["dm"]["enabled"], equal_to(False))
+    assert_that(overlay["bindings"][0]["match"]["channel"], equal_to("discord"))
+
+
+def test_build_openclaw_config_overlay_discord_allowlists_guilds_with_mentions():
+    overlay = build_openclaw_config_overlay_discord(
+        "litellm/gpt-4o",
+        "http://litellm:4000",
+        guild_ids=["123", "456"],
+        allowed_role_ids=["role-1"],
+        home_channel_id="channel-1",
+    )
+
+    assert_that(
+        overlay["channels"]["discord"]["guilds"],
+        equal_to(
+            {
+                "123": {"requireMention": True, "roles": ["role-1"]},
+                "456": {"requireMention": True, "roles": ["role-1"]},
+            }
+        ),
+    )
+    assert_that(
+        overlay["agents"]["defaults"]["heartbeat"],
+        equal_to({"target": "discord", "to": "channel:channel-1", "directPolicy": "block"}),
+    )
+
+
+def test_build_secret_discord_sets_runtime_token_and_platform():
+    secret = build_secret_discord(_AGENT_ID, _ORG_ID, _NS, "discord-token", "key", "http://litellm")
+
+    assert_that(secret.string_data["DISCORD_BOT_TOKEN"], equal_to("discord-token"))
+    assert_that(secret.string_data["AGENT_PLATFORM"], equal_to("discord"))
 
 
 # --- Telegram overlay -------------------------------------------------------

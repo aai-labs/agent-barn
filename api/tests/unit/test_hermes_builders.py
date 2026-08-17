@@ -1,18 +1,23 @@
+from types import SimpleNamespace
 from uuid import UUID
 
 import yaml
 from hamcrest import assert_that, contains_string, equal_to, has_key, is_not
 
 from api.domains.agents.builders import (
+    DISCORD_DENY_DMS_PLUGIN_INIT,
+    DISCORD_GUILD_ALLOWLIST_PLUGIN_INIT,
     HERMES_START_SH,
     SLACK_CHANNEL_ALLOWLIST_PLUGIN_INIT,
     SLACK_DENY_DMS_PLUGIN_INIT,
     TELEGRAM_CHANNEL_ALLOWLIST_PLUGIN_INIT,
     TELEGRAM_DENY_DMS_PLUGIN_INIT,
     build_hermes_config,
+    build_hermes_config_discord,
     build_hermes_config_map,
     build_hermes_config_telegram,
     build_hermes_deployment,
+    build_secret_hermes_discord,
     build_secret_hermes_slack,
     build_secret_hermes_telegram,
 )
@@ -20,6 +25,97 @@ from api.domains.agents.builders import (
 _AGENT_ID = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
 _ORG_ID = UUID("11111111-2222-3333-4444-555555555555")
 _NS = "agent-farm"
+
+
+def test_build_hermes_config_discord_uses_safe_mention_and_thread_defaults():
+    cfg = build_hermes_config_discord("litellm/qwen3", "http://litellm:4000")
+
+    assert_that(cfg["discord"]["require_mention"], equal_to(True))
+    assert_that(cfg["discord"]["thread_require_mention"], equal_to(True))
+    assert_that(cfg["discord"]["allow_mentions"], equal_to({"everyone": False, "roles": False}))
+    assert_that("discord-deny-dms" in cfg["plugins"]["enabled"], equal_to(True))
+    assert_that("discord-guild-allowlist" in cfg["plugins"]["enabled"], equal_to(True))
+
+
+def test_build_hermes_config_discord_open_group_policy_drops_guild_gate():
+    cfg = build_hermes_config_discord("litellm/qwen3", "http://litellm:4000", group_policy="open")
+
+    assert_that("discord-deny-dms" in cfg["plugins"]["enabled"], equal_to(True))
+    assert_that("discord-guild-allowlist" in cfg["plugins"]["enabled"], equal_to(False))
+
+
+def test_discord_policy_plugin_sources_are_valid_python():
+    compile(DISCORD_DENY_DMS_PLUGIN_INIT, "discord-deny-dms/__init__.py", "exec")
+    compile(DISCORD_GUILD_ALLOWLIST_PLUGIN_INIT, "discord-guild-allowlist/__init__.py", "exec")
+
+
+def test_discord_deny_dms_plugin_skips_direct_messages():
+    namespace: dict = {}
+    exec(DISCORD_DENY_DMS_PLUGIN_INIT, namespace)  # noqa: S102 - execute checked-in plugin source
+    event = SimpleNamespace(source=SimpleNamespace(platform="discord", chat_type="dm"))
+
+    assert_that(namespace["deny_discord_dms"](event), equal_to({"action": "skip", "reason": "discord-dm-denied"}))
+
+
+def test_discord_guild_allowlist_plugin_fails_closed(monkeypatch):
+    monkeypatch.setenv("DISCORD_GUILD_IDS", "guild-1")
+    namespace: dict = {}
+    exec(DISCORD_GUILD_ALLOWLIST_PLUGIN_INIT, namespace)  # noqa: S102 - execute checked-in plugin source
+    allowed = SimpleNamespace(source=SimpleNamespace(platform="discord", chat_type="channel", guild_id="guild-1"))
+    denied = SimpleNamespace(source=SimpleNamespace(platform="discord", chat_type="channel", guild_id="guild-2"))
+
+    assert_that(namespace["filter_guild"](allowed), equal_to(None))
+    assert_that(
+        namespace["filter_guild"](denied),
+        equal_to({"action": "skip", "reason": "discord-guild-not-allowlisted"}),
+    )
+
+
+def test_build_hermes_config_map_discord_contains_policy_plugins():
+    cfg = build_hermes_config_discord("litellm/m", "http://x:4000")
+    cm = build_hermes_config_map(
+        _AGENT_ID,
+        _ORG_ID,
+        _NS,
+        soul_md="# Soul",
+        identity_md="# Identity",
+        user_md="# User",
+        tools_md="# Tools",
+        agents_md="# Agents",
+        boot_md="# Boot",
+        heartbeat_md="# Heartbeat",
+        hermes_config=cfg,
+        platform="discord",
+    )
+
+    assert_that(cm.data, has_key("discord-deny-dms-plugin.yaml"))
+    assert_that(cm.data, has_key("discord-guild-allowlist-plugin.yaml"))
+
+
+def test_build_secret_hermes_discord_scopes_access_and_home_channel():
+    secret = build_secret_hermes_discord(
+        _AGENT_ID,
+        _ORG_ID,
+        _NS,
+        "Infra Sentinel",
+        "discord-token",
+        "key",
+        "http://litellm",
+        "api-key",
+        ["channel-1"],
+        ["user-1"],
+        ["role-1"],
+        "channel-1",
+        ["guild-1"],
+    )
+
+    assert_that(secret.string_data["DISCORD_BOT_TOKEN"], equal_to("discord-token"))
+    assert_that(secret.string_data["DISCORD_ALLOWED_CHANNELS"], equal_to("channel-1"))
+    assert_that(secret.string_data["DISCORD_ALLOWED_USERS"], equal_to("user-1"))
+    assert_that(secret.string_data["DISCORD_ALLOWED_ROLES"], equal_to("role-1"))
+    assert_that(secret.string_data["DISCORD_GUILD_IDS"], equal_to("guild-1"))
+    assert_that(secret.string_data["DISCORD_HOME_CHANNEL"], equal_to("channel-1"))
+    assert_that(secret.string_data["DISCORD_ALLOW_BOTS"], equal_to("none"))
 
 
 def test_build_hermes_config_sets_model_and_base_url():

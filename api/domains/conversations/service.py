@@ -23,6 +23,7 @@ from api.domains.conversations.models import (
 from api.domains.conversations.repository import ConversationRepository
 from api.domains.rbac.catalog import PermissionKey
 from api.infrastructure.crypto import decrypt_token
+from api.infrastructure.discord.client import DiscordClient
 from api.infrastructure.slack.client import SlackClient
 from api.infrastructure.telegram.client import get_chat_display_name
 
@@ -118,6 +119,8 @@ class ConversationService:
             return {}, {}, {}
         if agent.platform == AgentPlatform.TELEGRAM:
             return self._telegram_maps(agent.id, unresolved_ids or [])
+        if agent.platform == AgentPlatform.DISCORD:
+            return self._discord_maps(agent.id, unresolved_ids or [])
         try:
             slack_config = self.agent_repository.get_slack_config(agent.id)
             if not slack_config:
@@ -162,6 +165,24 @@ class ConversationService:
             if name:
                 resolved[chat_id] = name
         return {}, resolved, resolved
+
+    def _discord_maps(
+        self, agent_id: UUID, unresolved_ids: list[str]
+    ) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
+        if not unresolved_ids:
+            return {}, {}, {}
+        discord_config = self.agent_repository.get_discord_config(agent_id)
+        if not discord_config:
+            return {}, {}, {}
+        bot_token = decrypt_token(
+            discord_config.bot_token_encrypted,
+            self.config.agent_token_encryption_key,
+        )
+        client = DiscordClient(bot_token)
+        channels = {
+            channel_id: name for channel_id in unresolved_ids if (name := client.get_channel_display_name(channel_id))
+        }
+        return {}, channels, {}
 
     def list_threads(
         self,
