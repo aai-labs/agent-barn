@@ -28,8 +28,8 @@ export const SkillFileSchema = z.object({
 
 export const SkillDetailSchema = SkillSchema.extend({
   files: z.array(SkillFileSchema),
-  // Whether any non-soft-deleted agent currently has this skill assigned; gates
-  // deleting the currently published version.
+  // Whether a non-soft-deleted agent in the caller's organization has this skill
+  // assigned; gates deleting the currently published version.
   isAssignedToAgent: z.boolean(),
 });
 

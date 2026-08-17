@@ -168,7 +168,6 @@ def upgrade() -> None:
         sa.Column("skill_id", sa.Uuid(), nullable=False),
         sa.Column("version", sa.Integer(), nullable=False),
         sa.Column("created_by", sa.Uuid(), nullable=True),
-        sa.Column("restored_from_version", sa.Integer(), nullable=True),
         sa.ForeignKeyConstraint(["skill_id"], ["skill.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["created_by"], ["user.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),

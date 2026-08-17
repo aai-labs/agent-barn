@@ -219,7 +219,7 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
         requiredProviders: selectedProviders,
       });
       setLocalFiles(draft.files.map((f) => ({ path: f.path, content: f.content })));
-      toast.success("Draft saved.");
+      toast.success(`${detail!.name} v${detail!.version + 1} draft saved.`);
     } catch {
       // error rendered via mutationError
     }

@@ -54,7 +54,7 @@ class SkillService:
         here rather than surfacing as a database error.
         """
         base = slugify(name) or "skill"
-        taken = {s.slug for s in self.repository.find_accessible_for_org(org_id) if s.organization_id == org_id}
+        taken = {s.slug for s in self.repository.find_org_scoped(org_id)}
         if base not in taken:
             return base
         suffix = 2
@@ -66,7 +66,7 @@ class SkillService:
         """A fork keeps the built-in's name when it's free in the organization and
         gains a ``(fork)`` suffix when the org already has a same-named skill, so
         the org-scoped ``(organization_id, name)`` uniqueness holds."""
-        taken = {s.name for s in self.repository.find_accessible_for_org(org_id) if s.organization_id == org_id}
+        taken = {s.name for s in self.repository.find_org_scoped(org_id)}
         if base not in taken:
             return base
         candidate = f"{base} (fork)"
@@ -205,7 +205,7 @@ class SkillService:
             {
                 **read.model_dump(),
                 "files": [SkillFileRead.model_validate(f) for f in files],
-                "is_assigned_to_agent": self.repository.is_assigned_to_any_agent(skill.id),
+                "is_assigned_to_agent": self.repository.is_assigned_to_any_agent(skill.id, org_id),
             }
         )
 
@@ -214,7 +214,7 @@ class SkillService:
         skill = self._get_or_404(skill_id, org_id)
         self.permission_policy.require_organization(context, org_id, PermissionKey.SKILL_READ)
         versions = self.repository.list_versions(skill.id)
-        pinned = self.repository.get_pinned_versions_for_skill(skill.id)
+        pinned = self.repository.get_pinned_versions_for_skill(skill.id, org_id)
         return [
             SkillVersionRead.model_validate({**v.model_dump(), "is_pinned_by_agent": v.version in pinned})
             for v in versions
@@ -232,7 +232,7 @@ class SkillService:
                 status_code=status.HTTP_404_NOT_FOUND, detail=f"Version {version} not found for skill {skill_id}"
             )
         files = self.repository.get_files(skill_version.id)
-        pinned = self.repository.get_pinned_versions_for_skill(skill.id)
+        pinned = self.repository.get_pinned_versions_for_skill(skill.id, org_id)
         return SkillVersionDetailRead.model_validate(
             {
                 **skill_version.model_dump(),
@@ -358,7 +358,7 @@ class SkillService:
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Cannot delete the only version of a skill",
             )
-        if self.repository.is_skill_version_pinned(skill.id, version):
+        if self.repository.is_skill_version_pinned(skill.id, version, org_id):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Cannot delete a version that is pinned by an agent",

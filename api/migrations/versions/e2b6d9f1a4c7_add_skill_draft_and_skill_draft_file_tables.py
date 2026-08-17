@@ -30,7 +30,6 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("skill_id", sa.Uuid(), nullable=False),
-        sa.Column("source_version", sa.Integer(), nullable=True),
         sa.ForeignKeyConstraint(["skill_id"], ["skill.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("skill_id", name="uq_skill_draft_skill_id"),

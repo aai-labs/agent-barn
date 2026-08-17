@@ -68,7 +68,7 @@ test.describe("Settings — Skill detail page", () => {
     await expect(page).toHaveURL(new RegExp(`settings/skills/${MOCK_CUSTOM_SKILL_ID}\\?edit=1$`));
     const saveDraft = page.getByRole("button", { name: "Save draft" });
     await expect(saveDraft).toBeEnabled();
-    const fileInput = page.getByLabel("Content of github_skill.md");
+    const fileInput = page.getByRole("textbox", { name: "Content of github_skill.md" });
     await fileInput.fill("# Edited fork");
     await expect(page.getByRole("button", { name: "Discard" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Publish" })).not.toBeVisible();
@@ -89,7 +89,7 @@ test.describe("Settings — Skill detail page", () => {
 
     await page.goto(`/dashboard/${TEST_ORG_ID}/settings/skills/${MOCK_CUSTOM_SKILL_ID}?edit=1`);
 
-    const fileInput = page.getByLabel("Content of SKILL.md");
+    const fileInput = page.getByRole("textbox", { name: "Content of SKILL.md" });
     await expect(fileInput).toHaveValue("# Unsaved draft edits");
     await expect(page.getByRole("button", { name: "Discard" })).toBeVisible();
   });
@@ -124,7 +124,7 @@ test.describe("Settings — Skill detail page", () => {
     await page.goto(`/dashboard/${TEST_ORG_ID}/settings/skills/${MOCK_CUSTOM_SKILL_ID}`);
     await page.getByRole("button", { name: "Edit" }).click();
 
-    await expect(page.getByLabel("Content of SKILL.md")).toHaveValue("# My tool");
+    await expect(page.getByRole("textbox", { name: "Content of SKILL.md" })).toHaveValue("# My tool");
     await expect(page.getByRole("button", { name: "Discard" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Save draft" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Publish" })).not.toBeVisible();
@@ -149,6 +149,8 @@ test.describe("Settings — Skill detail page", () => {
         body: JSON.stringify({
           skill_id: MOCK_CUSTOM_SKILL_ID,
           files: [{ path: "SKILL.md", content: "# Edited" }],
+          description: null,
+          required_providers: [],
           created_at: "2026-01-01T00:00:00Z",
           updated_at: "2026-01-01T00:00:00Z",
         }),
@@ -157,10 +159,11 @@ test.describe("Settings — Skill detail page", () => {
 
     await page.goto(`/dashboard/${TEST_ORG_ID}/settings/skills/${MOCK_CUSTOM_SKILL_ID}`);
     await page.getByRole("button", { name: "Edit" }).click();
-    await page.getByLabel("Content of SKILL.md").fill("# Edited");
+    await page.getByRole("textbox", { name: "Content of SKILL.md" }).fill("# Edited");
     await page.getByRole("button", { name: "Save draft" }).click();
 
-    await expect(page.getByLabel("Content of SKILL.md")).toHaveValue("# Edited");
+    await expect(page.getByRole("textbox", { name: "Content of SKILL.md" })).toHaveValue("# Edited");
+    await expect(page.getByText("my-tool v2 draft saved.")).toBeVisible();
     expect(draftUpdateCalled).toBe(true);
   });
 

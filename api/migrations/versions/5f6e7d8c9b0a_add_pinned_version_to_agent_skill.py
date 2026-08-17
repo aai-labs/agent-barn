@@ -1,7 +1,7 @@
 """add pinned_version to agent_skill
 
 Revision ID: 5f6e7d8c9b0a
-Revises: 9a1b2c3d4e5f
+Revises: 8c1e9cda45e3
 Create Date: 2026-08-15 13:00:00.000000
 
 """
@@ -13,7 +13,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "5f6e7d8c9b0a"
-down_revision: str | None = "9a1b2c3d4e5f"
+down_revision: str | None = "8c1e9cda45e3"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

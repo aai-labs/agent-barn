@@ -1,4 +1,5 @@
 import enum
+from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
@@ -65,6 +66,14 @@ class Skill(BaseModel, table=True):
     # Only an override: when NULL the pointer is derived from name + description +
     # entry path. The built-ins carry curated wording here.
     tools_pointer: str | None = SqlField(default=None, sa_column=Column(sa.Text(), nullable=True))
+
+
+@dataclass(frozen=True)
+class PinnedSkill:
+    """A loaded skill lineage paired with the exact version an agent mounts."""
+
+    skill: Skill
+    version: int
 
 
 class SkillVersion(BaseModel, table=True):
@@ -210,8 +219,8 @@ class SkillSummaryRead(SkillRead):
 
 class SkillDetailRead(SkillSummaryRead):
     files: list[SkillFileRead]
-    # Whether any non-soft-deleted agent currently has this skill assigned. The
-    # UI uses it to gate deleting the currently published version.
+    # Whether a non-soft-deleted agent in the caller's organization has this skill
+    # assigned. The UI uses it to gate deleting the currently published version.
     is_assigned_to_agent: bool
 
 
@@ -221,9 +230,9 @@ class SkillVersionRead(PydanticBaseModel):
     version: int
     created_by: UUID | None
     created_at: datetime
-    # Whether any non-soft-deleted agent pins this exact version. The UI uses
-    # it to disable the per-version Delete button — the backend enforces the
-    # same guard independently.
+    # Whether a non-soft-deleted agent in the caller's organization pins this exact
+    # version. The UI uses it to disable the per-version Delete button; the backend
+    # enforces the same guard independently.
     is_pinned_by_agent: bool
 
     model_config = ConfigDict(from_attributes=True)

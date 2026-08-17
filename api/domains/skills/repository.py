@@ -6,8 +6,9 @@ from injector import inject, singleton
 from sqlalchemy import func
 from sqlmodel import Session, col, delete, or_, select
 
-from api.domains.agents.models import Agent, AgentSkill, SecretProvider
+from api.domains.agents.models import Agent, AgentSkill, SecretProvider, SkillVersionPin
 from api.domains.skills.models import (
+    PinnedSkill,
     Skill,
     SkillDraft,
     SkillDraftFile,
@@ -97,7 +98,7 @@ class SkillRepository:
             )
             return list(session.exec(query).all())
 
-    def get_files_for_skill_versions(self, pins: list[tuple[UUID, int]]) -> dict[UUID, list[SkillFile]]:
+    def get_files_for_skill_versions(self, pins: list[SkillVersionPin]) -> dict[UUID, list[SkillFile]]:
         """Files of each skill's *pinned* version, keyed by skill id.
 
         Used when materializing an agent's skills at start, so mounting resolves
@@ -107,11 +108,11 @@ class SkillRepository:
             return {}
         with Session(self.delegate.engine) as session:
             version_rows = []
-            for skill_id, version in dict.fromkeys(pins):
+            for pin in pins:
                 row = session.exec(
                     select(SkillVersion)
-                    .where(col(SkillVersion.skill_id) == skill_id)
-                    .where(col(SkillVersion.version) == version)
+                    .where(col(SkillVersion.skill_id) == pin.skill_id)
+                    .where(col(SkillVersion.version) == pin.version)
                 ).first()
                 if row is not None:
                     version_rows.append(row)
@@ -129,26 +130,27 @@ class SkillRepository:
             result.setdefault(version_ids[file.skill_version_id], []).append(file)
         return result
 
-    def is_skill_version_pinned(self, skill_id: UUID, version: int) -> bool:
-        """Whether any non-soft-deleted agent pins this exact skill version."""
+    def is_skill_version_pinned(self, skill_id: UUID, version: int, org_id: UUID) -> bool:
+        """Whether an organization's non-soft-deleted agent pins this version."""
         with Session(self.delegate.engine) as session:
             query = (
                 select(AgentSkill)
                 .join(Agent, col(AgentSkill.agent_id) == col(Agent.id))
                 .where(col(AgentSkill.skill_id) == skill_id)
                 .where(col(AgentSkill.pinned_version) == version)
+                .where(col(Agent.organization_id) == org_id)
                 .where(col(Agent.deleted_at).is_(None))
             )
             return session.exec(query).first() is not None
 
-    def get_pinned_versions_for_skill(self, skill_id: UUID) -> set[int]:
-        """Every version number of this skill that at least one non-soft-deleted
-        agent pins. Used to annotate ``SkillVersionRead`` for the UI."""
+    def get_pinned_versions_for_skill(self, skill_id: UUID, org_id: UUID) -> set[int]:
+        """Versions pinned by non-soft-deleted agents in an organization."""
         with Session(self.delegate.engine) as session:
             query = (
                 select(col(AgentSkill.pinned_version))
                 .join(Agent, col(AgentSkill.agent_id) == col(Agent.id))
                 .where(col(AgentSkill.skill_id) == skill_id)
+                .where(col(Agent.organization_id) == org_id)
                 .where(col(Agent.deleted_at).is_(None))
             )
             return set(session.exec(query).all())
@@ -335,6 +337,12 @@ class SkillRepository:
             )
             return list(session.exec(query).all())
 
+    def find_org_scoped(self, org_id: UUID) -> list[Skill]:
+        """Return only skills owned by an organization, without pagination."""
+        with Session(self.delegate.engine) as session:
+            query = select(Skill).where(col(Skill.organization_id) == org_id)
+            return list(session.exec(query).all())
+
     def find_all_for_org(
         self,
         org_id: UUID,
@@ -376,12 +384,13 @@ class SkillRepository:
     def delete(self, skill: Skill) -> None:
         self.delegate.delete(skill)
 
-    def is_assigned_to_any_agent(self, skill_id: UUID) -> bool:
+    def is_assigned_to_any_agent(self, skill_id: UUID, org_id: UUID) -> bool:
         with Session(self.delegate.engine) as session:
             query = (
                 select(AgentSkill)
                 .join(Agent, col(AgentSkill.agent_id) == col(Agent.id))
                 .where(col(AgentSkill.skill_id) == skill_id)
+                .where(col(Agent.organization_id) == org_id)
                 .where(col(Agent.deleted_at).is_(None))
             )
             return session.exec(query).first() is not None
@@ -412,7 +421,7 @@ class SkillRepository:
                 result.setdefault(agent_skill.agent_id, []).append(skill)
             return result
 
-    def get_skills_for_agents_with_versions(self, agent_ids: list[UUID]) -> dict[UUID, list[tuple[Skill, int]]]:
+    def get_skills_for_agents_with_versions(self, agent_ids: list[UUID]) -> dict[UUID, list[PinnedSkill]]:
         """Each agent's assigned skills alongside their explicit pinned version.
 
         Joins ``Agent`` with ``deleted_at IS NULL`` so the batch load cannot
@@ -428,7 +437,9 @@ class SkillRepository:
                 .where(col(AgentSkill.agent_id).in_(agent_ids))
                 .where(col(Agent.deleted_at).is_(None))
             )
-            result: dict[UUID, list[tuple[Skill, int]]] = {}
+            result: dict[UUID, list[PinnedSkill]] = {}
             for agent_skill, skill in session.exec(query).all():
-                result.setdefault(agent_skill.agent_id, []).append((skill, agent_skill.pinned_version))
+                result.setdefault(agent_skill.agent_id, []).append(
+                    PinnedSkill(skill=skill, version=agent_skill.pinned_version)
+                )
             return result
