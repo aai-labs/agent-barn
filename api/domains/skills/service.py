@@ -154,7 +154,12 @@ class SkillService:
         )
         self.repository.save(skill)
         version = self.repository.publish_version(skill.id, files, created_by=context.user.id)
-        self.repository.save_new_draft(skill.id, files)
+        self.repository.save_new_draft(
+            skill.id,
+            files,
+            description=skill.description,
+            required_providers=[p.value for p in skill.required_providers],
+        )
         read = self._to_read(skill, version.version, has_draft=True)
         return SkillDetailRead.model_validate(
             {
@@ -279,7 +284,12 @@ class SkillService:
                 status_code=status.HTTP_404_NOT_FOUND, detail=f"No published version for skill {skill_id}"
             )
         files = [(f.path, f.content) for f in self.repository.get_files(source.id)]
-        draft = self.repository.save_new_draft(skill.id, files)
+        draft = self.repository.save_new_draft(
+            skill.id,
+            files,
+            description=skill.description,
+            required_providers=[p.value for p in skill.required_providers],
+        )
         return self._draft_to_read(draft)
 
     def update_skill_draft(self, skill_id: UUID, data: SkillDraftUpdate, context: CurrentUserContext) -> SkillDraftRead:
@@ -289,7 +299,14 @@ class SkillService:
         if draft is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"No draft for skill {skill_id}")
         files = self._validated_files(data.files, skill.entry_path)
-        draft = self.repository.update_draft_files(draft.id, files)
+        draft = self.repository.update_draft_files(
+            draft.id,
+            files,
+            description=data.description,
+            required_providers=[p.value for p in data.required_providers]
+            if data.required_providers is not None
+            else None,
+        )
         return self._draft_to_read(draft)
 
     def discard_skill_draft(self, skill_id: UUID, context: CurrentUserContext) -> None:
@@ -308,6 +325,8 @@ class SkillService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"No draft for skill {skill_id}")
         files = [(f.path, f.content) for f in self.repository.get_draft_files(draft.id)]
         published = self.repository.publish_draft(skill.id, draft.id, files, created_by=context.user.id)
+        # Reload the skill to pick up the draft's metadata applied in publish_draft.
+        skill = self._get_or_404(skill_id, org_id)
         return self._to_read(skill, published.version, has_draft=False)
 
     def delete_skill_version(self, skill_id: UUID, version: int, context: CurrentUserContext) -> None:

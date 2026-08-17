@@ -104,21 +104,29 @@ export function useStartSkillDraft() {
   });
 }
 
+export type SkillDraftUpdatePayload = {
+  skillId: string;
+  files: SkillFilePayload[];
+  description?: string;
+  requiredProviders?: string[];
+};
+
 export function useUpdateSkillDraft() {
   const queryClient = useQueryClient();
   const orgApiBase = useOrganizationApiBase();
 
   return useMutation({
-    mutationFn: async ({ skillId, files }: { skillId: string; files: SkillFilePayload[] }) => {
+    mutationFn: async ({ skillId, files, ...metadata }: SkillDraftUpdatePayload) => {
       const response = await api.patch<SkillDraft>(
         `${orgApiBase}/skills/${skillId}/draft`,
-        { files },
+        { files, ...metadata },
         { schema: SkillDraftSchema },
       );
       return response.data;
     },
     onSuccess: (draft) => {
       queryClient.setQueryData(skillDraftKey(draft.skillId), draft);
+      void queryClient.invalidateQueries({ queryKey: skillsKey.all });
     },
   });
 }

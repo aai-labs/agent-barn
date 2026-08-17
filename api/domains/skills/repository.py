@@ -6,7 +6,7 @@ from injector import inject, singleton
 from sqlalchemy import func
 from sqlmodel import Session, col, delete, or_, select
 
-from api.domains.agents.models import Agent, AgentSkill
+from api.domains.agents.models import Agent, AgentSkill, SecretProvider
 from api.domains.skills.models import (
     Skill,
     SkillDraft,
@@ -206,9 +206,20 @@ class SkillRepository:
             )
             return list(session.exec(query).all())
 
-    def save_new_draft(self, skill_id: UUID, files: list[tuple[str, str]]) -> SkillDraft:
+    def save_new_draft(
+        self,
+        skill_id: UUID,
+        files: list[tuple[str, str]],
+        *,
+        description: str | None = None,
+        required_providers: list[str] | None = None,
+    ) -> SkillDraft:
         with Session(self.delegate.engine) as session:
-            draft = SkillDraft(skill_id=skill_id)
+            draft = SkillDraft(
+                skill_id=skill_id,
+                description=description,
+                required_providers=required_providers or [],
+            )
             session.add(draft)
             session.flush()
             for path, content in files:
@@ -217,7 +228,14 @@ class SkillRepository:
             session.refresh(draft)
             return draft
 
-    def update_draft_files(self, draft_id: UUID, files: list[tuple[str, str]]) -> SkillDraft:
+    def update_draft_files(
+        self,
+        draft_id: UUID,
+        files: list[tuple[str, str]],
+        *,
+        description: str | None = None,
+        required_providers: list[str] | None = None,
+    ) -> SkillDraft:
         with Session(self.delegate.engine) as session:
             draft = session.get(SkillDraft, draft_id)
             assert draft is not None
@@ -226,6 +244,10 @@ class SkillRepository:
             )
             for path, content in files:
                 session.add(SkillDraftFile(skill_draft_id=draft_id, path=path, content=content))
+            if description is not None:
+                draft.description = description
+            if required_providers is not None:
+                draft.required_providers = required_providers
             draft.updated_at = datetime.now(UTC)
             session.add(draft)
             session.commit()
@@ -245,8 +267,8 @@ class SkillRepository:
         *,
         created_by: UUID | None = None,
     ) -> SkillVersion:
-        """Publish a draft's files as the next immutable version, then clear the
-        draft slot, atomically."""
+        """Publish a draft's files as the next immutable version, apply the
+        draft's metadata to the skill row, then clear the draft slot, atomically."""
         with Session(self.delegate.engine) as session:
             current = session.exec(
                 select(func.max(col(SkillVersion.version))).where(col(SkillVersion.skill_id) == skill_id)
@@ -260,6 +282,16 @@ class SkillRepository:
             session.flush()
             for path, content in files:
                 session.add(SkillFile(skill_version_id=version.id, path=path, content=content))
+            # Apply the draft's metadata to the skill row so the published
+            # version carries the description and required providers the author
+            # staged in the draft.
+            draft = session.get(SkillDraft, draft_id)
+            if draft is not None:
+                skill = session.get(Skill, skill_id)
+                if skill is not None:
+                    skill.description = draft.description
+                    skill.required_providers = [SecretProvider(p) for p in draft.required_providers]
+                    session.add(skill)
             session.exec(delete(SkillDraft).where(col(SkillDraft.id) == draft_id))  # type: ignore[call-overload]
             session.commit()
             session.refresh(version)

@@ -235,6 +235,8 @@ export class SkillDataSupport {
         body: JSON.stringify({
           skill_id: skillId,
           files,
+          description: null,
+          required_providers: [],
           created_at: "2026-01-01T00:00:00Z",
           updated_at: "2026-01-01T00:00:00Z",
         }),
@@ -265,6 +267,8 @@ export class SkillDataSupport {
             : JSON.stringify({
                 skill_id: skillId,
                 files,
+                description: null,
+                required_providers: [],
                 created_at: "2026-01-01T00:00:00Z",
                 updated_at: "2026-01-01T00:00:00Z",
               }),
@@ -401,6 +405,8 @@ export class SkillDataSupport {
             : JSON.stringify({
                 skill_id: skillId,
                 files,
+                description: null,
+                required_providers: [],
                 created_at: "2026-01-01T00:00:00Z",
                 updated_at: "2026-01-01T00:00:00Z",
               }),

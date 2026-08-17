@@ -43,6 +43,8 @@ export const SkillVersionSchema = z.object({
 export const SkillDraftSchema = z.object({
   skillId: z.string().uuid(),
   files: z.array(SkillFileSchema),
+  description: z.string().nullable(),
+  requiredProviders: z.array(z.string()),
   createdAt: z.string(),
   updatedAt: z.string(),
 });

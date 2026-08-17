@@ -116,6 +116,13 @@ class SkillDraft(BaseModel, table=True):
     __table_args__ = (sa.UniqueConstraint("skill_id", name="uq_skill_draft_skill_id"),)
 
     skill_id: UUID = SqlField(foreign_key="skill.id", nullable=False, ondelete="CASCADE")
+    # Draft metadata: staged here and only applied to the skill row on publish,
+    # so the published version's metadata stays frozen until a draft is published.
+    description: str | None = SqlField(default=None, nullable=True, max_length=2000)
+    required_providers: list[str] = SqlField(
+        default_factory=list,
+        sa_column=Column(sa.JSON(), nullable=False, server_default="[]"),
+    )
 
 
 class SkillDraftFile(BaseModel, table=True):
@@ -229,6 +236,8 @@ class SkillVersionDetailRead(SkillVersionRead):
 class SkillDraftRead(PydanticBaseModel):
     skill_id: UUID
     files: list[SkillFileRead]
+    description: str | None
+    required_providers: list[SecretProvider]
     created_at: datetime
     updated_at: datetime
 
@@ -237,6 +246,8 @@ class SkillDraftRead(PydanticBaseModel):
 
 class SkillDraftUpdate(PydanticBaseModel):
     files: list[SkillFileInput] = Field(min_length=1)
+    description: str | None = Field(default=None, max_length=2000)
+    required_providers: list[SecretProvider] | None = None
 
 
 class SkillFilter(PydanticBaseModel):
