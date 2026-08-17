@@ -21,7 +21,7 @@ test.describe("Settings — New skill page", () => {
   test("starts from a SKILL.md entry point", async ({ page }) => {
     await page.getByPlaceholder("e.g. my-tool").fill("test-skill");
 
-    await expect(page.getByRole("button", { name: "SKILL.md" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "SKILL.md", exact: true })).toBeVisible();
     await expect(page.getByLabel("Content of SKILL.md")).not.toBeEmpty();
   });
 
