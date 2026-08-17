@@ -24,6 +24,8 @@ export function EventDeliveryDetail({ delivery }: { delivery: EventDelivery }) {
           label="Organization"
           value={organizationLabel}
         />
+        {delivery.actorDisplay && <EventDeliveryDetailRow label="Actor" value={delivery.actorDisplay} />}
+        {delivery.subjectDisplay && <EventDeliveryDetailRow label="Subject" value={delivery.subjectDisplay} />}
         <EventDeliveryDetailRow label="Attempt count" value={delivery.attemptCount} />
       </Section>
 

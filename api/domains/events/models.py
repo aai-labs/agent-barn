@@ -195,6 +195,11 @@ class EventDeliveryRead(BaseModel):
     attempt_count: int
     dead_letter_reason: EventDeliveryDeadLetterReason | None = None
     last_error: str | None = None
+    # Curated display strings the event's own payload already carries (not the raw
+    # actor/subject envelope, which stays internal-only) — absent for the handful of
+    # event types that don't yet set them (e.g. agent.created, agent.started/stopped).
+    actor_display: str | None = None
+    subject_display: str | None = None
     created_at: datetime
     enqueued_at: datetime | None = None
     claimed_at: datetime | None = None

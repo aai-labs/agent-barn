@@ -1,15 +1,20 @@
 "use client";
 
-import { useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useState } from "react";
 import type { Agent } from "../schemas";
 import { useUpdateAgent } from "../hooks/use-update-agent";
+import type { AgentConfigurationEditHandle } from "./agent-configuration-utils";
 
 interface TelegramConfigPanelProps {
   agent: Agent;
+  onDirtyChange?: (isDirty: boolean) => void;
   onSaved?: () => void;
 }
 
-export function TelegramConfigPanel({ agent, onSaved }: TelegramConfigPanelProps) {
+export const TelegramConfigPanel = forwardRef<
+  AgentConfigurationEditHandle,
+  TelegramConfigPanelProps
+>(function TelegramConfigPanel({ agent, onDirtyChange, onSaved }, ref) {
   const updateAgent = useUpdateAgent();
   const tc = agent.telegramConfig;
 
@@ -17,27 +22,39 @@ export function TelegramConfigPanel({ agent, onSaved }: TelegramConfigPanelProps
   const [dmPolicy, setDmPolicy] = useState<"off" | "open" | "allowlist">(tc?.dmPolicy ?? "open");
   const [allowedChatIds, setAllowedChatIds] = useState((tc?.allowedChatIds ?? []).join(", "));
   const [allowedUserIds, setAllowedUserIds] = useState((tc?.allowedUserIds ?? []).join(", "));
-  const [saved, setSaved] = useState(false);
   const parsedChatIds = allowedChatIds.split(",").map((s) => s.trim()).filter(Boolean);
+  const isDirty =
+    groupPolicy !== (tc?.groupPolicy ?? "open") ||
+    dmPolicy !== (tc?.dmPolicy ?? "open") ||
+    allowedChatIds !== (tc?.allowedChatIds ?? []).join(", ") ||
+    allowedUserIds !== (tc?.allowedUserIds ?? []).join(", ");
   const shouldShowHermesHomeChannelMessage =
     agent.agentType === "hermes" && parsedChatIds.length === 0;
 
+  useEffect(() => {
+    onDirtyChange?.(isDirty);
+  }, [isDirty, onDirtyChange]);
+
   async function handleSave() {
-    try {
-      await updateAgent.mutateAsync({
-        agentId: agent.id,
-        telegramGroupPolicy: groupPolicy,
-        telegramDmPolicy: dmPolicy,
-        telegramAllowedChatIds: allowedChatIds.split(",").map((s) => s.trim()).filter(Boolean),
-        telegramAllowedUserIds: allowedUserIds.split(",").map((s) => s.trim()).filter(Boolean),
-      });
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-      onSaved?.();
-    } catch {
-      // error displayed via updateAgent.error
-    }
+    await updateAgent.mutateAsync({
+      agentId: agent.id,
+      telegramGroupPolicy: groupPolicy,
+      telegramDmPolicy: dmPolicy,
+      telegramAllowedChatIds: allowedChatIds.split(",").map((s) => s.trim()).filter(Boolean),
+      telegramAllowedUserIds: allowedUserIds.split(",").map((s) => s.trim()).filter(Boolean),
+    });
+    onSaved?.();
   }
+
+  function resetForm() {
+    setGroupPolicy(tc?.groupPolicy ?? "open");
+    setDmPolicy(tc?.dmPolicy ?? "open");
+    setAllowedChatIds((tc?.allowedChatIds ?? []).join(", "));
+    setAllowedUserIds((tc?.allowedUserIds ?? []).join(", "));
+    updateAgent.reset();
+  }
+
+  useImperativeHandle(ref, () => ({ apply: handleSave, cancel: resetForm }));
 
   return (
     <div className="flex flex-col gap-5">
@@ -124,20 +141,21 @@ export function TelegramConfigPanel({ agent, onSaved }: TelegramConfigPanelProps
         )}
       </section>
 
-      <div className="flex items-center gap-2">
+      {updateAgent.error && (
+        <span className="text-xs" style={{ color: "var(--err)" }}>
+          {updateAgent.error instanceof Error ? updateAgent.error.message : "Save failed"}
+        </span>
+      )}
+      {onSaved && (
         <button
-          className="af-btn af-btn-sm"
+          type="button"
+          className="af-btn af-btn-sm self-start"
           disabled={updateAgent.isPending}
-          onClick={() => { void handleSave(); }}
+          onClick={() => void handleSave()}
         >
-          {updateAgent.isPending ? "Saving…" : saved ? "Saved!" : "Save & Start"}
+          {updateAgent.isPending ? "Saving…" : "Save & Start"}
         </button>
-        {updateAgent.error && (
-          <span className="text-xs" style={{ color: "var(--err)" }}>
-            {updateAgent.error instanceof Error ? updateAgent.error.message : "Save failed"}
-          </span>
-        )}
-      </div>
+      )}
     </div>
   );
-}
+});

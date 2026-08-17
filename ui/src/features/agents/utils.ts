@@ -23,6 +23,7 @@ export type ConversationsFiltersKey = {
 export const agentsKey = {
   ..._agentsKeyBase,
   health: (id: string) => [..._agentsKeyBase.detail(id), "health"] as const,
+  configuration: (id: string) => [..._agentsKeyBase.detail(id), "configuration"] as const,
   shareSettings: (id: string) => [..._agentsKeyBase.detail(id), "share"] as const,
   shareRoles: () => [..._agentsKeyBase.all, "share-roles"] as const,
   conversationChannels: (agentId: string) =>

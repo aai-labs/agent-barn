@@ -2,6 +2,7 @@ import enum
 import hashlib
 import json
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 import sqlalchemy as sa
@@ -38,6 +39,16 @@ class AgentPlatform(str, enum.Enum):
 class AgentType(str, enum.Enum):
     OPENCLAW = "openclaw"
     HERMES = "hermes"
+
+
+class AgentTemplateOverrideSourceType(str, enum.Enum):
+    PLATFORM = "platform"
+    ORGANIZATION = "organization"
+
+
+class AgentTemplatePinType(str, enum.Enum):
+    SHARED = "shared"
+    OVERRIDE = "override"
 
 
 class SlackGroupPolicy(str, enum.Enum):
@@ -249,14 +260,13 @@ class Agent(BaseModel, table=True):
             "organization_id",
             name="uq_agent_id_organization",
         ),
-        # An active agent pins exactly one template version via one of two
-        # mutually-exclusive FKs: platform_template_id for a global predefined
-        # template, or agent_template_id for an org-scoped custom/fork template.
-        # Soft-deleted agents may be detached when their old template lineage is
-        # purged.
+        # An active agent pins exactly one shared or Agent-owned template
+        # version. Soft-deleted agents retain their pin for history and may be
+        # detached when an old shared lineage is purged.
         sa.CheckConstraint(
-            "((deleted_at IS NOT NULL) AND platform_template_id IS NULL AND agent_template_id IS NULL) "
-            "OR ((platform_template_id IS NULL) <> (agent_template_id IS NULL))",
+            "deleted_at IS NOT NULL OR ((platform_template_id IS NOT NULL)::integer "
+            "+ (agent_template_id IS NOT NULL)::integer "
+            "+ (agent_template_override_version_id IS NOT NULL)::integer = 1)",
             name="ck_agent_template_pin_state",
         ),
     )
@@ -286,12 +296,17 @@ class Agent(BaseModel, table=True):
         nullable=True,
         sa_type=sa.DateTime(timezone=True),  # type: ignore
     )
-    # Template pin: active agents set exactly one of platform_template_id /
-    # agent_template_id (enforced by ck_agent_template_pin_state). Soft-deleted
-    # agents may be detached by template deletion.
+    # Shared Template pin: active agents set exactly one of the shared or
+    # Agent-owned pin columns (enforced by ck_agent_template_pin_state).
     platform_template_id: UUID | None = SqlField(
         default=None,
         foreign_key="platform_template.id",
+        nullable=True,
+        ondelete="RESTRICT",
+    )
+    agent_template_override_version_id: UUID | None = SqlField(
+        default=None,
+        foreign_key="agent_template_override_version.id",
         nullable=True,
         ondelete="RESTRICT",
     )
@@ -535,6 +550,144 @@ class AgentTemplateSkill(BaseModel, table=True):
     group_key: str | None = SqlField(default=None, nullable=True, max_length=100)
 
 
+class AgentTemplateOverrideDraft(BaseModel, table=True):
+    __tablename__: str = "agent_template_override_draft"
+
+    __table_args__ = (
+        sa.UniqueConstraint("agent_id", name="uq_agent_template_override_draft_agent"),
+        sa.ForeignKeyConstraint(
+            ["agent_id", "organization_id"],
+            ["agent.id", "agent.organization_id"],
+            name="fk_agent_template_override_draft_agent_organization",
+            ondelete="CASCADE",
+        ),
+        sa.Index("ix_agent_template_override_draft_organization", "organization_id"),
+    )
+
+    organization_id: UUID = SqlField(foreign_key="organization.id", nullable=False, ondelete="CASCADE")
+    agent_id: UUID = SqlField(nullable=False)
+    created_by_user_id: UUID | None = SqlField(
+        default=None,
+        foreign_key="user.id",
+        nullable=True,
+        ondelete="SET NULL",
+    )
+    source_type: AgentTemplateOverrideSourceType = SqlField(
+        sa_column=Column(sa.String(20), nullable=False),
+    )
+    source_template_key: str = SqlField(nullable=False, max_length=255)
+    source_template_version: int = SqlField(nullable=False)
+    source_platform_template_id: UUID | None = SqlField(
+        default=None,
+        foreign_key="platform_template.id",
+        nullable=True,
+        ondelete="SET NULL",
+    )
+    source_agent_template_id: UUID | None = SqlField(
+        default=None,
+        foreign_key="agent_template.id",
+        nullable=True,
+        ondelete="SET NULL",
+    )
+    template_name: str = SqlField(nullable=False, max_length=255)
+    description: str | None = SqlField(default=None, nullable=True, max_length=500)
+    soul_md: str = SqlField(nullable=False)
+    identity_md: str = SqlField(nullable=False)
+    user_md: str = SqlField(nullable=False)
+    tools_md: str = SqlField(nullable=False)
+    agents_md: str = SqlField(nullable=False)
+    boot_md: str = SqlField(nullable=False)
+    bootstrap_md: str = SqlField(nullable=False)
+    heartbeat_md: str = SqlField(nullable=False)
+
+
+class AgentTemplateOverrideVersion(BaseModel, table=True):
+    __tablename__: str = "agent_template_override_version"
+
+    __table_args__ = (
+        sa.UniqueConstraint("agent_id", "version", name="uq_agent_template_override_version_agent_version"),
+        sa.ForeignKeyConstraint(
+            ["agent_id", "organization_id"],
+            ["agent.id", "agent.organization_id"],
+            name="fk_agent_template_override_version_agent_organization",
+            ondelete="CASCADE",
+        ),
+        sa.Index("ix_agent_template_override_version_organization", "organization_id"),
+        sa.Index("ix_agent_template_override_version_agent", "agent_id"),
+    )
+
+    organization_id: UUID = SqlField(foreign_key="organization.id", nullable=False, ondelete="CASCADE")
+    agent_id: UUID = SqlField(nullable=False)
+    version: int = SqlField(nullable=False)
+    created_by_user_id: UUID | None = SqlField(
+        default=None,
+        foreign_key="user.id",
+        nullable=True,
+        ondelete="SET NULL",
+    )
+    source_type: AgentTemplateOverrideSourceType = SqlField(
+        sa_column=Column(sa.String(20), nullable=False),
+    )
+    source_template_key: str = SqlField(nullable=False, max_length=255)
+    source_template_version: int = SqlField(nullable=False)
+    source_platform_template_id: UUID | None = SqlField(
+        default=None,
+        foreign_key="platform_template.id",
+        nullable=True,
+        ondelete="SET NULL",
+    )
+    source_agent_template_id: UUID | None = SqlField(
+        default=None,
+        foreign_key="agent_template.id",
+        nullable=True,
+        ondelete="SET NULL",
+    )
+    template_name: str = SqlField(nullable=False, max_length=255)
+    description: str | None = SqlField(default=None, nullable=True, max_length=500)
+    soul_md: str = SqlField(nullable=False)
+    identity_md: str = SqlField(nullable=False)
+    user_md: str = SqlField(nullable=False)
+    tools_md: str = SqlField(nullable=False)
+    agents_md: str = SqlField(nullable=False)
+    boot_md: str = SqlField(nullable=False)
+    bootstrap_md: str = SqlField(nullable=False)
+    heartbeat_md: str = SqlField(nullable=False)
+
+
+class AgentTemplateOverrideDraftSkill(BaseModel, table=True):
+    __tablename__: str = "agent_template_override_draft_skill"
+
+    __table_args__ = (
+        sa.UniqueConstraint("draft_id", "skill_id", name="uq_agent_template_override_draft_skill"),
+        sa.Index("ix_agent_template_override_draft_skill_draft", "draft_id"),
+    )
+
+    draft_id: UUID = SqlField(
+        foreign_key="agent_template_override_draft.id",
+        nullable=False,
+        ondelete="CASCADE",
+    )
+    skill_id: UUID = SqlField(foreign_key="skill.id", nullable=False, ondelete="RESTRICT")
+    group_key: str | None = SqlField(default=None, nullable=True, max_length=100)
+
+
+class AgentTemplateOverrideVersionSkill(BaseModel, table=True):
+    __tablename__: str = "agent_template_override_version_skill"
+
+    __table_args__ = (
+        sa.UniqueConstraint("version_id", "skill_id", name="uq_agent_template_override_version_skill"),
+        sa.Index("ix_agent_template_override_version_skill_version", "version_id"),
+    )
+
+    version_id: UUID = SqlField(
+        foreign_key="agent_template_override_version.id",
+        nullable=False,
+        ondelete="CASCADE",
+    )
+    skill_id: UUID = SqlField(foreign_key="skill.id", nullable=False, ondelete="RESTRICT")
+    group_key: str | None = SqlField(default=None, nullable=True, max_length=100)
+
+
 class PlatformTemplateSkill(BaseModel, table=True):
     __tablename__: str = "platform_template_skill"
 
@@ -707,6 +860,169 @@ class AgentUpdate(PydanticBaseModel):
         return self
 
 
+class AgentOverrideAuthorRead(PydanticBaseModel):
+    user_id: UUID | None
+    email: str | None
+    full_name: str | None
+
+
+class AgentTemplateOverrideSkillGroup(PydanticBaseModel):
+    group_key: str = Field(min_length=1, max_length=100)
+    skill_ids: list[UUID] = Field(min_length=1)
+
+
+class AgentTemplateOverrideRequiredSkillRead(PydanticBaseModel):
+    id: UUID
+    organization_id: UUID | None
+    name: str
+    source: str
+    required_providers: list[str]
+    tools_pointer: str | None
+    group_key: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+def _validate_override_skill_groups(
+    standalone_ids: list[UUID],
+    groups: list[AgentTemplateOverrideSkillGroup],
+) -> None:
+    seen_group_keys: set[str] = set()
+    seen_in_groups: set[UUID] = set()
+    for group in groups:
+        if group.group_key in seen_group_keys:
+            raise ValueError(f"Duplicate required-skill group_key: {group.group_key}")
+        seen_group_keys.add(group.group_key)
+        for skill_id in group.skill_ids:
+            if skill_id in seen_in_groups:
+                raise ValueError(f"Skill {skill_id} cannot belong to more than one required-skill group")
+            seen_in_groups.add(skill_id)
+    overlap = set(standalone_ids) & seen_in_groups
+    if overlap:
+        raise ValueError(
+            f"Skills cannot be both standalone required and part of a group: {sorted(str(s) for s in overlap)}"
+        )
+
+
+class AgentTemplateOverrideDraftUpdate(PydanticBaseModel):
+    expected_updated_at: datetime
+    template_name: str | None = Field(default=None, min_length=1, max_length=255)
+    description: str | None = Field(default=None, max_length=500)
+    soul_md: str | None = None
+    identity_md: str | None = None
+    user_md: str | None = None
+    tools_md: str | None = None
+    agents_md: str | None = None
+    boot_md: str | None = None
+    bootstrap_md: str | None = None
+    heartbeat_md: str | None = None
+    required_skill_ids: list[UUID] | None = None
+    required_skill_groups: list[AgentTemplateOverrideSkillGroup] | None = None
+
+    @model_validator(mode="after")
+    def validate_not_empty(self) -> AgentTemplateOverrideDraftUpdate:
+        fields = set(self.model_fields_set) - {"expected_updated_at"}
+        if not fields:
+            raise ValueError("At least one draft field must be provided")
+        if "template_name" in fields and self.template_name is None:
+            raise ValueError("template_name cannot be null when updating a draft")
+        non_nullable_fields = {
+            "soul_md",
+            "identity_md",
+            "user_md",
+            "tools_md",
+            "agents_md",
+            "boot_md",
+            "bootstrap_md",
+            "heartbeat_md",
+        }
+        null_fields = sorted(field for field in fields if field in non_nullable_fields and getattr(self, field) is None)
+        if null_fields:
+            raise ValueError(f"Draft fields cannot be null: {', '.join(null_fields)}")
+        if self.required_skill_ids is not None and self.required_skill_groups is not None:
+            _validate_override_skill_groups(self.required_skill_ids, self.required_skill_groups)
+        return self
+
+
+class AgentTemplateOverridePublish(PydanticBaseModel):
+    expected_updated_at: datetime
+
+
+class AgentTemplateSelection(PydanticBaseModel):
+    selection_type: Literal["platform", "organization", "override"]
+    template_key: str | None = Field(default=None, min_length=1, max_length=255)
+    template_version: int | None = Field(default=None, ge=1)
+    override_version: int | None = Field(default=None, ge=1)
+    expected_agent_updated_at: datetime
+
+    @model_validator(mode="after")
+    def validate_target(self) -> AgentTemplateSelection:
+        if self.selection_type in {"platform", "organization"}:
+            if self.template_key is None or self.template_version is None or self.override_version is not None:
+                raise ValueError(
+                    "Shared template selection requires template_key and template_version, and no override_version"
+                )
+        elif self.override_version is None or self.template_key is not None or self.template_version is not None:
+            raise ValueError("Override selection requires override_version, and no template_key or template_version")
+        return self
+
+
+class AgentTemplateOverrideSnapshotRead(PydanticBaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    agent_id: UUID
+    version: int | None
+    template_key: str
+    template_name: str
+    description: str | None
+    soul_md: str
+    identity_md: str
+    user_md: str
+    tools_md: str
+    agents_md: str
+    boot_md: str
+    bootstrap_md: str
+    heartbeat_md: str
+    source_type: AgentTemplateOverrideSourceType
+    source_template_key: str
+    source_template_version: int
+    source_platform_template_id: UUID | None
+    source_agent_template_id: UUID | None
+    created_by_user_id: UUID | None
+    author: AgentOverrideAuthorRead | None = None
+    required_skills: list[AgentTemplateOverrideRequiredSkillRead] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+
+
+class AgentConfigurationVersionRead(AgentTemplateOverrideSnapshotRead):
+    state: Literal["active", "published"] = "published"
+    pin_type: AgentTemplatePinType = AgentTemplatePinType.SHARED
+    template_source: str | None = None
+
+
+class AgentTemplateOverrideDraftRead(AgentTemplateOverrideSnapshotRead):
+    version: int | None = None
+    state: Literal["draft"] = "draft"
+    pin_type: AgentTemplatePinType = AgentTemplatePinType.OVERRIDE
+
+
+class AgentTemplateOverrideVersionRead(AgentTemplateOverrideSnapshotRead):
+    version: int
+    state: Literal["published"] = "published"
+    pin_type: AgentTemplatePinType = AgentTemplatePinType.OVERRIDE
+
+
+class AgentConfigurationRead(PydanticBaseModel):
+    agent_id: UUID
+    active: AgentConfigurationVersionRead
+    draft: AgentTemplateOverrideDraftRead | None = None
+    source_update: AgentConfigurationVersionRead | None = None
+    shared_versions: list[AgentConfigurationVersionRead] = Field(default_factory=list)
+    override_versions: list[AgentTemplateOverrideVersionRead] = Field(default_factory=list)
+
+
 class AgentSlackConfigRead(PydanticBaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -806,6 +1122,8 @@ class AgentRead(PydanticBaseModel):
     organization_id: UUID
     template_key: str
     template_version: int
+    template_pin_type: AgentTemplatePinType = AgentTemplatePinType.SHARED
+    override_version: int | None = None
     model: str
     slack_config: AgentSlackConfigRead | None = None
     teams_config: AgentTeamsConfigRead | None = None

@@ -26,6 +26,8 @@ aai-cli sheets <resource> <action> [args] --profile google-sheets-work
 
 ## Response shapes
 
+**`spreadsheets create`** returns `spreadsheetId`, `spreadsheetUrl`, `properties.title`, and the `sheets` array for the new file. Give the user the `spreadsheetUrl`.
+
 **`spreadsheets list`** returns a `files` array. Each element has `id` (the `spreadsheetId` used in all other commands) and `name`.
 
 **`spreadsheets get`** returns a `sheets` array. Each element has a `properties` object with the tab `title` (use this in range strings) and numeric `sheetId`.
@@ -35,6 +37,8 @@ aai-cli sheets <resource> <action> [args] --profile google-sheets-work
 **`values update`** returns an update summary: `updatedRange`, `updatedRows`, `updatedColumns`, `updatedCells`.
 
 **`values clear`** returns the `clearedRange`.
+
+**`sheets add` / `sheets delete` / `sheets rename`** return the raw `batchUpdate` reply. `sheets add` includes the new tab's `sheetId` under `replies[0].addSheet.properties`.
 
 ## Error response shape
 
@@ -59,6 +63,43 @@ All errors print to stderr as a single JSON line:
 | `network` | Could not reach Google APIs |
 
 Exit code is non-zero on any error.
+
+---
+
+## spreadsheets create
+
+Create a new spreadsheet in the authenticated user's Drive. Use this when the user asks for
+a new sheet — do not tell them to create one by hand.
+
+```
+aai-cli sheets spreadsheets create <TITLE> [--sheets "Name1,Name2"] --profile google-sheets-work
+```
+
+| Argument/Flag | Required | Description |
+|---|---|---|
+| `TITLE` | **yes** | Title for the new spreadsheet |
+| `--sheets` | no | Comma-separated tab names. Omit for a single default `Sheet1` |
+
+**Example**
+
+```
+aai-cli sheets spreadsheets create "Q3 Forecast" --sheets "Summary,Detail" --profile google-sheets-work
+```
+
+```json
+{
+  "spreadsheetId": "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms",
+  "spreadsheetUrl": "https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms/edit",
+  "properties": { "title": "Q3 Forecast" },
+  "sheets": [
+    { "properties": { "sheetId": 0, "title": "Summary" } },
+    { "properties": { "sheetId": 1491539105, "title": "Detail" } }
+  ]
+}
+```
+
+Write into it with `values update` using the returned `spreadsheetId`, then give the user
+the `spreadsheetUrl`.
 
 ---
 
@@ -122,6 +163,57 @@ aai-cli sheets spreadsheets get 1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms --p
 ```
 
 Use the `title` value to construct range strings (e.g. `'Inventory'!A1:D10`).
+
+---
+
+## sheets add
+
+Add a tab to an existing spreadsheet. Address tabs by title — the numeric `sheetId` is
+looked up for you.
+
+```
+aai-cli sheets sheets add <SPREADSHEET_ID> <TITLE> --profile google-sheets-work
+```
+
+| Argument | Required | Description |
+|---|---|---|
+| `SPREADSHEET_ID` | **yes** | The spreadsheet ID |
+| `TITLE` | **yes** | Title for the new tab. Must not already exist |
+
+**Example**
+
+```
+aai-cli sheets sheets add 1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms "Q4" --profile google-sheets-work
+```
+
+---
+
+## sheets delete
+
+Delete a tab by title.
+
+```
+aai-cli sheets sheets delete <SPREADSHEET_ID> <TITLE> --profile google-sheets-work
+```
+
+The last remaining tab cannot be deleted — a spreadsheet must keep at least one. Deleting a
+tab destroys its data; confirm with the user first.
+
+---
+
+## sheets rename
+
+Rename a tab. Google updates formulas that reference the old title, so this is safe.
+
+```
+aai-cli sheets sheets rename <SPREADSHEET_ID> <TITLE> <NEW_TITLE> --profile google-sheets-work
+```
+
+| Argument | Required | Description |
+|---|---|---|
+| `SPREADSHEET_ID` | **yes** | The spreadsheet ID |
+| `TITLE` | **yes** | Current tab title |
+| `NEW_TITLE` | **yes** | New tab title. Must not collide with another tab |
 
 ---
 

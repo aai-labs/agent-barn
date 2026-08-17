@@ -14,14 +14,15 @@ class Config(BaseSettings):
     secret_signing_key: str
     platform_admin_credentials: str
     platform_admin_full_name: str = "Super User"
-    email_server_credential: str | None = None
-    email_smtp_server: str | None = None
-    # Optional visible "From" for outgoing mail. The SMTP login always uses the email
-    # in EMAIL_SERVER_CREDENTIAL; set EMAIL_FROM_ADDRESS to send *as* another address
-    # (e.g. no-reply@agentbarn.dev) while still authenticating with that credential.
-    # For good deliverability the sending domain should be authorized by the SMTP
-    # provider and DKIM/SPF/DMARC-configured. Defaults to the credential email.
-    email_from_address: str | None = None
+    # Cloudflare Email Sending. The token needs the "Email Sending: Edit" permission and
+    # must belong to the account identified by cloudflare_account_id.
+    cloudflare_account_id: str | None = None
+    cloudflare_api_token: str | None = None
+    # Visible "From" address, e.g. noreply@mail.agentbarn.dev. Its domain MUST be onboarded
+    # and Verified for Email Sending in that account or Cloudflare rejects the send.
+    # Each environment sends from its own `mail.`-style subdomain so a damaged sending
+    # reputation can't reach the root domain (website, logins) or another environment.
+    sender_email: str | None = None
     email_from_name: str = "Agent Barn"
 
     environment: str = "local"
@@ -81,7 +82,11 @@ class Config(BaseSettings):
 
     @property
     def is_email_delivery_enabled(self) -> bool:
-        return bool((self.email_server_credential or "").strip() and (self.email_smtp_server or "").strip())
+        return bool(
+            (self.cloudflare_account_id or "").strip()
+            and (self.cloudflare_api_token or "").strip()
+            and (self.sender_email or "").strip()
+        )
 
 
 @lru_cache

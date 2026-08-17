@@ -8,12 +8,14 @@ export function PlatformTemplateSkillGroup({
   skillMap,
   selectedSkillIds,
   onToggle,
+  disabled = false,
 }: {
   group: SkillGroupDraft;
   skills: PlatformSkill[];
   skillMap: Map<string, PlatformSkill>;
   selectedSkillIds: Set<string>;
   onToggle: (skillId: string) => void;
+  disabled?: boolean;
 }) {
   const groupSkills = group.skillIds
     .map((id) => skillMap.get(id))
@@ -56,6 +58,7 @@ export function PlatformTemplateSkillGroup({
           skill={skill}
           checked={selectedSkillIds.has(skill.id)}
           onChange={() => onToggle(skill.id)}
+          disabled={disabled}
         />
       ))}
       {missingSkillCount > 0 && (

@@ -9,7 +9,8 @@ def log_email_delivery_disabled_warning(logger: logging.Logger) -> None:
         f"\n\n"
         f"{YELLOW}"
         "⚠️ EMAIL DELIVERY DISABLED\n"
-        "Email delivery is disabled because EMAIL_SERVER_CREDENTIAL or EMAIL_SMTP_SERVER is not set."
+        "Email delivery is disabled because CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN "
+        "or SENDER_EMAIL is not set."
         f"{RESET}"
         f"\n\n"
     )
