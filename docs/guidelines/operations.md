@@ -45,6 +45,8 @@ Testing and verification commands live in `testing.md`. Run the smallest complet
 
 The deployable services have independent Helm charts. `../../helmfile.yaml.gotmpl` controls release ordering, and `../../.github/workflows/deploy.yml` builds images and applies Helmfile. Read `../architecture/runtime-and-deployment.md` before changing runtime images, agent Kubernetes resources, chart wiring, migrations, or deployment order.
 
+LiteLLM uses a non-overlapping rolling update (`maxSurge: 0`, `maxUnavailable: 1`): the namespace quota cannot accommodate its old and replacement 2Gi pods at once. Upgrades briefly interrupt the proxy while Kubernetes replaces the pod; do not restore the default surge behavior unless the quota is increased first.
+
 ## Transactional email
 
 Invites, password resets, and agent lifecycle notifications send through **Cloudflare Email Sending** (`POST https://api.cloudflare.com/client/v4/accounts/{account_id}/email/sending/send`, Bearer token). `../../api/infrastructure/email/client.py` is the only place that talks to the provider; `EmailService` above it is transport-agnostic.

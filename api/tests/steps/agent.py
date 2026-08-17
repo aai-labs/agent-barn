@@ -10,6 +10,7 @@ from injector import Module, provider, singleton
 from api.domains.agents.models import (
     Agent,
     AgentAccess,
+    AgentDiscordConfig,
     AgentPlatform,
     AgentSlackConfig,
     AgentStatus,
@@ -43,6 +44,7 @@ TEST_TEAMS_APP_ID = "test-teams-app-id"
 TEST_TEAMS_APP_PASSWORD = "test-teams-app-password"
 TEST_TEAMS_TENANT_ID = "test-tenant-id"
 TEST_TELEGRAM_BOT_TOKEN = "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
+TEST_DISCORD_BOT_TOKEN = "test-discord-bot-token"
 FAKE_LITELLM_KEY = "sk-fake-litellm-key-for-tests"
 
 
@@ -148,6 +150,14 @@ def there_is_an_agent(
                 bot_username="test_bot",
             )
             repository.save_telegram_config(telegram_config)
+        elif platform == AgentPlatform.DISCORD:
+            effective_bot_token = bot_token or TEST_DISCORD_BOT_TOKEN
+            discord_config = AgentDiscordConfig(
+                agent_id=agent.id,
+                bot_token_encrypted=encrypt_token(effective_bot_token, TEST_ENCRYPTION_KEY),
+                bot_token_hash=None if deleted else compute_bot_token_hash(effective_bot_token),
+            )
+            repository.save_discord_config(discord_config)
 
         context.agent = agent
 

@@ -1,4 +1,4 @@
-import { SlackIcon, TeamsIcon, TelegramIcon } from "@/components/icons";
+import { DiscordIcon, SlackIcon, TeamsIcon, TelegramIcon } from "@/components/icons";
 import { OpenClawIcon, HermesIcon } from "@/components/brand-icons";
 import {
   Tooltip,
@@ -24,6 +24,11 @@ const PLATFORM_META = {
     label: "Telegram",
     Icon: TelegramIcon,
     tooltip: "Connected via Telegram",
+  },
+  discord: {
+    label: "Discord",
+    Icon: DiscordIcon,
+    tooltip: "Connected via Discord",
   },
 } as const;
 

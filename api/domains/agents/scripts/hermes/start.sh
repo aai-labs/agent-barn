@@ -42,6 +42,18 @@ if [ -f /app/config/telegram-channel-allowlist-plugin.yaml ]; then
     cp /app/config/telegram-channel-allowlist-init.py /opt/data/plugins/telegram-channel-allowlist/__init__.py
 fi
 
+if [ -f /app/config/discord-deny-dms-plugin.yaml ]; then
+    mkdir -p /opt/data/plugins/discord-deny-dms
+    cp /app/config/discord-deny-dms-plugin.yaml /opt/data/plugins/discord-deny-dms/plugin.yaml
+    cp /app/config/discord-deny-dms-init.py /opt/data/plugins/discord-deny-dms/__init__.py
+fi
+
+if [ -f /app/config/discord-guild-allowlist-plugin.yaml ]; then
+    mkdir -p /opt/data/plugins/discord-guild-allowlist
+    cp /app/config/discord-guild-allowlist-plugin.yaml /opt/data/plugins/discord-guild-allowlist/plugin.yaml
+    cp /app/config/discord-guild-allowlist-init.py /opt/data/plugins/discord-guild-allowlist/__init__.py
+fi
+
 cp /app/config/telemetry-push-plugin.yaml /opt/data/plugins/telemetry-push/plugin.yaml
 cp /app/config/telemetry-push-init.py /opt/data/plugins/telemetry-push/__init__.py
 
