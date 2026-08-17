@@ -78,6 +78,9 @@ function SelectContent({
         <SelectPrimitive.Viewport
           data-position={position}
           className={cn(
+            // Upstream shadcn pads the viewport; without it the first and last
+            // options sit flush against the panel border.
+            "p-1",
             "data-[position=popper]:h-(--radix-select-trigger-height) data-[position=popper]:w-full data-[position=popper]:min-w-(--radix-select-trigger-width)",
             position === "popper" && ""
           )}

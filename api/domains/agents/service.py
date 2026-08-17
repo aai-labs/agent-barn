@@ -277,6 +277,18 @@ class AgentService:
     def count_agents_in_error(self) -> int:
         return self.repository.count_agents_in_error()
 
+    def count_agents_for_stats(self, **filters) -> tuple[int, int, int, int]:
+        """(total, running, stopped, errored) Agent counts for the stats surfaces (AF-256).
+        Authority is enforced at the platform route; passing organization_id
+        narrows the same aggregate for a future Organization dashboard."""
+        return self.repository.count_agents_for_stats(**filters)
+
+    def agent_inventory(
+        self, window_start: dt.datetime, window_end: dt.datetime, **kwargs
+    ) -> list[tuple[dt.datetime, int, int]]:
+        """(bucket_start, existing, created) Agent inventory (AF-256)."""
+        return self.repository.agent_inventory_since(window_start, window_end, **kwargs)
+
     def _ensure_model_allowed(self, model: str | None, org_id: UUID) -> None:
         """Rejects models outside the allowlist. litellm is cluster-internal, so
         create/update are the only paths that can set an agent's model; enforcing
