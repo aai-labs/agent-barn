@@ -30,6 +30,7 @@ import {
   useForkSkill,
   usePublishSkillDraft,
   useStartSkillDraft,
+  useUpdateSkill,
   useUpdateSkillDraft,
 } from "../hooks/use-skill-mutations";
 import { SkillDetailSidebar, type SkillDetailSection } from "./skill-detail-sidebar";
@@ -75,6 +76,7 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
   const updateDraft = useUpdateSkillDraft();
   const discardDraft = useDiscardSkillDraft();
   const publishDraft = usePublishSkillDraft();
+  const updateSkill = useUpdateSkill();
   const forkSkill = useForkSkill();
   const deleteSkillVersion = useDeleteSkillVersion();
 
@@ -100,7 +102,7 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
     setDraftApplied(true);
   }
 
-  const latestVersion = Math.max(0, ...versions.map((v) => v.version));
+  const latestVersion = versions.length > 0 ? Math.max(...versions.map((v) => v.version)) : (detail?.version ?? 0);
   const viewingHistorical = selectedVersion !== null && selectedVersion !== latestVersion;
   const { files: historicalFiles, isLoading: historicalLoading } = useSkillVersionDetail(
     viewingHistorical ? skillId : null,
@@ -108,9 +110,19 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
   );
 
   const isPending =
-    startDraft.isPending || updateDraft.isPending || discardDraft.isPending || publishDraft.isPending;
+    startDraft.isPending ||
+    updateDraft.isPending ||
+    updateSkill.isPending ||
+    discardDraft.isPending ||
+    publishDraft.isPending;
   const mutationError =
-    startDraft.error ?? updateDraft.error ?? discardDraft.error ?? publishDraft.error ?? forkSkill.error ?? deleteSkillVersion.error;
+    startDraft.error ??
+    updateDraft.error ??
+    updateSkill.error ??
+    discardDraft.error ??
+    publishDraft.error ??
+    forkSkill.error ??
+    deleteSkillVersion.error;
 
   if (isLoading) {
     return (
@@ -210,16 +222,24 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
 
   async function handleSaveDraft() {
     if (!localFiles || !validateEntry(localFiles)) return;
+    const nextName = name.trim();
+    if (!nextName) {
+      setFileError("A skill name is required.");
+      return;
+    }
     setFileError(null);
     try {
       const draft = await updateDraft.mutateAsync({
         skillId,
         files: localFiles,
-        description: description.trim(),
+        description: description.trim() || null,
         requiredProviders: selectedProviders,
       });
+      if (nextName !== detail!.name) {
+        await updateSkill.mutateAsync({ skillId, name: nextName });
+      }
       setLocalFiles(draft.files.map((f) => ({ path: f.path, content: f.content })));
-      toast.success(`${detail!.name} v${detail!.version + 1} draft saved.`);
+      toast.success(`${nextName} v${detail!.version + 1} draft saved.`);
     } catch {
       // error rendered via mutationError
     }
@@ -375,6 +395,7 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
               </h2>
               <SkillVersionHistory
                 versions={versions}
+                currentVersion={detail.version}
                 isLoading={versionsLoading}
                 canManage={canEdit}
                 onDelete={handleDeleteVersion}

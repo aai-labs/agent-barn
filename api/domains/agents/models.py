@@ -489,7 +489,7 @@ class AgentSkill(BaseModel, table=True):
         sa.ForeignKeyConstraint(
             ["skill_id", "pinned_version"],
             ["skill_version.skill_id", "skill_version.version"],
-            ondelete="RESTRICT",
+            ondelete="NO ACTION",
             name="fk_agent_skill_pinned_version",
         ),
     )

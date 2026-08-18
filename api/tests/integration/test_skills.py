@@ -4,6 +4,7 @@ from fastapi import status
 from hamcrest import assert_that, contains_string, equal_to, has_item, has_items, not_
 from starlette.testclient import TestClient
 
+from api.domains.agents.models import SecretProvider
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.users.organization_users.models import OrganizationRole
 from api.tests.core.givenpy import given, then, when
@@ -80,6 +81,17 @@ def _there_is_a_skill_draft():
 
         repo: SkillRepository = context.injector.get(SkillRepository)
         repo.save_new_draft(context.skill.id, [("SKILL.md", "# Draft")])
+
+    return step
+
+
+def _set_skill_description(description: str | None):
+    def step(context):
+        from api.domains.skills.repository import SkillRepository
+
+        context.skill.description = description
+        repo: SkillRepository = context.injector.get(SkillRepository)
+        repo.save(context.skill)
 
     return step
 
@@ -187,6 +199,18 @@ def test_create_skill_returns_201():
             assert_that(body["name"], equal_to("My Skill"))
             assert_that(body["source"], equal_to("custom"))
             assert_that(body["organization_id"], equal_to(str(context.organization.id)))
+
+
+def test_create_skill_with_duplicate_name_returns_409():
+    with given([*_GIVEN, there_is_a_skill(name="Existing Skill")]) as context:
+        response = context.client.post(
+            _BASE,
+            json={"name": "Existing Skill", "files": _files()},
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+        assert_that(response.json()["detail"], contains_string("already exists"))
 
 
 def test_create_skill_requires_at_least_one_file():
@@ -602,6 +626,17 @@ def test_update_skill_returns_200():
             assert_that(response.json()["name"], equal_to("New Name"))
 
 
+def test_update_skill_rejects_draft_metadata_fields():
+    with given([*_GIVEN, there_is_a_skill(name="Draft Metadata")]) as context:
+        response = context.client.patch(
+            f"{_BASE}/{context.skill.id}",
+            json={"description": "Must be staged", "required_providers": ["github"]},
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
+
+
 def test_update_aai_cli_skill_returns_403():
     with given([*_GIVEN, there_is_a_skill(global_skill=True)]) as context:
         client: TestClient = context.client
@@ -960,6 +995,62 @@ def test_update_skill_draft_replaces_its_files():
             assert_that(skill_response.json()["version"], equal_to(1))
 
 
+def test_update_skill_draft_preserves_omitted_metadata_and_publishes_it():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Metadata Skill", required_providers=[SecretProvider.GITHUB]),
+            _set_skill_description("Keep this description"),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        client.post(f"{_BASE}/{context.skill.id}/draft", headers=_auth(context))
+
+        response = client.patch(
+            f"{_BASE}/{context.skill.id}/draft",
+            json={"files": _files(content="# Metadata")},
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(response.json()["description"], equal_to("Keep this description"))
+        assert_that(response.json()["required_providers"], equal_to(["github"]))
+
+        published = client.post(f"{_BASE}/{context.skill.id}/draft/publish", headers=_auth(context))
+        assert_that(published.status_code, equal_to(status.HTTP_201_CREATED))
+        skill = client.get(f"{_BASE}/{context.skill.id}", headers=_auth(context)).json()
+        assert_that(skill["description"], equal_to("Keep this description"))
+        assert_that(skill["required_providers"], equal_to(["github"]))
+
+
+def test_update_skill_draft_explicit_null_clears_metadata_before_publish():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Clearable Metadata", required_providers=[SecretProvider.GITHUB]),
+            _set_skill_description("Clear this description"),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        client.post(f"{_BASE}/{context.skill.id}/draft", headers=_auth(context))
+
+        response = client.patch(
+            f"{_BASE}/{context.skill.id}/draft",
+            json={"files": _files(content="# Cleared"), "description": None, "required_providers": None},
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(response.json()["description"], equal_to(None))
+        assert_that(response.json()["required_providers"], equal_to([]))
+
+        published = client.post(f"{_BASE}/{context.skill.id}/draft/publish", headers=_auth(context))
+        assert_that(published.status_code, equal_to(status.HTTP_201_CREATED))
+        skill = client.get(f"{_BASE}/{context.skill.id}", headers=_auth(context)).json()
+        assert_that(skill["description"], equal_to(None))
+        assert_that(skill["required_providers"], equal_to([]))
+
+
 def test_update_skill_draft_with_path_traversal_returns_400():
     with given([*_GIVEN, there_is_a_skill(name="Versioned Skill")]) as context:
         client: TestClient = context.client
@@ -995,6 +1086,13 @@ def test_update_skill_draft_with_oversized_file_returns_400():
 
         with then("it returns 400"):
             assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+
+
+def test_get_builtin_skill_draft_returns_403():
+    with given([*_GIVEN, there_is_a_skill(name="Built-in Draft", global_skill=True)]) as context:
+        response = context.client.get(f"{_BASE}/{context.skill.id}/draft", headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
 def test_update_skill_draft_not_found_returns_404():

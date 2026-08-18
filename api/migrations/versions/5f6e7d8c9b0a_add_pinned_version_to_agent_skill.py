@@ -37,16 +37,16 @@ def upgrade() -> None:
     op.execute("UPDATE agent_skill SET pinned_version = 1 WHERE pinned_version IS NULL")
     op.alter_column("agent_skill", "pinned_version", nullable=False)
     # Composite FK so a version pinned by any agent cannot be deleted at the DB
-    # level, and a pin can never reference a nonexistent version. RESTRICT (the
-    # default) ensures the application-level 409 fires first; this is the safety
-    # net for concurrent delete/pin races.
+    # level, and a pin can never reference a nonexistent version. NO ACTION keeps
+    # the safety net for direct version deletes while allowing sibling cascades
+    # (for example, organization deletion) to remove the assignment first.
     op.create_foreign_key(
         "fk_agent_skill_pinned_version",
         "agent_skill",
         "skill_version",
         ["skill_id", "pinned_version"],
         ["skill_id", "version"],
-        ondelete="RESTRICT",
+        ondelete="NO ACTION",
     )
 
 

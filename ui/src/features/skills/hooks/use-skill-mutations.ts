@@ -23,8 +23,6 @@ export type SkillCreatePayload = {
 export type SkillUpdatePayload = {
   skillId: string;
   name?: string;
-  description?: string;
-  requiredProviders?: string[];
 };
 
 export function useCreateSkill() {
@@ -107,8 +105,8 @@ export function useStartSkillDraft() {
 export type SkillDraftUpdatePayload = {
   skillId: string;
   files: SkillFilePayload[];
-  description?: string;
-  requiredProviders?: string[];
+  description?: string | null;
+  requiredProviders?: string[] | null;
 };
 
 export function useUpdateSkillDraft() {

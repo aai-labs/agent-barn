@@ -390,6 +390,7 @@ class AgentService:
         pins: list[SkillVersionPin],
         current_skill_ids: set[UUID],
         removed_skill_ids: list[UUID],
+        org_id: UUID,
     ) -> list[SkillVersionPin]:
         """Resolve every agent assignment to an explicit pinned version.
 
@@ -399,6 +400,14 @@ class AgentService:
         and the requested version must exist (it can later be deleted only after
         no agent pins it, so a valid pin never dangles from version deletion).
         """
+        overlap = set(skill_ids) & set(removed_skill_ids)
+        if overlap:
+            ids = ", ".join(str(skill_id) for skill_id in sorted(overlap, key=str))
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Skill ID(s) cannot be both added and removed: {ids}",
+            )
+
         pin_map: dict[UUID, SkillVersionPin] = {}
         for pin in pins:
             if pin.skill_id in pin_map:
@@ -415,6 +424,17 @@ class AgentService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Skill version pins must reference a skill the agent ends up with",
             )
+
+        requested_ids = set(skill_ids) | set(pin_map)
+        if requested_ids:
+            accessible_ids = {skill.id for skill in self.skill_repository.find_accessible_for_org(org_id)}
+            inaccessible_ids = requested_ids - accessible_ids
+            if inaccessible_ids:
+                skill_id = min(inaccessible_ids, key=str)
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Skill {skill_id} not found",
+                )
 
         resolved: list[SkillVersionPin] = []
         resolved_ids: set[UUID] = set()
@@ -707,7 +727,7 @@ class AgentService:
         # Preflight skill version pins before any persistence so an invalid pin
         # (nonexistent version, pin for a skill not in the request) is rejected
         # atomically rather than after the agent, configs, and secrets are saved.
-        resolved_pins = self._resolve_skill_pins(data.skill_ids, data.skill_versions, set(), [])
+        resolved_pins = self._resolve_skill_pins(data.skill_ids, data.skill_versions, set(), [], org_id)
         resolved_pin_by_skill_id = {pin.skill_id: pin for pin in resolved_pins}
 
         # The creator always gets an explicit Owner AgentAccess row, even if they
@@ -1585,7 +1605,7 @@ class AgentService:
         current_skill_rows = self.repository.get_skills_for_agent(agent.id)
         current_skill_ids = {row.skill_id for row in current_skill_rows}
         resolved_skill_pins = self._resolve_skill_pins(
-            data.skill_ids, data.skill_versions, current_skill_ids, data.removed_skill_ids
+            data.skill_ids, data.skill_versions, current_skill_ids, data.removed_skill_ids, org_id
         )
 
         # Re-pin the agent to a different template (key, version). The model

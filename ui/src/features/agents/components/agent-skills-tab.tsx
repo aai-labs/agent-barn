@@ -78,8 +78,11 @@ export const AgentSkillsTab = forwardRef<
     ),
   ];
 
+  const pendingPinChanges = Object.entries(pendingPins).filter(([skillId, version]) =>
+    agent.skills.some((skill) => skill.id === skillId && skill.version !== version),
+  );
   const hasPendingChanges =
-    pendingAddIds.length > 0 || pendingRemoveIds.length > 0 || Object.keys(pendingPins).length > 0;
+    pendingAddIds.length > 0 || pendingRemoveIds.length > 0 || pendingPinChanges.length > 0;
   const isValid = !hasIncompleteIntegration(newSecretDrafts);
 
   useEffect(() => {
@@ -182,9 +185,9 @@ export const AgentSkillsTab = forwardRef<
       agentId: agent.id,
       skillIds: pendingAddIds,
       removedSkillIds: pendingRemoveIds,
-      ...(Object.keys(pendingPins).length > 0
+      ...(pendingPinChanges.length > 0
         ? {
-            skillVersions: Object.entries(pendingPins)
+            skillVersions: pendingPinChanges
               .filter(([skillId]) => !pendingRemoveIds.includes(skillId))
               .map(([skillId, version]) => ({ skillId, version })),
           }
@@ -266,7 +269,15 @@ export const AgentSkillsTab = forwardRef<
             isRunning={isRunning}
             pin={pendingPins[skill.id] ?? skill.version}
             onPinChange={(version) =>
-              setPendingPins((prev) => ({ ...prev, [skill.id]: version }))
+              setPendingPins((prev) => {
+                const next = { ...prev };
+                if (version === skill.version) {
+                  delete next[skill.id];
+                } else {
+                  next[skill.id] = version;
+                }
+                return next;
+              })
             }
             onRemove={() => markForRemoval(skill.id)}
           />

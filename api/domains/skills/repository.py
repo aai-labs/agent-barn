@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import cast
 from uuid import UUID
 
 from injector import inject, singleton
@@ -107,15 +108,11 @@ class SkillRepository:
         if not pins:
             return {}
         with Session(self.delegate.engine) as session:
-            version_rows = []
-            for pin in pins:
-                row = session.exec(
-                    select(SkillVersion)
-                    .where(col(SkillVersion.skill_id) == pin.skill_id)
-                    .where(col(SkillVersion.version) == pin.version)
-                ).first()
-                if row is not None:
-                    version_rows.append(row)
+            conditions = [
+                (col(SkillVersion.skill_id) == pin.skill_id) & (col(SkillVersion.version) == pin.version)
+                for pin in pins
+            ]
+            version_rows = list(session.exec(select(SkillVersion).where(or_(*conditions))).all())
             if not version_rows:
                 return {}
             version_ids = {v.id: v.skill_id for v in version_rows}
@@ -235,21 +232,22 @@ class SkillRepository:
         draft_id: UUID,
         files: list[tuple[str, str]],
         *,
-        description: str | None = None,
-        required_providers: list[str] | None = None,
+        metadata: dict[str, str | list[str] | None] | None = None,
     ) -> SkillDraft:
         with Session(self.delegate.engine) as session:
             draft = session.get(SkillDraft, draft_id)
-            assert draft is not None
+            if draft is None:
+                raise ValueError(f"Draft {draft_id} not found")
             session.exec(  # type: ignore[call-overload]
                 delete(SkillDraftFile).where(col(SkillDraftFile.skill_draft_id) == draft_id)
             )
             for path, content in files:
                 session.add(SkillDraftFile(skill_draft_id=draft_id, path=path, content=content))
-            if description is not None:
-                draft.description = description
-            if required_providers is not None:
-                draft.required_providers = required_providers
+            if metadata is not None:
+                if "description" in metadata:
+                    draft.description = cast(str | None, metadata["description"])
+                if "required_providers" in metadata:
+                    draft.required_providers = cast(list[str] | None, metadata["required_providers"]) or []
             draft.updated_at = datetime.now(UTC)
             session.add(draft)
             session.commit()
@@ -381,9 +379,6 @@ class SkillRepository:
         self.delegate.save(skill)
         return skill
 
-    def delete(self, skill: Skill) -> None:
-        self.delegate.delete(skill)
-
     def is_assigned_to_any_agent(self, skill_id: UUID, org_id: UUID) -> bool:
         with Session(self.delegate.engine) as session:
             query = (
@@ -406,20 +401,6 @@ class SkillRepository:
 
     def get_many_by_ids(self, skill_ids: list[UUID]) -> list[Skill]:
         return self.delegate.find_many(Skill, skill_ids)
-
-    def get_skills_for_agents(self, agent_ids: list[UUID]) -> dict[UUID, list[Skill]]:
-        if not agent_ids:
-            return {}
-        with Session(self.delegate.engine) as session:
-            query = (
-                select(AgentSkill, Skill)
-                .join(Skill, col(AgentSkill.skill_id) == col(Skill.id))
-                .where(col(AgentSkill.agent_id).in_(agent_ids))
-            )
-            result: dict[UUID, list[Skill]] = {}
-            for agent_skill, skill in session.exec(query).all():
-                result.setdefault(agent_skill.agent_id, []).append(skill)
-            return result
 
     def get_skills_for_agents_with_versions(self, agent_ids: list[UUID]) -> dict[UUID, list[PinnedSkill]]:
         """Each agent's assigned skills alongside their explicit pinned version.

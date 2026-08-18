@@ -115,9 +115,8 @@ class SkillDraft(BaseModel, table=True):
 
     At most one per lineage (enforced by the unique constraint), mutated in place
     while editing. Publishing turns its files into the next immutable skill_version
-    and deletes this row. Metadata (name, description, required providers) isn't
-    draft-gated: it lives on the skill row and edits apply immediately, since it
-    isn't versioned content.
+    and deletes this row. Name remains lineage metadata and is edited directly;
+    description and required providers are staged here and applied on publish.
     """
 
     __tablename__: str = "skill_draft"
@@ -180,11 +179,11 @@ class SkillCreate(PydanticBaseModel):
 
 
 class SkillUpdate(PydanticBaseModel):
-    """Metadata-only edit. Content changes go through the draft/publish flow."""
+    """Name-only edit. Content metadata changes go through draft/publish."""
+
+    model_config = ConfigDict(extra="forbid")
 
     name: str | None = Field(default=None, min_length=1, max_length=255)
-    description: str | None = Field(default=None, max_length=2000)
-    required_providers: list[SecretProvider] | None = Field(default=None)
 
 
 class SkillRead(PydanticBaseModel):
@@ -254,6 +253,11 @@ class SkillDraftRead(PydanticBaseModel):
 
 
 class SkillDraftUpdate(PydanticBaseModel):
+    """Replace draft files and optionally stage metadata.
+
+    An omitted metadata field remains unchanged; an explicit ``null`` clears it.
+    """
+
     files: list[SkillFileInput] = Field(min_length=1)
     description: str | None = Field(default=None, max_length=2000)
     required_providers: list[SecretProvider] | None = None

@@ -76,6 +76,16 @@ class SkillService:
             suffix += 1
         return candidate
 
+    def _save_new_skill(self, skill: Skill) -> None:
+        """Persist a new lineage and translate uniqueness races to a conflict."""
+        try:
+            self.repository.save(skill)
+        except IntegrityError:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A skill with this name or mount slug already exists in this organization",
+            ) from None
+
     def _to_read(self, skill: Skill, version: int | None = None, has_draft: bool | None = None) -> SkillSummaryRead:
         if version is None:
             latest = self.repository.get_latest_version(skill.id)
@@ -110,7 +120,7 @@ class SkillService:
             source=SkillSource.CUSTOM,
             required_providers=data.required_providers,
         )
-        self.repository.save(skill)
+        self._save_new_skill(skill)
         version = self.repository.publish_version(skill.id, files, created_by=context.user.id)
         return self._to_read(skill, version.version, has_draft=False)
 
@@ -152,13 +162,13 @@ class SkillService:
             source=SkillSource.CUSTOM,
             required_providers=source.required_providers,
         )
-        self.repository.save(skill)
+        self._save_new_skill(skill)
         version = self.repository.publish_version(skill.id, files, created_by=context.user.id)
         self.repository.save_new_draft(
             skill.id,
             files,
             description=skill.description,
-            required_providers=[p.value for p in skill.required_providers],
+            required_providers=[p.value if hasattr(p, "value") else p for p in skill.required_providers],
         )
         read = self._to_read(skill, version.version, has_draft=True)
         return SkillDetailRead.model_validate(
@@ -170,8 +180,7 @@ class SkillService:
         )
 
     def update_skill(self, skill_id: UUID, data: SkillUpdate, context: CurrentUserContext) -> SkillSummaryRead:
-        """Metadata-only: name, description, required providers. Content changes
-        go through the draft/publish flow instead."""
+        """Update a skill's name; content metadata is draft-gated."""
         org_id = self._org_id(context)
         skill = self._get_or_404(skill_id, org_id)
         self.permission_policy.require_organization(context, org_id, PermissionKey.SKILL_MANAGE)
@@ -186,10 +195,6 @@ class SkillService:
         # invalidate paths referenced from inside its own markdown.
         if "name" in updated:
             skill.name = updated["name"]
-        if "description" in updated:
-            skill.description = updated["description"]
-        if "required_providers" in updated:
-            skill.required_providers = updated["required_providers"]
         self.repository.save(skill)
         return self._to_read(skill)
 
@@ -259,8 +264,7 @@ class SkillService:
 
     def get_skill_draft(self, skill_id: UUID, context: CurrentUserContext) -> SkillDraftRead:
         org_id = self._org_id(context)
-        skill = self._get_or_404(skill_id, org_id)
-        self.permission_policy.require_organization(context, org_id, PermissionKey.SKILL_MANAGE)
+        skill = self._require_draftable_skill(skill_id, org_id, context)
         draft = self.repository.get_draft(skill.id)
         if draft is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"No draft for skill {skill_id}")
@@ -288,7 +292,7 @@ class SkillService:
             skill.id,
             files,
             description=skill.description,
-            required_providers=[p.value for p in skill.required_providers],
+            required_providers=[p.value if hasattr(p, "value") else p for p in skill.required_providers],
         )
         return self._draft_to_read(draft)
 
@@ -299,14 +303,14 @@ class SkillService:
         if draft is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"No draft for skill {skill_id}")
         files = self._validated_files(data.files, skill.entry_path)
-        draft = self.repository.update_draft_files(
-            draft.id,
-            files,
-            description=data.description,
-            required_providers=[p.value for p in data.required_providers]
-            if data.required_providers is not None
-            else None,
-        )
+        metadata: dict[str, str | list[str] | None] = {}
+        if "description" in data.model_fields_set:
+            metadata["description"] = data.description
+        if "required_providers" in data.model_fields_set:
+            metadata["required_providers"] = (
+                [p.value for p in data.required_providers] if data.required_providers is not None else None
+            )
+        draft = self.repository.update_draft_files(draft.id, files, metadata=metadata)
         return self._draft_to_read(draft)
 
     def discard_skill_draft(self, skill_id: UUID, context: CurrentUserContext) -> None:

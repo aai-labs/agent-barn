@@ -6,6 +6,7 @@ import type { SkillVersion } from "../schemas";
 
 interface SkillVersionHistoryProps {
   versions: SkillVersion[];
+  currentVersion: number;
   isLoading: boolean;
   canManage: boolean;
   onDelete: (version: number) => void;
@@ -14,12 +15,13 @@ interface SkillVersionHistoryProps {
 
 export function SkillVersionHistory({
   versions,
+  currentVersion,
   isLoading,
   canManage,
   onDelete,
   deletingVersion,
 }: SkillVersionHistoryProps) {
-  const latest = Math.max(0, ...versions.map((v) => v.version));
+  const latest = versions.length > 0 ? Math.max(...versions.map((v) => v.version)) : currentVersion;
 
   if (isLoading) {
     return (

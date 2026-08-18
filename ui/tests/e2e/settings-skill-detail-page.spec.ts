@@ -137,6 +137,10 @@ test.describe("Settings — Skill detail page", () => {
     await dataSupportPage.skills.interceptUpdateSkillRequest();
 
     let draftUpdateCalled = false;
+    const skillUpdateRequest = page.waitForRequest(
+      (request) =>
+        request.url().endsWith(`/skills/${MOCK_CUSTOM_SKILL_ID}`) && request.method() === "PATCH",
+    );
     await page.route(`**/api/v1/organizations/*/skills/${MOCK_CUSTOM_SKILL_ID}/draft`, async (route) => {
       if (route.request().method() !== "PATCH") {
         await route.fallback();
@@ -159,12 +163,14 @@ test.describe("Settings — Skill detail page", () => {
 
     await page.goto(`/dashboard/${TEST_ORG_ID}/settings/skills/${MOCK_CUSTOM_SKILL_ID}`);
     await page.getByRole("button", { name: "Edit" }).click();
+    await page.getByRole("textbox", { name: "Name" }).fill("Renamed tool");
     await page.getByRole("textbox", { name: "Content of SKILL.md" }).fill("# Edited");
     await page.getByRole("button", { name: "Save draft" }).click();
 
     await expect(page.getByRole("textbox", { name: "Content of SKILL.md" })).toHaveValue("# Edited");
-    await expect(page.getByText("my-tool v2 draft saved.")).toBeVisible();
+    await expect(page.getByText("Renamed tool v2 draft saved.")).toBeVisible();
     expect(draftUpdateCalled).toBe(true);
+    expect((await skillUpdateRequest).postDataJSON()).toEqual({ name: "Renamed tool" });
   });
 
   test("Discard removes the draft and returns to read-only view", async ({ page }) => {

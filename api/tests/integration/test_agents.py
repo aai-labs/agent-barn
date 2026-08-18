@@ -2756,6 +2756,20 @@ def test_create_agent_with_skill_pin_for_unassigned_skill_returns_400():
             assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
 
 
+def test_update_agent_rejects_a_skill_that_is_added_and_removed_together():
+    with given([*_GIVEN, there_is_an_agent(), there_is_a_skill(name="Contradictory Skill")]) as context:
+        response = context.client.patch(
+            f"{_BASE}/{context.agent.id}",
+            json={
+                "skill_ids": [str(context.skill.id)],
+                "removed_skill_ids": [str(context.skill.id)],
+            },
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
+
+
 def test_update_agent_re_pins_existing_skill_to_newer_version():
     with given(
         [
@@ -2818,6 +2832,22 @@ def test_create_agent_with_skill_from_other_org_returns_404():
 
         with then("it returns 404"):
             assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_create_agent_skill_pin_from_other_org_does_not_reveal_version_existence():
+    with given([*_GIVEN, there_is_a_skill_for_another_org()]) as context:
+        client: TestClient = context.client
+        payload = {
+            **_VALID_CREATE,
+            "skill_ids": [str(context.other_org_skill.id)],
+            "skill_versions": [{"skill_id": str(context.other_org_skill.id), "version": 99}],
+        }
+
+        response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+        assert_that(response.json()["detail"], contains_string("Skill"))
+        assert_that(response.json()["detail"], is_not(contains_string("Version")))
 
 
 def test_create_agent_with_unknown_skill_id_returns_404():
