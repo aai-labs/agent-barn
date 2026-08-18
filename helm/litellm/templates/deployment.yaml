@@ -6,6 +6,16 @@ metadata:
   labels:
     {{- include "litellm.labels" . | nindent 4 }}
 spec:
+  # The namespace memory quota cannot accommodate both the current and
+  # replacement LiteLLM pods (each has a 2Gi memory limit).  Delete the old
+  # pod before creating its replacement so an upgrade can proceed within that
+  # quota.  The brief proxy interruption is preferable to leaving an upgrade
+  # permanently blocked by FailedCreate.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
   replicas: {{ .Values.replicaCount }}
   selector:
     matchLabels:
