@@ -8,6 +8,15 @@ metadata:
     {{- include "agentfarm-api.labels" . | nindent 4 }}
     app.kubernetes.io/component: worker
 spec:
+  # The namespace memory quota cannot accommodate both the current and
+  # replacement pod at once (see helm/litellm/templates/deployment.yaml).
+  # Delete the old pod before creating its replacement so an upgrade can
+  # proceed within that quota.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
   replicas: {{ .Values.worker.replicaCount }}
   selector:
     matchLabels:

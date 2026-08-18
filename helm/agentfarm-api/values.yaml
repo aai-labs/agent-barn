@@ -129,7 +129,7 @@ worker:
       cpu: 100m
     limits:
       memory: 512Mi
-      cpu: 500m
+      cpu: 1000m
 
 resources:
   requests:
