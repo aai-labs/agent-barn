@@ -33,12 +33,11 @@ export function IntegrationFields({
   draft: IntegrationDraft;
   onFieldChange: (key: string, value: string) => void;
   onReposChange: (key: string, repos: string[]) => void;
-  onOAuthConnected: (result: GoogleOAuthResult) => void;
+  onOAuthConnected?: (result: GoogleOAuthResult) => void;
   namePrefix?: string;
   showScopeNote?: boolean;
   disabled?: boolean;
 }) {
-  // Per-field secret visibility, keyed by field so one toggle can't reveal another.
   const [visible, setVisible] = useState<Record<string, boolean>>({});
 
   return (
@@ -49,7 +48,7 @@ export function IntegrationFields({
         </p>
       )}
 
-      {provider.authMethod === "google_oauth" && (
+      {provider.authMethod === "google_oauth" && onOAuthConnected && (
         <GoogleAuthButton
           connected={isOAuthConnected(draft)}
           onConnected={onOAuthConnected}

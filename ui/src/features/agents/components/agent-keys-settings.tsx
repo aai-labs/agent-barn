@@ -33,6 +33,7 @@ export function AgentKeysSettings({
   const [teamsAppPassword, setTeamsAppPassword] = useState("");
   const [teamsTenantId, setTeamsTenantId] = useState("");
   const [telegramBotToken, setTelegramBotToken] = useState("");
+  const [discordBotToken, setDiscordBotToken] = useState("");
   const [showSecret, setShowSecret] = useState(false);
   const [secretDrafts, setSecretDrafts] = useState<IntegrationDraft[]>([]);
   const [removedProviders, setRemovedProviders] = useState<string[]>([]);
@@ -46,7 +47,8 @@ export function AgentKeysSettings({
       teamsAppId.trim() ||
       teamsAppPassword.trim() ||
       teamsTenantId.trim() ||
-      telegramBotToken.trim(),
+      telegramBotToken.trim() ||
+      discordBotToken.trim(),
   );
   const hasIntegrationChanges = secretDrafts.length > 0 || removedProviders.length > 0;
   const hasChanges = hasPlatformChanges || hasIntegrationChanges;
@@ -69,7 +71,9 @@ export function AgentKeysSettings({
               ...(teamsAppPassword.trim() ? { teamsAppPassword } : {}),
               ...(teamsTenantId.trim() ? { teamsTenantId } : {}),
             }
-          : { ...(telegramBotToken.trim() ? { telegramBotToken } : {}) };
+          : agent.platform === "telegram"
+            ? { ...(telegramBotToken.trim() ? { telegramBotToken } : {}) }
+            : { ...(discordBotToken.trim() ? { discordBotToken } : {}) };
 
     await applyAndRestart(() =>
       updateAgent.mutateAsync({
@@ -100,6 +104,7 @@ export function AgentKeysSettings({
     setTeamsAppPassword("");
     setTeamsTenantId("");
     setTelegramBotToken("");
+    setDiscordBotToken("");
     setSecretDrafts([]);
     setRemovedProviders([]);
   }
@@ -111,6 +116,7 @@ export function AgentKeysSettings({
     setTeamsAppPassword("");
     setTeamsTenantId("");
     setTelegramBotToken("");
+    setDiscordBotToken("");
     setSecretDrafts([]);
     setRemovedProviders([]);
     updateAgent.reset();
@@ -122,7 +128,9 @@ export function AgentKeysSettings({
       ? Boolean(agent.slackConfig)
       : agent.platform === "teams"
         ? Boolean(agent.teamsConfig)
-        : Boolean(agent.telegramConfig);
+        : agent.platform === "telegram"
+          ? Boolean(agent.telegramConfig)
+          : Boolean(agent.discordConfig);
 
   return (
     <AgentConfigurationSection
@@ -201,6 +209,12 @@ export function AgentKeysSettings({
               <label className="flex flex-col gap-1.5 text-[0.84rem] font-medium" style={{ color: "var(--ink)" }}>
                 Bot token
                 <TokenInput value={telegramBotToken} onChange={setTelegramBotToken} visible={showSecret} onToggle={() => setShowSecret((value) => !value)} placeholder="123456:ABC-DEF…" />
+              </label>
+            )}
+            {agent.platform === "discord" && (
+              <label className="flex flex-col gap-1.5 text-[0.84rem] font-medium" style={{ color: "var(--ink)" }}>
+                Discord bot token
+                <TokenInput value={discordBotToken} onChange={setDiscordBotToken} visible={showSecret} onToggle={() => setShowSecret((value) => !value)} placeholder="Leave blank to keep existing token" />
               </label>
             )}
           </div>

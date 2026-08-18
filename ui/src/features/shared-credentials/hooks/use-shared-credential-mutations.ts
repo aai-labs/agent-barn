@@ -11,13 +11,13 @@ import { sharedCredentialsKey } from "../utils";
 export type SharedCredentialCreatePayload = {
   provider: string;
   name: string;
-  content: Record<string, string | string[]>;
+  content: Record<string, string | string[] | boolean>;
 };
 
 export type SharedCredentialUpdatePayload = {
   credentialId: string;
   name?: string;
-  content?: Record<string, string | string[]>;
+  content?: Record<string, string | string[] | boolean>;
 };
 
 export function useCreateSharedCredential() {

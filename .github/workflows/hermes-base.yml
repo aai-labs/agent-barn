@@ -53,6 +53,15 @@ jobs:
             --entrypoint python3 \
             hermes-base:ci \
             /driver.py
+      - name: Discord policy plugin contract
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}/api/domains/agents/scripts/hermes/plugins/discord-deny-dms:/plugins/deny-dms:ro" \
+            -v "${{ github.workspace }}/api/domains/agents/scripts/hermes/plugins/discord-guild-allowlist:/plugins/guild-allowlist:ro" \
+            -v "${{ github.workspace }}/api/tests/fixtures/hermes_discord_policy_driver.py:/driver.py:ro" \
+            --entrypoint python3 \
+            hermes-base:ci \
+            /driver.py
 
   push:
     name: Push
@@ -106,6 +115,15 @@ jobs:
             -e INGEST_API_KEY=ci \
             -v "${{ github.workspace }}/api/domains/agents/scripts/hermes/plugins/telemetry-push:/plugin:ro" \
             -v "${{ github.workspace }}/api/tests/fixtures/hermes_session_store_driver.py:/driver.py:ro" \
+            --entrypoint python3 \
+            ${{ vars.REGISTRY_URL }}/agentfarm-hermes-base:${{ steps.tag.outputs.value }} \
+            /driver.py
+      - name: Discord policy plugin contract
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}/api/domains/agents/scripts/hermes/plugins/discord-deny-dms:/plugins/deny-dms:ro" \
+            -v "${{ github.workspace }}/api/domains/agents/scripts/hermes/plugins/discord-guild-allowlist:/plugins/guild-allowlist:ro" \
+            -v "${{ github.workspace }}/api/tests/fixtures/hermes_discord_policy_driver.py:/driver.py:ro" \
             --entrypoint python3 \
             ${{ vars.REGISTRY_URL }}/agentfarm-hermes-base:${{ steps.tag.outputs.value }} \
             /driver.py

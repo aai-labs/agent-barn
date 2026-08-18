@@ -259,6 +259,45 @@ def test_process_messages_resolves_telegram_names(mock_maps):
             assert_that(messages[0].sender_name, equal_to("Alice"))
 
 
+@patch("api.domains.ingest.service.get_config")
+@patch("api.domains.ingest.service.decrypt_token", return_value="discord-token")
+@patch("api.domains.ingest.service.DiscordClient")
+def test_process_messages_resolves_discord_names(mock_client_class, _mock_decrypt, mock_config):
+    with given():
+        agent_repo = MagicMock()
+        agent_repo.get_discord_config.return_value = MagicMock(bot_token_encrypted="encrypted-token")
+        conv_repo = MagicMock()
+        service = _make_service(agent_repo=agent_repo, conv_repo=conv_repo)
+        agent = _make_agent()
+        agent.platform = AgentPlatform.DISCORD
+        mock_config.return_value = MagicMock(agent_token_encryption_key="enc-key")
+        mock_client = mock_client_class.return_value
+        mock_client.get_user_display_name.return_value = "Alice"
+        mock_client.get_channel_display_name.return_value = "ops-alerts"
+        batch = IngestBatchRequest(
+            messages=[
+                IngestMessageEvent(
+                    msg_id="discord-msg-1",
+                    session_key="agent:main:discord:channel:channel-1",
+                    channel_id="channel-1",
+                    direction=MessageDirection.INBOUND,
+                    conversation_type=ConversationType.CHANNEL,
+                    sender_id="user-1",
+                    content="hello from Discord",
+                    occurred_at=datetime.now(UTC),
+                )
+            ]
+        )
+
+        with when("I process Discord telemetry without display names"):
+            service.process(agent, batch)
+
+        with then("the Discord directory supplies the sender and channel names"):
+            message = conv_repo.upsert_messages.call_args.args[0][0]
+            assert_that(message.sender_name, equal_to("Alice"))
+            assert_that(message.channel_name, equal_to("ops-alerts"))
+
+
 def test_process_tool_calls_calls_upsert_pending():
     with given():
         tc_repo = MagicMock()

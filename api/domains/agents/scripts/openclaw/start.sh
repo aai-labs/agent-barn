@@ -13,6 +13,10 @@ if [ "$AGENT_PLATFORM" = "slack" ] || [ -z "$AGENT_PLATFORM" ]; then
   openclaw plugins install @openclaw/slack 2>&1 || echo "[start] slack plugin install failed"
 fi
 
+if [ "$AGENT_PLATFORM" = "discord" ]; then
+  openclaw plugins install @openclaw/discord 2>&1 || echo "[start] discord plugin install failed"
+fi
+
 openclaw plugins install @openclaw/firecrawl-plugin 2>&1 || echo "[start] firecrawl plugin install failed"
 
 if [ -f /app/config/aai-cli-setup.sh ]; then

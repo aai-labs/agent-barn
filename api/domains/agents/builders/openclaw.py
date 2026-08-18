@@ -199,6 +199,57 @@ def build_openclaw_config_overlay_telegram(
     )
 
 
+def build_openclaw_config_overlay_discord(
+    model: str,
+    litellm_base_url: str,
+    guild_ids: list[str] | None = None,
+    allowed_channel_ids: list[str] | None = None,
+    allowed_user_ids: list[str] | None = None,
+    allowed_role_ids: list[str] | None = None,
+    home_channel_id: str | None = None,
+    require_mention: bool = True,
+    group_policy: str = "allowlist",
+    approval_mode: str = "auto",
+) -> dict:
+    channel_rules = {
+        channel_id: {"enabled": True, "requireMention": require_mention} for channel_id in (allowed_channel_ids or [])
+    }
+    guild_rule: dict = {"requireMention": require_mention}
+    if allowed_user_ids:
+        guild_rule["users"] = allowed_user_ids
+    if allowed_role_ids:
+        guild_rule["roles"] = allowed_role_ids
+    if channel_rules:
+        guild_rule["channels"] = channel_rules
+    guilds = (
+        {guild_id: dict(guild_rule) for guild_id in (guild_ids or [])}
+        if group_policy == "allowlist"
+        else {"*": guild_rule}
+    )
+    cfg = _openclaw_config_core(
+        model,
+        litellm_base_url,
+        binding_channel="discord",
+        channels={
+            "discord": {
+                "enabled": True,
+                "groupPolicy": group_policy,
+                "dmPolicy": "disabled",
+                "allowFrom": [],
+                "dm": {"enabled": False},
+                "guilds": guilds,
+            }
+        },
+    )
+    if home_channel_id:
+        cfg["agents"]["defaults"]["heartbeat"] = {
+            "target": "discord",
+            "to": f"channel:{home_channel_id}",
+            "directPolicy": "block",
+        }
+    return cfg
+
+
 def build_config_map(
     agent_id: UUID,
     org_id: UUID,
@@ -294,6 +345,27 @@ def build_secret_telegram(
             "LITELLM_API_KEY": litellm_api_key,
             "LITELLM_BASE_URL": litellm_base_url,
             "AGENT_PLATFORM": "telegram",
+        },
+    )
+
+
+def build_secret_discord(
+    agent_id: UUID,
+    org_id: UUID,
+    namespace: str,
+    discord_bot_token: str,
+    litellm_api_key: str,
+    litellm_base_url: str,
+) -> client.V1Secret:
+    return client.V1Secret(
+        metadata=client.V1ObjectMeta(
+            name=_resource_name(agent_id), namespace=namespace, labels=_labels(agent_id, org_id)
+        ),
+        string_data={
+            "DISCORD_BOT_TOKEN": discord_bot_token,
+            "LITELLM_API_KEY": litellm_api_key,
+            "LITELLM_BASE_URL": litellm_base_url,
+            "AGENT_PLATFORM": "discord",
         },
     )
 
