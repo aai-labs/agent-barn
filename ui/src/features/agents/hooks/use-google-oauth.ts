@@ -6,8 +6,8 @@ import { z } from "zod";
 import { api } from "@/shared/api";
 
 const AuthorizeUrlSchema = z.object({ authorizeUrl: z.string().url() });
-// email/grantedScopes are additive: providers that don't request the openid scopes
-// (gmail, google_sheets) get null/absent values.
+// email/grantedScopes are absent unless the openid scopes were requested, which
+// google_workspace always does.
 const TokenSchema = z.object({
   refreshToken: z.string().min(1),
   email: z.string().nullish(),
@@ -65,8 +65,8 @@ export function useGoogleOAuth() {
     async (
       creds?: GoogleClientCredentials,
       // Which Google integration is being connected — decides the scopes the backend
-      // requests. Defaults to gmail, the only provider this flow originally served.
-      provider: string = "gmail",
+      // requests. google_workspace is the only Google provider left.
+      provider: string = "google_workspace",
       // Extra authorize-url query params. google_workspace derives its scopes from the
       // user's service selection, so it passes services + read_only here.
       authorizeParams?: Record<string, string>,

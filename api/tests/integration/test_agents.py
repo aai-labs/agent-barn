@@ -635,14 +635,14 @@ def test_patch_agent_adds_secret():
             assert_that(jira["secret_name"], equal_to("Jira credential"))
 
 
-def test_patch_agent_adds_google_sheets_secret():
-    """Exercises the provider check constraint: a provider missing from the migration
-    is rejected by the database, not by validation, so this only passes once both the
-    enum and the constraint know about google_sheets."""
+def test_patch_agent_rejects_retired_google_provider():
+    """The per-service Google providers were removed outright — enum member, content
+    model and rows (deleted by migration c9f1b30a7d42). A stale client naming one must be
+    refused by request validation rather than reaching the database."""
     with given([*_GIVEN, there_is_an_agent()]) as context:
         client: TestClient = context.client
 
-        with when("I patch the agent with a google sheets secret"):
+        with when("I patch the agent with a retired google sheets secret"):
             response = client.patch(
                 f"{_BASE}/{context.agent.id}",
                 json={
@@ -656,13 +656,9 @@ def test_patch_agent_adds_google_sheets_secret():
                 headers=_auth(context),
             )
 
-        with then("it returns 200 and the agent exposes the google sheets secret"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            assert_that(_providers(response), equal_to(["google_sheets"]))
-            sheets = response.json()["secrets"][0]
-            assert_that(sheets["secret_name"], equal_to("Google Sheets credential"))
-            # Read APIs return provider and label, never credential contents.
-            assert_that("content" in sheets, equal_to(False))
+        with then("it is rejected as an unknown provider"):
+            assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
+            assert_that("google_sheets" in response.text, equal_to(True))
 
 
 def test_patch_agent_upserts_existing_secret():

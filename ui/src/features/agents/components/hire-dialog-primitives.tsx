@@ -144,8 +144,8 @@ export function GoogleAuthButton({
   onConnected,
   disabled,
   disabledNote,
-  provider = "gmail",
-  connectedNote = "read-only Gmail access granted",
+  provider = "google_workspace",
+  connectedNote = "Google account connected",
   authorizeParams,
   requireEmail = false,
 }: {
@@ -164,15 +164,18 @@ export function GoogleAuthButton({
   requireEmail?: boolean;
 }) {
   const { connectGoogle, isConnecting } = useGoogleOAuth();
+  // google_workspace expects the user's own OAuth client, so its help text is the full
+  // setup walkthrough rather than a short "optional" aside. It is rendered inline and
+  // above the connect button — never behind a disclosure — because the client id/secret
+  // are a prerequisite for connecting, not an aside to go looking for. The toggle (and
+  // this state) only apply to providers where bringing your own client is optional.
+  const ownClientRequired = provider === "google_workspace";
   const [error, setError] = useState<string | null>(null);
   const [showCustom, setShowCustom] = useState(false);
   const [clientId, setClientId] = useState("");
   const [clientSecret, setClientSecret] = useState("");
   const [showSecret, setShowSecret] = useState(false);
   const clientFileRef = useRef<HTMLInputElement>(null);
-  // google_workspace expects the user's own OAuth client, so its help text is the full
-  // setup walkthrough rather than gmail's "optional" aside.
-  const ownClientRequired = provider === "google_workspace";
 
   const redirectUri =
     typeof window !== "undefined"
@@ -237,46 +240,22 @@ export function GoogleAuthButton({
 
   return (
     <div className="flex flex-col gap-2">
-      <button
-        type="button"
-        className="af-btn af-btn-sm flex items-center gap-2 self-start"
-        onClick={handleClick}
-        disabled={disabled || isConnecting}
-      >
-        <GoogleGlyph size={15} />
-        {isConnecting
-          ? "Waiting for Google…"
-          : connected
-            ? "Reconnect Google account"
-            : "Authenticate with Google"}
-      </button>
-      {connected && !isConnecting && (
-        <span className="text-[0.75rem] font-medium" style={{ color: "var(--ok, #2f855a)" }}>
-          ✓ Connected — {connectedNote}
+      {ownClientRequired ? (
+        <span className="text-[0.75rem] font-medium self-start" style={{ color: "var(--ink-3)" }}>
+          Your Google OAuth client (required)
         </span>
+      ) : (
+        <button
+          type="button"
+          className="text-[0.75rem] self-start"
+          style={{ color: "var(--ink-4)" }}
+          onClick={() => setShowCustom((v) => !v)}
+          disabled={disabled || isConnecting}
+        >
+          {showCustom ? "▾" : "▸"} Use your own Google client (optional)
+        </button>
       )}
-      {disabled && disabledNote && !isConnecting && (
-        <span className="text-[0.75rem]" style={{ color: "var(--ink-4)" }}>
-          {disabledNote}
-        </span>
-      )}
-      {error && (
-        <span className="text-[0.75rem]" style={{ color: "var(--danger, #c53030)" }}>
-          {error}
-        </span>
-      )}
-
-      <button
-        type="button"
-        className="text-[0.75rem] self-start"
-        style={{ color: "var(--ink-4)" }}
-        onClick={() => setShowCustom((v) => !v)}
-        disabled={disabled || isConnecting}
-      >
-        {showCustom ? "▾" : "▸"}{" "}
-        {ownClientRequired ? "Your Google OAuth client (required)" : "Use your own Google client (optional)"}
-      </button>
-      {showCustom && (
+      {(ownClientRequired || showCustom) && (
         <div className="flex flex-col gap-2.5 pl-3" style={{ borderLeft: "2px solid var(--line)" }}>
           {ownClientRequired ? (
             <div className="text-[0.75rem] leading-[1.5] flex flex-col gap-1.5" style={{ color: "var(--ink-4)" }}>
@@ -324,7 +303,7 @@ export function GoogleAuthButton({
                 Google Cloud Console
               </a>{" "}
               create an OAuth 2.0 Client ID of type <strong>Web application</strong>, enable the
-              Gmail API, request the <code>gmail.readonly</code> scope, and add{" "}
+              APIs for the services you need, and add{" "}
               <code className="break-all">{redirectUri}</code> as an authorized redirect URI. Then
               paste the client ID and secret below — leave both blank to use the shared app client.
             </p>
@@ -363,6 +342,35 @@ export function GoogleAuthButton({
             />
           </FormField>
         </div>
+      )}
+
+      <button
+        type="button"
+        className="af-btn af-btn-sm flex items-center gap-2 self-start"
+        onClick={handleClick}
+        disabled={disabled || isConnecting}
+      >
+        <GoogleGlyph size={15} />
+        {isConnecting
+          ? "Waiting for Google…"
+          : connected
+            ? "Reconnect Google account"
+            : "Authenticate with Google"}
+      </button>
+      {connected && !isConnecting && (
+        <span className="text-[0.75rem] font-medium" style={{ color: "var(--ok, #2f855a)" }}>
+          ✓ Connected — {connectedNote}
+        </span>
+      )}
+      {disabled && disabledNote && !isConnecting && (
+        <span className="text-[0.75rem]" style={{ color: "var(--ink-4)" }}>
+          {disabledNote}
+        </span>
+      )}
+      {error && (
+        <span className="text-[0.75rem]" style={{ color: "var(--danger, #c53030)" }}>
+          {error}
+        </span>
       )}
     </div>
   );

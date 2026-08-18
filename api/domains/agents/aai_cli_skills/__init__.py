@@ -19,8 +19,6 @@ from .bitbucket import BITBUCKET_SKILLS
 from .confluence import CONFLUENCE_SKILLS
 from .excel import EXCEL_SKILLS
 from .github import GITHUB_SKILLS
-from .gmail import GMAIL_SKILLS
-from .google_sheets import GOOGLE_SHEETS_SKILLS
 from .jira import JIRA_SKILLS
 from .pipedrive import PIPEDRIVE_SKILLS
 from .slack import SLACK_SKILLS
@@ -60,20 +58,6 @@ AAI_CLI_PROVIDER_SKILLS: list[dict] = [
         "files": BITBUCKET_SKILLS,
         "entry_path": BITBUCKET_SKILLS[0]["skill_file_path"].removeprefix(AAI_CLI_ROOT_DIR + "/"),
         "tools_pointer": "\nFor Bitbucket, use the aai-cli tool. See ./skills/aai-cli/bitbucket_skill.md\n",
-    },
-    {
-        "name": "Gmail",
-        "required_providers": [SecretProvider.GMAIL],
-        "files": GMAIL_SKILLS,
-        "entry_path": GMAIL_SKILLS[0]["skill_file_path"].removeprefix(AAI_CLI_ROOT_DIR + "/"),
-        "tools_pointer": "\nFor Gmail, use the aai-cli tool. See ./skills/aai-cli/gmail_skill.md\n",
-    },
-    {
-        "name": "Google Sheets",
-        "required_providers": [SecretProvider.GOOGLE_SHEETS],
-        "files": GOOGLE_SHEETS_SKILLS,
-        "entry_path": GOOGLE_SHEETS_SKILLS[0]["skill_file_path"].removeprefix(AAI_CLI_ROOT_DIR + "/"),
-        "tools_pointer": "\nFor Google Sheets, use the aai-cli tool. See ./skills/aai-cli/google_sheets_skill.md\n",
     },
     {
         "name": "Excel",

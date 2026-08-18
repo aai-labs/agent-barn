@@ -90,8 +90,6 @@ from api.domains.agents.models import (
     AgentUpdate,
     ConfluenceContent,
     FirecrawlContent,
-    GmailContent,
-    GoogleSheetsContent,
     GoogleWorkspaceContent,
     JiraContent,
     PairRequest,
@@ -2372,13 +2370,12 @@ class AgentService:
             assert ciphertext is not None
             decrypted[provider] = decrypt_content(provider, ciphertext, key)
         self._backfill_google_client_credentials(decrypted)
-        for google_provider in (
-            SecretProvider.GMAIL,
-            SecretProvider.GOOGLE_SHEETS,
-            SecretProvider.GOOGLE_WORKSPACE,
-        ):
+        # Only google_workspace is materialized; the retired per-service Google providers
+        # are tombstones (see SecretProvider) and a leftover secret is simply ignored here
+        # rather than blocking start.
+        for google_provider in (SecretProvider.GOOGLE_WORKSPACE,):
             content = decrypted.get(google_provider)
-            if not isinstance(content, (GmailContent, GoogleSheetsContent, GoogleWorkspaceContent)):
+            if not isinstance(content, GoogleWorkspaceContent):
                 continue
             if not content.client_id or not content.client_secret:
                 raise HTTPException(
@@ -2943,16 +2940,11 @@ class AgentService:
 
     def _backfill_google_client_credentials(self, decrypted: dict[SecretProvider, Any]) -> None:
         """Secrets created via the Google OAuth flow store only the refresh token; inject
-        the app-owned client id/secret from config. Backfill only when empty so legacy
-        secrets (which carry their own client the refresh token was issued under) keep
-        working."""
-        for provider in (
-            SecretProvider.GMAIL,
-            SecretProvider.GOOGLE_SHEETS,
-            SecretProvider.GOOGLE_WORKSPACE,
-        ):
+        the app-owned client id/secret from config. Backfill only when empty so a
+        user-supplied client (the one the refresh token was issued under) keeps working."""
+        for provider in (SecretProvider.GOOGLE_WORKSPACE,):
             content = decrypted.get(provider)
-            if not isinstance(content, (GmailContent, GoogleSheetsContent, GoogleWorkspaceContent)):
+            if not isinstance(content, GoogleWorkspaceContent):
                 continue
             if not content.client_id:
                 content.client_id = self.config.google_cloud_client_id

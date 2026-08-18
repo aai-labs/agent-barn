@@ -112,34 +112,10 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
       { key: "apiToken", label: "API token", type: "secret", required: true },
     ],
   },
-  {
-    id: "gmail",
-    label: "Gmail",
-    authMethod: "google_oauth",
-    scopeNote: "Read-only Gmail access via Google sign-in (gmail.readonly). No manual keys needed.",
-    oauthConnectedNote: "read-only Gmail access granted",
-    fields: [],
-  },
-  {
-    id: "google_sheets",
-    label: "Google Sheets",
-    authMethod: "google_oauth",
-    scopeNote:
-      "Read and write spreadsheet values via Google sign-in (spreadsheets), plus metadata-only Drive access to list your spreadsheets. No manual keys needed.",
-    oauthConnectedNote: "read/write access to your spreadsheets granted",
-    fields: [],
-  },
-  // google_calendar disabled: not currently offered as an integration. Re-enable by
-  // uncommenting once it's wired up (e.g. behind the Google OAuth flow like gmail).
-  // {
-  //   id: "google_calendar",
-  //   label: "Google Calendar",
-  //   scopeNote: "OAuth2 access token with calendar.readonly or calendar scope",
-  //   fields: [
-  //     { key: "accessToken", label: "Access token", type: "secret", required: true },
-  //     { key: "calendarId", label: "Calendar ID", type: "text", required: true, placeholder: "primary or calendar@group.calendar.google.com" },
-  //   ],
-  // },
+  // gmail, google_sheets and google_calendar are retired: one google_workspace
+  // credential (below) now covers Gmail, Calendar, Drive and Sheets through gog under a
+  // single consent. The backend keeps their enum members so existing secrets still
+  // decrypt, but refuses new ones — so they must not be offered here.
   {
     id: "google_workspace",
     label: "Google Workspace",

@@ -10,7 +10,7 @@ Integrations make external services available to an Agent. Agent Secrets hold en
 
 ## Supported providers
 
-Provider credential contracts are defined by `SecretProvider` and its content models in `../../api/domains/agents/models.py`. Current providers cover GitHub, Jira, Confluence, Bitbucket, Gmail, Google Calendar, Google Sheets, Google Workspace, Zoho Mail, Zoho Calendar, Firecrawl, Slack, and Pipedrive.
+Provider credential contracts are defined by `SecretProvider` and its content models in `../../api/domains/agents/models.py`. Current providers cover GitHub, Jira, Confluence, Bitbucket, Google Workspace, Zoho Mail, Zoho Calendar, Firecrawl, Slack, and Pipedrive. The per-service Google providers (Gmail, Google Calendar, Google Sheets) are retired: their enum members and content models survive as tombstones so secrets written before the switch still decrypt, but nothing materializes them, new ones are rejected on write, and they are absent from the UI.
 
 Providers reach their service through one of two CLIs: aai-cli (all of the above except Google Workspace) or the gog CLI (Google Workspace only). The two share nothing — no profiles, no secret store — and each has its own runtime artifacts and its own agent policy block.
 
@@ -18,7 +18,7 @@ Providers reach their service through one of two CLIs: aai-cli (all of the above
 
 Shared Credentials are org-scoped, admin-managed credential payloads that any member can attach to an agent. They use the same encryption and provider content models as Agent Secrets.
 
-- Only manual-entry providers are supported for shared credentials (v1): GitHub, Jira, Confluence, Bitbucket, Zoho Mail. OAuth-based providers (Gmail, Google Calendar, Google Sheets, Google Workspace) are excluded.
+- Only manual-entry providers are supported for shared credentials (v1): GitHub, Jira, Confluence, Bitbucket, Zoho Mail. OAuth-based providers (Google Workspace) are excluded.
 - An agent gets either a shared credential or a per-agent secret for a given provider, not both.
 - Any org member can list and attach shared credentials; only admins (owner/admin roles) can create, update, or delete them.
 - Multiple shared credentials per provider per org are allowed (e.g. "Production GitHub" and "Staging GitHub").
@@ -44,13 +44,9 @@ Per-user Slack configuration tokens support automated Slack app creation. They a
 
 ## Google OAuth
 
-One flow serves every Google-backed provider. The authorize and exchange operations require an authenticated user. The caller names the provider it is connecting; that choice selects the requested scopes and is carried inside the signed state, because the provider callback receives nothing from Google but the code and state. The callback accepts a signed, typed, short-lived state and forwards the authorization code to the web application; authenticated exchange returns a refresh token. Persistence then occurs through the normal Agent Secret create/update flow.
+The flow serves Google Workspace, the only Google-backed provider. The authorize and exchange operations require an authenticated user. The caller names the provider it is connecting, which is carried inside the signed state because the callback receives nothing from Google but the code and state; a state naming a retired provider no longer resolves. The callback accepts a signed, typed, short-lived state and forwards the authorization code to the web application; authenticated exchange returns a refresh token. Persistence then occurs through the normal Agent Secret create/update flow.
 
-Server-owned Google client credentials are the default for the single-service providers. User-supplied client identity is also supported by the route contract. All Google providers request offline access. Gmail requests read-only mail access; Google Sheets requests read/write on spreadsheet values plus metadata-only Drive access, which is what spreadsheet discovery needs.
-
-Each Google provider owns its own secret-store names rather than sharing one entry. The store is a flat namespace, so a user who supplies their own Google client for one provider while using the server-owned client for another would otherwise overwrite one set of credentials with the other.
-
-Google Workspace differs from the single-service providers in three ways. Its scopes are derived per request from the caller's service selection and read-only choice rather than being fixed per provider, so `/authorize-url` accepts `services` and `read_only` (rejected for every other provider rather than ignored). Its scope sets mirror the pinned gog release's own derivation, because the services recorded in the credential are re-declared to gog at agent start. And because gog keys stored tokens by account email, the flow always requests the identity scopes and `/token` returns the `email` claim decoded from the id_token — unverified, since the token arrives directly from Google's token endpoint in our own server-to-server exchange. `/token` also returns `granted_scopes`; the consent screen lets a user withhold individual scopes, so what was granted can be narrower than what was requested, and the credential records the granted set.
+Scopes are derived per request from the caller's service selection and read-only choice rather than being fixed per provider, so `/authorize-url` accepts `services` and `read_only`, and rejects any provider other than Google Workspace rather than serving scopes no integration can use. The scope sets mirror the pinned gog release's own derivation, because the services recorded in the credential are re-declared to gog at agent start. And because gog keys stored tokens by account email, the flow always requests the identity scopes and `/token` returns the `email` claim decoded from the id_token — unverified, since the token arrives directly from Google's token endpoint in our own server-to-server exchange. `/token` also returns `granted_scopes`; the consent screen lets a user withhold individual scopes, so what was granted can be narrower than what was requested, and the credential records the granted set.
 
 A user-supplied Web-application OAuth client is the expected setup for Google Workspace rather than an option. Google caps any app requesting unverified sensitive or restricted scopes at 100 grant-users for the lifetime of the project, and that cap cannot be reset — so a server-owned client only suits a verified deployment or a Workspace-internal app. Consent-screen publishing status matters too: apps left in Testing get refresh tokens that expire after 7 days, which is what the validator's `invalid_grant` message points at.
 
@@ -73,7 +69,7 @@ Google Workspace materializes through its own builders (`gog_artifacts.py`): the
 | gog runtime materialization (Google Workspace)     | `../../api/domains/agents/gog_artifacts.py`; `gog` binary pinned in `../../openclaw-base/Dockerfile` and `../../hermes-base/Dockerfile`             |
 | Built-in skill definitions                         | `../../api/domains/agents/aai_cli_skills/`                                                                                                          |
 | Slack configuration token lifecycle                | `../../api/domains/auth/token_service.py`, `../../api/domains/auth/routes.py`                                                                       |
-| Google OAuth (Gmail, Sheets, Google Workspace)     | `../../api/domains/integrations/google_oauth/routes.py`                                                                                             |
+| Google OAuth (Google Workspace)                    | `../../api/domains/integrations/google_oauth/routes.py`                                                                                             |
 | Firecrawl runtime wiring                           | `../../api/domains/agents/service.py` (platform-default + per-agent override)                                                                       |
 | UI credential forms                                | `../../ui/src/features/agents/`, `../../ui/src/features/account/`                                                                                   |
 | Tests                                              | `../../api/tests/integration/test_agents.py`, `../../api/tests/integration/test_shared_credentials.py`, `../../api/tests/integration/test_slack_config_token.py`, `../../api/tests/unit/test_google_oauth.py`, `../../api/tests/unit/test_gog_artifacts.py` |

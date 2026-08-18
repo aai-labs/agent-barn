@@ -10,9 +10,6 @@ from api.domains.agents.models import (
     BitbucketContent,
     ConfluenceContent,
     GithubContent,
-    GmailContent,
-    GoogleCalendarContent,
-    GoogleSheetsContent,
     JiraContent,
     PipedriveContent,
     SecretContent,
@@ -30,17 +27,6 @@ provider_secrets_map: dict[str, list[tuple[str, str]]] = {
     "jira": [("jira.api_token", "api_token")],
     "confluence": [("confluence.api_token", "api_token")],
     "bitbucket": [("bitbucket.api_token", "api_token")],
-    "gmail": [
-        ("google.client_secret", "client_secret"),
-        ("google.gmail_refresh_token", "refresh_token"),
-    ],
-    # Deliberately not sharing gmail's "google.client_secret": a user may bring their own
-    # Google client for one provider and use the app-owned one for the other, and these
-    # names are flat keys in the same store — sharing would let one clobber the other.
-    "google_sheets": [
-        ("google.sheets_client_secret", "client_secret"),
-        ("google.sheets_refresh_token", "refresh_token"),
-    ],
     "zoho_mail": [
         ("zoho.client_secret", "client_secret"),
         ("zoho.mail_refresh_token", "refresh_token"),
@@ -58,9 +44,6 @@ PROFILE_SLUGS: dict[SecretProvider, str] = {
     SecretProvider.JIRA: "jira-work",
     SecretProvider.CONFLUENCE: "confluence-work",
     SecretProvider.BITBUCKET: "bitbucket-work",
-    SecretProvider.GMAIL: "gmail-work",
-    SecretProvider.GOOGLE_CALENDAR: "google-calendar-work",
-    SecretProvider.GOOGLE_SHEETS: "google-sheets-work",
     SecretProvider.ZOHO_MAIL: "zoho-mail-rest",
     SecretProvider.ZOHO_CALENDAR: "zoho-calendar-work",
     SecretProvider.SLACK: "slack-work",
@@ -170,39 +153,6 @@ def _bitbucket_block(c: BitbucketContent) -> str:
     return "\n".join(blocks)
 
 
-def _gmail_block(c: GmailContent) -> str:
-    return (
-        f"[profiles.{PROFILE_SLUGS[SecretProvider.GMAIL]}]\n"
-        'provider = "google"\n'
-        'auth_type = "bearer_token"\n'
-        f"client_id = {_q(c.client_id)}\n"
-        'client_secret_secret = "google.client_secret"\n'
-        'refresh_token_secret = "google.gmail_refresh_token"\n'
-        'user_id = "me"\n'
-    )
-
-
-def _google_sheets_block(c: GoogleSheetsContent) -> str:
-    return (
-        f"[profiles.{PROFILE_SLUGS[SecretProvider.GOOGLE_SHEETS]}]\n"
-        'provider = "google"\n'
-        'auth_type = "bearer_token"\n'
-        f"client_id = {_q(c.client_id)}\n"
-        'client_secret_secret = "google.sheets_client_secret"\n'
-        'refresh_token_secret = "google.sheets_refresh_token"\n'
-    )
-
-
-def _google_calendar_block(c: GoogleCalendarContent) -> str:
-    return (
-        f"[profiles.{PROFILE_SLUGS[SecretProvider.GOOGLE_CALENDAR]}]\n"
-        'provider = "google"\n'
-        'auth_type = "bearer_token"\n'
-        'token_env = "GOOGLE_CALENDAR_ACCESS_TOKEN"\n'
-        f"calendar_id = {_q(c.calendar_id)}\n"
-    )
-
-
 def _zoho_mail_block(c: ZohoMailContent) -> str:
     return (
         f"[profiles.{PROFILE_SLUGS[SecretProvider.ZOHO_MAIL]}]\n"
@@ -254,9 +204,6 @@ _PROFILE_BUILDERS: dict[SecretProvider, Callable[..., str]] = {
     SecretProvider.JIRA: _jira_block,
     SecretProvider.CONFLUENCE: _confluence_block,
     SecretProvider.BITBUCKET: _bitbucket_block,
-    SecretProvider.GMAIL: _gmail_block,
-    SecretProvider.GOOGLE_SHEETS: _google_sheets_block,
-    SecretProvider.GOOGLE_CALENDAR: _google_calendar_block,
     SecretProvider.ZOHO_MAIL: _zoho_mail_block,
     SecretProvider.ZOHO_CALENDAR: _zoho_calendar_block,
     SecretProvider.SLACK: _slack_block,
@@ -266,10 +213,11 @@ _PROFILE_BUILDERS: dict[SecretProvider, Callable[..., str]] = {
 
 # Every provider reachable through an aai-cli --profile gets a "Configured Integrations"
 # line. This was previously limited to the four repo/issue trackers, which left Slack,
-# Gmail, Zoho Mail, Pipedrive, and the calendars with no "credentials are already in
+# Zoho Mail, Pipedrive, and the calendars with no "credentials are already in
 # place" note at all — so those agents would tell the user they had no access, or ask for
 # a token that was already mounted. Keyed off PROFILE_SLUGS so a new provider is covered
-# the moment it gets a profile.
+# the moment it gets a profile. Google is not here: it is served by gog, not aai-cli
+# (see gog_artifacts.py).
 _TOOL_CONTEXT_PROVIDERS = frozenset(PROFILE_SLUGS)
 
 
@@ -327,7 +275,7 @@ def build_tool_context_md(decrypted: Mapping[SecretProvider, SecretContent]) -> 
         else:
             # Providers with no site/repo metadata worth printing still belong here: the
             # point of this block is "credentials are already in place", which is exactly
-            # what a Slack- or Gmail-only agent was missing.
+            # what a Slack-only agent was missing.
             lines.append(f"- **{_INTEGRATION_LABELS[provider]}** (`{PROFILE_SLUGS[provider]}`)")
     return "\n".join(lines) + "\n"
 
@@ -398,9 +346,6 @@ _INTEGRATION_LABELS: dict[SecretProvider, str] = {
     SecretProvider.JIRA: "Jira",
     SecretProvider.CONFLUENCE: "Confluence",
     SecretProvider.BITBUCKET: "Bitbucket",
-    SecretProvider.GMAIL: "Gmail",
-    SecretProvider.GOOGLE_CALENDAR: "Google Calendar",
-    SecretProvider.GOOGLE_SHEETS: "Google Sheets",
     SecretProvider.ZOHO_MAIL: "Zoho Mail",
     SecretProvider.ZOHO_CALENDAR: "Zoho Calendar",
     SecretProvider.SLACK: "Slack",
@@ -413,16 +358,12 @@ _INTEGRATION_LABELS: dict[SecretProvider, str] = {
 # question to `slack-work` and would answer that it had no access — the profile slug alone
 # never told it what the profile was *for*. Sourced from the command surface documented in
 # each ``aai_cli_skills/<provider>.py``; keep in sync when commands are added. Providers
-# with no aai-cli skill doc (the calendars) are omitted and render as before.
+# with no aai-cli skill doc (Zoho Calendar) are omitted and render as before.
 _INTEGRATION_CAPABILITIES: dict[SecretProvider, str] = {
     SecretProvider.GITHUB: "PRs (diff, files, reviews, comments), issues, branches, repo source, Actions runs",
     SecretProvider.JIRA: "issues (comments, attachments), sprints, boards, projects, users",
     SecretProvider.CONFLUENCE: "pages (comments, attachments), spaces",
     SecretProvider.BITBUCKET: "PRs (diff, comments), commits, branches, repo source, pipelines",
-    SecretProvider.GMAIL: "read and search mail (read-only)",
-    SecretProvider.GOOGLE_SHEETS: (
-        "create and list spreadsheets, add/delete/rename sheet tabs, read/update/clear cell ranges"
-    ),
     SecretProvider.ZOHO_MAIL: "read and search mail (read-only)",
     SecretProvider.SLACK: (
         "read channel data: list channels, list and download files and attachments, "

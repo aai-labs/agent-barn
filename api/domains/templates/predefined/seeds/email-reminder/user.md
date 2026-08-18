@@ -8,7 +8,7 @@ This file stores runtime configuration and state for {{ agent_display_name }}.
 
 ## Email Platform
 
-- **email_platform:** (gmail / zoho_mail — set during setup)
+- **email_platform:** (google_workspace / zoho_mail — set during setup)
 
 ## Notification Settings
 

@@ -12,6 +12,33 @@ from api.domains.templates.slug import slugify
 logger = logging.getLogger(__name__)
 
 
+def _prune_retired_aai_cli_skills(repository: SkillRepository) -> None:
+    """Delete built-in skills that no longer exist in the registry, when nothing uses them.
+
+    Retiring a provider (e.g. the Gmail/Google Sheets aai-cli skills, superseded by the
+    gog-backed google_workspace integration) removes its definition from
+    ``AAI_CLI_PROVIDER_SKILLS``, but the seeder never deleted rows — so the old skill
+    lingered in every database and still auto-mounted for any agent that kept the retired
+    credential, handing the agent a doc for a ``--profile`` that is no longer generated.
+
+    Only unreferenced rows are removed: ``agent_skill.skill_id`` cascades, so deleting an
+    assigned skill would silently strip it from an agent. Anything still assigned is left
+    in place and logged for manual follow-up.
+    """
+    known = {skill_def["name"] for skill_def in AAI_CLI_PROVIDER_SKILLS}
+    for skill in repository.get_aai_cli_skills():
+        if skill.name in known:
+            continue
+        if repository.is_assigned_to_any_agent(skill.id):
+            logger.warning(
+                "Retired AAI_CLI skill %s is still assigned to an agent; leaving it in place",
+                skill.name,
+            )
+            continue
+        repository.delete(skill)
+        logger.warning("Pruned retired AAI_CLI skill: %s", skill.name)
+
+
 def seed_aai_cli_skills(repository: SkillRepository) -> None:
     """Ensure all built-in AAI_CLI skills exist, publishing a version when content changes.
 
@@ -53,3 +80,5 @@ def seed_aai_cli_skills(repository: SkillRepository) -> None:
             continue
         version = repository.publish_version(skill.id, files)
         logger.warning("Published AAI_CLI skill %s v%d", name, version.version)
+
+    _prune_retired_aai_cli_skills(repository)

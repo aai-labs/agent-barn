@@ -95,15 +95,16 @@ def test_create_shared_credential_rejects_oauth_provider():
     with given(_GIVEN) as context:
         client: TestClient = context.client
 
-        with when("I try to create a shared credential for Gmail (OAuth provider)"):
+        with when("I try to create a shared credential for Google Workspace (OAuth provider)"):
             response = client.post(
                 _BASE,
                 json={
-                    "provider": "gmail",
-                    "name": "Shared Gmail",
+                    "provider": "google_workspace",
+                    "name": "Shared Google Workspace",
                     "content": {
-                        "client_id": "",
-                        "client_secret": "",
+                        "email": "alice@example.com",
+                        "services": ["gmail"],
+                        "scopes": [],
                         "refresh_token": "tok",
                     },
                 },

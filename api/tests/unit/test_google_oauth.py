@@ -41,12 +41,12 @@ def test_redirect_uri_uses_web_app_url():
 
 def test_state_round_trip_returns_provider():
     cfg = _config()
-    state = oauth._encode_state(cfg, "google_sheets")
-    assert oauth._provider_from_state(state, cfg) == "google_sheets"
+    state = oauth._encode_state(cfg, "google_workspace")
+    assert oauth._provider_from_state(state, cfg) == "google_workspace"
 
 
 def test_state_rejects_wrong_signing_key():
-    state = oauth._encode_state(_config(), "gmail")
+    state = oauth._encode_state(_config(), "google_workspace")
     assert oauth._provider_from_state(state, _config(secret_signing_key="other")) is None
 
 
@@ -66,35 +66,33 @@ def test_state_rejects_unknown_provider():
     assert oauth._provider_from_state(state, cfg) is None
 
 
-def test_state_without_provider_claim_defaults_to_gmail():
-    # States signed before the provider claim existed must keep working.
+def test_state_naming_a_retired_provider_is_rejected():
+    # gmail/google_sheets states may still be in flight from an old popup; they must not
+    # resolve now that nothing materializes those providers.
     cfg = _config()
-    legacy = jwt.encode(
-        {"typ": oauth._STATE_TYPE, "exp": 9999999999},
-        cfg.secret_signing_key,
-        algorithm=JWT_ENCODING_ALGORITHM,
-    )
-    assert oauth._provider_from_state(legacy, cfg) == "gmail"
+    for retired in ("gmail", "google_sheets", "google_calendar"):
+        assert oauth._provider_from_state(oauth._encode_state(cfg, retired), cfg) is None
 
 
 # --- authorize-url ---
 
 
 def test_authorize_url_contains_expected_params():
-    url = oauth.google_authorize_url(_context=_NO_CONTEXT, config=_config())["authorize_url"]
+    url = oauth.google_authorize_url(_context=_NO_CONTEXT, services="gmail", config=_config())["authorize_url"]
     assert url.startswith(oauth.GOOGLE_AUTH_ENDPOINT)
     assert "access_type=offline" in url
     assert "prompt=consent" in url
-    assert "gmail.readonly" in url
+    assert "gmail.modify" in url
     assert "client-id.apps.googleusercontent.com" in url
 
 
-def test_authorize_url_requests_sheets_scopes_for_sheets_provider():
-    url = oauth.google_authorize_url(_context=_NO_CONTEXT, provider="google_sheets", config=_config())["authorize_url"]
-    assert "auth%2Fspreadsheets" in url
-    assert "drive.metadata.readonly" in url
-    # Connecting Sheets must not drag Gmail access along with it.
-    assert "gmail" not in url
+def test_authorize_url_rejects_retired_provider():
+    # The per-service Google providers are gone; a stale caller must fail loudly rather
+    # than consent to scopes no integration can use.
+    for retired in ("gmail", "google_sheets", "google_calendar"):
+        with pytest.raises(HTTPException) as exc:
+            oauth.google_authorize_url(_context=_NO_CONTEXT, provider=retired, services="gmail", config=_config())
+        assert exc.value.status_code == 400
 
 
 def test_authorize_url_rejects_unknown_provider():
@@ -105,7 +103,7 @@ def test_authorize_url_rejects_unknown_provider():
 
 def test_authorize_url_requires_configured_client():
     with pytest.raises(HTTPException) as exc:
-        oauth.google_authorize_url(_context=_NO_CONTEXT, config=_config(google_cloud_client_id=""))
+        oauth.google_authorize_url(_context=_NO_CONTEXT, services="gmail", config=_config(google_cloud_client_id=""))
     assert exc.value.status_code == 503
 
 
@@ -115,6 +113,7 @@ def test_authorize_url_uses_custom_client_id_without_config():
     url = oauth.google_authorize_url(
         _context=_NO_CONTEXT,
         client_id="custom.apps.googleusercontent.com",
+        services="gmail",
         config=_config(google_cloud_client_id="", google_cloud_client_secret=""),
     )["authorize_url"]
     assert "custom.apps.googleusercontent.com" in url
@@ -131,20 +130,20 @@ def test_callback_success_posts_code(monkeypatch):
         lambda *a, **k: pytest.fail("callback must not exchange the code"),
     )
     cfg = _config()
-    state = oauth._encode_state(cfg, "gmail")
+    state = oauth._encode_state(cfg, "google_workspace")
     resp = oauth.google_callback(config=cfg, code="auth-code", state=state, error=None)
     msg = _extract_message(resp.body.decode())
     assert msg["type"] == oauth.MESSAGE_TYPE
-    assert msg["provider"] == "gmail"
+    assert msg["provider"] == "google_workspace"
     assert msg["code"] == "auth-code"
     assert "error" not in msg
 
 
 def test_callback_echoes_the_provider_from_state():
     cfg = _config()
-    state = oauth._encode_state(cfg, "google_sheets")
+    state = oauth._encode_state(cfg, "google_workspace")
     resp = oauth.google_callback(config=cfg, code="auth-code", state=state, error=None)
-    assert _extract_message(resp.body.decode())["provider"] == "google_sheets"
+    assert _extract_message(resp.body.decode())["provider"] == "google_workspace"
 
 
 def test_callback_rejects_invalid_state():
@@ -156,7 +155,7 @@ def test_callback_rejects_invalid_state():
 
 def test_callback_requires_code():
     cfg = _config()
-    state = oauth._encode_state(cfg, "gmail")
+    state = oauth._encode_state(cfg, "google_workspace")
     resp = oauth.google_callback(config=cfg, code=None, state=state, error=None)
     msg = _extract_message(resp.body.decode())
     assert "error" in msg
@@ -320,18 +319,6 @@ def test_workspace_authorize_url_rejects_unknown_service():
         _workspace_url("gmail,youtube")
     assert exc.value.status_code == 400
     assert "youtube" in exc.value.detail
-
-
-def test_authorize_url_rejects_services_for_non_workspace_provider():
-    # Silently ignoring them would hand out a token with the wrong scopes.
-    with pytest.raises(HTTPException) as exc:
-        oauth.google_authorize_url(
-            _context=_NO_CONTEXT,
-            provider="gmail",
-            services="gmail,drive",
-            config=_config(),
-        )
-    assert exc.value.status_code == 400
 
 
 def test_state_round_trips_workspace_provider():

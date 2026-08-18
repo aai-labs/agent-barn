@@ -1,6 +1,6 @@
 """Google OAuth 2.0 authorization-code flow for the Google-backed skills.
 
-Serves every Google provider (see ``PROVIDER_SCOPES``); the caller picks one with the
+Serves the google_workspace provider; the caller picks it with the
 ``provider`` query parameter and the only thing that varies is the requested scope.
 
 Replaces the old hand-pasted client_id/client_secret/refresh_token fields with a
@@ -48,18 +48,10 @@ from api.domains.auth.utils import get_current_user
 
 integrations_router = APIRouter(prefix="/integrations", tags=["integrations"])
 
-# Scopes requested per provider — exactly what that provider's aai-cli profile needs.
-# Gmail is read-only (listing mail); Sheets is read/write on spreadsheet values, plus
-# metadata-only Drive access because `sheets spreadsheets list` discovers spreadsheets
-# through drive/v3/files.
-PROVIDER_SCOPES: dict[str, tuple[str, ...]] = {
-    SecretProvider.GMAIL.value: ("https://www.googleapis.com/auth/gmail.readonly",),
-    SecretProvider.GOOGLE_SHEETS.value: (
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive.metadata.readonly",
-    ),
-}
-DEFAULT_PROVIDER = SecretProvider.GMAIL.value
+# google_workspace is the only Google provider; it derives its scopes per request from
+# the services the user selected (see _WORKSPACE_SERVICE_SCOPES below). The retired
+# per-service providers (gmail, google_sheets) had fixed scope tuples here.
+DEFAULT_PROVIDER = SecretProvider.GOOGLE_WORKSPACE.value
 
 _SCOPE_PREFIX = "https://www.googleapis.com/auth/"
 
@@ -96,10 +88,8 @@ _WORKSPACE_SERVICE_SCOPES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = 
 # is read out of the resulting id_token (gog keys its stored tokens by email).
 _IDENTITY_SCOPES: tuple[str, ...] = ("openid", "email", f"{_SCOPE_PREFIX}userinfo.email")
 
-# Providers a signed state may name. google_workspace derives its scopes per request, so
-# it has no PROVIDER_SCOPES entry — without this the callback would reject every
-# workspace state as invalid.
-_VALID_PROVIDERS: frozenset[str] = frozenset(PROVIDER_SCOPES) | {SecretProvider.GOOGLE_WORKSPACE.value}
+# Providers a signed state may name.
+_VALID_PROVIDERS: frozenset[str] = frozenset({SecretProvider.GOOGLE_WORKSPACE.value})
 
 GOOGLE_USERINFO_ENDPOINT = "https://openidconnect.googleapis.com/v1/userinfo"
 
@@ -177,7 +167,6 @@ def _provider_from_state(state: str, config: Config) -> str | None:
         return None
     if payload.get("typ") != _STATE_TYPE:
         return None
-    # States signed before the provider claim existed were all gmail.
     provider = payload.get("provider", DEFAULT_PROVIDER)
     return provider if provider in _VALID_PROVIDERS else None
 
@@ -246,34 +235,23 @@ def google_authorize_url(
 ):
     """Return the Google OAuth authorize URL for the popup to navigate to.
 
-    ``provider`` selects which Google integration is being connected, and so which scopes
-    are requested; it defaults to gmail for callers predating the other providers.
-
-    ``services`` (comma-separated) and ``read_only`` apply to ``google_workspace`` only,
-    whose scopes are derived per request from the user's service selection rather than
-    being fixed per provider. They are rejected for the other providers instead of being
-    silently ignored, so a mis-wired caller fails loudly.
+    ``google_workspace`` is the only supported provider; its scopes are derived per
+    request from ``services`` (comma-separated) and ``read_only`` rather than being fixed
+    per provider. The retired per-service Google providers are rejected here rather than
+    silently served, so a stale caller fails loudly instead of consenting to scopes no
+    integration can use.
 
     ``client_id`` (optional) selects a user-supplied Google client; when omitted the
     app-owned client from config is used. Only the client id is needed here — it is
     public and travels in the authorize URL — while the matching secret is supplied
     later, to ``/token``.
     """
-    if provider == SecretProvider.GOOGLE_WORKSPACE.value:
-        scopes = workspace_scopes(_parse_services(services), read_only)
-    else:
-        if services is not None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"'services' is only supported for the {SecretProvider.GOOGLE_WORKSPACE.value} provider.",
-            )
-        provider_scopes = PROVIDER_SCOPES.get(provider)
-        if provider_scopes is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Unsupported Google provider: {provider}",
-            )
-        scopes = provider_scopes
+    if provider != SecretProvider.GOOGLE_WORKSPACE.value:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported Google provider: {provider}",
+        )
+    scopes = workspace_scopes(_parse_services(services), read_only)
     resolved_client_id = client_id or config.google_cloud_client_id
     # For the app-owned client, also require its secret to be configured so we fail
     # before opening consent. A custom client carries its own secret to /token.
