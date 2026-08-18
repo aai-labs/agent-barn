@@ -4,7 +4,7 @@ import os
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
@@ -23,6 +23,7 @@ _token_cache: dict = {"ok": None, "reason": None}
 AGENT_PLATFORM = os.environ.get("AGENT_PLATFORM", "slack")
 _SLACK_API = "https://slack.com/api"
 _TELEGRAM_API = "https://api.telegram.org"
+_DISCORD_API = "https://discord.com/api/v10"
 _SKIP_VALIDATION = os.environ.get("SKIP_SLACK_TOKEN_VALIDATION", "").lower() in ("1", "true", "yes")
 
 _TERMINAL_LLM_ERRORS: dict[int, str] = {
@@ -79,6 +80,48 @@ def _check_telegram_token(token: str) -> tuple[bool, str]:
         return False, f"Telegram token validation failed: {exc}"
 
 
+def _check_discord_token(token: str) -> tuple[bool, str]:
+    if not token:
+        return False, "No Discord bot token was provided."
+    try:
+        req = Request(
+            f"{_DISCORD_API}/users/@me",
+            headers={"Authorization": f"Bot {token}"},
+        )
+        with urlopen(req, timeout=15) as resp:
+            body = json.loads(resp.read())
+        if body.get("id") and body.get("bot") is True:
+            return True, ""
+        return False, "Discord bot token validation returned an unexpected account."
+    except HTTPError as exc:
+        if exc.code in (401, 403):
+            return False, "Discord bot token is invalid or unauthorized."
+        return False, f"Discord token validation failed: HTTP {exc.code}"
+    except Exception as exc:
+        return False, f"Discord token validation failed: {exc}"
+
+
+def _validate_platform_tokens() -> tuple[bool, str]:
+    if AGENT_PLATFORM == "telegram":
+        return _check_telegram_token(os.environ.get("TELEGRAM_BOT_TOKEN", ""))
+    if AGENT_PLATFORM == "discord":
+        return _check_discord_token(os.environ.get("DISCORD_BOT_TOKEN", ""))
+    if AGENT_PLATFORM == "slack":
+        ok, reason = _check_token(
+            f"{_SLACK_API}/auth.test",
+            os.environ.get("SLACK_BOT_TOKEN", ""),
+            "bot token",
+        )
+        if ok:
+            return _check_token(
+                f"{_SLACK_API}/apps.connections.open",
+                os.environ.get("SLACK_APP_TOKEN", ""),
+                "app token",
+            )
+        return ok, reason
+    return False, f"Unsupported agent platform: {AGENT_PLATFORM}"
+
+
 def _poll_tokens() -> None:
     if _SKIP_VALIDATION:
         with _lock:
@@ -87,23 +130,11 @@ def _poll_tokens() -> None:
         return
 
     while True:
-        if AGENT_PLATFORM == "telegram":
-            telegram_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-            ok, reason = _check_telegram_token(telegram_token)
-        else:
-            bot_token = os.environ.get("SLACK_BOT_TOKEN", "")
-            app_token = os.environ.get("SLACK_APP_TOKEN", "")
-            ok, reason = _check_token(f"{_SLACK_API}/auth.test", bot_token, "bot token")
-            if ok:
-                ok, reason = _check_token(f"{_SLACK_API}/apps.connections.open", app_token, "app token")
+        ok, reason = _validate_platform_tokens()
         with _lock:
             _token_cache["ok"] = ok
             _token_cache["reason"] = reason if not ok else None
         time.sleep(TOKEN_POLL_INTERVAL)
-
-
-threading.Thread(target=_poll, daemon=True).start()
-threading.Thread(target=_poll_tokens, daemon=True).start()
 
 
 def _snapshot() -> tuple:
@@ -276,10 +307,16 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 conn.close()
 
 
-if LITELLM_PROXY_TARGET:
-    threading.Thread(
-        target=lambda: ThreadingHTTPServer(("", PROXY_PORT), _ProxyHandler).serve_forever(),
-        daemon=True,
-    ).start()
+def main() -> None:
+    threading.Thread(target=_poll, daemon=True).start()
+    threading.Thread(target=_poll_tokens, daemon=True).start()
+    if LITELLM_PROXY_TARGET:
+        threading.Thread(
+            target=lambda: ThreadingHTTPServer(("", PROXY_PORT), _ProxyHandler).serve_forever(),
+            daemon=True,
+        ).start()
+    HTTPServer(("", PORT), _Handler).serve_forever()
 
-HTTPServer(("", PORT), _Handler).serve_forever()
+
+if __name__ == "__main__":
+    main()

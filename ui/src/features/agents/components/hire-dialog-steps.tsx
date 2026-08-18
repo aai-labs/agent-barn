@@ -841,7 +841,7 @@ export function DiscordTokenStep({
       <div className="flex flex-col gap-3 rounded-2xl p-4" style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}>
         <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>Before you connect</div>
         <NextStep n={1} label="Create a Discord application">In the <a href="https://discord.com/developers/applications" target="_blank" rel="noopener noreferrer" className="underline" style={{ color: "var(--ink-2)" }}>Discord Developer Portal ↗</a>, create an application and add a bot.</NextStep>
-        <NextStep n={2} label="Enable Message Content Intent">On the Bot page, enable Message Content Intent so the agent can receive mentions in channels.</NextStep>
+        <NextStep n={2} label="Enable required Gateway Intents">On the Bot page under <b>Privileged Gateway Intents</b>, enable <b>Message Content Intent</b>. If you configure allowed roles, also enable <b>Server Members Intent</b>.</NextStep>
         <NextStep n={3} label="Invite the bot">{applicationId.trim() ? <a href={`https://discord.com/oauth2/authorize?client_id=${applicationId.trim()}&scope=bot%20applications.commands&permissions=274878286912`} target="_blank" rel="noopener noreferrer" className="underline" style={{ color: "var(--ink-2)" }}>Open the recommended install link ↗</a> : "Paste the Application ID above to generate a recommended, least-privilege install link."}</NextStep>
       </div>
     </form>

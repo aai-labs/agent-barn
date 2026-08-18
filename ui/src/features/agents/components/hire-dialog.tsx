@@ -31,7 +31,7 @@ const DEFAULT_BOT_DESCRIPTION = "Handles tasks and reduces day-to-day friction."
 
 interface HireDialogProps {
   onClose: () => void;
-  onHired: (info: { name: string; role: string }) => void;
+  onHired: (info: { name: string; role: string; platform: "slack" | "telegram" | "discord" }) => void;
 }
 
 const PROVISION_STEPS = [
@@ -167,6 +167,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   const progressRef = useRef(0);
   const apiDoneRef = useRef(false);
   const errorRef = useRef(false);
+  const discordCompletionReportedRef = useRef(false);
 
   const effectiveTemplate = selectedTemplate;
   const { versions, isLoading: versionsLoading } = useTemplateVersions(
@@ -354,7 +355,20 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
     return () => clearInterval(id);
   }, [provisioning]);
 
+  useEffect(() => {
+    if (
+      platform !== "discord"
+      || provisioning
+      || !createdAgent
+      || discordCompletionReportedRef.current
+    ) return;
+    discordCompletionReportedRef.current = true;
+    onHired({ name, role: roleLabel, platform });
+  }, [createdAgent, name, onHired, platform, provisioning, roleLabel]);
+
   if (!provisioning && createdAgent) {
+    if (platform === "discord") return null;
+
     if (platform === "telegram") {
       return (
         <DialogShell shadeClick={undefined}>
@@ -370,7 +384,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
                 Set up Telegram access
               </h2>
             </div>
-            <button className="af-btn af-btn-ghost af-btn-icon" onClick={() => onHired({ name, role: roleLabel })}>
+            <button className="af-btn af-btn-ghost af-btn-icon" onClick={() => onHired({ name, role: roleLabel, platform })}>
               <XIcon />
             </button>
           </header>
@@ -382,7 +396,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
               agent={createdAgent}
               onSaved={() => {
                 void startAgent.mutateAsync(createdAgent.id).then(() => {
-                  onHired({ name, role: roleLabel });
+                  onHired({ name, role: roleLabel, platform });
                 });
               }}
             />
@@ -395,7 +409,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
               className="af-btn af-btn-ghost"
               onClick={() => {
                 void startAgent.mutateAsync(createdAgent.id).then(() => {
-                  onHired({ name, role: roleLabel });
+                  onHired({ name, role: roleLabel, platform });
                 });
               }}
             >
@@ -420,7 +434,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
               Set up Slack access
             </h2>
           </div>
-          <button className="af-btn af-btn-ghost af-btn-icon" onClick={() => onHired({ name, role: roleLabel })}>
+          <button className="af-btn af-btn-ghost af-btn-icon" onClick={() => onHired({ name, role: roleLabel, platform })}>
             <XIcon />
           </button>
         </header>
@@ -432,7 +446,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
             agent={createdAgent}
             onSaved={() => {
               void startAgent.mutateAsync(createdAgent.id).then(() => {
-                onHired({ name, role: roleLabel });
+                onHired({ name, role: roleLabel, platform });
               });
             }}
           />
@@ -445,7 +459,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
             className="af-btn af-btn-ghost"
             onClick={() => {
               void startAgent.mutateAsync(createdAgent.id).then(() => {
-                onHired({ name, role: roleLabel });
+                onHired({ name, role: roleLabel, platform });
               });
             }}
           >
@@ -465,7 +479,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
             Hiring {name}…
           </h2>
           <p className="text-sm mb-8" style={{ color: "var(--ink-3)" }}>
-            A few moments — provisioning, installing skills, connecting to {platform === "telegram" ? "Telegram" : "Slack"}.
+            A few moments — provisioning, installing skills, connecting to {platform === "slack" ? "Slack" : platform === "telegram" ? "Telegram" : "Discord"}.
           </p>
           <div className="w-full max-w-sm mb-8">
             <div className="w-full h-1.5 rounded-full overflow-hidden" style={{ background: "var(--bg-soft)" }}>

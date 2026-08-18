@@ -99,6 +99,8 @@ test.describe("Hire Dialog", () => {
     await page.getByRole("button", { name: /continue/i }).click(); // platform-choice → Discord token
 
     await expect(page.getByText("Connect your Discord bot")).toBeVisible();
+    await expect(page.getByText("Enable required Gateway Intents")).toBeVisible();
+    await expect(page.getByText("Server Members Intent", { exact: true })).toBeVisible();
     await page.getByPlaceholder("Discord bot token").fill("discord-token");
     await page.getByPlaceholder("123456789012345678").first().fill("111111111111111111");
     await page.getByPlaceholder("987654321098765432").fill("987654321098765432");
@@ -116,6 +118,9 @@ test.describe("Hire Dialog", () => {
     await page.getByRole("button", { name: "Hire Aria" }).click();
     const body = (await createRequest).postDataJSON();
     expect(body.discord_allowed_role_ids).toEqual(["987654321098765432"]);
+    await expect(page.getByText("Hiring Aria…")).not.toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("Set up Slack access")).not.toBeVisible();
+    await expect(page.getByText("Aria was hired. Review Discord access, then start the agent.")).toBeVisible();
   });
 
   test("should skip bot builder when choosing existing app", async ({ page }) => {

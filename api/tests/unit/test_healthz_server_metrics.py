@@ -1,3 +1,4 @@
+import importlib.util
 import os
 import socket
 import subprocess
@@ -11,6 +12,16 @@ import pytest
 from hamcrest import assert_that, contains_string, equal_to
 
 _SCRIPT = Path(__file__).resolve().parents[2] / "domains" / "agents" / "scripts" / "hermes" / "healthz-server.py"
+
+
+@pytest.fixture
+def healthz_module():
+    spec = importlib.util.spec_from_file_location("hermes_healthz_server", _SCRIPT)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("could not load Hermes health server")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _free_port() -> int:
@@ -89,3 +100,30 @@ def test_unknown_path_still_returns_404(healthz_server):
     status, _, _ = _get(f"{healthz_server}/nope")
 
     assert_that(status, equal_to(404))
+
+
+def test_discord_platform_validates_discord_token_without_calling_slack(
+    healthz_module,
+    monkeypatch,
+):
+    monkeypatch.setattr(healthz_module, "AGENT_PLATFORM", "discord")
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "discord-token")
+    monkeypatch.setattr(
+        healthz_module,
+        "_check_discord_token",
+        lambda token: (token == "discord-token", ""),
+    )
+
+    def fail_slack_validation(*_args, **_kwargs):
+        raise AssertionError("Discord health checks must not call Slack")
+
+    monkeypatch.setattr(healthz_module, "_check_token", fail_slack_validation)
+
+    assert_that(healthz_module._validate_platform_tokens(), equal_to((True, "")))
+
+
+def test_missing_discord_token_has_platform_specific_error(healthz_module):
+    assert_that(
+        healthz_module._check_discord_token(""),
+        equal_to((False, "No Discord bot token was provided.")),
+    )
