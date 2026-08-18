@@ -7,7 +7,7 @@ import {
   mockPlatformSkill,
   mockCustomSkill,
   mockJiraSkill,
-  mockGmailSkill,
+  mockGoogleWorkspaceSkill,
   MOCK_PLATFORM_SKILL_ID,
   MOCK_BITBUCKET_SKILL_ID,
 } from "../pages/data-support/skill-data-support.po";
@@ -625,19 +625,19 @@ test.describe("Hire Dialog — Skills step", () => {
     expect(body.secrets.some((secret) => secret.provider === "slack")).toBe(false);
   });
 
-  test("selecting a gmail skill reveals the Google OAuth button", async ({ page }) => {
+  test("selecting a google workspace skill reveals the Google OAuth button", async ({ page }) => {
     await navigateToSkillsStep(page);
 
-    await page.getByText(mockGmailSkill.name, { exact: true }).click();
+    await page.getByText(mockGoogleWorkspaceSkill.name, { exact: true }).click();
 
     await expect(page.getByText("Required credentials", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Authenticate with Google" })).toBeVisible();
   });
 
-  test("hire button is disabled when gmail credentials are incomplete", async ({ page }) => {
+  test("hire button is disabled when google workspace credentials are incomplete", async ({ page }) => {
     await navigateToSkillsStep(page);
 
-    await page.getByText(mockGmailSkill.name, { exact: true }).click();
+    await page.getByText(mockGoogleWorkspaceSkill.name, { exact: true }).click();
 
     await expect(page.getByRole("button", { name: /hire aria/i })).toBeDisabled();
   });
