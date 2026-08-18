@@ -120,7 +120,7 @@ test.describe("Hire Dialog", () => {
     expect(body.discord_allowed_role_ids).toEqual(["987654321098765432"]);
     await expect(page.getByText("Hiring Aria…")).not.toBeVisible({ timeout: 10_000 });
     await expect(page.getByText("Set up Slack access")).not.toBeVisible();
-    await expect(page.getByText("Aria was hired. Review Discord access, then start the agent.")).toBeVisible();
+    await expect(page.getByText("Aria was hired successfully.")).toBeVisible();
   });
 
   test("should skip bot builder when choosing existing app", async ({ page }) => {

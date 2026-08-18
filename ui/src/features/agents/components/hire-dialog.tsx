@@ -31,7 +31,7 @@ const DEFAULT_BOT_DESCRIPTION = "Handles tasks and reduces day-to-day friction."
 
 interface HireDialogProps {
   onClose: () => void;
-  onHired: (info: { name: string; role: string; platform: "slack" | "telegram" | "discord" }) => void;
+  onHired: (info: { name: string; role: string }) => void;
 }
 
 const PROVISION_STEPS = [
@@ -363,7 +363,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
       || discordCompletionReportedRef.current
     ) return;
     discordCompletionReportedRef.current = true;
-    onHired({ name, role: roleLabel, platform });
+    onHired({ name, role: roleLabel });
   }, [createdAgent, name, onHired, platform, provisioning, roleLabel]);
 
   if (!provisioning && createdAgent) {
@@ -384,7 +384,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
                 Set up Telegram access
               </h2>
             </div>
-            <button className="af-btn af-btn-ghost af-btn-icon" onClick={() => onHired({ name, role: roleLabel, platform })}>
+            <button className="af-btn af-btn-ghost af-btn-icon" onClick={() => onHired({ name, role: roleLabel })}>
               <XIcon />
             </button>
           </header>
@@ -396,7 +396,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
               agent={createdAgent}
               onSaved={() => {
                 void startAgent.mutateAsync(createdAgent.id).then(() => {
-                  onHired({ name, role: roleLabel, platform });
+                  onHired({ name, role: roleLabel });
                 });
               }}
             />
@@ -409,7 +409,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
               className="af-btn af-btn-ghost"
               onClick={() => {
                 void startAgent.mutateAsync(createdAgent.id).then(() => {
-                  onHired({ name, role: roleLabel, platform });
+                  onHired({ name, role: roleLabel });
                 });
               }}
             >
@@ -434,7 +434,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
               Set up Slack access
             </h2>
           </div>
-          <button className="af-btn af-btn-ghost af-btn-icon" onClick={() => onHired({ name, role: roleLabel, platform })}>
+          <button className="af-btn af-btn-ghost af-btn-icon" onClick={() => onHired({ name, role: roleLabel })}>
             <XIcon />
           </button>
         </header>
@@ -446,7 +446,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
             agent={createdAgent}
             onSaved={() => {
               void startAgent.mutateAsync(createdAgent.id).then(() => {
-                onHired({ name, role: roleLabel, platform });
+                onHired({ name, role: roleLabel });
               });
             }}
           />
@@ -459,7 +459,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
             className="af-btn af-btn-ghost"
             onClick={() => {
               void startAgent.mutateAsync(createdAgent.id).then(() => {
-                onHired({ name, role: roleLabel, platform });
+                onHired({ name, role: roleLabel });
               });
             }}
           >

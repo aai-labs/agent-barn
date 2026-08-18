@@ -17,11 +17,9 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
       {hireOpen && (
         <HireDialog
           onClose={() => setHireOpen(false)}
-          onHired={({ name, platform }) => {
+          onHired={({ name }) => {
             setHireOpen(false);
-            toast.success(platform === "discord"
-              ? `${name} was hired. Review Discord access, then start the agent.`
-              : `${name} is in ${platform === "slack" ? "Slack" : "Telegram"} and ready to roll.`);
+            toast.success(`${name} was hired successfully.`);
           }}
         />
       )}
