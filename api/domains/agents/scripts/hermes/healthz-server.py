@@ -137,6 +137,10 @@ def _poll_tokens() -> None:
         time.sleep(TOKEN_POLL_INTERVAL)
 
 
+threading.Thread(target=_poll, daemon=True).start()
+threading.Thread(target=_poll_tokens, daemon=True).start()
+
+
 def _snapshot() -> tuple:
     """One consistent read of both caches; handlers stay lock-free."""
     with _lock:
@@ -307,16 +311,10 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 conn.close()
 
 
-def main() -> None:
-    threading.Thread(target=_poll, daemon=True).start()
-    threading.Thread(target=_poll_tokens, daemon=True).start()
-    if LITELLM_PROXY_TARGET:
-        threading.Thread(
-            target=lambda: ThreadingHTTPServer(("", PROXY_PORT), _ProxyHandler).serve_forever(),
-            daemon=True,
-        ).start()
-    HTTPServer(("", PORT), _Handler).serve_forever()
+if LITELLM_PROXY_TARGET:
+    threading.Thread(
+        target=lambda: ThreadingHTTPServer(("", PROXY_PORT), _ProxyHandler).serve_forever(),
+        daemon=True,
+    ).start()
 
-
-if __name__ == "__main__":
-    main()
+HTTPServer(("", PORT), _Handler).serve_forever()
