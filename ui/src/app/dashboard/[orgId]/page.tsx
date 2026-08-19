@@ -137,7 +137,7 @@ export default function DashboardPage() {
           onClose={() => setHireOpen(false)}
           onHired={({ name }) => {
             setHireOpen(false);
-            toast.success(`${name} is in Slack and ready to roll.`);
+            toast.success(`${name} was hired successfully.`);
           }}
         />
       )}
