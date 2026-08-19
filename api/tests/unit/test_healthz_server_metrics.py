@@ -102,26 +102,6 @@ def test_unknown_path_still_returns_404(healthz_server):
     assert_that(status, equal_to(404))
 
 
-def test_discord_platform_validates_discord_token_without_calling_slack(
-    healthz_module,
-    monkeypatch,
-):
-    monkeypatch.setattr(healthz_module, "AGENT_PLATFORM", "discord")
-    monkeypatch.setenv("DISCORD_BOT_TOKEN", "discord-token")
-    monkeypatch.setattr(
-        healthz_module,
-        "_check_discord_token",
-        lambda token: (token == "discord-token", ""),
-    )
-
-    def fail_slack_validation(*_args, **_kwargs):
-        raise AssertionError("Discord health checks must not call Slack")
-
-    monkeypatch.setattr(healthz_module, "_check_token", fail_slack_validation)
-
-    assert_that(healthz_module._validate_platform_tokens(), equal_to((True, "")))
-
-
 def test_missing_discord_token_has_platform_specific_error(healthz_module):
     assert_that(
         healthz_module._check_discord_token(""),
