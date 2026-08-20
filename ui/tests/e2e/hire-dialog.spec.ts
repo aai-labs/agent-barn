@@ -99,15 +99,19 @@ test.describe("Hire Dialog", () => {
     await page.getByRole("button", { name: /continue/i }).click(); // platform-choice → Discord token
 
     await expect(page.getByText("Connect your Discord bot")).toBeVisible();
-    await expect(page.getByText("Enable required Gateway Intents")).toBeVisible();
+    await expect(page.getByRole("textbox", { name: "Allowed operator IDs", exact: true })).not.toBeVisible();
+    await expect(page.getByRole("textbox", { name: "Allowed role IDs", exact: true })).not.toBeVisible();
+    await page.getByRole("button", { name: "Help for Discord setup requirements" }).hover();
     await expect(page.getByText("Server Members Intent", { exact: true })).toBeVisible();
     await page.getByPlaceholder("Discord bot token").fill("discord-token");
-    await page.getByPlaceholder("123456789012345678").first().fill("111111111111111111");
-    await page.getByPlaceholder("987654321098765432").fill("987654321098765432");
-    await expect(page.getByRole("link", { name: /recommended install link/i })).toHaveAttribute(
+    await page.getByRole("textbox", { name: "Application ID", exact: true }).fill("111111111111111111");
+    await expect(page.getByRole("link", { name: /invite this bot/i })).toHaveAttribute(
       "href",
       /client_id=111111111111111111/,
     );
+    await page.getByText("Advanced access controls").click();
+    await expect(page.getByRole("textbox", { name: "Allowed role IDs", exact: true })).toBeVisible();
+    await page.getByRole("textbox", { name: "Allowed role IDs", exact: true }).fill("987654321098765432");
     await page.getByRole("button", { name: /continue/i }).click();
 
     await expect(page.getByLabel("Name them")).toBeVisible();

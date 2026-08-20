@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import JSZip from "jszip";
-import { ChevronDownIcon } from "lucide-react";
+import { ChevronDownIcon, CircleHelpIcon } from "lucide-react";
 import { PlusIcon, SearchIcon, XIcon } from "@/components/icons";
 import {
   DropdownMenu,
@@ -826,25 +826,86 @@ export function DiscordTokenStep({
   token: string; onTokenChange: (v: string) => void; applicationId: string; onApplicationIdChange: (v: string) => void; guildIds: string; onGuildIdsChange: (v: string) => void; channelIds: string; onChannelIdsChange: (v: string) => void; allowedUserIds: string; onAllowedUserIdsChange: (v: string) => void; allowedRoleIds: string; onAllowedRoleIdsChange: (v: string) => void; homeChannelId: string; onHomeChannelIdChange: (v: string) => void; showToken: boolean; onToggleToken: () => void; error: string | null;
 }) {
   return (
-    <form autoComplete="off" className="flex flex-col gap-5" onSubmit={(e) => e.preventDefault()}>
-      <div className="flex flex-col gap-3.5 p-4 rounded-2xl" style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}>
-        <div><div className="font-semibold text-[0.844rem] mb-0.5" style={{ color: "var(--ink)" }}>Discord bot token</div><div className="text-[0.781rem]" style={{ color: "var(--ink-3)" }}>Stored encrypted and supplied only to the agent runtime.</div></div>
-        <FormField label="Bot token" hint="From Discord Developer Portal → Application → Bot"><TokenInput value={token} onChange={onTokenChange} visible={showToken} onToggle={onToggleToken} placeholder="Discord bot token" /></FormField>
-        <FormField label="Application ID" hint="Optional. Lets us generate the least-privilege install link."><input className="af-input font-mono text-[0.8125rem]" value={applicationId} onChange={(e) => onApplicationIdChange(e.target.value)} placeholder="123456789012345678" /></FormField>
-        <FormField label="Allowed server IDs" hint="Comma-separated Discord server (guild) IDs. Leave blank to configure later through the API."><input className="af-input font-mono text-[0.8125rem]" value={guildIds} onChange={(e) => onGuildIdsChange(e.target.value)} placeholder="123456789012345678" /></FormField>
-        <FormField label="Allowed channel IDs" hint="The channels this agent may read or post in."><input className="af-input font-mono text-[0.8125rem]" value={channelIds} onChange={(e) => onChannelIdsChange(e.target.value)} placeholder="123456789012345678" /></FormField>
-        <FormField label="Allowed operator IDs" hint="Optional for outbound-only agents; required for interactive Hermes agents."><input className="af-input font-mono text-[0.8125rem]" value={allowedUserIds} onChange={(e) => onAllowedUserIdsChange(e.target.value)} placeholder="123456789012345678" /></FormField>
-        <FormField label="Allowed role IDs" hint="Members with any listed Discord role may interact with the agent."><input className="af-input font-mono text-[0.8125rem]" value={allowedRoleIds} onChange={(e) => onAllowedRoleIdsChange(e.target.value)} placeholder="987654321098765432" /></FormField>
-        <FormField label="Alert destination channel ID" hint="Optional. Hermes posts scheduled and proactive updates here."><input className="af-input font-mono text-[0.8125rem]" value={homeChannelId} onChange={(e) => onHomeChannelIdChange(e.target.value)} placeholder="123456789012345678" /></FormField>
+    <form autoComplete="off" className="flex flex-col gap-4" onSubmit={(e) => e.preventDefault()}>
+      <div className="flex flex-col gap-4 p-5 rounded-2xl" style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <div className="font-semibold text-[0.9rem] mb-1" style={{ color: "var(--ink)" }}>Connection details</div>
+            <div className="text-[0.781rem] leading-relaxed" style={{ color: "var(--ink-3)" }}>Start with the connection details. Fine-grained access is optional.</div>
+          </div>
+          <a href="https://discord.com/developers/applications" target="_blank" rel="noopener noreferrer" className="text-[0.75rem] underline whitespace-nowrap" style={{ color: "var(--ink-3)" }}>Developer Portal ↗</a>
+        </div>
+
+        <DiscordField id="discord-bot-token" label="Bot token" help={<><b>What it does:</b> authenticates the agent as your Discord bot.<br /><b>Where to find it:</b> Developer Portal → your application → Bot → Reset Token or Copy.</>}>
+          <TokenInput id="discord-bot-token" value={token} onChange={onTokenChange} visible={showToken} onToggle={onToggleToken} placeholder="Discord bot token" />
+        </DiscordField>
+        <DiscordField id="discord-application-id" label="Application ID" optional help={<><b>What it does:</b> identifies the application and generates the bot install link.<br /><b>Where to find it:</b> Developer Portal → your application → General Information → Application ID.</>}>
+          <input id="discord-application-id" className="af-input font-mono text-[0.8125rem]" value={applicationId} onChange={(e) => onApplicationIdChange(e.target.value)} placeholder="123456789012345678" />
+        </DiscordField>
+        {applicationId.trim() && (
+          <a href={`https://discord.com/oauth2/authorize?client_id=${applicationId.trim()}&scope=bot%20applications.commands&permissions=274878286912`} target="_blank" rel="noopener noreferrer" className="text-[0.781rem] underline self-start -mt-2" style={{ color: "var(--ink-2)" }}>Invite this bot to Discord ↗</a>
+        )}
+        <DiscordField id="discord-server-ids" label="Allowed server IDs" help={<><b>What it does:</b> limits the bot to these Discord servers. This is required for OpenClaw allowlist routing.<br /><b>How to copy one:</b> enable Developer Mode in Discord under User Settings → Advanced, then right-click the server icon → Copy Server ID. Separate multiple IDs with commas.</>}>
+          <input id="discord-server-ids" className="af-input font-mono text-[0.8125rem]" value={guildIds} onChange={(e) => onGuildIdsChange(e.target.value)} placeholder="123456789012345678" />
+        </DiscordField>
+        <DiscordField id="discord-channel-ids" label="Allowed channel IDs" help={<><b>What it does:</b> limits where the agent can read and reply.<br /><b>How to copy one:</b> with Developer Mode enabled, right-click a channel → Copy Channel ID. Separate multiple IDs with commas.</>}>
+          <input id="discord-channel-ids" className="af-input font-mono text-[0.8125rem]" value={channelIds} onChange={(e) => onChannelIdsChange(e.target.value)} placeholder="123456789012345678" />
+        </DiscordField>
+
+        <details className="group rounded-xl" style={{ border: "1px solid var(--line)", background: "var(--bg-elev)" }}>
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 [&::-webkit-details-marker]:hidden">
+            <div>
+              <div className="text-[0.8125rem] font-semibold" style={{ color: "var(--ink-2)" }}>Advanced access controls</div>
+              <div className="text-[0.72rem] mt-0.5" style={{ color: "var(--ink-4)" }}>Optional people, roles, and alert routing</div>
+            </div>
+            <ChevronDownIcon size={16} className="transition-transform group-open:rotate-180" style={{ color: "var(--ink-4)" }} />
+          </summary>
+          <div className="flex flex-col gap-4 px-4 pb-4 pt-1" style={{ borderTop: "1px solid var(--line)" }}>
+            <DiscordField id="discord-operator-ids" label="Allowed operator IDs" optional help={<><b>What it does:</b> restricts who can interact with the agent.<br /><b>How to copy one:</b> with Developer Mode enabled, right-click a user → Copy User ID. Interactive Hermes agents need an operator or role allowlist.</>}>
+              <input id="discord-operator-ids" className="af-input font-mono text-[0.8125rem]" value={allowedUserIds} onChange={(e) => onAllowedUserIdsChange(e.target.value)} placeholder="123456789012345678" />
+            </DiscordField>
+            <DiscordField id="discord-role-ids" label="Allowed role IDs" optional help={<><b>What it does:</b> lets members with these roles interact with the agent.<br /><b>How to copy one:</b> open Server Settings → Roles, right-click a role → Copy Role ID. Enabling this also requires Server Members Intent.</>}>
+              <input id="discord-role-ids" className="af-input font-mono text-[0.8125rem]" value={allowedRoleIds} onChange={(e) => onAllowedRoleIdsChange(e.target.value)} placeholder="987654321098765432" />
+            </DiscordField>
+            <DiscordField id="discord-alert-channel-id" label="Alert destination channel ID" optional help={<><b>What it does:</b> gives Hermes a destination for scheduled and proactive updates.<br /><b>How to copy it:</b> with Developer Mode enabled, right-click the destination channel → Copy Channel ID.</>}>
+              <input id="discord-alert-channel-id" className="af-input font-mono text-[0.8125rem]" value={homeChannelId} onChange={(e) => onHomeChannelIdChange(e.target.value)} placeholder="123456789012345678" />
+            </DiscordField>
+          </div>
+        </details>
+
+        <div className="flex items-center gap-2 rounded-xl px-3 py-2.5 text-[0.75rem]" style={{ border: "1px solid var(--line)", color: "var(--ink-3)", background: "var(--bg-elev)" }}>
+          <span>Before starting, enable Discord&apos;s required Gateway Intents.</span>
+          <DiscordHelp label="Discord setup requirements"><b>Message Content Intent</b> is required. In the Developer Portal, open your application → Bot → Privileged Gateway Intents. If you use allowed roles, also enable <b>Server Members Intent</b>.</DiscordHelp>
+        </div>
         {error && <div className="text-[0.8125rem]" style={{ color: "var(--err)" }}>{error}</div>}
       </div>
-      <div className="flex flex-col gap-3 rounded-2xl p-4" style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}>
-        <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>Before you connect</div>
-        <NextStep n={1} label="Create a Discord application">In the <a href="https://discord.com/developers/applications" target="_blank" rel="noopener noreferrer" className="underline" style={{ color: "var(--ink-2)" }}>Discord Developer Portal ↗</a>, create an application and add a bot.</NextStep>
-        <NextStep n={2} label="Enable required Gateway Intents">On the Bot page under <b>Privileged Gateway Intents</b>, enable <b>Message Content Intent</b>. If you configure allowed roles, also enable <b>Server Members Intent</b>.</NextStep>
-        <NextStep n={3} label="Invite the bot">{applicationId.trim() ? <a href={`https://discord.com/oauth2/authorize?client_id=${applicationId.trim()}&scope=bot%20applications.commands&permissions=274878286912`} target="_blank" rel="noopener noreferrer" className="underline" style={{ color: "var(--ink-2)" }}>Open the recommended install link ↗</a> : "Paste the Application ID above to generate a recommended, least-privilege install link."}</NextStep>
-      </div>
     </form>
+  );
+}
+
+function DiscordHelp({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button type="button" aria-label={`Help for ${label}`} className="inline-grid size-5 shrink-0 place-items-center rounded-full transition-colors hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2" style={{ color: "var(--ink-4)" }}>
+          <CircleHelpIcon size={14} />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="top" sideOffset={6} className="max-w-[19rem] leading-relaxed">{children}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+function DiscordField({ id, label, optional = false, help, children }: { id: string; label: string; optional?: boolean; help: ReactNode; children: ReactNode }) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center gap-1.5">
+        <label htmlFor={id} className="font-medium text-[0.8125rem]" style={{ color: "var(--ink)" }}>{label}</label>
+        {optional && <span className="text-[0.6875rem]" style={{ color: "var(--ink-4)" }}>Optional</span>}
+        <DiscordHelp label={label}>{help}</DiscordHelp>
+      </div>
+      {children}
+    </div>
   );
 }
 

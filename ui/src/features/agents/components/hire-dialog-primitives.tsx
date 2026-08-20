@@ -79,6 +79,7 @@ export function FormField({
 }
 
 export function TokenInput({
+  id,
   value,
   onChange,
   visible,
@@ -86,6 +87,7 @@ export function TokenInput({
   placeholder,
   disabled,
 }: {
+  id?: string;
   value: string;
   onChange: (v: string) => void;
   visible: boolean;
@@ -96,6 +98,7 @@ export function TokenInput({
   return (
     <div className="relative">
       <input
+        id={id}
         className="af-input font-mono text-[0.8125rem] pr-10"
         type={visible ? "text" : "password"}
         value={value}
