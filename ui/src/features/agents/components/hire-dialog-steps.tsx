@@ -891,7 +891,14 @@ function DiscordHelp({ label, children }: { label: string; children: ReactNode }
           <CircleHelpIcon size={14} />
         </button>
       </TooltipTrigger>
-      <TooltipContent side="top" sideOffset={6} className="max-w-[19rem] leading-relaxed">{children}</TooltipContent>
+      <TooltipContent
+        side="top"
+        sideOffset={6}
+        className="max-w-[19rem] border leading-relaxed shadow-lg"
+        style={{ background: "var(--ink)", borderColor: "var(--ink)", color: "var(--bg-elev)" }}
+      >
+        <div>{children}</div>
+      </TooltipContent>
     </Tooltip>
   );
 }
