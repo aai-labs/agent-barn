@@ -2,7 +2,7 @@
 
 ## Read when
 
-Read before changing template versioning, predefined template seeding, template Markdown fields, Agent Template Overrides, required skills, skill archives, skill provider requirements, or agent skill mounting.
+Read before changing template versioning, predefined template seeding, template Markdown fields, Agent Template Overrides, required skills, skill versioning, skill file storage, skill provider requirements, or agent skill mounting.
 
 ## Role in the system
 
@@ -25,9 +25,19 @@ Templates provide versioned agent configuration; Skills provide packaged instruc
 ## Skill invariants
 
 - Built-in `aai_cli` skills are global Platform Resources; custom skills belong to one organization.
-- Built-in skills cannot be updated or deleted through normal skill CRUD.
-- Custom skill content is stored as a ZIP and validated for archive size, expanded size, entry count, encryption, compression ratio, absolute paths, and path traversal.
-- A custom skill cannot be deleted while assigned to an agent or required by a latest template version.
+- Built-in skills cannot be updated or deleted through normal skill CRUD, but an organization can *fork* one: `POST /{skill_id}/fork` publishes an org-scoped custom skill (source `custom`) seeded from the built-in's latest version — name preserved when free and disambiguated with a `(fork)` suffix when the org already has a same-named skill — with the built-in's description, required providers, and entry path carried over, mounted under the fork's own slug directory. It immediately opens an in-flight draft seeded from that fork v1, so the author lands in the editor. The built-in lineage stays read-only and untouched; the fork is a one-time snapshot with no update tracking.
+- A Skill row is a *lineage*: stable identity, name, slug, and mount location. Content lives in `skill_version` rows, each owning a flat set of `skill_file` rows. Each version is an immutable, self-contained snapshot of the lineage's content — no deltas, no cross-version pointers. The published version is always the lineage's highest `version`, so "latest" and "current" coincide and no current-version pointer exists. Snapshots are never edited in place; recovering from a bad version is a per-agent concern handled by re-pinning the agent's assigned skill version, never a lineage-level restore.
+- `GET /{skill_id}/versions` lists a lineage's version history (newest first); `GET /{skill_id}/versions/{version}` returns one version's files.
+- Content edits go through a `skill_draft` row: at most one per lineage (an `skill_draft_file` set), mirroring `PlatformTemplateDraft`. `POST /{skill_id}/draft` gets-or-creates it, seeded from the latest published version. `PATCH /{skill_id}/draft` replaces its files and stages metadata (description, required providers); `DELETE /{skill_id}/draft` discards it; `POST /{skill_id}/draft/publish` turns the draft into the next immutable `skill_version`, applies the staged metadata to the skill row, and clears the draft slot. All draft endpoints require `skill.manage` and are rejected for built-ins. `PATCH /{skill_id}` is metadata-only (name) and is never draft-gated or versioned. Description and required providers are staged on the draft and only applied on publish, so the published version's metadata stays frozen until a draft is published.
+- Agents and templates reference a skill *lineage*, never a version. `TemplateRequiredSkillRead` therefore carries no version, while the Skills UI reads `SkillSummaryRead`/`SkillDetailRead`, which do.
+- An agent pins an exact skill version at assignment time, mirroring template pins: `agent_skill.pinned_version` is explicit (existing assignments were backfilled to their then-latest at migration). Publishing a newer skill version never moves an existing pin; the agent keeps mounting the pinned version at start. Re-pinning to an older version is how an agent recovers from a bad version. `AgentCreate`/`AgentUpdate` accept optional `skill_versions` (list of `{skill_id, version}`) — omitted skills pin to their latest at apply time, and a pin must reference a version that exists.
+- Skill files are text, addressed by a path relative to the skill root. Directories are implied by the path and never stored. Paths are validated for traversal, absolute paths, archive metadata, disallowed characters, case-insensitive duplicates, and per-file/total size caps (`api/domains/skills/files.py`).
+- `root_dir` is the workspace directory a skill's files are written to, and is *not* derived from the slug at mount time. Custom skills use their slug; all ten built-ins deliberately share `aai-cli` so their published pointer paths (`./skills/aai-cli/jira_skill.md`) keep resolving. Renaming a skill never moves its files.
+- Two skills sharing a `root_dir` can claim the same workspace path. The manifest builder applies skills in a stable order (by name), first claim wins, and losing claims are returned as collisions and logged against the agent at start.
+- `tools_pointer` is a curated override carried only by built-ins. For every other skill the pointer is derived from name, description, and entry path, so a rename or description edit cannot leave a stale pointer behind.
+- A skill has no whole-lineage deletion: removal is per version. `DELETE /{skill_id}/versions/{version}` requires `skill.manage`, is rejected for built-ins, cannot remove the last remaining version, and cannot remove a version any agent is pinned to — deleting a pinned version would break that agent's explicit pin (recover by re-pinning, never by deleting a pinned snapshot). Historical versions no agent pins are always safe to prune because agents mount their pinned version, never the lineage's latest.
+- `SkillVersionRead` carries `is_pinned_by_agent`, so the UI can disable the per-version Delete button and show a "Pinned by agent" badge for versions in use by an agent in the caller's Organization.
+- `SkillDetailRead` carries `is_assigned_to_agent`, indicating whether a non-soft-deleted agent in the caller's Organization currently has the skill assigned (used by the fork flow).
 - Template-required skills must be explicitly present on the agent: standalone (ungrouped) required skills must all be present; for a required-skill group, at least one member must be present. A group member only becomes individually "required" (cannot be removed) once it is the agent's sole assigned member of that group.
 - Agent create/update validates assigned-skill provider requirements against Agent Secrets. Editing a skill's required providers does not revalidate existing agent assignments, and start does not repeat that validation.
 - At start time, eligible built-in provider skills are mounted implicitly when their provider credential exists. This does not create an explicit agent-skill assignment.
@@ -35,7 +45,7 @@ Templates provide versioned agent configuration; Skills provide packaged instruc
 ## Authorization invariants
 
 - Template list, detail, and version-history APIs require the Organization Permission `template.read`; create and version-publishing APIs require `template.manage`.
-- Skill list and detail APIs require the Organization Permission `skill.read`; custom Skill create, update, and delete APIs require `skill.manage`.
+- Skill list and detail APIs require the Organization Permission `skill.read`; custom Skill create and update APIs require `skill.manage`, as does version deletion and forking a built-in skill (forking creates an org-scoped custom skill).
 - The fixed Organization Member Role can read and use Organization Templates and Skills but cannot mutate their shared definitions. The UI preserves read-only drawers for Members and hides create/edit/delete controls; Organization Owner/Admin receive management authority.
 - Permission checks remain at user-facing service boundaries. Internal Agent workflows may resolve visible Templates and Skills directly after enforcing the Agent action Permission, so Member Agent creation and configuration do not require shared-definition management authority.
 
@@ -59,7 +69,15 @@ An Agent Override may show an update only from the direct Platform or Organizati
 
 ### Assign and mount skills
 
-Explicit assignments are persisted after organization access and provider requirements pass. Agent start loads those skills, adds eligible built-in provider skills, builds the runtime skill manifest, and appends skill pointers to rendered tool context.
+Explicit assignments are persisted after organization access and provider requirements pass, each pinning the skill's version at apply time (the requested version or the latest). Agent start loads those skills, adds eligible built-in provider skills, loads each assigned skill's *pinned-version* files (implicit aai-cli mounts use the latest), builds the runtime skill manifest (prefixing every path with the skill's `root_dir` and reporting collisions), and appends skill pointers to rendered tool context.
+
+### Fork a built-in skill
+
+An organization that wants to customize a built-in skill can fork it from its read-only detail page. `POST /{skill_id}/fork` publishes a new org-scoped custom skill lineage seeded from the built-in's latest version (name, description, required providers, and entry path carried over, mounted under the fork's own slug directory) and opens an in-flight draft seeded from that v1. The author edits and publishes through the normal draft flow; the built-in lineage remains read-only and untouched.
+
+### Delete a version
+
+From the skill's Version history, a manager can delete any version snapshot (`DELETE /{skill_id}/versions/{version}`) to prune history. The last remaining version is never deletable, and a version any agent is pinned to is never deletable — re-pin the agent first. Deleting an unpinned version never affects agents because they mount the exact version they pin. To clean up a bad published version, publish a fixed one (making the bad one non-latest), re-pin any affected agents, then delete the bad version.
 
 ### Author Platform Templates
 
@@ -73,7 +91,9 @@ Platform Administrators use the Platform View's Platform Templates catalog (`/da
 | Template versioning and seeding     | `../../api/domains/templates/service.py`, `../../api/domains/templates/predefined/`                                                                         |
 | Template persistence                | `../../api/domains/templates/repository.py`                                                                                     |
 | Skill model and DTOs                | `../../api/domains/skills/models.py`                                                                                            |
-| Skill archive and CRUD rules        | `../../api/domains/skills/service.py`                                                                                           |
+| Skill file path rules               | `../../api/domains/skills/files.py`                                                                                             |
+| Skill versioning and CRUD rules     | `../../api/domains/skills/service.py`, `../../api/domains/skills/repository.py`                                                       |
+| Skill manifest and collision check  | `../../api/domains/agents/aai_cli_skills/__init__.py`                                                                           |
 | Built-in skill seeding              | `../../api/domains/skills/skill_seeder.py`, `../../api/domains/agents/aai_cli_skills/`                                                |
 | Assignment enforcement and mounting | `../../api/domains/agents/service.py`                                                                                           |
 | UI template surface                 | `../../ui/src/features/agents/components/templates-panel.tsx`, `../../ui/src/features/platform-templates/`                     |
@@ -82,6 +102,6 @@ Platform Administrators use the Platform View's Platform Templates catalog (`/da
 
 ## Change impact
 
-Template changes affect agent pinning/rendering, predefined seeds, required skills, UI template schemas, and existing-version behavior. Changes to predefined v1 requirements must account for already-pinned agents. Agent Template Override changes additionally affect Agent-owned snapshot persistence, source update discovery, pin selection, restart activation, rollback, and sibling isolation. Skill changes affect ZIP validation, assignment/deletion guards, agent start manifests, provider requirements, templates, and the Skills UI; provider-requirement edits must account for existing assignments. Verify all three domain test suites when their relationship changes.
+Template changes affect agent pinning/rendering, predefined seeds, required skills, UI template schemas, and existing-version behavior. Changes to predefined v1 requirements must account for already-pinned agents. Agent Template Override changes additionally affect Agent-owned snapshot persistence, source update discovery, pin selection, restart activation, rollback, and sibling isolation. Skill changes affect file path validation, version publishing, version-deletion protections, agent start manifests, provider requirements, templates, and the Skills UI; provider-requirement edits must account for existing assignments. Skill forking adds a built-in detail-page action and a `POST /{skill_id}/fork` contract; version deletion replaces whole-lineage deletion with a `DELETE /{skill_id}/versions/{version}` contract; and agents now pin an exact skill version (`agent_skill.pinned_version`, exposed on `AgentAssignedSkillRead`), so start-time mounting and the agent configuration Skills UI resolve and edit pinned versions. Verify all three domain test suites when their relationship changes.
 
 Required-skill *group* changes (the `group_key` column and the "at least one of" model) affect: agent create/update validation (group membership, the never-drop-to-zero grandfathering rule), predefined seeding idempotency (a group's seeded membership can be a subset when not all member skills exist yet), the hire dialog (multi-select group UI, gates Hire until a choice is made), the template editor (group authoring: create/add/remove member/dissolve), and the canonical Agent configuration page's Template selection flow (group choice re-derived against the new template's groups). Changes here must be verified against both `agent_template_skill` and `platform_template_skill` groups.

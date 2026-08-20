@@ -20,7 +20,7 @@ from api.domains.agents.aai_cli_artifacts import (
     build_tool_context_md,
     provider_secrets_map,
 )
-from api.domains.agents.aai_cli_skills import build_skills_manifest_from_zips
+from api.domains.agents.aai_cli_skills import build_skills_manifest
 from api.domains.agents.authorization import AgentAuthorization
 from api.domains.agents.builders import (
     build_config_map,
@@ -93,6 +93,7 @@ from api.domains.agents.models import (
     JiraContent,
     PairRequest,
     SecretProvider,
+    SkillVersionPin,
     compute_bot_token_hash,
     decrypt_content,
     encrypt_content,
@@ -117,7 +118,7 @@ from api.domains.events.catalog import (
 from api.domains.organizations.lookup import OrganizationLookupService
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.shared_credentials.repository import SharedCredentialRepository
-from api.domains.skills.models import Skill
+from api.domains.skills.models import PinnedSkill, Skill, derive_tools_pointer
 from api.domains.skills.repository import SkillRepository
 from api.domains.templates.models import AgentTemplate, PlatformTemplate, TemplateRead
 from api.domains.templates.renderer import render_template
@@ -326,7 +327,7 @@ class AgentService:
 
     @staticmethod
     def _build_skill_pointers(skills: list[Skill]) -> str:
-        return "".join(s.tools_pointer for s in skills if s.tools_pointer)
+        return "".join(derive_tools_pointer(s) for s in skills)
 
     def _auto_attached_aai_cli_skills(
         self,
@@ -403,6 +404,84 @@ class AgentService:
             skills.append(skill)
         return skills
 
+    def _resolve_skill_pins(
+        self,
+        skill_ids: list[UUID],
+        pins: list[SkillVersionPin],
+        current_skill_ids: set[UUID],
+        removed_skill_ids: list[UUID],
+        org_id: UUID,
+    ) -> list[SkillVersionPin]:
+        """Resolve every agent assignment to an explicit pinned version.
+
+        Added skills pin to a requested version when given, else to the skill's
+        latest at apply time. Existing skills can be re-pinned through the same
+        ``pins`` list. Every pin must reference a skill the agent ends up with,
+        and the requested version must exist (it can later be deleted only after
+        no agent pins it, so a valid pin never dangles from version deletion).
+        """
+        overlap = set(skill_ids) & set(removed_skill_ids)
+        if overlap:
+            ids = ", ".join(str(skill_id) for skill_id in sorted(overlap, key=str))
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Skill ID(s) cannot be both added and removed: {ids}",
+            )
+
+        pin_map: dict[UUID, SkillVersionPin] = {}
+        for pin in pins:
+            if pin.skill_id in pin_map:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Duplicate skill version pin for skill {pin.skill_id}",
+                )
+            pin_map[pin.skill_id] = pin
+        remaining_ids = current_skill_ids - set(removed_skill_ids)
+        allowed_ids = remaining_ids | set(skill_ids)
+        extras = set(pin_map) - allowed_ids
+        if extras:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Skill version pins must reference a skill the agent ends up with",
+            )
+
+        requested_ids = set(skill_ids) | set(pin_map)
+        if requested_ids:
+            accessible_ids = {skill.id for skill in self.skill_repository.find_accessible_for_org(org_id)}
+            inaccessible_ids = requested_ids - accessible_ids
+            if inaccessible_ids:
+                skill_id = min(inaccessible_ids, key=str)
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Skill {skill_id} not found",
+                )
+
+        resolved: list[SkillVersionPin] = []
+        resolved_ids: set[UUID] = set()
+        for skill_id in dict.fromkeys(skill_ids):
+            pin = pin_map.get(skill_id)
+            if pin is None:
+                latest = self.skill_repository.get_latest_version(skill_id)
+                pin = SkillVersionPin(skill_id=skill_id, version=latest.version if latest else 1)
+            else:
+                if self.skill_repository.get_version(skill_id, pin.version) is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=f"Version {pin.version} not found for skill {skill_id}",
+                    )
+            resolved.append(pin)
+            resolved_ids.add(skill_id)
+        for pin in pins:
+            if pin.skill_id in current_skill_ids and pin.skill_id not in resolved_ids:
+                if self.skill_repository.get_version(pin.skill_id, pin.version) is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=f"Version {pin.version} not found for skill {pin.skill_id}",
+                    )
+                resolved.append(pin)
+                resolved_ids.add(pin.skill_id)
+        return resolved
+
     def _validate_skill_update(
         self,
         agent: Agent,
@@ -460,7 +539,7 @@ class AgentService:
         telegram_config: AgentTelegramConfig | None = None,
         discord_config: AgentDiscordConfig | None = None,
         secrets: list[AgentSecret] | None = None,
-        skills: list[Skill] | None = None,
+        skills: list[PinnedSkill] | None = None,
         required_skill_map: dict[UUID, str | None] | None = None,
         allowed_actions: list[PermissionKey] | None = None,
         template_key: str = "",
@@ -487,11 +566,17 @@ class AgentService:
                 read.shared_credential_id = sc.id
                 read.shared_credential_name = sc.name
             secrets_read.append(read)
-        assigned_ids = {skill.id for skill in (skills or [])}
+        assigned_ids = {pinned.skill.id for pinned in (skills or [])}
         req_ids = effective_required_ids(required_skill_map or {}, assigned_ids)
         skills_read = [
-            AgentAssignedSkillRead.model_validate(skill).model_copy(update={"required": skill.id in req_ids})
-            for skill in (skills or [])
+            AgentAssignedSkillRead.model_validate(
+                {
+                    **pinned.skill.model_dump(),
+                    "version": pinned.version,
+                    "required": pinned.skill.id in req_ids,
+                }
+            )
+            for pinned in (skills or [])
         ]
         webhook_url = (
             f"{self.config.api_external_url}/api/v1/webhooks/teams/{agent.id}/messages"
@@ -537,7 +622,10 @@ class AgentService:
         elif agent.platform == AgentPlatform.DISCORD:
             discord_config = self.repository.get_discord_config(agent.id)
         secrets = self.repository.get_secrets_for_agent(agent.id)
-        skills = [s for _, s in self.skill_repository.get_agent_skills_with_details(agent.id)]
+        skills = [
+            PinnedSkill(skill=s, version=row.pinned_version)
+            for row, s in self.skill_repository.get_agent_skills_with_details(agent.id)
+        ]
         template = self.template_repository.get_pinned_template(agent)
         required_map = self.template_repository.get_required_skill_map_for(template) if template else {}
         allowed_actions = self.authorization.allowed_actions(context, [agent])[agent.id]
@@ -666,6 +754,12 @@ class AgentService:
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"At least one of these template skills must be included in skill_ids: {', '.join(names)}",
                 )
+
+        # Preflight skill version pins before any persistence so an invalid pin
+        # (nonexistent version, pin for a skill not in the request) is rejected
+        # atomically rather than after the agent, configs, and secrets are saved.
+        resolved_pins = self._resolve_skill_pins(data.skill_ids, data.skill_versions, set(), [], org_id)
+        resolved_pin_by_skill_id = {pin.skill_id: pin for pin in resolved_pins}
 
         # The creator always gets an explicit Owner AgentAccess row, even if they
         # currently have implicit full access as an Org Owner/Admin: it's what keeps
@@ -854,7 +948,19 @@ class AgentService:
             secrets.append(slack_secret)
 
         if skills_to_assign:
-            self.repository.save_skills([AgentSkill(agent_id=agent.id, skill_id=s.id) for s in skills_to_assign])
+            self.repository.save_skills(
+                [
+                    AgentSkill(
+                        agent_id=agent.id,
+                        skill_id=s.id,
+                        pinned_version=resolved_pin_by_skill_id[s.id].version,
+                    )
+                    for s in skills_to_assign
+                ]
+            )
+        skills_read_versions = [
+            PinnedSkill(skill=s, version=resolved_pin_by_skill_id[s.id].version) for s in skills_to_assign
+        ]
 
         self.event_delivery_dispatcher.enqueue_immediate(created_delivery_ids + secret_delivery_ids)
 
@@ -868,7 +974,7 @@ class AgentService:
             telegram_config,
             discord_config,
             secrets,
-            skills_to_assign,
+            skills_read_versions,
             required_map,
             allowed_actions,
             template_key=template.template_key,
@@ -1471,7 +1577,7 @@ class AgentService:
         telegram_configs = self.repository.get_telegram_configs_for_agents(agent_ids)
         discord_configs = self.repository.get_discord_configs_for_agents(agent_ids)
         secrets_by_agent = self.repository.get_secrets_for_agents(agent_ids)
-        skills_by_agent = self.skill_repository.get_skills_for_agents(agent_ids)
+        skills_by_agent = self.skill_repository.get_skills_for_agents_with_versions(agent_ids)
 
         req_maps_by_agent = self.template_repository.get_required_skill_map_for_agents(agents)
         pin_info = self.template_repository.get_pinned_template_info_for_agents(agents)
@@ -1556,6 +1662,15 @@ class AgentService:
                     detail=f"Cannot set {label} fields on a {agent.platform.title()} agent",
                 )
 
+        # Preflight skill version pins before any persistence (template re-pin,
+        # config updates, secret updates) so an invalid pin is rejected atomically
+        # rather than after config/secrets are already saved.
+        current_skill_rows = self.repository.get_skills_for_agent(agent.id)
+        current_skill_ids = {row.skill_id for row in current_skill_rows}
+        resolved_skill_pins = self._resolve_skill_pins(
+            data.skill_ids, data.skill_versions, current_skill_ids, data.removed_skill_ids, org_id
+        )
+
         # Re-pin the agent to a different template (key, version). The model
         # validator guarantees both keys appear together.
         effective_template = None
@@ -1590,7 +1705,7 @@ class AgentService:
         )
         if required_map:
             standalone_ids, required_groups = split_requirements(required_map)
-            existing_skill_ids = {s.id for _, s in self.skill_repository.get_agent_skills_with_details(agent.id)}
+            existing_skill_ids = current_skill_ids
             effective_skill_ids = (existing_skill_ids | set(data.skill_ids)) - set(data.removed_skill_ids)
             # Block removal of required skills.
             if data.removed_skill_ids:
@@ -1858,11 +1973,14 @@ class AgentService:
                         actor_display=secret_actor_display,
                     )
 
-        # Apply skill changes
+        # Apply skill changes (pins were preflighted before persistence above)
         for skill_id in data.removed_skill_ids:
             self.repository.remove_skill(agent.id, skill_id)
-        for skill_id in dict.fromkeys(data.skill_ids):
-            self.repository.add_skill(agent.id, skill_id)
+        for pin in resolved_skill_pins:
+            if pin.skill_id in current_skill_ids:
+                self.repository.re_pin_skill(agent.id, pin.skill_id, pin.version)
+            else:
+                self.repository.add_skill(agent.id, pin.skill_id, pinned_version=pin.version)
 
         # Keep the aai-cli Slack Agent Secret in sync with the gateway bot token:
         # write/refresh it whenever a remaining skill requires it (covers skill add
@@ -2327,7 +2445,33 @@ class AgentService:
             set(decrypted.keys()),
             {s.id for s in assigned_skills},
         )
-        skills_json = build_skills_manifest_from_zips(mounted_skills) if mounted_skills else None
+        skills_json = None
+        if mounted_skills:
+            pinned_by_id = {s.id: SkillVersionPin(skill_id=s.id, version=row.pinned_version) for row, s in agent_skills}
+            # Explicitly assigned skills mount their pinned version; implicit
+            # aai-cli mounts resolve to the built-in's latest.
+            pins_to_mount: list[SkillVersionPin] = []
+            for skill in mounted_skills:
+                pin = pinned_by_id.get(skill.id)
+                if pin is None:
+                    latest = self.skill_repository.get_latest_version(skill.id)
+                    pin = SkillVersionPin(skill_id=skill.id, version=latest.version if latest else 1)
+                pins_to_mount.append(pin)
+            files_by_skill = self.skill_repository.get_files_for_skill_versions(pins_to_mount)
+            for pin in pins_to_mount:
+                if pin.skill_id not in files_by_skill:
+                    logger.warning(
+                        "Agent %s skill %s pinned version %s has no files; the version may have been removed",
+                        agent.id,
+                        pin.skill_id,
+                        pin.version,
+                    )
+            skills_json, collisions = build_skills_manifest(mounted_skills, files_by_skill)
+            for collision in collisions:
+                # Two skills claiming one workspace path: the loser's file is silently
+                # absent for the agent, so surface it rather than letting the agent
+                # fail to find documentation it was told exists.
+                logger.warning("Agent %s skill file collision: %s", agent.id, collision)
         tools_md = rendered.tools_md + self._build_skill_pointers(mounted_skills) + build_tool_context_md(decrypted)
         # AGENTS.md is auto-loaded into the startup prompt by both runtimes, so the
         # --profile mapping + no-fallback policy is appended here (not just to TOOLS.md).

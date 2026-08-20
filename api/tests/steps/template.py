@@ -85,32 +85,33 @@ def there_is_a_template_skill_group(skill_names: tuple[str, ...], group_key: str
     context.template as members of the same "at least one of" group."""
 
     def step(context):
-        import io
-        import zipfile
-
         from sqlmodel import Session
 
         from api.domains.agents.models import AgentTemplateSkill
-        from api.domains.skills.models import Skill, SkillSource
+        from api.domains.skills.models import Skill, SkillFile, SkillSource, SkillVersion
+        from api.domains.templates.slug import slugify
         from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
         delegate: PostgresRepositoryDelegate = context.injector.get(PostgresRepositoryDelegate)
         skills = []
         with Session(delegate.engine) as session:
             for name in skill_names:
-                buf = io.BytesIO()
-                with zipfile.ZipFile(buf, "w") as zf:
-                    zf.writestr("skill.md", f"# {name}")
+                slug = slugify(name)
                 skill = Skill(
                     organization_id=context.organization.id,
                     name=name,
+                    slug=slug,
+                    root_dir=slug,
+                    entry_path="SKILL.md",
                     source=SkillSource.CUSTOM,
                     required_providers=[],
-                    zip_content=buf.getvalue(),
-                    tools_pointer=f'You can use "{name}" skill in the ./skills folder',
                 )
                 session.add(skill)
                 session.flush()
+                version = SkillVersion(skill_id=skill.id, version=1)
+                session.add(version)
+                session.flush()
+                session.add(SkillFile(skill_version_id=version.id, path="SKILL.md", content=f"# {name}"))
                 session.add(
                     AgentTemplateSkill(
                         template_id=context.template.id,

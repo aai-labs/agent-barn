@@ -530,10 +530,23 @@ class AgentSecret(BaseModel, table=True):
 class AgentSkill(BaseModel, table=True):
     __tablename__: str = "agent_skill"
 
-    __table_args__ = (sa.UniqueConstraint("agent_id", "skill_id", name="uq_agent_skill_agent_skill"),)
+    __table_args__ = (
+        sa.UniqueConstraint("agent_id", "skill_id", name="uq_agent_skill_agent_skill"),
+        sa.ForeignKeyConstraint(
+            ["skill_id", "pinned_version"],
+            ["skill_version.skill_id", "skill_version.version"],
+            ondelete="NO ACTION",
+            name="fk_agent_skill_pinned_version",
+        ),
+    )
 
     agent_id: UUID = SqlField(foreign_key="agent.id", nullable=False, ondelete="CASCADE")
     skill_id: UUID = SqlField(foreign_key="skill.id", nullable=False, ondelete="CASCADE")
+    # The exact skill version this agent mounts at start. Skills are pinned
+    # explicitly (like template pins): publishing a newer version never moves an
+    # existing pin, and recovering from a bad version means re-pinning to an
+    # older one. Backfilled to each skill's then-latest at migration.
+    pinned_version: int = SqlField(nullable=False)
 
 
 class AgentLogSnapshot(BaseModel, table=True):
@@ -782,6 +795,13 @@ class AgentSharedCredentialAttach(PydanticBaseModel):
     shared_credential_id: UUID
 
 
+class SkillVersionPin(PydanticBaseModel):
+    """An explicit skill version pin for an agent assignment."""
+
+    skill_id: UUID
+    version: int = Field(ge=1)
+
+
 class AgentCreate(PydanticBaseModel):
     name: str = Field(min_length=1, max_length=255)
     platform: AgentPlatform = AgentPlatform.SLACK
@@ -823,6 +843,9 @@ class AgentCreate(PydanticBaseModel):
     shared_credentials: list[AgentSharedCredentialAttach] = Field(default_factory=list)
     # Custom org skills to assign on creation (optional)
     skill_ids: list[UUID] = Field(default_factory=list)
+    # Optional explicit version pins for skills in skill_ids. Skills without a
+    # pin here are pinned to their latest version at creation time.
+    skill_versions: list[SkillVersionPin] = Field(default_factory=list)
     approval_mode: CommandApprovalMode = CommandApprovalMode.AUTO
 
     @model_validator(mode="after")
@@ -885,6 +908,10 @@ class AgentUpdate(PydanticBaseModel):
     model: str | None = None
     skill_ids: list[UUID] = Field(default_factory=list)
     removed_skill_ids: list[UUID] = Field(default_factory=list)
+    # Version pins for newly added skills and for re-pinning skills the agent
+    # already has (skills not in skill_ids). Every entry must reference a skill
+    # the agent ends up with.
+    skill_versions: list[SkillVersionPin] = Field(default_factory=list)
     # Integration credentials: upsert (add/replace) + explicit removal.
     # Providers not mentioned in either list are left untouched.
     secrets: list[AgentSecretCreate] | None = None
@@ -1187,6 +1214,8 @@ class AgentAssignedSkillRead(PydanticBaseModel):
     created_at: datetime
     updated_at: datetime
     required: bool = False
+    # The exact skill version this agent is pinned to (explicit, like templates).
+    version: int
 
 
 class AgentRead(PydanticBaseModel):

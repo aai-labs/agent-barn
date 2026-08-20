@@ -5,13 +5,22 @@ import { useDebouncedValue } from "@tanstack/react-pacer";
 
 import { AppErrorState } from "@/components/app-error-state";
 import { SearchIcon } from "@/components/icons";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { SharedManualToggle } from "@/features/shared-credentials/components/shared-manual-toggle";
 import { useSharedManualSwitch } from "@/features/shared-credentials/hooks/use-shared-manual-switch";
 import { SHARED_CREDENTIAL_PROVIDER_LABELS } from "@/features/shared-credentials/utils";
 import { useSkills } from "@/features/skills/hooks/use-skills";
+import { useSkillVersions } from "@/features/skills/hooks/use-skill-versions";
 import { SKILL_PROVIDER_LABELS } from "@/features/skills/utils";
-import { SkillSourceBadge } from "@/features/skills/components/skill-drawer";
+import { SkillSourceBadge } from "@/features/skills/components/skill-source-badge";
 import type { Skill } from "@/features/skills/schemas";
 
 import {
@@ -43,6 +52,7 @@ export const AgentSkillsTab = forwardRef<
 
   const [pendingAddIds, setPendingAddIds] = useState<string[]>([]);
   const [pendingRemoveIds, setPendingRemoveIds] = useState<string[]>([]);
+  const [pendingPins, setPendingPins] = useState<Record<string, number>>({});
   const [newSecretDrafts, setNewSecretDrafts] = useState<IntegrationDraft[]>([]);
 
   const existingSecretProviders = new Set(
@@ -68,8 +78,11 @@ export const AgentSkillsTab = forwardRef<
     ),
   ];
 
+  const pendingPinChanges = Object.entries(pendingPins).filter(([skillId, version]) =>
+    agent.skills.some((skill) => skill.id === skillId && skill.version !== version),
+  );
   const hasPendingChanges =
-    pendingAddIds.length > 0 || pendingRemoveIds.length > 0;
+    pendingAddIds.length > 0 || pendingRemoveIds.length > 0 || pendingPinChanges.length > 0;
   const isValid = !hasIncompleteIntegration(newSecretDrafts);
 
   useEffect(() => {
@@ -107,6 +120,11 @@ export const AgentSkillsTab = forwardRef<
 
   function markForRemoval(skillId: string) {
     setPendingRemoveIds((prev) => [...prev, skillId]);
+    setPendingPins((prev) => {
+      const next = { ...prev };
+      delete next[skillId];
+      return next;
+    });
   }
 
   function undoRemoval(skillId: string) {
@@ -167,6 +185,13 @@ export const AgentSkillsTab = forwardRef<
       agentId: agent.id,
       skillIds: pendingAddIds,
       removedSkillIds: pendingRemoveIds,
+      ...(pendingPinChanges.length > 0
+        ? {
+            skillVersions: pendingPinChanges
+              .filter(([skillId]) => !pendingRemoveIds.includes(skillId))
+              .map(([skillId, version]) => ({ skillId, version })),
+          }
+        : {}),
       ...(orphanedProviders.length > 0 ? { removedSecretProviders: orphanedProviders } : {}),
       ...(manualDrafts.length > 0
         ? {
@@ -182,12 +207,14 @@ export const AgentSkillsTab = forwardRef<
     });
     setPendingAddIds([]);
     setPendingRemoveIds([]);
+    setPendingPins({});
     setNewSecretDrafts([]);
   }
 
   function resetForm() {
     setPendingAddIds([]);
     setPendingRemoveIds([]);
+    setPendingPins({});
     setNewSecretDrafts([]);
     updateAgent.reset();
   }
@@ -240,6 +267,18 @@ export const AgentSkillsTab = forwardRef<
             key={skill.id}
             skill={skill}
             isRunning={isRunning}
+            pin={pendingPins[skill.id] ?? skill.version}
+            onPinChange={(version) =>
+              setPendingPins((prev) => {
+                const next = { ...prev };
+                if (version === skill.version) {
+                  delete next[skill.id];
+                } else {
+                  next[skill.id] = version;
+                }
+                return next;
+              })
+            }
             onRemove={() => markForRemoval(skill.id)}
           />
         ))}
@@ -455,12 +494,17 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 function AssignedSkillRow({
   skill,
   isRunning,
+  pin,
+  onPinChange,
   onRemove,
 }: {
   skill: AgentAssignedSkill;
   isRunning: boolean;
+  pin: number;
+  onPinChange: (version: number) => void;
   onRemove: () => void;
 }) {
+  const { versions } = useSkillVersions(skill.id);
   return (
     <div
       className="flex items-center gap-2 px-3.5 py-2.5 rounded-2xl"
@@ -480,6 +524,24 @@ function AssignedSkillRow({
           </span>
         )}
       </div>
+      <Select
+        value={String(pin)}
+        onValueChange={(value) => onPinChange(Number(value))}
+        disabled={isRunning}
+      >
+        <SelectTrigger className="w-auto min-w-24" aria-label={`Version for ${skill.name}`}>
+          <SelectValue placeholder="Version" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectGroup>
+            {versions.map((v) => (
+              <SelectItem key={v.version} value={String(v.version)}>
+                Version v{v.version}
+              </SelectItem>
+            ))}
+          </SelectGroup>
+        </SelectContent>
+      </Select>
       {skill.required ? (
         <TooltipProvider>
           <Tooltip>

@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 import { TEST_ORG_ID } from "../constants";
+import { MOCK_CUSTOM_SKILL_ID } from "../pages/data-support/skill-data-support.po";
 import { AgentConfigurationPage } from "../pages/agent-configuration-page.po";
 import {
   MOCK_AGENT_ID,
@@ -411,5 +412,69 @@ test.describe("Agent configuration page", () => {
     await page.getByRole("dialog").getByRole("button", { name: "Apply & Restart", exact: true }).click();
 
     await Promise.all([stopPromise, updatePromise, startPromise]);
+  });
+
+  test("re-pins an assigned skill to a specific version and sends skill_versions", async ({ page }) => {
+    const dataSupport = new DataSupport(page);
+    const configurationPage = new AgentConfigurationPage(page);
+    const assignedSkill = {
+      id: MOCK_CUSTOM_SKILL_ID,
+      name: "my-tool",
+      source: "custom",
+      requiredProviders: [],
+      toolsPointer: null,
+      required: false,
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:00Z",
+      version: 1,
+    };
+    let currentAgent = { ...mockAgent, status: "STOPPED", skills: [assignedSkill] };
+
+    await dataSupport.auth.interceptRefreshRequest();
+    await dataSupport.users.interceptGetUserContextRequest();
+    await dataSupport.users.interceptGetOrganizationsRequest();
+    await dataSupport.agents.interceptGetAgentRequest({ body: currentAgent });
+    await dataSupport.agents.interceptGetAgentConfigurationRequest();
+    await dataSupport.skills.interceptGetSkillsRequest();
+    await page.route(`**/api/v1/organizations/*/skills/${MOCK_CUSTOM_SKILL_ID}/versions`, async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([
+          { version: 2, created_by: null, created_at: "2026-01-02T00:00:00Z", is_pinned_by_agent: false },
+          { version: 1, created_by: null, created_at: "2026-01-01T00:00:00Z", is_pinned_by_agent: false },
+        ]),
+      });
+    });
+    let sentBody: Record<string, unknown> | undefined;
+    await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}`, async (route) => {
+      if (route.request().method() !== "PATCH") {
+        await route.fallback();
+        return;
+      }
+      sentBody = route.request().postDataJSON() as Record<string, unknown>;
+      currentAgent = { ...currentAgent, skills: [{ ...assignedSkill, version: 2 }] };
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(currentAgent) });
+    });
+
+    await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
+    await configurationPage.sectionButton("Skills").click();
+    await expect(page.getByText("v1")).toBeVisible();
+    await page.getByRole("button", { name: "Edit", exact: true }).click();
+
+    await page.getByRole("combobox", { name: "Version for my-tool" }).click();
+    await page.getByRole("option", { name: "Version v2", exact: true }).click();
+
+    const footer = page.locator('section[aria-label="Skills"] footer');
+    await expect(footer.getByRole("button", { name: "Apply", exact: true })).toBeEnabled();
+    await footer.getByRole("button", { name: "Apply", exact: true }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Apply", exact: true }).click();
+
+    expect(sentBody?.skill_versions).toEqual([{ skill_id: MOCK_CUSTOM_SKILL_ID, version: 2 }]);
+    await expect(page.getByText("v2")).toBeVisible();
   });
 });
