@@ -427,6 +427,15 @@ def test_build_hermes_deployment_mounts_opt_data_and_workspace():
     assert_that("/workspace" in mounts, equal_to(True))
 
 
+def test_build_hermes_deployment_restarts_a_circuit_breaker_paused_gateway():
+    dep = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:latest")
+
+    probe = dep.spec.template.spec.containers[0].liveness_probe
+    assert_that(probe.http_get.path, equal_to("/live"))
+    assert_that(probe.period_seconds, equal_to(60))
+    assert_that(probe.failure_threshold, equal_to(5))
+
+
 def test_build_hermes_deployment_workspace_is_pvc_backed():
     # /workspace must persist across restarts (AF-215): it is a subPath of the
     # per-agent PVC, not an ephemeral emptyDir — mirroring ocbw's persistent

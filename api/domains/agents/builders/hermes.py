@@ -413,6 +413,16 @@ def build_hermes_deployment(
                                 period_seconds=15,
                                 failure_threshold=6,
                             ),
+                            liveness_probe=client.V1Probe(
+                                http_get=client.V1HTTPGetAction(
+                                    path="/live",
+                                    port=8081,
+                                ),
+                                initial_delay_seconds=60,
+                                period_seconds=60,
+                                failure_threshold=5,
+                                timeout_seconds=5,
+                            ),
                             env=[
                                 # The hermes process starts in its install dir
                                 # (/opt/hermes) and the runtime user's HOME is
