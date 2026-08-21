@@ -140,7 +140,7 @@ prometheus:
           relabel_configs:
             - source_labels:
                 [
-                  __meta_kubernetes_service_label_agentfarm_io_component,
+                  __meta_kubernetes_service_label_agentbarn_io_component,
                   __meta_kubernetes_endpoint_port_name,
                 ]
               regex: agent;healthz
@@ -207,7 +207,7 @@ prometheus:
               # survives API redeploys instead of resolving + re-firing on
               # every rollout; keep_firing_for bridges the series gap while
               # pods are swapped.
-              expr: min(agentfarm_database_up) == 0
+              expr: min(agentbarn_database_up) == 0
               for: 2m
               keep_firing_for: 5m
               labels:
@@ -251,11 +251,11 @@ prometheus:
             - alert: HighToolCallErrorRate
               expr: >-
                 (
-                  sum(rate(agentfarm_tool_calls_total{status="error"}[15m]))
+                  sum(rate(agentbarn_tool_calls_total{status="error"}[15m]))
                   /
-                  clamp_min(sum(rate(agentfarm_tool_calls_total[15m])), 1e-9)
+                  clamp_min(sum(rate(agentbarn_tool_calls_total[15m])), 1e-9)
                 ) > 0.25
-                and sum(rate(agentfarm_tool_calls_total[15m])) > 0.01
+                and sum(rate(agentbarn_tool_calls_total[15m])) > 0.01
               for: 10m
               labels:
                 severity: warning
@@ -295,7 +295,7 @@ prometheus:
               # max() drops pod/instance labels: stable identity across API
               # redeploys, and a fresh replica's default-0 gauge can't mask
               # the real count.
-              expr: max(agentfarm_agents_in_error) > 0
+              expr: max(agentbarn_agents_in_error) > 0
               for: 5m
               keep_firing_for: 5m
               labels:
@@ -321,8 +321,8 @@ prometheus:
               # identity across API redeploys) and ignores fresh replicas
               # that still export default 0.
               expr: >-
-                max(agentfarm_openrouter_credits_remaining) < 5
-                and max(agentfarm_openrouter_credits_scrape_ok) == 1
+                max(agentbarn_openrouter_credits_remaining) < 5
+                and max(agentbarn_openrouter_credits_scrape_ok) == 1
               for: 15m
               keep_firing_for: 5m
               labels:
@@ -334,7 +334,7 @@ prometheus:
             - alert: OpenRouterCreditsUnknown
               # max(): healthy if any replica polls successfully; drops
               # pod/instance labels so redeploys don't resolve + re-fire it.
-              expr: max(agentfarm_openrouter_credits_scrape_ok) == 0
+              expr: max(agentbarn_openrouter_credits_scrape_ok) == 0
               for: 30m
               keep_firing_for: 5m
               labels:

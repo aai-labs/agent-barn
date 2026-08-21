@@ -86,7 +86,7 @@ def test_metrics_exposes_http_metrics_and_database_gauge():
         with then("it returns HTTP metrics and the database gauge"):
             assert_that(response.status_code, equal_to(200))
             assert_that(response.text, contains_string("http_requests_total"))
-            assert_that(response.text, contains_string("agentfarm_database_up 1.0"))
+            assert_that(response.text, contains_string("agentbarn_database_up 1.0"))
 
 
 def test_metrics_reports_agents_in_error():
@@ -97,7 +97,7 @@ def test_metrics_reports_agents_in_error():
             response = client.get("/metrics")
 
         with then("the agents-in-error gauge reads 1"):
-            assert_that(response.text, contains_string("agentfarm_agents_in_error 1.0"))
+            assert_that(response.text, contains_string("agentbarn_agents_in_error 1.0"))
 
 
 def test_metrics_reports_openrouter_scrape_not_ok_without_key():
@@ -110,7 +110,7 @@ def test_metrics_reports_openrouter_scrape_not_ok_without_key():
         with then("the credits scrape_ok gauge reads 0"):
             assert_that(
                 response.text,
-                contains_string("agentfarm_openrouter_credits_scrape_ok 0.0"),
+                contains_string("agentbarn_openrouter_credits_scrape_ok 0.0"),
             )
 
 
@@ -160,7 +160,7 @@ def test_ingest_metrics_counts_tool_call_errors():
                 (
                     ln
                     for ln in body.splitlines()
-                    if ln.startswith("agentfarm_tool_calls_total")
+                    if ln.startswith("agentbarn_tool_calls_total")
                     and 'tool_name="metrics-probe-tool"' in ln
                     and 'status="error"' in ln
                 ),
@@ -179,4 +179,4 @@ def test_creating_the_app_twice_does_not_break_metrics():
 
         with then("its /metrics still works"):
             assert_that(response.status_code, equal_to(200))
-            assert_that(response.text, contains_string("agentfarm_database_up"))
+            assert_that(response.text, contains_string("agentbarn_database_up"))

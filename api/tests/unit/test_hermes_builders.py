@@ -554,7 +554,7 @@ def test_build_hermes_deployment_pod_carries_agent_component_label():
         image="registry.example.com/hermes:0.1.0",
     )
     pod_labels = dep.spec.template.metadata.labels
-    assert_that(pod_labels["agentfarm.io/component"], equal_to("agent"))
+    assert_that(pod_labels["agentbarn.io/component"], equal_to("agent"))
     # Selector must NOT include the new label, so existing agents keep matching.
     assert_that(
         dep.spec.selector.match_labels,

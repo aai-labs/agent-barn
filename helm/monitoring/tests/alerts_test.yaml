@@ -67,9 +67,9 @@ tests:
   # and the alert carries no pod/instance labels (redeploy-stable) ---
   - interval: 1m
     input_series:
-      - series: 'agentfarm_database_up{pod="api-a"}'
+      - series: 'agentbarn_database_up{pod="api-a"}'
         values: "1x30"
-      - series: 'agentfarm_database_up{pod="api-b"}'
+      - series: 'agentbarn_database_up{pod="api-b"}'
         values: "1x5 0x25"
     alert_rule_test:
       - eval_time: 5m
@@ -138,9 +138,9 @@ tests:
   # --- HighToolCallErrorRate: 50% errors at healthy call rate fires ---
   - interval: 1m
     input_series:
-      - series: 'agentfarm_tool_calls_total{status="error"}'
+      - series: 'agentbarn_tool_calls_total{status="error"}'
         values: "0+3x40"
-      - series: 'agentfarm_tool_calls_total{status="success"}'
+      - series: 'agentbarn_tool_calls_total{status="success"}'
         values: "0+3x40"
     alert_rule_test:
       - eval_time: 14m
@@ -156,7 +156,7 @@ tests:
   # floor must NOT fire ---
   - interval: 1m
     input_series:
-      - series: 'agentfarm_tool_calls_total{status="error"}'
+      - series: 'agentbarn_tool_calls_total{status="error"}'
         values: "0+0.3x40"
     alert_rule_test:
       - eval_time: 14m
@@ -241,9 +241,9 @@ tests:
   # not mask the real count, and no pod labels leak into the alert ---
   - interval: 1m
     input_series:
-      - series: 'agentfarm_agents_in_error{pod="api-old"}'
+      - series: 'agentbarn_agents_in_error{pod="api-old"}'
         values: "2x10"
-      - series: 'agentfarm_agents_in_error{pod="api-new"}'
+      - series: 'agentbarn_agents_in_error{pod="api-new"}'
         values: "0x10"
     alert_rule_test:
       - eval_time: 7m
@@ -290,9 +290,9 @@ tests:
   # --- OpenRouterCreditsLow: below $5 with a healthy probe fires ---
   - interval: 1m
     input_series:
-      - series: 'agentfarm_openrouter_credits_remaining{pod="api-a"}'
+      - series: 'agentbarn_openrouter_credits_remaining{pod="api-a"}'
         values: "3x40"
-      - series: 'agentfarm_openrouter_credits_scrape_ok{pod="api-a"}'
+      - series: 'agentbarn_openrouter_credits_scrape_ok{pod="api-a"}'
         values: "1x40"
     alert_rule_test:
       - eval_time: 17m
@@ -308,9 +308,9 @@ tests:
   # CreditsUnknown, never a false CreditsLow ---
   - interval: 1m
     input_series:
-      - series: 'agentfarm_openrouter_credits_remaining{pod="api-a"}'
+      - series: 'agentbarn_openrouter_credits_remaining{pod="api-a"}'
         values: "0x40"
-      - series: 'agentfarm_openrouter_credits_scrape_ok{pod="api-a"}'
+      - series: 'agentbarn_openrouter_credits_scrape_ok{pod="api-a"}'
         values: "0x40"
     alert_rule_test:
       - eval_time: 17m

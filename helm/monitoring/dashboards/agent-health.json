@@ -1,6 +1,6 @@
 {
   "title": "Agent Health",
-  "uid": "agentfarm-agent-health",
+  "uid": "agentbarn-agent-health",
   "tags": [
     "agent-farm"
   ],
@@ -122,7 +122,7 @@
       },
       "targets": [
         {
-          "expr": "max(agentfarm_agents_in_error)",
+          "expr": "max(agentbarn_agents_in_error)",
           "refId": "A"
         }
       ],

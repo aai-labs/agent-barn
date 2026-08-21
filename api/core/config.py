@@ -59,7 +59,7 @@ class Config(BaseSettings):
     openrouter_api_key: str = ""
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     openrouter_models_cache_ttl_seconds: int = 3600
-    # TTL for the credits poll behind agentfarm_openrouter_credits_remaining
+    # TTL for the credits poll behind agentbarn_openrouter_credits_remaining
     # (GET /key with the inference key above; no management key involved).
     openrouter_credits_cache_ttl_seconds: int = 300
 

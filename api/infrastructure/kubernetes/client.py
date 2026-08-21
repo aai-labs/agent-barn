@@ -133,7 +133,7 @@ class KubernetesClient:
                 changed = True
         if not changed:
             return path
-        patched = os.path.join(tempfile.gettempdir(), "agentfarm-kubeconfig-incluster.yaml")
+        patched = os.path.join(tempfile.gettempdir(), "agentbarn-kubeconfig-incluster.yaml")
         with open(patched, "w") as f:
             yaml.safe_dump(kubeconfig, f)
         return patched
@@ -181,7 +181,7 @@ class KubernetesClient:
     def create_service(self, namespace: str, manifest: client.V1Service) -> client.V1Service:
         # Not _create_or_get: agent stop keeps the Service (stable ClusterIP),
         # so a restart must refresh its labels here or new monitoring labels
-        # (org-name, agent-name, agentfarm.io/component) would never propagate.
+        # (org-name, agent-name, agentbarn.io/component) would never propagate.
         try:
             return self._core_v1.create_namespaced_service(namespace, manifest)
         except ApiException as e:
