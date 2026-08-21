@@ -1,7 +1,7 @@
 {
   "title": "API Health",
   "uid": "agentbarn-api-health",
-  "tags": ["agent-farm"],
+  "tags": ["agent-barn"],
   "schemaVersion": 39,
   "version": 1,
   "refresh": "30s",

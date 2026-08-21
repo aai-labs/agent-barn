@@ -1,7 +1,7 @@
 {
   "title": "Error Rates",
   "uid": "agentbarn-error-rates",
-  "tags": ["agent-farm"],
+  "tags": ["agent-barn"],
   "schemaVersion": 39,
   "version": 1,
   "refresh": "30s",

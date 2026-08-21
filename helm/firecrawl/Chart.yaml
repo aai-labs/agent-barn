@@ -1,4 +1,4 @@
 apiVersion: v2
 name: firecrawl
-description: Self-hosted Firecrawl web scraping service for agent-farm
+description: Self-hosted Firecrawl web scraping service for Agent Barn
 version: 0.1.3

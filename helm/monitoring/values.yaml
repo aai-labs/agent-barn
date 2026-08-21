@@ -172,7 +172,7 @@ prometheus:
     # annotations included, verbatim.
     alerting_rules.yml:
       groups:
-        - name: agent-farm.rules
+        - name: agent-barn.rules
           rules:
             # --- system up (API + DB) ---
             - alert: APIDown
@@ -181,7 +181,7 @@ prometheus:
               labels:
                 severity: critical
               annotations:
-                summary: The agent-farm API is not responding to scrapes.
+                summary: The Agent Barn API is not responding to scrapes.
                 description: Prometheus cannot scrape the main API process on :8000.
 
             - alert: APIAbsent
@@ -190,7 +190,7 @@ prometheus:
               labels:
                 severity: critical
               annotations:
-                summary: The agent-farm API target has disappeared entirely.
+                summary: The Agent Barn API target has disappeared entirely.
                 description: No scrape target exists for the API — the Service is gone or discovery is broken.
 
             - alert: IngestAPIDown
