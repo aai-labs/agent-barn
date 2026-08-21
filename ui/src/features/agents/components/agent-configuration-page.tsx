@@ -6,6 +6,7 @@ import { parseAsStringEnum, useQueryState } from "nuqs";
 import { ArrowLeft, CircleAlert } from "lucide-react";
 
 import { AppErrorState } from "@/components/app-error-state";
+import { SettingsPageLayout } from "@/components/settings/settings-page-layout";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
 import { useAgent } from "../hooks/use-agent";
@@ -167,77 +168,70 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
           </Alert>
         )}
 
-        <div className="grid gap-8 lg:grid-cols-[14rem_minmax(0,1fr)] lg:items-start">
-          <AgentConfigurationSidebar
-            agent={agent}
-            activeSection={activeSection}
-            onSectionChange={selectSection}
-          />
-
-          <div className="min-w-0">
-            <div className="mb-4">
-              <h2 className="m-0 text-[1.25rem] font-semibold" style={{ color: "var(--ink)" }}>
-                {configurationSectionLabel(activeSection, agent)}
-              </h2>
-              <p className="mb-0 mt-1 text-[0.84rem]" style={{ color: "var(--ink-3)" }}>
-                {section.description}
-              </p>
-            </div>
-
-            {activeSection === "template" && (
-              <AgentTemplateSelectionSettings
-                agent={agent}
-                configuration={configuration}
-                canEdit={canEdit}
-              />
-            )}
-            {activeSection === "profile" && (
-              <AgentProfileSettings
-                agent={agent}
-                canEdit={canEdit}
-                editing={editingSection === "profile"}
-                onEdit={() => toggleEditing("profile")}
-              />
-            )}
-            {activeSection === "channels" && (
-              <AgentChannelSettings
-                agent={agent}
-                canEdit={canEdit}
-                editing={editingSection === "channels"}
-                onEdit={() => toggleEditing("channels")}
-              />
-            )}
-            {activeSection === "skills" && (
-              <AgentSkillsSettings
-                agent={agent}
-                canEdit={canEdit}
-                editing={editingSection === "skills"}
-                onEdit={() => toggleEditing("skills")}
-              />
-            )}
-            {activeSection === "keys" && (
-              <AgentKeysSettings
-                agent={agent}
-                canEdit={canManageSecrets}
-                editing={editingSection === "keys"}
-                onEdit={() => toggleEditing("keys")}
-              />
-            )}
-            {activeSection === "override" && (
-              <AgentOverrideSettings
-                agentId={agent.id}
-                configuration={configuration}
-                canEdit={canEdit}
-                editing={editingSection === "override"}
-                onEdit={() => toggleEditing("override")}
-                onPublished={handleOverridePublished}
-              />
-            )}
-            {activeSection === "danger" && (
-              <AgentDangerZoneSettings agent={agent} canDelete={canDelete} homeHref={homeHref} />
-            )}
-          </div>
-        </div>
+        <SettingsPageLayout
+          sidebar={
+            <AgentConfigurationSidebar
+              agent={agent}
+              activeSection={activeSection}
+              onSectionChange={selectSection}
+            />
+          }
+          heading={configurationSectionLabel(activeSection, agent)}
+          description={section.description}
+        >
+          {activeSection === "template" && (
+            <AgentTemplateSelectionSettings
+              agent={agent}
+              configuration={configuration}
+              canEdit={canEdit}
+            />
+          )}
+          {activeSection === "profile" && (
+            <AgentProfileSettings
+              agent={agent}
+              canEdit={canEdit}
+              editing={editingSection === "profile"}
+              onEdit={() => toggleEditing("profile")}
+            />
+          )}
+          {activeSection === "channels" && (
+            <AgentChannelSettings
+              agent={agent}
+              canEdit={canEdit}
+              editing={editingSection === "channels"}
+              onEdit={() => toggleEditing("channels")}
+            />
+          )}
+          {activeSection === "skills" && (
+            <AgentSkillsSettings
+              agent={agent}
+              canEdit={canEdit}
+              editing={editingSection === "skills"}
+              onEdit={() => toggleEditing("skills")}
+            />
+          )}
+          {activeSection === "keys" && (
+            <AgentKeysSettings
+              agent={agent}
+              canEdit={canManageSecrets}
+              editing={editingSection === "keys"}
+              onEdit={() => toggleEditing("keys")}
+            />
+          )}
+          {activeSection === "override" && (
+            <AgentOverrideSettings
+              agentId={agent.id}
+              configuration={configuration}
+              canEdit={canEdit}
+              editing={editingSection === "override"}
+              onEdit={() => toggleEditing("override")}
+              onPublished={handleOverridePublished}
+            />
+          )}
+          {activeSection === "danger" && (
+            <AgentDangerZoneSettings agent={agent} canDelete={canDelete} homeHref={homeHref} />
+          )}
+        </SettingsPageLayout>
       </main>
     </div>
   );

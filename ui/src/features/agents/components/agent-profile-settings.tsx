@@ -10,11 +10,14 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
-import { formatModelName } from "../utils";
+import { currentModelOf, formatModelName } from "../utils";
 import { useAgentApplyAndRestart } from "../hooks/use-agent-apply-and-restart";
+import { useModels } from "../hooks/use-models";
 import { useUpdateAgent } from "../hooks/use-update-agent";
 import type { Agent, CommandApprovalMode } from "../schemas";
-import { ModelSelect } from "./model-select";
+import { ModelChoice } from "./model-choice";
+import { ModelSourceBadge } from "./model-source-badge";
+import { PendingModelNote } from "./pending-model-note";
 import { AgentConfigurationSection } from "./agent-configuration-section";
 
 export function AgentProfileSettings({
@@ -29,14 +32,17 @@ export function AgentProfileSettings({
   onEdit: () => void;
 }) {
   const updateAgent = useUpdateAgent();
+  // The organization's default, not agent.effectiveModel — for an Agent that already
+  // has its own model those differ, and this control is about what it would inherit.
+  const { defaultModel: organizationDefaultModel } = useModels();
   const [name, setName] = useState(agent.name);
-  const [model, setModel] = useState(agent.model);
+  const [model, setModel] = useState<string | null>(agent.model || null);
   const [approvalMode, setApprovalMode] = useState<CommandApprovalMode>(agent.approvalMode);
   const { applyAndRestart } = useAgentApplyAndRestart(agent);
   const approvalLabel = agent.agentType === "hermes" ? agent.approvalMode : "Managed by OpenClaw";
   const isDirty =
     name.trim() !== agent.name ||
-    model !== agent.model ||
+    (model ?? "") !== agent.model ||
     (agent.agentType === "hermes" && approvalMode !== agent.approvalMode);
 
   async function applyChanges() {
@@ -52,7 +58,7 @@ export function AgentProfileSettings({
 
   function cancelChanges() {
     setName(agent.name);
-    setModel(agent.model);
+    setModel(agent.model || null);
     setApprovalMode(agent.approvalMode);
     updateAgent.reset();
     onEdit();
@@ -77,10 +83,16 @@ export function AgentProfileSettings({
             Agent name
             <input className="af-input" value={name} onChange={(event) => setName(event.target.value)} />
           </label>
-          <label className="flex flex-col gap-1.5 text-[0.84rem] font-medium" style={{ color: "var(--ink)" }}>
-            Model
-            <ModelSelect value={model} onChange={setModel} />
-          </label>
+          <fieldset className="flex flex-col gap-1.5 border-0 p-0">
+            <legend className="mb-1.5 text-[0.84rem] font-medium" style={{ color: "var(--ink)" }}>
+              Model
+            </legend>
+            <ModelChoice
+              value={model}
+              effectiveDefaultModel={organizationDefaultModel}
+              onChange={setModel}
+            />
+          </fieldset>
           {agent.agentType === "hermes" && (
             <label className="flex flex-col gap-1.5 text-[0.84rem] font-medium" style={{ color: "var(--ink)" }}>
               Command approval
@@ -110,7 +122,11 @@ export function AgentProfileSettings({
           </div>
           <div>
             <dt className="text-[0.72rem] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Model</dt>
-            <dd className="mb-0 mt-1 font-mono text-[0.84rem]" style={{ color: "var(--ink-2)" }}>{formatModelName(agent.model) || "Default model"}</dd>
+            <dd className="mb-0 mt-1 flex flex-wrap items-center gap-2 font-mono text-[0.84rem]" style={{ color: "var(--ink-2)" }}>
+              {formatModelName(currentModelOf(agent)) || "—"}
+              <ModelSourceBadge source={agent.modelSource} />
+            </dd>
+            <PendingModelNote pendingModel={agent.pendingModel} />
           </div>
           <div>
             <dt className="text-[0.72rem] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Runtime</dt>

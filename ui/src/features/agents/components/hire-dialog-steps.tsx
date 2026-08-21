@@ -32,7 +32,7 @@ import { useTemplates } from "../hooks/use-templates";
 import type { RequiredSkillGroup } from "../utils";
 import { ChoiceCard, FormField, NextStep, TokenInput } from "./hire-dialog-primitives";
 import { IntegrationFields } from "./integration-fields";
-import { ModelSelect } from "./model-select";
+import { ModelChoice } from "./model-choice";
 import { Pagination } from "./pagination";
 
 const HIRE_DIALOG_PAGE_SIZE = 6;
@@ -1203,6 +1203,7 @@ export function DetailsStep({
   onNameChange,
   model,
   onModelChange,
+  effectiveDefaultModel,
   slackGroupPolicy,
   onSlackGroupPolicyChange,
   slackDmPolicy,
@@ -1222,8 +1223,9 @@ export function DetailsStep({
   agentType: "openclaw" | "hermes";
   name: string;
   onNameChange: (v: string) => void;
-  model: string;
-  onModelChange: (v: string) => void;
+  model: string | null;
+  onModelChange: (v: string | null) => void;
+  effectiveDefaultModel: string;
   slackGroupPolicy: string;
   onSlackGroupPolicyChange: (v: string) => void;
   slackDmPolicy: string;
@@ -1272,7 +1274,11 @@ export function DetailsStep({
       </FormField>
 
       <FormField label="Model">
-        <ModelSelect value={model} onChange={onModelChange} aria-label="Model" />
+        <ModelChoice
+          value={model}
+          effectiveDefaultModel={effectiveDefaultModel}
+          onChange={onModelChange}
+        />
       </FormField>
 
       {agentType === "hermes" && (

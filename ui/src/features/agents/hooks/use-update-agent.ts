@@ -11,7 +11,8 @@ import { agentsKey } from "../utils";
 export type UpdateAgentData = {
   agentId: string;
   name?: string;
-  model?: string;
+  // null clears an explicit model, returning the Agent to its organization's default.
+  model?: string | null;
   slackBotToken?: string;
   slackAppToken?: string;
   // Re-pin the agent to a different template version (both required together).

@@ -4,7 +4,9 @@ import { useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useQueryState, parseAsStringEnum, parseAsString } from "nuqs";
-import { canAgent, formatModelName } from "../utils";
+import { canAgent, currentModelOf, formatModelName } from "../utils";
+import { ModelSourceBadge } from "./model-source-badge";
+import { PendingModelNote } from "./pending-model-note";
 import { useAgent } from "../hooks/use-agent";
 import { useAgentHealth } from "../hooks/use-agent-health";
 import { useStartAgent } from "../hooks/use-start-agent";
@@ -114,10 +116,14 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
                 >
                   {agent.name}
                 </h1>
-                {agent.model && (
-                  <div className="text-[0.906rem] font-mono" style={{ color: "var(--ink-3)" }}>
-                    {formatModelName(agent.model)}
-                  </div>
+                {currentModelOf(agent) && (
+                  <>
+                    <div className="flex items-center gap-2 text-[0.906rem]" style={{ color: "var(--ink-3)" }}>
+                      <span className="font-mono">{formatModelName(currentModelOf(agent))}</span>
+                      <ModelSourceBadge source={agent.modelSource} />
+                    </div>
+                    <PendingModelNote pendingModel={agent.pendingModel} />
+                  </>
                 )}
                 {agent.slackConfig?.botDisplayName && (
                   <div className="text-[0.875rem] mt-0.5" style={{ color: "var(--ink-4)" }}>

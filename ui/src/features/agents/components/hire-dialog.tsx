@@ -7,6 +7,7 @@ import { useSlackConfigTokenActions } from "@/features/account/hooks/use-slack-c
 import { useCreateAgent } from "../hooks/use-create-agent";
 import { useCreateSlackApp } from "../hooks/use-create-slack-app";
 import { useStartAgent } from "../hooks/use-start-agent";
+import { useModels } from "../hooks/use-models";
 import { useTemplateVersions } from "../hooks/use-template-versions";
 import { DialogShell } from "./hire-dialog-primitives";
 import {
@@ -111,7 +112,9 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   const [selectedTemplate, setSelectedTemplate] = useState<AgentTemplateRead | null>(null);
   const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
   const [name, setName] = useState<string>(DEFAULT_AGENT_NAME);
-  const [model, setModel] = useState<string>("");
+  // null = follow the organization default; only a deliberate pick pins a model.
+  const [model, setModel] = useState<string | null>(null);
+  const { defaultModel } = useModels();
   const [platform, setPlatform] = useState<"slack" | "telegram" | "discord">("slack");
   const [setupNewBot, setSetupNewBot] = useState(true);
   const [botName, setBotName] = useState<string>(DEFAULT_AGENT_NAME);
@@ -295,7 +298,10 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
       // Templates are stored raw; {{ … }} placeholders render server-side
       // when the agent starts.
       const agent = await createAgent.mutateAsync({
-        name, model, platform,
+        name, platform,
+        // Omitted entirely when following the default, so the Agent inherits rather
+        // than freezing today's default into its own row.
+        ...(model ? { model } : {}),
         agentType,
         templateKey: effectiveTemplate.templateKey,
         ...(resolvedVersion != null ? { templateVersion: resolvedVersion } : {}),
@@ -645,7 +651,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
             platform={platform}
             agentType={agentType}
             name={name} onNameChange={setName}
-            model={model} onModelChange={setModel}
+            model={model} onModelChange={setModel} effectiveDefaultModel={defaultModel}
             slackGroupPolicy={slackGroupPolicy} onSlackGroupPolicyChange={(v) => setSlackGroupPolicy(v as "open" | "allowlist")}
             slackDmPolicy={slackDmPolicy} onSlackDmPolicyChange={(v) => setSlackDmPolicy(v as "off" | "open" | "allowlist")}
             slackVerboseMode={slackVerboseMode} onSlackVerboseModeChange={setSlackVerboseMode}

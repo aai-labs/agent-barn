@@ -174,7 +174,7 @@ test.describe("Hire Dialog", () => {
     await expect(page.getByText(/step 6 of 7/i)).toBeVisible();
   });
 
-  test("should show model dropdown with glm-5.2 as default and gpt-5-mini as option", async ({ page }) => {
+  test("should follow the organization default until a specific model is chosen", async ({ page }) => {
     await page.getByText("General Purpose", { exact: true }).click();
     await page.getByRole("button", { name: /continue/i }).click(); // template → agent-type
     await page.getByRole("button", { name: /continue/i }).click(); // agent-type → platform-choice
@@ -185,12 +185,20 @@ test.describe("Hire Dialog", () => {
     await page.getByPlaceholder(/xoxb-/i).fill("xoxb-test");
     await page.getByRole("button", { name: /continue/i }).click();
 
-    // The model picker is a searchable combobox: the trigger button shows the
-    // default model's label, and options render once it is opened.
+    // Hiring starts on the organization default rather than pre-filling a concrete
+    // model, so a new Agent inherits and moves when the default changes. The picker
+    // appears only once someone deliberately opts out.
+    const useDefault = page.getByRole("radio", { name: /use organization default/i });
+    await expect(useDefault).toBeChecked();
+    // Both the option and the model it would inherit sit in the radio's label, so its
+    // accessible name is what a screen reader announces — assert on that.
+    await expect(useDefault).toHaveAccessibleName(/glm 5\.2/i);
+    await expect(page.getByRole("button", { name: /^model$/i })).toHaveCount(0);
+
+    await page.getByRole("radio", { name: /choose a specific model/i }).check();
+
     const modelTrigger = page.getByRole("button", { name: /model/i });
     await expect(modelTrigger).toBeVisible();
-    await expect(modelTrigger).toContainText(/glm 5\.2/i);
-
     await modelTrigger.click();
     await expect(page.getByRole("option", { name: /glm 5\.2/i })).toBeVisible();
     await expect(page.getByRole("option", { name: /gpt-5 mini/i })).toBeVisible();
