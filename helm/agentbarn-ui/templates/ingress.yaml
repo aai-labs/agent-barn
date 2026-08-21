@@ -4,7 +4,7 @@ metadata:
   name: {{ .Release.Name }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "agentfarm-api.labels" . | nindent 4 }}
+    {{- include "agentbarn-ui.labels" . | nindent 4 }}
   annotations:
     cert-manager.io/cluster-issuer: {{ .Values.ingress.clusterIssuer }}
     traefik.ingress.kubernetes.io/router.entrypoints: websecure
@@ -22,10 +22,7 @@ spec:
     - host: {{ . | trim }}
       http:
         paths:
-          # /api only: the outer app also serves /metrics, which must stay
-          # cluster-internal (Prometheus scrapes the Service directly, not
-          # the ingress) — a / prefix would expose it to the internet.
-          - path: /api
+          - path: /
             pathType: Prefix
             backend:
               service:

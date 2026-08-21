@@ -123,16 +123,16 @@ releases:
       - {{ env "NAMESPACE" | default "agent-farm" }}/postgres-firecrawl
       - {{ env "NAMESPACE" | default "agent-farm" }}/redis
 
-  - name: agentfarm-api
+  - name: agentbarn-api
     namespace: {{ env "NAMESPACE" | default "agent-farm" }}
-    chart: ./helm/agentfarm-api
+    chart: ./helm/agentbarn-api
     labels:
-      name: agentfarm-api
+      name: agentbarn-api
     set:
       - name: registryPrefix
         value: {{ env "REGISTRY_PREFIX" | default "registry.k8s.aai-labs.com" | quote }}
       - name: image.repository
-        value: {{ env "API_IMAGE_REPOSITORY" | default "agentfarm-api" | quote }}
+        value: {{ env "API_IMAGE_REPOSITORY" | default "agentbarn-api" | quote }}
       # Local k8s dev: set IfNotPresent to run images imported via `k3d image import`.
       - name: image.pullPolicy
         value: {{ env "API_IMAGE_PULL_POLICY" | default "Always" | quote }}
@@ -143,11 +143,11 @@ releases:
       - name: litellmKeyServiceAccountName
         value: {{ env "LITELLM_KEY_SERVICE_ACCOUNT" | default "agent-farm-user" | quote }}
       - name: openclawImage.repository
-        value: {{ env "OPENCLAW_IMAGE_REPOSITORY" | default "agentfarm-openclaw-base" | quote }}
+        value: {{ env "OPENCLAW_IMAGE_REPOSITORY" | default "agentbarn-openclaw-base" | quote }}
       - name: openclawImage.tag
         value: {{ env "OPENCLAW_IMAGE_TAG" | default "latest" | quote }}
       - name: hermesImage.repository
-        value: {{ env "HERMES_IMAGE_REPOSITORY" | default "agentfarm-hermes-base" | quote }}
+        value: {{ env "HERMES_IMAGE_REPOSITORY" | default "agentbarn-hermes-base" | quote }}
       - name: hermesImage.tag
         value: {{ env "HERMES_IMAGE_TAG" | default "latest" | quote }}
       - name: dbConnectionUrl
@@ -202,16 +202,16 @@ releases:
       - {{ env "NAMESPACE" | default "agent-farm" }}/firecrawl
       - {{ env "NAMESPACE" | default "agent-farm" }}/redis
 
-  - name: agentfarm-ui
+  - name: agentbarn-ui
     namespace: {{ env "NAMESPACE" | default "agent-farm" }}
-    chart: ./helm/agentfarm-ui
+    chart: ./helm/agentbarn-ui
     labels:
-      name: agentfarm-ui
+      name: agentbarn-ui
     set:
       - name: registryPrefix
         value: {{ env "REGISTRY_PREFIX" | default "registry.k8s.aai-labs.com" | quote }}
       - name: image.repository
-        value: {{ env "UI_IMAGE_REPOSITORY" | default "agentfarm-ui" | quote }}
+        value: {{ env "UI_IMAGE_REPOSITORY" | default "agentbarn-ui" | quote }}
       # Local k8s dev: set IfNotPresent to run images imported via `k3d image import`.
       - name: image.pullPolicy
         value: {{ env "UI_IMAGE_PULL_POLICY" | default "Always" | quote }}
@@ -222,7 +222,7 @@ releases:
       - name: ingress.hosts
         value: {{ env "UI_HOST" | required "UI_HOST is required" | quote }}
     needs:
-      - {{ env "NAMESPACE" | default "agent-farm" }}/agentfarm-api
+      - {{ env "NAMESPACE" | default "agent-farm" }}/agentbarn-api
 
   # Prometheus + Grafana + Alertmanager, fully namespace-scoped (no CRDs, no
   # cluster RBAC — the shared cluster only grants us a namespace); the release
@@ -258,4 +258,4 @@ releases:
         value: {{ env "STORAGE_CLASS" | quote }}
 {{ end }}
     needs:
-      - {{ env "NAMESPACE" | default "agent-farm" }}/agentfarm-api
+      - {{ env "NAMESPACE" | default "agent-farm" }}/agentbarn-api

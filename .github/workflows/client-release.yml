@@ -1,6 +1,6 @@
 name: Client Release
 
-# Builds every agent-farm image and pushes it to the client-facing registry.
+# Builds every Agent Barn image and pushes it to the client-facing registry.
 # Manual only. Distinct from deploy.yml: it uses the docker/* actions (no hand
 # -rolled docker login/build/push) and a matrix over the images rather than a
 # step per image.
@@ -22,7 +22,7 @@ env:
   # portable across any client cluster: the browser hits same-origin /api/*, and
   # the UI server proxies to this address from inside the agent-farm namespace
   # (same namespace as the API, so the short name resolves).
-  UI_BACKEND_URL: http://agentfarm-api:8000
+  UI_BACKEND_URL: http://agentbarn-api:8000
 
 jobs:
   release:
@@ -82,7 +82,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ${{ vars.CLIENT_REGISTRY_URL }}/agent-farm/${{ matrix.name }}
+          images: ${{ vars.CLIENT_REGISTRY_URL }}/agent-barn/${{ matrix.name }}
           tags: |
             type=raw,value=${{ steps.ver.outputs.version }}
             type=raw,value=latest
@@ -107,7 +107,7 @@ jobs:
         run: |
           docker run --rm \
             -v "${{ github.workspace }}/${{ matrix.smoke }}:/smoke-test.sh:ro" \
-            "${{ vars.CLIENT_REGISTRY_URL }}/agent-farm/${{ matrix.name }}:${{ steps.ver.outputs.version }}" \
+            "${{ vars.CLIENT_REGISTRY_URL }}/agent-barn/${{ matrix.name }}:${{ steps.ver.outputs.version }}" \
             /bin/sh /smoke-test.sh
 
       - name: Push

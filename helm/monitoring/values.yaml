@@ -98,7 +98,7 @@ prometheus:
         # The API container runs two processes; each exposes its own
         # /metrics. The endpoint label ("http" vs "ingest") tells the two
         # targets apart — alerts rely on it.
-        - job_name: agentfarm-api
+        - job_name: agentbarn-api
           kubernetes_sd_configs:
             - role: endpoints
               namespaces:
@@ -109,7 +109,7 @@ prometheus:
                   __meta_kubernetes_service_label_app_kubernetes_io_name,
                   __meta_kubernetes_endpoint_port_name,
                 ]
-              regex: agentfarm-api;(http|ingest)
+              regex: agentbarn-api;(http|ingest)
               action: keep
             - source_labels: [__meta_kubernetes_endpoint_port_name]
               target_label: endpoint
@@ -176,7 +176,7 @@ prometheus:
           rules:
             # --- system up (API + DB) ---
             - alert: APIDown
-              expr: up{job="agentfarm-api", endpoint="http"} == 0
+              expr: up{job="agentbarn-api", endpoint="http"} == 0
               for: 2m
               labels:
                 severity: critical
@@ -185,7 +185,7 @@ prometheus:
                 description: Prometheus cannot scrape the main API process on :8000.
 
             - alert: APIAbsent
-              expr: absent(up{job="agentfarm-api", endpoint="http"})
+              expr: absent(up{job="agentbarn-api", endpoint="http"})
               for: 5m
               labels:
                 severity: critical
@@ -194,7 +194,7 @@ prometheus:
                 description: No scrape target exists for the API — the Service is gone or discovery is broken.
 
             - alert: IngestAPIDown
-              expr: up{job="agentfarm-api", endpoint="ingest"} == 0
+              expr: up{job="agentbarn-api", endpoint="ingest"} == 0
               for: 5m
               labels:
                 severity: warning
@@ -221,11 +221,11 @@ prometheus:
             - alert: HighAPI5xxRate
               expr: >-
                 (
-                  sum(rate(http_requests_total{job="agentfarm-api", status="5xx"}[5m]))
+                  sum(rate(http_requests_total{job="agentbarn-api", status="5xx"}[5m]))
                   /
-                  clamp_min(sum(rate(http_requests_total{job="agentfarm-api"}[5m])), 1e-9)
+                  clamp_min(sum(rate(http_requests_total{job="agentbarn-api"}[5m])), 1e-9)
                 ) > 0.05
-                and sum(rate(http_requests_total{job="agentfarm-api"}[5m])) > 0.1
+                and sum(rate(http_requests_total{job="agentbarn-api"}[5m])) > 0.1
               for: 5m
               labels:
                 severity: warning
@@ -236,11 +236,11 @@ prometheus:
             - alert: HighAPI5xxRate
               expr: >-
                 (
-                  sum(rate(http_requests_total{job="agentfarm-api", status="5xx"}[5m]))
+                  sum(rate(http_requests_total{job="agentbarn-api", status="5xx"}[5m]))
                   /
-                  clamp_min(sum(rate(http_requests_total{job="agentfarm-api"}[5m])), 1e-9)
+                  clamp_min(sum(rate(http_requests_total{job="agentbarn-api"}[5m])), 1e-9)
                 ) > 0.2
-                and sum(rate(http_requests_total{job="agentfarm-api"}[5m])) > 0.1
+                and sum(rate(http_requests_total{job="agentbarn-api"}[5m])) > 0.1
               for: 5m
               labels:
                 severity: critical

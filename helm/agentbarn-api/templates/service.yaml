@@ -4,7 +4,7 @@ metadata:
   name: {{ .Release.Name }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "agentfarm-api.labels" . | nindent 4 }}
+    {{- include "agentbarn-api.labels" . | nindent 4 }}
 spec:
   type: ClusterIP
   ports:
@@ -15,5 +15,5 @@ spec:
       port: {{ .Values.service.ingestPort }}
       targetPort: {{ .Values.service.ingestPort }}
   selector:
-    {{- include "agentfarm-api.selectorLabels" . | nindent 4 }}
+    {{- include "agentbarn-api.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: api

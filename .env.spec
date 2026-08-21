@@ -43,7 +43,7 @@ K8S_NAMESPACE=agent-farm
 STORAGE_CLASS=
 
 # Agents
-# Full image ref for agent pods, e.g. {REGISTRY_URL}/agentfarm-openclaw-base:{VERSION}
+# Full image ref for agent pods, e.g. {REGISTRY_URL}/agentbarn-openclaw-base:{VERSION}
 AGENT_IMAGE=
 # Fernet key for encrypting Slack tokens at rest. Generate with:
 #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"

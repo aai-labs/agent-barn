@@ -47,7 +47,7 @@ class Config(BaseSettings):
     agent_default_model: str = "litellm/openrouter/z-ai/glm-5.2"
     organization_creation_limit: int = 5
     api_external_url: str = ""
-    ingest_base_url: str = "http://agentfarm-api.agent-farm.svc.cluster.local:8001/ingest/v1"
+    ingest_base_url: str = "http://agentbarn-api.agent-farm.svc.cluster.local:8001/ingest/v1"
     skip_slack_token_validation: bool = False
     skip_telegram_token_validation: bool = False
     slack_directory_cache_ttl_seconds: int = 600

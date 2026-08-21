@@ -4,7 +4,7 @@ metadata:
   name: {{ .Release.Name }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "agentfarm-api.labels" . | nindent 4 }}
+    {{- include "agentbarn-api.labels" . | nindent 4 }}
     app.kubernetes.io/component: api
 spec:
   # The namespace memory quota cannot accommodate both the current and
@@ -19,7 +19,7 @@ spec:
   replicas: {{ .Values.replicaCount }}
   selector:
     matchLabels:
-      {{- include "agentfarm-api.selectorLabels" . | nindent 6 }}
+      {{- include "agentbarn-api.selectorLabels" . | nindent 6 }}
       app.kubernetes.io/component: api
   template:
     metadata:
@@ -36,7 +36,7 @@ spec:
         # Helm sees no manifest diff and skips the rollout entirely.
         build-sha: {{ .Values.buildSha | quote }}
       labels:
-        {{- include "agentfarm-api.selectorLabels" . | nindent 8 }}
+        {{- include "agentbarn-api.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: api
     spec:
       serviceAccountName: {{ .Release.Name }}

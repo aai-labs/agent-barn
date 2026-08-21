@@ -1,7 +1,7 @@
 registryPrefix: "registry.k8s.aai-labs.com"
 
 image:
-  repository: agentfarm-ui
+  repository: agentbarn-ui
   tag: latest
   pullPolicy: Always
 
@@ -22,7 +22,7 @@ service:
 ingress:
   hosts: "agent-farm.k8s.aai-labs.com"
   clusterIssuer: letsencrypt-http01
-  tlsSecretName: agentfarm-ui-tls
+  tlsSecretName: agentbarn-ui-tls
 
 resources:
   requests:

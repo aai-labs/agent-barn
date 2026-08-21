@@ -1,6 +1,6 @@
 # Development and operations
 
-> **Naming note:** the product rebranded from Agent Farm to Agent Barn. Code-level identifiers were migrated in that rebrand (`agentbarn_*` metrics, `agentbarn.io` labels, Redis namespaces), but deployment identifiers deliberately still carry the old name — namespaces (`agent-farm`, `agent-farm-staging`), ServiceAccounts (`agent-farm-user`), helm charts/releases (`agentfarm-api`, `agentfarm-ui`), image repositories (`agentfarm-*`), the Postgres app user/db (`agentfarm`), and ingress hosts. Renaming any of these changes what gets deployed and requires a planned cutover; until that is scheduled, treat them as stable identifiers, not branding.
+> **Naming note:** the product rebranded from Agent Farm to Agent Barn. Code and deployment identifiers were migrated in that rebrand (`agentbarn_*` metrics, `agentbarn.io` labels, `agentbarn-*` charts/releases/images). Only the Kubernetes namespaces deliberately keep the old name — `agent-farm`, `agent-farm-staging`, and their `<namespace>-user` ServiceAccounts — because renaming them would strand running workloads; treat those as stable identifiers, not branding.
 
 ## Install dependencies
 

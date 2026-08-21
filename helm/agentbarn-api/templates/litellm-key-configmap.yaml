@@ -21,7 +21,7 @@ data:
     LITELLM_URL = "http://litellm:4000"
     MASTER_KEY = os.environ["LITELLM_MASTER_KEY"]
     SECRET_NAME = "litellm-api-key"
-    KEY_ALIAS = "agentfarm-api"
+    KEY_ALIAS = "agentbarn-api"
     LITELLM_HEADERS = {
         "Authorization": f"Bearer {MASTER_KEY}",
         "Content-Type": "application/json",

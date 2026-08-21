@@ -93,7 +93,7 @@ jobs:
           context: hermes-base
           file: hermes-base/Dockerfile
           load: true
-          tags: ${{ vars.REGISTRY_URL }}/agentfarm-hermes-base:${{ steps.tag.outputs.value }}
+          tags: ${{ vars.REGISTRY_URL }}/agentbarn-hermes-base:${{ steps.tag.outputs.value }}
           # Only the first build in this job opts out — see the CI job above for why. The
           # Push steps then reuse the layer this one just built, so the image that ships is
           # the same one the smoke test ran against, at one compile rather than three.
@@ -105,7 +105,7 @@ jobs:
         run: |
           docker run --rm \
             -v "${{ github.workspace }}/hermes-base/smoke-test.sh:/smoke-test.sh:ro" \
-            ${{ vars.REGISTRY_URL }}/agentfarm-hermes-base:${{ steps.tag.outputs.value }} \
+            ${{ vars.REGISTRY_URL }}/agentbarn-hermes-base:${{ steps.tag.outputs.value }} \
             /bin/sh /smoke-test.sh
       - name: Plugin contract
         run: |
@@ -116,7 +116,7 @@ jobs:
             -v "${{ github.workspace }}/api/domains/agents/scripts/hermes/plugins/telemetry-push:/plugin:ro" \
             -v "${{ github.workspace }}/api/tests/fixtures/hermes_session_store_driver.py:/driver.py:ro" \
             --entrypoint python3 \
-            ${{ vars.REGISTRY_URL }}/agentfarm-hermes-base:${{ steps.tag.outputs.value }} \
+            ${{ vars.REGISTRY_URL }}/agentbarn-hermes-base:${{ steps.tag.outputs.value }} \
             /driver.py
       - name: Discord policy plugin contract
         run: |
@@ -125,7 +125,7 @@ jobs:
             -v "${{ github.workspace }}/api/domains/agents/scripts/hermes/plugins/discord-guild-allowlist:/plugins/guild-allowlist:ro" \
             -v "${{ github.workspace }}/api/tests/fixtures/hermes_discord_policy_driver.py:/driver.py:ro" \
             --entrypoint python3 \
-            ${{ vars.REGISTRY_URL }}/agentfarm-hermes-base:${{ steps.tag.outputs.value }} \
+            ${{ vars.REGISTRY_URL }}/agentbarn-hermes-base:${{ steps.tag.outputs.value }} \
             /driver.py
       - name: Push
         uses: docker/build-push-action@v7
@@ -133,7 +133,7 @@ jobs:
           context: hermes-base
           file: hermes-base/Dockerfile
           push: true
-          tags: ${{ vars.REGISTRY_URL }}/agentfarm-hermes-base:${{ steps.tag.outputs.value }}
+          tags: ${{ vars.REGISTRY_URL }}/agentbarn-hermes-base:${{ steps.tag.outputs.value }}
           cache-from: type=gha
           secrets: |
             gh_token=${{ secrets.AAI_CLI_REPO_ACCESS_TOKEN }}
@@ -144,7 +144,7 @@ jobs:
           context: hermes-base
           file: hermes-base/Dockerfile
           push: true
-          tags: ${{ vars.REGISTRY_URL }}/agentfarm-hermes-base:latest
+          tags: ${{ vars.REGISTRY_URL }}/agentbarn-hermes-base:latest
           cache-from: type=gha
           secrets: |
             gh_token=${{ secrets.AAI_CLI_REPO_ACCESS_TOKEN }}

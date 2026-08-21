@@ -1,6 +1,6 @@
 # Cluster prerequisite for Agent Barn, applied outside helm.
 #
-# The agentfarm-api chart's litellm-key pre-install Job runs as the
+# The agentbarn-api chart's litellm-key pre-install Job runs as the
 # `agent-farm-user` ServiceAccount: it mints a LiteLLM key and writes it to the
 # `litellm-api-key` Secret via the k8s API, so the SA needs create/update on
 # secrets. This is a cluster-bootstrap identity (not a per-release resource), so
