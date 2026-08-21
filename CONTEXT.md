@@ -1,6 +1,6 @@
-# Agent Farm
+# Agent Barn
 
-Agent Farm manages organization-owned AI agents that operate in Slack, Microsoft Teams, Telegram, or Discord through a selected runtime and a versioned configuration.
+Agent Barn manages organization-owned AI agents that operate in Slack, Microsoft Teams, Telegram, or Discord through a selected runtime and a versioned configuration.
 
 ## Language
 
@@ -21,7 +21,7 @@ The deployment-configured maximum number of non-deleted Organizations attributed
 _Avoid_: Membership limit, ownership limit, Platform Administrator quota
 
 **Platform Administrator**:
-A user with platform-level authority to administer Agent Farm outside any single Organization. A Platform Administrator may also have normal Memberships, but platform authority is separate from Organization Membership authority.
+A user with platform-level authority to administer Agent Barn outside any single Organization. A Platform Administrator may also have normal Memberships, but platform authority is separate from Organization Membership authority.
 _Avoid_: superuser, super admin, global role
 
 **Platform Privilege**:
@@ -29,7 +29,7 @@ The platform-level grant that makes a user a Platform Administrator.
 _Avoid_: global Membership, Organization Role, default Organization ownership
 
 **Platform Resource**:
-A global resource owned by Agent Farm itself rather than by an Organization.
+A global resource owned by Agent Barn itself rather than by an Organization.
 _Avoid_: default Organization resource, shared tenant data
 
 **Platform View**:
@@ -89,11 +89,11 @@ The models and token usage attributed to Agent executions during a defined repor
 _Avoid_: configured model, current model
 
 **Runtime**:
-The implementation that executes an agent. Agent Farm currently supports Hermes and OpenClaw.
+The implementation that executes an agent. Agent Barn currently supports Hermes and OpenClaw.
 _Avoid_: platform
 
 **Platform**:
-The chat system through which an agent interacts with people. Agent Farm currently supports Slack, Microsoft Teams, Telegram, and Discord.
+The chat system through which an agent interacts with people. Agent Barn currently supports Slack, Microsoft Teams, Telegram, and Discord.
 _Avoid_: runtime
 
 **Template**:
@@ -177,7 +177,7 @@ An ingested record of one external tool execution by an agent, with pending, suc
 _Avoid_: integration call
 
 **Domain Event**:
-An immutable, typed business fact that occurred at Platform or Organization scope and may be handled internally by Agent Farm.
+An immutable, typed business fact that occurred at Platform or Organization scope and may be handled internally by Agent Barn.
 _Avoid_: outbox row, telemetry event, audit log
 
 **Event Scope**:
@@ -217,7 +217,7 @@ A durable, immutable compliance artifact that records a security-relevant fact, 
 _Avoid_: domain event, audit event, log line
 
 **Ingest**:
-The separately served, authenticated telemetry path through which agent runtimes report conversation messages and tool-call state to Agent Farm.
+The separately served, authenticated telemetry path through which agent runtimes report conversation messages and tool-call state to Agent Barn.
 _Avoid_: webhook
 
 ## Relationships
