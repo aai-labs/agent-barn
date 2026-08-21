@@ -1,4 +1,4 @@
-# Cluster prerequisite for agent-farm, applied outside helm.
+# Cluster prerequisite for Agent Barn, applied outside helm.
 #
 # The agentfarm-api chart's litellm-key pre-install Job runs as the
 # `agent-farm-user` ServiceAccount: it mints a LiteLLM key and writes it to the
