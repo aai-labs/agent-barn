@@ -27,7 +27,7 @@ const ICONS = {
 export default function SettingsPage() {
   const { canManage, selectedOrganization } = useActiveOrgRole();
   const [activeSection, setActiveSection] = useQueryState(
-    "section",
+    "tab",
     parseAsStringEnum<OrganizationSettingsSectionKey>(ORGANIZATION_SETTINGS_SECTION_KEYS)
       .withDefault("agents")
       .withOptions({ scroll: false, history: "replace" }),

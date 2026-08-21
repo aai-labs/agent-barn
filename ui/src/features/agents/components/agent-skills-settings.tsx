@@ -68,7 +68,10 @@ export function AgentSkillsSettings({
                 <div className="font-medium text-[0.86rem]" style={{ color: "var(--ink-2)" }}>{skill.name}</div>
                 <div className="text-[0.76rem]" style={{ color: "var(--ink-4)" }}>{skill.source}{skill.required ? " · Required by active template" : ""}</div>
               </div>
-              <span className="font-mono text-[0.72rem]" style={{ color: "var(--ink-4)" }}>{skill.requiredProviders.length > 0 ? skill.requiredProviders.join(", ") : "No provider"}</span>
+              <div className="flex items-center gap-2">
+                <span className="font-mono text-[0.72rem]" style={{ color: "var(--ink-4)" }}>v{skill.version}</span>
+                <span className="font-mono text-[0.72rem]" style={{ color: "var(--ink-4)" }}>{skill.requiredProviders.length > 0 ? skill.requiredProviders.join(", ") : "No provider"}</span>
+              </div>
             </div>
           ))}
         </div>

@@ -59,6 +59,9 @@ export const AgentAssignedSkillSchema = z.object({
   required: z.boolean().default(false),
   createdAt: z.string(),
   updatedAt: z.string(),
+  // The exact skill version this agent is pinned to (explicit, like templates).
+  // Optional so template required-skill reads (which don't carry a pin) still parse.
+  version: z.number().int().optional().default(1),
 });
 
 // A template's required skill. groupKey is null for a standalone
