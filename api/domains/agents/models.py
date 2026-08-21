@@ -323,6 +323,13 @@ class Agent(BaseModel, table=True):
         ondelete="RESTRICT",
     )
     model: str = SqlField(nullable=False, default="")
+    # The model this Agent's running pod was started on. The runtime reads its config
+    # once at container start, so this stays put while `model` and the Organization
+    # default move underneath it. Empty means "not running".
+    running_model: str = SqlField(
+        default="",
+        sa_column=Column(sa.String(), nullable=False, server_default=""),
+    )
     platform: AgentPlatform = SqlField(
         default=AgentPlatform.SLACK,
         sa_column=Column(sa.String(10), nullable=False, server_default="slack"),
@@ -1189,6 +1196,9 @@ class AgentAssignedSkillRead(PydanticBaseModel):
     required: bool = False
 
 
+AgentModelSource = Literal["default", "override"]
+
+
 class AgentRead(PydanticBaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -1202,7 +1212,18 @@ class AgentRead(PydanticBaseModel):
     template_version: int
     template_pin_type: AgentTemplatePinType = AgentTemplatePinType.SHARED
     override_version: int | None = None
+    # The stored value: empty means the Agent follows its Organization's default.
     model: str
+    # Resolved for the caller so no client re-derives inheritance, and so an
+    # inheriting Agent can name the model it will actually run.
+    model_source: AgentModelSource
+    #: What this Agent would start on now.
+    effective_model: str
+    #: What its running pod actually started on; "" when it is not running.
+    running_model: str
+    #: Set only when a running Agent's resolved model has moved since it started, so a
+    #: surface can say what a restart would switch it to without recomputing the rule.
+    pending_model: str
     slack_config: AgentSlackConfigRead | None = None
     teams_config: AgentTeamsConfigRead | None = None
     telegram_config: AgentTelegramConfigRead | None = None

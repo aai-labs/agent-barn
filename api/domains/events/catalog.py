@@ -25,6 +25,7 @@ TEMPLATE_CREATED = "template.created"
 TEMPLATE_UPDATED = "template.updated"
 TEMPLATE_DELETED = "template.deleted"
 ORGANIZATION_MODEL_ALLOWLIST_CHANGED = "organization.model_allowlist.changed"
+ORGANIZATION_AGENT_SETTINGS_CHANGED = "organization.agent_settings.changed"
 ORGANIZATION_MEMBER_ADDED = "organization.member.added"
 ORGANIZATION_MEMBER_REMOVED = "organization.member.removed"
 ORGANIZATION_OWNERSHIP_TRANSFERRED = "organization.ownership_transferred"
@@ -233,6 +234,26 @@ class OrganizationModelAllowlistChangedPayload(BaseModel):
     subject_display: str
 
 
+class OrganizationAgentSettingsChangedPayload(BaseModel):
+    """One changed Agent Setting, named by `setting`, with its before/after values.
+
+    Unlike the allowlist event this can safely carry both values: a setting holds a
+    single bounded scalar (a model slug), not an unbounded list, so the payload
+    cannot grow into MAX_PAYLOAD_BYTES. `previous`/`current` are None when the
+    Organization was, or becomes, one that follows the platform default.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    setting: str
+    previous: str | None
+    current: str | None
+    inheriting_agent_count: int
+    actor_display: str
+    subject_display: str
+
+
 class OrganizationMemberChangedPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -292,6 +313,7 @@ def build_default_event_registry() -> DomainEventRegistry:
         (TEMPLATE_UPDATED, TemplateUpdatedPayload),
         (TEMPLATE_DELETED, TemplateDeletedPayload),
         (ORGANIZATION_MODEL_ALLOWLIST_CHANGED, OrganizationModelAllowlistChangedPayload),
+        (ORGANIZATION_AGENT_SETTINGS_CHANGED, OrganizationAgentSettingsChangedPayload),
         (ORGANIZATION_OWNERSHIP_TRANSFERRED, OrganizationOwnershipTransferredPayload),
     ):
         registry.register(

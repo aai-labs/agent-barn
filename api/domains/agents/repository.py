@@ -137,6 +137,45 @@ class AgentRepository:
             )
             return session.scalar(count_query) or 0
 
+    def count_by_model_source(self, org_id: UUID) -> tuple[int, int]:
+        """(inheriting, override) Agent counts for the Organization's Agent Settings.
+
+        Deliberately unscoped by Agent visibility: the caller holds
+        `organization.update`, and these two numbers state how far a default-model
+        change reaches rather than naming any Agent the caller may not see.
+        An empty `model` is the inherit sentinel.
+        """
+        with Session(self.delegate.engine) as session:
+            inheriting, override = session.exec(
+                select(
+                    func.count().filter(col(Agent.model) == ""),
+                    func.count().filter(col(Agent.model) != ""),
+                )
+                .select_from(Agent)
+                .where(col(Agent.organization_id) == org_id)
+                .where(col(Agent.deleted_at).is_(None))
+            ).one()
+            return int(inheriting or 0), int(override or 0)
+
+    def list_pinned_models(self, org_id: UUID) -> list[tuple[str, str]]:
+        """(name, model) for every Agent in the Organization holding an explicit model.
+
+        Backs the allowlist guard: removing a model that an Agent names would not move
+        that Agent, it would only make it unstartable, so the caller has to be told
+        which Agents stand in the way. Unscoped by Agent visibility for the same reason
+        as `count_by_model_source` — but this one names Agents, so callers must hold
+        `organization.update`.
+        """
+        with Session(self.delegate.engine) as session:
+            rows = session.exec(
+                select(col(Agent.name), col(Agent.model))
+                .where(col(Agent.organization_id) == org_id)
+                .where(col(Agent.deleted_at).is_(None))
+                .where(col(Agent.model) != "")
+                .order_by(col(Agent.name))
+            ).all()
+            return [(name, model) for name, model in rows]
+
     def count_agents_in_error(self) -> int:
         """All-orgs aggregate count for the /metrics probe (agents_in_error
         gauge). Deliberately unscoped and deliberately narrow: it returns a
@@ -687,9 +726,13 @@ class AgentRepository:
             ).first()
             if persisted is None:
                 return AgentLifecycleEventResult(agent=agent, delivery_ids=[])
+            # Only the fields a lifecycle transition owns are copied onto the locked row,
+            # so a concurrent edit elsewhere is not clobbered by this caller's stale copy.
+            # Anything start/stop writes has to be listed here or it is silently dropped.
             persisted.status = agent.status
             persisted.last_error = agent.last_error
             persisted.ingest_key_encrypted = agent.ingest_key_encrypted
+            persisted.running_model = agent.running_model
             session.add(persisted)
             session.flush()
             payload: dict[str, Any] = {

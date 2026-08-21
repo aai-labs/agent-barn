@@ -134,6 +134,12 @@ def _service(openrouter, allowlist=None, default_model=""):
     org_lookup = MagicMock()
     org_lookup.get_allowed_models.return_value = allowlist
 
+    # The picker's default now comes from the Organization's Agent Settings, which
+    # fall back to AGENT_DEFAULT_MODEL. These tests are about how the resolved
+    # default is surfaced, so they stub the resolution and keep their assertions.
+    agent_settings_lookup = MagicMock()
+    agent_settings_lookup.resolve_default_model.return_value = default_model
+
     return AgentService(
         repository=MagicMock(),
         override_repository=MagicMock(),
@@ -148,6 +154,7 @@ def _service(openrouter, allowlist=None, default_model=""):
         shared_credential_repository=MagicMock(),
         event_delivery_dispatcher=MagicMock(),
         organization_lookup=org_lookup,
+        agent_settings_lookup=agent_settings_lookup,
     )
 
 

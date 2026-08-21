@@ -11,6 +11,7 @@ from fastapi import HTTPException, status
 from injector import inject, singleton
 
 from api.core.config import Config
+from api.domains.agent_settings.lookup import AgentSettingsLookupService
 from api.domains.agents.aai_cli_artifacts import (
     build_config_toml,
     build_env,
@@ -279,6 +280,7 @@ class AgentService:
     shared_credential_repository: SharedCredentialRepository
     event_delivery_dispatcher: EventDeliveryDispatcher
     organization_lookup: OrganizationLookupService
+    agent_settings_lookup: AgentSettingsLookupService
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
@@ -312,17 +314,26 @@ class AgentService:
     def _ensure_model_allowed(self, model: str | None, org_id: UUID) -> None:
         """Rejects models outside the allowlist. litellm is cluster-internal, so
         create/update are the only paths that can set an agent's model; enforcing
-        here is sufficient. An empty/None model defers to the configured default.
+        here is sufficient. An empty/None model defers to the resolved default.
+
+        The resolved default is admitted whatever the allowlist says. When the
+        Organization set its own default that is already true by invariant; the case
+        this covers is an Organization following a platform default its allowlist
+        does not cover, where the model picker offers that default and rejecting it
+        would make the one pre-selected option unsavable.
         """
         if model:
             allowed_models = self.organization_lookup.get_allowed_models(org_id)
             if allowed_models is None:
                 raise HTTPException(status_code=404, detail="Organization not found")
-            if not is_model_allowed(model, allowed_models):
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Model '{model}' is not in the allowed model list",
-                )
+            if is_model_allowed(model, allowed_models):
+                return
+            if model == self.agent_settings_lookup.resolve_default_model(org_id):
+                return
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Model '{model}' is not in the allowed model list",
+            )
 
     @staticmethod
     def _build_skill_pointers(skills: list[Skill]) -> str:
@@ -467,6 +478,7 @@ class AgentService:
         template_version: int = 0,
         template_pin_type: AgentTemplatePinType = AgentTemplatePinType.SHARED,
         override_version: int | None = None,
+        effective_default_model: str = "",
     ) -> AgentRead:
         slack_config_read = AgentSlackConfigRead.model_validate(slack_config) if slack_config else None
         if slack_config_read and slack_config:
@@ -498,6 +510,7 @@ class AgentService:
             if agent.platform == AgentPlatform.TEAMS and self.config.api_external_url
             else None
         )
+        resolved_model = agent.model or effective_default_model
         return AgentRead(
             id=agent.id,
             name=agent.name,
@@ -510,6 +523,12 @@ class AgentService:
             template_pin_type=template_pin_type,
             override_version=override_version,
             model=agent.model,
+            model_source="override" if agent.model else "default",
+            effective_model=resolved_model,
+            running_model=agent.running_model,
+            # A running pod that started on something else is the only case a surface
+            # must not report the resolved value as current.
+            pending_model=(resolved_model if agent.running_model and agent.running_model != resolved_model else ""),
             approval_mode=agent.approval_mode,
             slack_config=slack_config_read,
             teams_config=teams_config_read,
@@ -561,6 +580,7 @@ class AgentService:
             skills,
             required_map,
             allowed_actions,
+            effective_default_model=self.agent_settings_lookup.resolve_default_model(agent.organization_id),
             template_key=template_key,
             template_version=template.version if template else 0,
             template_pin_type=pin_type,
@@ -873,6 +893,7 @@ class AgentService:
             allowed_actions,
             template_key=template.template_key,
             template_version=template.version,
+            effective_default_model=self.agent_settings_lookup.resolve_default_model(org_id),
         )
 
     def get_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
@@ -1475,6 +1496,9 @@ class AgentService:
 
         req_maps_by_agent = self.template_repository.get_required_skill_map_for_agents(agents)
         pin_info = self.template_repository.get_pinned_template_info_for_agents(agents)
+        # Resolved once for the page. Every Agent in it belongs to the same
+        # Organization, so resolving per row would be one query per row.
+        effective_default_model = self.agent_settings_lookup.resolve_default_model(read_scope.organization_id)
 
         items = [
             self._build_agent_read(
@@ -1495,6 +1519,7 @@ class AgentService:
                     else AgentTemplatePinType.SHARED
                 ),
                 override_version=pin_info.get(agent.id, ("", 0, "shared", None))[3],
+                effective_default_model=effective_default_model,
             )
             for agent in agents
         ]
@@ -1577,7 +1602,10 @@ class AgentService:
 
         if "model" in updated:
             self._ensure_model_allowed(updated["model"], org_id)
-            agent.model = updated["model"]
+            # An explicit null (or empty string) clears the override and returns the
+            # Agent to its Organization's default. The column is non-nullable, so the
+            # sentinel is "", never None.
+            agent.model = updated["model"] or ""
 
         if "approval_mode" in updated:
             agent.approval_mode = updated["approval_mode"]
@@ -1965,18 +1993,26 @@ class AgentService:
             if agent.litellm_key_encrypted
             else ""
         )
-        effective_model = agent.model or self.config.agent_default_model
+        effective_model = agent.model or self.agent_settings_lookup.resolve_default_model(org_id)
         llm_proxy_url = "http://localhost:8090"
 
         # Re-check the allowlist at start time, not just create/update: the org's
         # allowlist can change after the agent was created, and a model that was
         # valid then may no longer be permitted now.
-        allowed_models = self.organization_lookup.get_allowed_models(org_id)
-        if allowed_models is None or not is_model_allowed(effective_model, allowed_models):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Model '{effective_model}' is no longer in the organization's allowed model list",
-            )
+        #
+        # Only an explicit override is re-checked. An Agent that inherits is running
+        # the Organization's policy rather than a user's choice: when the Organization
+        # set its own default, the allowlist invariant already keeps that model inside
+        # the list, and when it did not, the model is the platform default the
+        # Organization has no way to police. Failing the start in either case would
+        # punish the Agent for a decision nobody made about it.
+        if agent.model:
+            allowed_models = self.organization_lookup.get_allowed_models(org_id)
+            if allowed_models is None or not is_model_allowed(agent.model, allowed_models):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Model '{agent.model}' is no longer in the organization's allowed model list",
+                )
 
         overlay: dict | None = None
         hermes_cfg: dict | None = None
@@ -2406,6 +2442,10 @@ class AgentService:
 
         agent.status = AgentStatus.RUNNING
         agent.last_error = None
+        # Pin what this pod was started on. The runtime reads its config once, so this
+        # is the model it serves until someone restarts it — however the Organization
+        # default moves in the meantime.
+        agent.running_model = effective_model
         agent.ingest_key_encrypted = encrypt_token(ingest_key, self.config.agent_token_encryption_key)
         result = self.repository.save_with_lifecycle_event(
             agent,
@@ -2544,6 +2584,7 @@ class AgentService:
         self.k8s.delete_secret(name, ns)
 
         agent.status = AgentStatus.STOPPED
+        agent.running_model = ""
         result = self.repository.save_with_lifecycle_event(
             agent,
             event_name=AGENT_STOPPED,
@@ -2689,9 +2730,14 @@ class AgentService:
                 logger.warning("Unexpected error joining channel %s: %s", channel_id, e)
 
     def list_models(self, context: CurrentUserContext, catalog: bool = False) -> list[dict]:
-        """Returns the allowlisted OpenRouter models as picker options. The
-        configured default (AGENT_DEFAULT_MODEL) is guaranteed present, flagged
-        is_default, and listed first so the frontend and backend agree on it.
+        """Returns the allowlisted OpenRouter models as picker options.
+
+        The Organization's resolved default model is guaranteed present, flagged
+        is_default, and listed first, so the frontend and backend agree on which
+        model an Agent inherits without a second request. It is normally already in
+        the filtered list, since an Organization picks its default from its own
+        allowlist; the append only fires for an Organization following a platform
+        default its allowlist does not cover.
         """
         org_id = self._org_id(context)
         self.authorization.require_collection_scope(context, PermissionKey.AGENT_CREATE)
@@ -2720,7 +2766,7 @@ class AgentService:
             for model in allowed
         ]
 
-        default_value = self.config.agent_default_model
+        default_value = self.agent_settings_lookup.resolve_default_model(org_id)
         if default_value and not any(o["value"] == default_value for o in options):
             options.append(
                 {

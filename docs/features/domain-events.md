@@ -71,6 +71,7 @@ AF-167 broadens Security Audit Record coverage to additional mutations:
 - `agent.secret.added` / `agent.secret.updated` / `agent.secret.removed` — emitted on Agent Secret (credential) create/update/delete; payload is built allowlist-style from safe fields only and never includes the encrypted `content`.
 - `template.created` / `template.updated` / `template.deleted` — emitted on org Template lineage create/update/delete; `template.updated`'s `field_changes` is scoped to `template_name`/`description` only, excluding the markdown prompt bodies.
 - `organization.model_allowlist.changed` — emitted when an Organization's `allowed_models` list changes.
+- `organization.agent_settings.changed` — emitted when an Organization's Agent Settings change, naming the setting and carrying its previous and current values plus the number of Agents that inherit it. Not emitted when a save leaves the value unchanged.
 - `organization.member.added` / `organization.member.removed` — emitted on Organization membership add/remove.
 - `organization.ownership_transferred` — emitted when Organization ownership transfers between Memberships.
 
