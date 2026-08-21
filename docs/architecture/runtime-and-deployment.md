@@ -63,6 +63,10 @@ Runtime configuration is generated at agent start, so a running agent keeps the 
 
 Discord guild policy and channel restrictions are independent. An open guild policy allows the bot to operate in any guild containing it, while configured channel, user, and role restrictions continue to narrow access within those guilds in both runtimes.
 
+## Platform failure recovery
+
+Hermes retries retryable platform connection failures with its bounded exponential backoff. If repeated failures open Hermes' platform circuit breaker, the agent's dedicated `/live` probe reports unhealthy and Kubernetes restarts the pod after approximately five minutes, allowing recoverable external configuration changes to take effect without operator intervention. A platform intentionally paused through `/platform pause` remains live and is not automatically restarted.
+
 ## Telemetry and costs
 
 Agent runtimes report messages and tool-call state to the separate Ingest API using the per-start ingest key. Ingest authentication currently remains valid after stop because status is not checked and the stored key is not cleared. Costs follow a separate path: the API queries LiteLLM and attributes spend through each agent's LiteLLM key identity.
