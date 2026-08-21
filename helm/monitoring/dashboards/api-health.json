@@ -1,6 +1,6 @@
 {
   "title": "API Health",
-  "uid": "agentfarm-api-health",
+  "uid": "agentbarn-api-health",
   "tags": ["agent-farm"],
   "schemaVersion": 39,
   "version": 1,
@@ -68,7 +68,7 @@
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 5, "w": 6, "x": 12, "y": 0 },
       "targets": [
-        { "expr": "min(agentfarm_database_up)", "refId": "A" }
+        { "expr": "min(agentbarn_database_up)", "refId": "A" }
       ],
       "fieldConfig": {
         "defaults": {

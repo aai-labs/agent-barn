@@ -50,7 +50,7 @@ class TemplateKeyCollisionError(RuntimeError):
     """Raised when a newly generated key is already used by any template row."""
 
 
-_TEMPLATE_KEY_ALLOCATION_LOCK = "agent-farm.template-key-allocation"
+_TEMPLATE_KEY_ALLOCATION_LOCK = "agent-barn.template-key-allocation"
 
 
 class _RequiredSkillRow(Protocol):

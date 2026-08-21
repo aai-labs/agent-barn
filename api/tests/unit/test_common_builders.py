@@ -33,12 +33,12 @@ def test_labels_include_stable_agent_component_label():
             {
                 "app": f"agent-{_AGENT_ID}",
                 "org-id": str(_ORG_ID),
-                "agentfarm.io/component": "agent",
+                "agentbarn.io/component": "agent",
             }
         ),
     )
     pvc = build_pvc(_AGENT_ID, _ORG_ID, _NS)
-    assert_that(pvc.metadata.labels, has_entries({"agentfarm.io/component": "agent"}))
+    assert_that(pvc.metadata.labels, has_entries({"agentbarn.io/component": "agent"}))
 
 
 def test_service_selector_stays_on_app_label_only():
