@@ -115,6 +115,7 @@ _VALID_CREATE_DISCORD = {
     "discord_allowed_channel_ids": ["channel-1"],
     "discord_allowed_user_ids": ["user-1"],
     "discord_allowed_role_ids": ["role-1"],
+    "discord_allow_all_users": False,
     "discord_home_channel_id": "channel-1",
     "template_key": "test-template",
 }
@@ -1890,6 +1891,7 @@ def test_create_discord_agent_returns_read_safe_configuration():
                         "allowed_channel_ids": ["channel-1"],
                         "allowed_user_ids": ["user-1"],
                         "allowed_role_ids": ["role-1"],
+                        "allow_all_users": False,
                         "home_channel_id": "channel-1",
                         "require_mention": True,
                         "group_policy": "allowlist",
@@ -1909,6 +1911,7 @@ def test_patch_discord_agent_updates_routing_and_rotates_token():
                     "discord_bot_token": "rotated-discord-token",
                     "discord_guild_ids": ["guild-2"],
                     "discord_allowed_role_ids": ["role-2"],
+                    "discord_allow_all_users": False,
                     "discord_home_channel_id": "channel-2",
                 },
                 headers=_auth(context),
@@ -1924,6 +1927,62 @@ def test_patch_discord_agent_updates_routing_and_rotates_token():
                 decrypt_token(config.bot_token_encrypted, TEST_ENCRYPTION_KEY),
                 equal_to("rotated-discord-token"),
             )
+
+
+def test_create_discord_agent_allows_all_users_by_default():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I create a Discord agent without user or role restrictions"):
+            payload = {key: value for key, value in _VALID_CREATE_DISCORD.items() if key != "discord_allow_all_users"}
+            payload["discord_allowed_user_ids"] = []
+            payload["discord_allowed_role_ids"] = []
+            response = client.post(
+                _BASE,
+                json=payload,
+                headers=_auth(context),
+            )
+
+        with then("all users are allowed within the configured routing boundaries"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(response.json()["discord_config"]["allow_all_users"], equal_to(True))
+
+
+def test_create_discord_agent_rejects_empty_restricted_user_policy():
+    with given(_GIVEN) as context:
+        with when("I create a restricted Discord agent without a user or role"):
+            response = context.client.post(
+                _BASE,
+                json={
+                    **_VALID_CREATE_DISCORD,
+                    "discord_allow_all_users": False,
+                    "discord_allowed_user_ids": [],
+                    "discord_allowed_role_ids": [],
+                },
+                headers=_auth(context),
+            )
+
+        with then("the invalid policy is explained"):
+            assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
+            assert_that(response.text, contains_string("at least one allowed user or role"))
+
+
+def test_patch_discord_agent_rejects_empty_restricted_user_policy():
+    with given([*_GIVEN, there_is_an_agent(platform=AgentPlatform.DISCORD)]) as context:
+        with when("I disable allow-all without configuring a user or role"):
+            response = context.client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={
+                    "discord_allow_all_users": False,
+                    "discord_allowed_user_ids": [],
+                    "discord_allowed_role_ids": [],
+                },
+                headers=_auth(context),
+            )
+
+        with then("the invalid policy is explained"):
+            assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
+            assert_that(response.json()["detail"], contains_string("at least one allowed user or role"))
 
 
 def test_patch_discord_token_requires_secret_management_permission():
@@ -1963,6 +2022,7 @@ def test_start_openclaw_discord_agent_materializes_all_routing_fields():
         config.allowed_channel_ids = ["channel-1"]
         config.allowed_user_ids = ["user-1"]
         config.allowed_role_ids = ["role-1"]
+        config.allow_all_users = False
         config.home_channel_id = "channel-1"
         repository.save_discord_config(config)
         k8s: MagicMock = context.injector.get(KubernetesClient)
@@ -1994,6 +2054,7 @@ def test_start_hermes_discord_open_policy_preserves_channel_restrictions():
         config.group_policy = DiscordGroupPolicy.OPEN
         config.guild_ids = ["guild-1"]
         config.allowed_channel_ids = ["channel-1"]
+        config.allow_all_users = False
         repository.save_discord_config(config)
         k8s: MagicMock = context.injector.get(KubernetesClient)
 

@@ -61,7 +61,7 @@ Guarantee strength differs by platform. Slack on both runtimes enforces a fresh 
 
 Runtime configuration is generated at agent start, so a running agent keeps the gating it was started with until it is stopped and started again.
 
-Discord guild policy and channel restrictions are independent. An open guild policy allows the bot to operate in any guild containing it, while configured channel, user, and role restrictions continue to narrow access within those guilds in both runtimes.
+Discord guild, channel, and user policies are independent. User access defaults open within the configured guild and channel boundaries. When open user access is explicitly disabled, at least one user or role ID is required and both runtimes materialize those restrictions. An open guild policy allows the bot to operate in any guild containing it, while configured channel restrictions continue to narrow access within those guilds.
 
 ## Platform failure recovery
 

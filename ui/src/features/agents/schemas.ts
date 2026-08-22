@@ -28,6 +28,7 @@ export const AgentDiscordConfigSchema = z.object({
   allowedChannelIds: z.array(z.string()),
   allowedUserIds: z.array(z.string()),
   allowedRoleIds: z.array(z.string()),
+  allowAllUsers: z.boolean().default(true),
   homeChannelId: z.string().nullable(),
   requireMention: z.boolean(),
   groupPolicy: z.enum(["open", "allowlist"]),

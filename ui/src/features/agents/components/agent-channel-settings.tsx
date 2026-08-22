@@ -23,6 +23,7 @@ export function AgentChannelSettings({
 }) {
   const [copied, setCopied] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
+  const [isValid, setIsValid] = useState(true);
   const panelRef = useRef<AgentConfigurationEditHandle>(null);
   const { applyAndRestart } = useAgentApplyAndRestart(agent);
   const editable = canEdit && agent.platform !== "teams";
@@ -59,7 +60,7 @@ export function AgentChannelSettings({
       onApply={applyChanges}
       onCancel={cancelChanges}
       onApplied={onEdit}
-      applyDisabled={!isDirty}
+      applyDisabled={!isDirty || !isValid}
       restartOnApply={agent.status === "RUNNING"}
     >
       {editing && editable ? (
@@ -81,6 +82,7 @@ export function AgentChannelSettings({
             ref={panelRef}
             agent={agent}
             onDirtyChange={setIsDirty}
+            onValidChange={setIsValid}
           />
         )
       ) : (
@@ -143,7 +145,7 @@ export function AgentChannelSettings({
               </div>
               <div>
                 <dt className="text-[0.72rem] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Allowed operators</dt>
-                <dd className="mb-0 mt-1 text-[0.9rem]" style={{ color: "var(--ink-2)" }}>{discord.allowedUserIds.length} users · {discord.allowedRoleIds.length} roles</dd>
+                <dd className="mb-0 mt-1 text-[0.9rem]" style={{ color: "var(--ink-2)" }}>{discord.allowAllUsers ? "All users" : `${discord.allowedUserIds.length} users · ${discord.allowedRoleIds.length} roles`}</dd>
               </div>
               <div>
                 <dt className="text-[0.72rem] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Mention gating</dt>
