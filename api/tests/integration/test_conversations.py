@@ -1,16 +1,16 @@
 """Integration tests for the per-channel Conversations API."""
 
 from datetime import UTC, datetime, timedelta
-from unittest.mock import patch
 
 from fastapi import status
 from hamcrest import assert_that, equal_to, has_length
 from starlette.testclient import TestClient
 
-from api.domains.agents.models import AgentPlatform, AgentStatus
+from api.domains.agents.models import AgentStatus
+from api.domains.communications.models import CommunicationConnection
 from api.domains.conversations.models import AgentChatMessage, MessageDirection
 from api.domains.conversations.repository import ConversationRepository
-from api.domains.conversations.service import ConversationService
+from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
     create_test_client,
@@ -66,10 +66,22 @@ def _seed_message(
     occurred_at: datetime | None = None,
     channel_name: str | None = None,
 ):
+    if not hasattr(context, "communication_connection"):
+        delegate: PostgresRepositoryDelegate = context.injector.get(PostgresRepositoryDelegate)
+        context.communication_connection = CommunicationConnection(
+            organization_id=context.agent.organization_id,
+            agent_id=context.agent.id,
+            platform_key="slack",
+            display_name="Test Slack",
+            credentials_encrypted="test-credentials",
+            driver_key_encrypted="test-driver-key",
+        )
+        delegate.save(context.communication_connection)
     repo: ConversationRepository = context.injector.get(ConversationRepository)
     ts = occurred_at or datetime(2025, 5, 1, 12, 0, 0, tzinfo=UTC)
     msg = AgentChatMessage(
         agent_id=context.agent.id,
+        connection_id=context.communication_connection.id,
         openclaw_msg_id=f"test-{direction}-{channel_id}-{thread_id}-{content[:8]}-{ts.isoformat()}",
         session_key=f"agent:main:slack:channel:{channel_id.lower()}",
         channel_id=channel_id,
@@ -137,70 +149,6 @@ def test_list_channels_stopped_agent_returns_db_channels():
             assert_that(ids, equal_to({"CAAA", "CBBB"}))
             general = next(c for c in body if c["channel_id"] == "CAAA")
             assert_that(general["channel_name"], equal_to("general"))
-
-
-def test_list_channels_idle_agent_resolves_null_channel_names_from_directory():
-    # A channel the agent only posted to has no persisted name; an idle agent must
-    # still resolve it from the Slack directory rather than render the raw C... id.
-    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
-        client: TestClient = context.client
-        _seed_message(
-            context,
-            direction=MessageDirection.INBOUND,
-            channel_id="CAAA",
-            content="msg1",
-            channel_name="general",
-        )
-        _seed_message(
-            context,
-            direction=MessageDirection.OUTBOUND,
-            channel_id="CBBB",
-            content="msg2",
-        )
-
-        with (
-            when("I list channels with the directory resolving CBBB"),
-            patch.object(
-                ConversationService,
-                "_platform_maps",
-                return_value=({}, {"CBBB": "ops-alerts"}, {}),
-            ),
-        ):
-            response = client.get(
-                f"{_BASE}/{context.agent.id}/conversations/channels",
-                headers=_auth(context),
-            )
-
-        with then("the null-named channel gets its directory name, others untouched"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            by_id = {c["channel_id"]: c["channel_name"] for c in response.json()}
-            assert_that(by_id["CBBB"], equal_to("ops-alerts"))
-            assert_that(by_id["CAAA"], equal_to("general"))
-
-
-def test_list_channels_resolves_discord_channel_names():
-    with given(
-        [
-            *_GIVEN,
-            there_is_an_agent(platform=AgentPlatform.DISCORD, status=AgentStatus.STOPPED),
-        ]
-    ) as context:
-        _seed_message(
-            context,
-            direction=MessageDirection.OUTBOUND,
-            channel_id="123456789012345678",
-            content="Discord alert",
-        )
-
-        with patch("api.domains.conversations.service.DiscordClient") as client_class:
-            client_class.return_value.get_channel_display_name.return_value = "ops-alerts"
-            response = context.client.get(
-                f"{_BASE}/{context.agent.id}/conversations/channels",
-                headers=_auth(context),
-            )
-
-        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-        assert_that(response.json()[0]["channel_name"], equal_to("ops-alerts"))
 
 
 def test_list_channels_returns_db_channels():

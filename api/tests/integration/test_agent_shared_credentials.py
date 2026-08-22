@@ -62,9 +62,6 @@ def _auth(context) -> dict:
 
 _VALID_CREATE = {
     "name": "Agent with shared cred",
-    "platform": "slack",
-    "slack_bot_token": "xoxb-real-bot-token",
-    "slack_app_token": "xapp-1-real-app-token",
     "template_key": "test-template",
 }
 

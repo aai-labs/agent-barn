@@ -66,6 +66,7 @@ services:
       - .env
     environment:
       <<: *api-env
+      COMMUNICATIONS_BASE_URL: http://communications:8002/communications/v1
     volumes:
       - ./api:/app/api
     ports:
@@ -90,6 +91,25 @@ services:
       <<: *api-env
     volumes:
       - ./api:/app/api
+
+  communications:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    container_name: aai_communications
+    restart: unless-stopped
+    command: ["uvicorn", "api.communications_main:app", "--host", "0.0.0.0", "--port", "8002", "--reload"]
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      <<: *api-env
+    volumes:
+      - ./api:/app/api
+    ports:
+      - "8002:8002"
 
   ui:
     build:

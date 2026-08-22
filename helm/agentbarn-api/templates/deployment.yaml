@@ -75,6 +75,8 @@ spec:
               value: "{{ .Values.litellmBaseUrl }}"
             - name: AGENT_LITELLM_BASE_URL
               value: "{{ .Values.agentLitellmBaseUrl }}"
+            - name: COMMUNICATIONS_BASE_URL
+              value: "http://{{ .Release.Name }}-communications:{{ .Values.communications.service.port }}/communications/v1"
             - name: AGENT_IMAGE_PULL_SECRET
               value: "{{ .Values.agentImagePullSecret }}"
             - name: AGENT_MODEL_ALLOWLIST

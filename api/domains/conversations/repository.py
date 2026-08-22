@@ -7,8 +7,9 @@ from injector import inject, singleton
 from sqlalchemy.dialects.postgresql import insert
 from sqlmodel import Session, and_, col, or_, select
 
-from api.domains.agents.models import Agent, AgentPlatform
+from api.domains.agents.models import Agent
 from api.domains.agents.repository import agent_scope_predicates
+from api.domains.communications.models import CommunicationConnection, CommunicationPlatform
 from api.domains.conversations.models import (
     AgentChatMessage,
     ConversationsCursor,
@@ -37,6 +38,7 @@ class ConversationRepository:
                     "created_at": m.created_at,
                     "updated_at": m.updated_at,
                     "agent_id": m.agent_id,
+                    "connection_id": m.connection_id,
                     "openclaw_msg_id": m.openclaw_msg_id,
                     "session_key": m.session_key,
                     "channel_id": m.channel_id,
@@ -53,7 +55,8 @@ class ConversationRepository:
             ]
             stmt = insert(AgentChatMessage).values(rows)
             stmt = stmt.on_conflict_do_update(
-                constraint="uq_agent_chat_message_agent_msg",
+                index_elements=["connection_id", "openclaw_msg_id"],
+                index_where=sa.text("connection_id IS NOT NULL"),
                 set_={
                     "thread_id": stmt.excluded.thread_id,
                     "sender_name": stmt.excluded.sender_name,
@@ -74,7 +77,7 @@ class ConversationRepository:
         organization_id: UUID | None = None,
         agent_id: UUID | None = None,
         created_by_user_id: UUID | None = None,
-        platform: AgentPlatform | None = None,
+        platform: CommunicationPlatform | None = None,
     ) -> list[tuple[datetime, int, int]]:
         """Daily inbound/outbound message counts for the stats surfaces (AF-256).
         Returns (iso_date, inbound, outbound) ordered by day.
@@ -117,7 +120,12 @@ class ConversationRepository:
         if created_by_user_id is not None:
             agent_predicates.append(col(Agent.created_by_user_id) == created_by_user_id)
         if platform is not None:
-            agent_predicates.append(col(Agent.platform) == platform)
+            message_predicates.append(
+                sa.exists().where(
+                    col(CommunicationConnection.id) == col(AgentChatMessage.connection_id),
+                    col(CommunicationConnection.platform_key) == platform.value,
+                )
+            )
 
         with Session(self.delegate.engine) as session:
             # Every bucket in the window is generated up front and left-joined,
@@ -172,7 +180,7 @@ class ConversationRepository:
         organization_id: UUID | None = None,
         agent_id: UUID | None = None,
         created_by_user_id: UUID | None = None,
-        platform: AgentPlatform | None = None,
+        platform: CommunicationPlatform | None = None,
     ) -> dict[datetime, set[UUID]]:
         """{iso_date: {agent_id}} — Agents that exchanged at least one message
         that UTC day (AF-256).
@@ -191,7 +199,12 @@ class ConversationRepository:
         if created_by_user_id is not None:
             agent_predicates.append(col(Agent.created_by_user_id) == created_by_user_id)
         if platform is not None:
-            agent_predicates.append(col(Agent.platform) == platform)
+            agent_predicates.append(
+                sa.exists().where(
+                    col(CommunicationConnection.id) == col(AgentChatMessage.connection_id),
+                    col(CommunicationConnection.platform_key) == platform.value,
+                )
+            )
 
         with Session(self.delegate.engine) as session:
             query = select(sa.func.timezone("UTC", day), col(AgentChatMessage.agent_id)).where(

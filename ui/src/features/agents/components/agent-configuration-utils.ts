@@ -1,7 +1,6 @@
 import type { PlatformTemplateFileKey } from "@/features/platform-templates/utils";
 
 import type {
-  Agent,
   AgentConfigurationVersion,
   AgentOverrideDraft,
   AgentOverrideVersion,
@@ -69,14 +68,7 @@ export const AGENT_CONFIGURATION_SECTIONS: AgentConfigurationSection[] = [
 
 export function configurationSectionLabel(
   key: AgentConfigurationSectionKey,
-  agent: Pick<Agent, "platform">,
 ): string {
-  if (key === "channels" && agent.platform === "telegram") {
-    return "Chats & endpoint";
-  }
-  if (key === "channels" && agent.platform === "teams") {
-    return "Endpoint";
-  }
   return AGENT_CONFIGURATION_SECTIONS.find((section) => section.key === key)?.label ?? key;
 }
 

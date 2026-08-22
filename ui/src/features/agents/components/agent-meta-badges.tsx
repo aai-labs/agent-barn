@@ -1,4 +1,3 @@
-import { DiscordIcon, SlackIcon, TeamsIcon, TelegramIcon } from "@/components/icons";
 import { OpenClawIcon, HermesIcon } from "@/components/brand-icons";
 import {
   Tooltip,
@@ -8,29 +7,6 @@ import {
 import type { Agent } from "../schemas";
 
 type Variant = "icon" | "full";
-
-const PLATFORM_META = {
-  slack: {
-    label: "Slack",
-    Icon: SlackIcon,
-    tooltip: "Connected via Slack",
-  },
-  teams: {
-    label: "Teams",
-    Icon: TeamsIcon,
-    tooltip: "Connected via Microsoft Teams",
-  },
-  telegram: {
-    label: "Telegram",
-    Icon: TelegramIcon,
-    tooltip: "Connected via Telegram",
-  },
-  discord: {
-    label: "Discord",
-    Icon: DiscordIcon,
-    tooltip: "Connected via Discord",
-  },
-} as const;
 
 const TYPE_META = {
   hermes: {
@@ -83,11 +59,10 @@ export function AgentMetaBadges({
   variant = "icon",
   className,
 }: {
-  agent: Pick<Agent, "platform" | "agentType">;
+  agent: Pick<Agent, "agentType">;
   variant?: Variant;
   className?: string;
 }) {
-  const platform = PLATFORM_META[agent.platform];
   const type = TYPE_META[agent.agentType];
 
   return (
@@ -96,12 +71,6 @@ export function AgentMetaBadges({
         Icon={type.Icon}
         label={type.label}
         tooltip={type.tooltip}
-        variant={variant}
-      />
-      <Badge
-        Icon={platform.Icon}
-        label={platform.label}
-        tooltip={platform.tooltip}
         variant={variant}
       />
     </div>

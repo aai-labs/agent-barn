@@ -90,10 +90,8 @@ export const AgentSkillsTab = forwardRef<
   }, [hasPendingChanges, isValid, newSecretDrafts.length, onDirtyChange]);
 
   function addSkill(skill: Skill) {
-    // Slack is never manually configured — the API derives it from the agent's
-    // gateway bot token, so it must never appear in the secrets payload.
     const needed = skill.requiredProviders.filter(
-      (p) => p !== "slack" && !existingSecretProviders.has(p),
+      (p) => !existingSecretProviders.has(p),
     );
     setPendingAddIds((prev) => [...prev, skill.id]);
     setNewSecretDrafts((prev) => {
@@ -167,14 +165,12 @@ export const AgentSkillsTab = forwardRef<
     const stillNeeded = new Set(survivingSkills.flatMap((s) => s.requiredProviders));
 
     // Secrets whose provider is no longer required by any remaining skill.
-    // Slack is excluded — the API removes/re-syncs it automatically based on
-    // skill membership and rejects an explicit removedSecretProviders entry.
     const orphanedProviders = [
       ...new Set(
         agent.skills
           .filter((s) => pendingRemoveIds.includes(s.id))
           .flatMap((s) => s.requiredProviders)
-          .filter((p) => p !== "slack" && !stillNeeded.has(p)),
+          .filter((p) => !stillNeeded.has(p)),
       ),
     ];
 
@@ -346,25 +342,6 @@ export const AgentSkillsTab = forwardRef<
         <div className="flex flex-col gap-3">
           <SectionLabel>Required credentials</SectionLabel>
           {newlyRequiredProviderIds.map((providerId) => {
-            if (providerId === "slack") {
-              return (
-                <div
-                  key={providerId}
-                  className="px-4 py-3 rounded-2xl text-[0.8125rem]"
-                  style={{
-                    border: "1px solid var(--line)",
-                    background: "var(--bg-soft)",
-                    color: "var(--ink-3)",
-                  }}
-                >
-                  <span className="font-medium" style={{ color: "var(--ink)" }}>
-                    Slack
-                  </span>{" "}
-                  — uses this agent&apos;s existing Slack bot token automatically. No credentials needed here.
-                </div>
-              );
-            }
-
             const providerSpec = getIntegrationProvider(providerId);
             const draft = newSecretDrafts.find((d) => d.provider === providerId);
             if (!draft) return null;
@@ -463,7 +440,6 @@ export const AgentSkillsTab = forwardRef<
             key={skill.id}
             skill={skill}
             isRunning={isRunning}
-            needsSlackPlatform={skill.requiredProviders.includes("slack") && agent.platform !== "slack"}
             onAdd={() => addSkill(skill)}
           />
         ))}
@@ -571,18 +547,16 @@ function AssignedSkillRow({
 function AvailableSkillRow({
   skill,
   isRunning,
-  needsSlackPlatform,
   onAdd,
 }: {
   skill: Skill;
   isRunning: boolean;
-  needsSlackPlatform: boolean;
   onAdd: () => void;
 }) {
   return (
     <div
       className="flex items-center gap-2 px-3.5 py-2.5 rounded-2xl"
-      style={{ border: "1px solid var(--line)", opacity: needsSlackPlatform ? 0.5 : 1 }}
+      style={{ border: "1px solid var(--line)" }}
     >
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
@@ -591,24 +565,18 @@ function AvailableSkillRow({
           </span>
           <SkillSourceBadge source={skill.source} />
         </div>
-        {needsSlackPlatform ? (
+        {skill.requiredProviders.length > 0 && (
           <span className="text-[0.75rem]" style={{ color: "var(--ink-4)" }}>
-            Requires Slack platform
+            Requires:{" "}
+            {skill.requiredProviders
+              .map((p) => SKILL_PROVIDER_LABELS[p] ?? p)
+              .join(", ")}
           </span>
-        ) : (
-          skill.requiredProviders.length > 0 && (
-            <span className="text-[0.75rem]" style={{ color: "var(--ink-4)" }}>
-              Requires:{" "}
-              {skill.requiredProviders
-                .map((p) => SKILL_PROVIDER_LABELS[p] ?? p)
-                .join(", ")}
-            </span>
-          )
         )}
       </div>
       <button
         className="af-btn af-btn-sm af-btn-ghost"
-        disabled={isRunning || needsSlackPlatform}
+        disabled={isRunning}
         onClick={onAdd}
       >
         Add

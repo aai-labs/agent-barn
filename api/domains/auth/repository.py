@@ -4,11 +4,7 @@ from uuid import UUID
 from injector import inject, singleton
 from sqlmodel import Session, select
 
-from api.domains.auth.models import (
-    PasswordResetToken,
-    RefreshToken,
-    UserSlackConfigToken,
-)
+from api.domains.auth.models import PasswordResetToken, RefreshToken
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
 
@@ -78,41 +74,3 @@ class PasswordResetTokenRepository:
         session.add(pwd_reset_token)
         session.flush()
         return pwd_reset_token
-
-
-@inject
-@singleton
-@dataclass
-class SlackConfigTokenRepository:
-    delegate: PostgresRepositoryDelegate
-
-    def get_by_user_id(self, user_id: UUID) -> UserSlackConfigToken | None:
-        return self.delegate.find_one(UserSlackConfigToken, user_id=user_id)
-
-    def upsert(
-        self,
-        user_id: UUID,
-        access_token_encrypted: str,
-        refresh_token_encrypted: str,
-    ) -> UserSlackConfigToken:
-        with Session(self.delegate.engine) as session:
-            existing = session.exec(select(UserSlackConfigToken).where(UserSlackConfigToken.user_id == user_id)).first()
-            if existing:
-                existing.access_token_encrypted = access_token_encrypted
-                existing.refresh_token_encrypted = refresh_token_encrypted
-                session.commit()
-                session.refresh(existing)
-                return existing
-
-            token = UserSlackConfigToken(
-                user_id=user_id,
-                access_token_encrypted=access_token_encrypted,
-                refresh_token_encrypted=refresh_token_encrypted,
-            )
-            session.add(token)
-            session.commit()
-            session.refresh(token)
-            return token
-
-    def delete_by_user_id(self, user_id: UUID) -> bool:
-        return self.delegate.delete_all(UserSlackConfigToken, user_id=user_id)

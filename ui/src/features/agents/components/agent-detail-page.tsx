@@ -119,11 +119,6 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
                     {formatModelName(agent.model)}
                   </div>
                 )}
-                {agent.slackConfig?.botDisplayName && (
-                  <div className="text-[0.875rem] mt-0.5" style={{ color: "var(--ink-4)" }}>
-                    @{agent.slackConfig.botDisplayName}
-                  </div>
-                )}
                 <AgentMetaBadges agent={agent} variant="full" className="mt-2" />
                 <div className="mt-2">
                   <StatusLine status={agent.status} health={health} />

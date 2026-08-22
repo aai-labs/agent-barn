@@ -41,16 +41,21 @@ export interface IntegrationDraft {
   sharedCredentialId?: string;
 }
 
-// These providers are derived from the agent configuration rather than stored as
-// standalone credentials. They can appear in a skill's required_providers list,
-// but must not be collected or validated as manual integration drafts.
-const AUTO_CONFIGURED_PROVIDER_IDS = new Set(["slack"]);
+const AUTO_CONFIGURED_PROVIDER_IDS = new Set<string>();
 
 export function isAutoConfiguredProvider(providerId: string): boolean {
   return AUTO_CONFIGURED_PROVIDER_IDS.has(providerId);
 }
 
 export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
+  {
+    id: "slack",
+    label: "Slack tool access",
+    scopeNote: "A tool credential is separate from Communication Connection credentials and is exposed only to the Agent's Slack skill.",
+    fields: [
+      { key: "token", label: "Bot or user token", type: "secret", required: true, placeholder: "xoxb-… or xoxp-…" },
+    ],
+  },
   {
     id: "github",
     label: "GitHub",

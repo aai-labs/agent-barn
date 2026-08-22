@@ -2,37 +2,6 @@ import { z } from "zod";
 
 import { OrganizationRoleSchema } from "@/features/organizations/schemas";
 
-export const AgentSlackConfigSchema = z.object({
-  channelIds: z.array(z.string()),
-  dmUserIds: z.array(z.string()),
-  groupPolicy: z.enum(["open", "allowlist"]),
-  dmPolicy: z.enum(["off", "open", "allowlist"]),
-  verboseMode: z.boolean().default(true),
-  botDisplayName: z.string().nullable().optional(),
-});
-
-export const AgentTeamsConfigSchema = z.object({
-  tenantId: z.string(),
-});
-
-export const AgentTelegramConfigSchema = z.object({
-  allowedUserIds: z.array(z.string()),
-  allowedChatIds: z.array(z.string()),
-  groupPolicy: z.enum(["open", "allowlist"]),
-  dmPolicy: z.enum(["off", "open", "allowlist"]),
-  botUsername: z.string().nullable().optional(),
-});
-
-export const AgentDiscordConfigSchema = z.object({
-  guildIds: z.array(z.string()),
-  allowedChannelIds: z.array(z.string()),
-  allowedUserIds: z.array(z.string()),
-  allowedRoleIds: z.array(z.string()),
-  homeChannelId: z.string().nullable(),
-  requireMention: z.boolean(),
-  groupPolicy: z.enum(["open", "allowlist"]),
-});
-
 export const AgentSecretReadSchema = z.object({
   provider: z.string(),
   secretName: z.string(),
@@ -116,7 +85,6 @@ export const AgentSchema = z.object({
   id: z.string().uuid(),
   name: z.string(),
   status: z.enum(["STOPPED", "RUNNING", "ERROR"]),
-  platform: z.enum(["slack", "teams", "telegram", "discord"]),
   agentType: z.enum(["openclaw", "hermes"]).default("openclaw"),
   organizationId: z.string().uuid(),
   templateKey: z.string(),
@@ -125,13 +93,8 @@ export const AgentSchema = z.object({
   overrideVersion: z.number().int().nullable().optional(),
   model: z.string(),
   approvalMode: z.enum(["manual", "auto", "off"]).default("auto"),
-  slackConfig: AgentSlackConfigSchema.nullable().optional(),
-  teamsConfig: AgentTeamsConfigSchema.nullable().optional(),
-  telegramConfig: AgentTelegramConfigSchema.nullable().optional(),
-  discordConfig: AgentDiscordConfigSchema.nullable().optional(),
   secrets: z.array(AgentSecretReadSchema).optional(),
   skills: z.array(AgentAssignedSkillSchema).default([]),
-  webhookUrl: z.string().nullable().optional(),
   allowedActions: z.array(AgentPermissionKeySchema).default([]),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -244,19 +207,6 @@ export const ConversationThreadsPageSchema = z.object({
   nextCursor: ConversationsCursorSchema.nullable(),
 });
 
-export const SlackChannelSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  isPrivate: z.boolean().optional(),
-});
-
-export const SlackUserSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  realName: z.string(),
-  displayName: z.string(),
-});
-
 export const ModelOptionSchema = z.object({
   value: z.string(),
   label: z.string(),
@@ -353,9 +303,6 @@ export type AgentPermissionKey = z.infer<typeof AgentPermissionKeySchema>;
 export type Agent = z.infer<typeof AgentSchema>;
 export type AgentAssignedSkill = z.infer<typeof AgentAssignedSkillSchema>;
 export type TemplateRequiredSkill = z.infer<typeof TemplateRequiredSkillSchema>;
-export type AgentSlackConfig = z.infer<typeof AgentSlackConfigSchema>;
-export type AgentTeamsConfig = z.infer<typeof AgentTeamsConfigSchema>;
-export type AgentTelegramConfig = z.infer<typeof AgentTelegramConfigSchema>;
 export type AgentHealth = z.infer<typeof AgentHealthSchema>;
 export type AgentTemplateRead = z.infer<typeof AgentTemplateReadSchema>;
 export type TemplateSource = AgentTemplateRead["templateSource"];
@@ -375,8 +322,6 @@ export type ConversationThread = z.infer<typeof ConversationThreadSchema>;
 export type ConversationThreadsPage = z.infer<typeof ConversationThreadsPageSchema>;
 export type ToolCall = z.infer<typeof ToolCallSchema>;
 export type PaginatedToolCalls = z.infer<typeof PaginatedToolCallsSchema>;
-export type SlackChannel = z.infer<typeof SlackChannelSchema>;
-export type SlackUser = z.infer<typeof SlackUserSchema>;
 export type ModelOption = z.infer<typeof ModelOptionSchema>;
 export type AgentLogHistoryRead = z.infer<typeof AgentLogHistoryReadSchema>;
 export type AgentLogsRead = z.infer<typeof AgentLogsReadSchema>;

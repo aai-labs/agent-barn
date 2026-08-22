@@ -1411,7 +1411,6 @@ export function SkillsStep({
   requiredGroups = [],
   groupChoices = {},
   onGroupChoiceChange,
-  platform,
 }: {
   selectedSkillIds: string[];
   skillCredentials: IntegrationDraft[];
@@ -1421,7 +1420,6 @@ export function SkillsStep({
   requiredGroups?: RequiredSkillGroup[];
   groupChoices?: Record<string, string[]>;
   onGroupChoiceChange?: (groupKey: string, skillId: string) => void;
-  platform: "slack" | "telegram" | "discord";
 }) {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
@@ -1637,9 +1635,8 @@ export function SkillsStep({
           <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
             {orderedSkills.map((skill) => {
               const isRequired = requiredSkillIds.has(skill.id);
-              const needsSlackPlatform = skill.requiredProviders.includes("slack") && platform !== "slack";
               const selected = isRequired || selectedSkillIds.includes(skill.id);
-              const disabled = !isRequired && needsSlackPlatform;
+              const disabled = false;
               return (
                 <div
                   key={skill.id}
@@ -1663,16 +1660,10 @@ export function SkillsStep({
                       Required by template
                     </div>
                   )}
-                  {needsSlackPlatform ? (
+                  {skill.requiredProviders.length > 0 && (
                     <div className="text-[0.75rem]" style={{ color: "var(--ink-4)" }}>
-                      Requires Slack platform
+                      {skill.requiredProviders.map((p) => SKILL_PROVIDER_LABELS[p] ?? p).join(", ")}
                     </div>
-                  ) : (
-                    skill.requiredProviders.length > 0 && (
-                      <div className="text-[0.75rem]" style={{ color: "var(--ink-4)" }}>
-                        {skill.requiredProviders.map((p) => SKILL_PROVIDER_LABELS[p] ?? p).join(", ")}
-                      </div>
-                    )
                   )}
                 </div>
               );
@@ -1689,21 +1680,6 @@ export function SkillsStep({
             Required credentials
           </div>
           {requiredProviderIds.map((providerId) => {
-            if (providerId === "slack") {
-              return (
-                <div
-                  key={providerId}
-                  className="px-4 py-3 rounded-2xl text-[0.8125rem]"
-                  style={{ border: "1px solid var(--line)", background: "var(--bg-soft)", color: "var(--ink-3)" }}
-                >
-                  <span className="font-medium" style={{ color: "var(--ink)" }}>
-                    Slack
-                  </span>{" "}
-                  — uses this agent&apos;s existing Slack bot token automatically. No credentials needed here.
-                </div>
-              );
-            }
-
             const providerSpec = getIntegrationProvider(providerId);
             const draft = skillCredentials.find((c) => c.provider === providerId);
             if (!draft) return null;

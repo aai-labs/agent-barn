@@ -2,6 +2,11 @@ from injector import Module, provider, singleton
 
 from api.core.config import Config, get_config
 from api.domains.agents.event_handlers import AgentLifecycleEmailHandler
+from api.domains.communications.plugins.discord import DiscordPlatformPlugin
+from api.domains.communications.plugins.registry import PlatformPluginRegistry
+from api.domains.communications.plugins.slack import SlackPlatformPlugin
+from api.domains.communications.plugins.teams import TeamsPlatformPlugin
+from api.domains.communications.plugins.telegram import TelegramPlatformPlugin
 from api.domains.events.constants import EVENT_DELIVERY_PROCESSING_STALE_SECONDS
 from api.domains.events.handlers import EventHandlerRegistry
 from api.domains.events.processor import EventDeliveryProcessor
@@ -29,6 +34,18 @@ class AppModule(Module):
     @singleton
     def provide_kubernetes_client(self, config: Config) -> KubernetesClient:
         return KubernetesClient(config)
+
+    @provider
+    @singleton
+    def provide_platform_plugin_registry(self, config: Config) -> PlatformPluginRegistry:
+        return PlatformPluginRegistry(
+            [
+                DiscordPlatformPlugin(config),
+                SlackPlatformPlugin(config),
+                TeamsPlatformPlugin(),
+                TelegramPlatformPlugin(config),
+            ]
+        )
 
     @provider
     @singleton

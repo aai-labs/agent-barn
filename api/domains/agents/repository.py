@@ -9,23 +9,18 @@ from sqlalchemy import exists, func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
-from api.domains.agents.exceptions import BotTokenConflictHTTPException
 from api.domains.agents.models import (
     Agent,
     AgentAccess,
-    AgentDiscordConfig,
     AgentFilter,
     AgentLifecycleEmailReceipt,
     AgentLogSnapshot,
-    AgentPlatform,
     AgentSecret,
     AgentSkill,
-    AgentSlackConfig,
     AgentStatus,
-    AgentTeamsConfig,
-    AgentTelegramConfig,
     SecretProvider,
 )
+from api.domains.communications.models import CommunicationConnection, CommunicationPlatform
 from api.domains.events import ActorIdentity, ActorIdentityType, EventDelivery, SubjectIdentity, SubjectIdentityType
 from api.domains.events.catalog import (
     AGENT_ACCESS_GRANTED,
@@ -156,7 +151,7 @@ class AgentRepository:
         organization_id: UUID | None,
         agent_id: UUID | None,
         created_by_user_id: UUID | None,
-        platform: AgentPlatform | None,
+        platform: CommunicationPlatform | None,
     ) -> list[Any]:
         """Shared narrowing for the stats aggregates (AF-256). Deliberately does
         not include a deleted_at predicate — callers decide that, since inventory
@@ -169,7 +164,13 @@ class AgentRepository:
         if created_by_user_id is not None:
             predicates.append(col(Agent.created_by_user_id) == created_by_user_id)
         if platform is not None:
-            predicates.append(col(Agent.platform) == platform)
+            predicates.append(
+                exists().where(
+                    col(CommunicationConnection.agent_id) == col(Agent.id),
+                    col(CommunicationConnection.platform_key) == platform.value,
+                    col(CommunicationConnection.retired_at).is_(None),
+                )
+            )
         return predicates
 
     def count_agents_for_stats(
@@ -178,7 +179,7 @@ class AgentRepository:
         organization_id: UUID | None = None,
         agent_id: UUID | None = None,
         created_by_user_id: UUID | None = None,
-        platform: AgentPlatform | None = None,
+        platform: CommunicationPlatform | None = None,
     ) -> tuple[int, int, int, int]:
         """(total, running, stopped, errored) Agent counts for the stats
         surfaces (AF-256).
@@ -217,7 +218,7 @@ class AgentRepository:
         organization_id: UUID | None = None,
         agent_id: UUID | None = None,
         created_by_user_id: UUID | None = None,
-        platform: AgentPlatform | None = None,
+        platform: CommunicationPlatform | None = None,
     ) -> list[tuple[datetime, int, int]]:
         """(bucket_start, existing, created) Agent inventory for the stats
         surfaces (AF-256), reconstructed exactly from created_at/deleted_at.
@@ -635,7 +636,6 @@ class AgentRepository:
                     "organization_id": agent.organization_id,
                     "agent_id": agent.id,
                     "agent_name": agent.name,
-                    "platform": agent.platform,
                     "runtime": agent.agent_type,
                     "created_by_user_id": agent.created_by_user_id,
                 },
@@ -690,13 +690,13 @@ class AgentRepository:
             persisted.status = agent.status
             persisted.last_error = agent.last_error
             persisted.ingest_key_encrypted = agent.ingest_key_encrypted
+            persisted.communication_key_encrypted = agent.communication_key_encrypted
             session.add(persisted)
             session.flush()
             payload: dict[str, Any] = {
                 "organization_id": persisted.organization_id,
                 "agent_id": persisted.id,
                 "agent_name": persisted.name,
-                "platform": persisted.platform,
                 "runtime": persisted.agent_type,
             }
             if event_name == AGENT_CREATED:
@@ -824,7 +824,6 @@ class AgentRepository:
                     "organization_id": persisted.organization_id,
                     "agent_id": persisted.id,
                     "agent_name": persisted.name,
-                    "platform": persisted.platform,
                     "runtime": persisted.agent_type,
                     "actor_display": actor_display or actor.type.value,
                     "subject_display": persisted.name,
@@ -1019,116 +1018,6 @@ class AgentRepository:
         with Session(self.delegate.engine) as session:
             query = select(Agent).where(col(Agent.organization_id) == org_id).order_by(col(Agent.created_at).asc())
             return list(session.exec(query).all())
-
-    # --- Slack config ---
-
-    def get_slack_config(self, agent_id: UUID) -> AgentSlackConfig | None:
-        with Session(self.delegate.engine) as session:
-            query = select(AgentSlackConfig).where(col(AgentSlackConfig.agent_id) == agent_id)
-            return session.exec(query).first()
-
-    def save_slack_config(self, config: AgentSlackConfig) -> AgentSlackConfig:
-        try:
-            self.delegate.save(config)
-        except IntegrityError as e:
-            if "ix_agent_slack_config_bot_token_hash" in str(e).lower():
-                raise BotTokenConflictHTTPException("another agent")
-            raise
-        return config
-
-    def find_active_agent_by_bot_token_hash(
-        self, bot_token_hash: str, exclude_agent_id: UUID | None = None
-    ) -> Agent | None:
-        with Session(self.delegate.engine) as session:
-            query = (
-                select(Agent)
-                .join(AgentSlackConfig, col(AgentSlackConfig.agent_id) == col(Agent.id))
-                .where(col(AgentSlackConfig.bot_token_hash) == bot_token_hash)
-                .where(col(Agent.deleted_at).is_(None))
-            )
-            if exclude_agent_id is not None:
-                query = query.where(col(Agent.id) != exclude_agent_id)
-            return session.exec(query).first()
-
-    def get_slack_configs_for_agents(self, agent_ids: list[UUID]) -> dict[UUID, AgentSlackConfig]:
-        if not agent_ids:
-            return {}
-        with Session(self.delegate.engine) as session:
-            query = select(AgentSlackConfig).where(col(AgentSlackConfig.agent_id).in_(agent_ids))
-            return {c.agent_id: c for c in session.exec(query).all()}
-
-    # --- Teams config ---
-
-    def get_teams_config(self, agent_id: UUID) -> AgentTeamsConfig | None:
-        with Session(self.delegate.engine) as session:
-            query = select(AgentTeamsConfig).where(col(AgentTeamsConfig.agent_id) == agent_id)
-            return session.exec(query).first()
-
-    def save_teams_config(self, config: AgentTeamsConfig) -> AgentTeamsConfig:
-        self.delegate.save(config)
-        return config
-
-    def get_teams_configs_for_agents(self, agent_ids: list[UUID]) -> dict[UUID, AgentTeamsConfig]:
-        if not agent_ids:
-            return {}
-        with Session(self.delegate.engine) as session:
-            query = select(AgentTeamsConfig).where(col(AgentTeamsConfig.agent_id).in_(agent_ids))
-            return {c.agent_id: c for c in session.exec(query).all()}
-
-    # --- Telegram config ---
-
-    def get_telegram_config(self, agent_id: UUID) -> AgentTelegramConfig | None:
-        with Session(self.delegate.engine) as session:
-            query = select(AgentTelegramConfig).where(col(AgentTelegramConfig.agent_id) == agent_id)
-            return session.exec(query).first()
-
-    def save_telegram_config(self, config: AgentTelegramConfig) -> AgentTelegramConfig:
-        self.delegate.save(config)
-        return config
-
-    def get_telegram_configs_for_agents(self, agent_ids: list[UUID]) -> dict[UUID, AgentTelegramConfig]:
-        if not agent_ids:
-            return {}
-        with Session(self.delegate.engine) as session:
-            query = select(AgentTelegramConfig).where(col(AgentTelegramConfig.agent_id).in_(agent_ids))
-            return {c.agent_id: c for c in session.exec(query).all()}
-
-    # --- Discord config ---
-
-    def get_discord_config(self, agent_id: UUID) -> AgentDiscordConfig | None:
-        with Session(self.delegate.engine) as session:
-            query = select(AgentDiscordConfig).where(col(AgentDiscordConfig.agent_id) == agent_id)
-            return session.exec(query).first()
-
-    def save_discord_config(self, config: AgentDiscordConfig) -> AgentDiscordConfig:
-        try:
-            self.delegate.save(config)
-        except IntegrityError as e:
-            if "ix_agent_discord_config_bot_token_hash" in str(e).lower():
-                raise BotTokenConflictHTTPException("another agent", platform="Discord")
-            raise
-        return config
-
-    def find_active_discord_agent_by_bot_token_hash(
-        self, bot_token_hash: str, exclude_agent_id: UUID | None = None
-    ) -> Agent | None:
-        with Session(self.delegate.engine) as session:
-            query = (
-                select(Agent)
-                .join(AgentDiscordConfig, col(AgentDiscordConfig.agent_id) == col(Agent.id))
-                .where(col(AgentDiscordConfig.bot_token_hash) == bot_token_hash)
-                .where(col(Agent.deleted_at).is_(None))
-            )
-            if exclude_agent_id is not None:
-                query = query.where(col(Agent.id) != exclude_agent_id)
-            return session.exec(query).first()
-
-    def get_discord_configs_for_agents(self, agent_ids: list[UUID]) -> dict[UUID, AgentDiscordConfig]:
-        if not agent_ids:
-            return {}
-        with Session(self.delegate.engine) as session:
-            query = select(AgentDiscordConfig).where(col(AgentDiscordConfig.agent_id).in_(agent_ids))
-            return {c.agent_id: c for c in session.exec(query).all()}
 
     # --- Integration secrets ---
 

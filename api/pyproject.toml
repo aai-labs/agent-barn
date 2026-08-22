@@ -30,6 +30,7 @@ dependencies = [
     "dramatiq[redis,watch]>=2.2.0",
     "redis>=8.1.0",
     "prometheus-fastapi-instrumentator>=8.1.0",
+    "websockets>=17.0",
 ]
 
 [tool.pytest.ini_options]
@@ -52,10 +53,9 @@ line-length = 120
 ignore = ["B008", "BLE001", "S110"]
 
 [tool.ruff.lint.per-file-ignores]
-# N999 - hermes plugin bundle directories are named to match the plugin ids the
-#        Hermes runtime expects (e.g. "slack-channel-allowlist"), not imported
-#        as Python packages, so hyphens are intentional.
-"domains/agents/scripts/hermes/plugins/**/__init__.py" = ["N999"]
+# Hermes bundle directories use the runtime's plugin ID rather than a Python
+# package name, so the remaining telemetry plugin intentionally has a hyphen.
+"domains/agents/scripts/hermes/plugins/telemetry-push/__init__.py" = ["N999"]
 # SIM117 - tests use a given/when/then BDD DSL where each nested `with` is a
 #          deliberate narrative block; merging them loses that structure.
 "tests/**" = ["SIM117"]

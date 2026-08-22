@@ -2,6 +2,7 @@
 set -e
 
 python3 /app/config/healthz-server.py &
+python3 /app/config/communications-runtime-adapter.py &
 
 mkdir -p /opt/data/plugins/telemetry-push /opt/data/memories /workspace
 
@@ -17,42 +18,6 @@ cp /app/config/hermes-config.yaml /opt/data/config.yaml
 # A persisted .env takes precedence over system env and would cause stale
 # values (e.g. old home channel) to survive pod restarts.
 rm -f /opt/data/.env
-
-if [ -f /app/config/slack-deny-dms-plugin.yaml ]; then
-    mkdir -p /opt/data/plugins/slack-deny-dms
-    cp /app/config/slack-deny-dms-plugin.yaml /opt/data/plugins/slack-deny-dms/plugin.yaml
-    cp /app/config/slack-deny-dms-init.py /opt/data/plugins/slack-deny-dms/__init__.py
-fi
-
-if [ -f /app/config/slack-channel-allowlist-plugin.yaml ]; then
-    mkdir -p /opt/data/plugins/slack-channel-allowlist
-    cp /app/config/slack-channel-allowlist-plugin.yaml /opt/data/plugins/slack-channel-allowlist/plugin.yaml
-    cp /app/config/slack-channel-allowlist-init.py /opt/data/plugins/slack-channel-allowlist/__init__.py
-fi
-
-if [ -f /app/config/telegram-deny-dms-plugin.yaml ]; then
-    mkdir -p /opt/data/plugins/telegram-deny-dms
-    cp /app/config/telegram-deny-dms-plugin.yaml /opt/data/plugins/telegram-deny-dms/plugin.yaml
-    cp /app/config/telegram-deny-dms-init.py /opt/data/plugins/telegram-deny-dms/__init__.py
-fi
-
-if [ -f /app/config/telegram-channel-allowlist-plugin.yaml ]; then
-    mkdir -p /opt/data/plugins/telegram-channel-allowlist
-    cp /app/config/telegram-channel-allowlist-plugin.yaml /opt/data/plugins/telegram-channel-allowlist/plugin.yaml
-    cp /app/config/telegram-channel-allowlist-init.py /opt/data/plugins/telegram-channel-allowlist/__init__.py
-fi
-
-if [ -f /app/config/discord-deny-dms-plugin.yaml ]; then
-    mkdir -p /opt/data/plugins/discord-deny-dms
-    cp /app/config/discord-deny-dms-plugin.yaml /opt/data/plugins/discord-deny-dms/plugin.yaml
-    cp /app/config/discord-deny-dms-init.py /opt/data/plugins/discord-deny-dms/__init__.py
-fi
-
-if [ -f /app/config/discord-guild-allowlist-plugin.yaml ]; then
-    mkdir -p /opt/data/plugins/discord-guild-allowlist
-    cp /app/config/discord-guild-allowlist-plugin.yaml /opt/data/plugins/discord-guild-allowlist/plugin.yaml
-    cp /app/config/discord-guild-allowlist-init.py /opt/data/plugins/discord-guild-allowlist/__init__.py
-fi
 
 cp /app/config/telemetry-push-plugin.yaml /opt/data/plugins/telemetry-push/plugin.yaml
 cp /app/config/telemetry-push-init.py /opt/data/plugins/telemetry-push/__init__.py

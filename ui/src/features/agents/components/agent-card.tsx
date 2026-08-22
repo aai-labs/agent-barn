@@ -31,11 +31,6 @@ export function AgentCard({ agent, onOpen }: AgentCardProps) {
               {formatModelName(agent.model)}
             </div>
           )}
-          {agent.slackConfig?.botDisplayName && (
-            <div className="text-[0.813rem] mt-0.5 truncate" style={{ color: "var(--ink-4)" }}>
-              @{agent.slackConfig.botDisplayName}
-            </div>
-          )}
           <AgentMetaBadges agent={agent} className="mt-2" />
         </div>
       </div>
