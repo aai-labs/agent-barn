@@ -1,6 +1,6 @@
 apiVersion: v2
 name: monitoring
-description: Observability stack for agent-farm (namespace-scoped Prometheus + Grafana)
+description: Observability stack for Agent Barn (namespace-scoped Prometheus + Grafana)
 version: 0.1.0
 dependencies:
   # Deliberately NOT kube-prometheus-stack: this runs on a shared cluster

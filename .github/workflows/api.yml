@@ -89,7 +89,7 @@ jobs:
           context: .
           file: api/Dockerfile
           push: false
-          tags: agentfarm-api:ci
+          tags: agentbarn-api:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -120,6 +120,6 @@ jobs:
           context: .
           file: api/Dockerfile
           push: true
-          tags: ${{ vars.REGISTRY_URL }}/agentfarm-api:${{ steps.tag.outputs.value }}
+          tags: ${{ vars.REGISTRY_URL }}/agentbarn-api:${{ steps.tag.outputs.value }}
           cache-from: type=gha
 

@@ -1,10 +1,10 @@
-{{- define "agentfarm-api.selectorLabels" -}}
-app.kubernetes.io/name: agentfarm-api
+{{- define "agentbarn-ui.selectorLabels" -}}
+app.kubernetes.io/name: agentbarn-ui
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
-{{- define "agentfarm-api.labels" -}}
-{{ include "agentfarm-api.selectorLabels" . }}
+{{- define "agentbarn-ui.labels" -}}
+{{ include "agentbarn-ui.selectorLabels" . }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
 {{- end }}

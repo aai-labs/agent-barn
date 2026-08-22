@@ -5,7 +5,7 @@ metadata:
   name: {{ .Release.Name }}-event-reconciler
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "agentfarm-api.labels" . | nindent 4 }}
+    {{- include "agentbarn-api.labels" . | nindent 4 }}
     app.kubernetes.io/component: event-reconciler
 spec:
   schedule: {{ .Values.eventDelivery.reconciliation.schedule | quote }}
@@ -17,7 +17,7 @@ spec:
       template:
         metadata:
           labels:
-            {{- include "agentfarm-api.selectorLabels" . | nindent 12 }}
+            {{- include "agentbarn-api.selectorLabels" . | nindent 12 }}
             app.kubernetes.io/component: event-reconciler
         spec:
           restartPolicy: OnFailure

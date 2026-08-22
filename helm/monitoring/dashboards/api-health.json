@@ -1,7 +1,7 @@
 {
   "title": "API Health",
   "uid": "agentbarn-api-health",
-  "tags": ["agent-farm"],
+  "tags": ["agent-barn"],
   "schemaVersion": 39,
   "version": 1,
   "refresh": "30s",
@@ -25,7 +25,7 @@
       "gridPos": { "h": 5, "w": 6, "x": 0, "y": 0 },
       "targets": [
         {
-          "expr": "min(up{job=\"agentfarm-api\", endpoint=\"http\"})",
+          "expr": "min(up{job=\"agentbarn-api\", endpoint=\"http\"})",
           "refId": "A"
         }
       ],
@@ -47,7 +47,7 @@
       "gridPos": { "h": 5, "w": 6, "x": 6, "y": 0 },
       "targets": [
         {
-          "expr": "min(up{job=\"agentfarm-api\", endpoint=\"ingest\"})",
+          "expr": "min(up{job=\"agentbarn-api\", endpoint=\"ingest\"})",
           "refId": "A"
         }
       ],
@@ -88,7 +88,7 @@
       "gridPos": { "h": 5, "w": 6, "x": 18, "y": 0 },
       "targets": [
         {
-          "expr": "sum(increase(kube_pod_container_status_restarts_total{pod=~\"agentfarm-api-.*\"}[1h]))",
+          "expr": "sum(increase(kube_pod_container_status_restarts_total{pod=~\"agentbarn-api-.*\"}[1h]))",
           "refId": "A"
         }
       ],
@@ -107,7 +107,7 @@
       "gridPos": { "h": 9, "w": 12, "x": 0, "y": 5 },
       "targets": [
         {
-          "expr": "sum by (handler) (rate(http_requests_total{job=\"agentfarm-api\"}[5m]))",
+          "expr": "sum by (handler) (rate(http_requests_total{job=\"agentbarn-api\"}[5m]))",
           "legendFormat": "{{handler}}",
           "refId": "A"
         }
@@ -122,7 +122,7 @@
       "gridPos": { "h": 9, "w": 12, "x": 12, "y": 5 },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum by (le, handler) (rate(http_request_duration_seconds_bucket{job=\"agentfarm-api\"}[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le, handler) (rate(http_request_duration_seconds_bucket{job=\"agentbarn-api\"}[5m])))",
           "legendFormat": "{{handler}}",
           "refId": "A"
         }
@@ -137,7 +137,7 @@
       "gridPos": { "h": 8, "w": 24, "x": 0, "y": 14 },
       "targets": [
         {
-          "expr": "sum by (pod) (increase(kube_pod_container_status_restarts_total{pod=~\"agentfarm-api-.*\"}[1h]))",
+          "expr": "sum by (pod) (increase(kube_pod_container_status_restarts_total{pod=~\"agentbarn-api-.*\"}[1h]))",
           "legendFormat": "{{pod}}",
           "refId": "A"
         }

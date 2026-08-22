@@ -12,7 +12,7 @@ tests:
   # --- APIDown: fires only after 2m of failed scrapes ---
   - interval: 1m
     input_series:
-      - series: 'up{job="agentfarm-api", endpoint="http"}'
+      - series: 'up{job="agentbarn-api", endpoint="http"}'
         values: "1x3 0x10"
     alert_rule_test:
       - eval_time: 3m
@@ -23,10 +23,10 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: critical
-              job: agentfarm-api
+              job: agentbarn-api
               endpoint: http
             exp_annotations:
-              summary: The agent-farm API is not responding to scrapes.
+              summary: The Agent Barn API is not responding to scrapes.
               description: Prometheus cannot scrape the main API process on :8000.
 
   # --- APIAbsent: fires when the target does not exist at all ---
@@ -40,16 +40,16 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: critical
-              job: agentfarm-api
+              job: agentbarn-api
               endpoint: http
             exp_annotations:
-              summary: The agent-farm API target has disappeared entirely.
+              summary: The Agent Barn API target has disappeared entirely.
               description: No scrape target exists for the API — the Service is gone or discovery is broken.
 
   # --- IngestAPIDown ---
   - interval: 1m
     input_series:
-      - series: 'up{job="agentfarm-api", endpoint="ingest"}'
+      - series: 'up{job="agentbarn-api", endpoint="ingest"}'
         values: "1x2 0x12"
     alert_rule_test:
       - eval_time: 9m
@@ -57,7 +57,7 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: warning
-              job: agentfarm-api
+              job: agentbarn-api
               endpoint: ingest
             exp_annotations:
               summary: The ingest API process is not responding to scrapes.
@@ -88,9 +88,9 @@ tests:
   # (5% warning + 20% critical) ---
   - interval: 1m
     input_series:
-      - series: 'http_requests_total{job="agentfarm-api", status="2xx"}'
+      - series: 'http_requests_total{job="agentbarn-api", status="2xx"}'
         values: "0+12x30"
-      - series: 'http_requests_total{job="agentfarm-api", status="5xx"}'
+      - series: 'http_requests_total{job="agentbarn-api", status="5xx"}'
         values: "0+6x30"
     alert_rule_test:
       - eval_time: 10m
@@ -110,9 +110,9 @@ tests:
   # --- HighAPI5xxRate: ~8% errors trips only the warning tier ---
   - interval: 1m
     input_series:
-      - series: 'http_requests_total{job="agentfarm-api", status="2xx"}'
+      - series: 'http_requests_total{job="agentbarn-api", status="2xx"}'
         values: "0+12x30"
-      - series: 'http_requests_total{job="agentfarm-api", status="5xx"}'
+      - series: 'http_requests_total{job="agentbarn-api", status="5xx"}'
         values: "0+1x30"
     alert_rule_test:
       - eval_time: 10m
@@ -128,7 +128,7 @@ tests:
   # floor must NOT fire ---
   - interval: 1m
     input_series:
-      - series: 'http_requests_total{job="agentfarm-api", status="5xx"}'
+      - series: 'http_requests_total{job="agentbarn-api", status="5xx"}'
         values: "0+3x30"
     alert_rule_test:
       - eval_time: 10m
@@ -274,7 +274,7 @@ tests:
   # --- LiteLLMDown: absent target is the same incident ---
   - interval: 1m
     input_series:
-      - series: 'up{job="agentfarm-api", endpoint="http"}'
+      - series: 'up{job="agentbarn-api", endpoint="http"}'
         values: "1x10"
     alert_rule_test:
       - eval_time: 5m
