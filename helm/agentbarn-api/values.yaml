@@ -72,6 +72,11 @@ agentModelAllowlist: ""
 agentDefaultModel: ""
 
 kubeconfigB64: ""
+# Name of the registry pull Secret this chart creates (registry-secret.yaml) and
+# that agent pods reference to pull their own images. Must match imagePullSecrets
+# below. When a release of this chart coexists with another release in the same
+# namespace (e.g. during a rename cutover), override both to a release-distinct
+# name — Helm refuses to let one release adopt a Secret another release owns.
 agentImagePullSecret: "registry-pull-secret"
 
 # StorageClass for agent pod PVCs. Empty falls through to the cluster default.
@@ -94,8 +99,11 @@ litellmSecretName: litellm
 # provision the agent-farm-user Role/RoleBinding (e.g. a namespace-scoped kubeconfig).
 litellmKeyServiceAccountName: agent-farm-user
 
-#  kubeconfig Secret for managing agent k8s resources
-kubeconfigSecretName: agent-farm-user-kubeconfig
+# kubeconfig Secret for managing agent k8s resources. Empty defaults to
+# "<release-name>-kubeconfig" so this release's Secret never collides with
+# another release's Secret of the same name (Helm refuses to let one release
+# adopt an object another release already owns).
+kubeconfigSecretName: ""
 
 imagePullSecrets:
   - name: registry-pull-secret

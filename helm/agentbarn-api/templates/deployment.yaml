@@ -111,4 +111,4 @@ spec:
       volumes:
         - name: kubeconfig
           secret:
-            secretName: {{ .Values.kubeconfigSecretName }}
+            secretName: {{ .Values.kubeconfigSecretName | default (printf "%s-kubeconfig" .Release.Name) }}
