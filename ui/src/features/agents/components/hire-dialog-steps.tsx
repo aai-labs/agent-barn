@@ -821,10 +821,14 @@ export function TelegramTokenStep({
 }
 
 export function DiscordTokenStep({
-  token, onTokenChange, applicationId, onApplicationIdChange, guildIds, onGuildIdsChange, channelIds, onChannelIdsChange, allowedUserIds, onAllowedUserIdsChange, allowedRoleIds, onAllowedRoleIdsChange, homeChannelId, onHomeChannelIdChange, showToken, onToggleToken, error,
+  token, onTokenChange, applicationId, onApplicationIdChange, guildIds, onGuildIdsChange, channelIds, onChannelIdsChange, allowAllUsers, onAllowAllUsersChange, allowedUserIds, onAllowedUserIdsChange, allowedRoleIds, onAllowedRoleIdsChange, homeChannelId, onHomeChannelIdChange, showToken, onToggleToken, error,
 }: {
-  token: string; onTokenChange: (v: string) => void; applicationId: string; onApplicationIdChange: (v: string) => void; guildIds: string; onGuildIdsChange: (v: string) => void; channelIds: string; onChannelIdsChange: (v: string) => void; allowedUserIds: string; onAllowedUserIdsChange: (v: string) => void; allowedRoleIds: string; onAllowedRoleIdsChange: (v: string) => void; homeChannelId: string; onHomeChannelIdChange: (v: string) => void; showToken: boolean; onToggleToken: () => void; error: string | null;
+  token: string; onTokenChange: (v: string) => void; applicationId: string; onApplicationIdChange: (v: string) => void; guildIds: string; onGuildIdsChange: (v: string) => void; channelIds: string; onChannelIdsChange: (v: string) => void; allowAllUsers: boolean; onAllowAllUsersChange: (v: boolean) => void; allowedUserIds: string; onAllowedUserIdsChange: (v: string) => void; allowedRoleIds: string; onAllowedRoleIdsChange: (v: string) => void; homeChannelId: string; onHomeChannelIdChange: (v: string) => void; showToken: boolean; onToggleToken: () => void; error: string | null;
 }) {
+  const restrictedAccessMissingIds = !allowAllUsers
+    && !allowedUserIds.split(",").some((id) => id.trim())
+    && !allowedRoleIds.split(",").some((id) => id.trim());
+
   return (
     <form autoComplete="off" className="flex flex-col gap-4" onSubmit={(e) => e.preventDefault()}>
       <div className="flex flex-col gap-4 p-5 rounded-2xl" style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}>
@@ -861,12 +865,25 @@ export function DiscordTokenStep({
             <ChevronDownIcon size={16} className="transition-transform group-open:rotate-180" style={{ color: "var(--ink-4)" }} />
           </summary>
           <div className="flex flex-col gap-4 px-4 pb-4 pt-1" style={{ borderTop: "1px solid var(--line)" }}>
-            <DiscordField id="discord-operator-ids" label="Allowed operator IDs" optional help={<><b>What it does:</b> restricts who can interact with the agent.<br /><b>How to copy one:</b> with Developer Mode enabled, right-click a user → Copy User ID. Interactive Hermes agents need an operator or role allowlist.</>}>
-              <input id="discord-operator-ids" className="af-input font-mono text-[0.8125rem]" value={allowedUserIds} onChange={(e) => onAllowedUserIdsChange(e.target.value)} placeholder="123456789012345678" />
-            </DiscordField>
-            <DiscordField id="discord-role-ids" label="Allowed role IDs" optional help={<><b>What it does:</b> lets members with these roles interact with the agent.<br /><b>How to copy one:</b> open Server Settings → Roles, right-click a role → Copy Role ID. Enabling this also requires Server Members Intent.</>}>
-              <input id="discord-role-ids" className="af-input font-mono text-[0.8125rem]" value={allowedRoleIds} onChange={(e) => onAllowedRoleIdsChange(e.target.value)} placeholder="987654321098765432" />
-            </DiscordField>
+            <label className="flex items-start gap-2 text-[0.8125rem]" style={{ color: "var(--ink-2)" }}>
+              <input type="checkbox" className="mt-0.5" checked={allowAllUsers} onChange={(e) => onAllowAllUsersChange(e.target.checked)} />
+              <span><b>Allow all users</b><br /><span className="text-[0.72rem]" style={{ color: "var(--ink-4)" }}>Anyone in an allowed server and channel may interact with this agent.</span></span>
+            </label>
+            {!allowAllUsers && (
+              <>
+                <DiscordField id="discord-operator-ids" label="Allowed operator IDs" optional help={<><b>What it does:</b> restricts who can interact with the agent.<br /><b>How to copy one:</b> with Developer Mode enabled, right-click a user → Copy User ID.</>}>
+                  <input id="discord-operator-ids" className="af-input font-mono text-[0.8125rem]" value={allowedUserIds} onChange={(e) => onAllowedUserIdsChange(e.target.value)} placeholder="123456789012345678" />
+                </DiscordField>
+                <DiscordField id="discord-role-ids" label="Allowed role IDs" optional help={<><b>What it does:</b> lets members with these roles interact with the agent.<br /><b>How to copy one:</b> open Server Settings → Roles, right-click a role → Copy Role ID. Enabling this also requires Server Members Intent.</>}>
+                  <input id="discord-role-ids" className="af-input font-mono text-[0.8125rem]" value={allowedRoleIds} onChange={(e) => onAllowedRoleIdsChange(e.target.value)} placeholder="987654321098765432" />
+                </DiscordField>
+                {restrictedAccessMissingIds && (
+                  <div className="rounded-lg px-3 py-2 text-[0.75rem]" style={{ color: "var(--err)", background: "color-mix(in srgb, var(--err) 8%, transparent)" }}>
+                    Add at least one allowed operator or role, or turn on Allow all users.
+                  </div>
+                )}
+              </>
+            )}
             <DiscordField id="discord-alert-channel-id" label="Alert destination channel ID" optional help={<><b>What it does:</b> gives Hermes a destination for scheduled and proactive updates.<br /><b>How to copy it:</b> with Developer Mode enabled, right-click the destination channel → Copy Channel ID.</>}>
               <input id="discord-alert-channel-id" className="af-input font-mono text-[0.8125rem]" value={homeChannelId} onChange={(e) => onHomeChannelIdChange(e.target.value)} placeholder="123456789012345678" />
             </DiscordField>

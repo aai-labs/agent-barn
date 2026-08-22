@@ -105,6 +105,7 @@ def test_build_secret_hermes_discord_scopes_access_and_home_channel():
         ["channel-1"],
         ["user-1"],
         ["role-1"],
+        False,
         "channel-1",
         ["guild-1"],
     )
@@ -113,9 +114,32 @@ def test_build_secret_hermes_discord_scopes_access_and_home_channel():
     assert_that(secret.string_data["DISCORD_ALLOWED_CHANNELS"], equal_to("channel-1"))
     assert_that(secret.string_data["DISCORD_ALLOWED_USERS"], equal_to("user-1"))
     assert_that(secret.string_data["DISCORD_ALLOWED_ROLES"], equal_to("role-1"))
+    assert_that(secret.string_data["DISCORD_ALLOW_ALL_USERS"], equal_to("false"))
     assert_that(secret.string_data["DISCORD_GUILD_IDS"], equal_to("guild-1"))
     assert_that(secret.string_data["DISCORD_HOME_CHANNEL"], equal_to("channel-1"))
     assert_that(secret.string_data["DISCORD_ALLOW_BOTS"], equal_to("none"))
+
+
+def test_build_secret_hermes_discord_allows_users_with_channel_restrictions():
+    secret = build_secret_hermes_discord(
+        _AGENT_ID,
+        _ORG_ID,
+        _NS,
+        "Infra Sentinel",
+        "discord-token",
+        "key",
+        "http://litellm",
+        "api-key",
+        ["channel-1"],
+        [],
+        [],
+        True,
+        None,
+        ["guild-1"],
+    )
+
+    assert_that(secret.string_data["DISCORD_ALLOWED_CHANNELS"], equal_to("channel-1"))
+    assert_that(secret.string_data["DISCORD_ALLOW_ALL_USERS"], equal_to("true"))
 
 
 def test_build_hermes_config_sets_model_and_base_url():

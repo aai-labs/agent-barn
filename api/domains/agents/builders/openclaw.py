@@ -206,6 +206,7 @@ def build_openclaw_config_overlay_discord(
     allowed_channel_ids: list[str] | None = None,
     allowed_user_ids: list[str] | None = None,
     allowed_role_ids: list[str] | None = None,
+    allow_all_users: bool = True,
     home_channel_id: str | None = None,
     require_mention: bool = True,
     group_policy: str = "allowlist",
@@ -215,9 +216,9 @@ def build_openclaw_config_overlay_discord(
         channel_id: {"enabled": True, "requireMention": require_mention} for channel_id in (allowed_channel_ids or [])
     }
     guild_rule: dict = {"requireMention": require_mention}
-    if allowed_user_ids:
+    if not allow_all_users and allowed_user_ids:
         guild_rule["users"] = allowed_user_ids
-    if allowed_role_ids:
+    if not allow_all_users and allowed_role_ids:
         guild_rule["roles"] = allowed_role_ids
     if channel_rules:
         guild_rule["channels"] = channel_rules

@@ -136,6 +136,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   const [discordApplicationId, setDiscordApplicationId] = useState("");
   const [discordGuildIds, setDiscordGuildIds] = useState("");
   const [discordChannelIds, setDiscordChannelIds] = useState("");
+  const [discordAllowAllUsers, setDiscordAllowAllUsers] = useState(true);
   const [discordAllowedUserIds, setDiscordAllowedUserIds] = useState("");
   const [discordAllowedRoleIds, setDiscordAllowedRoleIds] = useState("");
   const [discordHomeChannelId, setDiscordHomeChannelId] = useState("");
@@ -280,6 +281,16 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
       setDiscordTokenError("Bot token is required.");
       return;
     }
+    if (
+      !discordAllowAllUsers
+      && !discordAllowedUserIds.split(",").some((id) => id.trim())
+      && !discordAllowedRoleIds.split(",").some((id) => id.trim())
+    ) {
+      setDiscordTokenError(
+        "Add at least one allowed operator or role, or turn on Allow all users.",
+      );
+      return;
+    }
     setStep("details");
   }
 
@@ -321,6 +332,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
                 discordBotToken,
                 discordGuildIds: discordGuildIds.split(",").map((id) => id.trim()).filter(Boolean),
                 discordAllowedChannelIds: discordChannelIds.split(",").map((id) => id.trim()).filter(Boolean),
+                discordAllowAllUsers,
                 discordAllowedUserIds: discordAllowedUserIds.split(",").map((id) => id.trim()).filter(Boolean),
                 discordAllowedRoleIds: discordAllowedRoleIds.split(",").map((id) => id.trim()).filter(Boolean),
                 ...(discordHomeChannelId.trim() ? { discordHomeChannelId: discordHomeChannelId.trim() } : {}),
@@ -628,10 +640,12 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
             onGuildIdsChange={setDiscordGuildIds}
             channelIds={discordChannelIds}
             onChannelIdsChange={setDiscordChannelIds}
+            allowAllUsers={discordAllowAllUsers}
+            onAllowAllUsersChange={(value) => { setDiscordAllowAllUsers(value); setDiscordTokenError(null); }}
             allowedUserIds={discordAllowedUserIds}
-            onAllowedUserIdsChange={setDiscordAllowedUserIds}
+            onAllowedUserIdsChange={(value) => { setDiscordAllowedUserIds(value); setDiscordTokenError(null); }}
             allowedRoleIds={discordAllowedRoleIds}
-            onAllowedRoleIdsChange={setDiscordAllowedRoleIds}
+            onAllowedRoleIdsChange={(value) => { setDiscordAllowedRoleIds(value); setDiscordTokenError(null); }}
             homeChannelId={discordHomeChannelId}
             onHomeChannelIdChange={setDiscordHomeChannelId}
             showToken={showDiscordToken}

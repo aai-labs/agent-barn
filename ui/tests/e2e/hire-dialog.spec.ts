@@ -86,6 +86,7 @@ test.describe("Hire Dialog", () => {
           allowed_channel_ids: ["channel-1"],
           allowed_user_ids: ["user-1"],
           allowed_role_ids: ["987654321098765432"],
+          allow_all_users: false,
           home_channel_id: null,
           require_mention: true,
           group_policy: "allowlist",
@@ -110,8 +111,15 @@ test.describe("Hire Dialog", () => {
       /client_id=111111111111111111/,
     );
     await page.getByText("Advanced access controls").click();
+    const allowAllUsers = page.getByRole("checkbox", { name: /allow all users/i });
+    await expect(allowAllUsers).toBeChecked();
+    await allowAllUsers.uncheck();
+    await expect(page.getByText(/add at least one allowed operator or role/i)).toBeVisible();
+    await page.getByRole("button", { name: /continue/i }).click();
+    await expect(page.getByText("Connect your Discord bot")).toBeVisible();
     await expect(page.getByRole("textbox", { name: "Allowed role IDs", exact: true })).toBeVisible();
     await page.getByRole("textbox", { name: "Allowed role IDs", exact: true }).fill("987654321098765432");
+    await expect(page.getByText(/add at least one allowed operator or role/i)).not.toBeVisible();
     await page.getByRole("button", { name: /continue/i }).click();
 
     await expect(page.getByLabel("Name them")).toBeVisible();
@@ -122,6 +130,7 @@ test.describe("Hire Dialog", () => {
     await page.getByRole("button", { name: "Hire Aria" }).click();
     const body = (await createRequest).postDataJSON();
     expect(body.discord_allowed_role_ids).toEqual(["987654321098765432"]);
+    expect(body.discord_allow_all_users).toBe(false);
     await expect(page.getByText("Hiring Aria…")).not.toBeVisible({ timeout: 10_000 });
     await expect(page.getByText("Set up Slack access")).not.toBeVisible();
     await expect(page.getByText("Aria was hired successfully.")).toBeVisible();
