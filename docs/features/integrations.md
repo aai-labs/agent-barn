@@ -2,7 +2,7 @@
 
 ## Read when
 
-Read before changing provider credential schemas, encryption, Slack app setup, Google OAuth, aai-cli configuration, provider-derived skills, or runtime secret injection.
+Read before changing tool-provider credential schemas, encryption, Google OAuth, aai-cli configuration, provider-derived Skills, or runtime secret injection. Chat-platform credentials belong to Communication Connections; follow the Communications route in `../INDEX.md` for those changes.
 
 ## Role in the system
 
@@ -33,12 +33,8 @@ Shared Credentials are org-scoped, admin-managed credential payloads that any me
 - Agent updates validate that remaining skill provider requirements are satisfied. Updating a Skill's provider metadata later does not revalidate existing agents.
 - Eligible built-in aai-cli skills are mounted at start when their provider credential is configured.
 - A built-in skill may declare no required providers when it needs no credential (Excel operates on local `.xlsx` files). Such a skill is never auto-mounted — an empty requirement list is trivially satisfied, so it would otherwise attach to every agent — and is mounted only when explicitly assigned.
-- Application deployment secrets, per-user Slack configuration tokens, per-agent Agent Secrets, and Shared Credentials are distinct credential classes with different ownership and lifecycles.
+- Application deployment secrets, Agent Secrets, Shared Credentials, and Communication Connection credentials are distinct credential classes with different ownership and lifecycles. Connection credentials are owned and validated by shipped Platform Plugins and never become runtime Integration secrets.
 - Firecrawl is an infrastructure-level capability: when `AGENT_FIRECRAWL_BASE_URL` and `AGENT_FIRECRAWL_API_KEY` are configured, all agents receive web-fetch/search by default (analogous to LiteLLM). Agents with a per-agent Firecrawl Agent Secret override the platform key.
-
-## Slack setup
-
-Per-user Slack configuration tokens support automated Slack app creation. They are encrypted at rest, exposed only as masked previews, validated when saved, and rotated through their refresh token when used. Agent Slack bot/app tokens are separate per-agent credentials.
 
 ## Google OAuth
 
@@ -61,7 +57,7 @@ At start, Agent Service decrypts provider payloads, backfills configured Google 
 | Agent Secret persistence and lifecycle             | `../../api/domains/agents/service.py`, `../../api/domains/agents/repository.py`                                                                     |
 | aai-cli runtime materialization                    | `../../api/domains/agents/aai_cli_artifacts.py`, `../../api/domains/agents/aai_cli_skills/`                                                         |
 | Built-in skill definitions                         | `../../api/domains/agents/aai_cli_skills/`                                                                                                          |
-| Slack configuration token lifecycle                | `../../api/domains/auth/token_service.py`, `../../api/domains/auth/routes.py`                                                                       |
+| Communication platform credentials                 | `../../api/domains/communications/`, [`communications/CHANGELOG.md`](communications/CHANGELOG.md)                                                   |
 | Google OAuth (Gmail, Google Sheets)                | `../../api/domains/integrations/google_oauth/routes.py`                                                                                             |
 | Firecrawl runtime wiring                           | `../../api/domains/agents/service.py` (platform-default + per-agent override)                                                                       |
 | UI credential forms                                | `../../ui/src/features/agents/`, `../../ui/src/features/account/`                                                                                   |
@@ -69,4 +65,4 @@ At start, Agent Service decrypts provider payloads, backfills configured Google 
 
 ## Change impact
 
-A provider addition or schema change affects request validation, encrypted compatibility, runtime environment/config generation, built-in skill seeding, UI forms/Zod schemas, and agent start tests. Encryption-key changes require an explicit migration/rotation plan because stored Agent Secrets and Slack configuration tokens depend on the existing key.
+A tool Integration provider addition or schema change affects request validation, encrypted compatibility, runtime environment/config generation, built-in Skill seeding, UI forms/Zod schemas, and Agent start tests. Platform additions instead use the shipped Platform Plugin seam. Encryption-key changes require an explicit migration/rotation plan because Agent Secrets, Shared Credentials, and Communication Connection credentials depend on the existing key.

@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { z } from "zod";
 
 import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
+import { useOrganizationContext } from "@/features/organizations/providers/organization-provider";
 import { api } from "@/shared/api";
 import { createQueryKeyStructure } from "@/shared/query-keys";
 
@@ -21,8 +22,10 @@ export const communicationPlatformsKey = createQueryKeyStructure("communication-
 
 export function useCommunicationPlatforms() {
   const orgApiBase = useOrganizationApiBase();
+  const { selectedOrganization } = useOrganizationContext();
+  const organizationId = selectedOrganization?.id ?? "";
   return useQuery({
-    queryKey: communicationPlatformsKey.lists(),
+    queryKey: communicationPlatformsKey.list({ organizationId }),
     queryFn: async () => {
       const response = await api.get<CommunicationPlatform[]>(
         `${orgApiBase}/communication-platforms`,
@@ -35,8 +38,10 @@ export function useCommunicationPlatforms() {
 
 export function useCommunicationConnections(agentId: string) {
   const orgApiBase = useOrganizationApiBase();
+  const { selectedOrganization } = useOrganizationContext();
+  const organizationId = selectedOrganization?.id ?? "";
   return useQuery({
-    queryKey: communicationConnectionsKey.list({ agentId }),
+    queryKey: communicationConnectionsKey.list({ organizationId, agentId }),
     queryFn: async () => {
       const response = await api.get<CommunicationConnection[]>(
         `${orgApiBase}/agents/${agentId}/connections`,
@@ -50,11 +55,13 @@ export function useCommunicationConnections(agentId: string) {
 
 export function useCommunicationConnectionActions() {
   const orgApiBase = useOrganizationApiBase();
+  const { selectedOrganization } = useOrganizationContext();
+  const organizationId = selectedOrganization?.id ?? "";
   const queryClient = useQueryClient();
 
   function invalidate(agentId: string) {
     return queryClient.invalidateQueries({
-      queryKey: communicationConnectionsKey.list({ agentId }),
+      queryKey: communicationConnectionsKey.list({ organizationId, agentId }),
     });
   }
 

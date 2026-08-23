@@ -7,6 +7,7 @@ from uuid import uuid4
 import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
+from jwt.algorithms import RSAAlgorithm
 from pydantic import ValidationError
 
 from api.domains.communications.models import PlatformCapability
@@ -162,7 +163,7 @@ def test_teams_plugin_authenticates_bot_connector_webhook() -> None:
         "serviceUrl": "https://smba.trafficmanager.net/teams",
     }
     private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    key_data = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(private_key.public_key()))
+    key_data = json.loads(RSAAlgorithm.to_jwk(private_key.public_key()))
     key_data.update({"kid": "key-1", "endorsements": ["msteams"]})
     now = int(time.time())
     token = jwt.encode(
@@ -186,7 +187,7 @@ def test_teams_plugin_rejects_service_url_not_bound_by_token() -> None:
     plugin = TeamsPlatformPlugin()
     credentials = plugin.credentials_model.model_validate({"app_id": "app-1", "app_password": "secret"})
     private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    key_data = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(private_key.public_key()))
+    key_data = json.loads(RSAAlgorithm.to_jwk(private_key.public_key()))
     key_data.update({"kid": "key-1", "endorsements": ["msteams"]})
     now = int(time.time())
     token = jwt.encode(

@@ -226,35 +226,51 @@ class ConversationRepository:
 
     def distinct_channels(
         self, agent_id: UUID, authorization_scope: AuthorizationScope
-    ) -> list[tuple[str, str | None, ConversationType]]:
-        """Returns DISTINCT (channel_id, channel_name, conversation_type) per agent.
+    ) -> list[tuple[UUID, str, str, str, str | None, ConversationType]]:
+        """Return distinct connection-scoped conversation locations for an Agent.
 
-        Picks the latest non-null channel_name per channel_id.
+        Provider channel identifiers are unique only within one Connection. Picks
+        the latest non-null channel name for each (Connection, channel) pair.
         """
         with Session(self.delegate.engine) as session:
             query = (
-                select(
-                    AgentChatMessage.channel_id,
-                    AgentChatMessage.channel_name,
-                    AgentChatMessage.conversation_type,
-                )
+                select(AgentChatMessage, CommunicationConnection)
                 .join(Agent, col(Agent.id) == col(AgentChatMessage.agent_id))
+                .join(
+                    CommunicationConnection,
+                    col(CommunicationConnection.id) == col(AgentChatMessage.connection_id),
+                )
                 .where(
                     col(AgentChatMessage.agent_id) == agent_id,
                     *agent_scope_predicates(authorization_scope),
                 )
                 .order_by(
+                    col(AgentChatMessage.connection_id),
                     col(AgentChatMessage.channel_id),
                     col(AgentChatMessage.channel_name).desc().nulls_last(),
                 )
-                .distinct(col(AgentChatMessage.channel_id))
+                .distinct(
+                    col(AgentChatMessage.connection_id),
+                    col(AgentChatMessage.channel_id),
+                )
             )
             rows = session.exec(query).all()
-            return [(r[0], r[1], r[2]) for r in rows]
+            return [
+                (
+                    message.connection_id,
+                    connection.display_name,
+                    connection.platform_key,
+                    message.channel_id,
+                    message.channel_name,
+                    message.conversation_type,
+                )
+                for message, connection in rows
+            ]
 
     def find_channel_page(
         self,
         agent_id: UUID,
+        connection_id: UUID,
         channel_id: str,
         filter: ConversationsFilter,
         cursor: ConversationsCursor,
@@ -271,6 +287,7 @@ class ConversationRepository:
         with Session(self.delegate.engine) as session:
             filters = [
                 col(AgentChatMessage.agent_id) == agent_id,
+                col(AgentChatMessage.connection_id) == connection_id,
                 col(AgentChatMessage.channel_id) == channel_id,
             ]
             if filter.from_date is not None:
@@ -316,6 +333,7 @@ class ConversationRepository:
     def find_all_channel_messages(
         self,
         agent_id: UUID,
+        connection_id: UUID,
         channel_id: str,
         filter: ConversationsFilter,
         authorization_scope: AuthorizationScope,
@@ -324,6 +342,7 @@ class ConversationRepository:
         with Session(self.delegate.engine) as session:
             filters = [
                 col(AgentChatMessage.agent_id) == agent_id,
+                col(AgentChatMessage.connection_id) == connection_id,
                 col(AgentChatMessage.channel_id) == channel_id,
             ]
             if filter.from_date is not None:

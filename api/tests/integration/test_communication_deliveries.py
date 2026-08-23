@@ -105,21 +105,22 @@ def test_runtime_claim_serializes_one_conversation() -> None:
         with when("the runtime claims work for the same conversation"):
             first = repository.claim_next_inbound(agent_id=context.agent.id)
             blocked = repository.claim_next_inbound(agent_id=context.agent.id)
-            assert_that(first, is_(not_(none())))
-            assert first is not None
             completed = repository.complete_runtime_delivery(
-                first.delivery_id,
+                first.delivery_id if first is not None else UUID(int=0),
                 agent_id=context.agent.id,
                 succeeded=True,
             )
             second = repository.claim_next_inbound(agent_id=context.agent.id)
 
         with then("the second message waits for the first delivery"):
+            assert_that(first, is_(not_(none())))
             assert_that(blocked, none())
             assert_that(completed, is_(True))
             assert_that(second, is_(not_(none())))
-            assert second is not None
-            assert_that(second.envelope.provider_message_id, equal_to("provider-2"))
+            assert_that(
+                second.envelope.provider_message_id if second is not None else None,
+                equal_to("provider-2"),
+            )
 
 
 def test_message_for_intentionally_stopped_agent_is_terminally_unavailable() -> None:

@@ -32,7 +32,12 @@ class AgentChatMessage(BaseModel, table=True):
             unique=True,
             postgresql_where=sa.text("connection_id IS NOT NULL"),
         ),
-        sa.Index("ix_agent_chat_message_agent_channel", "agent_id", "channel_id"),
+        sa.Index(
+            "ix_agent_chat_message_agent_connection_channel",
+            "agent_id",
+            "connection_id",
+            "channel_id",
+        ),
         sa.Index("ix_agent_chat_message_connection_channel", "connection_id", "channel_id"),
         sa.Index("ix_agent_chat_message_agent_session", "agent_id", "session_key"),
         # Platform View stats (AF-256) read a trailing time window across all
@@ -67,6 +72,7 @@ class ConversationMessageRead(PydanticBaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
+    connection_id: UUID
     direction: MessageDirection
     thread_id: str | None
     sender_id: str | None
@@ -78,6 +84,9 @@ class ConversationMessageRead(PydanticBaseModel):
 class ConversationChannelRead(PydanticBaseModel):
     model_config = ConfigDict(from_attributes=True)
 
+    connection_id: UUID
+    connection_name: str
+    platform_key: str
     channel_id: str
     channel_name: str | None
     conversation_type: ConversationType = ConversationType.CHANNEL

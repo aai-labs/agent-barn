@@ -311,20 +311,15 @@ class CommunicationDeliveryRepository:
             ).one_or_none()
             if delivery is None:
                 return
-            delivery.lease_expires_at = None
-            delivery.last_error_code = error_code
-            delivery.last_error_message = self._safe_error(error_message)
-            if provider_message_id is not None:
-                delivery.status = CommunicationDeliveryStatus.SUCCEEDED
-                delivery.provider_message_id = provider_message_id
-                delivery.completed_at = now
-            elif delivery.attempt_count >= max_attempts:
-                delivery.status = CommunicationDeliveryStatus.DEAD_LETTERED
-                delivery.completed_at = now
-            else:
-                delivery.status = CommunicationDeliveryStatus.PENDING
-                delivery.available_at = now + timedelta(seconds=min(300, 2**delivery.attempt_count))
-                delivery.claimed_at = None
+            self._apply_completion(
+                delivery,
+                succeeded=provider_message_id is not None,
+                now=now,
+                max_attempts=max_attempts,
+                error_code=error_code,
+                error_message=error_message,
+            )
+            delivery.provider_message_id = provider_message_id
             session.add(delivery)
             session.commit()
 
@@ -352,22 +347,42 @@ class CommunicationDeliveryRepository:
             ).one_or_none()
             if delivery is None:
                 return False
-            delivery.lease_expires_at = None
-            delivery.last_error_code = error_code
-            delivery.last_error_message = self._safe_error(error_message)
-            if succeeded:
-                delivery.status = CommunicationDeliveryStatus.SUCCEEDED
-                delivery.completed_at = now
-            elif delivery.attempt_count >= max_attempts:
-                delivery.status = CommunicationDeliveryStatus.DEAD_LETTERED
-                delivery.completed_at = now
-            else:
-                delivery.status = CommunicationDeliveryStatus.PENDING
-                delivery.available_at = now + timedelta(seconds=min(300, 2**delivery.attempt_count))
-                delivery.claimed_at = None
+            self._apply_completion(
+                delivery,
+                succeeded=succeeded,
+                now=now,
+                max_attempts=max_attempts,
+                error_code=error_code,
+                error_message=error_message,
+            )
             session.add(delivery)
             session.commit()
             return True
+
+    @classmethod
+    def _apply_completion(
+        cls,
+        delivery: CommunicationDelivery,
+        *,
+        succeeded: bool,
+        now: datetime,
+        max_attempts: int,
+        error_code: str | None,
+        error_message: str | None,
+    ) -> None:
+        delivery.lease_expires_at = None
+        delivery.last_error_code = error_code
+        delivery.last_error_message = cls._safe_error(error_message)
+        if succeeded:
+            delivery.status = CommunicationDeliveryStatus.SUCCEEDED
+            delivery.completed_at = now
+        elif delivery.attempt_count >= max_attempts:
+            delivery.status = CommunicationDeliveryStatus.DEAD_LETTERED
+            delivery.completed_at = now
+        else:
+            delivery.status = CommunicationDeliveryStatus.PENDING
+            delivery.available_at = now + timedelta(seconds=min(300, 2**delivery.attempt_count))
+            delivery.claimed_at = None
 
     @staticmethod
     def ordering_key(connection_id: UUID, envelope: NormalizedCommunicationEnvelope) -> str:

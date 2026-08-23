@@ -19,7 +19,7 @@ API configuration is read from the repository root `.env`; tests may use `.env.s
 make db-up       # PostgreSQL only
 make dev-api     # product API on :8000
 make dev-ui      # UI on :3000
-make up          # full Docker stack, including the separately served Ingest app
+make up          # full Docker stack, including the separately served Ingest and Communications apps
 make down
 make restart
 make logs

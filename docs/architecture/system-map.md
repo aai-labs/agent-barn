@@ -10,12 +10,12 @@ Agent Barn is a monorepo with four operational areas:
 
 | Area           | Responsibility                                                                                         | Authoritative sources                                                        |
 | -------------- | ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
-| API            | Product and ingest HTTP contracts, authorization, business orchestration, persistence, runtime control | `../../api/api_app.py`, `../../api/ingest_app.py`, `../../api/domains/`, `../../api/infrastructure/` |
+| API            | Product, telemetry, and communications HTTP contracts; authorization; orchestration; persistence; runtime control | `../../api/api_app.py`, `../../api/ingest_app.py`, `../../api/communications_app.py`, `../../api/domains/`, `../../api/infrastructure/` |
 | UI             | Authenticated organization-scoped product interface                                                    | `../../ui/src/app/`, `../../ui/src/features/`, `../../ui/src/shared/`                          |
 | Agent runtimes | Execute rendered agent configuration and report activity                                               | `../../api/domains/agents/builders/`, `../../hermes-base/`, `../../openclaw-base/`             |
 | Deployment     | Build and deploy databases, LiteLLM, API, UI, and runtime images                                       | `../../helm/`, `../../helmfile.yaml.gotmpl`, `../../.github/workflows/`                        |
 
-Product routes are registered in `../../api/api_app.py` beneath `/api/v1`. Runtime telemetry is a separate FastAPI application registered in `../../api/ingest_app.py` beneath `/ingest/v1` and served on a separate process/port by `../../api/start.sh`. The UI normally reaches product routes through `../../ui/src/shared/api`.
+Product routes are registered in `../../api/api_app.py` beneath `/api/v1`. Runtime telemetry is isolated in `../../api/ingest_app.py` beneath `/ingest/v1`. Provider ingress, outbound provider delivery, and the runtime-neutral delivery protocol are isolated in `../../api/communications_app.py` beneath `/communications/v1`. The UI normally reaches only product routes through `../../ui/src/shared/api`.
 
 ## Domain relationships
 
@@ -28,20 +28,24 @@ Organization
     ├── pinned Template version
     ├── assigned Skills
     ├── Agent Secrets ── Integrations
+    ├── Communication Connections ── Platform Plugins
+    │   └── Communication Deliveries ── Communications Gateway
     ├── Runtime resources ── Kubernetes
-    ├── Conversation Messages / Tool Calls ← Ingest
+    ├── Conversation Messages ← Communications Gateway
+    ├── Tool Calls ← Ingest
     └── LiteLLM key ── Costs
 ```
 
-The Agent domain is the central orchestration boundary. It coordinates templates, skills, encrypted credentials, runtime builders, Kubernetes resources, Slack/Telegram checks, LiteLLM keys, and ingest credentials. This cross-domain orchestration belongs in services rather than routes or repositories.
+The Agent domain owns lifecycle, templates, skills, runtime builders, Kubernetes resources, LiteLLM keys, and runtime credentials. The Communications domain independently owns provider credentials, Platform Plugins, Communication Connections, provider sessions, canonical messages, and durable delivery. Cross-domain orchestration belongs in services rather than routes or repositories.
 
 ## Dependency direction
 
 - API requests flow through routes → services → repositories → PostgreSQL delegate.
-- Services may also call infrastructure adapters such as Kubernetes, Slack, Telegram, LiteLLM, OpenRouter, email, and crypto.
+- Services and Platform Plugins may call infrastructure adapters such as Kubernetes, provider HTTP clients, LiteLLM, OpenRouter, email, and crypto.
 - UI routes compose feature components; feature hooks use the shared API client and centralized query-key patterns.
 - Agent startup renders a pinned template, combines skills and integration context, builds runtime resources, and applies them through the Kubernetes client.
-- Runtime telemetry flows back through Ingest into conversation and tool-call persistence.
+- Runtime telemetry flows through Ingest into Tool Call persistence.
+- Platform ingress flows through a Connection's shipped Platform Plugin into durable inbound delivery; runtime replies return through the same Connection and plugin.
 - Domain-specific repository operations that produce Domain Events own one explicit SQLModel transaction for business state, the event Outbox Message, and intended Event Deliveries.
 - Costs are queried from LiteLLM and joined to agents by LiteLLM key identity; they are not derived from conversation or tool-call records.
 
@@ -50,7 +54,7 @@ The Agent domain is the central orchestration boundary. It coordinates templates
 - Organization is the tenant-scoping axis for user-visible data.
 - API DTOs and database models remain distinct types even when they share a domain `models.py` file.
 - Agent runtime configuration is assembled from the agent's pinned template version, explicit skill assignments, eligible integration skills, and encrypted credentials at start time.
-- Runtime and platform are separate concepts: Hermes/OpenClaw are runtimes; Slack/Teams/Telegram are platforms.
+- Runtime and platform are separate concepts: Hermes/OpenClaw execute Agents; Slack/Teams/Telegram/Discord are supplied by shipped Platform Plugins and never select a runtime.
 - Domain Events are internal, tenant-aware business facts; they are separate from runtime Telemetry Events and are persisted through transport-neutral PostgreSQL outbox tables.
 - Schema changes are represented by Alembic migrations and exercised against PostgreSQL in API integration tests.
 - API and UI deployment versions are independent; `../../AGENTS.md` owns the release-version rules.

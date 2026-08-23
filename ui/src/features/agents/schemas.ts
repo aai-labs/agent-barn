@@ -171,6 +171,7 @@ export const PaginatedToolCallsSchema = z.object({
 
 export const ConversationMessageSchema = z.object({
   id: z.string().uuid(),
+  connectionId: z.string().uuid(),
   direction: z.enum(["INBOUND", "OUTBOUND"]),
   threadId: z.string().nullable(),
   senderId: z.string().nullable(),
@@ -180,6 +181,9 @@ export const ConversationMessageSchema = z.object({
 });
 
 export const ConversationChannelSchema = z.object({
+  connectionId: z.string().uuid(),
+  connectionName: z.string(),
+  platformKey: z.string(),
   channelId: z.string(),
   channelName: z.string().nullable(),
   conversationType: z.enum(["CHANNEL", "DM"]),

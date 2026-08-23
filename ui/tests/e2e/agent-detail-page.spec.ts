@@ -469,80 +469,149 @@ test.describe("Agent Detail Page — Channels tab", () => {
       body: { ...mockAgent, status: "STOPPED" },
     });
     await dataSupportPage.agents.interceptGetAgentTemplateRequest();
-    await dataSupportPage.agents.interceptSlackChannelsRequest();
-    await dataSupportPage.agents.interceptSlackUsersRequest();
-    await dataSupportPage.agents.interceptUpdateAgentRequest();
     await dataSupportPage.agents.interceptGetConversationChannelsRequest();
     await dataSupportPage.agents.interceptGetTemplatesRequest();
     await dataSupportPage.agents.interceptGetAgentConfigurationRequest();
     await dataSupportPage.agents.interceptGetModelsRequest();
-
-    await agentDetailPage.goto(MOCK_AGENT_ID);
-    await agentDetailPage.configureButton().click();
-    await agentDetailPage.channelsTab().click();
-    await agentDetailPage.editButton().click();
-  });
-
-  test("shows group and DM policy dropdowns with the agent's current values", async () => {
-    await expect(agentDetailPage.groupPolicySelect()).toHaveValue("allowlist");
-    await expect(agentDetailPage.dmPolicySelect()).toHaveValue("off");
-  });
-
-  test("uses the card footer for cancel and apply actions", async ({ page }) => {
-    const footer = page.locator('section[aria-label="Channels & endpoint"] footer');
-
-    await expect(footer.getByRole("button", { name: "Cancel", exact: true })).toBeVisible();
-    await expect(footer.getByRole("button", { name: "Apply", exact: true })).toBeDisabled();
-
-    await agentDetailPage.groupPolicySelect().selectOption("open");
-    await expect(footer.getByRole("button", { name: "Apply", exact: true })).toBeEnabled();
-
-    await footer.getByRole("button", { name: "Cancel", exact: true }).click();
-    await expect(page.getByRole("button", { name: "Edit", exact: true })).toBeVisible();
-  });
-
-  test("shows Discord routing and write-only token controls", async ({ page }) => {
-    await dataSupportPage.agents.interceptGetAgentRequest({
-      body: {
-        ...mockAgent,
-        status: "STOPPED",
-        platform: "discord",
-        slack_config: null,
-        discord_config: {
-          guild_ids: ["guild-1"],
-          allowed_channel_ids: ["channel-1"],
-          allowed_user_ids: ["user-1"],
-          allowed_role_ids: ["role-1"],
-          home_channel_id: "channel-1",
-          require_mention: true,
-          group_policy: "allowlist",
-        },
-      },
+    await page.route("**/api/v1/organizations/*/communication-platforms", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([{
+          key: "teams",
+          display_name: "Microsoft Teams",
+          schema_version: 1,
+          capabilities: ["WEBHOOK_INGRESS"],
+          settings_schema: {
+            type: "object",
+            properties: { tenant_id: { title: "Tenant ID", type: "string" } },
+            required: ["tenant_id"],
+          },
+          credentials_schema: {
+            type: "object",
+            properties: {
+              app_id: { title: "App ID", type: "string" },
+              app_password: { title: "App password", type: "string" },
+            },
+            required: ["app_id", "app_password"],
+          },
+        }]),
+      });
     });
+    await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections`, async (route) => {
+      if (route.request().method() === "POST") {
+        await route.fulfill({
+          status: 201,
+          contentType: "application/json",
+          body: JSON.stringify({
+            id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            agent_id: MOCK_AGENT_ID,
+            platform_key: "teams",
+            display_name: "Partner Teams",
+            enabled: true,
+            schema_version: 1,
+            settings: { tenant_id: "tenant-two" },
+            external_identity: "tenant-two / app-two",
+            observed_status: "PENDING",
+            last_health_at: null,
+            last_error_code: null,
+            last_error_message: null,
+            webhook_url: "https://api.example.test/communications/v1/webhooks/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            revision: 1,
+            created_at: "2026-01-01T00:00:00Z",
+            updated_at: "2026-01-01T00:00:00Z",
+          }),
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([{
+          id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+          agent_id: MOCK_AGENT_ID,
+          platform_key: "teams",
+          display_name: "Customer Teams",
+          enabled: true,
+          schema_version: 1,
+          settings: { tenant_id: "tenant-one" },
+          external_identity: "tenant-one / app-one",
+          observed_status: "CONNECTED",
+          last_health_at: "2026-01-01T00:00:00Z",
+          last_error_code: null,
+          last_error_message: null,
+          webhook_url: null,
+          revision: 3,
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+        }]),
+      });
+    });
+    await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections/*`, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+          agent_id: MOCK_AGENT_ID,
+          platform_key: "teams",
+          display_name: "Renamed Teams",
+          enabled: true,
+          schema_version: 1,
+          settings: { tenant_id: "tenant-updated" },
+          external_identity: "tenant-one / app-one",
+          observed_status: "PENDING",
+          last_health_at: null,
+          last_error_code: null,
+          last_error_message: null,
+          webhook_url: null,
+          revision: 4,
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+        }),
+      });
+    });
+
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();
     await agentDetailPage.channelsTab().click();
-    await agentDetailPage.editButton().click();
-
-    await expect(page.getByRole("textbox", { name: "Allowed server IDs" })).toHaveValue("guild-1");
-    await expect(page.getByRole("textbox", { name: "Allowed role IDs" })).toHaveValue("role-1");
-
-    await page.getByRole("button", { name: "Keys & integrations", exact: true }).click();
-    await agentDetailPage.editButton().click();
-    await expect(page.getByPlaceholder("Leave blank to keep existing token")).toBeVisible();
   });
 
+  test("lists Connection identity and health independently of the Agent runtime", async ({ page }) => {
+    await expect(page.getByText("Customer Teams", { exact: true })).toBeVisible();
+    await expect(page.getByText(/teams · tenant-one \/ app-one · CONNECTED/)).toBeVisible();
+  });
 
-  test("focusing the channel search shows mocked channels in the dropdown", async ({
-    page,
-  }) => {
-    await agentDetailPage.groupPolicySelect().selectOption("allowlist");
-    await agentDetailPage.channelSearchInput().focus();
+  test("edits Connection name and plugin settings without resending credentials", async ({ page }) => {
+    await page.getByRole("button", { name: "Edit Customer Teams" }).click();
+    await page.getByLabel("Connection name").fill("Renamed Teams");
+    await page.getByLabel("Tenant ID").fill("tenant-updated");
+    const update = page.waitForRequest((request) => request.method() === "PATCH" && request.url().includes("/connections/"));
+    await page.getByRole("button", { name: "Save changes" }).click();
+    expect((await update).postDataJSON()).toEqual({
+      revision: 3,
+      display_name: "Renamed Teams",
+      settings: { tenant_id: "tenant-updated" },
+    });
+  });
 
-    await expect(page.getByRole("button", { name: /#general/ })).toBeVisible();
-    await expect(
-      page.getByRole("button", { name: /#engineering/ }),
-    ).toBeVisible();
+  test("creates another same-platform Connection from the plugin schema", async ({ page }) => {
+    await page.getByRole("button", { name: "Add connection" }).click();
+    await page.getByRole("combobox").click();
+    await page.getByRole("option", { name: "Microsoft Teams" }).click();
+    await page.getByLabel("Connection name").fill("Partner Teams");
+    await page.getByLabel("Tenant ID").fill("tenant-two");
+    await page.getByLabel("App ID").fill("app-two");
+    await page.getByLabel("App password").fill("secret-two");
+    const create = page.waitForRequest((request) => request.method() === "POST" && request.url().endsWith("/connections"));
+    await page.getByRole("button", { name: "Create connection" }).click();
+    expect((await create).postDataJSON()).toEqual({
+      platform_key: "teams",
+      display_name: "Partner Teams",
+      enabled: true,
+      settings: { tenant_id: "tenant-two" },
+      credentials: { app_id: "app-two", app_password: "secret-two" },
+    });
   });
 });
 
@@ -750,50 +819,8 @@ test.describe("Agent Detail Page — Keys tab", () => {
     await agentDetailPage.editButton().click();
   });
 
-  test("shows app-level token and bot token inputs", async () => {
-    await expect(agentDetailPage.appTokenInput()).toBeVisible();
-    await expect(agentDetailPage.botTokenInput()).toBeVisible();
-  });
-
-  test("Save tokens button is disabled when both fields are empty", async () => {
-    await expect(agentDetailPage.saveTokensButton()).toBeDisabled();
-  });
-
-  test("filling a token field enables Save tokens", async () => {
-    await agentDetailPage.appTokenInput().fill("xapp-1-test");
-    await expect(agentDetailPage.saveTokensButton()).toBeEnabled();
-  });
-
-  test("saving tokens calls the update API", async ({ page }) => {
-    await dataSupportPage.agents.interceptUpdateAgentRequest();
-
-    await agentDetailPage.appTokenInput().fill("xapp-1-test");
-
-    const updatePromise = page.waitForRequest(
-      (req) => req.url().includes(`/agents/${MOCK_AGENT_ID}`) && req.method() === "PATCH",
-    );
-    await agentDetailPage.saveTokensButton().click();
-    await agentDetailPage.applyAndRestartConfirmationButton().click();
-    await updatePromise;
-  });
-
-  test("shows error near Save tokens when token save fails", async ({ page }) => {
-    await dataSupportPage.agents.interceptUpdateAgentRequest({
-      status: 422,
-      detail: "Invalid token format",
-    });
-
-    await agentDetailPage.appTokenInput().fill("bad-token");
-    await agentDetailPage.saveTokensButton().click();
-    await agentDetailPage.applyAndRestartConfirmationButton().click();
-
-    await expect(
-      page.locator('section[aria-label="Keys & integrations"]').getByText("Invalid token format"),
-    ).toBeVisible();
-  });
-
   test("shows Integrations section", async ({ page }) => {
-    await expect(page.getByText("Integration credentials", { exact: true })).toBeVisible();
+    await expect(page.getByText("Add an integration", { exact: true })).toBeVisible();
   });
 
   test("Save integrations is disabled when nothing is staged", async () => {
@@ -875,19 +902,6 @@ test.describe("Agent Detail Page — Keys tab", () => {
     await expect(page.getByText("Will be removed")).toBeVisible();
   });
 
-  test("error from token save does not appear in integrations section", async ({ page }) => {
-    await dataSupportPage.agents.interceptUpdateAgentRequest({
-      status: 500,
-      detail: "Token save failed",
-    });
-
-    await agentDetailPage.appTokenInput().fill("xapp-1-test");
-    await agentDetailPage.saveTokensButton().click();
-    await agentDetailPage.applyAndRestartConfirmationButton().click();
-
-    await expect(page.getByText("Token save failed")).toHaveCount(1);
-    await expect(agentDetailPage.saveIntegrationsButton()).toBeEnabled();
-  });
 });
 
 test.describe("Agent Detail Page — Personality tab (approval mode)", () => {

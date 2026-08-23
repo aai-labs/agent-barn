@@ -84,26 +84,6 @@ class PlatformIngressSupervisor:
             )
 
     async def _maintain(self, connection: CommunicationConnection) -> None:
-        plugin = self.plugins.require(connection.platform_key)
-        settings = plugin.settings_model.model_validate(connection.settings)
-        credentials = plugin.credentials_model.model_validate(
-            json.loads(decrypt_token(connection.credentials_encrypted, self.config.agent_token_encryption_key))
-        )
-
-        async def emit(payload: dict) -> None:
-            await asyncio.to_thread(self.gateway.accept_plugin_payload, connection.id, payload)
-
-        async def connected() -> None:
-            await asyncio.to_thread(
-                self.connections.record_health,
-                connection.id,
-                ConnectionObservedStatus.CONNECTED,
-            )
-
-        if PlatformCapability.WEBHOOK_INGRESS in plugin.capabilities:
-            await connected()
-            await asyncio.Event().wait()
-
         while True:
             await asyncio.to_thread(
                 self.connections.record_health,
@@ -111,6 +91,31 @@ class PlatformIngressSupervisor:
                 ConnectionObservedStatus.CONNECTING,
             )
             try:
+                plugin = self.plugins.require(connection.platform_key)
+                settings = plugin.settings_model.model_validate(connection.settings)
+                credentials = plugin.credentials_model.model_validate(
+                    json.loads(
+                        decrypt_token(
+                            connection.credentials_encrypted,
+                            self.config.agent_token_encryption_key,
+                        )
+                    )
+                )
+
+                async def emit(payload: dict) -> None:
+                    await asyncio.to_thread(self.gateway.accept_plugin_payload, connection.id, payload)
+
+                async def connected() -> None:
+                    await asyncio.to_thread(
+                        self.connections.record_health,
+                        connection.id,
+                        ConnectionObservedStatus.CONNECTED,
+                    )
+
+                if PlatformCapability.WEBHOOK_INGRESS in plugin.capabilities:
+                    await connected()
+                    await asyncio.Event().wait()
+
                 await plugin.run_ingress(settings, credentials, emit, connected)
                 raise RuntimeError("Platform ingress session ended unexpectedly")
             except NotImplementedError as exc:

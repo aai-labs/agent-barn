@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Cable, CircleAlert, Plus, Trash2 } from "lucide-react";
+import { Cable, CircleAlert, Pencil, Plus, Trash2 } from "lucide-react";
 
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
 import {
@@ -114,8 +114,6 @@ export function AgentChannelSettings({
 }: {
   agent: Agent;
   canEdit: boolean;
-  editing: boolean;
-  onEdit: () => void;
 }) {
   const connections = useCommunicationConnections(agent.id);
   const platforms = useCommunicationPlatforms();
@@ -127,6 +125,10 @@ export function AgentChannelSettings({
   const [credentials, setCredentials] = useState<Record<string, unknown>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [retiring, setRetiring] = useState<CommunicationConnection | null>(null);
+  const [editingConnection, setEditingConnection] = useState<CommunicationConnection | null>(null);
+  const [editDisplayName, setEditDisplayName] = useState("");
+  const [editSettings, setEditSettings] = useState<Record<string, unknown>>({});
+  const [editCredentials, setEditCredentials] = useState<Record<string, unknown>>({});
 
   const selectedPlatform = useMemo(
     () => platforms.data?.find((platform) => platform.key === platformKey),
@@ -160,6 +162,36 @@ export function AgentChannelSettings({
       setFormError(null);
     } catch (error) {
       setFormError(error instanceof Error ? error.message : "Could not create the connection.");
+    }
+  }
+
+  function beginEditing(connection: CommunicationConnection) {
+    setEditingConnection(connection);
+    setEditDisplayName(connection.displayName);
+    setEditSettings(connection.settings);
+    setEditCredentials({});
+    setFormError(null);
+  }
+
+  async function saveConnection() {
+    if (!editingConnection) return;
+    const credentialsChanged = Object.values(editCredentials).some(
+      (value) => Array.isArray(value) ? value.length > 0 : value !== "" && value !== null && value !== undefined,
+    );
+    try {
+      await updateConnection.mutateAsync({
+        agentId: agent.id,
+        connectionId: editingConnection.id,
+        revision: editingConnection.revision,
+        displayName: editDisplayName.trim(),
+        settings: editSettings,
+        ...(credentialsChanged ? { credentials: editCredentials } : {}),
+      });
+      setEditingConnection(null);
+      setEditCredentials({});
+      setFormError(null);
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : "Could not update the connection.");
     }
   }
 
@@ -200,6 +232,9 @@ export function AgentChannelSettings({
               </div>
               {canEdit && (
                 <div className="flex gap-2">
+                  <button type="button" className="af-btn af-btn-sm" aria-label={`Edit ${connection.displayName}`} onClick={() => beginEditing(connection)}>
+                    <Pencil size={14} /> Edit
+                  </button>
                   <button
                     type="button"
                     className="af-btn af-btn-sm"
@@ -219,6 +254,38 @@ export function AgentChannelSettings({
                 </div>
               )}
             </div>
+            {editingConnection?.id === connection.id && (() => {
+              const platform = platforms.data?.find((candidate) => candidate.key === connection.platformKey);
+              return (
+                <div className="mt-4 flex flex-col gap-4 border-t pt-4" style={{ borderColor: "var(--line)" }}>
+                  <label className="flex flex-col gap-1.5 text-sm font-medium">
+                    Connection name
+                    <input className="af-input" value={editDisplayName} onChange={(event) => setEditDisplayName(event.target.value)} />
+                  </label>
+                  {platform && (
+                    <>
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <SchemaFields schema={platform.settingsSchema} values={editSettings} onChange={setEditSettings} />
+                      </div>
+                      <div className="rounded-lg p-3" style={{ border: "1px solid var(--line)" }}>
+                        <div className="mb-1 text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--ink-4)" }}>Replace credentials</div>
+                        <p className="mb-3 mt-0 text-xs" style={{ color: "var(--ink-3)" }}>Leave every credential blank to keep the encrypted credentials already stored.</p>
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <SchemaFields schema={platform.credentialsSchema} values={editCredentials} onChange={setEditCredentials} secret />
+                        </div>
+                      </div>
+                    </>
+                  )}
+                  {formError && <p className="m-0 text-xs" style={{ color: "var(--err)" }}>{formError}</p>}
+                  <div className="flex justify-end gap-2">
+                    <button type="button" className="af-btn" onClick={() => { setEditingConnection(null); setFormError(null); }}>Cancel</button>
+                    <button type="button" className="af-btn af-btn-primary" disabled={!editDisplayName.trim() || updateConnection.isPending} onClick={() => void saveConnection()}>
+                      {updateConnection.isPending ? "Saving…" : "Save changes"}
+                    </button>
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         ))}
         {!connections.isPending && connections.data?.length === 0 && !adding && (

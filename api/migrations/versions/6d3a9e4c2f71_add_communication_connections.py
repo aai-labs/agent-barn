@@ -317,9 +317,21 @@ def upgrade() -> None:
         "agent_chat_message",
         ["connection_id", "channel_id"],
     )
+    op.drop_index("ix_agent_chat_message_agent_channel", table_name="agent_chat_message")
+    op.create_index(
+        "ix_agent_chat_message_agent_connection_channel",
+        "agent_chat_message",
+        ["agent_id", "connection_id", "channel_id"],
+    )
 
 
 def downgrade() -> None:
+    op.drop_index("ix_agent_chat_message_agent_connection_channel", table_name="agent_chat_message")
+    op.create_index(
+        "ix_agent_chat_message_agent_channel",
+        "agent_chat_message",
+        ["agent_id", "channel_id"],
+    )
     op.drop_index("ix_agent_chat_message_connection_channel", table_name="agent_chat_message")
     op.drop_constraint("fk_agent_chat_message_connection", "agent_chat_message", type_="foreignkey")
     op.drop_column("agent_chat_message", "connection_id")

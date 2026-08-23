@@ -14,7 +14,6 @@ from api.domains.conversations.models import (
     ConversationsFilter,
     ConversationThreadRead,
     ConversationThreadsPage,
-    ConversationType,
 )
 from api.domains.conversations.repository import ConversationRepository
 from api.domains.rbac.catalog import PermissionKey
@@ -33,13 +32,16 @@ class ConversationService:
             context, agent, PermissionKey.ACTIVITY_READ
         )
         db_channels = self.repository.distinct_channels(agent_id, activity_scope)
-        merged: dict[str, tuple[str | None, ConversationType]] = {
-            cid: (name, ctype) for cid, name, ctype in db_channels
-        }
-
         return [
-            ConversationChannelRead(channel_id=cid, channel_name=name, conversation_type=ctype)
-            for cid, (name, ctype) in sorted(merged.items())
+            ConversationChannelRead(
+                connection_id=connection_id,
+                connection_name=connection_name,
+                platform_key=platform_key,
+                channel_id=channel_id,
+                channel_name=channel_name,
+                conversation_type=conversation_type,
+            )
+            for connection_id, connection_name, platform_key, channel_id, channel_name, conversation_type in db_channels
         ]
 
     def platform_daily_message_counts(
@@ -58,6 +60,7 @@ class ConversationService:
         self,
         agent_id: UUID,
         context: CurrentUserContext,
+        connection_id: UUID,
         channel_id: str,
         filter: ConversationsFilter,
         cursor: ConversationsCursor,
@@ -69,6 +72,7 @@ class ConversationService:
         )
         messages = self.repository.find_all_channel_messages(
             agent_id=agent_id,
+            connection_id=connection_id,
             channel_id=channel_id.upper(),
             filter=filter,
             authorization_scope=activity_scope,

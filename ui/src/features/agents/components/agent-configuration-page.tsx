@@ -202,8 +202,6 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
               <AgentChannelSettings
                 agent={agent}
                 canEdit={canEdit}
-                editing={editingSection === "channels"}
-                onEdit={() => toggleEditing("channels")}
               />
             )}
             {activeSection === "skills" && (

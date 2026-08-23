@@ -1,4 +1,4 @@
-from hamcrest import assert_that, has_items, is_not
+from hamcrest import assert_that, has_item, has_items, is_, is_not
 from sqlalchemy import create_engine, inspect
 
 from api.core.config import get_config
@@ -23,4 +23,11 @@ def test_communications_cutover_removes_legacy_platform_schema():
         "agent_discord_config",
     ):
         assert_that(tables, is_not(has_items(legacy_table)))
-    assert "platform" not in {column["name"] for column in inspector.get_columns("agent")}
+    assert_that(
+        {column["name"] for column in inspector.get_columns("agent")},
+        is_not(has_item("platform")),
+    )
+    connection_id = next(
+        column for column in inspector.get_columns("agent_chat_message") if column["name"] == "connection_id"
+    )
+    assert_that(connection_id["nullable"], is_(False))

@@ -5,7 +5,7 @@ from api.domains.communications.plugins.base import PlatformPlugin
 
 
 class PlatformPluginRegistry:
-    """Code-owned catalogue of trusted Platform Plugins shipped with Agent Farm."""
+    """Code-owned catalogue of trusted Platform Plugins shipped with Agent Barn."""
 
     def __init__(self, plugins: Iterable[PlatformPlugin]) -> None:
         by_key: dict[str, PlatformPlugin] = {}
