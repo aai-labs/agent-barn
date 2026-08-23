@@ -155,6 +155,13 @@ export KUBECONFIG=.k3d/kubeconfig-host.yaml
 export K8S_KUBECONFIG_PATH=.k3d/kubeconfig-host.yaml
 ```
 
+Also set `LITELLM_BASE_URL=http://127.0.0.1:7070` in `.env` for this path. It's
+blank in `.env.spec`, and unlike the Docker path (where compose always
+overrides it to the in-network LiteLLM service) nothing here fills it in for
+you — `create_agent` silently skips minting a LiteLLM key when it's empty
+(`api/domains/agents/service.py:728`, no error either way), so the agent gets
+created and *looks* fine but can never actually answer.
+
 See [docs/features/domain-events.md](./docs/features/domain-events.md) for how Domain Event delivery works.
 
 ## Local Kubernetes (k3d) dev environment
@@ -303,6 +310,15 @@ grep -E '^(OPENCLAW|HERMES)_IMAGE=' .env
 Fix by running `./run.sh` again (it reloads any image missing from the
 cluster), or `bash docker/k3d/k3d-load-images.sh` directly with the same
 `K3D_CLUSTER` as the cluster.
+
+A second, less obvious cause: an image that *was* imported can still
+disappear later. Imported images are unreferenced whenever no agent is
+running one, and kubelet garbage-collects unreferenced images under disk
+pressure (seen at `usage=87 highThreshold=85` on a constrained host). With
+`imagePullPolicy=IfNotPresent` against a private registry and no pull
+secret seeded locally, a GC'd image can't be re-pulled — only reimported.
+`docker system df` / `docker stats --no-stream` will show whether disk
+pressure is the actual trigger before you re-run the fix above.
 
 **Warning `FailedToRetrieveImagePullSecret (registry-pull-secret)` repeating on a
 pod.** Expected locally and harmless on its own — the local flow imports images

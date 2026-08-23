@@ -43,9 +43,22 @@ def prepare_ingest_server():
 
 def set_env_variable(vars_dict: dict[str, str]):
     def step(context):
+        from api.tests.core.givenpy import LambdaWith
+
+        previous = {key: os.environ.get(key) for key in vars_dict}
         get_config.cache_clear()
         for key, value in vars_dict.items():
             os.environ[key] = value
+
+        def restore():
+            get_config.cache_clear()
+            for key, prior_value in previous.items():
+                if prior_value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = prior_value
+
+        return LambdaWith(lambda: None, restore)
 
     return step
 

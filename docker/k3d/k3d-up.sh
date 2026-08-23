@@ -171,8 +171,17 @@ data:
       }
     }
 COREDNS
-  kubectl -n kube-system rollout restart deployment coredns >/dev/null 2>&1 || true
-  green "  host.docker.internal → ${host_ip} (CoreDNS entry added for Linux)"
+  # Wait for the restart to actually finish rather than printing "ready"
+  # immediately after triggering it — a probe run right after this script
+  # exits can otherwise hit CoreDNS mid-restart and look like a real failure.
+  # `|| true` on restart alone previously hid genuine rollout failures too.
+  kubectl -n kube-system rollout restart deployment coredns >/dev/null
+  if kubectl -n kube-system rollout status deployment coredns --timeout=60s >/dev/null 2>&1; then
+    green "  host.docker.internal → ${host_ip} (CoreDNS entry added for Linux)"
+  else
+    yellow "  CoreDNS restart didn't report ready within 60s — host.docker.internal"
+    yellow "  resolution inside pods may be stale for a bit; check 'kubectl -n kube-system rollout status deployment coredns'"
+  fi
 fi
 
 # ── summary ───────────────────────────────────────────────────────────────────
