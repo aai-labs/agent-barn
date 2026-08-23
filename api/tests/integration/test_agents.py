@@ -2517,6 +2517,7 @@ _GIVEN_WITH_HERMES_IMAGE = [
             "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
             "API_EXTERNAL_URL": "https://api.test.com",
             "HERMES_IMAGE": "nousresearch/hermes-agent:v1.0",
+            "SKIP_SLACK_TOKEN_VALIDATION": "true",
         }
     ),
     prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
@@ -4348,6 +4349,7 @@ _GIVEN_HERMES_WITH_FIRECRAWL = [
             "HERMES_IMAGE": "nousresearch/hermes-agent:v1.0",
             "AGENT_FIRECRAWL_BASE_URL": "http://firecrawl:3002",
             "AGENT_FIRECRAWL_API_KEY": "fc-platform-key",
+            "SKIP_SLACK_TOKEN_VALIDATION": "true",
         }
     ),
     prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
