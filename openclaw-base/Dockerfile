@@ -22,7 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /src
 RUN --mount=type=secret,id=gh_token \
     git clone --depth 1 \
-      "https://x-access-token:$(cat /run/secrets/gh_token)@github.com/aai-labs/agent-cli-tools.git" repo && \
+      "https://x-access-token:$(cat /run/secrets/gh_token)@github.com/aai-labs/aai-cli.git" repo && \
     cargo install --path repo --root /out --locked
 
 FROM node:22-bookworm-slim

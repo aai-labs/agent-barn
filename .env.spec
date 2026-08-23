@@ -80,7 +80,7 @@ OPENROUTER_API_KEY=
 AGENT_MODEL_ALLOWLIST=
 
 # ── Local Kubernetes (k3d) dev environment ──────────────────────────────────
-# Only needed to run agents locally (`make cluster-up`, `make k3d-load-images`).
+# Only needed to run agents locally (`./run.sh` sets this up for you).
 # See README → "Local Kubernetes (k3d) dev environment".
 
 # Stable admin key for the local LiteLLM proxy, e.g. sk-$(openssl rand -hex 16).
@@ -89,18 +89,18 @@ AGENT_MODEL_ALLOWLIST=
 LITELLM_MASTER_KEY=
 
 # Full image refs the agent pods request. Each tag must equal the matching
-# openclaw-base/VERSION and hermes-base/VERSION; `make k3d-load-images` builds
-# and imports under exactly these tags. These supersede AGENT_IMAGE above,
-# which the API no longer reads.
+# openclaw-base/VERSION and hermes-base/VERSION; docker/k3d/k3d-load-images.sh
+# (run automatically by ./run.sh) builds and imports under exactly these tags.
+# These supersede AGENT_IMAGE above, which the API no longer reads.
 OPENCLAW_IMAGE=
 HERMES_IMAGE=
 
-# GitHub PAT with read access to aai-labs/agent-cli-tools — the base-image
+# GitHub PAT with read access to aai-labs/aai-cli — the base-image
 # build clones that repo.
 GH_TOKEN=
 
-# In-container path to the kubeconfig, for the API started by `make up`.
-# `make cluster-up` prints the exact value. Leave empty if you're not using k3d.
+# In-container path to the kubeconfig, for the API started by `./run.sh`.
+# ./run.sh sets this automatically. Leave empty if you're not using k3d.
 API_K8S_KUBECONFIG_PATH=
 
 # Optional. How the API inside Docker reaches LiteLLM; defaults to the compose

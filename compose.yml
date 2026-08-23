@@ -1,7 +1,7 @@
 # Local dev stack only — prod runs via Helm (see helm/, helmfile.yaml.gotmpl).
 # api/worker/ui run with source bind-mounted and dev servers in watch mode, so
-# `make up` gives you the same hot reload as `make dev-api`/`dev-ui`/`dev-worker`,
-# just fully containerized.
+# ./run.sh (which drives this file) gives you the same hot reload as
+# `make dev-api`/`dev-ui`/`dev-worker`, just fully containerized.
 
 x-api-env: &api-env
   # Container-network hostnames override the localhost defaults in .env.

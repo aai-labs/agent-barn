@@ -117,7 +117,7 @@ database has none.
 | `OPENROUTER_API_KEY`                                                 | passed to LiteLLM; also used for the model picker                                                                                                              |
 | `LITELLM_MASTER_KEY`                                                 | **stable** admin key, e.g. `sk-$(openssl rand -hex 16)` — LiteLLM encrypts stored keys with it, so changing it later breaks agents created under the old value |
 | `OPENCLAW_IMAGE`, `HERMES_IMAGE`                                     | full `name:tag`; the tag must equal the matching `openclaw-base/VERSION` / `hermes-base/VERSION`                                                               |
-| `GH_TOKEN`                                                           | GitHub PAT with read access to [`aai-labs/agent-cli-tools`](https://github.com/aai-labs/agent-cli-tools) — the base-image build clones it                      |
+| `GH_TOKEN`                                                           | GitHub PAT with read access to [`aai-labs/aai-cli`](https://github.com/aai-labs/aai-cli) — the base-image build clones it                      |
 
 `run.sh` sets `API_K8S_KUBECONFIG_PATH` in `.env` for you once the cluster is up
 — no manual kubeconfig wiring needed.

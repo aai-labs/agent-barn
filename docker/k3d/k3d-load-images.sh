@@ -8,8 +8,8 @@
 # Required env vars:
 #   OPENCLAW_IMAGE    — fully-qualified image name+tag (from .env)
 #   HERMES_IMAGE      — fully-qualified image name+tag (from .env)
-#   GH_TOKEN          — GitHub PAT with read access to aai-labs/agent-cli-tools
-#                       (https://github.com/aai-labs/agent-cli-tools); only
+#   GH_TOKEN          — GitHub PAT with read access to aai-labs/aai-cli
+#                       (https://github.com/aai-labs/aai-cli); only
 #                       needed when a build actually has to run.
 #
 # Optional:
@@ -112,7 +112,7 @@ build_image() {
   local context="$3"
   local tag="$4"
 
-  [[ -n "${GH_TOKEN:-}" ]] || red "GH_TOKEN is not set — needed to clone agent-cli-tools for the ${name} build"
+  [[ -n "${GH_TOKEN:-}" ]] || red "GH_TOKEN is not set — needed to clone aai-cli for the ${name} build"
 
   step "Building ${name} → ${tag}"
   if [[ "${APT_MIRROR}" != "deb.debian.org" ]]; then
