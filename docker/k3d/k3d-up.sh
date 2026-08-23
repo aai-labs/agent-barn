@@ -101,12 +101,16 @@ mkdir -p "${KUBECONFIG_DIR}"
 # variants from one fetch: host tools reach the published port on 127.0.0.1;
 # the API container reaches it via host.docker.internal (which does not resolve
 # outside containers).
+# `#` as the sed delimiter (instead of the more common `|`) so the alternation
+# `|` inside the pattern can stay a plain, unescaped ERE operator. `\|` reads
+# as alternation under GNU sed but as a literal pipe under BSD/macOS sed, so
+# escaping it (as this used to) silently no-ops the whole substitution there.
 raw_kubeconfig="$(${COMPOSE} run --rm -T k3d-runner k3d kubeconfig get "${CLUSTER}")"
 printf '%s\n' "${raw_kubeconfig}" \
-  | sed -E "s|https://(0\.0\.0\.0\|host\.docker\.internal):${K8S_API_PORT}|https://127.0.0.1:${K8S_API_PORT}|g" \
+  | sed -E "s#https://(0\.0\.0\.0|host\.docker\.internal):${K8S_API_PORT}#https://127.0.0.1:${K8S_API_PORT}#g" \
   > "${KUBECONFIG_HOST}"
 printf '%s\n' "${raw_kubeconfig}" \
-  | sed -E "s|https://(0\.0\.0\.0\|127\.0\.0\.1):${K8S_API_PORT}|https://host.docker.internal:${K8S_API_PORT}|g" \
+  | sed -E "s#https://(0\.0\.0\.0|127\.0\.0\.1):${K8S_API_PORT}#https://host.docker.internal:${K8S_API_PORT}#g" \
   > "${KUBECONFIG_INTERNAL}"
 chmod 600 "${KUBECONFIG_HOST}" "${KUBECONFIG_INTERNAL}"
 green "  ${KUBECONFIG_HOST} (host tools)"

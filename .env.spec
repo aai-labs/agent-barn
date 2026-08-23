@@ -21,9 +21,12 @@ REDIS_URL=redis://localhost:6379/0
 SECRET_SIGNING_KEY=replace_with_a_secure_random_value
 # The password must satisfy the API's own policy — at least 8 characters with an
 # uppercase letter, a lowercase letter and a digit (see
-# api/domains/auth/password_validation.py). A non-compliant value fails startup
-# with "500: Error while initializing startup data".
-PLATFORM_ADMIN_CREDENTIALS=admin@example.com:Replace_With_Secure_Password1
+# api/domains/auth/password_validation.py). Deliberately left non-compliant
+# (no uppercase, no digit) so startup fails with "500: Error while
+# initializing startup data" until you replace it — this is a real login
+# credential, not a value you want silently accepted as-is on a publicly
+# bound API.
+PLATFORM_ADMIN_CREDENTIALS=admin@example.com:replace_with_a_secure_password
 
 # Optional: if unset, email delivery is disabled and send attempts are logged. All three
 # are required for delivery. Transactional mail goes through Cloudflare Email Sending.

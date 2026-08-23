@@ -155,7 +155,7 @@ services:
       - .:/workspace
     working_dir: /workspace
 
-  # LiteLLM proxy + its Postgres — only started by `make cluster-up`.
+  # LiteLLM proxy + its Postgres — only started by ./run.sh (or `bash docker/k3d/k3d-up.sh`).
   # Agents running inside k3d reach LiteLLM via host.docker.internal:7070.
   litellm-db:
     image: postgres:16
@@ -167,7 +167,11 @@ services:
       POSTGRES_PASSWORD: litellm
       POSTGRES_DB: litellm
     volumes:
-      - aai_litellm_db_data:/var/lib/postgresql
+      # postgres:16 declares VOLUME /var/lib/postgresql/data (PGDATA), not the
+      # parent — mounting the parent here left PGDATA an anonymous volume that
+      # `docker compose down -v`/`docker volume prune` drops silently, wiping
+      # every LiteLLM virtual key even though the named volume looked intact.
+      - aai_litellm_db_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U litellm -d litellm"]
       interval: 5s
