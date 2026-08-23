@@ -4,7 +4,8 @@ import os
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
-from urllib.error import URLError
+from pathlib import Path
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
@@ -15,6 +16,8 @@ POLL_INTERVAL = 10
 TOKEN_POLL_INTERVAL = 300  # 5 minutes
 
 LITELLM_PROXY_TARGET = os.environ.get("LITELLM_PROXY_TARGET", "")
+HERMES_HOME = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes")))
+GATEWAY_STATE_PATH = HERMES_HOME / "gateway_state.json"
 
 _lock = threading.Lock()
 _cache: dict = {"ok": None, "ever_connected": False, "reason": None}
@@ -23,6 +26,8 @@ _token_cache: dict = {"ok": None, "reason": None}
 AGENT_PLATFORM = os.environ.get("AGENT_PLATFORM", "slack")
 _SLACK_API = "https://slack.com/api"
 _TELEGRAM_API = "https://api.telegram.org"
+_DISCORD_API = "https://discord.com/api/v10"
+_DISCORD_USER_AGENT = "DiscordBot (https://github.com/aai-labs/agent-farm, 1.0)"
 _SKIP_VALIDATION = os.environ.get("SKIP_SLACK_TOKEN_VALIDATION", "").lower() in ("1", "true", "yes")
 
 _TERMINAL_LLM_ERRORS: dict[int, str] = {
@@ -79,6 +84,53 @@ def _check_telegram_token(token: str) -> tuple[bool, str]:
         return False, f"Telegram token validation failed: {exc}"
 
 
+def _check_discord_token(token: str) -> tuple[bool, str]:
+    if not token:
+        return False, "No Discord bot token was provided."
+    try:
+        # Discord rejects urllib's default Python user agent at its Cloudflare
+        # edge, which otherwise makes a valid bot token look like a 403.
+        req = Request(
+            f"{_DISCORD_API}/users/@me",
+            headers={
+                "Authorization": f"Bot {token}",
+                "User-Agent": _DISCORD_USER_AGENT,
+            },
+        )
+        with urlopen(req, timeout=15) as resp:
+            body = json.loads(resp.read())
+        if body.get("id") and body.get("bot") is True:
+            return True, ""
+        return False, "Discord bot token validation returned an unexpected account."
+    except HTTPError as exc:
+        if exc.code in (401, 403):
+            return False, "Discord bot token is invalid or unauthorized."
+        return False, f"Discord token validation failed: HTTP {exc.code}"
+    except Exception as exc:
+        return False, f"Discord token validation failed: {exc}"
+
+
+def _validate_platform_tokens() -> tuple[bool, str]:
+    if AGENT_PLATFORM == "telegram":
+        return _check_telegram_token(os.environ.get("TELEGRAM_BOT_TOKEN", ""))
+    if AGENT_PLATFORM == "discord":
+        return _check_discord_token(os.environ.get("DISCORD_BOT_TOKEN", ""))
+    if AGENT_PLATFORM == "slack":
+        ok, reason = _check_token(
+            f"{_SLACK_API}/auth.test",
+            os.environ.get("SLACK_BOT_TOKEN", ""),
+            "bot token",
+        )
+        if ok:
+            return _check_token(
+                f"{_SLACK_API}/apps.connections.open",
+                os.environ.get("SLACK_APP_TOKEN", ""),
+                "app token",
+            )
+        return ok, reason
+    return False, f"Unsupported agent platform: {AGENT_PLATFORM}"
+
+
 def _poll_tokens() -> None:
     if _SKIP_VALIDATION:
         with _lock:
@@ -87,15 +139,7 @@ def _poll_tokens() -> None:
         return
 
     while True:
-        if AGENT_PLATFORM == "telegram":
-            telegram_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-            ok, reason = _check_telegram_token(telegram_token)
-        else:
-            bot_token = os.environ.get("SLACK_BOT_TOKEN", "")
-            app_token = os.environ.get("SLACK_APP_TOKEN", "")
-            ok, reason = _check_token(f"{_SLACK_API}/auth.test", bot_token, "bot token")
-            if ok:
-                ok, reason = _check_token(f"{_SLACK_API}/apps.connections.open", app_token, "app token")
+        ok, reason = _validate_platform_tokens()
         with _lock:
             _token_cache["ok"] = ok
             _token_cache["reason"] = reason if not ok else None
@@ -148,6 +192,35 @@ def _healthz_result(ok, ever, reason, tok_ok, tok_reason) -> tuple[int, dict]:
     return 503, {"status": "starting", "reason": reason}
 
 
+def _liveness_result() -> tuple[int, dict]:
+    """Restart a gateway only when Hermes' automatic circuit breaker is open."""
+    try:
+        state = json.loads(GATEWAY_STATE_PATH.read_text(encoding="utf-8"))
+    except FileNotFoundError, OSError, json.JSONDecodeError:
+        return 200, {"live": True}
+
+    if not isinstance(state, dict):
+        return 200, {"live": True}
+    platforms = state.get("platforms")
+    if not isinstance(platforms, dict):
+        return 200, {"live": True}
+    platform = platforms.get(AGENT_PLATFORM, {})
+    if not isinstance(platform, dict):
+        return 200, {"live": True}
+    if platform.get("state") != "paused":
+        return 200, {"live": True}
+
+    reason = str(platform.get("error_message") or "")
+    if reason == "paused via /platform pause":
+        return 200, {"live": True, "platform": AGENT_PLATFORM, "state": "manually-paused"}
+    return 500, {
+        "live": False,
+        "platform": AGENT_PLATFORM,
+        "state": "circuit-breaker-paused",
+        "reason": reason,
+    }
+
+
 class _Handler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: object) -> None:
         pass
@@ -155,6 +228,8 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         if self.path == "/ready":
             self._send(200, {"ready": True})
+        elif self.path == "/live":
+            self._send(*_liveness_result())
         elif self.path == "/metrics":
             ok, ever, _, tok_ok, _ = _snapshot()
             self._send_text(200, _metrics_text(ok, ever, tok_ok))

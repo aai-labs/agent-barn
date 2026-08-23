@@ -60,7 +60,7 @@ services:
       redis:
         condition: service_healthy
     # Pulls in everything else defined in .env (AGENT_*, LITELLM_*, OPENROUTER_*,
-    # EMAIL_*, GOOGLE_CLOUD_*, ...); `environment:` below overrides only the
+    # CLOUDFLARE_*, SENDER_EMAIL, GOOGLE_CLOUD_*, ...); `environment:` below overrides only the
     # values that must point at in-network container hostnames.
     env_file:
       - .env

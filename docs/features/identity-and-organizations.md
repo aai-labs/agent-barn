@@ -17,7 +17,7 @@ Authentication establishes a user and membership context; Organization is the te
 - Organization-scoped routes carry the active organization in the URL. A route without an `organization_id` path parameter has no active Organization.
 - Org-scoped routes require real membership in the selected organization, including for Platform Administrators. Platform Administrator authority is reserved for platform routes.
 - Cross-organization resource access is intentionally hidden with 404 for tenant-owned entities; known but unauthorized organization administration uses 403.
-- Agent Farm has no default Organization. Platform-owned resources are global Platform Resources, not Organization-owned rows. Any organization with active agents must remove them before deletion.
+- Agent Barn has no default Organization. Platform-owned resources are global Platform Resources, not Organization-owned rows. Any organization with active agents must remove them before deletion.
 - Platform routes accept Platform Administrator authority only from an authenticated user session. API-key, service, runtime, and other non-user-session credential classes are denied even when they identify a Platform Administrator.
 - Platform Administrators can list users and organizations, provision pending users with an initial Organization, resend pending-user invitations, and grant or revoke Platform Privilege. Platform password reset, account deletion, and platform-level Organization creation/deletion are not supported.
 - Platform Privilege changes require a 1–1000 character reason, reject no-op changes, prohibit self-revocation, and cannot remove the final Platform Administrator. The user-state change and Platform-scoped Domain Event commit atomically.

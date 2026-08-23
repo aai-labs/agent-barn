@@ -25,6 +25,14 @@ export type UpdateAgentData = {
   telegramBotToken?: string;
   telegramGroupPolicy?: "open" | "allowlist";
   telegramDmPolicy?: "off" | "open" | "allowlist";
+  discordBotToken?: string;
+  discordGuildIds?: string[];
+  discordAllowedChannelIds?: string[];
+  discordAllowedUserIds?: string[];
+  discordAllowedRoleIds?: string[];
+  discordHomeChannelId?: string | null;
+  discordRequireMention?: boolean;
+  discordGroupPolicy?: "open" | "allowlist";
   telegramAllowedUserIds?: string[];
   telegramAllowedChatIds?: string[];
   teamsAppId?: string;
@@ -32,6 +40,8 @@ export type UpdateAgentData = {
   teamsTenantId?: string;
   skillIds?: string[];
   removedSkillIds?: string[];
+  // Explicit skill version pins for newly added and re-pinned skills.
+  skillVersions?: Array<{ skillId: string; version: number }>;
   // Integration credentials: upsert (add/replace) + explicit removal.
   secrets?: Array<{ provider: string; content: Record<string, string | string[] | boolean> }>;
   // Shared credentials to attach (by ID)

@@ -20,11 +20,11 @@ REGISTRY_PASSWORD=
 
 # Image repository names under REGISTRY_PREFIX. Defaults match the internal
 # registry. The client release bundle ships these set to api/ui/hermes-base/
-# openclaw-base under REGISTRY_PREFIX=clients.registry.k8s.aai-labs.com/agent-farm.
-API_IMAGE_REPOSITORY=agentfarm-api
-UI_IMAGE_REPOSITORY=agentfarm-ui
-HERMES_IMAGE_REPOSITORY=agentfarm-hermes-base
-OPENCLAW_IMAGE_REPOSITORY=agentfarm-openclaw-base
+# openclaw-base under REGISTRY_PREFIX=clients.registry.k8s.aai-labs.com/agent-barn.
+API_IMAGE_REPOSITORY=agentbarn-api
+UI_IMAGE_REPOSITORY=agentbarn-ui
+HERMES_IMAGE_REPOSITORY=agentbarn-hermes-base
+OPENCLAW_IMAGE_REPOSITORY=agentbarn-openclaw-base
 
 # ── Image tags (pin explicit images for a manual deploy) ─────────────────────
 # GitHub Actions branch deploys set API/UI image tags automatically to the
@@ -63,11 +63,19 @@ AGENT_TOKEN_ENCRYPTION_KEY=
 PLATFORM_ADMIN_CREDENTIALS=admin@example.com:
 ENVIRONMENT=local
 
+# ── Transactional email (Cloudflare Email Sending) ───────────────────────────
+# Leave blank to disable email delivery; sends are logged and no-op. All three are
+# required for delivery. The token needs the "Email Sending: Edit" permission, and
+# SENDER_EMAIL's domain must be a Verified sending domain in the Cloudflare account.
+CLOUDFLARE_ACCOUNT_ID=
+CLOUDFLARE_API_TOKEN=
+SENDER_EMAIL=
+
 # ── URLs / ingress hosts ─────────────────────────────────────────────────────
 # Hostnames the ingress serves. Point DNS (or /etc/hosts) at the cluster.
-API_HOST=api.agentfarm.local
-UI_HOST=agentfarm.local
-WEB_APP_URL=http://agentfarm.local
+API_HOST=api.agentbarn.local
+UI_HOST=agentbarn.local
+WEB_APP_URL=http://agentbarn.local
 
 # ── Gmail OAuth (AF-153) ─────────────────────────────────────────────────────
 # Shared Google OAuth 2.0 "Web application" client for the Gmail "Authenticate

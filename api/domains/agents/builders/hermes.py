@@ -11,10 +11,13 @@ _DENY_DMS = _SCRIPTS / "plugins" / "slack-deny-dms"
 _CHANNEL_ALLOWLIST = _SCRIPTS / "plugins" / "slack-channel-allowlist"
 _TG_DENY_DMS = _SCRIPTS / "plugins" / "telegram-deny-dms"
 _TG_CHANNEL_ALLOWLIST = _SCRIPTS / "plugins" / "telegram-channel-allowlist"
+_DISCORD_DENY_DMS = _SCRIPTS / "plugins" / "discord-deny-dms"
+_DISCORD_GUILD_ALLOWLIST = _SCRIPTS / "plugins" / "discord-guild-allowlist"
 _TELEMETRY_PUSH = _SCRIPTS / "plugins" / "telemetry-push"
 _NO_SLACK_HOME_CHANNEL = "C0000000000"
 _NO_TELEGRAM_HOME_CHANNEL = "0000000000"
 _NO_TELEGRAM_HOME_CHANNEL_NAME = "No Telegram Home Channel"
+_NO_DISCORD_HOME_CHANNEL = "000000000000000000"
 
 HERMES_BOOTLOADER_FOOTER: str = (_SCRIPTS / "bootloader-footer.md").read_text()
 HERMES_HEALTHZ_PY: str = (_SCRIPTS / "healthz-server.py").read_text()
@@ -27,6 +30,10 @@ TELEGRAM_DENY_DMS_PLUGIN_YAML: str = (_TG_DENY_DMS / "plugin.yaml").read_text()
 TELEGRAM_DENY_DMS_PLUGIN_INIT: str = (_TG_DENY_DMS / "__init__.py").read_text()
 TELEGRAM_CHANNEL_ALLOWLIST_PLUGIN_YAML: str = (_TG_CHANNEL_ALLOWLIST / "plugin.yaml").read_text()
 TELEGRAM_CHANNEL_ALLOWLIST_PLUGIN_INIT: str = (_TG_CHANNEL_ALLOWLIST / "__init__.py").read_text()
+DISCORD_DENY_DMS_PLUGIN_YAML: str = (_DISCORD_DENY_DMS / "plugin.yaml").read_text()
+DISCORD_DENY_DMS_PLUGIN_INIT: str = (_DISCORD_DENY_DMS / "__init__.py").read_text()
+DISCORD_GUILD_ALLOWLIST_PLUGIN_YAML: str = (_DISCORD_GUILD_ALLOWLIST / "plugin.yaml").read_text()
+DISCORD_GUILD_ALLOWLIST_PLUGIN_INIT: str = (_DISCORD_GUILD_ALLOWLIST / "__init__.py").read_text()
 TELEMETRY_PUSH_PLUGIN_YAML: str = (_TELEMETRY_PUSH / "plugin.yaml").read_text()
 TELEMETRY_PUSH_PLUGIN_INIT: str = (_TELEMETRY_PUSH / "__init__.py").read_text()
 
@@ -148,6 +155,33 @@ def build_hermes_config_telegram(
     return cfg
 
 
+def build_hermes_config_discord(
+    model: str,
+    litellm_base_url: str,
+    require_mention: bool = True,
+    group_policy: str = "allowlist",
+    approval_mode: str = "auto",
+) -> dict:
+    enabled_plugins = ["telemetry-push", "discord-deny-dms"]
+    if group_policy != "open":
+        enabled_plugins.append("discord-guild-allowlist")
+    cfg = _hermes_config_core(
+        model,
+        litellm_base_url,
+        enabled_plugins,
+        display_platforms={"discord": {"tool_progress": "off"}},
+        approval_mode=approval_mode,
+    )
+    cfg["discord"] = {
+        "require_mention": require_mention,
+        "thread_require_mention": True,
+        "auto_thread": True,
+        "reactions": True,
+        "allow_mentions": {"everyone": False, "roles": False},
+    }
+    return cfg
+
+
 def build_hermes_config_map(
     agent_id: UUID,
     org_id: UUID,
@@ -189,6 +223,11 @@ def build_hermes_config_map(
         data["telegram-deny-dms-init.py"] = TELEGRAM_DENY_DMS_PLUGIN_INIT
         data["telegram-channel-allowlist-plugin.yaml"] = TELEGRAM_CHANNEL_ALLOWLIST_PLUGIN_YAML
         data["telegram-channel-allowlist-init.py"] = TELEGRAM_CHANNEL_ALLOWLIST_PLUGIN_INIT
+    elif platform == "discord":
+        data["discord-deny-dms-plugin.yaml"] = DISCORD_DENY_DMS_PLUGIN_YAML
+        data["discord-deny-dms-init.py"] = DISCORD_DENY_DMS_PLUGIN_INIT
+        data["discord-guild-allowlist-plugin.yaml"] = DISCORD_GUILD_ALLOWLIST_PLUGIN_YAML
+        data["discord-guild-allowlist-init.py"] = DISCORD_GUILD_ALLOWLIST_PLUGIN_INIT
     if aai_cli_config_toml is not None:
         data["aai-cli-config.toml"] = aai_cli_config_toml
     if aai_cli_setup_sh is not None:
@@ -291,6 +330,50 @@ def build_secret_hermes_telegram(
     )
 
 
+def build_secret_hermes_discord(
+    agent_id: UUID,
+    org_id: UUID,
+    namespace: str,
+    agent_name: str,
+    discord_bot_token: str,
+    litellm_api_key: str,
+    litellm_base_url: str,
+    api_server_key: str,
+    allowed_channel_ids: list[str],
+    allowed_user_ids: list[str],
+    allowed_role_ids: list[str],
+    home_channel_id: str | None,
+    guild_ids: list[str],
+) -> client.V1Secret:
+    return client.V1Secret(
+        metadata=client.V1ObjectMeta(
+            name=_resource_name(agent_id), namespace=namespace, labels=_labels(agent_id, org_id)
+        ),
+        string_data={
+            "DISCORD_BOT_TOKEN": discord_bot_token,
+            "DISCORD_ALLOWED_CHANNELS": ",".join(allowed_channel_ids),
+            "DISCORD_ALLOWED_USERS": ",".join(allowed_user_ids),
+            "DISCORD_ALLOWED_ROLES": ",".join(allowed_role_ids),
+            "DISCORD_GUILD_IDS": ",".join(guild_ids),
+            "DISCORD_ALLOW_ALL_USERS": str(
+                bool(guild_ids and not allowed_channel_ids and not allowed_user_ids and not allowed_role_ids)
+            ).lower(),
+            "DISCORD_HOME_CHANNEL": home_channel_id or _NO_DISCORD_HOME_CHANNEL,
+            "DISCORD_HOME_CHANNEL_NAME": home_channel_id or "No Discord Home Channel",
+            "DISCORD_ALLOW_BOTS": "none",
+            "OPENAI_API_KEY": litellm_api_key,
+            "OPENAI_BASE_URL": litellm_base_url,
+            "OPENROUTER_BASE_URL": litellm_base_url,
+            "API_SERVER_ENABLED": "true",
+            "API_SERVER_HOST": "0.0.0.0",
+            "API_SERVER_PORT": "8642",
+            "API_SERVER_KEY": api_server_key,
+            "API_SERVER_MODEL_NAME": agent_name,
+            "AGENT_PLATFORM": "discord",
+        },
+    )
+
+
 def build_hermes_deployment(
     agent_id: UUID,
     org_id: UUID,
@@ -329,6 +412,16 @@ def build_hermes_deployment(
                                 initial_delay_seconds=30,
                                 period_seconds=15,
                                 failure_threshold=6,
+                            ),
+                            liveness_probe=client.V1Probe(
+                                http_get=client.V1HTTPGetAction(
+                                    path="/live",
+                                    port=8081,
+                                ),
+                                initial_delay_seconds=60,
+                                period_seconds=60,
+                                failure_threshold=5,
+                                timeout_seconds=5,
                             ),
                             env=[
                                 # The hermes process starts in its install dir

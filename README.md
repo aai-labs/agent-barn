@@ -1,4 +1,4 @@
-# Agent Farm
+# Agent Barn
 
 Platform for hiring, managing, and running AI agents on Slack and Microsoft Teams.
 

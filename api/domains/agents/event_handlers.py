@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import ClassVar
@@ -14,7 +15,13 @@ from api.domains.events.handlers import (
     TerminalEventHandlerError,
 )
 from api.domains.events.models import DomainEventEnvelope
+from api.infrastructure.email.exceptions import (
+    RetryableEmailSendingException,
+    TerminalEmailSendingException,
+)
 from api.infrastructure.email.service import EmailService
+
+logger = logging.getLogger(__name__)
 
 
 @inject
@@ -41,17 +48,35 @@ class AgentLifecycleEmailHandler:
         # ones that already succeeded.
         already_notified = self.repository.find_notified_lifecycle_email_recipients(context.delivery_id)
         pending_recipients = [recipient for recipient in recipients if recipient.email not in already_notified]
-        failed_recipients: list[str] = []
+        retryable_recipients: list[str] = []
+        terminal_recipients: list[str] = []
         for recipient in pending_recipients:
-            sent = self.email_service.send_agent_lifecycle_email(
-                receiver_email=recipient.email,
-                receiver_name=recipient.full_name,
-                agent_name=agent_name,
-                lifecycle_action=action,
+            try:
+                self.email_service.send_agent_lifecycle_email(
+                    receiver_email=recipient.email,
+                    receiver_name=recipient.full_name,
+                    agent_name=agent_name,
+                    lifecycle_action=action,
+                )
+            except RetryableEmailSendingException:
+                retryable_recipients.append(recipient.email)
+                continue
+            except TerminalEmailSendingException:
+                terminal_recipients.append(recipient.email)
+                continue
+            except Exception:
+                # Unclassified failure: retry rather than drop the notification.
+                logger.exception("Unexpected error sending agent lifecycle email to %s", recipient.email)
+                retryable_recipients.append(recipient.email)
+                continue
+            self.repository.record_lifecycle_email_recipient_notified(context.delivery_id, recipient.email)
+        # A retryable failure anywhere wins: rescheduling gives the terminal recipients no
+        # extra sends (they're re-classified next attempt) but rescues the transient ones.
+        if retryable_recipients:
+            raise RetryableEventHandlerError(
+                f"Agent lifecycle email failed for {len(retryable_recipients)} recipient(s)"
             )
-            if sent:
-                self.repository.record_lifecycle_email_recipient_notified(context.delivery_id, recipient.email)
-            else:
-                failed_recipients.append(recipient.email)
-        if failed_recipients:
-            raise RetryableEventHandlerError(f"Agent lifecycle email failed for {len(failed_recipients)} recipient(s)")
+        if terminal_recipients:
+            raise TerminalEventHandlerError(
+                f"Agent lifecycle email permanently failed for {len(terminal_recipients)} recipient(s)"
+            )

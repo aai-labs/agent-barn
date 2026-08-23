@@ -75,6 +75,54 @@ test.describe("Hire Dialog", () => {
     await expect(page.getByText(/step 2 of/i)).toBeVisible();
   });
 
+  test("should collect Discord identity and routing configuration", async ({ page }) => {
+    await dataSupportPage.agents.interceptCreateAgentRequest({
+      body: {
+        ...mockAgent,
+        platform: "discord",
+        status: "STOPPED",
+        discord_config: {
+          guild_ids: ["guild-1"],
+          allowed_channel_ids: ["channel-1"],
+          allowed_user_ids: ["user-1"],
+          allowed_role_ids: ["987654321098765432"],
+          home_channel_id: null,
+          require_mention: true,
+          group_policy: "allowlist",
+        },
+      },
+    });
+    await page.getByText("General Purpose", { exact: true }).click();
+    await page.getByRole("button", { name: /continue/i }).click(); // template → agent-type
+    await page.getByRole("button", { name: /continue/i }).click(); // agent-type → platform-choice
+    await page.getByText("Discord", { exact: true }).click();
+    await page.getByRole("button", { name: /continue/i }).click(); // platform-choice → Discord token
+
+    await expect(page.getByText("Connect your Discord bot")).toBeVisible();
+    await expect(page.getByText("Enable required Gateway Intents")).toBeVisible();
+    await expect(page.getByText("Server Members Intent", { exact: true })).toBeVisible();
+    await page.getByPlaceholder("Discord bot token").fill("discord-token");
+    await page.getByPlaceholder("123456789012345678").first().fill("111111111111111111");
+    await page.getByPlaceholder("987654321098765432").fill("987654321098765432");
+    await expect(page.getByRole("link", { name: /recommended install link/i })).toHaveAttribute(
+      "href",
+      /client_id=111111111111111111/,
+    );
+    await page.getByRole("button", { name: /continue/i }).click();
+
+    await expect(page.getByLabel("Name them")).toBeVisible();
+    await page.getByRole("button", { name: /continue/i }).click();
+    const createRequest = page.waitForRequest(
+      (request) => request.url().includes("/agents") && request.method() === "POST",
+    );
+    await page.getByRole("button", { name: "Hire Aria" }).click();
+    const body = (await createRequest).postDataJSON();
+    expect(body.discord_allowed_role_ids).toEqual(["987654321098765432"]);
+    await expect(page.getByText("Hiring Aria…")).not.toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("Set up Slack access")).not.toBeVisible();
+    await expect(page.getByText("Aria was hired successfully.")).toBeVisible();
+  });
+
   test("should skip bot builder when choosing existing app", async ({ page }) => {
     await page.getByText("General Purpose", { exact: true }).click();
     await page.getByRole("button", { name: /continue/i }).click(); // template → agent-type
@@ -521,6 +569,60 @@ test.describe("Hire Dialog — Skills step", () => {
     await page.getByText(mockJiraSkill.name, { exact: true }).click();
 
     await expect(page.getByRole("button", { name: /hire aria/i })).toBeDisabled();
+  });
+
+  test("automatic Slack credentials do not block hiring", async ({ page }) => {
+    await dataSupportPage.agents.interceptCreateAgentRequest({
+      body: { ...mockAgent, status: "STOPPED" },
+    });
+    await dataSupportPage.agents.interceptGetTemplateVersionsRequest({
+      body: mockVersionsForKey("general-purpose").map((v) => ({
+        ...v,
+        required_skills: [
+          {
+            id: mockJiraSkill.id,
+            name: "jira",
+            source: "aai_cli",
+            required_providers: ["jira"],
+            tools_pointer: null,
+            required: true,
+            created_at: "2026-01-01T00:00:00Z",
+            updated_at: "2026-01-01T00:00:00Z",
+          },
+          {
+            id: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+            name: "slack",
+            source: "aai_cli",
+            required_providers: ["slack"],
+            tools_pointer: null,
+            required: true,
+            created_at: "2026-01-01T00:00:00Z",
+            updated_at: "2026-01-01T00:00:00Z",
+          },
+        ],
+      })),
+    });
+
+    await navigateToSkillsStep(page);
+
+    await expect(page.getByText(/Slack — uses this agent's existing Slack bot token automatically/)).toBeVisible();
+    await page.getByPlaceholder(/atlassian\.net/).fill("https://aai-labs.atlassian.net/");
+    await page.getByRole("radio", { name: "Scoped token", exact: true }).check();
+    await page.getByPlaceholder("you@example.com").fill("kalkidan@aai-labs.com");
+    await page.locator('input[type="password"]').last().fill("jira-api-token");
+
+    const createPromise = page.waitForRequest(
+      (req) =>
+        /\/api\/v1\/organizations\/[^/]+\/agents$/.test(new URL(req.url()).pathname) &&
+        req.method() === "POST",
+    );
+    await expect(page.getByRole("button", { name: /hire aria/i })).toBeEnabled();
+    await page.getByRole("button", { name: "Hire Aria" }).click();
+
+    const body = (await createPromise).postDataJSON() as {
+      secrets: Array<{ provider: string }>;
+    };
+    expect(body.secrets.some((secret) => secret.provider === "slack")).toBe(false);
   });
 
   test("selecting a gmail skill reveals the Google OAuth button", async ({ page }) => {

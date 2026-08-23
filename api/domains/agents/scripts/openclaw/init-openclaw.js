@@ -20,6 +20,8 @@ const REPLACE_PATHS = [
   ['channels', 'msteams', 'allowFrom'],
   ['channels', 'telegram', 'allowFrom'],
   ['channels', 'telegram', 'groups'],
+  ['channels', 'discord', 'allowFrom'],
+  ['channels', 'discord', 'guilds'],
 ];
 
 function getPath(obj, parts) {
@@ -152,6 +154,7 @@ for (const [channel, allowFile, defaultAllowFile] of [
   ['slack', 'slack-allowFrom.json', 'slack-default-allowFrom.json'],
   ['msteams', 'msteams-allowFrom.json', 'msteams-default-allowFrom.json'],
   ['telegram', 'telegram-allowFrom.json', 'telegram-default-allowFrom.json'],
+  ['discord', 'discord-allowFrom.json', 'discord-default-allowFrom.json'],
 ]) {
   const af = getPath(overlay, ['channels', channel, 'allowFrom']);
   if (af !== undefined) {

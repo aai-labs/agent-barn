@@ -1,17 +1,26 @@
 "use client";
 
-import { useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useState } from "react";
 import { useDebouncedValue } from "@tanstack/react-pacer";
 
 import { AppErrorState } from "@/components/app-error-state";
 import { SearchIcon } from "@/components/icons";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { SharedManualToggle } from "@/features/shared-credentials/components/shared-manual-toggle";
 import { useSharedManualSwitch } from "@/features/shared-credentials/hooks/use-shared-manual-switch";
 import { SHARED_CREDENTIAL_PROVIDER_LABELS } from "@/features/shared-credentials/utils";
 import { useSkills } from "@/features/skills/hooks/use-skills";
+import { useSkillVersions } from "@/features/skills/hooks/use-skill-versions";
 import { SKILL_PROVIDER_LABELS } from "@/features/skills/utils";
-import { SkillSourceBadge } from "@/features/skills/components/skill-drawer";
+import { SkillSourceBadge } from "@/features/skills/components/skill-source-badge";
 import type { Skill } from "@/features/skills/schemas";
 
 import {
@@ -23,14 +32,19 @@ import {
 } from "../integrations";
 import { useUpdateAgent } from "../hooks/use-update-agent";
 import type { Agent, AgentAssignedSkill } from "../schemas";
+import type { AgentConfigurationEditHandle } from "./agent-configuration-utils";
 import { IntegrationFields } from "./integration-fields";
 
 interface AgentSkillsTabProps {
   agent: Agent;
   isRunning: boolean;
+  onDirtyChange?: (isDirty: boolean, isValid?: boolean) => void;
 }
 
-export function AgentSkillsTab({ agent, isRunning }: AgentSkillsTabProps) {
+export const AgentSkillsTab = forwardRef<
+  AgentConfigurationEditHandle,
+  AgentSkillsTabProps
+>(function AgentSkillsTab({ agent, isRunning, onDirtyChange }, ref) {
   const [search, setSearch] = useState("");
   const [debouncedSearch] = useDebouncedValue(search, { wait: 300 });
   const { skills, isLoading, error, refetch } = useSkills({ search: debouncedSearch || undefined, pageSize: 100 });
@@ -38,8 +52,8 @@ export function AgentSkillsTab({ agent, isRunning }: AgentSkillsTabProps) {
 
   const [pendingAddIds, setPendingAddIds] = useState<string[]>([]);
   const [pendingRemoveIds, setPendingRemoveIds] = useState<string[]>([]);
+  const [pendingPins, setPendingPins] = useState<Record<string, number>>({});
   const [newSecretDrafts, setNewSecretDrafts] = useState<IntegrationDraft[]>([]);
-  const [saved, setSaved] = useState(false);
 
   const existingSecretProviders = new Set(
     (agent.secrets ?? []).map((s) => s.provider),
@@ -64,8 +78,16 @@ export function AgentSkillsTab({ agent, isRunning }: AgentSkillsTabProps) {
     ),
   ];
 
+  const pendingPinChanges = Object.entries(pendingPins).filter(([skillId, version]) =>
+    agent.skills.some((skill) => skill.id === skillId && skill.version !== version),
+  );
   const hasPendingChanges =
-    pendingAddIds.length > 0 || pendingRemoveIds.length > 0;
+    pendingAddIds.length > 0 || pendingRemoveIds.length > 0 || pendingPinChanges.length > 0;
+  const isValid = !hasIncompleteIntegration(newSecretDrafts);
+
+  useEffect(() => {
+    onDirtyChange?.(hasPendingChanges || newSecretDrafts.length > 0, isValid);
+  }, [hasPendingChanges, isValid, newSecretDrafts.length, onDirtyChange]);
 
   function addSkill(skill: Skill) {
     // Slack is never manually configured — the API derives it from the agent's
@@ -98,6 +120,11 @@ export function AgentSkillsTab({ agent, isRunning }: AgentSkillsTabProps) {
 
   function markForRemoval(skillId: string) {
     setPendingRemoveIds((prev) => [...prev, skillId]);
+    setPendingPins((prev) => {
+      const next = { ...prev };
+      delete next[skillId];
+      return next;
+    });
   }
 
   function undoRemoval(skillId: string) {
@@ -130,56 +157,69 @@ export function AgentSkillsTab({ agent, isRunning }: AgentSkillsTabProps) {
   );
 
   async function handleSave() {
+    if (hasIncompleteIntegration(newSecretDrafts)) return;
     updateAgent.reset();
-    try {
-      // Providers required by skills that survive this update (kept + newly added).
-      const survivingSkills = [
-        ...agent.skills.filter((s) => !pendingRemoveIds.includes(s.id)),
-        ...skills.filter((s) => pendingAddIds.includes(s.id)),
-      ];
-      const stillNeeded = new Set(survivingSkills.flatMap((s) => s.requiredProviders));
+    // Providers required by skills that survive this update (kept + newly added).
+    const survivingSkills = [
+      ...agent.skills.filter((s) => !pendingRemoveIds.includes(s.id)),
+      ...skills.filter((s) => pendingAddIds.includes(s.id)),
+    ];
+    const stillNeeded = new Set(survivingSkills.flatMap((s) => s.requiredProviders));
 
-      // Secrets whose provider is no longer required by any remaining skill.
-      // Slack is excluded — the API removes/re-syncs it automatically based on
-      // skill membership and rejects an explicit removedSecretProviders entry.
-      const orphanedProviders = [
-        ...new Set(
-          agent.skills
-            .filter((s) => pendingRemoveIds.includes(s.id))
-            .flatMap((s) => s.requiredProviders)
-            .filter((p) => p !== "slack" && !stillNeeded.has(p)),
-        ),
-      ];
+    // Secrets whose provider is no longer required by any remaining skill.
+    // Slack is excluded — the API removes/re-syncs it automatically based on
+    // skill membership and rejects an explicit removedSecretProviders entry.
+    const orphanedProviders = [
+      ...new Set(
+        agent.skills
+          .filter((s) => pendingRemoveIds.includes(s.id))
+          .flatMap((s) => s.requiredProviders)
+          .filter((p) => p !== "slack" && !stillNeeded.has(p)),
+      ),
+    ];
 
-      const manualDrafts = newSecretDrafts.filter((d) => !d.sharedCredentialId);
-      const sharedDrafts = newSecretDrafts.filter((d) => !!d.sharedCredentialId);
+    const manualDrafts = newSecretDrafts.filter((d) => !d.sharedCredentialId);
+    const sharedDrafts = newSecretDrafts.filter((d) => !!d.sharedCredentialId);
 
-      await updateAgent.mutateAsync({
-        agentId: agent.id,
-        skillIds: pendingAddIds,
-        removedSkillIds: pendingRemoveIds,
-        ...(orphanedProviders.length > 0 ? { removedSecretProviders: orphanedProviders } : {}),
-        ...(manualDrafts.length > 0
-          ? {
-              secrets: manualDrafts.map((d) => ({
-                provider: d.provider,
-                content: coerceBooleanFields(d.provider === "github" ? expandGithubContent(d.content) : d.content),
-              })),
-            }
-          : {}),
-        ...(sharedDrafts.length > 0
-          ? { sharedCredentials: sharedDrafts.map((d) => ({ sharedCredentialId: d.sharedCredentialId! })) }
-          : {}),
-      });
-      setPendingAddIds([]);
-      setPendingRemoveIds([]);
-      setNewSecretDrafts([]);
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-    } catch {
-      // error displayed via updateAgent.error
-    }
+    await updateAgent.mutateAsync({
+      agentId: agent.id,
+      skillIds: pendingAddIds,
+      removedSkillIds: pendingRemoveIds,
+      ...(pendingPinChanges.length > 0
+        ? {
+            skillVersions: pendingPinChanges
+              .filter(([skillId]) => !pendingRemoveIds.includes(skillId))
+              .map(([skillId, version]) => ({ skillId, version })),
+          }
+        : {}),
+      ...(orphanedProviders.length > 0 ? { removedSecretProviders: orphanedProviders } : {}),
+      ...(manualDrafts.length > 0
+        ? {
+            secrets: manualDrafts.map((d) => ({
+              provider: d.provider,
+              content: coerceBooleanFields(d.provider === "github" ? expandGithubContent(d.content) : d.content),
+            })),
+          }
+        : {}),
+      ...(sharedDrafts.length > 0
+        ? { sharedCredentials: sharedDrafts.map((d) => ({ sharedCredentialId: d.sharedCredentialId! })) }
+        : {}),
+    });
+    setPendingAddIds([]);
+    setPendingRemoveIds([]);
+    setPendingPins({});
+    setNewSecretDrafts([]);
   }
+
+  function resetForm() {
+    setPendingAddIds([]);
+    setPendingRemoveIds([]);
+    setPendingPins({});
+    setNewSecretDrafts([]);
+    updateAgent.reset();
+  }
+
+  useImperativeHandle(ref, () => ({ apply: handleSave, cancel: resetForm }));
 
   if (isLoading) {
     return (
@@ -227,6 +267,18 @@ export function AgentSkillsTab({ agent, isRunning }: AgentSkillsTabProps) {
             key={skill.id}
             skill={skill}
             isRunning={isRunning}
+            pin={pendingPins[skill.id] ?? skill.version}
+            onPinChange={(version) =>
+              setPendingPins((prev) => {
+                const next = { ...prev };
+                if (version === skill.version) {
+                  delete next[skill.id];
+                } else {
+                  next[skill.id] = version;
+                }
+                return next;
+              })
+            }
             onRemove={() => markForRemoval(skill.id)}
           />
         ))}
@@ -417,34 +469,16 @@ export function AgentSkillsTab({ agent, isRunning }: AgentSkillsTabProps) {
         ))}
       </div>
 
-      {/* Save */}
-      {hasPendingChanges && (
-        <div className="flex gap-2 items-center">
-          <button
-            className="af-btn af-btn-sm"
-            disabled={
-              isRunning ||
-              updateAgent.isPending ||
-              hasIncompleteIntegration(newSecretDrafts)
-            }
-            onClick={() => {
-              void handleSave();
-            }}
-          >
-            {updateAgent.isPending ? "Saving…" : saved ? "Saved!" : "Save changes"}
-          </button>
-          {updateAgent.error && (
-            <span className="text-xs" style={{ color: "var(--err)" }}>
-              {updateAgent.error instanceof Error
-                ? updateAgent.error.message
-                : "Save failed"}
-            </span>
-          )}
-        </div>
+      {updateAgent.error && (
+        <span className="text-xs" style={{ color: "var(--err)" }}>
+          {updateAgent.error instanceof Error
+            ? updateAgent.error.message
+            : "Save failed"}
+        </span>
       )}
     </div>
   );
-}
+});
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
@@ -460,12 +494,17 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 function AssignedSkillRow({
   skill,
   isRunning,
+  pin,
+  onPinChange,
   onRemove,
 }: {
   skill: AgentAssignedSkill;
   isRunning: boolean;
+  pin: number;
+  onPinChange: (version: number) => void;
   onRemove: () => void;
 }) {
+  const { versions } = useSkillVersions(skill.id);
   return (
     <div
       className="flex items-center gap-2 px-3.5 py-2.5 rounded-2xl"
@@ -485,6 +524,24 @@ function AssignedSkillRow({
           </span>
         )}
       </div>
+      <Select
+        value={String(pin)}
+        onValueChange={(value) => onPinChange(Number(value))}
+        disabled={isRunning}
+      >
+        <SelectTrigger className="w-auto min-w-24" aria-label={`Version for ${skill.name}`}>
+          <SelectValue placeholder="Version" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectGroup>
+            {versions.map((v) => (
+              <SelectItem key={v.version} value={String(v.version)}>
+                Version v{v.version}
+              </SelectItem>
+            ))}
+          </SelectGroup>
+        </SelectContent>
+      </Select>
       {skill.required ? (
         <TooltipProvider>
           <Tooltip>

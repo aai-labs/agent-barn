@@ -26,15 +26,28 @@ export interface IntegrationProvider {
   scopeNote?: string;
   fields: IntegrationField[];
   // When set, the provider is configured via an OAuth flow (an "Authenticate with
-  // <provider>" button) instead of manual field entry. "google_oauth" captures a Gmail
-  // refresh token via the popup flow and writes it to content.refreshToken.
+  // <provider>" button) instead of manual field entry. "google_oauth" captures a
+  // refresh token via the popup flow and writes it to content.refreshToken; the
+  // provider id selects which scopes Google is asked for.
   authMethod?: "google_oauth";
+  // Shown next to the ✓ once an OAuth provider is connected — describes the access
+  // that was actually granted.
+  oauthConnectedNote?: string;
 }
 
 export interface IntegrationDraft {
   provider: string;
   content: Record<string, string | string[]>;
   sharedCredentialId?: string;
+}
+
+// These providers are derived from the agent configuration rather than stored as
+// standalone credentials. They can appear in a skill's required_providers list,
+// but must not be collected or validated as manual integration drafts.
+const AUTO_CONFIGURED_PROVIDER_IDS = new Set(["slack"]);
+
+export function isAutoConfiguredProvider(providerId: string): boolean {
+  return AUTO_CONFIGURED_PROVIDER_IDS.has(providerId);
 }
 
 export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
@@ -104,6 +117,16 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
     label: "Gmail",
     authMethod: "google_oauth",
     scopeNote: "Read-only Gmail access via Google sign-in (gmail.readonly). No manual keys needed.",
+    oauthConnectedNote: "read-only Gmail access granted",
+    fields: [],
+  },
+  {
+    id: "google_sheets",
+    label: "Google Sheets",
+    authMethod: "google_oauth",
+    scopeNote:
+      "Read and write spreadsheet values via Google sign-in (spreadsheets), plus metadata-only Drive access to list your spreadsheets. No manual keys needed.",
+    oauthConnectedNote: "read/write access to your spreadsheets granted",
     fields: [],
   },
   // google_calendar disabled: not currently offered as an integration. Re-enable by
@@ -201,6 +224,7 @@ export function isOAuthConnected(draft: IntegrationDraft): boolean {
 // True if any added integration is missing a required field — used to gate "Hire".
 export function hasIncompleteIntegration(integrations: IntegrationDraft[]): boolean {
   return integrations.some((draft) => {
+    if (isAutoConfiguredProvider(draft.provider)) return false;
     if (draft.sharedCredentialId) return false;
     const provider = getIntegrationProvider(draft.provider);
     if (!provider) return true;

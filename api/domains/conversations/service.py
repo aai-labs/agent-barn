@@ -1,5 +1,6 @@
 import logging
 from dataclasses import dataclass
+from datetime import datetime
 from uuid import UUID
 
 from injector import inject, singleton
@@ -22,6 +23,7 @@ from api.domains.conversations.models import (
 from api.domains.conversations.repository import ConversationRepository
 from api.domains.rbac.catalog import PermissionKey
 from api.infrastructure.crypto import decrypt_token
+from api.infrastructure.discord.client import DiscordClient
 from api.infrastructure.slack.client import SlackClient
 from api.infrastructure.telegram.client import get_chat_display_name
 
@@ -53,6 +55,31 @@ class ConversationService:
             ConversationChannelRead(channel_id=cid, channel_name=name, conversation_type=ctype)
             for cid, (name, ctype) in sorted(merged.items())
         ]
+
+    def platform_daily_message_counts(
+        self, window_start: datetime, window_end: datetime, **kwargs
+    ) -> list[tuple[datetime, int, int]]:
+        """Cross-Organization daily (iso_date, inbound, outbound) counts for the
+        Platform View stats surface (AF-256).
+
+        No CurrentUserContext and no authorization scope: Platform Privilege is
+        enforced at the platform route via `require_platform_admin`, and no
+        Active Organization exists to scope against. Every other read on this
+        service deliberately goes through AgentAuthorization instead. Passing
+        organization_id narrows the same aggregate for a future Organization
+        dashboard, which will bring its own route, DTO, and authorization.
+        """
+        return self.repository.daily_direction_counts_since(window_start, window_end, **kwargs)
+
+    def platform_daily_active_agent_ids(
+        self, window_start: datetime, window_end: datetime, **kwargs
+    ) -> dict[datetime, set[UUID]]:
+        """{iso_date: {agent_id}} for Agents that exchanged a message (AF-256).
+
+        Identities rather than counts: the caller unions this with tool-call
+        activity, and an Agent doing both must be counted once.
+        """
+        return self.repository.daily_active_agent_ids_since(window_start, window_end, **kwargs)
 
     def _resolve_channel_names(
         self,
@@ -92,6 +119,8 @@ class ConversationService:
             return {}, {}, {}
         if agent.platform == AgentPlatform.TELEGRAM:
             return self._telegram_maps(agent.id, unresolved_ids or [])
+        if agent.platform == AgentPlatform.DISCORD:
+            return self._discord_maps(agent.id, unresolved_ids or [])
         try:
             slack_config = self.agent_repository.get_slack_config(agent.id)
             if not slack_config:
@@ -136,6 +165,24 @@ class ConversationService:
             if name:
                 resolved[chat_id] = name
         return {}, resolved, resolved
+
+    def _discord_maps(
+        self, agent_id: UUID, unresolved_ids: list[str]
+    ) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
+        if not unresolved_ids:
+            return {}, {}, {}
+        discord_config = self.agent_repository.get_discord_config(agent_id)
+        if not discord_config:
+            return {}, {}, {}
+        bot_token = decrypt_token(
+            discord_config.bot_token_encrypted,
+            self.config.agent_token_encryption_key,
+        )
+        client = DiscordClient(bot_token)
+        channels = {
+            channel_id: name for channel_id in unresolved_ids if (name := client.get_channel_display_name(channel_id))
+        }
+        return {}, channels, {}
 
     def list_threads(
         self,

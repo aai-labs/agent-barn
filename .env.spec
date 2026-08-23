@@ -25,9 +25,15 @@ SECRET_SIGNING_KEY=replace_with_a_secure_random_value
 # with "500: Error while initializing startup data".
 PLATFORM_ADMIN_CREDENTIALS=admin@example.com:Replace_With_Secure_Password1
 
-# Optional: if unset, email delivery is disabled and send attempts are logged.
-EMAIL_SERVER_CREDENTIAL=
-EMAIL_SMTP_SERVER=
+# Optional: if unset, email delivery is disabled and send attempts are logged. All three
+# are required for delivery. Transactional mail goes through Cloudflare Email Sending.
+# The token needs the "Email Sending: Edit" permission on the account below, and
+# SENDER_EMAIL's domain must be onboarded and Verified there or Cloudflare rejects sends.
+# Each environment sends from its own `mail.`-style subdomain to keep sending reputation
+# off the root domain. Example: noreply@mail.agentbarn.dev
+CLOUDFLARE_ACCOUNT_ID=
+CLOUDFLARE_API_TOKEN=
+SENDER_EMAIL=
 
 # Optional: shared Google OAuth 2.0 "Web application" client for the Gmail
 # "Authenticate with Google" flow. If unset, the flow is disabled. Register
@@ -47,7 +53,7 @@ K8S_NAMESPACE=agent-farm
 STORAGE_CLASS=
 
 # Agents
-# Full image ref for agent pods, e.g. {REGISTRY_URL}/agentfarm-openclaw-base:{VERSION}
+# Full image ref for agent pods, e.g. {REGISTRY_URL}/agentbarn-openclaw-base:{VERSION}
 AGENT_IMAGE=
 # Fernet key for encrypting Slack tokens at rest. Generate with:
 #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"

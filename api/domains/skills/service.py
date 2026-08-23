@@ -1,30 +1,32 @@
-import io
-import zipfile
 from dataclasses import dataclass
 from uuid import UUID
 
 from fastapi import HTTPException, status
 from injector import inject, singleton
+from sqlalchemy.exc import IntegrityError
 
 from api.domains.auth.models import CurrentUserContext
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import PermissionPolicy
+from api.domains.skills.files import DEFAULT_ENTRY_PATH, validate_files
 from api.domains.skills.models import (
     Skill,
     SkillCreate,
+    SkillDetailRead,
+    SkillDraft,
+    SkillDraftRead,
+    SkillDraftUpdate,
+    SkillFileRead,
     SkillFilter,
-    SkillRead,
     SkillSource,
+    SkillSummaryRead,
     SkillUpdate,
+    SkillVersionDetailRead,
+    SkillVersionRead,
 )
 from api.domains.skills.repository import SkillRepository
+from api.domains.templates.slug import slugify
 from api.infrastructure.shared.models import PaginatedItems, Pagination
-
-_MAX_ZIP_BYTES = 50 * 1024 * 1024  # 50 MB compressed
-_MAX_UNCOMPRESSED_BYTES = 200 * 1024 * 1024  # 200 MB total uncompressed
-_MAX_SINGLE_FILE_BYTES = 100 * 1024 * 1024  # 100 MB per entry (actual read)
-_MAX_COMPRESSION_RATIO = 100  # uncompressed / compressed
-_MAX_ENTRIES = 1000
 
 
 @inject
@@ -38,101 +40,147 @@ class SkillService:
         return context.require_current_user_organization().organization_id
 
     @staticmethod
-    def _validate_zip(content: bytes) -> None:
-        if len(content) > _MAX_ZIP_BYTES:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Zip content exceeds 50 MB limit",
-            )
+    def _validated_files(files: list, entry_path: str = DEFAULT_ENTRY_PATH) -> list[tuple[str, str]]:
         try:
-            with zipfile.ZipFile(io.BytesIO(content)) as zf:
-                entries = zf.infolist()
+            return validate_files([(f.path, f.content) for f in files], entry_path=entry_path)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
-                if len(entries) > _MAX_ENTRIES:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail=f"Zip contains too many entries (max {_MAX_ENTRIES})",
-                    )
+    def _allocate_slug(self, name: str, org_id: UUID) -> str:
+        """Derive a slug that is unique within the organization.
 
-                total_uncompressed = sum(e.file_size for e in entries)
-                total_compressed = sum(e.compress_size for e in entries)
+        Distinct names can slugify onto the same value ("My Tool" / "my tool"), and
+        the slug is the skill's mount directory, so collisions have to be broken
+        here rather than surfacing as a database error.
+        """
+        base = slugify(name) or "skill"
+        taken = {s.slug for s in self.repository.find_org_scoped(org_id)}
+        if base not in taken:
+            return base
+        suffix = 2
+        while f"{base}-{suffix}" in taken:
+            suffix += 1
+        return f"{base}-{suffix}"
 
-                if total_uncompressed > _MAX_UNCOMPRESSED_BYTES:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="Zip uncompressed content exceeds 200 MB limit",
-                    )
+    def _allocate_fork_name(self, base: str, org_id: UUID) -> str:
+        """A fork keeps the built-in's name when it's free in the organization and
+        gains a ``(fork)`` suffix when the org already has a same-named skill, so
+        the org-scoped ``(organization_id, name)`` uniqueness holds."""
+        taken = {s.name for s in self.repository.find_org_scoped(org_id)}
+        if base not in taken:
+            return base
+        candidate = f"{base} (fork)"
+        suffix = 2
+        while candidate in taken:
+            candidate = f"{base} (fork {suffix})"
+            suffix += 1
+        return candidate
 
-                if total_compressed > 0 and total_uncompressed / total_compressed > _MAX_COMPRESSION_RATIO:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="Zip compression ratio is suspiciously high (possible zip bomb)",
-                    )
-
-                total_extracted = 0
-                for entry in entries:
-                    if entry.flag_bits & 0x1:
-                        raise HTTPException(
-                            status_code=status.HTTP_400_BAD_REQUEST,
-                            detail=f"Zip entry is encrypted: {entry.filename!r}",
-                        )
-                    name = entry.filename
-                    if name.startswith(("/", "\\")):
-                        raise HTTPException(
-                            status_code=status.HTTP_400_BAD_REQUEST,
-                            detail=f"Zip entry has an absolute path: {name!r}",
-                        )
-                    if ".." in name.replace("\\", "/").split("/"):
-                        raise HTTPException(
-                            status_code=status.HTTP_400_BAD_REQUEST,
-                            detail=f"Zip entry contains path traversal: {name!r}",
-                        )
-                    with zf.open(entry) as f:
-                        extracted = 0
-                        while chunk := f.read(65536):
-                            extracted += len(chunk)
-                            if extracted > _MAX_SINGLE_FILE_BYTES:
-                                raise HTTPException(
-                                    status_code=status.HTTP_400_BAD_REQUEST,
-                                    detail=f"Entry {entry.filename!r} exceeds per-file size limit",
-                                )
-                            total_extracted += len(chunk)
-                            if total_extracted > _MAX_UNCOMPRESSED_BYTES:
-                                raise HTTPException(
-                                    status_code=status.HTTP_400_BAD_REQUEST,
-                                    detail="Zip uncompressed content exceeds 200 MB limit",
-                                )
-        except zipfile.BadZipFile:
+    def _save_new_skill(self, skill: Skill) -> None:
+        """Persist a new lineage and translate uniqueness races to a conflict."""
+        try:
+            self.repository.save(skill)
+        except IntegrityError:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Uploaded file is not a valid zip archive",
-            )
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A skill with this name or mount slug already exists in this organization",
+            ) from None
+
+    def _to_read(self, skill: Skill, version: int | None = None, has_draft: bool | None = None) -> SkillSummaryRead:
+        if version is None:
+            latest = self.repository.get_latest_version(skill.id)
+            version = latest.version if latest else 1
+        if has_draft is None:
+            has_draft = self.repository.get_draft(skill.id) is not None
+        return SkillSummaryRead.model_validate({**skill.model_dump(), "version": version, "has_draft": has_draft})
 
     def _get_or_404(self, skill_id: UUID, org_id: UUID) -> Skill:
-        skill = self.repository.get_by_id(skill_id)
-        if skill is None or (skill.organization_id is not None and skill.organization_id != org_id):
+        skill = self.repository.get_by_id_for_org(skill_id, org_id)
+        if skill is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Skill {skill_id} not found",
             )
         return skill
 
-    def create_skill(self, data: SkillCreate, context: CurrentUserContext) -> SkillRead:
+    def create_skill(self, data: SkillCreate, context: CurrentUserContext) -> SkillSummaryRead:
         org_id = self._org_id(context)
         self.permission_policy.require_organization(context, org_id, PermissionKey.SKILL_MANAGE)
-        self._validate_zip(data.zip_content)
+        files = self._validated_files(data.files)
+        slug = self._allocate_slug(data.name, org_id)
         skill = Skill(
             organization_id=org_id,
             name=data.name,
+            slug=slug,
+            description=data.description,
+            # Custom skills mount under their own directory; only the built-ins
+            # share one. tools_pointer stays NULL so the pointer is derived.
+            root_dir=slug,
+            entry_path=DEFAULT_ENTRY_PATH,
             source=SkillSource.CUSTOM,
             required_providers=data.required_providers,
-            zip_content=data.zip_content,
-            tools_pointer=f'You can use "{data.name}" skill in the ./skills folder',
         )
-        self.repository.save(skill)
-        return SkillRead.model_validate(skill)
+        self._save_new_skill(skill)
+        version = self.repository.publish_version(skill.id, files, created_by=context.user.id)
+        return self._to_read(skill, version.version, has_draft=False)
 
-    def update_skill(self, skill_id: UUID, data: SkillUpdate, context: CurrentUserContext) -> SkillRead:
+    def fork_skill(self, skill_id: UUID, context: CurrentUserContext) -> SkillDetailRead:
+        """Create an org-scoped custom skill seeded from a built-in's latest version.
+
+        The fork publishes its own v1 immediately (so it is a real, assignable
+        lineage from the start) and then opens an in-flight draft seeded from that
+        v1, so the author lands directly in the editor. The built-in lineage stays
+        read-only and untouched; this is a one-time snapshot with no update tracking.
+        """
+        org_id = self._org_id(context)
+        self.permission_policy.require_organization(context, org_id, PermissionKey.SKILL_MANAGE)
+        source = self._get_or_404(skill_id, org_id)
+        if source.source != SkillSource.AAI_CLI:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Only built-in skills can be forked; edit custom skills directly",
+            )
+        latest = self.repository.get_latest_version(source.id)
+        if latest is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail=f"No published version for skill {skill_id}"
+            )
+        files = [(f.path, f.content) for f in self.repository.get_files(latest.id)]
+
+        name = self._allocate_fork_name(source.name, org_id)
+        slug = self._allocate_slug(name, org_id)
+        skill = Skill(
+            organization_id=org_id,
+            name=name,
+            slug=slug,
+            description=source.description,
+            # The fork mounts under its own directory, so it can't collide with
+            # the built-in's shared aai-cli root at manifest time. Entry path and
+            # provider requirements carry over so the copied content keeps working.
+            root_dir=slug,
+            entry_path=source.entry_path,
+            source=SkillSource.CUSTOM,
+            required_providers=source.required_providers,
+        )
+        self._save_new_skill(skill)
+        version = self.repository.publish_version(skill.id, files, created_by=context.user.id)
+        self.repository.save_new_draft(
+            skill.id,
+            files,
+            description=skill.description,
+            required_providers=[p.value if hasattr(p, "value") else p for p in skill.required_providers],
+        )
+        read = self._to_read(skill, version.version, has_draft=True)
+        return SkillDetailRead.model_validate(
+            {
+                **read.model_dump(),
+                "files": [SkillFileRead(path=path, content=content) for path, content in files],
+                "is_assigned_to_agent": False,
+            }
+        )
+
+    def update_skill(self, skill_id: UUID, data: SkillUpdate, context: CurrentUserContext) -> SkillSummaryRead:
+        """Update a skill's name; content metadata is draft-gated."""
         org_id = self._org_id(context)
         skill = self._get_or_404(skill_id, org_id)
         self.permission_policy.require_organization(context, org_id, PermissionKey.SKILL_MANAGE)
@@ -142,56 +190,206 @@ class SkillService:
                 detail="Cannot modify built-in skills",
             )
         updated = data.model_dump(exclude_unset=True)
-        if "zip_content" in updated and updated["zip_content"] is not None:
-            self._validate_zip(updated["zip_content"])
-            skill.zip_content = updated["zip_content"]
+        # The slug (and therefore the mount directory) is deliberately not
+        # recomputed on rename: renaming a skill must not move its files or
+        # invalidate paths referenced from inside its own markdown.
         if "name" in updated:
             skill.name = updated["name"]
-            skill.tools_pointer = f'You can use "{skill.name}" skill in the ./skills folder'
-        if "required_providers" in updated:
-            skill.required_providers = updated["required_providers"]
         self.repository.save(skill)
-        return SkillRead.model_validate(skill)
+        return self._to_read(skill)
 
-    def delete_skill(self, skill_id: UUID, context: CurrentUserContext) -> None:
+    def get_skill_detail(self, skill_id: UUID, context: CurrentUserContext) -> SkillDetailRead:
+        """A skill plus the files of its published version, for the editor/viewer."""
+        org_id = self._org_id(context)
+        skill = self._get_or_404(skill_id, org_id)
+        self.permission_policy.require_organization(context, org_id, PermissionKey.SKILL_READ)
+        latest = self.repository.get_latest_version(skill.id)
+        files = self.repository.get_files(latest.id) if latest else []
+        read = self._to_read(skill, latest.version if latest else 1)
+        return SkillDetailRead.model_validate(
+            {
+                **read.model_dump(),
+                "files": [SkillFileRead.model_validate(f) for f in files],
+                "is_assigned_to_agent": self.repository.is_assigned_to_any_agent(skill.id, org_id),
+            }
+        )
+
+    def list_skill_versions(self, skill_id: UUID, context: CurrentUserContext) -> list[SkillVersionRead]:
+        org_id = self._org_id(context)
+        skill = self._get_or_404(skill_id, org_id)
+        self.permission_policy.require_organization(context, org_id, PermissionKey.SKILL_READ)
+        versions = self.repository.list_versions(skill.id)
+        pinned = self.repository.get_pinned_versions_for_skill(skill.id, org_id)
+        return [
+            SkillVersionRead.model_validate({**v.model_dump(), "is_pinned_by_agent": v.version in pinned})
+            for v in versions
+        ]
+
+    def get_skill_version_detail(
+        self, skill_id: UUID, version: int, context: CurrentUserContext
+    ) -> SkillVersionDetailRead:
+        org_id = self._org_id(context)
+        skill = self._get_or_404(skill_id, org_id)
+        self.permission_policy.require_organization(context, org_id, PermissionKey.SKILL_READ)
+        skill_version = self.repository.get_version(skill.id, version)
+        if skill_version is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail=f"Version {version} not found for skill {skill_id}"
+            )
+        files = self.repository.get_files(skill_version.id)
+        pinned = self.repository.get_pinned_versions_for_skill(skill.id, org_id)
+        return SkillVersionDetailRead.model_validate(
+            {
+                **skill_version.model_dump(),
+                "files": [SkillFileRead.model_validate(f) for f in files],
+                "is_pinned_by_agent": version in pinned,
+            }
+        )
+
+    def _draft_to_read(self, draft: SkillDraft) -> SkillDraftRead:
+        files = self.repository.get_draft_files(draft.id)
+        return SkillDraftRead.model_validate(
+            {**draft.model_dump(), "files": [SkillFileRead.model_validate(f) for f in files]}
+        )
+
+    def _require_draftable_skill(self, skill_id: UUID, org_id: UUID, context: CurrentUserContext) -> Skill:
+        skill = self._get_or_404(skill_id, org_id)
+        self.permission_policy.require_organization(context, org_id, PermissionKey.SKILL_MANAGE)
+        if skill.source == SkillSource.AAI_CLI:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot modify built-in skills",
+            )
+        return skill
+
+    def get_skill_draft(self, skill_id: UUID, context: CurrentUserContext) -> SkillDraftRead:
+        org_id = self._org_id(context)
+        skill = self._require_draftable_skill(skill_id, org_id, context)
+        draft = self.repository.get_draft(skill.id)
+        if draft is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"No draft for skill {skill_id}")
+        return self._draft_to_read(draft)
+
+    def start_skill_draft(self, skill_id: UUID, context: CurrentUserContext) -> SkillDraftRead:
+        """Get-or-create the single in-flight draft for a skill, seeded from the
+        latest published version. Recovering from a bad version is a per-agent
+        concern handled by re-pinning the agent's assigned skill version, never a
+        lineage-level restore."""
+        org_id = self._org_id(context)
+        skill = self._require_draftable_skill(skill_id, org_id, context)
+
+        existing = self.repository.get_draft(skill.id)
+        if existing is not None:
+            return self._draft_to_read(existing)
+
+        source = self.repository.get_latest_version(skill.id)
+        if source is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail=f"No published version for skill {skill_id}"
+            )
+        files = [(f.path, f.content) for f in self.repository.get_files(source.id)]
+        draft = self.repository.save_new_draft(
+            skill.id,
+            files,
+            description=skill.description,
+            required_providers=[p.value if hasattr(p, "value") else p for p in skill.required_providers],
+        )
+        return self._draft_to_read(draft)
+
+    def update_skill_draft(self, skill_id: UUID, data: SkillDraftUpdate, context: CurrentUserContext) -> SkillDraftRead:
+        org_id = self._org_id(context)
+        skill = self._require_draftable_skill(skill_id, org_id, context)
+        draft = self.repository.get_draft(skill.id)
+        if draft is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"No draft for skill {skill_id}")
+        files = self._validated_files(data.files, skill.entry_path)
+        metadata: dict[str, str | list[str] | None] = {}
+        if "description" in data.model_fields_set:
+            metadata["description"] = data.description
+        if "required_providers" in data.model_fields_set:
+            metadata["required_providers"] = (
+                [p.value for p in data.required_providers] if data.required_providers is not None else None
+            )
+        draft = self.repository.update_draft_files(draft.id, files, metadata=metadata)
+        return self._draft_to_read(draft)
+
+    def discard_skill_draft(self, skill_id: UUID, context: CurrentUserContext) -> None:
+        org_id = self._org_id(context)
+        skill = self._require_draftable_skill(skill_id, org_id, context)
+        draft = self.repository.get_draft(skill.id)
+        if draft is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"No draft for skill {skill_id}")
+        self.repository.delete_draft(draft.id)
+
+    def publish_skill_draft(self, skill_id: UUID, context: CurrentUserContext) -> SkillSummaryRead:
+        org_id = self._org_id(context)
+        skill = self._require_draftable_skill(skill_id, org_id, context)
+        draft = self.repository.get_draft(skill.id)
+        if draft is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"No draft for skill {skill_id}")
+        files = [(f.path, f.content) for f in self.repository.get_draft_files(draft.id)]
+        published = self.repository.publish_draft(skill.id, draft.id, files, created_by=context.user.id)
+        # Reload the skill to pick up the draft's metadata applied in publish_draft.
+        skill = self._get_or_404(skill_id, org_id)
+        return self._to_read(skill, published.version, has_draft=False)
+
+    def delete_skill_version(self, skill_id: UUID, version: int, context: CurrentUserContext) -> None:
+        """Delete one immutable version snapshot from a skill's history.
+
+        Protections: built-ins are never modified; the last remaining version can't
+        be removed (the lineage must keep content); and a version pinned by any
+        agent can't be removed, because deleting it would break that agent's
+        explicit pin (recover from a bad version by re-pinning, never by deleting
+        a pinned snapshot). Historical versions no agent pins are always safe to
+        prune.
+        """
         org_id = self._org_id(context)
         skill = self._get_or_404(skill_id, org_id)
         self.permission_policy.require_organization(context, org_id, PermissionKey.SKILL_MANAGE)
         if skill.source == SkillSource.AAI_CLI:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Cannot delete built-in skills",
+                detail="Cannot modify built-in skills",
             )
-        if self.repository.is_assigned_to_any_agent(skill_id):
+        skill_version = self.repository.get_version(skill.id, version)
+        if skill_version is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail=f"Version {version} not found for skill {skill_id}"
+            )
+        versions = self.repository.list_versions(skill.id)
+        if len(versions) <= 1:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="Skill is currently assigned to one or more agents",
+                detail="Cannot delete the only version of a skill",
             )
-        blocking_templates = self.repository.get_latest_template_keys_requiring_skill(skill_id, org_id)
-        if blocking_templates:
-            template_keys = ", ".join(blocking_templates)
+        if self.repository.is_skill_version_pinned(skill.id, version, org_id):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    f"Skill is required by template(s): {template_keys}. "
-                    "Remove it from those templates before deleting."
-                ),
+                detail="Cannot delete a version that is pinned by an agent",
             )
-        self.repository.delete_stale_template_skill_refs(skill_id, org_id)
-        self.repository.delete(skill)
+        try:
+            self.repository.delete_version_by_id(skill_version.id)
+        except IntegrityError:
+            # Safety net for the concurrent delete/pin race: the composite FK
+            # on agent_skill(skill_id, pinned_version) blocks the delete if an
+            # agent pinned this version between the check above and the delete.
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Cannot delete a version that is pinned by an agent",
+            ) from None
 
-    def get_skill(self, skill_id: UUID, context: CurrentUserContext) -> SkillRead:
+    def get_skill(self, skill_id: UUID, context: CurrentUserContext) -> SkillSummaryRead:
         org_id = self._org_id(context)
         skill = self._get_or_404(skill_id, org_id)
         self.permission_policy.require_organization(context, org_id, PermissionKey.SKILL_READ)
-        return SkillRead.model_validate(skill)
+        return self._to_read(skill)
 
     def list_skills(
         self,
         skill_filter: SkillFilter,
         pagination: Pagination,
         context: CurrentUserContext,
-    ) -> PaginatedItems[SkillRead]:
+    ) -> PaginatedItems[SkillSummaryRead]:
         org_id = self._org_id(context)
         self.permission_policy.require_organization(context, org_id, PermissionKey.SKILL_READ)
         skills, total = self.repository.find_all_for_org(org_id, skill_filter, pagination)
@@ -199,8 +397,24 @@ class SkillService:
             page=pagination.page,
             page_size=pagination.size,
             total=total,
-            items=[SkillRead.model_validate(s) for s in skills],
+            items=self._to_reads(skills),
         )
 
-    def list_global_skills_for_platform_admin(self) -> list[SkillRead]:
-        return [SkillRead.model_validate(skill) for skill in self.repository.find_all_global()]
+    def list_global_skills_for_platform_admin(self) -> list[SkillSummaryRead]:
+        return self._to_reads(self.repository.find_all_global())
+
+    def _to_reads(self, skills: list[Skill]) -> list[SkillSummaryRead]:
+        """Batch the version and draft lookups so listing N skills stays at two extra queries."""
+        skill_ids = [s.id for s in skills]
+        versions = self.repository.get_latest_version_numbers(skill_ids)
+        draft_skill_ids = self.repository.get_draft_skill_ids(skill_ids)
+        return [
+            SkillSummaryRead.model_validate(
+                {
+                    **skill.model_dump(),
+                    "version": versions.get(skill.id, 1),
+                    "has_draft": skill.id in draft_skill_ids,
+                }
+            )
+            for skill in skills
+        ]

@@ -23,6 +23,16 @@ export const AgentTelegramConfigSchema = z.object({
   botUsername: z.string().nullable().optional(),
 });
 
+export const AgentDiscordConfigSchema = z.object({
+  guildIds: z.array(z.string()),
+  allowedChannelIds: z.array(z.string()),
+  allowedUserIds: z.array(z.string()),
+  allowedRoleIds: z.array(z.string()),
+  homeChannelId: z.string().nullable(),
+  requireMention: z.boolean(),
+  groupPolicy: z.enum(["open", "allowlist"]),
+});
+
 export const AgentSecretReadSchema = z.object({
   provider: z.string(),
   secretName: z.string(),
@@ -49,6 +59,9 @@ export const AgentAssignedSkillSchema = z.object({
   required: z.boolean().default(false),
   createdAt: z.string(),
   updatedAt: z.string(),
+  // The exact skill version this agent is pinned to (explicit, like templates).
+  // Optional so template required-skill reads (which don't carry a pin) still parse.
+  version: z.number().int().optional().default(1),
 });
 
 // A template's required skill. groupKey is null for a standalone
@@ -103,16 +116,19 @@ export const AgentSchema = z.object({
   id: z.string().uuid(),
   name: z.string(),
   status: z.enum(["STOPPED", "RUNNING", "ERROR"]),
-  platform: z.enum(["slack", "teams", "telegram"]),
+  platform: z.enum(["slack", "teams", "telegram", "discord"]),
   agentType: z.enum(["openclaw", "hermes"]).default("openclaw"),
   organizationId: z.string().uuid(),
   templateKey: z.string(),
   templateVersion: z.number().int(),
+  templatePinType: z.enum(["shared", "override"]).default("shared"),
+  overrideVersion: z.number().int().nullable().optional(),
   model: z.string(),
   approvalMode: z.enum(["manual", "auto", "off"]).default("auto"),
   slackConfig: AgentSlackConfigSchema.nullable().optional(),
   teamsConfig: AgentTeamsConfigSchema.nullable().optional(),
   telegramConfig: AgentTelegramConfigSchema.nullable().optional(),
+  discordConfig: AgentDiscordConfigSchema.nullable().optional(),
   secrets: z.array(AgentSecretReadSchema).optional(),
   skills: z.array(AgentAssignedSkillSchema).default([]),
   webhookUrl: z.string().nullable().optional(),
@@ -265,6 +281,72 @@ export const AgentLogHistoryReadSchema = z.object({
   nextSnapshotId: z.string().uuid().nullable().optional(),
 });
 
+export const AgentOverrideSourceTypeSchema = z.enum(["platform", "organization"]);
+
+export const AgentOverrideAuthorSchema = z.object({
+  userId: z.string().uuid().nullable(),
+  email: z.string().nullable(),
+  fullName: z.string().nullable(),
+});
+
+export const AgentOverrideRequiredSkillSchema = AgentAssignedSkillSchema.extend({
+  groupKey: z.string().nullable().optional().default(null),
+});
+
+const AgentConfigurationSnapshotSchema = z.object({
+  id: z.string().uuid(),
+  agentId: z.string().uuid(),
+  version: z.number().int().nullable(),
+  templateKey: z.string(),
+  templateName: z.string(),
+  description: z.string().nullable(),
+  soulMd: z.string(),
+  identityMd: z.string(),
+  userMd: z.string(),
+  toolsMd: z.string(),
+  agentsMd: z.string(),
+  bootMd: z.string(),
+  bootstrapMd: z.string(),
+  heartbeatMd: z.string(),
+  sourceType: AgentOverrideSourceTypeSchema,
+  sourceTemplateKey: z.string(),
+  sourceTemplateVersion: z.number().int(),
+  sourcePlatformTemplateId: z.string().uuid().nullable(),
+  sourceAgentTemplateId: z.string().uuid().nullable(),
+  createdByUserId: z.string().uuid().nullable(),
+  author: AgentOverrideAuthorSchema.nullable().optional(),
+  requiredSkills: z.array(AgentOverrideRequiredSkillSchema).default([]),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
+export const AgentConfigurationVersionSchema = AgentConfigurationSnapshotSchema.extend({
+  state: z.enum(["active", "published"]),
+  pinType: z.enum(["shared", "override"]).default("shared"),
+  templateSource: z.string().nullable().optional(),
+});
+
+export const AgentOverrideDraftSchema = AgentConfigurationSnapshotSchema.extend({
+  version: z.number().int().nullable(),
+  state: z.literal("draft"),
+  pinType: z.literal("override"),
+});
+
+export const AgentOverrideVersionSchema = AgentConfigurationSnapshotSchema.extend({
+  version: z.number().int(),
+  state: z.literal("published"),
+  pinType: z.literal("override"),
+});
+
+export const AgentConfigurationSchema = z.object({
+  agentId: z.string().uuid(),
+  active: AgentConfigurationVersionSchema,
+  draft: AgentOverrideDraftSchema.nullable(),
+  sourceUpdate: AgentConfigurationVersionSchema.nullable().optional(),
+  sharedVersions: z.array(AgentConfigurationVersionSchema).default([]),
+  overrideVersions: z.array(AgentOverrideVersionSchema).default([]),
+});
+
 
 export type CommandApprovalMode = "manual" | "auto" | "off";
 export type AgentPermissionKey = z.infer<typeof AgentPermissionKeySchema>;
@@ -279,6 +361,12 @@ export type AgentTemplateRead = z.infer<typeof AgentTemplateReadSchema>;
 export type TemplateSource = AgentTemplateRead["templateSource"];
 export type PaginatedTemplates = z.infer<typeof PaginatedTemplatesSchema>;
 export type PaginatedAgents = z.infer<typeof PaginatedAgentsSchema>;
+export type AgentOverrideAuthor = z.infer<typeof AgentOverrideAuthorSchema>;
+export type AgentOverrideRequiredSkill = z.infer<typeof AgentOverrideRequiredSkillSchema>;
+export type AgentConfigurationVersion = z.infer<typeof AgentConfigurationVersionSchema>;
+export type AgentOverrideDraft = z.infer<typeof AgentOverrideDraftSchema>;
+export type AgentOverrideVersion = z.infer<typeof AgentOverrideVersionSchema>;
+export type AgentConfiguration = z.infer<typeof AgentConfigurationSchema>;
 export type ConversationMessage = z.infer<typeof ConversationMessageSchema>;
 export type ConversationChannel = z.infer<typeof ConversationChannelSchema>;
 export type ConversationsCursor = z.infer<typeof ConversationsCursorSchema>;

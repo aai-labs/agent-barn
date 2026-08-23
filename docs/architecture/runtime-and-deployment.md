@@ -13,21 +13,31 @@ Starting an agent is an API-orchestrated deployment flow:
 3. Decrypt platform and provider credentials.
 4. Select runtime-specific configuration and deployment builders.
 5. Combine explicitly assigned skills with eligible built-in provider skills.
-6. Append tool pointers and integration policy to rendered Markdown.
+6. Append tool pointers, integration policy, and the unconditional runtime behaviour policies (chat commands, role scope) to rendered Markdown.
 7. Generate a fresh ingest key and runtime environment.
 8. Build ConfigMap, Secret, PVC, Service, and Deployment resources.
 9. Apply resources through the Kubernetes client and mark the agent running.
+
+Runtime behaviour policies are appended to `AGENTS.md` rather than stored in a template, because both runtimes auto-load `AGENTS.md` into the startup system prompt. They are unconditional and carry no role-specific wording, so custom and forked templates inherit them and the role-scope policy defers to whatever role the agent's own template defines.
 
 A failed Slack or Telegram credential check or Kubernetes start can place the agent in `ERROR`; successful start clears the prior error.
 
 ## Runtime/platform matrix
 
-| Runtime  | Slack | Teams | Telegram | Runtime configuration                        |
-| -------- | ----: | ----: | -------: | -------------------------------------------- |
-| Hermes   |   Yes |    No |      Yes | Hermes config and Hermes deployment builders |
-| OpenClaw |   Yes |   Yes |      Yes | OpenClaw overlay and deployment builders     |
+| Runtime  | Slack | Teams | Telegram | Discord | Runtime configuration                        |
+| -------- | ----: | ----: | -------: | ------: | -------------------------------------------- |
+| Hermes   |   Yes |    No |      Yes |     Yes | Hermes config and Hermes deployment builders |
+| OpenClaw |   Yes |   Yes |      Yes |     Yes | OpenClaw overlay and deployment builders     |
 
 Runtime is persisted as `agent_type`; platform is persisted separately. Both runtimes receive rendered template files, skills, integrations, model/LiteLLM settings, and ingest credentials, but their filesystem and configuration shapes differ.
+
+## Future platform-extension boundary
+
+Platform support currently follows explicit, platform-specific models, repository methods, service branches, and runtime builders. This keeps Slack, Teams, Telegram, and Discord contracts typed and locally discoverable, and is the preferred approach for a small number of materially different platforms.
+
+Adding a platform therefore touches persistence, API contracts, service orchestration, one or more runtime builders, Kubernetes Secret materialization, UI onboarding, tests, and this documentation. Do not introduce a generic adapter or untyped configuration blob solely to reduce the size of one platform change.
+
+Revisit a platform-adapter boundary when repeated platform additions create substantial duplicated lifecycle wiring. The candidate shape is a typed platform configuration adapter that owns credential validation, read-safe configuration, onboarding metadata, and runtime-specific materialization, while Agent Service retains authorization, lifecycle, templates, Skills, and Kubernetes orchestration. Any such change must preserve encrypted credential handling, the current Agent Access checks, and runtime-specific configuration validation.
 
 ## Mention gating
 
@@ -42,12 +52,20 @@ Builders set this per runtime and platform:
 | OpenClaw | Slack    | `channels.slack.requireMention`, `channels.slack.thread.requireExplicitMention`, and per-channel `requireMention` |
 | OpenClaw | Teams    | `channels.msteams.requireMention`                                                               |
 | OpenClaw | Telegram | `channels.telegram.groups.<chat_id>.requireMention`, or the `*` wildcard group when the group policy is open |
+| Hermes | Discord | `discord.require_mention` and `discord.thread_require_mention` |
+| OpenClaw | Discord | `channels.discord.guilds.<guild_id>.requireMention`, or the `*` wildcard guild when the group policy is open |
 
-The table covers all five supported runtime/platform pairs. Every value is pinned explicitly rather than left to a runtime default, so an upstream default change cannot silently reopen the gap.
+The table covers all seven supported runtime/platform pairs. Every value is pinned explicitly rather than left to a runtime default, so an upstream default change cannot silently reopen the gap.
 
-Guarantee strength differs by platform. Slack on both runtimes enforces a fresh mention per message, disabling thread auto-engagement. Teams and Telegram enforce "mention required" but expose no per-message re-mention control, so a direct reply to the agent's own message still reaches it. Those replies remain addressed to exactly one agent, so they do not reopen the cross-agent case.
+Guarantee strength differs by platform. Slack on both runtimes enforces a fresh mention per message, disabling thread auto-engagement. Teams, Telegram, and Discord enforce "mention required" but expose no per-message re-mention control, so a direct reply to the agent's own message still reaches it. Those replies remain addressed to exactly one agent, so they do not reopen the cross-agent case.
 
 Runtime configuration is generated at agent start, so a running agent keeps the gating it was started with until it is stopped and started again.
+
+Discord guild policy and channel restrictions are independent. An open guild policy allows the bot to operate in any guild containing it, while configured channel, user, and role restrictions continue to narrow access within those guilds in both runtimes.
+
+## Platform failure recovery
+
+Hermes retries retryable platform connection failures with its bounded exponential backoff. If repeated failures open Hermes' platform circuit breaker, the agent's dedicated `/live` probe reports unhealthy and Kubernetes restarts the pod after approximately five minutes, allowing recoverable external configuration changes to take effect without operator intervention. A platform intentionally paused through `/platform pause` remains live and is not automatically restarted.
 
 ## Telemetry and costs
 
@@ -65,7 +83,7 @@ Every release's namespace and `needs:` entries are templated on a `NAMESPACE` en
 
 ## Observability
 
-`../../helm/monitoring/` deploys plain namespace-scoped Prometheus, Grafana, and Alertmanager charts into the release namespace — no operator, no CRDs, and no cluster-scoped RBAC, because the shared cluster only grants this project a namespace (the chart renders no RBAC at all: Prometheus and kube-state-metrics run under the tenant deploy ServiceAccount `<namespace>-user`, which already holds namespaced read; Grafana — the only ingress-exposed pod — runs with no API token mounted). Scrape topology: the API exposes `/metrics` on both processes (main `:8000` with probe gauges for database, agents-in-ERROR, and the OpenRouter key's remaining credit limit (`GET /key` with the inference key; `+Inf` when the key has no limit); ingest `:8001` with the tool-call counter), LiteLLM exposes `/metrics` on `:4000` via its `prometheus` callback, and every agent's healthz server serves `/metrics` on `:8081`, discovered through an own-namespace scrape config selecting the stable `agentfarm.io/component: agent` Service label; the Service's `app`/`agent-name`/`org-name` labels are relabeled onto every scraped series so an agent keeps one identity across all its pod generations. Alerting is declarative: alert rules in the chart values → Alertmanager → Slack `#alerts` webhook (injected from `SLACK_ALERTS_WEBHOOK_URL` into a Secret referenced via `slack_api_url_file`, never committed). Grafana is dashboards-only, provisioned from ConfigMaps in the chart and exposed via traefik ingress at `GRAFANA_HOST`.
+`../../helm/monitoring/` deploys plain namespace-scoped Prometheus, Grafana, and Alertmanager charts into the release namespace — no operator, no CRDs, and no cluster-scoped RBAC, because the shared cluster only grants this project a namespace (the chart renders no RBAC at all: Prometheus and kube-state-metrics run under the tenant deploy ServiceAccount `<namespace>-user`, which already holds namespaced read; Grafana — the only ingress-exposed pod — runs with no API token mounted). Scrape topology: the API exposes `/metrics` on both processes (main `:8000` with probe gauges for database, agents-in-ERROR, and the OpenRouter key's remaining credit limit (`GET /key` with the inference key; `+Inf` when the key has no limit); ingest `:8001` with the tool-call counter), LiteLLM exposes `/metrics` on `:4000` via its `prometheus` callback, and every agent's healthz server serves `/metrics` on `:8081`, discovered through an own-namespace scrape config selecting the stable `agentbarn.io/component: agent` Service label; the Service's `app`/`agent-name`/`org-name` labels are relabeled onto every scraped series so an agent keeps one identity across all its pod generations. Alerting is declarative: alert rules in the chart values → Alertmanager → Slack `#alerts` webhook (injected from `SLACK_ALERTS_WEBHOOK_URL` into a Secret referenced via `slack_api_url_file`, never committed). Grafana is dashboards-only, provisioned from ConfigMaps in the chart and exposed via traefik ingress at `GRAFANA_HOST`.
 
 ## Kubernetes client constraint
 
@@ -77,7 +95,7 @@ Kubernetes `stream()` and `portforward()` temporarily monkey-patch `ApiClient.re
 | ------------------------------- | ------------------------------------------------------------------------------- |
 | Runtime orchestration           | `../../api/domains/agents/service.py`                                                 |
 | Ingest process and routing      | `../../api/ingest_app.py`, `../../api/ingest_main.py`, `../../api/start.sh`                       |
-| Domain Event delivery workers   | `../../api/worker_app.py`, `../../api/domains/events/worker.py`, `../../api/domains/events/reconciliation.py`, `../../helm/agentfarm-api/templates/event-delivery-worker-deployment.yaml`, `../../helm/agentfarm-api/templates/event-delivery-reconciliation-cronjob.yaml` |
+| Domain Event delivery workers   | `../../api/worker_app.py`, `../../api/domains/events/worker.py`, `../../api/domains/events/reconciliation.py`, `../../helm/agentbarn-api/templates/event-delivery-worker-deployment.yaml`, `../../helm/agentbarn-api/templates/event-delivery-reconciliation-cronjob.yaml` |
 | Shared Kubernetes builders      | `../../api/domains/agents/builders/common.py`                                         |
 | Hermes builders                 | `../../api/domains/agents/builders/hermes.py`, `../../hermes-base/`                         |
 | OpenClaw builders               | `../../api/domains/agents/builders/openclaw.py`, `../../openclaw-base/`                     |

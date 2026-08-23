@@ -12,6 +12,7 @@ from api.core.config import Config
 from api.infrastructure.email.client import EmailClient
 from api.infrastructure.email.exceptions import (
     EmailRenderingException,
+    TerminalEmailSendingException,
 )
 from api.infrastructure.email.models import Email, EmailTemplate, EmailTemplateAttribute
 
@@ -33,7 +34,7 @@ class EmailService:
             "Email delivery is disabled: action=%s recipient=%s reason=%s",
             action,
             receiver_email,
-            "EMAIL_SERVER_CREDENTIAL or EMAIL_SMTP_SERVER is missing",
+            "CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN or SENDER_EMAIL is missing",
         )
         return False
 
@@ -200,32 +201,40 @@ class EmailService:
         receiver_name: str | None,
         agent_name: str,
         lifecycle_action: str,
-    ) -> bool:
+    ) -> None:
+        """Unlike the other send methods this propagates `EmailSendingException` rather than
+        swallowing it. `AgentLifecycleEmailHandler` runs under the delivery framework and
+        needs the retryable/terminal distinction to pick its retry behaviour; collapsing
+        every failure to `False` made it retry payload errors that can never succeed."""
         if not self._email_enabled_or_log(
             action="send_agent_lifecycle_email",
             receiver_email=receiver_email,
         ):
-            return False
+            # Delivery disabled is a documented no-op (see helm values.yaml), not a failure.
+            # Raising here would dead-letter every lifecycle event on mail-less environments.
+            return
 
+        email_template = EmailTemplate(
+            file_name="agent-lifecycle-template.mjml",
+            subject=f"Agent {agent_name} {lifecycle_action}",
+            receiver_name=receiver_name,
+            receiver_email=receiver_email,
+            attributes=[
+                EmailTemplateAttribute(name="user_name", value=receiver_name or receiver_email),
+                EmailTemplateAttribute(name="agent_name", value=agent_name),
+                EmailTemplateAttribute(name="lifecycle_action", value=lifecycle_action),
+            ],
+        )
         try:
-            email_template = EmailTemplate(
-                file_name="agent-lifecycle-template.mjml",
-                subject=f"Agent {agent_name} {lifecycle_action}",
-                receiver_name=receiver_name,
-                receiver_email=receiver_email,
-                attributes=[
-                    EmailTemplateAttribute(name="user_name", value=receiver_name or receiver_email),
-                    EmailTemplateAttribute(name="agent_name", value=agent_name),
-                    EmailTemplateAttribute(name="lifecycle_action", value=lifecycle_action),
-                ],
-            )
             email = self.create_email(email_template)
-            self.client.send(email)
-            return True
-        except Exception:
-            msg = f"Unable to send agent lifecycle email to {receiver_email}"
-            logger.error(f"{msg} : {traceback.format_exc()}")
-            return False
+        except Exception as e:
+            logger.error(
+                f"Unable to build agent lifecycle email for {receiver_email} "
+                f"from {email_template.file_name} : {traceback.format_exc()}"
+            )
+            raise TerminalEmailSendingException(str(e), email=receiver_email) from e
+
+        self.client.send(email)
 
     def send_user_deletion_email(
         self,

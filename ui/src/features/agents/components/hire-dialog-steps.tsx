@@ -19,11 +19,12 @@ import { SHARED_CREDENTIAL_PROVIDER_LABELS } from "@/features/shared-credentials
 import { useSkills } from "@/features/skills/hooks/use-skills";
 import { SKILL_PROVIDER_LABELS } from "@/features/skills/utils";
 import type { Skill } from "@/features/skills/schemas";
-import { SkillSourceBadge } from "@/features/skills/components/skill-drawer";
+import { SkillSourceBadge } from "@/features/skills/components/skill-source-badge";
 
 import {
   INTEGRATION_PROVIDERS,
   getIntegrationProvider,
+  isAutoConfiguredProvider,
   type IntegrationDraft,
 } from "../integrations";
 import type { AgentAssignedSkill, AgentTemplateRead, TemplateRequiredSkill } from "../schemas";
@@ -45,6 +46,7 @@ export type WizardStep =
   | "bot-builder"
   | "slack-tokens"
   | "telegram-token"
+  | "discord-token"
   | "details"
   | "skills";
 
@@ -818,12 +820,40 @@ export function TelegramTokenStep({
   );
 }
 
+export function DiscordTokenStep({
+  token, onTokenChange, applicationId, onApplicationIdChange, guildIds, onGuildIdsChange, channelIds, onChannelIdsChange, allowedUserIds, onAllowedUserIdsChange, allowedRoleIds, onAllowedRoleIdsChange, homeChannelId, onHomeChannelIdChange, showToken, onToggleToken, error,
+}: {
+  token: string; onTokenChange: (v: string) => void; applicationId: string; onApplicationIdChange: (v: string) => void; guildIds: string; onGuildIdsChange: (v: string) => void; channelIds: string; onChannelIdsChange: (v: string) => void; allowedUserIds: string; onAllowedUserIdsChange: (v: string) => void; allowedRoleIds: string; onAllowedRoleIdsChange: (v: string) => void; homeChannelId: string; onHomeChannelIdChange: (v: string) => void; showToken: boolean; onToggleToken: () => void; error: string | null;
+}) {
+  return (
+    <form autoComplete="off" className="flex flex-col gap-5" onSubmit={(e) => e.preventDefault()}>
+      <div className="flex flex-col gap-3.5 p-4 rounded-2xl" style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}>
+        <div><div className="font-semibold text-[0.844rem] mb-0.5" style={{ color: "var(--ink)" }}>Discord bot token</div><div className="text-[0.781rem]" style={{ color: "var(--ink-3)" }}>Stored encrypted and supplied only to the agent runtime.</div></div>
+        <FormField label="Bot token" hint="From Discord Developer Portal → Application → Bot"><TokenInput value={token} onChange={onTokenChange} visible={showToken} onToggle={onToggleToken} placeholder="Discord bot token" /></FormField>
+        <FormField label="Application ID" hint="Optional. Lets us generate the least-privilege install link."><input className="af-input font-mono text-[0.8125rem]" value={applicationId} onChange={(e) => onApplicationIdChange(e.target.value)} placeholder="123456789012345678" /></FormField>
+        <FormField label="Allowed server IDs" hint="Comma-separated Discord server (guild) IDs. Leave blank to configure later through the API."><input className="af-input font-mono text-[0.8125rem]" value={guildIds} onChange={(e) => onGuildIdsChange(e.target.value)} placeholder="123456789012345678" /></FormField>
+        <FormField label="Allowed channel IDs" hint="The channels this agent may read or post in."><input className="af-input font-mono text-[0.8125rem]" value={channelIds} onChange={(e) => onChannelIdsChange(e.target.value)} placeholder="123456789012345678" /></FormField>
+        <FormField label="Allowed operator IDs" hint="Optional for outbound-only agents; required for interactive Hermes agents."><input className="af-input font-mono text-[0.8125rem]" value={allowedUserIds} onChange={(e) => onAllowedUserIdsChange(e.target.value)} placeholder="123456789012345678" /></FormField>
+        <FormField label="Allowed role IDs" hint="Members with any listed Discord role may interact with the agent."><input className="af-input font-mono text-[0.8125rem]" value={allowedRoleIds} onChange={(e) => onAllowedRoleIdsChange(e.target.value)} placeholder="987654321098765432" /></FormField>
+        <FormField label="Alert destination channel ID" hint="Optional. Hermes posts scheduled and proactive updates here."><input className="af-input font-mono text-[0.8125rem]" value={homeChannelId} onChange={(e) => onHomeChannelIdChange(e.target.value)} placeholder="123456789012345678" /></FormField>
+        {error && <div className="text-[0.8125rem]" style={{ color: "var(--err)" }}>{error}</div>}
+      </div>
+      <div className="flex flex-col gap-3 rounded-2xl p-4" style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}>
+        <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>Before you connect</div>
+        <NextStep n={1} label="Create a Discord application">In the <a href="https://discord.com/developers/applications" target="_blank" rel="noopener noreferrer" className="underline" style={{ color: "var(--ink-2)" }}>Discord Developer Portal ↗</a>, create an application and add a bot.</NextStep>
+        <NextStep n={2} label="Enable required Gateway Intents">On the Bot page under <b>Privileged Gateway Intents</b>, enable <b>Message Content Intent</b>. If you configure allowed roles, also enable <b>Server Members Intent</b>.</NextStep>
+        <NextStep n={3} label="Invite the bot">{applicationId.trim() ? <a href={`https://discord.com/oauth2/authorize?client_id=${applicationId.trim()}&scope=bot%20applications.commands&permissions=274878286912`} target="_blank" rel="noopener noreferrer" className="underline" style={{ color: "var(--ink-2)" }}>Open the recommended install link ↗</a> : "Paste the Application ID above to generate a recommended, least-privilege install link."}</NextStep>
+      </div>
+    </form>
+  );
+}
+
 export function PlatformChoiceStep({
   platform,
   onChange,
 }: {
-  platform: "slack" | "telegram";
-  onChange: (v: "slack" | "telegram") => void;
+  platform: "slack" | "telegram" | "discord";
+  onChange: (v: "slack" | "telegram" | "discord") => void;
 }) {
   return (
     <div className="flex flex-col gap-3">
@@ -832,6 +862,12 @@ export function PlatformChoiceStep({
         onClick={() => onChange("slack")}
         title="Slack"
         description="Connect via Socket Mode with a bot and app-level token. Recommended."
+      />
+      <ChoiceCard
+        selected={platform === "discord"}
+        onClick={() => onChange("discord")}
+        title="Discord"
+        description="Connect Hermes or OpenClaw with a Discord bot token. DMs are disabled by default."
       />
       <ChoiceCard
         selected={platform === "telegram"}
@@ -856,13 +892,13 @@ export function AgentTypeStep({
         selected={agentType === "hermes"}
         onClick={() => onChange("hermes")}
         title="Hermes"
-        description="Slack and Telegram. Fast, lightweight, plugin-based. Recommended."
+        description="Slack, Telegram, and Discord. Fast, lightweight, plugin-based. Recommended."
       />
       <ChoiceCard
         selected={agentType === "openclaw"}
         onClick={() => onChange("openclaw")}
         title="OpenClaw"
-        description="Slack and Telegram. Full platform support with multi-channel routing."
+        description="Slack, Telegram, Teams, and Discord. Full platform support with multi-channel routing."
       />
     </div>
   );
@@ -1182,7 +1218,7 @@ export function DetailsStep({
   onChangeTemplate,
 }: {
   template: AgentTemplateRead;
-  platform: "slack" | "telegram";
+  platform: "slack" | "telegram" | "discord";
   agentType: "openclaw" | "hermes";
   name: string;
   onNameChange: (v: string) => void;
@@ -1385,7 +1421,7 @@ export function SkillsStep({
   requiredGroups?: RequiredSkillGroup[];
   groupChoices?: Record<string, string[]>;
   onGroupChoiceChange?: (groupKey: string, skillId: string) => void;
-  platform: "slack" | "telegram";
+  platform: "slack" | "telegram" | "discord";
 }) {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
@@ -1439,9 +1475,9 @@ export function SkillsStep({
   function syncCredentialDrafts(requiredProviders: Set<string>) {
     const newCreds = skillCredentials.filter((c) => requiredProviders.has(c.provider));
     for (const p of requiredProviders) {
-      // Slack is never manually configured — the API derives it from the agent's
-      // gateway bot token, so it must never appear in the secrets payload.
-      if (p !== "slack" && !newCreds.find((c) => c.provider === p)) {
+      // Auto-configured providers are derived from the agent's configuration and
+      // must never appear in the secrets payload.
+      if (!isAutoConfiguredProvider(p) && !newCreds.find((c) => c.provider === p)) {
         newCreds.push({ provider: p, content: {} });
       }
     }
@@ -1488,10 +1524,19 @@ export function SkillsStep({
   }
 
   function setField(providerId: string, key: string, value: string) {
+    setFields(providerId, { [key]: value });
+  }
+  /** Apply several keys in ONE update.
+   *
+   * These helpers derive the next list from the closed-over prop rather than from a
+   * functional setState, so successive calls in the same tick all read the same stale
+   * value and the last one wins. The OAuth flow writes refreshToken, clientId and
+   * clientSecret together, which silently discarded the token. */
+  function setFields(providerId: string, patch: Record<string, string>) {
     onSkillCredentialsChange(
       skillCredentials.map((c) =>
         c.provider === providerId
-          ? { ...c, content: { ...c.content, [key]: value } }
+          ? { ...c, content: { ...c.content, ...patch } }
           : c,
       ),
     );
@@ -1716,9 +1761,7 @@ export function SkillsStep({
                     onFieldChange={(key, value) => setField(providerId, key, value)}
                     onReposChange={(key, repos) => setRepos(providerId, key, repos)}
                     onOAuthConnected={({ refreshToken, clientId, clientSecret }) => {
-                      setField(providerId, "refreshToken", refreshToken);
-                      setField(providerId, "clientId", clientId);
-                      setField(providerId, "clientSecret", clientSecret);
+                      setFields(providerId, { refreshToken, clientId, clientSecret });
                     }}
                   />
                 )}
@@ -1754,10 +1797,16 @@ export function IntegrationsStep({
     onChange(integrations.filter((i) => i.provider !== id));
   }
   function setField(providerId: string, key: string, value: string) {
+    setFields(providerId, { [key]: value });
+  }
+  /** Apply several keys in ONE update — see the note on the sibling step: successive
+   * single-key calls in the same tick overwrite each other, which dropped the OAuth
+   * refresh token. */
+  function setFields(providerId: string, patch: Record<string, string>) {
     onChange(
       integrations.map((i) =>
         i.provider === providerId
-          ? { ...i, content: { ...i.content, [key]: value } }
+          ? { ...i, content: { ...i.content, ...patch } }
           : i,
       ),
     );
@@ -1824,9 +1873,7 @@ export function IntegrationsStep({
                 onFieldChange={(key, value) => setField(draft.provider, key, value)}
                 onReposChange={(key, repos) => setRepos(draft.provider, key, repos)}
                 onOAuthConnected={({ refreshToken, clientId, clientSecret }) => {
-                  setField(draft.provider, "refreshToken", refreshToken);
-                  setField(draft.provider, "clientId", clientId);
-                  setField(draft.provider, "clientSecret", clientSecret);
+                  setFields(draft.provider, { refreshToken, clientId, clientSecret });
                 }}
               />
             )}

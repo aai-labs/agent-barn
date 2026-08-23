@@ -5,6 +5,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -19,13 +20,14 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-@pytest.fixture
-def healthz_server():
+@contextmanager
+def _run_healthz_server(env_overrides: dict[str, str] | None = None):
     port = _free_port()
     env = {
         **os.environ,
         "SKIP_SLACK_TOKEN_VALIDATION": "1",
         "HEALTHZ_PORT": str(port),
+        **(env_overrides or {}),
     }
     proc = subprocess.Popen(
         [sys.executable, str(_SCRIPT)],
@@ -48,6 +50,12 @@ def healthz_server():
     finally:
         proc.terminate()
         proc.wait(timeout=5)
+
+
+@pytest.fixture
+def healthz_server():
+    with _run_healthz_server() as base:
+        yield base
 
 
 def _get(url: str):
@@ -83,6 +91,32 @@ def test_healthz_endpoint_still_reports_starting(healthz_server):
 
     assert_that(status, equal_to(503))
     assert_that(body, contains_string("starting"))
+
+
+def test_live_endpoint_fails_when_platform_circuit_breaker_is_paused(tmp_path):
+    (tmp_path / "gateway_state.json").write_text(
+        '{"platforms":{"discord":{"state":"paused","error_message":"connection timed out"}}}',
+        encoding="utf-8",
+    )
+
+    with _run_healthz_server({"HERMES_HOME": str(tmp_path), "AGENT_PLATFORM": "discord"}) as base:
+        status, _, body = _get(f"{base}/live")
+
+    assert_that(status, equal_to(500))
+    assert_that(body, contains_string("circuit-breaker-paused"))
+
+
+def test_live_endpoint_respects_manual_platform_pause(tmp_path):
+    (tmp_path / "gateway_state.json").write_text(
+        '{"platforms":{"discord":{"state":"paused","error_message":"paused via /platform pause"}}}',
+        encoding="utf-8",
+    )
+
+    with _run_healthz_server({"HERMES_HOME": str(tmp_path), "AGENT_PLATFORM": "discord"}) as base:
+        status, _, body = _get(f"{base}/live")
+
+    assert_that(status, equal_to(200))
+    assert_that(body, contains_string("manually-paused"))
 
 
 def test_unknown_path_still_returns_404(healthz_server):

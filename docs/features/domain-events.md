@@ -6,7 +6,7 @@ Read before adding or changing internal Domain Events, Outbox Messages, Event De
 
 ## Role in the system
 
-Agent Farm uses internal Domain Events to record immutable, typed business facts at either Organization or Platform scope. A committed Domain Event is persisted as one PostgreSQL `event_outbox_message` row and one `event_delivery` row per currently registered Event Handler. PostgreSQL is the durable source for event intent and intended handler delivery state; Dramatiq/Redis is the low-latency, at-least-once transport for committed Event Deliveries.
+Agent Barn uses internal Domain Events to record immutable, typed business facts at either Organization or Platform scope. A committed Domain Event is persisted as one PostgreSQL `event_outbox_message` row and one `event_delivery` row per currently registered Event Handler. PostgreSQL is the durable source for event intent and intended handler delivery state; Dramatiq/Redis is the low-latency, at-least-once transport for committed Event Deliveries.
 
 ## Invariants
 
@@ -64,7 +64,17 @@ AF-219 ships the first concrete events as RBAC audit inputs and usage examples:
 - `platform.user_privilege.granted` — emitted atomically when Platform Privilege is granted.
 - `platform.user_privilege.revoked` — emitted atomically when Platform Privilege is revoked.
 
-RBAC and Platform Privilege events are intended for the `security_audit.projection` Event Handler, which persists deletion-independent Security Audit Records. Agent start/stop events are intended for the `agent.lifecycle_email.notification` Event Handler, which emails the Agent Creator and users with Agent Owner access, de-duplicated by email.
+AF-167 broadens Security Audit Record coverage to additional mutations:
+
+- `agent.updated` — emitted when `update_agent` changes a tracked scalar field (name, model, approval_mode, template pin); carries a generic `field_changes` diff and is not emitted when no tracked field actually changed.
+- `agent.deleted` — emitted when an Agent is soft-deleted.
+- `agent.secret.added` / `agent.secret.updated` / `agent.secret.removed` — emitted on Agent Secret (credential) create/update/delete; payload is built allowlist-style from safe fields only and never includes the encrypted `content`.
+- `template.created` / `template.updated` / `template.deleted` — emitted on org Template lineage create/update/delete; `template.updated`'s `field_changes` is scoped to `template_name`/`description` only, excluding the markdown prompt bodies.
+- `organization.model_allowlist.changed` — emitted when an Organization's `allowed_models` list changes.
+- `organization.member.added` / `organization.member.removed` — emitted on Organization membership add/remove.
+- `organization.ownership_transferred` — emitted when Organization ownership transfers between Memberships.
+
+RBAC, Platform Privilege, and the AF-167 events above are intended for the `security_audit.projection` Event Handler, which persists deletion-independent Security Audit Records. Agent start/stop events are intended for the `agent.lifecycle_email.notification` Event Handler, which emails the Agent Creator and users with Agent Owner access, de-duplicated by email.
 
 ## Delivery worker contract
 

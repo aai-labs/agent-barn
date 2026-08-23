@@ -55,8 +55,8 @@ class PredefinedTemplate:
 def _read_artifact(template_dir: Path, filename: str) -> str:
     template_specific = template_dir / filename
     if template_specific.exists():
-        return template_specific.read_text()
-    return (DEFAULTS_DIR / filename).read_text()
+        return template_specific.read_text(encoding="utf-8")
+    return (DEFAULTS_DIR / filename).read_text(encoding="utf-8")
 
 
 def _parse_required_skills(entries: list) -> tuple[str | tuple[str, ...], ...]:
@@ -72,7 +72,7 @@ def _parse_required_skills(entries: list) -> tuple[str | tuple[str, ...], ...]:
 
 
 def _load_template(template_dir: Path) -> PredefinedTemplate:
-    settings = yaml.safe_load((template_dir / "settings.yaml").read_text())
+    settings = yaml.safe_load((template_dir / "settings.yaml").read_text(encoding="utf-8"))
     artifacts = {filename[:-3]: _read_artifact(template_dir, filename) for filename in _ARTIFACT_FILES}
     return PredefinedTemplate(
         key=template_dir.name,

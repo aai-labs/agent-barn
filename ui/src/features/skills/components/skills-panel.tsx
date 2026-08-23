@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
+import { useParams } from "next/navigation";
 import { ChevronDownIcon } from "lucide-react";
 
 import { AppErrorState } from "@/components/app-error-state";
@@ -15,20 +17,16 @@ import {
 import { Pagination } from "@/features/agents/components/pagination";
 import { useActiveOrgRole } from "@/features/organizations/hooks/use-active-org-role";
 
-import { type Skill, type SkillSource } from "../schemas";
+import { type SkillSource } from "../schemas";
 import { useSkills } from "../hooks/use-skills";
-import { SKILLS_PAGE_SIZE, SKILL_PROVIDER_LABELS } from "../utils";
-import { SkillDrawer, SkillSourceBadge } from "./skill-drawer";
+import { SKILLS_PAGE_SIZE } from "../utils";
+import { SkillCard } from "./skill-card";
 
 const SOURCE_FILTERS: Array<{ value: SkillSource | ""; label: string }> = [
   { value: "", label: "All sources" },
-  { value: "aai_cli", label: "Platform" },
+  { value: "aai_cli", label: "Built in" },
   { value: "custom", label: "Custom" },
 ];
-
-type DrawerMode =
-  | { kind: "create" }
-  | { kind: "view"; skill: Skill };
 
 function Hint({ children }: { children: React.ReactNode }) {
   return (
@@ -41,23 +39,13 @@ function Hint({ children }: { children: React.ReactNode }) {
   );
 }
 
-function ProviderBadge({ provider }: { provider: string }) {
-  return (
-    <span
-      className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium"
-      style={{ background: "var(--bg-soft)", color: "var(--ink-3)", border: "1px solid var(--line)" }}
-    >
-      {SKILL_PROVIDER_LABELS[provider] ?? provider}
-    </span>
-  );
-}
-
 export function SkillsPanel() {
   const { canManage } = useActiveOrgRole();
+  const params = useParams();
+  const orgId = typeof params?.orgId === "string" ? params.orgId : null;
   const [search, setSearch] = useState("");
   const [sourceFilter, setSourceFilter] = useState<SkillSource | "">("");
   const [page, setPage] = useState(1);
-  const [drawer, setDrawer] = useState<DrawerMode | null>(null);
 
   const { skills, total, isLoading, error, refetch } = useSkills({
     search: search || undefined,
@@ -77,12 +65,18 @@ export function SkillsPanel() {
     setPage(1);
   }
 
+  function skillHref(skillId: string) {
+    return orgId ? `/dashboard/${orgId}/settings/skills/${skillId}` : "#";
+  }
+
+  const newSkillHref = orgId ? `/dashboard/${orgId}/settings/skills/new` : "#";
+
   return (
     <>
       <Hint>
         <ShieldIcon style={{ flexShrink: 0, marginTop: 1 }} />
-        Platform skills are provided by AAI Labs and cannot be modified. Custom skills are uploaded
-        by your organization and can be assigned to agents.
+        Built-in skills are provided by AAI Labs and can be viewed but not modified. Custom skills
+        are written by your organization and can be assigned to agents.
       </Hint>
 
       <div className="mb-4 flex items-center gap-2.5">
@@ -121,12 +115,9 @@ export function SkillsPanel() {
           </DropdownMenu>
         </div>
         {canManage && (
-          <button
-            className="af-btn af-btn-primary ml-auto"
-            onClick={() => setDrawer({ kind: "create" })}
-          >
+          <Link href={newSkillHref} className="af-btn af-btn-primary ml-auto">
             <PlusIcon /> New skill
-          </button>
+          </Link>
         )}
       </div>
 
@@ -163,44 +154,20 @@ export function SkillsPanel() {
         </div>
       )}
 
-      {skills.map((skill) => (
+      {!isLoading && !error && skills.length > 0 && (
         <div
-          key={skill.id}
-          className="flex items-center gap-3 px-0 py-3.5"
-          style={{ borderBottom: "1px solid var(--line)" }}
+          className="grid gap-4 mb-4"
+          style={{ gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))" }}
         >
-          <div className="flex-1 min-w-0">
-            <div
-              className="font-medium text-[14px] flex items-center gap-2"
-              style={{ color: "var(--ink)" }}
-            >
-              <span>{skill.name}</span>
-              <SkillSourceBadge source={skill.source} />
-            </div>
-            {skill.requiredProviders.length > 0 && (
-              <div className="flex flex-wrap gap-1 mt-1">
-                {skill.requiredProviders.map((p) => (
-                  <ProviderBadge key={p} provider={p} />
-                ))}
-              </div>
-            )}
-          </div>
-          <button
-            className="af-btn af-btn-sm af-btn-ghost"
-            onClick={() => setDrawer({ kind: "view", skill })}
-          >
-            View
-          </button>
+          {skills.map((skill) => (
+            <SkillCard key={skill.id} skill={skill} href={skillHref(skill.id)} />
+          ))}
         </div>
-      ))}
+      )}
 
       <div className="pt-4">
         <Pagination page={page} totalPages={totalPages} onPageChange={setPage} />
       </div>
-
-      {drawer && (
-        <SkillDrawer mode={drawer} canManage={canManage} onClose={() => setDrawer(null)} />
-      )}
     </>
   );
 }

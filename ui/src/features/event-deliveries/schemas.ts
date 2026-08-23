@@ -33,6 +33,8 @@ export const EventDeliverySchema = z.object({
   attemptCount: z.number().int(),
   deadLetterReason: EventDeliveryDeadLetterReasonSchema.nullable(),
   lastError: z.string().nullable(),
+  actorDisplay: z.string().nullable(),
+  subjectDisplay: z.string().nullable(),
   createdAt: z.string(),
   enqueuedAt: z.string().nullable(),
   claimedAt: z.string().nullable(),

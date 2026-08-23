@@ -10,6 +10,7 @@ from injector import Module, provider, singleton
 from api.domains.agents.models import (
     Agent,
     AgentAccess,
+    AgentDiscordConfig,
     AgentPlatform,
     AgentSlackConfig,
     AgentStatus,
@@ -43,6 +44,7 @@ TEST_TEAMS_APP_ID = "test-teams-app-id"
 TEST_TEAMS_APP_PASSWORD = "test-teams-app-password"
 TEST_TEAMS_TENANT_ID = "test-tenant-id"
 TEST_TELEGRAM_BOT_TOKEN = "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
+TEST_DISCORD_BOT_TOKEN = "test-discord-bot-token"
 FAKE_LITELLM_KEY = "sk-fake-litellm-key-for-tests"
 
 
@@ -148,6 +150,14 @@ def there_is_an_agent(
                 bot_username="test_bot",
             )
             repository.save_telegram_config(telegram_config)
+        elif platform == AgentPlatform.DISCORD:
+            effective_bot_token = bot_token or TEST_DISCORD_BOT_TOKEN
+            discord_config = AgentDiscordConfig(
+                agent_id=agent.id,
+                bot_token_encrypted=encrypt_token(effective_bot_token, TEST_ENCRYPTION_KEY),
+                bot_token_hash=None if deleted else compute_bot_token_hash(effective_bot_token),
+            )
+            repository.save_discord_config(discord_config)
 
         context.agent = agent
 
@@ -249,9 +259,13 @@ def skill_is_assigned_to_agent():
     def step(context):
         from api.domains.agents.models import AgentSkill
         from api.domains.agents.repository import AgentRepository
+        from api.domains.skills.repository import SkillRepository
 
+        skill_repo: SkillRepository = context.injector.get(SkillRepository)
+        latest = skill_repo.get_latest_version(context.skill.id)
+        pinned = latest.version if latest else 1
         repo: AgentRepository = context.injector.get(AgentRepository)
-        repo.save_skills([AgentSkill(agent_id=context.agent.id, skill_id=context.skill.id)])
+        repo.save_skills([AgentSkill(agent_id=context.agent.id, skill_id=context.skill.id, pinned_version=pinned)])
 
     return step
 
@@ -283,25 +297,21 @@ def there_is_a_skill_for_another_org():
         other_org_id = context.organization.id
         context.organization = original_org
 
-        import io
-        import zipfile
-
         from api.domains.skills.models import Skill, SkillSource
         from api.domains.skills.repository import SkillRepository
-
-        buf = io.BytesIO()
-        with zipfile.ZipFile(buf, "w") as zf:
-            zf.writestr("skill.md", "# Other Org Skill")
 
         skill = Skill(
             organization_id=other_org_id,
             name="Other Org Skill",
+            slug="other-org-skill",
+            root_dir="other-org-skill",
+            entry_path="SKILL.md",
             source=SkillSource.CUSTOM,
             required_providers=[],
-            zip_content=buf.getvalue(),
         )
         repo: SkillRepository = context.injector.get(SkillRepository)
         repo.save(skill)
+        repo.publish_version(skill.id, [("SKILL.md", "# Other Org Skill")])
         context.other_org_skill = skill
 
     return step
@@ -314,32 +324,29 @@ def there_is_a_skill(
     tools_pointer: str | None = None,
 ):
     def step(context):
-        import io
-        import zipfile
-
         from api.domains.skills.models import Skill, SkillSource
         from api.domains.skills.repository import SkillRepository
+        from api.domains.templates.slug import slugify
 
         org_id = None if global_skill else context.organization.id
         source = SkillSource.AAI_CLI if global_skill else SkillSource.CUSTOM
-        pointer = tools_pointer
-        if pointer is None and not global_skill:
-            pointer = f'You can use "{name}" skill in the ./skills folder'
-
-        buf = io.BytesIO()
-        with zipfile.ZipFile(buf, "w") as zf:
-            zf.writestr("skill.md", f"# {name}")
+        slug = slugify(name)
 
         skill = Skill(
             organization_id=org_id,
             name=name,
+            slug=slug,
+            # Built-ins share the aai-cli mount directory; custom skills get their own.
+            root_dir="aai-cli" if global_skill else slug,
+            entry_path="SKILL.md",
             source=source,
             required_providers=required_providers or [],
-            zip_content=buf.getvalue(),
-            tools_pointer=pointer,
+            # Custom skills leave this NULL so the pointer is derived from metadata.
+            tools_pointer=tools_pointer,
         )
         repo: SkillRepository = context.injector.get(SkillRepository)
         repo.save(skill)
+        repo.publish_version(skill.id, [("SKILL.md", f"# {name}")])
         context.skill = skill
 
     return step

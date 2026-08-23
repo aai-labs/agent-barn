@@ -24,6 +24,11 @@ jobs:
           file: openclaw-base/Dockerfile
           load: true
           tags: openclaw-base:ci
+          # The rust-build stage clones aai-cli's default branch, but its RUN text never
+          # changes, so Docker happily serves a months-old clone from cache and the image
+          # silently ships a stale aai-cli. Nothing else here depends on remote state, so
+          # only this stage opts out; the rest of the build still caches normally.
+          no-cache-filters: rust-build
           cache-from: type=gha
           cache-to: type=gha,mode=max
           secrets: |
@@ -65,7 +70,11 @@ jobs:
           context: openclaw-base
           file: openclaw-base/Dockerfile
           load: true
-          tags: ${{ vars.REGISTRY_URL }}/agentfarm-openclaw-base:${{ steps.tag.outputs.value }}
+          tags: ${{ vars.REGISTRY_URL }}/agentbarn-openclaw-base:${{ steps.tag.outputs.value }}
+          # Only the first build in this job opts out — see the CI job above for why. The
+          # Push steps then reuse the layer this one just built, so the image that ships is
+          # the same one the smoke test ran against, at one compile rather than three.
+          no-cache-filters: rust-build
           cache-from: type=gha
           secrets: |
             gh_token=${{ secrets.AAI_CLI_REPO_ACCESS_TOKEN }}
@@ -73,7 +82,7 @@ jobs:
         run: |
           docker run --rm \
             -v "${{ github.workspace }}/openclaw-base/smoke-test.sh:/smoke-test.sh:ro" \
-            ${{ vars.REGISTRY_URL }}/agentfarm-openclaw-base:${{ steps.tag.outputs.value }} \
+            ${{ vars.REGISTRY_URL }}/agentbarn-openclaw-base:${{ steps.tag.outputs.value }} \
             /bin/sh /smoke-test.sh
       - name: Push
         uses: docker/build-push-action@v7
@@ -81,7 +90,7 @@ jobs:
           context: openclaw-base
           file: openclaw-base/Dockerfile
           push: true
-          tags: ${{ vars.REGISTRY_URL }}/agentfarm-openclaw-base:${{ steps.tag.outputs.value }}
+          tags: ${{ vars.REGISTRY_URL }}/agentbarn-openclaw-base:${{ steps.tag.outputs.value }}
           cache-from: type=gha
           secrets: |
             gh_token=${{ secrets.AAI_CLI_REPO_ACCESS_TOKEN }}
@@ -92,7 +101,7 @@ jobs:
           context: openclaw-base
           file: openclaw-base/Dockerfile
           push: true
-          tags: ${{ vars.REGISTRY_URL }}/agentfarm-openclaw-base:latest
+          tags: ${{ vars.REGISTRY_URL }}/agentbarn-openclaw-base:latest
           cache-from: type=gha
           secrets: |
             gh_token=${{ secrets.AAI_CLI_REPO_ACCESS_TOKEN }}
