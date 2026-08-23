@@ -1,20 +1,43 @@
 # syntax=docker/dockerfile:1
+
+# Debian archive host. The default CDN resolves to a Fastly edge that is
+# sometimes badly degraded (seen at ~30KB/s, stalling builds for over an hour).
+# Override with a nearby full mirror to recover, e.g.:
+#   docker build --build-arg APT_MIRROR=mirror.csclub.uwaterloo.ca ...
+# It must carry BOTH /debian and /debian-security — many mirrors (ftp.us,
+# cloudflaremirrors) serve only the former and break apt-get update.
+ARG APT_MIRROR=deb.debian.org
+
 FROM rust:1-slim-bookworm AS rust-build
+ARG APT_MIRROR
+# Handles both the classic sources.list and the deb822 .sources layout.
+RUN set -eu; \
+    if [ "$APT_MIRROR" != "deb.debian.org" ]; then \
+      sed -i "s|deb\.debian\.org|${APT_MIRROR}|g" /etc/apt/sources.list 2>/dev/null || true; \
+      sed -i "s|deb\.debian\.org|${APT_MIRROR}|g" /etc/apt/sources.list.d/*.sources 2>/dev/null || true; \
+    fi
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git pkg-config libssl-dev ca-certificates && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
 RUN --mount=type=secret,id=gh_token \
     git clone --depth 1 \
-      "https://x-access-token:$(cat /run/secrets/gh_token)@github.com/aai-labs/agent-cli-tools.git" repo && \
+      "https://x-access-token:$(cat /run/secrets/gh_token)@github.com/aai-labs/aai-cli.git" repo && \
     cargo install --path repo --root /out --locked
 
 FROM node:22-bookworm-slim
+ARG APT_MIRROR
 COPY --from=rust-build /out/bin/ /usr/local/bin/
 
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright \
     UV_PYTHON_INSTALL_DIR=/opt/python \
     PIP_BREAK_SYSTEM_PACKAGES=1
+
+RUN set -eu; \
+    if [ "$APT_MIRROR" != "deb.debian.org" ]; then \
+      sed -i "s|deb\.debian\.org|${APT_MIRROR}|g" /etc/apt/sources.list 2>/dev/null || true; \
+      sed -i "s|deb\.debian\.org|${APT_MIRROR}|g" /etc/apt/sources.list.d/*.sources 2>/dev/null || true; \
+    fi
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get update && \

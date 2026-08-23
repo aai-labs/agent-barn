@@ -19,14 +19,11 @@ API configuration is read from the repository root `.env`; tests may use `.env.s
 make db-up       # PostgreSQL only
 make dev-api     # product API on :8000
 make dev-ui      # UI on :3000
-make up          # full Docker stack, including the separately served Ingest app
-make down
-make restart
-make logs
-make clean       # remove stack volumes and orphans
+./run.sh         # full Docker stack (db/redis/api/worker/ui + k3d), including the separately served Ingest app
+./stop.sh        # stop it; ./stop.sh --clean also deletes the k3d cluster
 ```
 
-Use `make db-down`, `make db-logs`, and `make db-restart` for database lifecycle. Prefer repository Make targets over ad hoc equivalents.
+Use `make db-down`, `make db-logs`, and `make db-restart` for database lifecycle. Prefer `./run.sh`/`./stop.sh` for the full stack and repository Make targets for individual services over ad hoc equivalents.
 
 ## Database migrations
 

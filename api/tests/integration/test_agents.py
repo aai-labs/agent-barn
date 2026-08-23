@@ -90,6 +90,10 @@ from api.tests.steps.template import (
 
 _BASE = "/api/v1/organizations/{organization_id}/agents"
 
+# Agents run in k3d while the API runs outside it (compose or the host), so the
+# pod-facing ingest URL is an override, not the in-cluster default.
+_INGEST_BASE_URL = "http://host.docker.internal:8001/ingest/v1"
+
 _VALID_CREATE = {
     "name": "My Agent",
     "platform": "slack",
@@ -954,6 +958,28 @@ def test_start_agent_emits_started_domain_event_and_delivery():
             # after is best-effort (falls back to background reconciliation on failure),
             # so whether it's already ENQUEUED here depends on Redis being reachable.
             assert_that(deliveries[0].status, is_in([EventDeliveryStatus.PENDING, EventDeliveryStatus.ENQUEUED]))
+
+
+def test_start_agent_wires_telemetry_push_into_the_secret():
+    with given(
+        [
+            set_env_variable({"INGEST_BASE_URL": _INGEST_BASE_URL}),
+            *_GIVEN,
+            there_is_an_agent(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("I start the agent"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the secret carries the telemetry push wiring the plugins read"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            _, secret = k8s.create_secret.call_args.args
+            assert_that(secret.string_data["AGENT_ID"], equal_to(str(context.agent.id)))
+            assert_that(secret.string_data["INGEST_URL"], equal_to(_INGEST_BASE_URL))
+            assert_that(secret.string_data["INGEST_API_KEY"], is_not(equal_to("")))
 
 
 def test_start_already_running_returns_409():
@@ -2491,6 +2517,7 @@ _GIVEN_WITH_HERMES_IMAGE = [
             "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
             "API_EXTERNAL_URL": "https://api.test.com",
             "HERMES_IMAGE": "nousresearch/hermes-agent:v1.0",
+            "SKIP_SLACK_TOKEN_VALIDATION": "true",
         }
     ),
     prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
@@ -4322,6 +4349,7 @@ _GIVEN_HERMES_WITH_FIRECRAWL = [
             "HERMES_IMAGE": "nousresearch/hermes-agent:v1.0",
             "AGENT_FIRECRAWL_BASE_URL": "http://firecrawl:3002",
             "AGENT_FIRECRAWL_API_KEY": "fc-platform-key",
+            "SKIP_SLACK_TOKEN_VALIDATION": "true",
         }
     ),
     prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),

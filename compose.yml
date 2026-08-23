@@ -1,7 +1,7 @@
 # Local dev stack only — prod runs via Helm (see helm/, helmfile.yaml.gotmpl).
 # api/worker/ui run with source bind-mounted and dev servers in watch mode, so
-# `make up` gives you the same hot reload as `make dev-api`/`dev-ui`/`dev-worker`,
-# just fully containerized.
+# ./run.sh (which drives this file) gives you the same hot reload as
+# `make dev-api`/`dev-ui`/`dev-worker`, just fully containerized.
 
 x-api-env: &api-env
   # Container-network hostnames override the localhost defaults in .env.
@@ -66,11 +66,47 @@ services:
       - .env
     environment:
       <<: *api-env
+      # The rest of the agent config (AGENT_*, LITELLM_SECRET_NAME, OPENCLAW_IMAGE,
+      # ...) arrives via env_file above. Only the values that must differ inside
+      # the container are overridden here.
+      #
+      # Local k8s (k3d) dev: point this at the in-container kubeconfig to let the
+      # API drive the k3d cluster. Named differently from the code's var so a
+      # bare `docker compose up` (no k3d) stays unchanged. ./run.sh sets this
+      # automatically; falling back to K8S_KUBECONFIG_PATH means a manually
+      # assembled .env that only sets the host-facing var doesn't have it
+      # silently blanked here — though that fallback value is host-facing
+      # (kubeconfig-host.yaml points at 127.0.0.1, unreachable from inside
+      # this container), so it'll fail loudly on a real connection attempt
+      # rather than pointing at the right cluster; set API_K8S_KUBECONFIG_PATH
+      # explicitly (/app/.k3d/kubeconfig-internal.yaml) for that to work.
+      K8S_KUBECONFIG_PATH: ${API_K8S_KUBECONFIG_PATH:-${K8S_KUBECONFIG_PATH-}}
+      # Where agent pods push telemetry. The code default targets the in-cluster
+      # Service, which only resolves when the API itself runs in k8s; here it runs
+      # in Docker, so pods must come back through the host. Same value as the
+      # host-run path in the Makefile — see README "Runtime telemetry".
+      INGEST_BASE_URL: ${INGEST_BASE_URL:-http://host.docker.internal:${INGEST_PORT:-8001}/ingest/v1}
+      # The API mints per-agent LiteLLM keys over the compose network. .env's
+      # LITELLM_BASE_URL is host-facing (127.0.0.1) and env_file would pull it in
+      # verbatim, where it resolves to this container instead of the proxy.
+      LITELLM_BASE_URL: ${API_LITELLM_BASE_URL:-http://litellm:4000}
+    extra_hosts:
+      # Reach the host-published k8s API from inside the container. No-op on
+      # Docker Desktop; required on Linux/CI where host.docker.internal is unset.
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./api:/app/api
+      # k3d writes kubeconfigs here. Directory mount is safe when absent (Docker
+      # creates an empty, gitignored dir) — avoids the missing-file-becomes-a-dir
+      # bind-mount trap.
+      - ./.k3d:/app/.k3d:ro
     ports:
       - "${API_PORT:?API_PORT is required}:8000"
-      - "8001:8001"
+      # Ingest, run by the api command above. Published on all interfaces so agent
+      # pods inside k3d can reach it through the host — on Linux
+      # host.docker.internal maps to the bridge gateway, not loopback. Every
+      # request needs the agent's INGEST_API_KEY as a bearer token.
+      - "${INGEST_PORT:-8001}:8001"
 
   worker:
     build:
@@ -113,7 +149,66 @@ services:
     ports:
       - "3000:3000"
 
+  # k3d runner — provides the k3d binary without requiring a host install.
+  # Docker socket is mounted so k3d can create k3s containers as host siblings.
+  # The repo root is mounted at /workspace so scripts and helm charts are accessible.
+  k3d-runner:
+    build:
+      context: .
+      dockerfile: docker/k3d/Dockerfile
+    profiles: ["k3d"]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - .:/workspace
+    working_dir: /workspace
+
+  # LiteLLM proxy + its Postgres — only started by ./run.sh (or `bash docker/k3d/k3d-up.sh`).
+  # Agents running inside k3d reach LiteLLM via host.docker.internal:7070.
+  litellm-db:
+    image: postgres:16
+    container_name: ${LITELLM_DB_CONTAINER_NAME:-aai_litellm_db}
+    profiles: ["k3d"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: litellm
+      POSTGRES_PASSWORD: litellm
+      POSTGRES_DB: litellm
+    volumes:
+      # postgres:16 declares VOLUME /var/lib/postgresql/data (PGDATA), not the
+      # parent — mounting the parent here left PGDATA an anonymous volume that
+      # `docker compose down -v`/`docker volume prune` drops silently, wiping
+      # every LiteLLM virtual key even though the named volume looked intact.
+      - aai_litellm_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U litellm -d litellm"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  litellm:
+    image: ghcr.io/berriai/litellm:main-v1.83.14-stable.patch.3
+    container_name: ${LITELLM_CONTAINER_NAME:-aai_litellm}
+    profiles: ["k3d"]
+    restart: unless-stopped
+    depends_on:
+      litellm-db:
+        condition: service_healthy
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      DATABASE_URL: postgresql://litellm:litellm@litellm-db:5432/litellm
+    ports:
+      # Bind all interfaces (not just loopback) so agent pods inside k3d can
+      # reach LiteLLM through the host on Linux, where host.docker.internal maps
+      # to the bridge gateway IP rather than 127.0.0.1. Safe for local dev on a
+      # personal machine: the proxy is gated by LITELLM_MASTER_KEY.
+      - "${LITELLM_PORT:-7070}:4000"
+    volumes:
+      - ./docker/litellm/config.yaml:/app/config.yaml:ro
+
 volumes:
   aai_db_postgres_data:
+  aai_litellm_db_data:
   aai_redis_data:
   aai_ui_node_modules:
