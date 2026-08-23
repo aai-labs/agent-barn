@@ -43,6 +43,18 @@ root = [".."]
 [tool.ruff]
 line-length = 120
 
+# These scripts are shipped into agent pods and executed by the *runtime
+# image's* Python, not by this package's own `requires-python` (3.14). Left
+# at the default, ruff infers target-version 3.14 for them too and both
+# lints and formats them for syntax those runtimes don't have — e.g. it will
+# reformat `except (A, B):` into the unparenthesized form that Python 3.14
+# alone accepts, which is a SyntaxError under the older interpreter the pod
+# actually runs (see openclaw-base/Dockerfile's `uv python install 3.12` and
+# hermes-base's bundled 3.13.5).
+[tool.ruff.per-file-target-version]
+"domains/agents/scripts/openclaw/**" = "py312"
+"domains/agents/scripts/hermes/**" = "py313"
+
 [tool.ruff.lint]
 # B008   - FastAPI dependency injection relies on function calls in default
 #          arguments (Query, Body, Injected, Depends, filter objects). This is
