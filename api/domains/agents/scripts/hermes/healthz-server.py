@@ -196,7 +196,7 @@ def _liveness_result() -> tuple[int, dict]:
     """Restart a gateway only when Hermes' automatic circuit breaker is open."""
     try:
         state = json.loads(GATEWAY_STATE_PATH.read_text(encoding="utf-8"))
-    except FileNotFoundError, OSError, json.JSONDecodeError:
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
         return 200, {"live": True}
 
     if not isinstance(state, dict):
