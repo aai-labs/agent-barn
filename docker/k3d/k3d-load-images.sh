@@ -109,6 +109,17 @@ build_image() {
   green "  built ${tag}"
 }
 
+# ── skip check ────────────────────────────────────────────────────────────────
+
+# Tags are pinned to the base image's VERSION file (asserted above), so a tag
+# already present in the node's containerd store is byte-for-byte what we'd
+# build again — safe to skip the (slow) build+import.
+image_loaded_in_cluster() {
+  local tag="$1"
+  docker exec "k3d-${CLUSTER}-server-0" ctr -n k8s.io images ls -q 2>/dev/null \
+    | grep -qF "${tag}"
+}
+
 # ── import into k3d ───────────────────────────────────────────────────────────
 
 import_image() {
@@ -123,19 +134,27 @@ import_image() {
 # ── main ──────────────────────────────────────────────────────────────────────
 
 if [[ "${TARGET}" == "all" || "${TARGET}" == "openclaw" ]]; then
-  build_image "openclaw-base" \
-    "openclaw-base/Dockerfile" \
-    "openclaw-base" \
-    "${OPENCLAW_IMAGE}"
-  import_image "${OPENCLAW_IMAGE}"
+  if image_loaded_in_cluster "${OPENCLAW_IMAGE}"; then
+    green "openclaw ${OPENCLAW_IMAGE} already in cluster '${CLUSTER}' — skipping"
+  else
+    build_image "openclaw-base" \
+      "openclaw-base/Dockerfile" \
+      "openclaw-base" \
+      "${OPENCLAW_IMAGE}"
+    import_image "${OPENCLAW_IMAGE}"
+  fi
 fi
 
 if [[ "${TARGET}" == "all" || "${TARGET}" == "hermes" ]]; then
-  build_image "hermes-base" \
-    "hermes-base/Dockerfile" \
-    "hermes-base" \
-    "${HERMES_IMAGE}"
-  import_image "${HERMES_IMAGE}"
+  if image_loaded_in_cluster "${HERMES_IMAGE}"; then
+    green "hermes ${HERMES_IMAGE} already in cluster '${CLUSTER}' — skipping"
+  else
+    build_image "hermes-base" \
+      "hermes-base/Dockerfile" \
+      "hermes-base" \
+      "${HERMES_IMAGE}"
+    import_image "${HERMES_IMAGE}"
+  fi
 fi
 
 # ── summary ───────────────────────────────────────────────────────────────────

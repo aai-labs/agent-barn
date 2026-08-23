@@ -16,6 +16,7 @@ API is served under `/api/v1`; frontend requests to `/api/*` are proxied to the 
 ## Features
 
 **Agents**
+
 - Hire agents on Slack or Microsoft Teams
 - Two runtimes: Hermes (Slack-only, lightweight) and OpenClaw (Slack + Teams)
 - Automatic Slack app creation via configuration tokens
@@ -25,15 +26,18 @@ API is served under `/api/v1`; frontend requests to `/api/*` are proxied to the 
 - Webhook support for agent events
 
 **Templates**
+
 - Versioned agent templates (soul, identity, user, tools, agents, boot, bootstrap, heartbeat files)
 - Pre-defined templates (general purpose, code reviewer, scrum master)
 - Template seeding on startup
 
 **Conversations & Tool Calls**
+
 - Conversation history per agent
 - Tool call tracking and audit log
 
 **Auth & Users**
+
 - Sign-up, login, logout
 - Access + refresh token flow (httpOnly cookie)
 - Password change and forgot/reset password
@@ -41,6 +45,7 @@ API is served under `/api/v1`; frontend requests to `/api/*` are proxied to the 
 - Organization management
 
 **Infrastructure**
+
 - Slack config token vault (encrypted, auto-renewed)
 - Kubernetes deployment via Helm + helmfile
 
@@ -65,165 +70,107 @@ API is served under `/api/v1`; frontend requests to `/api/*` are proxied to the 
 
 ## Prerequisites
 
-- Python `>=3.14` + [uv](https://github.com/astral-sh/uv)
-- Node.js `>=20` + [pnpm](https://pnpm.io/)
-- Docker (required for Postgres and Redis; sufficient on its own if you run everything via `make up` instead of the native `dev-*` targets)
+- Docker (required — everything below runs in containers, including the local
+  Kubernetes cluster used for agents)
+- `bash` (to run `run.sh`/`stop.sh`; see [Windows](#windows) if you're not on
+  macOS/Linux)
+- Python `>=3.14` + [uv](https://github.com/astral-sh/uv), Node.js `>=20` +
+  [pnpm](https://pnpm.io/) — only needed for the native `dev-*` targets, tests,
+  and lint; not required to run the app
 
-## Setup
+## Quick Start
 
 ```bash
-make setup
+cp .env.spec .env   # fill in the required values — see the table below
+./run.sh            # validates .env, starts everything, follows logs
 ```
 
-Installs API + UI dependencies and creates a local `.env` from `.env.spec` if one doesn't
-exist yet. Fill in the required values in `.env` before continuing (API reads env from
-repo root `.env`).
-
-## First-Time Run
+`./run.sh` brings up the k3d cluster + LiteLLM, loads the agent base images
+(skipping any already in the cluster), runs database migrations, and starts
+db/redis/api/worker/ui in Docker — all with hot reload on source changes. If
+any required `.env` value is missing it fails immediately and lists exactly
+what to fill in, rather than partway through or at agent-start.
 
 ```bash
-make db-up
-make migrate
+./run.sh --detach   # same, but don't follow logs
+./stop.sh           # stop containers; DB/redis data and the k3d cluster survive
+./stop.sh --clean   # also delete the k3d cluster (agent images reload next run);
+                     # volumes are never touched
 ```
 
-## Running Locally
+`make run`, `make stop`, and `make stop-clean` are thin wrappers around the
+same scripts.
 
-Both paths below hot-reload on source changes. Pick native if you already have
-`uv`/`pnpm` set up and want faster iteration; pick Docker if you'd rather not run
-anything on the host beyond Docker itself.
+Once it's up, log in at `http://localhost:3000` with `PLATFORM_ADMIN_CREDENTIALS`
+from `.env`, then create an organization — agents are org-scoped and a fresh
+database has none.
 
-Native — each command watches its own source; run the ones you need in separate
-terminals alongside `make db-up` (and `make redis-up` if you need the worker):
+### Required `.env` values
 
-```bash
-make dev-api      # API on :8000, hot reload
-make dev-ui       # UI on :3000, hot reload
-make dev-worker   # Dramatiq worker, hot reload (needs Redis: make redis-up)
-```
+| Variable                                                             | Notes                                                                                                                                                          |
+| -------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `POSTGRES_PORT` |                                                                                                                                                                |
+| `SECRET_SIGNING_KEY`                                                 | any random string                                                                                                                                              |
+| `PLATFORM_ADMIN_CREDENTIALS`                                         | `email:password` — password needs 8+ chars, upper, lower, digit                                                                                                |
+| `ENVIRONMENT`, `UI_APP_URL`, `API_PORT`                              | defaults in `.env.spec` are fine locally                                                                                                                       |
+| `AGENT_TOKEN_ENCRYPTION_KEY`                                         | Fernet key: `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`                                                        |
+| `OPENROUTER_API_KEY`                                                 | passed to LiteLLM; also used for the model picker                                                                                                              |
+| `LITELLM_MASTER_KEY`                                                 | **stable** admin key, e.g. `sk-$(openssl rand -hex 16)` — LiteLLM encrypts stored keys with it, so changing it later breaks agents created under the old value |
+| `OPENCLAW_IMAGE`, `HERMES_IMAGE`                                     | full `name:tag`; the tag must equal the matching `openclaw-base/VERSION` / `hermes-base/VERSION`                                                               |
+| `GH_TOKEN`                                                           | GitHub PAT with read access to [`aai-labs/agent-cli-tools`](https://github.com/aai-labs/agent-cli-tools) — the base-image build clones it                      |
 
-Fully dockerized (db + redis + api + worker + ui), source bind-mounted into the
-containers so api/worker/ui all hot-reload the same way. `up`/`restart` run in the
-foreground — leave the terminal open, `Ctrl+C` (or `make down` from another
-terminal) to stop:
+`run.sh` sets `API_K8S_KUBECONFIG_PATH` in `.env` for you once the cluster is up
+— no manual kubeconfig wiring needed.
 
-```bash
-make up         # start all (foreground)
-make down       # stop all
-make restart    # recreate and restart (foreground)
-make logs       # tail all logs
-make clean      # stop and remove volumes
-```
+## Native (non-Docker) development
 
-Database only:
-
-```bash
-make db-up
-make db-down
-make db-logs
-make db-restart
-```
-
-Redis + background worker only (needed alongside `make dev-api` to actually
-process Domain Events locally; `make up` starts these automatically):
+For faster iteration than rebuilding containers, run components directly on
+the host instead of through `run.sh`. Each command watches its own source; run
+the ones you need in separate terminals alongside `make db-up` (and
+`make redis-up` if you need the worker):
 
 ```bash
-make redis-up      # start Redis
-make dev-worker    # run the Dramatiq worker (non-docker)
+make setup        # one-time: uv sync + pnpm install
+make db-up         # Postgres only
+make migrate       # apply migrations
+make dev-api       # API on :8000, hot reload (also starts the ingest sink)
+make dev-ui        # UI on :3000, hot reload
+make redis-up      # Redis, needed by the worker
+make dev-worker    # Dramatiq worker, hot reload
 make reconcile     # one-shot repair pass for stuck/unpublished deliveries
-make redis-down
+```
+
+`make db-down` / `make redis-down` stop them; `make db-logs` / `db-restart`
+manage Postgres. This path uses the host ports (`3000`, `8000`, `8001`), so
+don't run it alongside `./run.sh`'s containers at the same time.
+
+Starting agents still needs a running k3d cluster + loaded images even in
+native mode — see [Local Kubernetes (k3d) dev environment](#local-kubernetes-k3d-dev-environment)
+below; `bash docker/k3d/k3d-up.sh` and `bash docker/k3d/k3d-load-images.sh`
+manage the cluster on their own, independent of `run.sh`/`stop.sh`. Point the
+host API at it with:
+
+```bash
+export KUBECONFIG=.k3d/kubeconfig-host.yaml
+export K8S_KUBECONFIG_PATH=.k3d/kubeconfig-host.yaml
 ```
 
 See [docs/features/domain-events.md](./docs/features/domain-events.md) for how Domain Event delivery works.
 
 ## Local Kubernetes (k3d) dev environment
 
-Agents run as Kubernetes resources, so working on that path locally needs a
-cluster. We use [k3d](https://k3d.io) (k3s in Docker): the cluster runs from a
-helper container, so no host `k3d` or `helm` install is needed — only Docker and
-`kubectl` (`cluster-up` uses host `kubectl` to seed the namespace/secret and, on
+Agents run as Kubernetes resources, so `./run.sh` needs a cluster and brings
+one up automatically. We use [k3d](https://k3d.io) (k3s in Docker): the
+cluster runs from a helper container, so no host `k3d` or `helm` install is
+needed — only Docker and `kubectl` (used to seed the namespace/secret and, on
 a native Linux docker engine, to add a CoreDNS host alias). It's
 [supported in GitHub Actions](https://github.com/AbsaOSS/k3d-action), so the same
 setup backs CI (see the `test-k8s` job in `.github/workflows/api.yml`).
 
-### What to add to `.env` first
-
-`make setup` seeds `.env` from `.env.spec`, which covers the app but **not** this
-k3d flow. Add these before starting, or the cluster and agent steps fail:
-
-| Variable | Needed by | Notes |
-| --- | --- | --- |
-| `OPENROUTER_API_KEY` | `cluster-up` | passed to LiteLLM; also used for the model picker |
-| `LITELLM_MASTER_KEY` | `cluster-up` | **stable** admin key, e.g. `sk-$(openssl rand -hex 16)` |
-| `AGENT_TOKEN_ENCRYPTION_KEY` | creating agents | Fernet key; agent creation fails without it |
-| `OPENCLAW_IMAGE`, `HERMES_IMAGE` | `k3d-load-images` | full `name:tag`, tag must equal the matching `*-base/VERSION` |
-| `GH_TOKEN` | `k3d-load-images` | PAT with read access to `aai-labs/agent-cli-tools` |
-| `API_K8S_KUBECONFIG_PATH` | `make up` only | `/app/.k3d/kubeconfig-internal.yaml` (see step 2) |
-
-`LITELLM_MASTER_KEY` is worth setting once and leaving alone: LiteLLM encrypts the
-virtual keys it stores in Postgres with it, so changing it between runs breaks
-agents created under the old key.
-
-`cluster-up` also needs every variable the compose file marks as required, even
-though it only starts LiteLLM and the k3d runner: Compose interpolates the whole
-file before it looks at `--profile`, so a missing one aborts the command with
-`error while interpolating ... required variable X is missing a value` and nothing
-starts. `make setup` seeds them all from `.env.spec` — the list matters only if
-you assembled `.env` by hand or carried one over from an older checkout:
-
-```text
-API_PORT   ENVIRONMENT   PLATFORM_ADMIN_CREDENTIALS   SECRET_SIGNING_KEY
-UI_APP_URL   POSTGRES_USER   POSTGRES_PASSWORD   POSTGRES_DB   POSTGRES_PORT
-```
-
-`PLATFORM_ADMIN_CREDENTIALS` is `email:password`, and the password must pass the
-API's own policy — at least 8 characters with an uppercase letter, a lowercase
-letter and a digit. A weaker value lets `cluster-up` through but fails API
-startup; see Common pitfalls below.
-
-Optional overrides, all with working defaults: `API_LITELLM_BASE_URL` (how the
-API in Docker reaches LiteLLM, defaults to the compose service — `.env`'s
-`LITELLM_BASE_URL` is host-facing and would resolve to the container itself),
-`INGEST_PORT` / `INGEST_BASE_URL`, and `API_DEV_PORT` (lets a second worktree run
-its own stack without port clashes).
-
-### 1. Start the cluster
-
-```bash
-make cluster-up      # start LiteLLM + a k3d cluster; write kubeconfigs to .k3d/
-make cluster-down    # stop the cluster and LiteLLM (nothing is lost)
-make cluster-delete  # destroy the cluster
-make cluster-reset   # cluster-delete + cluster-up
-```
-
-`cluster-down` **stops**, matching `db-down`/`redis-down` — imported base images,
-the namespace and any running agents survive, and `cluster-up` brings it back in
-seconds. `cluster-delete` throws all of that away, so you'll need to re-run
-`make k3d-load-images` afterwards; reach for it when a stopped cluster comes back
-unhealthy.
-
-The cluster name and its two host ports default to a single shared environment.
-Override them — as environment variables, not in `.env` — when you want a second
-cluster alongside the first, e.g. one per worktree. Pass the same values to every
-`cluster-*` and `k3d-load-images` command that should act on that cluster:
-
-| Variable | Default | What it names |
-| --- | --- | --- |
-| `K3D_CLUSTER` | `agentfarm-dev` | the k3d cluster |
-| `K3D_API_PORT` | `16443` | host port for the k8s API |
-| `LITELLM_PORT` | `7070` | host port for the LiteLLM proxy |
-| `LITELLM_CONTAINER_NAME`, `LITELLM_DB_CONTAINER_NAME` | `aai_litellm`, `aai_litellm_db` | the LiteLLM containers |
-
-```bash
-K3D_CLUSTER=agentfarm-mytask K3D_API_PORT=16444 LITELLM_PORT=7071 \
-  LITELLM_CONTAINER_NAME=aai_litellm_mytask \
-  LITELLM_DB_CONTAINER_NAME=aai_litellm_db_mytask \
-  make cluster-up
-```
-
-Without an override, `cluster-up` **adopts an existing cluster of the default
-name** rather than creating a new one — it starts it if stopped and re-applies the
-namespace and `litellm` secret into it. That's what you want for one shared
-environment and not what you want in a second worktree.
+`./run.sh` drives this via `docker/k3d/k3d-up.sh` (cluster + LiteLLM) and
+`docker/k3d/k3d-load-images.sh` (agent base images) — both idempotent and safe
+to re-run directly if you need to manage the cluster independent of the app
+stack (e.g. the native dev workflow above).
 
 It writes two kubeconfigs into `.k3d/` (gitignored) — the same cluster, reached
 differently depending on where the client runs:
@@ -231,69 +178,24 @@ differently depending on where the client runs:
 - `.k3d/kubeconfig-host.yaml` — server on `127.0.0.1`, for host tools
   (`kubectl`, `helm`, `make dev-api`).
 - `.k3d/kubeconfig-internal.yaml` — server on `host.docker.internal`, for the
-  API running **inside** Docker.
-
-### 2. Point the API at the cluster
-
-Pick the block that matches how you run the API.
-
-**API on the host** (`make dev-api`):
-
-```bash
-export KUBECONFIG=.k3d/kubeconfig-host.yaml
-export K8S_KUBECONFIG_PATH=.k3d/kubeconfig-host.yaml
-make dev-api      # starts the API and the ingest sink together
-```
-
-**API in Docker** (`make up`): add this one line to `.env` (one-time — the path
-is always the same), then `make up`:
-
-```dotenv
-API_K8S_KUBECONFIG_PATH=/app/.k3d/kubeconfig-internal.yaml
-```
-
-Without this line the containerized API can't reach the cluster, so leave it out
-if you're not using k3d.
-
-Ports: LiteLLM proxy on `127.0.0.1:7070`, k8s API on `127.0.0.1:16443`, ingest
-API on `127.0.0.1:8001`.
+  API running **inside** Docker (`run.sh` points `API_K8S_KUBECONFIG_PATH` at
+  this automatically).
 
 Agent pods inside k3d reach LiteLLM at `http://host.docker.internal:7070` — set
-`AGENT_LITELLM_BASE_URL` to that in `.env`. On Docker Desktop that name resolves
-inside pods automatically; on a native Linux docker engine `cluster-up` adds a
-CoreDNS entry (via the `coredns-custom` config map) mapping it to the cluster
-network gateway, so it resolves there too — no manual setup on either platform.
+`AGENT_LITELLM_BASE_URL` to that in `.env` if you override the default port. On
+Docker Desktop that name resolves inside pods automatically; on a native Linux
+docker engine, `k3d-up.sh` adds a CoreDNS entry (via the `coredns-custom`
+config map) mapping it to the cluster network gateway, so it resolves there
+too — no manual setup on either platform.
 
-### 3. Load the agent base images (only needed to run agents)
-
-`cluster-up` brings up the cluster but does **not** build or import the
-OpenClaw/Hermes base images. Do that separately when you actually want to launch
-agents (the cluster must already be running):
-
-```bash
-make k3d-load-images                   # build + import both
-TARGET=openclaw make k3d-load-images   # just OpenClaw
-TARGET=hermes   make k3d-load-images   # just Hermes
-```
-
-This builds each base image from source, tags it with the corresponding env var,
-and imports it into the k3d cluster. Agent pods run with
-`imagePullPolicy=IfNotPresent`, so they use the imported image and never hit a
-registry. It needs, in `.env`:
-
-- `GH_TOKEN` — a GitHub PAT with **read access to
-  [`aai-labs/agent-cli-tools`](https://github.com/aai-labs/agent-cli-tools)**;
-  the base-image build clones that repo.
-- `OPENCLAW_IMAGE`, `HERMES_IMAGE` — the fully-qualified image name+tag the agent
-  pods request.
-
-**Keep the image tags in sync with the `VERSION` files.** The tag in
-`OPENCLAW_IMAGE` must match `openclaw-base/VERSION`, and `HERMES_IMAGE` must match
-`hermes-base/VERSION` (e.g. if `openclaw-base/VERSION` is `0.3.0`, then
-`OPENCLAW_IMAGE` must end in `:0.3.0`). CI publishes each base image under exactly
-its `VERSION` tag, and the API launches pods using these env-var refs — so if a
-tag doesn't match its `VERSION`, you'll build, import, or pull an image that isn't
-the version the code expects.
+**Keep `OPENCLAW_IMAGE`/`HERMES_IMAGE` tags in sync with the `VERSION` files.**
+The tag in `OPENCLAW_IMAGE` must match `openclaw-base/VERSION`, and
+`HERMES_IMAGE` must match `hermes-base/VERSION` (e.g. if `openclaw-base/VERSION`
+is `0.3.0`, then `OPENCLAW_IMAGE` must end in `:0.3.0`). CI publishes each base
+image under exactly its `VERSION` tag, and the API launches pods using these
+env-var refs — a mismatched tag means running an image that isn't the version
+the code expects. `k3d-load-images.sh` refuses to run otherwise, and skips the
+build entirely for an image tag it can already see in the cluster.
 
 If a base-image build crawls or times out fetching Debian packages, the default
 archive CDN has likely handed you a degraded edge (seen at ~30KB/s, stalling the
@@ -301,42 +203,46 @@ build for over an hour). Point the build at another full mirror — it must carr
 both `/debian` and `/debian-security`:
 
 ```bash
-APT_MIRROR=mirror.csclub.uwaterloo.ca make k3d-load-images
+APT_MIRROR=mirror.csclub.uwaterloo.ca bash docker/k3d/k3d-load-images.sh
 ```
 
-### 4. Create an organization
+### Multiple clusters (e.g. one per worktree)
 
-A fresh database has a platform admin but **no organization**, and agents live
-under one — so agent creation fails until an org exists. Create it in the UI on
-first login, or via the API:
+The cluster name and its two host ports default to a single shared environment.
+Override them as environment variables (not in `.env`) to run a second cluster
+alongside the first:
+
+| Variable                                              | Default                         | What it names                   |
+| ----------------------------------------------------- | ------------------------------- | ------------------------------- |
+| `K3D_CLUSTER`                                         | `agentfarm-dev`                 | the k3d cluster                 |
+| `K3D_API_PORT`                                        | `16443`                         | host port for the k8s API       |
+| `LITELLM_PORT`                                        | `7070`                          | host port for the LiteLLM proxy |
+| `LITELLM_CONTAINER_NAME`, `LITELLM_DB_CONTAINER_NAME` | `aai_litellm`, `aai_litellm_db` | the LiteLLM containers          |
 
 ```bash
-curl -X POST http://localhost:8000/api/v1/organizations \
-  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"name":"Local Dev"}'
+K3D_CLUSTER=agentfarm-mytask K3D_API_PORT=16444 LITELLM_PORT=7071 \
+  LITELLM_CONTAINER_NAME=aai_litellm_mytask \
+  LITELLM_DB_CONTAINER_NAME=aai_litellm_db_mytask \
+  ./run.sh
 ```
 
-Agent routes are org-scoped from there:
-`/api/v1/organizations/{organization_id}/agents`.
+Without an override, this **adopts an existing cluster of the default name**
+rather than creating a new one — it starts it if stopped and re-applies the
+namespace and `litellm` secret into it. That's what you want for one shared
+environment and not what you want in a second worktree.
 
-### 5. Runtime telemetry (conversations and tool calls)
+### Runtime telemetry (conversations and tool calls)
 
 Agents don't store their history in the pod — runtime plugins push events to the
 ingest API, and the UI reads what was persisted. If that path is broken, agents
 run but their activity stays empty.
 
 Ingest listens on port `8001`, separate from the main API on `8000`. Pods reach
-it through the host, using the same `host.docker.internal` hop as LiteLLM:
-
-- **API in Docker** (`make up`) — `api/start.sh` runs ingest inside the
-  container, and compose publishes `8001`. Nothing to do.
-- **API on the host** (`make dev-api`) — starts ingest alongside the main app,
-  the same pairing as the container. `make dev-ingest` runs it on its own.
-
-Both paths hand pods `INGEST_BASE_URL=http://host.docker.internal:8001/ingest/v1`
-by default, overriding the in-cluster Service address that only applies when the
-API itself runs in k8s. Override `INGEST_BASE_URL` (or `INGEST_PORT`) if you need
-a different address; no `.env` entry is required for the default setup.
+it through the host via `host.docker.internal`, same as LiteLLM.
+`INGEST_BASE_URL=http://host.docker.internal:8001/ingest/v1` is the default for
+both `run.sh` and `make dev-api`, overriding the in-cluster Service address
+that only applies when the API itself runs in k8s. Override `INGEST_BASE_URL`
+(or `INGEST_PORT`) if you need a different address.
 
 Troubleshooting — agents start but show no conversation or tool calls:
 
@@ -349,52 +255,43 @@ kubectl run ingest-check --rm -it --restart=Never --image=curlimages/curl -- \
 
 `200` means the hop works, and the event endpoint behind it authenticates each
 pod with its own `INGEST_API_KEY`. A connection error means the hop is broken:
-with the API on the host, check `make dev-ingest` is running; on native Linux
-also check the host firewall allows the k3d bridge network to reach port 8001.
+in native mode, check `make dev-ingest` is running; on native Linux also check
+the host firewall allows the k3d bridge network to reach port 8001.
 
 ### Common pitfalls
 
 Symptoms you're likely to hit once, with the actual cause.
 
-**`make cluster-up` aborts with `required variable X is missing a value`, nothing
-starts.** Compose interpolates the entire file before applying `--profile`, so the
-k3d services can't start until every `${VAR:?}` in the file resolves — including
-app-only ones. See the variable list under "What to add to `.env` first".
-
 **API exits at startup with `500: Error while initializing startup data`.** Scroll
 up in the log for the real error. The usual cause is the password in
 `PLATFORM_ADMIN_CREDENTIALS` failing the API's own policy (≥8 characters, upper,
-lower, digit) while bootstrapping the platform admin. Older `.env` files carried a
-non-compliant default.
+lower, digit) while bootstrapping the platform admin.
 
 **The containerized API can't reach the cluster:
 `x509: certificate is valid for 127.0.0.1, ... not host.docker.internal`.**
 `kubeconfig-internal.yaml` dials the API server by that hostname and verifies the
-certificate, so the name has to be in the cert's SAN list. `cluster-up` passes
-`--tls-san=host.docker.internal`, but a cluster **created before that flag existed**
-still has the old certificate — `make cluster-delete && make cluster-up` (then
-re-run `make k3d-load-images`) reissues it. Host-mode (`make dev-api`) is immune
-because it connects to `127.0.0.1`.
+certificate, so the name has to be in the cert's SAN list. A cluster **created
+before this was fixed** may carry the old certificate — `./stop.sh --clean`
+then `./run.sh` reissues it. Host-mode (`make dev-api`) is immune because it
+connects to `127.0.0.1`.
 
 **Starting an agent fails with `Invalid kube-config file. No configuration found.`**
-The configured kubeconfig path doesn't exist. The message names neither the path
-nor the variable, and the check is lazy — the API boots clean and only fails when
-something first touches the cluster, so this looks like an agent bug rather than a
-config one. Verify the path resolves *inside* the container:
+The configured kubeconfig path doesn't resolve to a real file — either
+`API_K8S_KUBECONFIG_PATH`/`K8S_KUBECONFIG_PATH` is unset, or it's a relative
+path resolved against the wrong working directory. `run.sh` sets
+`API_K8S_KUBECONFIG_PATH` for you; in native mode, `K8S_KUBECONFIG_PATH` must
+be relative to `api/` (the directory `make dev-api` runs from) or absolute.
+Verify inside the container:
 
 ```bash
 docker exec aai_api ls -l "$(grep '^API_K8S_KUBECONFIG_PATH=' .env | cut -d= -f2-)"
 ```
 
 It must be `/app/.k3d/kubeconfig-internal.yaml` — `compose.yml` mounts `./.k3d`
-read-only at `/app/.k3d`, and that is the only filename `cluster-up` writes there
-for in-container use. An older `.env` pointing at `/app/.k3d/kubeconfig.yaml`
-resolves to nothing. A path that is a directory instead surfaces as a raw
-`IsADirectoryError`. On the host the equivalent variable is `K8S_KUBECONFIG_PATH`,
-pointing at `.k3d/kubeconfig-host.yaml`.
+read-only at `/app/.k3d`.
 
 **Agent pod stuck in `ErrImagePull` / `ImagePullBackOff`.** The base image for that
-tag isn't in *that* cluster. Pods run `imagePullPolicy=IfNotPresent` against a
+tag isn't in _that_ cluster. Pods run `imagePullPolicy=IfNotPresent` against a
 private registry, so an image that was never imported cannot be pulled. Compare
 what's in the cluster against what the API asks for:
 
@@ -403,9 +300,9 @@ docker exec k3d-${K3D_CLUSTER:-agentfarm-dev}-server-0 crictl images | grep -E '
 grep -E '^(OPENCLAW|HERMES)_IMAGE=' .env
 ```
 
-Fix by running `make k3d-load-images` with the same `K3D_CLUSTER` as the cluster.
-A related trap: the tag must equal the matching `*-base/VERSION`;
-`k3d-load-images` now refuses to run otherwise.
+Fix by running `./run.sh` again (it reloads any image missing from the
+cluster), or `bash docker/k3d/k3d-load-images.sh` directly with the same
+`K3D_CLUSTER` as the cluster.
 
 **Warning `FailedToRetrieveImagePullSecret (registry-pull-secret)` repeating on a
 pod.** Expected locally and harmless on its own — the local flow imports images
@@ -424,33 +321,18 @@ Both paths go through the host, so a loopback address in `.env` resolves to the 
 itself. `AGENT_LITELLM_BASE_URL` must be `http://host.docker.internal:<litellm
 port>` — it is handed to the pod as `LITELLM_PROXY_TARGET` and used by the in-pod
 proxy on `:8090` that the runtime actually talks to. For empty activity, check
-ingest is running and reachable (step 5).
-
-**`VAR=x make cluster-up` seems to ignore `VAR`.** Known gap, no error is printed.
-The `cluster-*` and `k3d-load-images` scripts `source .env` after they start, which
-unconditionally overwrites anything already in the environment that `.env` also
-defines. The rule in practice:
-
-- Works on the command line: `K3D_CLUSTER`, `K3D_API_PORT`, `LITELLM_PORT`,
-  `LITELLM_CONTAINER_NAME`, `LITELLM_DB_CONTAINER_NAME`, `APT_MIRROR`, `TARGET` —
-  none of them appear in `.env`.
-- Ignored on the command line: anything `.env` sets, notably `OPENCLAW_IMAGE`,
-  `HERMES_IMAGE`, `GH_TOKEN`, `INGEST_PORT`, `AGENT_LITELLM_BASE_URL`. Edit `.env`
-  for those.
+ingest is reachable (see Runtime telemetry above).
 
 ### Windows
 
-The k3d flow needs **`bash` and `make`** — the `make cluster-*` and
-`make k3d-load-images` targets shell out to `bash docker/k3d/*.sh`, so installing
-GNU Make alone (without a Unix shell) isn't enough. Two supported ways:
+The k3d flow needs **`bash`** — `run.sh`/`stop.sh` and the underlying
+`docker/k3d/*.sh` scripts are shell scripts. Two supported ways:
 
 - **WSL2 (recommended)** — Docker Desktop already uses the WSL2 backend, so
-  `make cluster-up` and the whole bash flow work unchanged, and that's the path
-  CI exercises. Docker Desktop publishes the container ports to `localhost`
-  inside both Windows and your WSL2 distro, so no manual port forwarding is
-  needed.
-- **`bash` on `PATH`** — e.g. Git Bash or MSYS2 installed alongside `make`; run
-  the `make` targets from that shell.
+  `./run.sh` works unchanged, and that's the path CI exercises. Docker Desktop
+  publishes container ports to `localhost` inside both Windows and your WSL2
+  distro, so no manual port forwarding is needed.
+- **`bash` on `PATH`** — e.g. Git Bash or MSYS2; run `./run.sh` from that shell.
 
 Requires Docker Desktop in Linux-container mode (the default).
 

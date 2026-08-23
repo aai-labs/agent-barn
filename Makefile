@@ -1,10 +1,24 @@
 COMPOSE := docker compose -f compose.yml
 
 .PHONY: \
-	setup \
+	setup run stop stop-clean \
 	dev-api dev-ingest dev-ui dev-worker reconcile seed-event-deliveries migrate merge-heads rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring fix-api test check fix \
-	up down restart logs build clean db-up db-down db-logs db-restart redis-up redis-down redis-logs worker-logs \
-	cluster-up cluster-down cluster-delete cluster-reset k3d-load-images k3d-load-openclaw k3d-load-hermes
+	db-up db-down db-logs db-restart redis-up redis-down redis-logs
+
+# One-command local dev: validates .env, brings up k3d + LiteLLM, loads agent
+# images (skipping any already in the cluster), migrates, starts the app
+# stack in Docker with hot reload, and follows logs. See run.sh for details.
+run:
+	@./run.sh
+
+# Stops containers; DB/redis data and the k3d cluster survive.
+stop:
+	@./stop.sh
+
+# Stops containers and deletes the k3d cluster (images will need reloading on
+# the next `make run`). Volumes are never touched.
+stop-clean:
+	@./stop.sh --clean
 
 # One-time project bootstrap: installs deps for api + ui and creates a local
 # .env from the tracked template if one doesn't already exist.
@@ -12,7 +26,7 @@ setup:
 	cd api && uv sync
 	cd ui && pnpm install
 	@test -f .env || cp .env.spec .env
-	@echo "Setup complete. Fill in .env, then run: make db-up && make migrate && make up"
+	@echo "Setup complete. Fill in .env, then run: ./run.sh"
 
 # Non-docker commands
 
@@ -119,25 +133,10 @@ fix-api:
 	cd api && uv run ruff check --fix && uv run ruff format .
 
 # Docker commands
-
-up:
-	$(COMPOSE) up --build
-
-down:
-	$(COMPOSE) down
-
-restart:
-	$(COMPOSE) down
-	$(COMPOSE) up --build
-
-logs:
-	$(COMPOSE) logs -f
-
-build:
-	$(COMPOSE) build
-
-clean:
-	$(COMPOSE) down -v --remove-orphans
+#
+# The full app stack (db/redis/api/worker/ui + k3d cluster) is run via
+# ./run.sh and ./stop.sh at the repo root, not make targets — see README.
+# The db/redis-only targets below remain for the native dev-* workflow.
 
 db-up:
 	$(COMPOSE) up -d db
@@ -159,46 +158,3 @@ redis-down:
 
 redis-logs:
 	$(COMPOSE) logs -f redis
-
-worker-logs:
-	$(COMPOSE) logs -f worker
-
-# k3d dev environment — k3s cluster + LiteLLM + litellm-db in Docker.
-# Requires: Docker running. No host k3d or helm install needed.
-# kubeconfigs are written to ./.k3d/ (host + in-container variants).
-# Ports: LiteLLM → 127.0.0.1:7070 | k8s API → 127.0.0.1:16443
-# K3D_CLUSTER/K3D_API_PORT/LITELLM_PORT override the cluster name and host ports
-# so a second worktree can run its own cluster side by side.
-K3D_CLUSTER ?= agentfarm-dev
-
-cluster-up:
-	@bash docker/k3d/k3d-up.sh
-
-# Stops the cluster, matching what -down means everywhere else here (db-down and
-# redis-down stop rather than destroy). Imported base images, the namespace and
-# any running agents survive, and cluster-up brings it back in seconds.
-cluster-down:
-	$(COMPOSE) --profile k3d run --rm k3d-runner k3d cluster stop $(K3D_CLUSTER)
-	$(COMPOSE) --profile k3d stop litellm litellm-db
-
-# Destroys the cluster: imported images and every workload in it are lost, and
-# the next cluster-up rebuilds from scratch (re-run k3d-load-images afterwards).
-# Reach for this when a stopped cluster comes back unhealthy.
-cluster-delete:
-	$(COMPOSE) --profile k3d run --rm k3d-runner k3d cluster delete $(K3D_CLUSTER)
-	$(COMPOSE) --profile k3d stop litellm litellm-db
-
-cluster-reset: cluster-delete cluster-up
-
-# Build both agent base images locally and import them into the k3d cluster.
-# Requires GH_TOKEN in env (GitHub PAT with repo read access).
-# OPENCLAW_IMAGE and HERMES_IMAGE are read from the environment (your .env).
-
-k3d-load-images:
-	@bash docker/k3d/k3d-load-images.sh
-
-k3d-load-openclaw:
-	@TARGET=openclaw bash docker/k3d/k3d-load-images.sh
-
-k3d-load-hermes:
-	@TARGET=hermes bash docker/k3d/k3d-load-images.sh

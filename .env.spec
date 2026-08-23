@@ -3,6 +3,12 @@ POSTGRES_PASSWORD=your_postgres_password
 POSTGRES_DB=your_database_name
 POSTGRES_PORT=5432
 
+# Required by host-run tools — `make migrate`, `make dev-api`, `make dev-worker`
+# — which read this directly; the config has no default and doesn't assemble
+# it from POSTGRES_* (api/core/config.py: db_connection_url). `./run.sh` doesn't
+# need this set correctly: compose overrides it to the in-network `db` hostname.
+DB_CONNECTION_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:${POSTGRES_PORT}/${POSTGRES_DB}
+
 API_PORT=8000
 ENVIRONMENT=local
 UI_APP_URL=http://localhost:3000

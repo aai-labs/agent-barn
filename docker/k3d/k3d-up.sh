@@ -173,16 +173,25 @@ fi
 
 # ── summary ───────────────────────────────────────────────────────────────────
 
+# Prints a boxed row padded to the border width, measuring visible width only
+# (ANSI color/bold codes are stripped before computing the pad) so port numbers
+# of any length and bold spans still land the right border flush.
+box_line() {
+  local text="$1" visible pad
+  visible="$(printf '%s' "$text" | sed -E 's/\x1b\[[0-9;]*m//g')"
+  pad=$((52 - ${#visible}))
+  (( pad < 0 )) && pad=0
+  printf "\033[32m|\033[0m  %s%*s\033[32m|\033[0m\n" "$text" "$pad" ""
+}
+
 printf '\n'
-green "╔══════════════════════════════════════════════════════╗"
-green "║  k3d dev environment ready                           ║"
-green "╠══════════════════════════════════════════════════════╣"
-printf "\033[32m║\033[0m  LiteLLM   → \033[1mhttp://127.0.0.1:%s\033[0m%s\033[32m║\033[0m\n" \
-  "${LITELLM_HOST_PORT}" "$(printf '%*s' $((23 - ${#LITELLM_HOST_PORT})) '')"
-printf "\033[32m║\033[0m  k8s API   → \033[1mhttps://127.0.0.1:%s\033[0m%s\033[32m║\033[0m\n" \
-  "${K8S_API_PORT}" "$(printf '%*s' $((23 - ${#K8S_API_PORT})) '')"
-printf "\033[32m║\033[0m  kubeconfig → .k3d/kubeconfig-host.yaml               \033[32m║\033[0m\n"
-green "╚══════════════════════════════════════════════════════╝"
+green "+------------------------------------------------------+"
+box_line "k3d dev environment ready"
+green "+------------------------------------------------------+"
+box_line "LiteLLM   -> $(printf '\033[1mhttp://127.0.0.1:%s\033[0m' "${LITELLM_HOST_PORT}")"
+box_line "k8s API   -> $(printf '\033[1mhttps://127.0.0.1:%s\033[0m' "${K8S_API_PORT}")"
+box_line "kubeconfig -> .k3d/kubeconfig-host.yaml"
+green "+------------------------------------------------------+"
 printf '\n'
 printf "  export KUBECONFIG=%s\n" "${KUBECONFIG_HOST}"
 printf "  kubectl get pods -A\n\n"
@@ -193,4 +202,4 @@ printf "  http://host.docker.internal:%s\n\n" "${LITELLM_HOST_PORT}"
 printf "  Agents push telemetry back to the ingest API via:\n"
 printf "  http://host.docker.internal:%s/ingest/v1\n" "${INGEST_HOST_PORT}"
 printf "    make up         → served by the api container (port published)\n"
-printf "    make dev-api    → also run 'make dev-ingest' in a second shell\n\n"
+printf "    make dev-api    → starts ingest alongside the main app automatically\n\n"
