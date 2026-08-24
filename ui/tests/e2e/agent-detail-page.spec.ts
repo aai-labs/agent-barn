@@ -577,7 +577,8 @@ test.describe("Agent Detail Page — Channels tab", () => {
 
   test("lists Connection identity and health independently of the Agent runtime", async ({ page }) => {
     await expect(page.getByText("Customer Discord", { exact: true })).toBeVisible();
-    await expect(page.getByText(/discord · validation-skipped · CONNECTED/)).toBeVisible();
+    await expect(page.getByText(/Connected as validation-skipped/)).toBeVisible();
+    await expect(page.getByText("Connected", { exact: true })).toBeVisible();
   });
 
   test("edits Connection name and plugin settings without resending credentials", async ({ page }) => {
@@ -595,16 +596,14 @@ test.describe("Agent Detail Page — Channels tab", () => {
 
   test("creates another same-platform Connection from the plugin schema", async ({ page }) => {
     await page.getByRole("button", { name: "Add connection" }).click();
-    await page.getByRole("combobox").click();
-    await page.getByRole("option", { name: "Discord" }).click();
-    await page.getByLabel("Connection name").fill("Partner Discord");
+    await page.getByText("Discord", { exact: true }).click();
     await page.getByLabel("Guild IDs").fill("guild-two");
     await page.getByLabel("Bot token").fill("token-two");
     const create = page.waitForRequest((request) => request.method() === "POST" && request.url().endsWith("/connections"));
     await page.getByRole("button", { name: "Create connection" }).click();
     expect((await create).postDataJSON()).toEqual({
       platform_key: "discord",
-      display_name: "Partner Discord",
+      display_name: "Discord",
       enabled: true,
       settings: { guild_ids: ["guild-two"] },
       credentials: { bot_token: "token-two" },
