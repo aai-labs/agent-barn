@@ -1,9 +1,19 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { CircleAlert, MessageCircleWarning, Pencil, Plug, Plus, Trash2 } from "lucide-react";
+import {
+  Check,
+  CircleAlert,
+  LockKeyhole,
+  MessageCircleWarning,
+  Pencil,
+  Plug,
+  Plus,
+  Trash2,
+} from "lucide-react";
 
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
+import { EyeIcon, EyeOffIcon } from "@/components/icons";
 import { platformIcon } from "@/components/brand-icons";
 import {
   Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
@@ -17,7 +27,6 @@ import type { CommunicationConnection } from "@/features/communication-connectio
 
 import type { Agent } from "../schemas";
 import { AgentConfigurationSection } from "./agent-configuration-section";
-import { ChoiceCard } from "./hire-dialog-primitives";
 
 function titleCase(text: string): string {
   return text.replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
@@ -50,6 +59,52 @@ function ConnectionIcon({ platformKey, size = 16 }: { platformKey: string; size?
   return platformIcon(platformKey, { size }) ?? <Plug size={size} />;
 }
 
+function PlatformOption({
+  platform,
+  selected,
+  onSelect,
+}: {
+  platform: { key: string; displayName: string };
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={selected}
+      aria-label={`Select ${platform.displayName}`}
+      className="group flex min-h-[4.75rem] cursor-pointer items-center gap-3 rounded-xl p-3 text-left transition-colors hover:shadow-sm"
+      style={{
+        border: selected ? "1.5px solid var(--accent)" : "1px solid var(--line)",
+        background: selected ? "var(--accent-soft)" : "var(--bg-elev)",
+        color: "var(--ink)",
+      }}
+      onClick={onSelect}
+    >
+      <span
+        className="grid h-10 w-10 flex-shrink-0 place-items-center rounded-lg transition-colors"
+        style={{ background: selected ? "var(--bg-elev)" : "var(--bg-soft)" }}
+      >
+        <ConnectionIcon platformKey={platform.key} size={20} />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-sm font-semibold">{platform.displayName}</span>
+        <span className="mt-0.5 block text-xs" style={{ color: "var(--ink-3)" }}>
+          {selected ? "Selected" : "Connect a channel"}
+        </span>
+      </span>
+      <span
+        className="grid h-5 w-5 flex-shrink-0 place-items-center rounded-full"
+        style={selected
+          ? { background: "var(--accent-ink)", color: "var(--bg-elev)" }
+          : { border: "1px solid var(--line-strong)", color: "transparent" }}
+      >
+        <Check size={12} strokeWidth={3} />
+      </span>
+    </button>
+  );
+}
+
 function schemaDefaults(schema: Record<string, unknown>): Record<string, unknown> {
   const properties = schema.properties;
   if (!properties || typeof properties !== "object" || Array.isArray(properties)) return {};
@@ -80,6 +135,55 @@ function schemaProperties(schema: Record<string, unknown>): Array<[string, Schem
 function patternOptions(pattern?: string): string[] {
   const match = pattern?.match(/^\^\(([^)]+)\)\$$/);
   return match?.[1]?.split("|") ?? [];
+}
+
+function SchemaTextInput({
+  label,
+  property,
+  value,
+  onChange,
+  secret,
+}: {
+  label: string;
+  property: SchemaProperty;
+  value: unknown;
+  onChange: (value: unknown) => void;
+  secret: boolean;
+}) {
+  const [visible, setVisible] = useState(false);
+  const textValue = Array.isArray(value) ? value.join(", ") : String(value);
+
+  function updateValue(next: string) {
+    onChange(property.type === "array"
+      ? next.split(",").map((item) => item.trim()).filter(Boolean)
+      : next);
+  }
+
+  return (
+    <div className="relative w-full">
+      <input
+        className={secret ? "af-input w-full pr-10" : "af-input w-full"}
+        type={secret && !visible ? "password" : "text"}
+        autoComplete={secret ? "new-password" : undefined}
+        spellCheck={false}
+        value={textValue}
+        placeholder={property.type === "array" ? "Comma-separated values" : undefined}
+        onChange={(event) => updateValue(event.target.value)}
+      />
+      {secret && (
+        <button
+          type="button"
+          className="absolute right-2 top-1/2 -translate-y-1/2 cursor-pointer rounded-md p-1 transition-colors hover:bg-[var(--bg-soft)]"
+          style={{ color: "var(--ink-4)" }}
+          aria-label={visible ? `Hide ${label}` : `Show ${label}`}
+          title={visible ? "Hide value" : "Show value"}
+          onClick={() => setVisible((current) => !current)}
+        >
+          {visible ? <EyeOffIcon size={15} /> : <EyeIcon size={15} />}
+        </button>
+      )}
+    </div>
+  );
 }
 
 function SchemaFields({
@@ -127,18 +231,9 @@ function SchemaFields({
       );
     }
     return (
-      <label key={key} className="flex flex-col gap-1.5 text-sm font-medium">
+      <label key={key} className="flex w-full flex-col gap-1.5 text-sm font-medium">
         {label}{required.has(key) ? " *" : ""}
-        <input
-          className="af-input"
-          type={secret ? "password" : "text"}
-          autoComplete={secret ? "new-password" : undefined}
-          value={Array.isArray(value) ? value.join(", ") : String(value)}
-          placeholder={property.type === "array" ? "Comma-separated values" : undefined}
-          onChange={(event) => update(property.type === "array"
-            ? event.target.value.split(",").map((item) => item.trim()).filter(Boolean)
-            : event.target.value)}
-        />
+        <SchemaTextInput label={label} property={property} value={value} onChange={update} secret={secret} />
         {hint}
       </label>
     );
@@ -152,7 +247,7 @@ export function AgentChannelSettings({
 }: {
   agent: Agent;
   canEdit: boolean;
-  /** Open the "New connection" form immediately — used when arriving here via the
+  /** Open the add-connection form immediately — used when arriving here via the
    * "Add a connection" shortcut on the Agent page, so there's no extra click to find. */
   autoOpen?: boolean;
 }) {
@@ -315,7 +410,7 @@ export function AgentChannelSettings({
                       <div className="rounded-lg p-3" style={{ border: "1px solid var(--line)" }}>
                         <div className="mb-1 text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--ink-4)" }}>Replace credentials</div>
                         <p className="mb-3 mt-0 text-xs" style={{ color: "var(--ink-3)" }}>Leave every credential blank to keep the encrypted credentials already stored.</p>
-                        <div className="grid gap-3 sm:grid-cols-2">
+                        <div className="flex w-full flex-col gap-3">
                           <SchemaFields schema={platform.credentialsSchema} values={editCredentials} onChange={setEditCredentials} secret />
                         </div>
                       </div>
@@ -345,42 +440,117 @@ export function AgentChannelSettings({
         )}
 
         {adding && (
-          <div className="flex flex-col gap-4 rounded-xl p-4" style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}>
-            <div>
-              <h3 className="m-0 text-sm font-semibold">New connection</h3>
-              <p className="mb-0 mt-1 text-xs" style={{ color: "var(--ink-3)" }}>Credentials are encrypted and never shown again once saved.</p>
-            </div>
-            <div className="flex flex-col gap-1.5 text-sm font-medium">
-              Platform
-              <div className="grid grid-cols-4 gap-2.5 sm:grid-cols-3 lg:grid-cols-4">
-                {platforms.data?.map((platform) => (
-                  <ChoiceCard
-                    key={platform.key}
-                    selected={platformKey === platform.key}
-                    onClick={() => choosePlatform(platform.key)}
-                    icon={<ConnectionIcon platformKey={platform.key} size={18} />}
-                    title={platform.displayName}
-                  />
-                ))}
+          <div className="overflow-hidden rounded-2xl" style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}>
+            <div className="flex flex-col gap-5 p-4 sm:p-5">
+              <div>
+                <div className="text-sm font-semibold" style={{ color: "var(--ink)" }}>Choose a platform</div>
+                <p className="mb-0 mt-1 text-xs" style={{ color: "var(--ink-3)" }}>
+                  You can add more channels later. Each connection has its own credentials and status.
+                </p>
+                {platforms.isPending && <p className="mb-0 mt-3 text-xs" style={{ color: "var(--ink-3)" }}>Loading platforms…</p>}
+                {platforms.error && (
+                  <div className="mt-3 flex items-center gap-2 text-xs" style={{ color: "var(--err)" }}>
+                    <CircleAlert size={14} /> Could not load available platforms.
+                  </div>
+                )}
+                {platforms.data && platforms.data.length > 0 && (
+                  <div className="mt-3 grid gap-2.5 sm:grid-cols-3">
+                    {platforms.data.map((platform) => (
+                      <PlatformOption
+                        key={platform.key}
+                        platform={platform}
+                        selected={platformKey === platform.key}
+                        onSelect={() => choosePlatform(platform.key)}
+                      />
+                    ))}
+                  </div>
+                )}
               </div>
-            </div>
-            {selectedPlatform && (
-              <>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <SchemaFields schema={selectedPlatform.settingsSchema} values={settings} onChange={setSettings} />
-                </div>
-                <div className="rounded-lg p-3" style={{ border: "1px solid var(--line)" }}>
-                  <div className="mb-3 text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--ink-4)" }}>Credentials</div>
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <SchemaFields schema={selectedPlatform.credentialsSchema} values={credentials} onChange={setCredentials} secret />
+
+              {!selectedPlatform ? (
+                <div
+                  className="flex items-start gap-3 rounded-xl p-3.5"
+                  style={{ border: "1px dashed var(--line-strong)", background: "var(--bg-elev)" }}
+                >
+                  <LockKeyhole size={17} className="mt-0.5 flex-shrink-0" style={{ color: "var(--ink-4)" }} />
+                  <div>
+                    <div className="text-sm font-medium" style={{ color: "var(--ink)" }}>Your credentials stay private</div>
+                    <p className="mb-0 mt-1 text-xs leading-relaxed" style={{ color: "var(--ink-3)" }}>
+                      Select a platform to see the small set of details needed to connect it securely.
+                    </p>
                   </div>
                 </div>
-              </>
-            )}
-            {(formError || createConnection.error) && <p className="m-0 text-xs" style={{ color: "var(--err)" }}>{formError ?? "Could not create the connection."}</p>}
-            <div className="flex justify-end gap-2">
-              <button type="button" className="af-btn" onClick={() => { setAdding(false); setFormError(null); }}>Cancel</button>
-              <button type="button" className="af-btn af-btn-primary" disabled={!platformKey || !displayName.trim() || createConnection.isPending} onClick={() => void addConnection()}>{createConnection.isPending ? "Connecting…" : "Create connection"}</button>
+              ) : (
+                <div className="rounded-xl p-4 sm:p-5" style={{ border: "1px solid var(--line)", background: "var(--bg-elev)" }}>
+                  <div className="flex items-center gap-3">
+                    <span className="grid h-9 w-9 flex-shrink-0 place-items-center rounded-lg" style={{ background: "var(--bg-soft)" }}>
+                      <ConnectionIcon platformKey={selectedPlatform.key} size={19} />
+                    </span>
+                    <div>
+                      <div className="text-sm font-semibold" style={{ color: "var(--ink)" }}>Configure {selectedPlatform.displayName}</div>
+                      <p className="mb-0 mt-0.5 text-xs" style={{ color: "var(--ink-3)" }}>Give this connection a recognizable name, then add its credentials.</p>
+                    </div>
+                  </div>
+
+                  <div className="mt-5 flex flex-col gap-4">
+                    <label className="flex flex-col gap-1.5 text-sm font-medium">
+                      Connection name
+                      <input
+                        className="af-input"
+                        value={displayName}
+                        onChange={(event) => setDisplayName(event.target.value)}
+                        placeholder={`${selectedPlatform.displayName} connection`}
+                      />
+                      <span className="text-xs font-normal" style={{ color: "var(--ink-4)" }}>Only you will see this label in the Agent settings.</span>
+                    </label>
+                    {schemaProperties(selectedPlatform.settingsSchema).length > 0 && (
+                      <div className="flex flex-col gap-2">
+                        <div className="text-xs font-semibold uppercase tracking-[0.1em]" style={{ color: "var(--ink-4)" }}>Connection settings</div>
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <SchemaFields schema={selectedPlatform.settingsSchema} values={settings} onChange={setSettings} />
+                        </div>
+                      </div>
+                    )}
+                    <div className="rounded-xl p-4" style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}>
+                      <div className="flex items-start gap-2.5">
+                        <LockKeyhole size={16} className="mt-0.5 flex-shrink-0" style={{ color: "var(--accent-ink)" }} />
+                        <div>
+                          <div className="text-xs font-semibold uppercase tracking-[0.1em]" style={{ color: "var(--ink-2)" }}>Credentials</div>
+                          <p className="mb-0 mt-1 text-xs leading-relaxed" style={{ color: "var(--ink-3)" }}>
+                            Encrypted at rest and never shown again after you save this connection.
+                          </p>
+                        </div>
+                      </div>
+                      <div className="mt-4 flex w-full flex-col gap-3">
+                        <SchemaFields schema={selectedPlatform.credentialsSchema} values={credentials} onChange={setCredentials} secret />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {(formError || createConnection.error) && (
+                <div className="flex items-center gap-2 text-xs" style={{ color: "var(--err)" }} role="alert">
+                  <CircleAlert size={14} /> {formError ?? "Could not create the connection."}
+                </div>
+              )}
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3 sm:px-5" style={{ borderColor: "var(--line)" }}>
+              <div className="inline-flex items-center gap-1.5 text-xs" style={{ color: "var(--ink-4)" }}>
+                <LockKeyhole size={13} /> Credentials are encrypted.
+              </div>
+              <div className="flex gap-2">
+                <button type="button" className="af-btn af-btn-ghost" onClick={() => { setAdding(false); setFormError(null); }}>Cancel</button>
+                <button
+                  type="button"
+                  className="af-btn af-btn-primary"
+                  disabled={!platformKey || !displayName.trim() || createConnection.isPending}
+                  onClick={() => void addConnection()}
+                >
+                  {createConnection.isPending ? "Connecting…" : selectedPlatform ? `Connect ${selectedPlatform.displayName}` : "Choose a platform"}
+                </button>
+              </div>
             </div>
           </div>
         )}

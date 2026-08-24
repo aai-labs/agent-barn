@@ -50,6 +50,25 @@ test.describe("Agent Detail Page", () => {
     await expect(page.getByText("litellm/gpt-5-mini")).toBeVisible();
   });
 
+  test("guides an unreachable Agent to messaging setup", async ({ page }) => {
+    await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections`, async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
+    });
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+
+    await expect(page.getByText("Messaging setup", { exact: true })).toBeVisible();
+    await expect(page.getByText("Make Maya reachable", { exact: true })).toBeVisible();
+    await expect(page.getByText("Not connected", { exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Add connection" })).toHaveAttribute(
+      "href",
+      /configuration\?section=channels&connect=true/,
+    );
+  });
+
   test("shows error state when agent fails to load", async ({ page }) => {
     await dataSupportPage.agents.interceptGetAgentRequest({
       status: 404,
@@ -598,9 +617,15 @@ test.describe("Agent Detail Page — Channels tab", () => {
     await page.getByRole("button", { name: "Add connection" }).click();
     await page.getByText("Discord", { exact: true }).click();
     await page.getByLabel("Guild IDs").fill("guild-two");
-    await page.getByLabel("Bot token").fill("token-two");
+    const botToken = page.getByRole("textbox", { name: "Bot token" });
+    await botToken.fill("token-two");
+    await expect(botToken).toHaveAttribute("type", "password");
+    await page.getByRole("button", { name: "Show Bot token" }).click();
+    await expect(botToken).toHaveAttribute("type", "text");
+    await page.getByRole("button", { name: "Hide Bot token" }).click();
+    await expect(botToken).toHaveAttribute("type", "password");
     const create = page.waitForRequest((request) => request.method() === "POST" && request.url().endsWith("/connections"));
-    await page.getByRole("button", { name: "Create connection" }).click();
+    await page.getByRole("button", { name: "Connect Discord", exact: true }).click();
     expect((await create).postDataJSON()).toEqual({
       platform_key: "discord",
       display_name: "Discord",
