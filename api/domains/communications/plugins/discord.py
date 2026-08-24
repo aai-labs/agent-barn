@@ -24,18 +24,50 @@ class DiscordValidationConfig(Protocol):
 
 
 class DiscordSettings(PlatformSettings):
-    guild_ids: list[str] = Field(default_factory=list)
-    allowed_channel_ids: list[str] = Field(default_factory=list)
-    allowed_user_ids: list[str] = Field(default_factory=list)
-    allowed_role_ids: list[str] = Field(default_factory=list)
-    group_policy: str = Field(default="allowlist", pattern="^(open|allowlist)$")
-    dm_policy: str = Field(default="off", pattern="^(off|open|allowlist)$")
-    require_mention: bool = True
-    home_channel_id: str | None = None
+    guild_ids: list[str] = Field(
+        default_factory=list,
+        title="Allowed servers",
+        description="Discord server (guild) IDs this agent may respond in. Used when Channel access is Allowlist.",
+    )
+    allowed_channel_ids: list[str] = Field(
+        default_factory=list,
+        title="Allowed channels",
+        description="Channel IDs this agent may read and post in. Leave empty to allow any channel in an allowed server.",
+    )
+    allowed_user_ids: list[str] = Field(
+        default_factory=list,
+        title="Allowed users",
+        description="User IDs allowed to interact with this agent (combined with Allowed roles).",
+    )
+    allowed_role_ids: list[str] = Field(
+        default_factory=list,
+        title="Allowed roles",
+        description="Members with any of these Discord role IDs may interact with this agent.",
+    )
+    group_policy: str = Field(
+        default="allowlist",
+        pattern="^(open|allowlist)$",
+        title="Channel access",
+        description="Open responds in any server it's added to. Allowlist restricts it to Allowed servers.",
+    )
+    dm_policy: str = Field(
+        default="off",
+        pattern="^(off|open|allowlist)$",
+        title="Direct messages",
+        description="Off ignores DMs, Open accepts DMs from anyone, Allowlist restricts to Allowed users.",
+    )
+    require_mention: bool = Field(
+        default=True, title="Require @mention", description="Only respond in servers when directly @mentioned."
+    )
+    home_channel_id: str | None = Field(
+        default=None, title="Alert channel", description="Optional channel ID for scheduled or proactive updates."
+    )
 
 
 class DiscordCredentials(PlatformCredentials):
-    bot_token: str = Field(min_length=1)
+    bot_token: str = Field(
+        min_length=1, title="Bot token", description="From the Discord Developer Portal → your application → Bot."
+    )
 
 
 class DiscordPlatformPlugin(PlatformPlugin):

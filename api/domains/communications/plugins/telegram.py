@@ -26,14 +26,32 @@ class TelegramValidationConfig(Protocol):
 
 
 class TelegramSettings(PlatformSettings):
-    allowed_user_ids: list[str] = Field(default_factory=list)
-    allowed_chat_ids: list[str] = Field(default_factory=list)
-    group_policy: str = Field(default="allowlist", pattern="^(open|allowlist)$")
-    dm_policy: str = Field(default="off", pattern="^(off|open|allowlist)$")
+    allowed_user_ids: list[str] = Field(
+        default_factory=list,
+        title="Allowed DM senders",
+        description="User IDs allowed to direct-message this agent. Used when Direct messages is Allowlist.",
+    )
+    allowed_chat_ids: list[str] = Field(
+        default_factory=list,
+        title="Allowed groups",
+        description="Group/chat IDs this agent may respond in. Used when Group access is Allowlist.",
+    )
+    group_policy: str = Field(
+        default="allowlist",
+        pattern="^(open|allowlist)$",
+        title="Group access",
+        description="Open responds in any group it's added to. Allowlist restricts it to Allowed groups.",
+    )
+    dm_policy: str = Field(
+        default="off",
+        pattern="^(off|open|allowlist)$",
+        title="Direct messages",
+        description="Off ignores DMs, Open accepts DMs from anyone, Allowlist restricts to Allowed DM senders.",
+    )
 
 
 class TelegramCredentials(PlatformCredentials):
-    bot_token: str = Field(min_length=1)
+    bot_token: str = Field(min_length=1, title="Bot token", description="From @BotFather in Telegram.")
 
 
 class TelegramPlatformPlugin(PlatformPlugin):

@@ -28,16 +28,42 @@ class SlackValidationConfig(Protocol):
 
 
 class SlackSettings(PlatformSettings):
-    channel_ids: list[str] = Field(default_factory=list)
-    dm_user_ids: list[str] = Field(default_factory=list)
-    group_policy: str = Field(default="allowlist", pattern="^(open|allowlist)$")
-    dm_policy: str = Field(default="off", pattern="^(off|open|allowlist)$")
-    verbose_mode: bool = True
+    channel_ids: list[str] = Field(
+        default_factory=list,
+        title="Allowed channels",
+        description="Channel IDs this agent may read and post in. Used when Channel access is Allowlist.",
+    )
+    dm_user_ids: list[str] = Field(
+        default_factory=list,
+        title="Allowed DM senders",
+        description="User IDs allowed to direct-message this agent. Used when Direct messages is Allowlist.",
+    )
+    group_policy: str = Field(
+        default="allowlist",
+        pattern="^(open|allowlist)$",
+        title="Channel access",
+        description="Open responds in any channel it's added to. Allowlist restricts it to Allowed channels.",
+    )
+    dm_policy: str = Field(
+        default="off",
+        pattern="^(off|open|allowlist)$",
+        title="Direct messages",
+        description="Off ignores DMs, Open accepts DMs from anyone, Allowlist restricts to Allowed DM senders.",
+    )
+    verbose_mode: bool = Field(
+        default=True,
+        title="Announce steps",
+        description="Post a running commentary of what it's doing, not just the final reply.",
+    )
 
 
 class SlackCredentials(PlatformCredentials):
-    bot_token: str = Field(min_length=1)
-    app_token: str = Field(min_length=1)
+    bot_token: str = Field(
+        min_length=1, title="Bot token", description="Starts with xoxb- — from OAuth & Permissions in your Slack app."
+    )
+    app_token: str = Field(
+        min_length=1, title="App-level token", description="Starts with xapp- — required for Socket Mode."
+    )
 
 
 class SlackPlatformPlugin(PlatformPlugin):
