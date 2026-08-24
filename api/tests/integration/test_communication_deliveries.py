@@ -54,13 +54,17 @@ def _auth(context) -> dict[str, str]:
     return {"Authorization": f"Bearer {context.access_token}"}
 
 
-def _create_connection(context, bot_token: str = "gateway-token") -> UUID:
+def _create_connection(
+    context,
+    bot_token: str = "gateway-token",
+    display_name: str = "Gateway Discord",
+) -> UUID:
     client: TestClient = context.client
     response = client.post(
         f"/api/v1/organizations/{context.organization.id}/agents/{context.agent.id}/connections",
         json={
             "platform_key": "discord",
-            "display_name": "Gateway Discord",
+            "display_name": display_name,
             "settings": {"guild_ids": ["guild-one"]},
             "credentials": {"bot_token": bot_token},
         },
@@ -121,6 +125,36 @@ def test_runtime_claim_serializes_one_conversation() -> None:
             assert_that(
                 second.envelope.provider_message_id if second is not None else None,
                 equal_to("provider-2"),
+            )
+
+
+def test_thread_state_is_durable_and_connection_scoped() -> None:
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        connection_id = _create_connection(context, bot_token="gateway-token-one")
+        second_connection_id = _create_connection(
+            context,
+            bot_token="gateway-token-two",
+            display_name="Gateway Discord Two",
+        )
+        repository = context.injector.get(CommunicationDeliveryRepository)
+        envelope = _envelope("provider-owned")
+
+        repository.accept_inbound(connection_id=connection_id, envelope=envelope)
+
+        with then("only the accepted Connection owns the persisted thread"):
+            assert_that(
+                repository.thread_has_agent_state(connection_id=connection_id, location=envelope.location), is_(True)
+            )
+            assert_that(
+                repository.thread_has_agent_state(connection_id=second_connection_id, location=envelope.location),
+                is_(False),
+            )
+            assert_that(
+                repository.thread_has_agent_state(
+                    connection_id=connection_id,
+                    location=ConversationLocation(id="other-channel", type="CHANNEL", thread_id="thread-one"),
+                ),
+                is_(False),
             )
 
 

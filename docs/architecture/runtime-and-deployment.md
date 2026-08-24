@@ -38,7 +38,7 @@ Connection credentials are encrypted and never returned by read APIs. Communicat
 
 ## Mention gating
 
-Shared-room admission is a Platform Plugin concern. Plugin settings define open/allowlist group and direct-message policies plus provider-specific restrictions. Discord additionally supports explicit mention gating and guild/channel/user/role constraints. Updating these settings increments the Connection revision and reconciles its gateway session; it does not rebuild the runtime.
+Shared-room admission is a Platform Plugin concern. Plugin settings define open/allowlist group and direct-message policies plus provider-specific restrictions. Discord supports explicit mention gating and guild/channel/user/role constraints. Slack channel messages require a direct bot mention and expose a schema-driven thread policy: `every_message` requires a mention on every thread reply, while `start_only` admits unmentioned replies only after a matching Connection-scoped thread has persisted Agent state. Slack captures the bot user identity at ingress, ignores duplicate `app_mention` events in favor of `message` events, and applies DM/allowlist checks before mention admission. Durable ownership is supplied to plugins through the Communications admission seam; it is never process-local. Updating these settings increments the Connection revision and reconciles its gateway session; it does not rebuild the runtime.
 
 ## Connection failure recovery
 

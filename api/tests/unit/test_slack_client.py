@@ -236,13 +236,14 @@ def test_get_bot_info_returns_fields_on_success():
     payload = {
         "ok": True,
         "app_id": "ATEST123",
+        "user_id": "UBOT123",
         "user": "my-bot",
         "team": "My Workspace",
     }
     with patch("httpx.request", _mock_httpx([_resp(payload)])):
         info = SlackClient("xoxb-token").get_bot_info()
 
-    assert info == {"app_id": "ATEST123", "bot_name": "my-bot", "team": "My Workspace"}
+    assert info == {"app_id": "ATEST123", "user_id": "UBOT123", "bot_name": "my-bot", "team": "My Workspace"}
 
 
 def test_get_bot_info_returns_empty_dict_on_non_ok():

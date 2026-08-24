@@ -4,6 +4,7 @@ from uuid import uuid4
 import pytest
 
 from api.domains.communications.models import PlatformCapability
+from api.domains.communications.plugins.base import InboundAdmissionContext
 from api.domains.communications.plugins.discord import DiscordPlatformPlugin
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.plugins.slack import SlackPlatformPlugin
@@ -131,3 +132,120 @@ def test_discord_plugin_ignores_unmentioned_group_messages() -> None:
         )
         == []
     )
+
+
+def _slack_event(
+    text: str,
+    *,
+    thread_ts: str | None = None,
+    channel_type: str = "channel",
+    subtype: str | None = None,
+    user: str = "user-1",
+) -> dict:
+    event = {
+        "type": "message",
+        "channel": "channel-1" if channel_type != "im" else "dm-1",
+        "channel_type": channel_type,
+        "user": user,
+        "ts": "1724320800.000100",
+        "text": text,
+    }
+    if thread_ts is not None:
+        event["thread_ts"] = thread_ts
+    if subtype is not None:
+        event["subtype"] = subtype
+    return {"event": event, "agentbarn_bot_user_id": "bot-1"}
+
+
+def _slack_admission_context(*, owned: bool) -> InboundAdmissionContext:
+    return InboundAdmissionContext(
+        connection_id=uuid4(),
+        thread_is_agent_owned=lambda _location: owned,
+    )
+
+
+def test_slack_plugin_requires_a_direct_bot_mention_for_channel_messages() -> None:
+    plugin = SlackPlatformPlugin(ValidationConfig())
+    settings = plugin.settings_model.model_validate({"group_policy": "open"})
+
+    mentioned = plugin.admit_inbound(
+        settings,
+        _slack_event("hello <@bot-1|agent>", thread_ts=None),
+        context=_slack_admission_context(owned=False),
+    )
+    unmentioned = plugin.admit_inbound(
+        settings,
+        _slack_event("hello everyone", thread_ts=None),
+        context=_slack_admission_context(owned=True),
+    )
+
+    assert len(mentioned) == 1
+    assert mentioned[0].mentions == ["bot-1"]
+    assert unmentioned == []
+
+
+def test_slack_every_message_policy_requires_mentions_inside_threads() -> None:
+    plugin = SlackPlatformPlugin(ValidationConfig())
+    settings = plugin.settings_model.model_validate({"group_policy": "open", "thread_mention_policy": "every_message"})
+
+    assert (
+        plugin.admit_inbound(
+            settings,
+            _slack_event("follow-up", thread_ts="1724320800.000100"),
+            context=_slack_admission_context(owned=True),
+        )
+        == []
+    )
+
+
+def test_slack_start_only_policy_accepts_unmentioned_replies_only_in_owned_threads() -> None:
+    plugin = SlackPlatformPlugin(ValidationConfig())
+    settings = plugin.settings_model.model_validate({"group_policy": "open", "thread_mention_policy": "start_only"})
+
+    owned_reply = plugin.admit_inbound(
+        settings,
+        _slack_event("follow-up", thread_ts="1724320800.000100"),
+        context=_slack_admission_context(owned=True),
+    )
+    arbitrary_reply = plugin.admit_inbound(
+        settings,
+        _slack_event("follow-up", thread_ts="other-root"),
+        context=_slack_admission_context(owned=False),
+    )
+
+    assert len(owned_reply) == 1
+    assert arbitrary_reply == []
+
+
+def test_slack_dm_and_bot_message_policies_remain_before_mention_admission() -> None:
+    plugin = SlackPlatformPlugin(ValidationConfig())
+    open_dms = plugin.settings_model.model_validate({"group_policy": "open", "dm_policy": "open"})
+
+    dm = plugin.admit_inbound(
+        open_dms,
+        _slack_event("hello without a mention", channel_type="im"),
+        context=_slack_admission_context(owned=False),
+    )
+    bot_message = plugin.admit_inbound(
+        open_dms,
+        _slack_event("<@bot-1> bot echo", user="bot-1"),
+        context=_slack_admission_context(owned=False),
+    )
+    subtype_message = plugin.admit_inbound(
+        open_dms,
+        _slack_event("edited", subtype="message_changed", channel_type="im"),
+        context=_slack_admission_context(owned=False),
+    )
+
+    assert len(dm) == 1
+    assert bot_message == []
+    assert subtype_message == []
+
+
+def test_slack_ignores_app_mention_events_to_avoid_duplicate_message_delivery() -> None:
+    plugin = SlackPlatformPlugin(ValidationConfig())
+    settings = plugin.settings_model.model_validate({"group_policy": "open"})
+    payload = _slack_event("<@bot-1> hello")
+    payload["event"]["type"] = "app_mention"
+
+    assert plugin.admit_inbound(settings, payload, context=_slack_admission_context(owned=False)) == []

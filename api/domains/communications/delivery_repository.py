@@ -16,6 +16,7 @@ from api.domains.communications.models import (
     CommunicationDelivery,
     CommunicationDeliveryStatus,
     CommunicationDirection,
+    ConversationLocation,
     NormalizedCommunicationEnvelope,
     OutboundCommunicationEnvelope,
     RuntimeDeliveryRead,
@@ -175,6 +176,33 @@ class CommunicationDeliveryRepository:
                 attempt_count=delivery.attempt_count,
                 envelope=NormalizedCommunicationEnvelope.model_validate(delivery.envelope),
             )
+
+    def thread_has_agent_state(
+        self,
+        *,
+        connection_id: UUID,
+        location: ConversationLocation,
+    ) -> bool:
+        """Return whether this Connection has persisted state for a thread.
+
+        A thread becomes Agent-owned only after an inbound or outbound
+        Communication message has been persisted for this exact Connection and
+        provider location. This deliberately avoids process-local ownership
+        caches, which would diverge across Communications replicas.
+        """
+        if not location.thread_id:
+            return False
+        with Session(self.delegate.engine) as session:
+            message = session.exec(
+                select(AgentChatMessage.id)
+                .where(
+                    col(AgentChatMessage.connection_id) == connection_id,
+                    col(AgentChatMessage.channel_id) == location.id,
+                    col(AgentChatMessage.thread_id) == location.thread_id,
+                )
+                .limit(1)
+            ).one_or_none()
+            return message is not None
 
     def enqueue_runtime_reply(
         self,

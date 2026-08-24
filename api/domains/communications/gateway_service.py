@@ -17,6 +17,7 @@ from api.domains.communications.models import (
     RuntimeDeliveryResult,
     RuntimeReplyCreate,
 )
+from api.domains.communications.plugins.base import InboundAdmissionContext
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.repository import CommunicationConnectionRepository
 from api.infrastructure.crypto import decrypt_token
@@ -105,7 +106,8 @@ class CommunicationsGatewayService:
         plugin = self.plugins.require(connection.platform_key)
         settings = plugin.settings_model.model_validate(connection.settings)
         return [
-            self.accept_inbound(connection.id, envelope) for envelope in plugin.normalize_inbound(settings, payload)
+            self.accept_inbound(connection.id, envelope)
+            for envelope in self._admit_plugin_payload(connection.id, plugin, settings, payload)
         ]
 
     def accept_plugin_payload(
@@ -120,8 +122,28 @@ class CommunicationsGatewayService:
         plugin = self.plugins.require(connection.platform_key)
         settings = plugin.settings_model.model_validate(connection.settings)
         return [
-            self.accept_inbound(connection.id, envelope) for envelope in plugin.normalize_inbound(settings, payload)
+            self.accept_inbound(connection.id, envelope)
+            for envelope in self._admit_plugin_payload(connection.id, plugin, settings, payload)
         ]
+
+    def _admit_plugin_payload(
+        self,
+        connection_id: UUID,
+        plugin,
+        settings,
+        payload: dict[str, Any],
+    ) -> list[NormalizedCommunicationEnvelope]:
+        return plugin.admit_inbound(
+            settings,
+            payload,
+            context=InboundAdmissionContext(
+                connection_id=connection_id,
+                thread_is_agent_owned=lambda location: self.delivery_repository.thread_has_agent_state(
+                    connection_id=connection_id,
+                    location=location,
+                ),
+            ),
+        )
 
     def accept_provider_webhook(
         self,

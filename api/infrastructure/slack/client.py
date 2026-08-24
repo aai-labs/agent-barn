@@ -118,6 +118,7 @@ class SlackClient:
                 return {}
             return {
                 "app_id": body.get("app_id", ""),
+                "user_id": body.get("user_id", ""),
                 "bot_name": body.get("user", ""),
                 "team": body.get("team", ""),
             }

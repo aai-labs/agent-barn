@@ -9,6 +9,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict
 
 from api.domains.communications.models import (
+    ConversationLocation,
     CredentialUniquenessScope,
     NormalizedCommunicationEnvelope,
     OutboundCommunicationEnvelope,
@@ -32,6 +33,19 @@ class ValidatedConnectionConfiguration:
     external_identity: str | None
     credential_fingerprint: str | None
     credential_scope_key: str | None
+
+
+@dataclass(frozen=True)
+class InboundAdmissionContext:
+    """Provider-neutral state a plugin may consult while admitting an event.
+
+    Plugins decide provider-specific admission rules, while the callback keeps
+    durable conversation ownership in Communications persistence rather than in
+    a provider task's process memory.
+    """
+
+    connection_id: UUID
+    thread_is_agent_owned: Callable[[ConversationLocation], bool]
 
 
 class PlatformPlugin(ABC):
@@ -126,6 +140,22 @@ class PlatformPlugin(ABC):
     ) -> list[NormalizedCommunicationEnvelope]:
         """Verify/filter a provider-decoded event and map it to protocol envelopes."""
         raise NotImplementedError(f"{self.key} does not implement inbound normalization")
+
+    def admit_inbound(
+        self,
+        settings: PlatformSettings,
+        payload: dict[str, Any],
+        *,
+        context: InboundAdmissionContext,
+    ) -> list[NormalizedCommunicationEnvelope]:
+        """Apply provider admission policy before durable delivery acceptance.
+
+        Most plugins only need normalization. Plugins with conversation-scoped
+        policies (for example Slack thread mention gating) override this seam and
+        use the supplied durable ownership callback without reaching into SQL.
+        """
+        del context
+        return self.normalize_inbound(settings, payload)
 
     async def run_ingress(
         self,
