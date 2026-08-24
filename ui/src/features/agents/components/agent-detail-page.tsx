@@ -4,11 +4,13 @@ import { useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useQueryState, parseAsStringEnum, parseAsString } from "nuqs";
+import { MessageCircleWarning } from "lucide-react";
 import { canAgent, formatModelName } from "../utils";
 import { useAgent } from "../hooks/use-agent";
 import { useAgentHealth } from "../hooks/use-agent-health";
 import { useStartAgent } from "../hooks/use-start-agent";
 import { useStopAgent } from "../hooks/use-stop-agent";
+import { useCommunicationConnections } from "@/features/communication-connections/hooks/use-communication-connections";
 import { ChevLeftIcon, PauseIcon, PlayIcon, CogIcon, ShareIcon } from "@/components/icons";
 import { AppErrorState } from "@/components/app-error-state";
 import { toastError } from "@/shared/toast";
@@ -72,6 +74,9 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   const isRunning = agent?.status === "RUNNING";
   const canManageLifecycle = canAgent(agent, "agent.lifecycle.manage");
   const canManageAccess = canAgent(agent, "agent.access.manage");
+  const canManageConnections = canAgent(agent, "agent.update");
+  const connections = useCommunicationConnections(agent?.id ?? "");
+  const isUnreachable = !connections.isPending && connections.data?.length === 0;
   const [shareOpen, setShareOpen] = useState(false);
 
   const params = useParams();
@@ -160,6 +165,29 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
                 style={{ background: "color-mix(in srgb, var(--err) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--err) 25%, transparent)", color: "var(--err)" }}
               >
                 <span className="font-medium">Error: </span>{health.reason}
+              </div>
+            )}
+
+            {isUnreachable && (
+              <div
+                className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-xl px-4 py-3"
+                style={{ background: "var(--warn-soft)", border: "1px solid color-mix(in srgb, var(--warn) 30%, transparent)" }}
+              >
+                <div className="flex items-start gap-2.5 text-[0.844rem]">
+                  <MessageCircleWarning size={17} style={{ color: "var(--warn)", flexShrink: 0, marginTop: 1 }} />
+                  <div>
+                    <span className="font-medium" style={{ color: "var(--ink)" }}>This agent can&apos;t be reached yet. </span>
+                    <span style={{ color: "var(--ink-3)" }}>Connect a messaging platform so people can message it.</span>
+                  </div>
+                </div>
+                {canManageConnections && (
+                  <Link
+                    href={`${homeHref}/agents/${agent.id}/configuration?section=channels&connect=true`}
+                    className="af-btn af-btn-sm flex-shrink-0"
+                  >
+                    Add a connection
+                  </Link>
+                )}
               </div>
             )}
 

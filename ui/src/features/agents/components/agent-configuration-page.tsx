@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { parseAsStringEnum, useQueryState } from "nuqs";
+import { parseAsBoolean, parseAsStringEnum, useQueryState } from "nuqs";
 import { ArrowLeft, CircleAlert } from "lucide-react";
 
 import { AppErrorState } from "@/components/app-error-state";
@@ -54,6 +54,7 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
       .withDefault("profile")
       .withOptions({ scroll: false, history: "replace" }),
   );
+  const [connect] = useQueryState("connect", parseAsBoolean.withDefault(false));
   const [editingSection, setEditingSection] = useState<AgentConfigurationSectionKey | null>(null);
 
   if (agentLoading || configurationLoading) {
@@ -202,6 +203,7 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
               <AgentChannelSettings
                 agent={agent}
                 canEdit={canEdit}
+                autoOpen={connect}
               />
             )}
             {activeSection === "skills" && (

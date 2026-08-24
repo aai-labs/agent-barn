@@ -31,25 +31,32 @@ export function DialogShell({
 export function ChoiceCard({
   selected,
   onClick,
+  icon,
   title,
   description,
 }: {
   selected: boolean;
   onClick: () => void;
+  icon?: React.ReactNode;
   title: string;
-  description: string;
+  description?: string;
 }) {
   return (
     <div
-      className="flex flex-col gap-1 p-4 rounded-2xl cursor-default transition-colors"
+      className="flex flex-col items-center gap-1.5 rounded-2xl p-3 transition-colors cursor-default sm:p-4 lg:items-start"
       style={{
         border: selected ? "1.5px solid var(--ink)" : "1.5px solid var(--line)",
         background: selected ? "var(--bg-soft)" : "var(--bg-elev)",
       }}
       onClick={onClick}
     >
-      <div className="font-semibold text-[0.9375rem]" style={{ color: "var(--ink)" }}>{title}</div>
-      <div className="text-[0.8125rem] leading-[1.45]" style={{ color: "var(--ink-3)" }}>{description}</div>
+      <div className="flex flex-col items-center gap-1.5 lg:flex-row lg:items-center lg:gap-2">
+        {icon}
+        <div className="hidden font-semibold text-[0.9375rem] sm:block" style={{ color: "var(--ink)" }}>{title}</div>
+      </div>
+      {description && (
+        <div className="hidden text-center text-[0.8125rem] leading-[1.45] sm:block lg:text-left" style={{ color: "var(--ink-3)" }}>{description}</div>
+      )}
     </div>
   );
 }

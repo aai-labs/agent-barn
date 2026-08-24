@@ -41,7 +41,7 @@ export const AGENT_CONFIGURATION_SECTIONS: AgentConfigurationSection[] = [
   },
   {
     key: "channels",
-    label: "Channels & endpoint",
+    label: "Messaging",
     description: "Where this Agent receives messages and sends replies.",
   },
   {
