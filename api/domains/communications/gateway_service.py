@@ -91,7 +91,6 @@ class CommunicationsGatewayService:
         delivery_id: UUID,
         result: RuntimeDeliveryResult,
     ) -> bool:
-        delivery = self.delivery_repository.get_inbound_runtime_delivery(delivery_id, agent_id=agent.id)
         completed = self.delivery_repository.complete_runtime_delivery(
             delivery_id,
             agent_id=agent.id,
@@ -99,12 +98,21 @@ class CommunicationsGatewayService:
             error_code=result.error_code,
             error_message=result.error_message,
         )
-        if completed and not result.succeeded and delivery is not None:
+        if completed and not result.succeeded:
+            self._notify_runtime_failure_feedback(agent.id, delivery_id)
+        return completed
+
+    def _notify_runtime_failure_feedback(self, agent_id: UUID, delivery_id: UUID) -> None:
+        """Notify terminal runtime failure without coupling it to completion."""
+        try:
             status = self.delivery_repository.delivery_status(
                 delivery_id,
                 direction=CommunicationDirection.INBOUND,
             )
-            if status == CommunicationDeliveryStatus.DEAD_LETTERED:
+            if status != CommunicationDeliveryStatus.DEAD_LETTERED:
+                return
+            delivery = self.delivery_repository.get_inbound_runtime_delivery(delivery_id, agent_id=agent_id)
+            if delivery is not None:
                 self.notify_processing_feedback(
                     ProcessingFeedbackContext(
                         connection_id=delivery.connection_id,
@@ -113,7 +121,14 @@ class CommunicationsGatewayService:
                         provider_message_id=delivery.envelope.provider_message_id,
                     )
                 )
-        return completed
+        except Exception as exc:
+            detail = " ".join(str(exc).split())[:160]
+            logger.warning(
+                "Communication terminal-failure feedback context failed for Delivery %s (%s): %s",
+                delivery_id,
+                type(exc).__name__,
+                detail,
+            )
 
     def enqueue_runtime_reply(
         self,

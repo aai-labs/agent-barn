@@ -75,23 +75,30 @@ class OutboundCommunicationProcessor:
                 self._notify_feedback(delivery.connection_id, outbound, ProcessingFeedbackStage.SUCCEEDED)
         return True
 
-    def _is_dead_lettered(self, delivery_id) -> bool:
-        return (
-            self.deliveries.delivery_status(
-                delivery_id,
-                direction=CommunicationDirection.OUTBOUND,
-            )
-            == CommunicationDeliveryStatus.DEAD_LETTERED
-        )
+    def _is_dead_lettered(self, delivery_id: UUID) -> bool:
+        return self._is_status(delivery_id, CommunicationDeliveryStatus.DEAD_LETTERED)
 
-    def _is_succeeded(self, delivery_id) -> bool:
-        return (
-            self.deliveries.delivery_status(
-                delivery_id,
-                direction=CommunicationDirection.OUTBOUND,
+    def _is_succeeded(self, delivery_id: UUID) -> bool:
+        return self._is_status(delivery_id, CommunicationDeliveryStatus.SUCCEEDED)
+
+    def _is_status(self, delivery_id: UUID, expected: CommunicationDeliveryStatus) -> bool:
+        try:
+            return (
+                self.deliveries.delivery_status(
+                    delivery_id,
+                    direction=CommunicationDirection.OUTBOUND,
+                )
+                == expected
             )
-            == CommunicationDeliveryStatus.SUCCEEDED
-        )
+        except Exception as exc:
+            detail = " ".join(str(exc).split())[:160]
+            logger.warning(
+                "Communication feedback status lookup failed for Delivery %s (%s): %s",
+                delivery_id,
+                type(exc).__name__,
+                detail,
+            )
+            return False
 
     def _notify_feedback(
         self,

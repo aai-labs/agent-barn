@@ -125,3 +125,23 @@ def test_gateway_marks_claim_and_terminal_runtime_failure_at_lifecycle_seam() ->
     assert completed is True
     stages = [call.args[2].stage for call in plugin.processing_feedback.call_args_list]
     assert stages == [ProcessingFeedbackStage.CLAIMED, ProcessingFeedbackStage.FAILED]
+
+
+def test_runtime_completion_is_not_blocked_by_feedback_context_lookup() -> None:
+    connection = cast(CommunicationConnection, _connection())
+    plugin = _feedback_plugin()
+    service, deliveries = _service(connection, plugin)
+    deliveries.complete_runtime_delivery.return_value = True
+    deliveries.delivery_status.return_value = CommunicationDeliveryStatus.DEAD_LETTERED
+    deliveries.get_inbound_runtime_delivery.side_effect = RuntimeError("database unavailable")
+    agent = cast(Agent, SimpleNamespace(id=uuid4(), status=AgentStatus.RUNNING))
+
+    completed = service.complete_runtime_delivery(
+        agent,
+        uuid4(),
+        RuntimeDeliveryResult(succeeded=False, error_code="RuntimeError", error_message="failed"),
+    )
+
+    assert completed is True
+    deliveries.complete_runtime_delivery.assert_called_once()
+    plugin.processing_feedback.assert_not_called()

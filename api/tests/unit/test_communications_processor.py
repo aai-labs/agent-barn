@@ -130,3 +130,22 @@ def test_outbound_retry_does_not_mark_processing_failed() -> None:
         assert processor.process_one() is True
 
     gateway.notify_processing_feedback.assert_not_called()
+
+
+def test_feedback_status_lookup_failure_does_not_escape_after_completion() -> None:
+    delivery, _ = _delivery()
+    processor, gateway, deliveries = _processor(
+        delivery,
+        _plugin(),
+        status=CommunicationDeliveryStatus.SUCCEEDED,
+    )
+    deliveries.delivery_status.side_effect = RuntimeError("database unavailable")
+
+    with patch(
+        "api.domains.communications.processor.decrypt_token",
+        return_value=json.dumps({"bot_token": "xoxb-token", "app_token": "xapp-token"}),
+    ):
+        assert processor.process_one() is True
+
+    deliveries.complete_outbound.assert_called_once_with(delivery.id, provider_message_id="provider-reply")
+    gateway.notify_processing_feedback.assert_not_called()
