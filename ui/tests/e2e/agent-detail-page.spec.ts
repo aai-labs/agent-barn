@@ -513,6 +513,7 @@ test.describe("Agent Detail Page — Channels tab", () => {
           allowed_channel_ids: ["channel-1"],
           allowed_user_ids: ["user-1"],
           allowed_role_ids: ["role-1"],
+          allow_all_users: false,
           home_channel_id: "channel-1",
           require_mention: true,
           group_policy: "allowlist",
