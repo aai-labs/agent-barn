@@ -254,7 +254,12 @@ class SlackPlatformPlugin(PlatformPlugin):
                 return []
         elif settings.group_policy == "allowlist" and channel_id not in settings.channel_ids:
             return []
-        message_id = str(event.get("client_msg_id") or event.get("ts") or "")
+        # Slack reactions address messages by their provider timestamp. Keep
+        # that timestamp as the canonical message identity so lifecycle
+        # feedback can reliably target the inbound message; the optional
+        # client-generated id remains useful metadata but is not a Slack API
+        # message reference.
+        message_id = str(event.get("ts") or "")
         if not channel_id or not message_id:
             return []
         try:
@@ -277,6 +282,7 @@ class SlackPlatformPlugin(PlatformPlugin):
                 provider_metadata={
                     "team_id": str(payload.get("team_id") or ""),
                     "event_id": str(payload.get("event_id") or ""),
+                    "client_msg_id": str(event.get("client_msg_id") or ""),
                 },
             )
         ]

@@ -44,7 +44,7 @@ Shared-room admission is a Platform Plugin concern. Plugin settings define open/
 
 ## Processing feedback
 
-Processing feedback is a best-effort Platform Plugin capability, separate from durable Communication Delivery state. Communications invokes the provider-neutral lifecycle seam after an inbound delivery is accepted, when runtime processing is claimed, and after terminal success or failure is known. Slack reacts with 👀 on acceptance, shows `assistant.threads.setStatus` while the runtime works, and replaces the acknowledgement with ✅ only after outbound provider delivery succeeds or ❌ after terminal failure. Slack status and reaction calls are idempotent and safe to retry; failures are bounded warnings and never change delivery retry or completion state. Plugins without this capability no-op.
+Processing feedback is a best-effort Platform Plugin capability, separate from durable Communication Delivery state. Communications invokes the provider-neutral lifecycle seam after an inbound delivery is accepted, when runtime processing is claimed, and after terminal success or failure is known. Slack reacts with 👀 on acceptance, shows `assistant.threads.setStatus` while the runtime works, and replaces the acknowledgement with ✅ only after outbound provider delivery succeeds or ❌ after terminal failure. Slack lifecycle reactions target the canonical provider message timestamp, while status targets the conversation thread. Slack status and reaction calls are idempotent and safe to retry; failures are bounded warnings and never change delivery retry or completion state. Plugins without this capability no-op.
 
 ## Connection failure recovery
 

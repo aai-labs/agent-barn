@@ -189,6 +189,23 @@ def test_slack_plugin_requires_a_direct_bot_mention_for_channel_messages() -> No
     assert unmentioned == []
 
 
+def test_slack_message_identity_uses_timestamp_for_reaction_feedback() -> None:
+    plugin = SlackPlatformPlugin(ValidationConfig())
+    settings = plugin.settings_model.model_validate({"group_policy": "open"})
+    payload = _slack_event("hello <@bot-1|agent>")
+    payload["event"]["client_msg_id"] = "client-generated-id"
+
+    envelopes = plugin.admit_inbound(
+        settings,
+        payload,
+        context=_slack_admission_context(owned=False),
+    )
+
+    assert len(envelopes) == 1
+    assert envelopes[0].provider_message_id == "1724320800.000100"
+    assert envelopes[0].provider_metadata["client_msg_id"] == "client-generated-id"
+
+
 def test_slack_every_message_policy_requires_mentions_inside_threads() -> None:
     plugin = SlackPlatformPlugin(ValidationConfig())
     settings = plugin.settings_model.model_validate({"group_policy": "open", "thread_mention_policy": "every_message"})

@@ -22,7 +22,7 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 ### 2026-08-24 — AF-272 — Slack processing feedback — PR pending
 
 - Delivered: Accepted Slack messages receive an immediate 👀 reaction; claimed deliveries show a Slack assistant processing status; successful outbound provider delivery replaces 👀 with ✅; terminal runtime/provider failure clears status, removes 👀, and adds ❌.
-- Changed: Added the provider-neutral processing-feedback capability and lifecycle seam. Slack's calls use existing `chat:write` and `reactions:write` scopes, treat duplicate reaction state as success, and remain best-effort so feedback cannot alter durable delivery outcomes.
+- Changed: Added the provider-neutral processing-feedback capability and lifecycle seam. Slack's calls use existing `chat:write` and `reactions:write` scopes, target reactions by the canonical message timestamp, treat duplicate reaction state as success, and remain best-effort so feedback cannot alter durable delivery outcomes.
 - Follow-up: Replace idle runtime claim polling with bounded long polling/backoff.
 
 ### 2026-08-24 — AF-272 — Slack mention and thread admission — PR pending
