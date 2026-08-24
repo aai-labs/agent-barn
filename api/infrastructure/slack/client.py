@@ -160,6 +160,40 @@ class SlackClient:
             raise SlackFetchError("chat.postMessage returned no message id")
         return message_id
 
+    def add_reaction(self, channel_id: str, timestamp: str, name: str) -> None:
+        """Add a reaction, treating Slack's duplicate response as success."""
+        body = self._post(
+            "reactions.add",
+            {"channel": channel_id, "timestamp": timestamp, "name": name},
+        )
+        if body.get("ok") or body.get("error") == "already_reacted":
+            return
+        raise SlackFetchError(f"reactions.add error: {body.get('error', 'unknown_error')}")
+
+    def remove_reaction(self, channel_id: str, timestamp: str, name: str) -> None:
+        """Remove a reaction, treating an already-removed reaction as success."""
+        body = self._post(
+            "reactions.remove",
+            {"channel": channel_id, "timestamp": timestamp, "name": name},
+        )
+        if body.get("ok") or body.get("error") == "no_reaction":
+            return
+        raise SlackFetchError(f"reactions.remove error: {body.get('error', 'unknown_error')}")
+
+    def set_thread_status(self, channel_id: str, thread_id: str, status: str) -> None:
+        """Set an assistant loading status for a Slack thread."""
+        body = self._post(
+            "assistant.threads.setStatus",
+            {"channel_id": channel_id, "thread_ts": thread_id, "status": status},
+        )
+        if body.get("ok"):
+            return
+        raise SlackFetchError(f"assistant.threads.setStatus error: {body.get('error', 'unknown_error')}")
+
+    def clear_thread_status(self, channel_id: str, thread_id: str) -> None:
+        """Clear an assistant loading status without sending another message."""
+        self.set_thread_status(channel_id, thread_id, "")
+
     # --- cached directory listings -----------------------------------------
 
     def _token_key(self, kind: str) -> str:

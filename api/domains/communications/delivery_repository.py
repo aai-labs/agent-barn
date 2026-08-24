@@ -317,6 +317,46 @@ class CommunicationDeliveryRepository:
             session.commit()
             return delivery
 
+    def get_inbound_runtime_delivery(
+        self,
+        delivery_id: UUID,
+        *,
+        agent_id: UUID,
+    ) -> RuntimeDeliveryRead | None:
+        """Load a claimed inbound delivery for lifecycle feedback context."""
+        with Session(self.delegate.engine) as session:
+            delivery = session.exec(
+                select(CommunicationDelivery).where(
+                    col(CommunicationDelivery.id) == delivery_id,
+                    col(CommunicationDelivery.agent_id) == agent_id,
+                    col(CommunicationDelivery.direction) == CommunicationDirection.INBOUND,
+                )
+            ).one_or_none()
+            if delivery is None:
+                return None
+            return RuntimeDeliveryRead(
+                delivery_id=delivery.id,
+                message_id=delivery.message_id,
+                connection_id=delivery.connection_id,
+                attempt_count=delivery.attempt_count,
+                envelope=NormalizedCommunicationEnvelope.model_validate(delivery.envelope),
+            )
+
+    def delivery_status(
+        self,
+        delivery_id: UUID,
+        *,
+        direction: CommunicationDirection,
+    ) -> CommunicationDeliveryStatus | None:
+        with Session(self.delegate.engine) as session:
+            status = session.exec(
+                select(CommunicationDelivery.status).where(
+                    col(CommunicationDelivery.id) == delivery_id,
+                    col(CommunicationDelivery.direction) == direction,
+                )
+            ).one_or_none()
+            return CommunicationDeliveryStatus(status) if status is not None else None
+
     def complete_outbound(
         self,
         delivery_id: UUID,
@@ -325,7 +365,7 @@ class CommunicationDeliveryRepository:
         error_code: str | None = None,
         error_message: str | None = None,
         max_attempts: int = 5,
-    ) -> None:
+    ) -> bool:
         now = datetime.now(UTC)
         with Session(self.delegate.engine) as session:
             delivery = session.exec(
@@ -338,7 +378,7 @@ class CommunicationDeliveryRepository:
                 .with_for_update()
             ).one_or_none()
             if delivery is None:
-                return
+                return False
             self._apply_completion(
                 delivery,
                 succeeded=provider_message_id is not None,
@@ -350,6 +390,7 @@ class CommunicationDeliveryRepository:
             delivery.provider_message_id = provider_message_id
             session.add(delivery)
             session.commit()
+            return True
 
     def complete_runtime_delivery(
         self,

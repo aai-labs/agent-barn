@@ -1,10 +1,15 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
 
-from api.domains.communications.models import PlatformCapability
-from api.domains.communications.plugins.base import InboundAdmissionContext
+from api.domains.communications.models import (
+    ConversationLocation,
+    PlatformCapability,
+    ProcessingFeedbackStage,
+)
+from api.domains.communications.plugins.base import InboundAdmissionContext, ProcessingFeedbackContext
 from api.domains.communications.plugins.discord import DiscordPlatformPlugin
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.plugins.slack import SlackPlatformPlugin
@@ -249,3 +254,36 @@ def test_slack_ignores_app_mention_events_to_avoid_duplicate_message_delivery() 
     payload["event"]["type"] = "app_mention"
 
     assert plugin.admit_inbound(settings, payload, context=_slack_admission_context(owned=False)) == []
+
+
+def test_slack_processing_feedback_uses_reactions_and_thread_status() -> None:
+    plugin = SlackPlatformPlugin(ValidationConfig())
+    settings = plugin.settings_model.model_validate({})
+    credentials = plugin.credentials_model.model_validate({"bot_token": "xoxb-token", "app_token": "xapp-token"})
+    context = ProcessingFeedbackContext(
+        connection_id=uuid4(),
+        stage=ProcessingFeedbackStage.ACCEPTED,
+        location=ConversationLocation(id="channel-1", type="CHANNEL", thread_id="root-1"),
+        provider_message_id="root-1",
+    )
+
+    with patch("api.domains.communications.plugins.slack.SlackClient") as client_type:
+        client = client_type.return_value
+        plugin.processing_feedback(settings, credentials, context)
+        plugin.processing_feedback(
+            settings,
+            credentials,
+            replace(context, stage=ProcessingFeedbackStage.CLAIMED),
+        )
+        plugin.processing_feedback(
+            settings,
+            credentials,
+            replace(context, stage=ProcessingFeedbackStage.SUCCEEDED),
+        )
+
+    assert client.add_reaction.call_args_list[0].args == ("channel-1", "root-1", "eyes")
+    client.set_thread_status.assert_called_once_with("channel-1", "root-1", "is thinking...")
+    client.clear_thread_status.assert_called_once_with("channel-1", "root-1")
+    client.remove_reaction.assert_called_once_with("channel-1", "root-1", "eyes")
+    assert client.add_reaction.call_count == 2
+    assert client.add_reaction.call_args_list[-1].args == ("channel-1", "root-1", "white_check_mark")

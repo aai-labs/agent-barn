@@ -1,3 +1,4 @@
+import json
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -259,3 +260,31 @@ def test_get_bot_info_returns_empty_dict_on_network_error():
         info = SlackClient("xoxb-token").get_bot_info()
 
     assert info == {}
+
+
+def test_processing_feedback_calls_are_idempotent_for_reactions_and_status():
+    responses = [
+        _resp({"ok": True}),
+        _resp({"ok": False, "error": "already_reacted"}),
+        _resp({"ok": False, "error": "no_reaction"}),
+        _resp({"ok": True}),
+        _resp({"ok": True}),
+    ]
+    mock = _mock_httpx(responses)
+    with patch("httpx.request", mock):
+        client = SlackClient("xoxb-token")
+        client.add_reaction("C123", "1724264405.531769", "eyes")
+        client.add_reaction("C123", "1724264405.531769", "eyes")
+        client.remove_reaction("C123", "1724264405.531769", "eyes")
+        client.set_thread_status("C123", "1724264405.531769", "is thinking...")
+        client.clear_thread_status("C123", "1724264405.531769")
+
+    assert mock.call_count == 5
+    status_request = mock.call_args_list[-2]
+    clear_request = mock.call_args_list[-1]
+    assert json.loads(status_request.kwargs["content"]) == {
+        "channel_id": "C123",
+        "thread_ts": "1724264405.531769",
+        "status": "is thinking...",
+    }
+    assert json.loads(clear_request.kwargs["content"])["status"] == ""

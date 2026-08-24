@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import re
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
@@ -16,14 +17,18 @@ from api.domains.communications.models import (
     NormalizedCommunicationEnvelope,
     OutboundCommunicationEnvelope,
     PlatformCapability,
+    ProcessingFeedbackStage,
 )
 from api.domains.communications.plugins.base import (
     InboundAdmissionContext,
     PlatformCredentials,
     PlatformPlugin,
     PlatformSettings,
+    ProcessingFeedbackContext,
 )
 from api.infrastructure.slack.client import SlackClient
+
+logger = logging.getLogger(__name__)
 
 
 class SlackValidationConfig(Protocol):
@@ -89,6 +94,7 @@ class SlackPlatformPlugin(PlatformPlugin):
             PlatformCapability.DIRECTORY_DISCOVERY,
             PlatformCapability.MENTIONS,
             PlatformCapability.THREADS,
+            PlatformCapability.PROCESSING_FEEDBACK,
         }
     )
     settings_model = SlackSettings
@@ -132,6 +138,89 @@ class SlackPlatformPlugin(PlatformPlugin):
             envelope.text,
             thread_id=envelope.location.thread_id,
         )
+
+    def processing_feedback(
+        self,
+        settings: PlatformSettings,
+        credentials: PlatformCredentials,
+        context: ProcessingFeedbackContext,
+    ) -> None:
+        del settings
+        assert isinstance(credentials, SlackCredentials)
+        client = SlackClient(credentials.bot_token)
+
+        if context.stage == ProcessingFeedbackStage.ACCEPTED:
+            self._best_effort_feedback(
+                "add acknowledgement reaction",
+                context,
+                lambda: client.add_reaction(context.location.id, context.provider_message_id or "", "eyes"),
+            )
+            return
+
+        if context.stage == ProcessingFeedbackStage.CLAIMED:
+            if context.location.thread_id:
+                self._best_effort_feedback(
+                    "set processing status",
+                    context,
+                    lambda: client.set_thread_status(
+                        context.location.id,
+                        context.location.thread_id or "",
+                        "is thinking...",
+                    ),
+                )
+            return
+
+        self._best_effort_feedback(
+            "clear processing status",
+            context,
+            lambda: (
+                client.clear_thread_status(
+                    context.location.id,
+                    context.location.thread_id or "",
+                )
+                if context.location.thread_id
+                else None
+            ),
+        )
+        self._best_effort_feedback(
+            "remove acknowledgement reaction",
+            context,
+            lambda: client.remove_reaction(context.location.id, context.provider_message_id or "", "eyes"),
+        )
+        self._best_effort_feedback(
+            "add terminal reaction",
+            context,
+            lambda: client.add_reaction(
+                context.location.id,
+                context.provider_message_id or "",
+                "white_check_mark" if context.stage == ProcessingFeedbackStage.SUCCEEDED else "x",
+            ),
+        )
+
+    @staticmethod
+    def _best_effort_feedback(
+        action: str,
+        context: ProcessingFeedbackContext,
+        callback: Callable[[], None],
+    ) -> None:
+        if not context.provider_message_id and action in {
+            "add acknowledgement reaction",
+            "remove acknowledgement reaction",
+            "add terminal reaction",
+        }:
+            return
+        try:
+            callback()
+        except Exception as exc:
+            detail = " ".join(str(exc).split())[:160]
+            logger.warning(
+                "Slack processing feedback %s failed for channel %s thread %s (%s): %s",
+                action,
+                context.location.id,
+                context.location.thread_id or "root",
+                type(exc).__name__,
+                detail,
+            )
 
     def normalize_inbound(
         self,

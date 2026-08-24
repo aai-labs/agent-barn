@@ -36,6 +36,14 @@ class PlatformCapability(str, enum.Enum):
     ATTACHMENTS = "attachments"
     THREADS = "threads"
     MENTIONS = "mentions"
+    PROCESSING_FEEDBACK = "processing_feedback"
+
+
+class ProcessingFeedbackStage(str, enum.Enum):
+    ACCEPTED = "accepted"
+    CLAIMED = "claimed"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
 
 
 class CredentialUniquenessScope(str, enum.Enum):

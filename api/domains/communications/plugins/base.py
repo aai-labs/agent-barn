@@ -15,6 +15,7 @@ from api.domains.communications.models import (
     OutboundCommunicationEnvelope,
     PlatformCapability,
     PlatformDescriptorRead,
+    ProcessingFeedbackStage,
 )
 
 
@@ -46,6 +47,17 @@ class InboundAdmissionContext:
 
     connection_id: UUID
     thread_is_agent_owned: Callable[[ConversationLocation], bool]
+
+
+@dataclass(frozen=True)
+class ProcessingFeedbackContext:
+    """Provider-neutral lifecycle facts for best-effort user feedback."""
+
+    connection_id: UUID
+    stage: ProcessingFeedbackStage
+    location: ConversationLocation
+    provider_message_id: str | None = None
+    source_delivery_id: UUID | None = None
 
 
 class PlatformPlugin(ABC):
@@ -156,6 +168,20 @@ class PlatformPlugin(ABC):
         """
         del context
         return self.normalize_inbound(settings, payload)
+
+    def processing_feedback(
+        self,
+        settings: PlatformSettings,
+        credentials: PlatformCredentials,
+        context: ProcessingFeedbackContext,
+    ) -> None:
+        """Publish optional provider UX for an inbound delivery lifecycle.
+
+        The hook is deliberately outside durable delivery state transitions:
+        failures here must never change whether a Communication Delivery is
+        accepted, retried, or terminally completed.
+        """
+        del settings, credentials, context
 
     async def run_ingress(
         self,
