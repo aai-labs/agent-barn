@@ -24,13 +24,13 @@ A Kubernetes/runtime start failure can place the Agent in `ERROR`; successful st
 
 ## Runtime-neutral communications
 
-Both Hermes and OpenClaw consume the same versioned Communications protocol. A sidecar-style runtime adapter claims inbound Communication Deliveries, invokes the runtime's local chat-completions endpoint with a Connection-scoped session key, submits the reply against the source delivery, and completes the delivery. Runtimes never receive provider tokens and contain no Slack, Teams, Telegram, or Discord transport configuration.
+Both Hermes and OpenClaw consume the same versioned Communications protocol. A sidecar-style runtime adapter claims inbound Communication Deliveries, invokes the runtime's local chat-completions endpoint with a Connection-scoped session key, submits the reply against the source delivery, and completes the delivery. Runtimes never receive provider tokens and contain no Slack, Telegram, or Discord transport configuration.
 
 Runtime is persisted as `agent_type`. Platform is not an Agent field: an Agent may be headless or own any number of Communication Connections independently of whether Hermes or OpenClaw executes it.
 
 ## Platform Plugin boundary
 
-Agent Barn ships a code-owned Platform Plugin registry. Each plugin owns typed settings and credential schemas, external validation, credential uniqueness/fingerprinting, inbound normalization, provider-session behavior, and outbound sending. Slack uses supervised Socket Mode, Telegram uses supervised polling, Discord uses a supervised Gateway session, and Teams uses authenticated webhook ingress.
+Agent Barn ships a code-owned Platform Plugin registry. Each plugin owns typed settings and credential schemas, external validation, credential uniqueness/fingerprinting, inbound normalization, provider-session behavior, and outbound sending. Slack uses supervised Socket Mode, Telegram uses supervised polling, and Discord uses a supervised Gateway session.
 
 Adding a shipped platform adds one plugin and provider client plus focused tests. The generic Connection persistence, CRUD routes, schema-driven UI, durable delivery pipeline, runtime protocol, and Agent builders do not gain platform branches. Plugins are trusted release artifacts, not dynamically installed packages.
 

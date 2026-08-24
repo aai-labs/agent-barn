@@ -37,7 +37,7 @@ def test_config_map_contains_runtime_adapter_and_no_provider_bundle() -> None:
     )
 
     assert "communications-runtime-adapter.py" in config_map.data
-    assert not any(name.startswith(("slack-", "telegram-", "discord-", "teams-")) for name in config_map.data)
+    assert not any(name.startswith(("slack-", "telegram-", "discord-")) for name in config_map.data)
 
 
 def test_runtime_secret_contains_only_runtime_and_llm_credentials() -> None:

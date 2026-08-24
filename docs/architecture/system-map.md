@@ -54,7 +54,7 @@ The Agent domain owns lifecycle, templates, skills, runtime builders, Kubernetes
 - Organization is the tenant-scoping axis for user-visible data.
 - API DTOs and database models remain distinct types even when they share a domain `models.py` file.
 - Agent runtime configuration is assembled from the agent's pinned template version, explicit skill assignments, eligible integration skills, and encrypted credentials at start time.
-- Runtime and platform are separate concepts: Hermes/OpenClaw execute Agents; Slack/Teams/Telegram/Discord are supplied by shipped Platform Plugins and never select a runtime.
+- Runtime and platform are separate concepts: Hermes/OpenClaw execute Agents; Slack/Telegram/Discord are supplied by shipped Platform Plugins and never select a runtime.
 - Domain Events are internal, tenant-aware business facts; they are separate from runtime Telemetry Events and are persisted through transport-neutral PostgreSQL outbox tables.
 - Schema changes are represented by Alembic migrations and exercised against PostgreSQL in API integration tests.
 - API and UI deployment versions are independent; `../../AGENTS.md` owns the release-version rules.

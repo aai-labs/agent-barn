@@ -26,7 +26,6 @@ class CommunicationPlatform(str, enum.Enum):
 
     SLACK = "slack"
     TELEGRAM = "telegram"
-    TEAMS = "teams"
     DISCORD = "discord"
 
 

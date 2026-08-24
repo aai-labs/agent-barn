@@ -59,12 +59,12 @@ def _base(context) -> str:
     return f"/api/v1/organizations/{context.organization.id}/agents/{context.agent.id}/connections"
 
 
-def _teams_payload(name: str = "Community Teams", app_id: str = "app-one") -> dict:
+def _discord_payload(name: str = "Community Discord", bot_token: str = "token-one") -> dict:
     return {
-        "platform_key": "teams",
+        "platform_key": "discord",
         "display_name": name,
-        "settings": {"tenant_id": "tenant-one"},
-        "credentials": {"app_id": app_id, "app_password": "secret"},
+        "settings": {"guild_ids": ["guild-one"]},
+        "credentials": {"bot_token": bot_token},
     }
 
 
@@ -82,7 +82,7 @@ def test_platform_catalog_lists_the_shipped_plugins() -> None:
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             assert_that(
                 [item["key"] for item in response.json()],
-                contains_inanyorder("discord", "slack", "teams", "telegram"),
+                contains_inanyorder("discord", "slack", "telegram"),
             )
 
 
@@ -97,7 +97,7 @@ def test_list_connections_without_authentication_returns_401() -> None:
 
 def test_create_connection_rejects_unknown_platform() -> None:
     with given(_GIVEN) as context:
-        payload = _teams_payload()
+        payload = _discord_payload()
         payload["platform_key"] = "carrier-pigeon"
 
         with when("I create a Connection for a plugin that is not shipped"):
@@ -112,7 +112,7 @@ def test_create_connection_rejects_incomplete_payload() -> None:
         with when("I omit the required credentials"):
             response = context.client.post(
                 _base(context),
-                json={"platform_key": "teams", "display_name": "Incomplete"},
+                json={"platform_key": "discord", "display_name": "Incomplete"},
                 headers=_auth(context),
             )
 
@@ -129,7 +129,7 @@ def test_create_connection_requires_agent_update_permission() -> None:
         with when("I create a Connection without Agent update permission"):
             response = context.client.post(
                 _base(context),
-                json=_teams_payload(),
+                json=_discord_payload(),
                 headers=_auth(context),
             )
 
@@ -150,11 +150,11 @@ def test_agent_can_have_multiple_connections_for_the_same_platform() -> None:
     with given(_GIVEN) as context:
         client: TestClient = context.client
 
-        with when("I create two Teams connections"):
-            first = client.post(_base(context), json=_teams_payload(), headers=_auth(context))
+        with when("I create two Discord connections"):
+            first = client.post(_base(context), json=_discord_payload(), headers=_auth(context))
             second = client.post(
                 _base(context),
-                json=_teams_payload("Partner Teams", "app-two"),
+                json=_discord_payload("Partner Discord", "token-two"),
                 headers=_auth(context),
             )
             listed = client.get(_base(context), headers=_auth(context))
@@ -164,19 +164,19 @@ def test_agent_can_have_multiple_connections_for_the_same_platform() -> None:
             assert_that(second.status_code, equal_to(status.HTTP_201_CREATED))
             assert_that(listed.status_code, equal_to(status.HTTP_200_OK))
             assert_that(len(listed.json()), equal_to(2))
-            assert_that(first.json(), has_entries(platform_key="teams", display_name="Community Teams", revision=1))
+            assert_that(first.json(), has_entries(platform_key="discord", display_name="Community Discord", revision=1))
             assert_that(first.json(), not_(has_key("credentials")))
 
 
 def test_duplicate_active_connection_name_returns_conflict() -> None:
     with given(_GIVEN) as context:
         client: TestClient = context.client
-        client.post(_base(context), json=_teams_payload(), headers=_auth(context))
+        client.post(_base(context), json=_discord_payload(), headers=_auth(context))
 
         with when("I reuse the active display name with different casing"):
             response = client.post(
                 _base(context),
-                json=_teams_payload("community teams", "app-two"),
+                json=_discord_payload("community discord", "token-two"),
                 headers=_auth(context),
             )
 
@@ -187,11 +187,11 @@ def test_duplicate_active_connection_name_returns_conflict() -> None:
 def test_stale_connection_update_returns_conflict() -> None:
     with given(_GIVEN) as context:
         client: TestClient = context.client
-        created = client.post(_base(context), json=_teams_payload(), headers=_auth(context)).json()
+        created = client.post(_base(context), json=_discord_payload(), headers=_auth(context)).json()
         url = f"{_base(context)}/{created['id']}"
         current = client.patch(
             url,
-            json={"revision": 1, "display_name": "Updated Teams"},
+            json={"revision": 1, "display_name": "Updated Discord"},
             headers=_auth(context),
         )
 
@@ -211,16 +211,16 @@ def test_stale_connection_update_returns_conflict() -> None:
 def test_connection_settings_name_and_credentials_can_be_updated() -> None:
     with given(_GIVEN) as context:
         client: TestClient = context.client
-        created = client.post(_base(context), json=_teams_payload(), headers=_auth(context)).json()
+        created = client.post(_base(context), json=_discord_payload(), headers=_auth(context)).json()
 
         with when("I update every editable schema-driven field"):
             response = client.patch(
                 f"{_base(context)}/{created['id']}",
                 json={
                     "revision": created["revision"],
-                    "display_name": "Renamed Teams",
-                    "settings": {"tenant_id": "tenant-two"},
-                    "credentials": {"app_id": "app-two", "app_password": "rotated-secret"},
+                    "display_name": "Renamed Discord",
+                    "settings": {"guild_ids": ["guild-two"]},
+                    "credentials": {"bot_token": "rotated-token"},
                 },
                 headers=_auth(context),
             )
@@ -230,9 +230,18 @@ def test_connection_settings_name_and_credentials_can_be_updated() -> None:
             assert_that(
                 response.json(),
                 has_entries(
-                    display_name="Renamed Teams",
-                    settings={"tenant_id": "tenant-two"},
-                    external_identity="tenant-two / app-two",
+                    display_name="Renamed Discord",
+                    settings={
+                        "guild_ids": ["guild-two"],
+                        "allowed_channel_ids": [],
+                        "allowed_user_ids": [],
+                        "allowed_role_ids": [],
+                        "group_policy": "allowlist",
+                        "dm_policy": "off",
+                        "require_mention": True,
+                        "home_channel_id": None,
+                    },
+                    external_identity="validation-skipped",
                     revision=2,
                 ),
             )
@@ -254,7 +263,7 @@ def test_unknown_connection_update_returns_404() -> None:
 
 def test_ingress_lease_allows_only_one_gateway_replica() -> None:
     with given(_GIVEN) as context:
-        created = context.client.post(_base(context), json=_teams_payload(), headers=_auth(context)).json()
+        created = context.client.post(_base(context), json=_discord_payload(), headers=_auth(context)).json()
         connection_id = UUID(created["id"])
         repository = context.injector.get(CommunicationConnectionRepository)
 

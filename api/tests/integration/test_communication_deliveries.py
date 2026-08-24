@@ -37,6 +37,7 @@ _GIVEN = [
             "LITELLM_SECRET_NAME": "litellm",
             "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
             "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
+            "SKIP_DISCORD_TOKEN_VALIDATION": "true",
         }
     ),
     prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
@@ -53,15 +54,15 @@ def _auth(context) -> dict[str, str]:
     return {"Authorization": f"Bearer {context.access_token}"}
 
 
-def _create_connection(context, app_id: str = "gateway-app") -> UUID:
+def _create_connection(context, bot_token: str = "gateway-token") -> UUID:
     client: TestClient = context.client
     response = client.post(
         f"/api/v1/organizations/{context.organization.id}/agents/{context.agent.id}/connections",
         json={
-            "platform_key": "teams",
-            "display_name": "Gateway Teams",
-            "settings": {"tenant_id": "tenant"},
-            "credentials": {"app_id": app_id, "app_password": "secret"},
+            "platform_key": "discord",
+            "display_name": "Gateway Discord",
+            "settings": {"guild_ids": ["guild-one"]},
+            "credentials": {"bot_token": bot_token},
         },
         headers=_auth(context),
     )

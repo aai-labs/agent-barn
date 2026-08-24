@@ -743,7 +743,7 @@ class AgentRepository:
         on the Agent row (name, model, approval_mode, template pin), diffing against
         the currently-persisted row and staging an `agent.updated` event only when a
         tracked field actually changed. Skills, secrets, and nested platform config
-        (Slack/Teams/Telegram) are covered by their own events elsewhere and are
+        (Slack/Telegram/Discord) are covered by their own events elsewhere and are
         deliberately excluded from this diff."""
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             persisted = session.exec(

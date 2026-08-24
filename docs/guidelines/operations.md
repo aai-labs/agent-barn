@@ -101,5 +101,5 @@ Documentation-only changes do not change a service image and do not require a se
 
 - Treat signing-key and encryption-key rotation as migrations: existing tokens or encrypted values depend on the current keys.
 - Verify migration and secret-hook behavior when changing API chart startup.
-- Keep runtime/platform differences explicit when changing Hermes, OpenClaw, Slack, Teams, or Telegram deployment configuration.
+- Keep runtime/platform differences explicit when changing Hermes, OpenClaw, Slack, Telegram, or Discord deployment configuration.
 - Use the existing deployment workflow rather than manually publishing mutable production tags.

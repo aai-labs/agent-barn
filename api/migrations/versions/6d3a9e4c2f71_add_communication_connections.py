@@ -139,33 +139,6 @@ def _backfill_connections() -> dict[uuid.UUID, uuid.UUID]:
             encryption_key=encryption_key,
         )
 
-    teams_rows = bind.execute(
-        sa.text(
-            """
-            SELECT a.id AS agent_id, a.organization_id, c.app_id_encrypted,
-                   c.app_password_encrypted, c.tenant_id
-            FROM agent a
-            JOIN agent_teams_config c ON c.agent_id = a.id
-            WHERE a.platform = 'teams'
-            """
-        )
-    ).mappings()
-    for row in teams_rows:
-        app_id = decrypt_token(row["app_id_encrypted"], encryption_key)
-        app_password = decrypt_token(row["app_password_encrypted"], encryption_key)
-        connection_by_agent[row["agent_id"]] = _insert_connection(
-            bind,
-            agent_id=row["agent_id"],
-            organization_id=row["organization_id"],
-            platform_key="teams",
-            display_name="Microsoft Teams",
-            settings={"tenant_id": row["tenant_id"]},
-            credentials={"app_id": app_id, "app_password": app_password},
-            fingerprint_material=app_id,
-            external_identity=f"{row['tenant_id']} / {app_id}",
-            encryption_key=encryption_key,
-        )
-
     telegram_rows = bind.execute(
         sa.text(
             """

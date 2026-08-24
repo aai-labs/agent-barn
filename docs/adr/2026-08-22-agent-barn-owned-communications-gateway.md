@@ -3,7 +3,7 @@
 Status: Accepted
 Date: 2026-08-22
 
-An Agent may communicate through zero or many Agent-owned Communication Connections, including several connections for one Communication Platform. Agent Barn ships trusted Platform Plugins and owns provider ingress, durable delivery, canonical Conversation Messages, and outbound replies through a Communications Gateway; runtimes consume one versioned internal communication protocol instead of owning Slack, Teams, Telegram, Discord, or future platform transports.
+An Agent may communicate through zero or many Agent-owned Communication Connections, including several connections for one Communication Platform. Agent Barn ships trusted Platform Plugins and owns provider ingress, durable delivery, canonical Conversation Messages, and outbound replies through a Communications Gateway; runtimes consume one versioned internal communication protocol instead of owning Slack, Telegram, Discord, or future platform transports.
 
 ## Considered alternatives
 

@@ -34,9 +34,6 @@ from api.infrastructure.litellm.client import LiteLLMClient
 TEST_ENCRYPTION_KEY: str = Fernet.generate_key().decode()
 TEST_SLACK_BOT_TOKEN = "xoxb-test-bot-token"
 TEST_SLACK_APP_TOKEN = "xapp-1-test-app-token"
-TEST_TEAMS_APP_ID = "test-teams-app-id"
-TEST_TEAMS_APP_PASSWORD = "test-teams-app-password"
-TEST_TEAMS_TENANT_ID = "test-tenant-id"
 TEST_TELEGRAM_BOT_TOKEN = "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
 TEST_DISCORD_BOT_TOKEN = "test-discord-bot-token"
 FAKE_LITELLM_KEY = "sk-fake-litellm-key-for-tests"

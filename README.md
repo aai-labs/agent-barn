@@ -1,6 +1,6 @@
 # Agent Barn
 
-Platform for hiring, managing, and running AI agents on Slack and Microsoft Teams.
+Platform for hiring, managing, and running AI agents across supported messaging platforms.
 
 Monorepo layout:
 
@@ -17,8 +17,8 @@ API is served under `/api/v1`; frontend requests to `/api/*` are proxied to the 
 
 **Agents**
 
-- Hire agents on Slack or Microsoft Teams
-- Two runtimes: Hermes (Slack-only, lightweight) and OpenClaw (Slack + Teams)
+- Reach agents through Slack, Telegram, and Discord connections
+- Two provider-independent runtimes: Hermes and OpenClaw
 - Automatic Slack app creation via configuration tokens
 - Manual Slack app setup with manifest export
 - Start, stop, and monitor agents
@@ -268,7 +268,7 @@ the host firewall allows the k3d bridge network to reach port 8001.
 
 ### Communication connections
 
-Slack, Telegram, Teams, and Discord sessions run in the separately served
+Slack, Telegram, and Discord sessions run in the separately served
 Communications gateway on port `8002`. Agent pods claim and complete deliveries
 through `http://host.docker.internal:8002/communications/v1`, because the
 Compose service name is not resolvable from k3d. `./run.sh` and `make dev-api`

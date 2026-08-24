@@ -5,7 +5,6 @@ from api.domains.agents.event_handlers import AgentLifecycleEmailHandler
 from api.domains.communications.plugins.discord import DiscordPlatformPlugin
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.plugins.slack import SlackPlatformPlugin
-from api.domains.communications.plugins.teams import TeamsPlatformPlugin
 from api.domains.communications.plugins.telegram import TelegramPlatformPlugin
 from api.domains.events.constants import EVENT_DELIVERY_PROCESSING_STALE_SECONDS
 from api.domains.events.handlers import EventHandlerRegistry
@@ -42,7 +41,6 @@ class AppModule(Module):
             [
                 DiscordPlatformPlugin(config),
                 SlackPlatformPlugin(config),
-                TeamsPlatformPlugin(),
                 TelegramPlatformPlugin(config),
             ]
         )

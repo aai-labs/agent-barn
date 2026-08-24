@@ -58,7 +58,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
         <div>
           <div className="mb-1 text-xs font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--ink-3)" }}>New Agent</div>
           <h2 className="m-0 text-xl font-semibold tracking-tight">Hire a headless Agent</h2>
-          <p className="mb-0 mt-1 text-sm" style={{ color: "var(--ink-3)" }}>Start with the runtime. Add Slack, Telegram, Teams, or several connections afterward.</p>
+          <p className="mb-0 mt-1 text-sm" style={{ color: "var(--ink-3)" }}>Start with the runtime. Add Slack, Telegram, Discord, or several connections afterward.</p>
         </div>
         <button type="button" className="af-btn af-btn-ghost af-btn-icon" disabled={pending} onClick={onClose}><XIcon /></button>
       </header>

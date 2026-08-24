@@ -478,22 +478,20 @@ test.describe("Agent Detail Page — Channels tab", () => {
         status: 200,
         contentType: "application/json",
         body: JSON.stringify([{
-          key: "teams",
-          display_name: "Microsoft Teams",
+          key: "discord",
+          display_name: "Discord",
           schema_version: 1,
-          capabilities: ["WEBHOOK_INGRESS"],
+          capabilities: ["MENTIONS"],
           settings_schema: {
             type: "object",
-            properties: { tenant_id: { title: "Tenant ID", type: "string" } },
-            required: ["tenant_id"],
+            properties: { guild_ids: { title: "Guild IDs", type: "array", items: { type: "string" } } },
           },
           credentials_schema: {
             type: "object",
             properties: {
-              app_id: { title: "App ID", type: "string" },
-              app_password: { title: "App password", type: "string" },
+              bot_token: { title: "Bot token", type: "string" },
             },
-            required: ["app_id", "app_password"],
+            required: ["bot_token"],
           },
         }]),
       });
@@ -506,12 +504,12 @@ test.describe("Agent Detail Page — Channels tab", () => {
           body: JSON.stringify({
             id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
             agent_id: MOCK_AGENT_ID,
-            platform_key: "teams",
-            display_name: "Partner Teams",
+            platform_key: "discord",
+            display_name: "Partner Discord",
             enabled: true,
             schema_version: 1,
-            settings: { tenant_id: "tenant-two" },
-            external_identity: "tenant-two / app-two",
+            settings: { guild_ids: ["guild-two"] },
+            external_identity: "validation-skipped",
             observed_status: "PENDING",
             last_health_at: null,
             last_error_code: null,
@@ -530,12 +528,12 @@ test.describe("Agent Detail Page — Channels tab", () => {
         body: JSON.stringify([{
           id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
           agent_id: MOCK_AGENT_ID,
-          platform_key: "teams",
-          display_name: "Customer Teams",
+          platform_key: "discord",
+          display_name: "Customer Discord",
           enabled: true,
           schema_version: 1,
-          settings: { tenant_id: "tenant-one" },
-          external_identity: "tenant-one / app-one",
+          settings: { guild_ids: ["guild-one"] },
+          external_identity: "validation-skipped",
           observed_status: "CONNECTED",
           last_health_at: "2026-01-01T00:00:00Z",
           last_error_code: null,
@@ -554,12 +552,12 @@ test.describe("Agent Detail Page — Channels tab", () => {
         body: JSON.stringify({
           id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
           agent_id: MOCK_AGENT_ID,
-          platform_key: "teams",
-          display_name: "Renamed Teams",
+          platform_key: "discord",
+          display_name: "Renamed Discord",
           enabled: true,
           schema_version: 1,
-          settings: { tenant_id: "tenant-updated" },
-          external_identity: "tenant-one / app-one",
+          settings: { guild_ids: ["guild-updated"] },
+          external_identity: "validation-skipped",
           observed_status: "PENDING",
           last_health_at: null,
           last_error_code: null,
@@ -578,39 +576,38 @@ test.describe("Agent Detail Page — Channels tab", () => {
   });
 
   test("lists Connection identity and health independently of the Agent runtime", async ({ page }) => {
-    await expect(page.getByText("Customer Teams", { exact: true })).toBeVisible();
-    await expect(page.getByText(/teams · tenant-one \/ app-one · CONNECTED/)).toBeVisible();
+    await expect(page.getByText("Customer Discord", { exact: true })).toBeVisible();
+    await expect(page.getByText(/discord · validation-skipped · CONNECTED/)).toBeVisible();
   });
 
   test("edits Connection name and plugin settings without resending credentials", async ({ page }) => {
-    await page.getByRole("button", { name: "Edit Customer Teams" }).click();
-    await page.getByLabel("Connection name").fill("Renamed Teams");
-    await page.getByLabel("Tenant ID").fill("tenant-updated");
+    await page.getByRole("button", { name: "Edit Customer Discord" }).click();
+    await page.getByLabel("Connection name").fill("Renamed Discord");
+    await page.getByLabel("Guild IDs").fill("guild-updated");
     const update = page.waitForRequest((request) => request.method() === "PATCH" && request.url().includes("/connections/"));
     await page.getByRole("button", { name: "Save changes" }).click();
     expect((await update).postDataJSON()).toEqual({
       revision: 3,
-      display_name: "Renamed Teams",
-      settings: { tenant_id: "tenant-updated" },
+      display_name: "Renamed Discord",
+      settings: { guild_ids: ["guild-updated"] },
     });
   });
 
   test("creates another same-platform Connection from the plugin schema", async ({ page }) => {
     await page.getByRole("button", { name: "Add connection" }).click();
     await page.getByRole("combobox").click();
-    await page.getByRole("option", { name: "Microsoft Teams" }).click();
-    await page.getByLabel("Connection name").fill("Partner Teams");
-    await page.getByLabel("Tenant ID").fill("tenant-two");
-    await page.getByLabel("App ID").fill("app-two");
-    await page.getByLabel("App password").fill("secret-two");
+    await page.getByRole("option", { name: "Discord" }).click();
+    await page.getByLabel("Connection name").fill("Partner Discord");
+    await page.getByLabel("Guild IDs").fill("guild-two");
+    await page.getByLabel("Bot token").fill("token-two");
     const create = page.waitForRequest((request) => request.method() === "POST" && request.url().endsWith("/connections"));
     await page.getByRole("button", { name: "Create connection" }).click();
     expect((await create).postDataJSON()).toEqual({
-      platform_key: "teams",
-      display_name: "Partner Teams",
+      platform_key: "discord",
+      display_name: "Partner Discord",
       enabled: true,
-      settings: { tenant_id: "tenant-two" },
-      credentials: { app_id: "app-two", app_password: "secret-two" },
+      settings: { guild_ids: ["guild-two"] },
+      credentials: { bot_token: "token-two" },
     });
   });
 });
