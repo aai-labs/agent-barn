@@ -2,9 +2,11 @@
 
 import json
 import os
+import random
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 
 COMMUNICATIONS_URL = os.environ["COMMUNICATIONS_URL"].rstrip("/")
 COMMUNICATIONS_API_KEY = os.environ["COMMUNICATIONS_API_KEY"]
@@ -12,6 +14,39 @@ AGENT_ID = os.environ["AGENT_ID"]
 RUNTIME_API_URL = os.environ["RUNTIME_API_URL"].rstrip("/")
 RUNTIME_API_KEY = os.environ["RUNTIME_API_KEY"]
 RUNTIME_MODEL = os.environ["RUNTIME_MODEL"]
+
+
+class IdleClaimBackoff:
+    """Bound idle claim cadence while retaining prompt bounded delivery."""
+
+    def __init__(
+        self,
+        *,
+        initial_seconds: float = 0.5,
+        max_seconds: float = 5.0,
+        multiplier: float = 2.0,
+        jitter_ratio: float = 0.2,
+        random_value: Callable[[], float] = random.random,
+    ) -> None:
+        if initial_seconds <= 0 or max_seconds < initial_seconds:
+            raise ValueError("Idle claim backoff bounds are invalid")
+        if multiplier < 1 or not 0 <= jitter_ratio < 1:
+            raise ValueError("Idle claim backoff parameters are invalid")
+        self._initial_seconds = initial_seconds
+        self._max_seconds = max_seconds
+        self._multiplier = multiplier
+        self._jitter_ratio = jitter_ratio
+        self._random_value = random_value
+        self._current_seconds = initial_seconds
+
+    def next_delay(self) -> float:
+        base = self._current_seconds
+        self._current_seconds = min(self._max_seconds, base * self._multiplier)
+        jitter = (self._random_value() * 2 - 1) * self._jitter_ratio
+        return min(self._max_seconds, max(0.0, base * (1 + jitter)))
+
+    def reset(self) -> None:
+        self._current_seconds = self._initial_seconds
 
 
 def http_request(method: str, url: str, *, headers: dict[str, str], payload: dict | None = None):
@@ -85,6 +120,7 @@ def run_delivery(delivery: dict) -> None:
 
 
 def main() -> None:
+    idle_backoff = IdleClaimBackoff()
     while True:
         try:
             delivery = http_request(
@@ -93,11 +129,13 @@ def main() -> None:
                 headers=communications_headers(),
             )
             if delivery is None:
-                time.sleep(0.5)
+                time.sleep(idle_backoff.next_delay())
                 continue
+            idle_backoff.reset()
             run_delivery(delivery)
         except Exception as exc:
             print(f"[communications-adapter] {exc}", flush=True)
+            idle_backoff.reset()
             time.sleep(2)
 
 

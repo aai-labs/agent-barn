@@ -26,6 +26,8 @@ A Kubernetes/runtime start failure can place the Agent in `ERROR`; successful st
 
 Both Hermes and OpenClaw consume the same versioned Communications protocol. A sidecar-style runtime adapter claims inbound Communication Deliveries, invokes the runtime's local chat-completions endpoint with a Connection-scoped session key, submits the reply against the source delivery, and completes the delivery. Runtimes never receive provider tokens and contain no Slack, Telegram, or Discord transport configuration.
 
+The shared runtime adapter uses bounded exponential idle backoff with jitter for empty claim responses, starting at 500 ms and capping at 5 seconds. A successful claim resets the backoff before the next claim, so prompt delivery remains bounded without a tight HTTP or PostgreSQL polling loop. This is client-side cadence only: the Communications protocol version, claim ordering, delivery leases, and idempotency contract remain unchanged for Hermes and OpenClaw.
+
 Runtime is persisted as `agent_type`. Platform is not an Agent field: an Agent may be headless or own any number of Communication Connections independently of whether Hermes or OpenClaw executes it.
 
 ## Platform Plugin boundary
