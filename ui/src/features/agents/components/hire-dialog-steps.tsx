@@ -10,7 +10,12 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { SharedManualToggle } from "@/features/shared-credentials/components/shared-manual-toggle";
 import { useSharedManualSwitch } from "@/features/shared-credentials/hooks/use-shared-manual-switch";
 import { SHARED_CREDENTIAL_PROVIDER_LABELS } from "@/features/shared-credentials/utils";
@@ -25,7 +30,11 @@ import {
   isAutoConfiguredProvider,
   type IntegrationDraft,
 } from "../integrations";
-import type { AgentAssignedSkill, AgentTemplateRead, TemplateRequiredSkill } from "../schemas";
+import type {
+  AgentAssignedSkill,
+  AgentTemplateRead,
+  TemplateRequiredSkill,
+} from "../schemas";
 import { useTemplates } from "../hooks/use-templates";
 import type { RequiredSkillGroup } from "../utils";
 import { IntegrationFields } from "./integration-fields";
@@ -65,7 +74,11 @@ export function TemplateSourceBadge({
           ? { color: "var(--accent-ink)", background: "var(--accent-soft)" }
           : { color: "var(--ink-3)", background: "var(--line)" }
       }
-      title={isFork ? "Organization fork of a Platform Template" : "Platform Template"}
+      title={
+        isFork
+          ? "Organization fork of a Platform Template"
+          : "Platform Template"
+      }
     >
       {isFork ? "Org fork" : "Built-in"}
     </span>
@@ -185,7 +198,6 @@ export function TemplateStep({
 
   const totalPages = Math.max(1, Math.ceil(total / HIRE_DIALOG_PAGE_SIZE));
 
-
   function handleSearchChange(value: string) {
     setSearch(value);
     setPage(1);
@@ -195,9 +207,15 @@ export function TemplateStep({
     <div className="flex flex-col gap-3">
       <div
         className="flex items-center gap-2 px-3 py-2 rounded-xl"
-        style={{ border: "1px solid var(--line)", background: "var(--bg-elev)" }}
+        style={{
+          border: "1px solid var(--line)",
+          background: "var(--bg-elev)",
+        }}
       >
-        <SearchIcon size={14} style={{ color: "var(--ink-4)", flexShrink: 0 }} />
+        <SearchIcon
+          size={14}
+          style={{ color: "var(--ink-4)", flexShrink: 0 }}
+        />
         <input
           className="flex-1 text-[0.8125rem] outline-none bg-transparent"
           style={{ color: "var(--ink)" }}
@@ -208,68 +226,98 @@ export function TemplateStep({
       </div>
 
       <div style={{ minHeight: "22rem" }}>
-      {isLoading && (
-        <div className="text-[0.8125rem] py-8 text-center" style={{ color: "var(--ink-3)" }}>
-          Loading templates…
-        </div>
-      )}
-      {!isLoading && error && (
-        <div className="text-[0.8125rem] py-8 text-center" style={{ color: "var(--err)" }}>
-          Could not load templates. Please try again.
-        </div>
-      )}
-      {!isLoading && !error && templates.length === 0 && (
-        <div className="text-[0.8125rem] py-8 text-center" style={{ color: "var(--ink-3)" }}>
-          {search ? "No templates match." : "No templates yet. Create one in Settings → Templates first."}
-        </div>
-      )}
+        {isLoading && (
+          <div
+            className="text-[0.8125rem] py-8 text-center"
+            style={{ color: "var(--ink-3)" }}
+          >
+            Loading templates…
+          </div>
+        )}
+        {!isLoading && error && (
+          <div
+            className="text-[0.8125rem] py-8 text-center"
+            style={{ color: "var(--err)" }}
+          >
+            Could not load templates. Please try again.
+          </div>
+        )}
+        {!isLoading && !error && templates.length === 0 && (
+          <div
+            className="text-[0.8125rem] py-8 text-center"
+            style={{ color: "var(--ink-3)" }}
+          >
+            {search
+              ? "No templates match."
+              : "No templates yet. Create one in Settings → Templates first."}
+          </div>
+        )}
 
-      {!isLoading && !error && templates.length > 0 && (
-        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
-          {templates.map((t) => (
-            <div
-              key={t.templateKey}
-              className="flex flex-col gap-1.5 p-4 rounded-2xl cursor-default transition-colors min-h-[4.5rem]"
-              style={{
-                border: selectedKey === t.templateKey ? "1.5px solid var(--ink)" : "1.5px solid var(--line)",
-                background: selectedKey === t.templateKey ? "var(--bg-soft)" : "var(--bg-elev)",
-              }}
-              onClick={() => onPick(t)}
-            >
-              <div className="flex items-center justify-between gap-2">
-                <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>{t.templateName}</div>
-                <TemplateSourceBadge
-                  source={t.templateSource}
-                  isFork={Boolean(t.forkedFromPlatformTemplateId)}
-                />
-              </div>
-              {t.description && <ClampedDescription text={t.description} />}
-              <div className="mt-1">
-                {selectedKey === t.templateKey ? (
-                  <div onClick={(e) => e.stopPropagation()}>
-                    {versionsLoading ? (
-                      <span className="text-[0.75rem]" style={{ color: "var(--ink-3)" }}>Loading…</span>
-                    ) : (
-                      <VersionSelect
-                        versions={versions}
-                        selectedVersion={selectedVersion}
-                        onChange={onVersionChange}
-                      />
-                    )}
+        {!isLoading && !error && templates.length > 0 && (
+          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+            {templates.map((t) => (
+              <div
+                key={t.templateKey}
+                className="flex flex-col gap-1.5 p-4 rounded-2xl cursor-default transition-colors min-h-[4.5rem]"
+                style={{
+                  border:
+                    selectedKey === t.templateKey
+                      ? "1.5px solid var(--ink)"
+                      : "1.5px solid var(--line)",
+                  background:
+                    selectedKey === t.templateKey
+                      ? "var(--bg-soft)"
+                      : "var(--bg-elev)",
+                }}
+                onClick={() => onPick(t)}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div
+                    className="font-semibold text-[0.844rem]"
+                    style={{ color: "var(--ink)" }}
+                  >
+                    {t.templateName}
                   </div>
-                ) : (
-                  <div className="h-8" />
-                )}
+                  <TemplateSourceBadge
+                    source={t.templateSource}
+                    isFork={Boolean(t.forkedFromPlatformTemplateId)}
+                  />
+                </div>
+                {t.description && <ClampedDescription text={t.description} />}
+                <div className="mt-1">
+                  {selectedKey === t.templateKey ? (
+                    <div onClick={(e) => e.stopPropagation()}>
+                      {versionsLoading ? (
+                        <span
+                          className="text-[0.75rem]"
+                          style={{ color: "var(--ink-3)" }}
+                        >
+                          Loading…
+                        </span>
+                      ) : (
+                        <VersionSelect
+                          versions={versions}
+                          selectedVersion={selectedVersion}
+                          onChange={onVersionChange}
+                        />
+                      )}
+                    </div>
+                  ) : (
+                    <div className="h-8" />
+                  )}
+                </div>
               </div>
-            </div>
-          ))}
-        </div>
-      )}
-
+            ))}
+          </div>
+        )}
       </div>
 
       <div style={{ minHeight: "1.875rem" }}>
-        <Pagination page={page} totalPages={totalPages} onPageChange={setPage} />
+        <Pagination
+          page={page}
+          totalPages={totalPages}
+          onPageChange={setPage}
+        />
       </div>
     </div>
   );
@@ -298,10 +346,8 @@ export function SkillsStep({
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
 
-  const { switchToShared, switchToManual, handlePickShared } = useSharedManualSwitch(
-    skillCredentials,
-    onSkillCredentialsChange,
-  );
+  const { switchToShared, switchToManual, handlePickShared } =
+    useSharedManualSwitch(skillCredentials, onSkillCredentialsChange);
 
   const { skills, total, isLoading } = useSkills({
     search: search || undefined,
@@ -312,16 +358,21 @@ export function SkillsStep({
   const totalPages = Math.max(1, Math.ceil(total / HIRE_DIALOG_PAGE_SIZE));
 
   const requiredSkillIds = new Set(templateRequiredSkills.map((s) => s.id));
-  const groupMemberIds = new Set(requiredGroups.flatMap((g) => g.members.map((m) => m.id)));
+  const groupMemberIds = new Set(
+    requiredGroups.flatMap((g) => g.members.map((m) => m.id)),
+  );
   const orderedSkills = [
     ...skills.filter((s) => requiredSkillIds.has(s.id)),
-    ...skills.filter((s) => !requiredSkillIds.has(s.id) && !groupMemberIds.has(s.id)),
+    ...skills.filter(
+      (s) => !requiredSkillIds.has(s.id) && !groupMemberIds.has(s.id),
+    ),
   ];
 
-  const chosenGroupSkills: TemplateRequiredSkill[] = requiredGroups.flatMap((g) =>
-    (groupChoices[g.key] ?? [])
-      .map((id) => g.members.find((m) => m.id === id))
-      .filter((s): s is TemplateRequiredSkill => !!s),
+  const chosenGroupSkills: TemplateRequiredSkill[] = requiredGroups.flatMap(
+    (g) =>
+      (groupChoices[g.key] ?? [])
+        .map((id) => g.members.find((m) => m.id === id))
+        .filter((s): s is TemplateRequiredSkill => !!s),
   );
 
   // Track full Skill objects for selected skills so we can compute requiredProviders
@@ -345,11 +396,16 @@ export function SkillsStep({
   // dropping ones that no longer are (e.g. switching a group's choice from
   // GitHub to Bitbucket drops the stale GitHub draft).
   function syncCredentialDrafts(requiredProviders: Set<string>) {
-    const newCreds = skillCredentials.filter((c) => requiredProviders.has(c.provider));
+    const newCreds = skillCredentials.filter((c) =>
+      requiredProviders.has(c.provider),
+    );
     for (const p of requiredProviders) {
       // Auto-configured providers are derived from the agent's configuration and
       // must never appear in the secrets payload.
-      if (!isAutoConfiguredProvider(p) && !newCreds.find((c) => c.provider === p)) {
+      if (
+        !isAutoConfiguredProvider(p) &&
+        !newCreds.find((c) => c.provider === p)
+      ) {
         newCreds.push({ provider: p, content: {} });
       }
     }
@@ -382,7 +438,7 @@ export function SkillsStep({
       ? current.filter((id) => id !== member.id)
       : [...current, member.id];
     const newChosen = requiredGroups.flatMap((g) =>
-      (g.key === groupKey ? nextIdsForGroup : groupChoices[g.key] ?? [])
+      (g.key === groupKey ? nextIdsForGroup : (groupChoices[g.key] ?? []))
         .map((id) => g.members.find((m) => m.id === id))
         .filter((s): s is TemplateRequiredSkill => !!s),
     );
@@ -404,7 +460,10 @@ export function SkillsStep({
    * functional setState, so successive calls in the same tick all read the same stale
    * value and the last one wins. The OAuth flow writes refreshToken, clientId and
    * clientSecret together, which silently discarded the token. */
-  function setFields(providerId: string, patch: Record<string, string>) {
+  function setFields(
+    providerId: string,
+    patch: Record<string, string | string[]>,
+  ) {
     onSkillCredentialsChange(
       skillCredentials.map((c) =>
         c.provider === providerId
@@ -426,18 +485,27 @@ export function SkillsStep({
 
   return (
     <div className="flex flex-col gap-5">
-      <p className="text-[0.8125rem] leading-[1.5]" style={{ color: "var(--ink-3)" }}>
-        Choose skills to assign to this agent. Required credentials will appear below as you select skills.
+      <p
+        className="text-[0.8125rem] leading-[1.5]"
+        style={{ color: "var(--ink-3)" }}
+      >
+        Choose skills to assign to this agent. Required credentials will appear
+        below as you select skills.
       </p>
 
       {requiredGroups.map((group) => (
         <div key={group.key} className="flex flex-col gap-2">
-          <div className="text-[0.8125rem] font-medium" style={{ color: "var(--ink)" }}>
+          <div
+            className="text-[0.8125rem] font-medium"
+            style={{ color: "var(--ink)" }}
+          >
             Required by template — choose at least one
           </div>
           <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
             {group.members.map((member) => {
-              const chosen = (groupChoices[group.key] ?? []).includes(member.id);
+              const chosen = (groupChoices[group.key] ?? []).includes(
+                member.id,
+              );
               return (
                 <div
                   key={member.id}
@@ -446,23 +514,36 @@ export function SkillsStep({
                   className="flex flex-col gap-1.5 p-4 rounded-2xl transition-colors min-h-[4.5rem]"
                   style={{
                     cursor: "pointer",
-                    border: chosen ? "1.5px solid var(--ink)" : "1.5px solid var(--line)",
+                    border: chosen
+                      ? "1.5px solid var(--ink)"
+                      : "1.5px solid var(--line)",
                     background: chosen ? "var(--bg-soft)" : "var(--bg-elev)",
                   }}
                   onClick={() => toggleGroupMember(group.key, member)}
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
+                    <div
+                      className="font-semibold text-[0.844rem]"
+                      style={{ color: "var(--ink)" }}
+                    >
                       {member.name}
                     </div>
                     <SkillSourceBadge source={member.source} />
                   </div>
-                  <div className="text-[0.6875rem]" style={{ color: "var(--ink-3)" }}>
+                  <div
+                    className="text-[0.6875rem]"
+                    style={{ color: "var(--ink-3)" }}
+                  >
                     {chosen ? "Selected" : "Required by template"}
                   </div>
                   {member.requiredProviders.length > 0 && (
-                    <div className="text-[0.75rem]" style={{ color: "var(--ink-4)" }}>
-                      {member.requiredProviders.map((p) => SKILL_PROVIDER_LABELS[p] ?? p).join(", ")}
+                    <div
+                      className="text-[0.75rem]"
+                      style={{ color: "var(--ink-4)" }}
+                    >
+                      {member.requiredProviders
+                        .map((p) => SKILL_PROVIDER_LABELS[p] ?? p)
+                        .join(", ")}
                     </div>
                   )}
                 </div>
@@ -474,9 +555,15 @@ export function SkillsStep({
 
       <div
         className="flex items-center gap-2 px-3 py-2 rounded-xl"
-        style={{ border: "1px solid var(--line)", background: "var(--bg-elev)" }}
+        style={{
+          border: "1px solid var(--line)",
+          background: "var(--bg-elev)",
+        }}
       >
-        <SearchIcon size={14} style={{ color: "var(--ink-4)", flexShrink: 0 }} />
+        <SearchIcon
+          size={14}
+          style={{ color: "var(--ink-4)", flexShrink: 0 }}
+        />
         <input
           className="flex-1 text-[0.8125rem] outline-none bg-transparent"
           style={{ color: "var(--ink)" }}
@@ -488,20 +575,30 @@ export function SkillsStep({
 
       <div style={isLoading ? { minHeight: "22rem" } : undefined}>
         {isLoading && (
-          <div className="text-[0.8125rem] py-8 text-center" style={{ color: "var(--ink-3)" }}>
+          <div
+            className="text-[0.8125rem] py-8 text-center"
+            style={{ color: "var(--ink-3)" }}
+          >
             Loading skills…
           </div>
         )}
         {!isLoading && total === 0 && !search && (
           <div
             className="text-[0.8125rem] py-6 text-center rounded-2xl"
-            style={{ border: "1px dashed var(--line-strong)", color: "var(--ink-4)" }}
+            style={{
+              border: "1px dashed var(--line-strong)",
+              color: "var(--ink-4)",
+            }}
           >
-            No skills available. Create skills in <strong>Settings → Skills</strong> first.
+            No skills available. Create skills in{" "}
+            <strong>Settings → Skills</strong> first.
           </div>
         )}
         {!isLoading && total === 0 && search && (
-          <div className="text-[0.8125rem] py-8 text-center" style={{ color: "var(--ink-3)" }}>
+          <div
+            className="text-[0.8125rem] py-8 text-center"
+            style={{ color: "var(--ink-3)" }}
+          >
             No skills match.
           </div>
         )}
@@ -509,7 +606,8 @@ export function SkillsStep({
           <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
             {orderedSkills.map((skill) => {
               const isRequired = requiredSkillIds.has(skill.id);
-              const selected = isRequired || selectedSkillIds.includes(skill.id);
+              const selected =
+                isRequired || selectedSkillIds.includes(skill.id);
               const disabled = false;
               return (
                 <div
@@ -517,26 +615,41 @@ export function SkillsStep({
                   className="flex flex-col gap-1.5 p-4 rounded-2xl transition-colors min-h-[4.5rem]"
                   style={{
                     cursor: isRequired || disabled ? "default" : "pointer",
-                    border: selected ? "1.5px solid var(--ink)" : "1.5px solid var(--line)",
+                    border: selected
+                      ? "1.5px solid var(--ink)"
+                      : "1.5px solid var(--line)",
                     background: selected ? "var(--bg-soft)" : "var(--bg-elev)",
                     opacity: disabled ? 0.5 : 1,
                   }}
-                  onClick={() => { if (!isRequired && !disabled) toggleSkill(skill); }}
+                  onClick={() => {
+                    if (!isRequired && !disabled) toggleSkill(skill);
+                  }}
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
+                    <div
+                      className="font-semibold text-[0.844rem]"
+                      style={{ color: "var(--ink)" }}
+                    >
                       {skill.name}
                     </div>
                     <SkillSourceBadge source={skill.source} />
                   </div>
                   {isRequired && (
-                    <div className="text-[0.6875rem]" style={{ color: "var(--ink-3)" }}>
+                    <div
+                      className="text-[0.6875rem]"
+                      style={{ color: "var(--ink-3)" }}
+                    >
                       Required by template
                     </div>
                   )}
                   {skill.requiredProviders.length > 0 && (
-                    <div className="text-[0.75rem]" style={{ color: "var(--ink-4)" }}>
-                      {skill.requiredProviders.map((p) => SKILL_PROVIDER_LABELS[p] ?? p).join(", ")}
+                    <div
+                      className="text-[0.75rem]"
+                      style={{ color: "var(--ink-4)" }}
+                    >
+                      {skill.requiredProviders
+                        .map((p) => SKILL_PROVIDER_LABELS[p] ?? p)
+                        .join(", ")}
                     </div>
                   )}
                 </div>
@@ -550,12 +663,17 @@ export function SkillsStep({
 
       {requiredProviderIds.length > 0 && (
         <div className="flex flex-col gap-3.5">
-          <div className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>
+          <div
+            className="font-medium text-[0.844rem]"
+            style={{ color: "var(--ink)" }}
+          >
             Required credentials
           </div>
           {requiredProviderIds.map((providerId) => {
             const providerSpec = getIntegrationProvider(providerId);
-            const draft = skillCredentials.find((c) => c.provider === providerId);
+            const draft = skillCredentials.find(
+              (c) => c.provider === providerId,
+            );
             if (!draft) return null;
 
             if (!providerSpec) {
@@ -563,7 +681,11 @@ export function SkillsStep({
                 <div
                   key={providerId}
                   className="px-4 py-3 rounded-2xl text-[0.8125rem]"
-                  style={{ border: "1px solid var(--line)", background: "var(--bg-soft)", color: "var(--ink-3)" }}
+                  style={{
+                    border: "1px solid var(--line)",
+                    background: "var(--bg-soft)",
+                    color: "var(--ink-3)",
+                  }}
                 >
                   <span className="font-medium" style={{ color: "var(--ink)" }}>
                     {SKILL_PROVIDER_LABELS[providerId] ?? providerId}
@@ -573,16 +695,23 @@ export function SkillsStep({
               );
             }
 
-            const isSharedEligible = !!SHARED_CREDENTIAL_PROVIDER_LABELS[providerId];
+            const isSharedEligible =
+              !!SHARED_CREDENTIAL_PROVIDER_LABELS[providerId];
             const useShared = draft.sharedCredentialId !== undefined;
 
             return (
               <div
                 key={providerId}
                 className="flex flex-col gap-3.5 p-4 rounded-2xl"
-                style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
+                style={{
+                  border: "1px solid var(--line)",
+                  background: "var(--bg-soft)",
+                }}
               >
-                <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
+                <div
+                  className="font-semibold text-[0.844rem]"
+                  style={{ color: "var(--ink)" }}
+                >
                   {providerSpec.label}
                   <span
                     className="ml-2 text-[0.6875rem] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full"
@@ -599,7 +728,9 @@ export function SkillsStep({
                     selectedId={draft.sharedCredentialId || undefined}
                     onSwitchToManual={() => switchToManual(providerId)}
                     onSwitchToShared={() => switchToShared(providerId)}
-                    onPickShared={(brief) => handlePickShared(providerId, brief)}
+                    onPickShared={(brief) =>
+                      handlePickShared(providerId, brief)
+                    }
                   />
                 )}
 
@@ -608,10 +739,26 @@ export function SkillsStep({
                     provider={providerSpec}
                     draft={draft}
                     showScopeNote
-                    onFieldChange={(key, value) => setField(providerId, key, value)}
-                    onReposChange={(key, repos) => setRepos(providerId, key, repos)}
-                    onOAuthConnected={({ refreshToken, clientId, clientSecret }) => {
-                      setFields(providerId, { refreshToken, clientId, clientSecret });
+                    onFieldChange={(key, value) =>
+                      setField(providerId, key, value)
+                    }
+                    onListChange={(key, values) =>
+                      setRepos(providerId, key, values)
+                    }
+                    onOAuthConnected={({
+                      refreshToken,
+                      clientId,
+                      clientSecret,
+                      email,
+                      scopes,
+                    }) => {
+                      setFields(providerId, {
+                        refreshToken,
+                        clientId,
+                        clientSecret,
+                        email,
+                        scopes,
+                      });
                     }}
                   />
                 )}
@@ -631,14 +778,13 @@ export function IntegrationsStep({
   integrations: IntegrationDraft[];
   onChange: (next: IntegrationDraft[]) => void;
 }) {
-
-  const { switchToShared, switchToManual, handlePickShared } = useSharedManualSwitch(
-    integrations,
-    onChange,
-  );
+  const { switchToShared, switchToManual, handlePickShared } =
+    useSharedManualSwitch(integrations, onChange);
 
   const usedProviders = new Set(integrations.map((i) => i.provider));
-  const available = INTEGRATION_PROVIDERS.filter((p) => !usedProviders.has(p.id));
+  const available = INTEGRATION_PROVIDERS.filter(
+    (p) => !usedProviders.has(p.id),
+  );
 
   function addProvider(id: string) {
     onChange([...integrations, { provider: id, content: {} }]);
@@ -652,7 +798,10 @@ export function IntegrationsStep({
   /** Apply several keys in ONE update — see the note on the sibling step: successive
    * single-key calls in the same tick overwrite each other, which dropped the OAuth
    * refresh token. */
-  function setFields(providerId: string, patch: Record<string, string>) {
+  function setFields(
+    providerId: string,
+    patch: Record<string, string | string[]>,
+  ) {
     onChange(
       integrations.map((i) =>
         i.provider === providerId
@@ -673,25 +822,36 @@ export function IntegrationsStep({
 
   return (
     <div className="flex flex-col gap-5">
-      <p className="text-[0.8125rem] leading-[1.5]" style={{ color: "var(--ink-3)" }}>
-        Connect external tools your agent can use. Credentials are encrypted in the key vault.
+      <p
+        className="text-[0.8125rem] leading-[1.5]"
+        style={{ color: "var(--ink-3)" }}
+      >
+        Connect external tools your agent can use. Credentials are encrypted in
+        the key vault.
         {" This step is optional — you can hire without any."}
       </p>
 
       {integrations.map((draft) => {
         const provider = getIntegrationProvider(draft.provider);
         if (!provider) return null;
-        const isSharedEligible = !!SHARED_CREDENTIAL_PROVIDER_LABELS[draft.provider];
+        const isSharedEligible =
+          !!SHARED_CREDENTIAL_PROVIDER_LABELS[draft.provider];
         const useShared = draft.sharedCredentialId !== undefined;
 
         return (
           <div
             key={draft.provider}
             className="flex flex-col gap-3.5 p-4 rounded-2xl"
-            style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
+            style={{
+              border: "1px solid var(--line)",
+              background: "var(--bg-soft)",
+            }}
           >
             <div className="flex items-center justify-between">
-              <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
+              <div
+                className="font-semibold text-[0.844rem]"
+                style={{ color: "var(--ink)" }}
+              >
                 {provider.label}
               </div>
               <button
@@ -711,7 +871,9 @@ export function IntegrationsStep({
                 selectedId={draft.sharedCredentialId || undefined}
                 onSwitchToManual={() => switchToManual(draft.provider)}
                 onSwitchToShared={() => switchToShared(draft.provider)}
-                onPickShared={(brief) => handlePickShared(draft.provider, brief)}
+                onPickShared={(brief) =>
+                  handlePickShared(draft.provider, brief)
+                }
               />
             )}
 
@@ -720,10 +882,26 @@ export function IntegrationsStep({
                 provider={provider}
                 draft={draft}
                 showScopeNote
-                onFieldChange={(key, value) => setField(draft.provider, key, value)}
-                onReposChange={(key, repos) => setRepos(draft.provider, key, repos)}
-                onOAuthConnected={({ refreshToken, clientId, clientSecret }) => {
-                  setFields(draft.provider, { refreshToken, clientId, clientSecret });
+                onFieldChange={(key, value) =>
+                  setField(draft.provider, key, value)
+                }
+                onListChange={(key, values) =>
+                  setRepos(draft.provider, key, values)
+                }
+                onOAuthConnected={({
+                  refreshToken,
+                  clientId,
+                  clientSecret,
+                  email,
+                  scopes,
+                }) => {
+                  setFields(draft.provider, {
+                    refreshToken,
+                    clientId,
+                    clientSecret,
+                    email,
+                    scopes,
+                  });
                 }}
               />
             )}
@@ -733,7 +911,10 @@ export function IntegrationsStep({
 
       {available.length > 0 && (
         <div className="flex flex-col gap-2">
-          <div className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>
+          <div
+            className="font-medium text-[0.844rem]"
+            style={{ color: "var(--ink)" }}
+          >
             Add an integration
           </div>
           <div className="flex flex-wrap gap-2">

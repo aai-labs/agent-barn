@@ -13,14 +13,15 @@ Starting an agent is an API-orchestrated deployment flow:
 3. Decrypt Agent Secrets used by tool Integrations; Communication Connection credentials stay in the Communications service.
 4. Select Hermes or OpenClaw runtime builders.
 5. Combine explicitly assigned skills with eligible built-in provider skills.
-6. Append tool pointers, integration policy, and unconditional runtime behaviour policies to rendered Markdown.
-7. Generate fresh Ingest and Communications protocol credentials.
-8. Build ConfigMap, Secret, PVC, Service, and Deployment resources, including the runtime-neutral communications adapter.
-9. Apply resources through the Kubernetes client and mark the Agent running.
+6. Materialize aai-cli integrations and Google Workspace's gog artifacts from encrypted Agent Secrets.
+7. Append tool pointers, integration policy, and unconditional runtime behaviour policies to rendered Markdown.
+8. Generate fresh Ingest and Communications protocol credentials.
+9. Build ConfigMap, Secret, PVC, Service, and Deployment resources, including the runtime-neutral communications adapter.
+10. Apply resources through the Kubernetes client and mark the Agent running.
 
 Runtime behaviour policies are appended to `AGENTS.md` rather than stored in a template, because both runtimes auto-load `AGENTS.md` into the startup system prompt. They are unconditional and carry no role-specific wording, so custom and forked templates inherit them and the role-scope policy defers to whatever role the agent's own template defines.
 
-A Kubernetes/runtime start failure can place the Agent in `ERROR`; successful start clears the prior lifecycle error. Connection validation and provider-session failures instead update that Communication Connection's observed health and do not change Agent lifecycle.
+A Kubernetes/runtime start failure can place the Agent in `ERROR`; successful start clears the prior lifecycle error. Google Workspace runtime state is rebuilt by a ConfigMap-mounted `gog-setup.sh` from `GOG_*` Secret environment and is kept outside the persistent workspace. Connection validation and provider-session failures instead update that Communication Connection's observed health and do not change Agent lifecycle.
 
 Command approval (the persisted `approval_mode` field) is mapped onto a runtime policy only for Hermes: `builders/hermes.py` maps `manual`→`manual`, `auto`→`smart`, and `off`→`off` into the Hermes `approvals.mode` config. OpenClaw has no user-configurable command-approval control — `build_openclaw_gateway_config` never receives or emits an approvals block — so the API rejects an explicit non-default `approval_mode` for an OpenClaw Agent instead of accepting and silently ignoring it. OpenClaw-specific command approval is tracked as a separate follow-up.
 
@@ -85,7 +86,7 @@ Kubernetes `stream()` and `portforward()` temporarily monkey-patch `ApiClient.re
 | Shared Kubernetes builders      | `../../api/domains/agents/builders/common.py`                                         |
 | Hermes builders                 | `../../api/domains/agents/builders/hermes.py`, `../../hermes-base/`                         |
 | OpenClaw builders               | `../../api/domains/agents/builders/openclaw.py`, `../../openclaw-base/`                     |
-| Skill and integration artifacts | `../../api/domains/agents/aai_cli_artifacts.py`, `../../api/domains/agents/aai_cli_skills/` |
+| Skill and integration artifacts | `../../api/domains/agents/aai_cli_artifacts.py`, `../../api/domains/agents/aai_cli_skills/`, `../../api/domains/agents/gog_artifacts.py` |
 | Provider clients                | `../../api/infrastructure/slack/`, `../../api/infrastructure/telegram/`, `../../api/infrastructure/discord/` |
 | Kubernetes client               | `../../api/infrastructure/kubernetes/`                                                |
 | Charts and release ordering     | `../../helm/`, `../../helmfile.yaml.gotmpl`                                                 |

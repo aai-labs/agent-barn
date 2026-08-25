@@ -30,6 +30,10 @@ if [ -f /app/config/aai-cli-setup.sh ]; then
   sh /app/config/aai-cli-setup.sh || echo "[aai-cli] setup failed; continuing"
 fi
 
+if [ -f /app/config/gog-setup.sh ]; then
+  sh /app/config/gog-setup.sh || echo "[gog] setup failed; continuing"
+fi
+
 # /workspace persists across restarts (PVC). The personality files above are
 # overwritten from the configmap every boot, but skills are additive — prune
 # them so a skill from a removed integration can't linger from a previous boot.

@@ -12,6 +12,7 @@ from injector import inject, singleton
 
 from api.core.config import Config
 from api.domains.agents.aai_cli_artifacts import (
+    PROFILE_SLUGS,
     build_config_toml,
     build_env,
     build_integrations_policy_md,
@@ -35,6 +36,7 @@ from api.domains.agents.builders import (
     build_service,
 )
 from api.domains.agents.error_messages import friendly_k8s_error, friendly_pod_reason
+from api.domains.agents.gog_artifacts import build_gog_env, build_gog_policy_md, build_gog_setup_sh
 from api.domains.agents.models import (
     PROVIDER_DISPLAY_NAMES,
     Agent,
@@ -69,8 +71,7 @@ from api.domains.agents.models import (
     CommandApprovalMode,
     ConfluenceContent,
     FirecrawlContent,
-    GmailContent,
-    GoogleSheetsContent,
+    GoogleWorkspaceContent,
     JiraContent,
     SecretProvider,
     SkillVersionPin,
@@ -1744,25 +1745,42 @@ class AgentService:
             assert ciphertext is not None
             decrypted[provider] = decrypt_content(provider, ciphertext, key)
         self._backfill_google_client_credentials(decrypted)
-        for google_provider in (SecretProvider.GMAIL, SecretProvider.GOOGLE_SHEETS):
-            content = decrypted.get(google_provider)
-            if not isinstance(content, (GmailContent, GoogleSheetsContent)):
-                continue
-            if not content.client_id or not content.client_secret:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=(
-                        f"{PROVIDER_DISPLAY_NAMES[google_provider]} is missing a client id/secret "
-                        "and Google OAuth is not configured on this server. Reconnect via "
-                        "Authenticate with Google, or configure google_cloud_client_id/secret."
-                    ),
-                )
+        # Only google_workspace is materialized. The retired per-service Google providers
+        # and their rows were deleted by migration; affected agents must reconnect through
+        # Google Workspace.
+        gws_content = decrypted.get(SecretProvider.GOOGLE_WORKSPACE)
+        if isinstance(gws_content, GoogleWorkspaceContent) and (
+            not gws_content.client_id or not gws_content.client_secret
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"{PROVIDER_DISPLAY_NAMES[SecretProvider.GOOGLE_WORKSPACE]} is missing a client id/secret "
+                    "and Google OAuth is not configured on this server. Reconnect via "
+                    "Authenticate with Google, or configure google_cloud_client_id/secret."
+                ),
+            )
         store = {p: c for p, c in decrypted.items() if p.value in provider_secrets_map}
         aai_home = "/opt/data" if agent.agent_type == AgentType.HERMES else "/home/node"
-        aai_config_toml = build_config_toml(decrypted, home_dir=aai_home) if decrypted else None
-        aai_setup_sh = build_setup_sh(list(store), home_dir=aai_home) if decrypted else None
+        # Gated on providers that actually get an aai-cli profile: an agent whose only
+        # integrations are profile-less (google_workspace, firecrawl) would otherwise get
+        # a config.toml holding nothing but the store header.
+        has_aai_profiles = bool(decrypted.keys() & set(PROFILE_SLUGS))
+        aai_config_toml = build_config_toml(decrypted, home_dir=aai_home) if has_aai_profiles else None
+        aai_setup_sh = build_setup_sh(list(store), home_dir=aai_home) if has_aai_profiles else None
         if store:
             secret.string_data.update(build_env(store))
+
+        # gog (Google Workspace) — its own CLI with its own on-disk state, rebuilt from
+        # this secret on every boot. GOG_HOME is deliberately the container filesystem,
+        # not the PVC that aai_home points at for Hermes.
+        gog_setup_sh = None
+        if isinstance(gws_content, GoogleWorkspaceContent):
+            gog_home_dir = "/home/hermes" if agent.agent_type == AgentType.HERMES else "/home/node"
+            secret.string_data.update(
+                build_gog_env(gws_content, gog_home_dir, secrets.token_urlsafe(32)),
+            )
+            gog_setup_sh = build_gog_setup_sh()
 
         fc_content = decrypted.get(SecretProvider.FIRECRAWL)
         fc_api_key = (
@@ -1860,9 +1878,12 @@ class AgentService:
         # Credential-free tools ride in their own block: the integrations policy is built
         # from configured secrets, so a tool with no provider would otherwise be invisible
         # in the auto-loaded prompt no matter that its skill is mounted.
+        # gog gets its own block: the aai-cli one insists on --profile and on aai-cli
+        # being the only route to its integrations, neither of which is true of gog.
         agents_md = (
             rendered.agents_md
             + build_integrations_policy_md(decrypted)
+            + build_gog_policy_md(gws_content if isinstance(gws_content, GoogleWorkspaceContent) else None)
             + build_local_tools_policy_md(s.name for s in mounted_skills)
             + build_chat_commands_policy_md()
             + build_role_scope_policy_md()
@@ -1884,6 +1905,7 @@ class AgentService:
                 hermes_config=hermes_cfg,
                 aai_cli_config_toml=aai_config_toml,
                 aai_cli_setup_sh=aai_setup_sh,
+                gog_setup_sh=gog_setup_sh,
                 skills_json=skills_json,
             )
         else:
@@ -1902,6 +1924,7 @@ class AgentService:
                 openclaw_config_overlay=overlay,
                 aai_cli_config_toml=aai_config_toml,
                 aai_cli_setup_sh=aai_setup_sh,
+                gog_setup_sh=gog_setup_sh,
                 skills_json=skills_json,
             )
 
@@ -2160,14 +2183,13 @@ class AgentService:
         return options
 
     def _backfill_google_client_credentials(self, decrypted: dict[SecretProvider, Any]) -> None:
-        """Secrets created via the Google OAuth flow store only the refresh token; inject
-        the app-owned client id/secret from config. Backfill only when empty so legacy
-        secrets (which carry their own client the refresh token was issued under) keep
-        working."""
-        for provider in (SecretProvider.GMAIL, SecretProvider.GOOGLE_SHEETS):
-            content = decrypted.get(provider)
-            if not isinstance(content, (GmailContent, GoogleSheetsContent)):
-                continue
+        """Inject the server-owned OAuth client when a Google Workspace secret omits it.
+
+        Backfill only when empty so a user-supplied client (the one the refresh token
+        was issued under) keeps working.
+        """
+        content = decrypted.get(SecretProvider.GOOGLE_WORKSPACE)
+        if isinstance(content, GoogleWorkspaceContent):
             if not content.client_id:
                 content.client_id = self.config.google_cloud_client_id
             if not content.client_secret:

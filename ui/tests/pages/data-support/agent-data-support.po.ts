@@ -1103,11 +1103,13 @@ export class AgentDataSupport {
     provider = "github",
     status = 404,
     detail = "Agent not found",
+    body,
   }: {
     agentId?: string;
     provider?: string;
     status?: number;
     detail?: string;
+    body?: unknown;
   } = {}) {
     await this.page.route(
       `**/api/v1/organizations/*/agents/${agentId}/integrations/${provider}/validate`,
@@ -1119,7 +1121,7 @@ export class AgentDataSupport {
         await route.fulfill({
           status,
           contentType: "application/json",
-          body: JSON.stringify({ detail }),
+          body: JSON.stringify(status >= 400 ? { detail } : body),
         });
       },
     );

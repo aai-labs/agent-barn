@@ -29,7 +29,7 @@ An Agent is the central execution aggregate. It connects organization tenancy, a
 - Each assigned skill is pinned to an exact version at apply time (mirroring template pins): `agent_skill.pinned_version`. Publishing a newer skill version never moves an existing pin, and an agent recovers from a bad version by re-pinning to an older one. Start mounts each assigned skill's pinned-version files; a version pinned by any agent is protected from skill version deletion.
 - Provider requirements for assigned skills are validated during agent create/update against the agent's resulting Agent Secrets. Later edits to skill metadata are not revalidated at agent start.
 - Agents are soft-deleted; deletion also removes runtime resources and attempts to block the LiteLLM key.
-- Secret values are encrypted at rest and omitted from read DTOs.
+- Secret values are encrypted at rest and omitted from read DTOs. Google Workspace credentials are validated as one service-scoped OAuth payload and materialized through the gog CLI; retired per-service Google providers are not supported.
 
 ## State model
 
@@ -60,7 +60,7 @@ The AF-253 Agent Template Override contract is a dedicated section of the canoni
 
 ### Start
 
-Start renders the pinned Template, decrypts Agent Secrets, selects Hermes/OpenClaw builders, combines explicit Skills with provider-derived built-ins, appends Integration context and runtime behaviour policy, creates fresh Ingest and Communications protocol identities, and recreates Kubernetes resources. Communication Connection credentials are never materialized into the runtime. A successful transition to `RUNNING` emits `agent.started`; its email handler notifies the Agent Creator and users with Agent Owner access, de-duplicated by email.
+Start renders the pinned Template, decrypts Agent Secrets, selects Hermes/OpenClaw builders, combines explicit Skills with provider-derived built-ins, materializes aai-cli integrations and Google Workspace's gog artifacts, appends Integration context and runtime behaviour policy, creates fresh Ingest and Communications protocol identities, and recreates Kubernetes resources. Communication Connection credentials are never materialized into the runtime. A successful transition to `RUNNING` emits `agent.started`; its email handler notifies the Agent Creator and users with Agent Owner access, de-duplicated by email.
 
 ### Stop and delete
 
@@ -82,7 +82,7 @@ Share-management endpoints expose locked Agent Access Roles and one canonical Ag
 | HTTP routes                                | `../../api/domains/agents/routes.py` |
 | Communication Connections and Plugins     | `../../api/domains/communications/` |
 | Runtime resources                          | `../../api/domains/agents/builders/`                                                                               |
-| Integration and skill artifacts            | `../../api/domains/agents/aai_cli_artifacts.py`, `../../api/domains/agents/aai_cli_skills/`                                                 |
+| Integration and skill artifacts            | `../../api/domains/agents/aai_cli_artifacts.py`, `../../api/domains/agents/aai_cli_skills/`, `../../api/domains/agents/gog_artifacts.py`                                                 |
 | UI contracts and hooks                     | `../../ui/src/features/agents/schemas.ts`, `../../ui/src/features/agents/hooks/`                                         |
 | UI components                              | `../../ui/src/features/agents/components/`                                                                         |
 | Integration coverage                       | `../../api/tests/integration/test_agents.py`, `../../api/tests/integration/test_agent_rbac.py`, `../../api/tests/integration/test_agent_general_access.py`, `../../api/tests/integration/test_agent_logs.py` |

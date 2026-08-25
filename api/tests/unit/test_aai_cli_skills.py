@@ -14,8 +14,6 @@ _EXPECTED_PROVIDER_NAMES = {
     "Confluence",
     "GitHub",
     "Bitbucket",
-    "Gmail",
-    "Google Sheets",
     "Excel",
     "Zoho Mail",
     "Slack",

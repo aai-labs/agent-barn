@@ -95,6 +95,7 @@ def build_hermes_config_map(
     hermes_config: dict,
     aai_cli_config_toml: str | None = None,
     aai_cli_setup_sh: str | None = None,
+    gog_setup_sh: str | None = None,
     skills_json: str | None = None,
 ) -> client.V1ConfigMap:
     data: dict[str, str] = {
@@ -116,6 +117,8 @@ def build_hermes_config_map(
         data["aai-cli-config.toml"] = aai_cli_config_toml
     if aai_cli_setup_sh is not None:
         data["aai-cli-setup.sh"] = aai_cli_setup_sh
+    if gog_setup_sh is not None:
+        data["gog-setup.sh"] = gog_setup_sh
     if skills_json is not None:
         data["skills.json"] = skills_json
     return client.V1ConfigMap(

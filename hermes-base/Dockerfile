@@ -55,6 +55,20 @@ RUN uv pip install --python /opt/hermes/.venv playwright && \
     /opt/hermes/.venv/bin/python -m playwright install chromium --with-deps && \
     chmod -R o+rX /opt/playwright
 
+# gog (gogcli) — Google Workspace CLI used by the google_workspace integration. Pinned:
+# the OAuth scopes the API requests mirror this version's service map, and auth-state
+# formats have changed across releases.
+ARG GOG_VERSION=0.37.0
+RUN curl -fsSL "https://github.com/openclaw/gogcli/releases/download/v${GOG_VERSION}/gogcli_${GOG_VERSION}_linux_amd64.tar.gz" \
+      | tar -xz -C /usr/local/bin ./gog && \
+    chmod 755 /usr/local/bin/gog
+
+# GOG_HOME lives under /home/hermes so gog's state is rebuilt from the credential on
+# every boot rather than persisting. This directory has to be created explicitly: the
+# hermes user's home is /opt/data (the PVC), and /home is root-owned and empty upstream,
+# so the agent could not otherwise create anything here.
+RUN mkdir -p /home/hermes && chown hermes:hermes /home/hermes
+
 ARG CLOUD_CLIS=false
 ENV CLOUD_CLIS=${CLOUD_CLIS}
 

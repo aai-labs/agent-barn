@@ -56,6 +56,14 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 
 RUN npm install -g openclaw@2026.6.11
 
+# gog (gogcli) — Google Workspace CLI used by the google_workspace integration. Pinned:
+# the OAuth scopes the API requests mirror this version's service map, and auth-state
+# formats have changed across releases.
+ARG GOG_VERSION=0.37.0
+RUN curl -fsSL "https://github.com/openclaw/gogcli/releases/download/v${GOG_VERSION}/gogcli_${GOG_VERSION}_linux_amd64.tar.gz" \
+      | tar -xz -C /usr/local/bin ./gog && \
+    chmod 755 /usr/local/bin/gog
+
 ARG CLOUD_CLIS=false
 ENV CLOUD_CLIS=${CLOUD_CLIS}
 

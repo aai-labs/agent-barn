@@ -15,4 +15,8 @@ openclaw plugins install @openclaw/firecrawl-plugin 2>&1 || echo "[start] firecr
 if [ -f /app/config/aai-cli-setup.sh ]; then
   sh /app/config/aai-cli-setup.sh || echo "[aai-cli] setup failed; continuing"
 fi
+
+if [ -f /app/config/gog-setup.sh ]; then
+  sh /app/config/gog-setup.sh || echo "[gog] setup failed; continuing"
+fi
 exec openclaw gateway --allow-unconfigured
