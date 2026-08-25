@@ -64,7 +64,12 @@ class LiteLLMClient:
             raise LiteLLMError(f"LiteLLM returned no key: {resp.text}")
         return key
 
-    def delete_key(self, key: str) -> None:
+    def delete_key(self, key: str) -> bool:
+        """Deletes a LiteLLM virtual key outright. Returns True only for a
+        successful LiteLLM response; callers should treat False as failure and
+        fall back to block_key so the key can no longer be used even if it
+        can't be removed. Never logs the plaintext key.
+        """
         try:
             master_key = self._master_key()
             resp = httpx.post(
@@ -75,7 +80,11 @@ class LiteLLMClient:
             )
             resp.raise_for_status()
         except Exception as exc:
-            logger.warning("Failed to delete LiteLLM key: %s", exc)
+            # Do not include the exception text: some HTTP/client exceptions can
+            # carry request details, and the request contains the plaintext key.
+            logger.warning("Failed to delete LiteLLM key: %s", type(exc).__name__)
+            return False
+        return True
 
     def block_key(self, key: str) -> None:
         try:
@@ -88,7 +97,9 @@ class LiteLLMClient:
             )
             resp.raise_for_status()
         except Exception as exc:
-            logger.warning("Failed to block LiteLLM key: %s", exc)
+            # Keep this best-effort path secret-safe even for client exceptions
+            # that may include request details.
+            logger.warning("Failed to block LiteLLM key: %s", type(exc).__name__)
 
     def get_key_info(self, key: str) -> dict:
         """Return the full key info dict from LiteLLM (spend, token totals, etc)."""

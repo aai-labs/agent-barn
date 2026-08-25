@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 from uuid import uuid7
 
 import httpx
-from fastapi import status
+from fastapi import HTTPException, status
 from hamcrest import (
     assert_that,
     contains_string,
@@ -182,6 +182,7 @@ def _pin_override_to_source(
 def test_create_agent_rejects_model_not_in_org_allowlist():
     with given(_GIVEN) as context:
         client: TestClient = context.client
+        litellm: MagicMock = context.injector.get(LiteLLMClient)
         org_repo: OrganizationRepository = context.injector.get(OrganizationRepository)
         org = org_repo.get(context.organization.id)
         assert org is not None
@@ -195,6 +196,7 @@ def test_create_agent_rejects_model_not_in_org_allowlist():
         with then("it returns 400"):
             assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
             assert_that(response.json()["detail"], contains_string("not in the allowed model list"))
+            litellm.generate_key.assert_not_called()
 
 
 def test_create_agent_emits_created_domain_event():
@@ -242,6 +244,7 @@ def test_create_agent_rejects_template_slug_after_key_migration():
 def test_create_agent_unknown_template_key_returns_404():
     with given(_GIVEN) as context:
         client: TestClient = context.client
+        litellm: MagicMock = context.injector.get(LiteLLMClient)
         payload = {**_VALID_CREATE, "template_key": "no-such-template"}
 
         with when("I create an agent referencing a non-existent template"):
@@ -249,6 +252,24 @@ def test_create_agent_unknown_template_key_returns_404():
 
         with then("it returns 404"):
             assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+            litellm.generate_key.assert_not_called()
+
+
+def test_create_agent_missing_shared_credential_returns_404_before_litellm_key_generation():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        litellm: MagicMock = context.injector.get(LiteLLMClient)
+        payload = {
+            **_VALID_CREATE,
+            "shared_credentials": [{"shared_credential_id": str(uuid7())}],
+        }
+
+        with when("I create an agent with a missing shared credential"):
+            response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("it returns 404 without allocating a LiteLLM key"):
+            assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+            litellm.generate_key.assert_not_called()
 
 
 def test_create_agent_no_auth_returns_401():
@@ -1426,6 +1447,8 @@ def test_create_agent_calls_litellm_generate_key():
             agent_id = response.json()["id"]
             # the test uses _VALID_CREATE where name is "Test Agent"
             litellm.generate_key.assert_called_once_with(agent_id, _VALID_CREATE["name"], str(context.organization.id))
+            litellm.delete_key.assert_not_called()
+            litellm.block_key.assert_not_called()
 
 
 def test_create_agent_litellm_failure_returns_503():
@@ -1450,6 +1473,69 @@ def test_create_agent_litellm_failure_returns_503():
                 Pagination(page=1, size=10),
             )
             assert_that(total, equal_to(0))
+
+
+def test_create_agent_releases_litellm_key_when_persistence_fails():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        repository: AgentRepository = context.injector.get(AgentRepository)
+        litellm: MagicMock = context.injector.get(LiteLLMClient)
+
+        with patch.object(
+            repository,
+            "create_with_creator_access",
+            side_effect=HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="persistence failed"),
+        ):
+            response = client.post(_BASE, json=_VALID_CREATE, headers=_auth(context))
+
+        with then("the unowned key is deleted exactly once"):
+            assert_that(response.status_code, equal_to(status.HTTP_500_INTERNAL_SERVER_ERROR))
+            litellm.delete_key.assert_called_once_with(FAKE_LITELLM_KEY)
+            litellm.block_key.assert_not_called()
+
+
+def test_create_agent_blocks_key_when_litellm_deletion_reports_failure(caplog):
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        repository: AgentRepository = context.injector.get(AgentRepository)
+        litellm: MagicMock = context.injector.get(LiteLLMClient)
+        litellm.delete_key.return_value = False
+
+        with patch.object(
+            repository,
+            "create_with_creator_access",
+            side_effect=HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="persistence failed"),
+        ):
+            with caplog.at_level("WARNING"):
+                response = client.post(_BASE, json=_VALID_CREATE, headers=_auth(context))
+
+        with then("blocking is attempted and the plaintext key is absent from logs"):
+            assert_that(response.status_code, equal_to(status.HTTP_500_INTERNAL_SERVER_ERROR))
+            litellm.delete_key.assert_called_once_with(FAKE_LITELLM_KEY)
+            litellm.block_key.assert_called_once_with(FAKE_LITELLM_KEY)
+            assert_that(caplog.text, is_not(contains_string(FAKE_LITELLM_KEY)))
+
+
+def test_create_agent_blocks_key_when_litellm_deletion_raises(caplog):
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        repository: AgentRepository = context.injector.get(AgentRepository)
+        litellm: MagicMock = context.injector.get(LiteLLMClient)
+        litellm.delete_key.side_effect = RuntimeError("remote delete failed")
+
+        with patch.object(
+            repository,
+            "create_with_creator_access",
+            side_effect=HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="persistence failed"),
+        ):
+            with caplog.at_level("WARNING"):
+                response = client.post(_BASE, json=_VALID_CREATE, headers=_auth(context))
+
+        with then("blocking is attempted after a deletion exception"):
+            assert_that(response.status_code, equal_to(status.HTTP_500_INTERNAL_SERVER_ERROR))
+            litellm.delete_key.assert_called_once_with(FAKE_LITELLM_KEY)
+            litellm.block_key.assert_called_once_with(FAKE_LITELLM_KEY)
+            assert_that(caplog.text, is_not(contains_string(FAKE_LITELLM_KEY)))
 
 
 def test_start_agent_injects_per_agent_key():
@@ -1478,6 +1564,7 @@ def test_delete_agent_calls_litellm_block_key():
         with then("LiteLLM block_key was called once"):
             assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
             litellm.block_key.assert_called_once_with(FAKE_LITELLM_KEY)
+            litellm.delete_key.assert_not_called()
 
 
 def test_delete_agent_litellm_failure_still_returns_204():
@@ -1491,6 +1578,7 @@ def test_delete_agent_litellm_failure_still_returns_204():
 
         with then("it still returns 204"):
             assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+            litellm.delete_key.assert_not_called()
 
 
 def test_create_agent_with_model():
@@ -2085,6 +2173,7 @@ def test_create_agent_pins_skill_to_explicit_version():
 def test_create_agent_with_invalid_skill_version_returns_404_and_leaves_no_partial_state():
     with given([*_GIVEN, there_is_a_skill(name="My Skill")]) as context:
         client: TestClient = context.client
+        litellm: MagicMock = context.injector.get(LiteLLMClient)
         payload = {
             **_VALID_CREATE,
             "skill_ids": [str(context.skill.id)],
@@ -2096,6 +2185,7 @@ def test_create_agent_with_invalid_skill_version_returns_404_and_leaves_no_parti
 
         with then("it returns 404 and no agent is persisted"):
             assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+            litellm.generate_key.assert_not_called()
             agents = client.get(_BASE, headers=_auth(context)).json()["items"]
             assert_that(len(agents), equal_to(0))
 
@@ -2235,6 +2325,7 @@ def test_create_agent_skill_missing_provider_returns_400():
         ]
     ) as context:
         client: TestClient = context.client
+        litellm: MagicMock = context.injector.get(LiteLLMClient)
         payload = {**_VALID_CREATE, "skill_ids": [str(context.skill.id)]}
 
         with when("I create an agent without providing the required GitHub secret"):
@@ -2244,6 +2335,7 @@ def test_create_agent_skill_missing_provider_returns_400():
             assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
             assert_that(response.json()["detail"], contains_string("GitHub Skill"))
             assert_that(response.json()["detail"], contains_string("github"))
+            litellm.generate_key.assert_not_called()
 
 
 def test_create_agent_skill_with_covered_provider_assigns_skill():
@@ -2814,12 +2906,14 @@ def test_create_agent_missing_required_skill_returns_400():
         ]
     ) as context:
         client: TestClient = context.client
+        litellm: MagicMock = context.injector.get(LiteLLMClient)
 
         with when("I create an agent without including the required skill"):
             response = client.post(_BASE, json=_VALID_CREATE, headers=_auth(context))
 
         with then("it returns 400"):
             assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            litellm.generate_key.assert_not_called()
 
 
 def test_update_agent_cannot_remove_required_skill_returns_409():
@@ -2961,12 +3055,14 @@ def test_create_agent_with_no_group_member_returns_400():
         ]
     ) as context:
         client: TestClient = context.client
+        litellm: MagicMock = context.injector.get(LiteLLMClient)
 
         with when("I create an agent without any group member in skill_ids"):
             response = client.post(_BASE, json=_VALID_CREATE, headers=_auth(context))
 
         with then("it returns 400"):
             assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            litellm.generate_key.assert_not_called()
 
 
 def test_create_agent_with_one_group_member_succeeds_and_marks_it_required():

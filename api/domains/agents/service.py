@@ -535,6 +535,76 @@ class AgentService:
             override_version=template.version if isinstance(template, AgentTemplateOverrideVersion) else None,
         )
 
+    def _release_unowned_litellm_key(
+        self,
+        agent: Agent,
+        error: BaseException,
+        *,
+        plaintext_key: str | None = None,
+    ) -> None:
+        """Best-effort cleanup for a LiteLLM key generated during a create_agent
+        call that ultimately failed. The key was never attached to a
+        successfully created Agent, so it is unowned: delete it outright
+        rather than blocking it, since there is no Agent history to preserve
+        (contrast with delete_agent, which blocks the key of an Agent that did
+        get created). If deletion fails, block the key as a safety fallback so
+        it can no longer be used even though it wasn't removed from LiteLLM.
+        ``plaintext_key`` is supplied when a failure happens after LiteLLM
+        returned the key but before its encrypted form was prepared. Never
+        raises and never logs the plaintext key.
+        """
+        if plaintext_key is None:
+            if not agent.litellm_key_encrypted:
+                return
+            try:
+                plaintext_key = decrypt_token(agent.litellm_key_encrypted, self.config.agent_token_encryption_key)
+            except Exception as cleanup_exc:
+                logger.warning(
+                    "Failed to release unowned LiteLLM key for agent %s (%s: %s)",
+                    agent.id,
+                    type(cleanup_exc).__name__,
+                    cleanup_exc,
+                )
+                return
+
+        def safe_message(exc: BaseException) -> str:
+            return str(exc).replace(plaintext_key, "[REDACTED]")
+
+        delete_error: BaseException | None = None
+        try:
+            if self.litellm.delete_key(plaintext_key):
+                return
+            delete_error = LiteLLMError("delete_key returned False")
+        except Exception as cleanup_exc:
+            delete_error = cleanup_exc
+
+        assert delete_error is not None
+        try:
+            self.litellm.block_key(plaintext_key)
+        except Exception as block_exc:
+            logger.warning(
+                "Failed to release unowned LiteLLM key for agent %s after failed create (%s: %s); "
+                "deletion failed (%s: %s), blocking also failed (%s: %s)",
+                agent.id,
+                type(error).__name__,
+                safe_message(error),
+                type(delete_error).__name__,
+                safe_message(delete_error),
+                type(block_exc).__name__,
+                safe_message(block_exc),
+            )
+            return
+
+        logger.warning(
+            "Failed to delete unowned LiteLLM key for agent %s after failed create (%s: %s); "
+            "deletion failed (%s: %s), blocked instead",
+            agent.id,
+            type(error).__name__,
+            safe_message(error),
+            type(delete_error).__name__,
+            safe_message(delete_error),
+        )
+
     def create_agent(self, data: AgentCreate, context: CurrentUserContext) -> AgentRead:
         org_id = self._org_id(context)
         self.authorization.require_collection_scope(context, PermissionKey.AGENT_CREATE)
@@ -560,16 +630,6 @@ class AgentService:
             approval_mode=data.approval_mode,
         )
         self._set_pin(agent, template)
-
-        if self.config.litellm_base_url and self.config.litellm_secret_name:
-            try:
-                litellm_key = self.litellm.generate_key(str(agent.id), agent.name, str(agent.organization_id))
-                agent.litellm_key_encrypted = encrypt_token(litellm_key, self.config.agent_token_encryption_key)
-            except LiteLLMError as exc:
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail="LiteLLM key generation failed; cannot create agent.",
-                ) from exc
 
         # Validate that all template-required skills are present in the request:
         # every standalone-required skill, and at least one member of each
@@ -597,6 +657,56 @@ class AgentService:
         resolved_pins = self._resolve_skill_pins(data.skill_ids, data.skill_versions, set(), [], org_id)
         resolved_pin_by_skill_id = {pin.skill_id: pin for pin in resolved_pins}
 
+        # Prepare Agent Secrets in memory without persisting them yet.
+        # Integration credentials are separate from Communication Connections.
+        prepared_secrets: list[AgentSecret] = []
+        for item in data.secrets:
+            content = _enrich_atlassian_content(validate_content(item.provider, item.content))
+            prepared_secrets.append(
+                AgentSecret(
+                    agent_id=agent.id,
+                    provider=item.provider,
+                    secret_name=PROVIDER_DISPLAY_NAMES[item.provider],
+                    content=encrypt_content(content, self.config.agent_token_encryption_key),
+                )
+            )
+
+        # Shared credentials: look up each, verify org ownership, and prepare
+        # link rows in memory. used_providers is recomputed every iteration so
+        # a duplicate provider across two shared credentials in the same
+        # request is rejected, not just a shared/manual collision.
+        for attach in data.shared_credentials:
+            shared_cred = self.shared_credential_repository.get_by_id_and_org(attach.shared_credential_id, org_id)
+            if shared_cred is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Shared credential {attach.shared_credential_id} not found",
+                )
+            used_providers = {s.provider for s in prepared_secrets}
+            if shared_cred.provider in used_providers:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Provider {shared_cred.provider} already has a credential in this request",
+                )
+            prepared_secrets.append(
+                AgentSecret(
+                    agent_id=agent.id,
+                    provider=shared_cred.provider,
+                    secret_name=shared_cred.name,
+                    content=None,
+                    shared_credential_id=shared_cred.id,
+                )
+            )
+
+        # Resolve and validate skills now that all credentials are known.
+        shared_providers = {s.provider for s in prepared_secrets if s.shared_credential_id}
+        skills_to_assign = self._resolve_skills(
+            data.skill_ids,
+            data.secrets,
+            org_id,
+            extra_providers=shared_providers,
+        )
+
         # The creator always gets an explicit Owner AgentAccess row, even if they
         # currently have implicit full access as an Org Owner/Admin: it's what keeps
         # them able to manage the Agent if they're later demoted to Member (see
@@ -609,87 +719,64 @@ class AgentService:
             if persisted_membership is not None and persisted_membership.user_id == context.user.id
             else None
         )
-        created = self.repository.create_with_creator_access(
-            agent,
-            creator_membership_id,
-            actor=resolve_actor_identity(context, org_id),
-        )
-        created_delivery_ids = created.delivery_ids
-
-        # Integration credentials are separate from Communication Connections.
         secret_actor = resolve_actor_identity(context, org_id)
         secret_actor_display = context.user.full_name or context.user.email
-        secrets: list[AgentSecret] = []
-        secret_delivery_ids: list[UUID] = []
-        for item in data.secrets:
-            content = _enrich_atlassian_content(validate_content(item.provider, item.content))
-            secret = AgentSecret(
-                agent_id=agent.id,
-                provider=item.provider,
-                secret_name=PROVIDER_DISPLAY_NAMES[item.provider],
-                content=encrypt_content(content, self.config.agent_token_encryption_key),
-            )
-            secret_delivery_ids += self.repository.save_secret_with_event(
-                secret,
-                event_name=AGENT_SECRET_ADDED,
-                organization_id=org_id,
-                agent_name=agent.name,
-                actor=secret_actor,
-                actor_display=secret_actor_display,
-            )
-            secrets.append(secret)
 
-        # Shared credentials: look up each, verify org ownership, create link rows
-        for attach in data.shared_credentials:
-            shared_cred = self.shared_credential_repository.get_by_id_and_org(attach.shared_credential_id, org_id)
-            if shared_cred is None:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Shared credential {attach.shared_credential_id} not found",
-                )
-            used_providers = {s.provider for s in secrets}
-            if shared_cred.provider in used_providers:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Provider {shared_cred.provider} already has a credential in this request",
-                )
-            secret = AgentSecret(
-                agent_id=agent.id,
-                provider=shared_cred.provider,
-                secret_name=shared_cred.name,
-                content=None,
-                shared_credential_id=shared_cred.id,
-            )
-            secret_delivery_ids += self.repository.save_secret_with_event(
-                secret,
-                event_name=AGENT_SECRET_ADDED,
-                organization_id=org_id,
-                agent_name=agent.name,
-                actor=secret_actor,
-                actor_display=secret_actor_display,
-            )
-            secrets.append(secret)
-
-        # Resolve and validate skills after all credentials are known.
-        shared_providers = {s.provider for s in secrets if s.shared_credential_id}
-        skills_to_assign = self._resolve_skills(
-            data.skill_ids,
-            data.secrets,
-            org_id,
-            extra_providers=shared_providers,
-        )
-
-        if skills_to_assign:
-            self.repository.save_skills(
-                [
-                    AgentSkill(
-                        agent_id=agent.id,
-                        skill_id=s.id,
-                        pinned_version=resolved_pin_by_skill_id[s.id].version,
+        # All deterministic, client-visible validation and in-memory preparation
+        # is complete. Allocate the LiteLLM key immediately before Agent
+        # persistence so a rejected create never allocates one (AF-272); any
+        # failure after allocation releases the unowned key.
+        allocated_litellm_key: str | None = None
+        try:
+            if self.config.litellm_base_url and self.config.litellm_secret_name:
+                try:
+                    allocated_litellm_key = self.litellm.generate_key(
+                        str(agent.id), agent.name, str(agent.organization_id)
                     )
-                    for s in skills_to_assign
-                ]
+                except LiteLLMError as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        detail="LiteLLM key generation failed; cannot create agent.",
+                    ) from exc
+                agent.litellm_key_encrypted = encrypt_token(
+                    allocated_litellm_key,
+                    self.config.agent_token_encryption_key,
+                )
+
+            created = self.repository.create_with_creator_access(
+                agent,
+                creator_membership_id,
+                actor=secret_actor,
             )
+            created_delivery_ids = created.delivery_ids
+
+            secret_delivery_ids: list[UUID] = []
+            for secret in prepared_secrets:
+                secret_delivery_ids += self.repository.save_secret_with_event(
+                    secret,
+                    event_name=AGENT_SECRET_ADDED,
+                    organization_id=org_id,
+                    agent_name=agent.name,
+                    actor=secret_actor,
+                    actor_display=secret_actor_display,
+                )
+
+            if skills_to_assign:
+                self.repository.save_skills(
+                    [
+                        AgentSkill(
+                            agent_id=agent.id,
+                            skill_id=s.id,
+                            pinned_version=resolved_pin_by_skill_id[s.id].version,
+                        )
+                        for s in skills_to_assign
+                    ]
+                )
+        except Exception as exc:
+            if allocated_litellm_key is not None:
+                self._release_unowned_litellm_key(agent, exc, plaintext_key=allocated_litellm_key)
+            raise
+
         skills_read_versions = [
             PinnedSkill(skill=s, version=resolved_pin_by_skill_id[s.id].version) for s in skills_to_assign
         ]
@@ -699,7 +786,7 @@ class AgentService:
         allowed_actions = self.authorization.allowed_actions(context, [agent])[agent.id]
         return self._build_agent_read(
             agent,
-            secrets,
+            prepared_secrets,
             skills_read_versions,
             required_map,
             allowed_actions,
