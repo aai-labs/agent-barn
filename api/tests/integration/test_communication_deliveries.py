@@ -2,16 +2,21 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from hamcrest import assert_that, equal_to, is_, none, not_
+from sqlmodel import Session
 from starlette.testclient import TestClient
 
 from api.domains.agents.models import AgentStatus
 from api.domains.communications.delivery_repository import CommunicationDeliveryRepository
 from api.domains.communications.models import (
+    CommunicationDelivery,
     CommunicationDeliveryStatus,
     CommunicationSender,
     ConversationLocation,
     NormalizedCommunicationEnvelope,
+    RuntimeReplyCreate,
 )
+from api.domains.conversations.models import AgentChatMessage
+from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
     create_test_client,
@@ -82,6 +87,22 @@ def _envelope(message_id: str) -> NormalizedCommunicationEnvelope:
         sender=CommunicationSender(id="person-one", display_name="Person One"),
         text=f"message {message_id}",
     )
+
+
+def _message(context, message_id: UUID) -> AgentChatMessage:
+    delegate = context.injector.get(PostgresRepositoryDelegate)
+    with Session(delegate.engine) as session:
+        message = session.get(AgentChatMessage, message_id)
+        assert message is not None
+        return message
+
+
+def _delivery(context, delivery_id: UUID) -> CommunicationDelivery:
+    delegate = context.injector.get(PostgresRepositoryDelegate)
+    with Session(delegate.engine) as session:
+        delivery = session.get(CommunicationDelivery, delivery_id)
+        assert delivery is not None
+        return delivery
 
 
 def test_inbound_acceptance_is_idempotent() -> None:
@@ -172,3 +193,71 @@ def test_message_for_intentionally_stopped_agent_is_terminally_unavailable() -> 
         with then("it is recorded but never queued for later execution"):
             assert_that(accepted.status, equal_to(CommunicationDeliveryStatus.UNAVAILABLE))
             assert_that(repository.claim_next_inbound(agent_id=context.agent.id), none())
+
+
+def test_duplicate_delivery_backfills_a_previously_missing_name() -> None:
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        connection_id = _create_connection(context)
+        repository = context.injector.get(CommunicationDeliveryRepository)
+        nameless = _envelope("provider-1").model_copy(
+            update={"sender": CommunicationSender(id="person-one", display_name=None)}
+        )
+
+        with when("the first delivery arrives before the sender name could be resolved"):
+            first = repository.accept_inbound(connection_id=connection_id, envelope=nameless)
+
+        with then("the message is stored without a sender name"):
+            assert_that(_message(context, first.message_id).sender_name, none())
+
+        with when("the provider retries the same message and a name is now available"):
+            retried = repository.accept_inbound(connection_id=connection_id, envelope=_envelope("provider-1"))
+
+        with then("the existing message is backfilled without creating a second message"):
+            assert_that(retried.duplicate, is_(True))
+            assert_that(retried.message_id, equal_to(first.message_id))
+            assert_that(_message(context, first.message_id).sender_name, equal_to("Person One"))
+
+
+def test_duplicate_delivery_does_not_erase_a_known_name_with_null() -> None:
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        connection_id = _create_connection(context)
+        repository = context.injector.get(CommunicationDeliveryRepository)
+
+        with when("the first delivery arrives with a resolved sender name"):
+            first = repository.accept_inbound(connection_id=connection_id, envelope=_envelope("provider-1"))
+
+        nameless_retry = _envelope("provider-1").model_copy(
+            update={"sender": CommunicationSender(id="person-one", display_name=None)}
+        )
+
+        with when("a later retry arrives without a resolved name"):
+            retried = repository.accept_inbound(connection_id=connection_id, envelope=nameless_retry)
+
+        with then("the already-known name is preserved rather than cleared"):
+            assert_that(retried.duplicate, is_(True))
+            assert_that(_message(context, first.message_id).sender_name, equal_to("Person One"))
+
+
+def test_outbound_reply_inherits_channel_name_from_source_inbound_location() -> None:
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        connection_id = _create_connection(context)
+        repository = context.injector.get(CommunicationDeliveryRepository)
+        envelope = _envelope("provider-1").model_copy(
+            update={
+                "location": ConversationLocation(
+                    id="channel-one", type="CHANNEL", thread_id="thread-one", display_name="general"
+                )
+            }
+        )
+        accepted = repository.accept_inbound(connection_id=connection_id, envelope=envelope)
+
+        with when("the runtime replies to that inbound delivery"):
+            outbound_delivery_id = repository.enqueue_runtime_reply(
+                agent_id=context.agent.id,
+                source_delivery_id=accepted.delivery_id,
+                reply=RuntimeReplyCreate(idempotency_key="reply-1", text="hello back"),
+            )
+
+        with then("the outbound message carries the source channel's name"):
+            outbound_message_id = _delivery(context, outbound_delivery_id).message_id
+            assert_that(_message(context, outbound_message_id).channel_name, equal_to("general"))

@@ -1,11 +1,14 @@
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
 
 from api.domains.communications.models import (
+    CommunicationSender,
     ConversationLocation,
+    NormalizedCommunicationEnvelope,
     PlatformCapability,
     ProcessingFeedbackStage,
 )
@@ -304,3 +307,200 @@ def test_slack_processing_feedback_uses_reactions_and_thread_status() -> None:
     client.remove_reaction.assert_called_once_with("channel-1", "root-1", "eyes")
     assert client.add_reaction.call_count == 2
     assert client.add_reaction.call_args_list[-1].args == ("channel-1", "root-1", "white_check_mark")
+
+
+# --- inbound name enrichment ------------------------------------------------
+
+
+def _envelope(*, location: ConversationLocation, sender: CommunicationSender) -> NormalizedCommunicationEnvelope:
+    return NormalizedCommunicationEnvelope(
+        provider_message_id="1",
+        occurred_at=datetime.now(UTC),
+        location=location,
+        sender=sender,
+        text="hi",
+    )
+
+
+def test_slack_enrich_inbound_preserves_names_already_in_the_payload() -> None:
+    plugin = SlackPlatformPlugin(ValidationConfig())
+    credentials = plugin.credentials_model.model_validate({"bot_token": "xoxb-token", "app_token": "xapp-token"})
+    envelope = _envelope(
+        location=ConversationLocation(id="C1", type="CHANNEL", display_name="general"),
+        sender=CommunicationSender(id="U1", display_name="Alice"),
+    )
+
+    with patch("api.domains.communications.plugins.slack.SlackClient") as client_type:
+        enriched = plugin.enrich_inbound(plugin.settings_model.model_validate({}), credentials, [envelope])
+
+    assert enriched == [envelope]
+    client_type.return_value.get_user_display_name.assert_not_called()
+    client_type.return_value.get_channel_name.assert_not_called()
+
+
+def test_slack_enrich_inbound_fills_missing_sender_and_channel_name() -> None:
+    plugin = SlackPlatformPlugin(ValidationConfig())
+    credentials = plugin.credentials_model.model_validate({"bot_token": "xoxb-token", "app_token": "xapp-token"})
+    envelope = _envelope(
+        location=ConversationLocation(id="C1", type="CHANNEL"),
+        sender=CommunicationSender(id="U1"),
+    )
+
+    with patch("api.domains.communications.plugins.slack.SlackClient") as client_type:
+        client = client_type.return_value
+        client.get_user_display_name.return_value = "Alice"
+        client.get_channel_name.return_value = "general"
+        enriched = plugin.enrich_inbound(plugin.settings_model.model_validate({}), credentials, [envelope])
+
+    assert enriched[0].sender.display_name == "Alice"
+    assert enriched[0].location.display_name == "general"
+    client.get_user_display_name.assert_called_once_with("U1")
+    client.get_channel_name.assert_called_once_with("C1")
+
+
+def test_slack_enrich_inbound_resolves_dm_participant_name() -> None:
+    plugin = SlackPlatformPlugin(ValidationConfig())
+    credentials = plugin.credentials_model.model_validate({"bot_token": "xoxb-token", "app_token": "xapp-token"})
+    envelope = _envelope(
+        location=ConversationLocation(id="D1", type="DM"),
+        sender=CommunicationSender(id="U1"),
+    )
+
+    with patch("api.domains.communications.plugins.slack.SlackClient") as client_type:
+        client = client_type.return_value
+        client.get_dm_participant_name.return_value = "Alice"
+        enriched = plugin.enrich_inbound(plugin.settings_model.model_validate({}), credentials, [envelope])
+
+    assert enriched[0].location.display_name == "Alice"
+    client.get_dm_participant_name.assert_called_once_with("D1")
+    client.get_channel_name.assert_not_called()
+
+
+def test_slack_enrich_inbound_lookup_failure_leaves_envelope_valid_with_ids_intact() -> None:
+    plugin = SlackPlatformPlugin(ValidationConfig())
+    credentials = plugin.credentials_model.model_validate({"bot_token": "xoxb-token", "app_token": "xapp-token"})
+    envelope = _envelope(
+        location=ConversationLocation(id="C1", type="CHANNEL"),
+        sender=CommunicationSender(id="U1"),
+    )
+
+    with patch("api.domains.communications.plugins.slack.SlackClient") as client_type:
+        client = client_type.return_value
+        client.get_user_display_name.side_effect = RuntimeError("missing users:read scope")
+        client.get_channel_name.return_value = "general"
+        enriched = plugin.enrich_inbound(plugin.settings_model.model_validate({}), credentials, [envelope])
+
+    assert enriched[0].sender.id == "U1"
+    assert enriched[0].sender.display_name is None
+    assert enriched[0].location.display_name == "general"
+
+
+def test_discord_enrich_inbound_preserves_member_nickname_already_in_payload() -> None:
+    plugin = DiscordPlatformPlugin(ValidationConfig())
+    credentials = plugin.credentials_model.model_validate({"bot_token": "discord-token"})
+    envelope = _envelope(
+        location=ConversationLocation(id="channel-1", type="CHANNEL"),
+        sender=CommunicationSender(id="user-1", display_name="Server Nickname"),
+    )
+
+    with patch("api.domains.communications.plugins.discord.DiscordClient") as client_type:
+        client = client_type.return_value
+        client.get_channel_display_name.return_value = "ops-alerts"
+        enriched = plugin.enrich_inbound(plugin.settings_model.model_validate({}), credentials, [envelope])
+
+    assert enriched[0].sender.display_name == "Server Nickname"
+    assert enriched[0].location.display_name == "ops-alerts"
+    client.get_user_display_name.assert_not_called()
+
+
+def test_discord_enrich_inbound_fills_missing_channel_name() -> None:
+    plugin = DiscordPlatformPlugin(ValidationConfig())
+    credentials = plugin.credentials_model.model_validate({"bot_token": "discord-token"})
+    envelope = _envelope(
+        location=ConversationLocation(id="channel-1", type="CHANNEL"),
+        sender=CommunicationSender(id="user-1"),
+    )
+
+    with patch("api.domains.communications.plugins.discord.DiscordClient") as client_type:
+        client = client_type.return_value
+        client.get_user_display_name.return_value = "Ada"
+        client.get_channel_display_name.return_value = "ops-alerts"
+        enriched = plugin.enrich_inbound(plugin.settings_model.model_validate({}), credentials, [envelope])
+
+    assert enriched[0].sender.display_name == "Ada"
+    assert enriched[0].location.display_name == "ops-alerts"
+
+
+def test_discord_enrich_inbound_lookup_failure_leaves_envelope_valid_with_ids_intact() -> None:
+    plugin = DiscordPlatformPlugin(ValidationConfig())
+    credentials = plugin.credentials_model.model_validate({"bot_token": "discord-token"})
+    envelope = _envelope(
+        location=ConversationLocation(id="channel-1", type="CHANNEL"),
+        sender=CommunicationSender(id="user-1"),
+    )
+
+    with patch("api.domains.communications.plugins.discord.DiscordClient") as client_type:
+        client = client_type.return_value
+        client.get_user_display_name.side_effect = RuntimeError("Discord unreachable")
+        client.get_channel_display_name.return_value = "ops-alerts"
+        enriched = plugin.enrich_inbound(plugin.settings_model.model_validate({}), credentials, [envelope])
+
+    assert enriched[0].sender.id == "user-1"
+    assert enriched[0].sender.display_name is None
+    assert enriched[0].location.display_name == "ops-alerts"
+
+
+def test_telegram_enrich_inbound_preserves_names_already_in_the_payload() -> None:
+    plugin = TelegramPlatformPlugin(ValidationConfig())
+    credentials = plugin.credentials_model.model_validate({"bot_token": "123:ABC"})
+    envelope = _envelope(
+        location=ConversationLocation(id="-100123", type="CHANNEL", display_name="Dev Chat"),
+        sender=CommunicationSender(id="42", display_name="Alice"),
+    )
+
+    with patch("api.domains.communications.plugins.telegram.get_chat_display_name") as lookup:
+        enriched = plugin.enrich_inbound(plugin.settings_model.model_validate({}), credentials, [envelope])
+
+    assert enriched == [envelope]
+    lookup.assert_not_called()
+
+
+def test_telegram_enrich_inbound_falls_back_when_payload_lacks_names() -> None:
+    plugin = TelegramPlatformPlugin(ValidationConfig())
+    credentials = plugin.credentials_model.model_validate({"bot_token": "123:ABC"})
+    envelope = _envelope(
+        location=ConversationLocation(id="42", type="DM"),
+        sender=CommunicationSender(id="42"),
+    )
+
+    with patch(
+        "api.domains.communications.plugins.telegram.get_chat_display_name",
+        return_value="Alice",
+    ) as lookup:
+        enriched = plugin.enrich_inbound(plugin.settings_model.model_validate({}), credentials, [envelope])
+
+    assert enriched[0].sender.display_name == "Alice"
+    assert enriched[0].location.display_name == "Alice"
+    assert lookup.call_args_list == [
+        (("123:ABC", "42"),),
+        (("123:ABC", "42"),),
+    ]
+
+
+def test_telegram_enrich_inbound_lookup_failure_leaves_envelope_valid_with_ids_intact() -> None:
+    plugin = TelegramPlatformPlugin(ValidationConfig())
+    credentials = plugin.credentials_model.model_validate({"bot_token": "123:ABC"})
+    envelope = _envelope(
+        location=ConversationLocation(id="-100123", type="CHANNEL"),
+        sender=CommunicationSender(id="42"),
+    )
+
+    with patch(
+        "api.domains.communications.plugins.telegram.get_chat_display_name",
+        side_effect=RuntimeError("Telegram unreachable"),
+    ):
+        enriched = plugin.enrich_inbound(plugin.settings_model.model_validate({}), credentials, [envelope])
+
+    assert enriched[0].sender.id == "42"
+    assert enriched[0].sender.display_name is None
+    assert enriched[0].location.display_name is None

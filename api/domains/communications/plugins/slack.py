@@ -343,6 +343,66 @@ class SlackPlatformPlugin(PlatformPlugin):
                 return user_id
         return ""
 
+    def enrich_inbound(
+        self,
+        settings: PlatformSettings,
+        credentials: PlatformCredentials,
+        envelopes: list[NormalizedCommunicationEnvelope],
+    ) -> list[NormalizedCommunicationEnvelope]:
+        del settings
+        assert isinstance(credentials, SlackCredentials)
+        client = SlackClient(credentials.bot_token)
+        return [self._enrich_envelope(client, envelope) for envelope in envelopes]
+
+    def _enrich_envelope(
+        self,
+        client: SlackClient,
+        envelope: NormalizedCommunicationEnvelope,
+    ) -> NormalizedCommunicationEnvelope:
+        sender = envelope.sender
+        if sender.id and not sender.display_name:
+            name = self._safe_lookup(
+                "resolve sender name",
+                envelope,
+                lambda: client.get_user_display_name(sender.id or ""),
+            )
+            if name:
+                sender = sender.model_copy(update={"display_name": name})
+
+        location = envelope.location
+        if not location.display_name:
+            lookup = (
+                (lambda: client.get_dm_participant_name(location.id))
+                if location.type == "DM"
+                else (lambda: client.get_channel_name(location.id))
+            )
+            name = self._safe_lookup("resolve location name", envelope, lookup)
+            if name:
+                location = location.model_copy(update={"display_name": name})
+
+        if sender is envelope.sender and location is envelope.location:
+            return envelope
+        return envelope.model_copy(update={"sender": sender, "location": location})
+
+    @staticmethod
+    def _safe_lookup(
+        action: str,
+        envelope: NormalizedCommunicationEnvelope,
+        callback: Callable[[], str | None],
+    ) -> str | None:
+        try:
+            return callback()
+        except Exception as exc:
+            detail = " ".join(str(exc).split())[:160]
+            logger.warning(
+                "Slack inbound enrichment %s failed for message %s (%s): %s",
+                action,
+                envelope.provider_message_id,
+                type(exc).__name__,
+                detail,
+            )
+            return None
+
     async def run_ingress(
         self,
         settings: PlatformSettings,

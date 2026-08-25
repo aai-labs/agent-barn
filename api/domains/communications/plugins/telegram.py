@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -18,7 +19,9 @@ from api.domains.communications.plugins.base import (
     PlatformPlugin,
     PlatformSettings,
 )
-from api.infrastructure.telegram.client import send_message, validate_bot_token
+from api.infrastructure.telegram.client import get_chat_display_name, send_message, validate_bot_token
+
+logger = logging.getLogger(__name__)
 
 
 class TelegramValidationConfig(Protocol):
@@ -148,6 +151,64 @@ class TelegramPlatformPlugin(PlatformPlugin):
                 provider_metadata={"update_id": int(payload.get("update_id") or 0)},
             )
         ]
+
+    def enrich_inbound(
+        self,
+        settings: PlatformSettings,
+        credentials: PlatformCredentials,
+        envelopes: list[NormalizedCommunicationEnvelope],
+    ) -> list[NormalizedCommunicationEnvelope]:
+        del settings
+        assert isinstance(credentials, TelegramCredentials)
+        return [self._enrich_envelope(credentials.bot_token, envelope) for envelope in envelopes]
+
+    def _enrich_envelope(
+        self,
+        bot_token: str,
+        envelope: NormalizedCommunicationEnvelope,
+    ) -> NormalizedCommunicationEnvelope:
+        sender = envelope.sender
+        if sender.id and not sender.display_name:
+            name = self._safe_lookup(
+                "resolve sender name",
+                envelope,
+                lambda: get_chat_display_name(bot_token, sender.id or ""),
+            )
+            if name:
+                sender = sender.model_copy(update={"display_name": name})
+
+        location = envelope.location
+        if not location.display_name:
+            name = self._safe_lookup(
+                "resolve location name",
+                envelope,
+                lambda: get_chat_display_name(bot_token, location.id),
+            )
+            if name:
+                location = location.model_copy(update={"display_name": name})
+
+        if sender is envelope.sender and location is envelope.location:
+            return envelope
+        return envelope.model_copy(update={"sender": sender, "location": location})
+
+    @staticmethod
+    def _safe_lookup(
+        action: str,
+        envelope: NormalizedCommunicationEnvelope,
+        callback: Callable[[], str | None],
+    ) -> str | None:
+        try:
+            return callback()
+        except Exception as exc:
+            detail = " ".join(str(exc).split())[:160]
+            logger.warning(
+                "Telegram inbound enrichment %s failed for message %s (%s): %s",
+                action,
+                envelope.provider_message_id,
+                type(exc).__name__,
+                detail,
+            )
+            return None
 
     async def run_ingress(
         self,

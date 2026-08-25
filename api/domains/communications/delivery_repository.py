@@ -73,12 +73,7 @@ class CommunicationDeliveryRepository:
             inserted_message = session.exec(message_insert).one_or_none()
             duplicate = inserted_message is None
             if inserted_message is None:
-                message_id = session.exec(
-                    select(AgentChatMessage.id).where(
-                        col(AgentChatMessage.connection_id) == connection_id,
-                        col(AgentChatMessage.openclaw_msg_id) == envelope.provider_message_id,
-                    )
-                ).one()
+                message_id = self._backfill_message_names(session, connection_id, envelope)
             else:
                 message_id = cast(UUID, inserted_message[0])
 
@@ -250,6 +245,7 @@ class CommunicationDeliveryRepository:
                 session_key=source.ordering_key,
                 channel_id=inbound.location.id,
                 thread_id=inbound.location.thread_id,
+                channel_name=inbound.location.display_name,
                 direction=MessageDirection.OUTBOUND,
                 conversation_type=ConversationType(inbound.location.type),
                 content=reply.text,
@@ -485,6 +481,34 @@ class CommunicationDeliveryRepository:
             "content": envelope.text,
             "occurred_at": envelope.occurred_at,
         }
+
+    @staticmethod
+    def _backfill_message_names(
+        session: Session,
+        connection_id: UUID,
+        envelope: NormalizedCommunicationEnvelope,
+    ) -> UUID:
+        """Backfill names on a duplicate delivery's existing message row.
+
+        Runs only on the conflict path (a provider retry of an already-durable
+        message), so a fresh insert's values are never touched here. COALESCE
+        keeps any already-known name and only fills a column that is still
+        NULL, so a retry can supply a name the first attempt lacked without
+        ever clearing a name a prior attempt already resolved.
+        """
+        update = (
+            sa.update(AgentChatMessage)
+            .where(
+                col(AgentChatMessage.connection_id) == connection_id,
+                col(AgentChatMessage.openclaw_msg_id) == envelope.provider_message_id,
+            )
+            .values(
+                sender_name=sa.func.coalesce(col(AgentChatMessage.sender_name), envelope.sender.display_name),
+                channel_name=sa.func.coalesce(col(AgentChatMessage.channel_name), envelope.location.display_name),
+            )
+            .returning(cast(Any, AgentChatMessage.id))
+        )
+        return cast(UUID, session.exec(update).one()[0])
 
     @staticmethod
     def _safe_error(message: str | None) -> str | None:

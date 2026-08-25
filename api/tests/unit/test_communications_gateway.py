@@ -66,6 +66,7 @@ def _feedback_plugin() -> Mock:
     plugin.settings_model = SlackSettings
     plugin.credentials_model = SlackCredentials
     plugin.admit_inbound.return_value = [_envelope()]
+    plugin.enrich_inbound.side_effect = lambda settings, credentials, envelopes: envelopes
     return plugin
 
 
@@ -90,6 +91,54 @@ def test_gateway_feedback_is_best_effort_after_inbound_acceptance() -> None:
     deliveries.accept_inbound.assert_called_once()
     plugin.processing_feedback.assert_called_once()
     assert plugin.processing_feedback.call_args.args[2].stage == ProcessingFeedbackStage.ACCEPTED
+
+
+def test_gateway_enriches_inbound_envelopes_with_decrypted_credentials_before_acceptance() -> None:
+    connection = cast(CommunicationConnection, _connection())
+    plugin = _feedback_plugin()
+    enriched = _envelope().model_copy(update={"text": "enriched"})
+    plugin.enrich_inbound.side_effect = None
+    plugin.enrich_inbound.return_value = [enriched]
+    service, deliveries = _service(connection, plugin)
+    deliveries.accept_inbound.return_value = AcceptedCommunicationRead(
+        message_id=uuid4(),
+        delivery_id=uuid4(),
+        status=CommunicationDeliveryStatus.PENDING,
+    )
+
+    with patch(
+        "api.domains.communications.gateway_service.decrypt_token",
+        return_value=json.dumps({"bot_token": "xoxb-token", "app_token": "xapp-token"}),
+    ):
+        service._accept_admitted_payload(connection, plugin, SlackSettings(), {})
+
+    plugin.enrich_inbound.assert_called_once()
+    call_settings, call_credentials, call_envelopes = plugin.enrich_inbound.call_args.args
+    assert isinstance(call_settings, SlackSettings)
+    assert call_credentials == SlackCredentials(bot_token="xoxb-token", app_token="xapp-token")
+    assert call_envelopes == [_envelope()]
+    deliveries.accept_inbound.assert_called_once_with(connection_id=connection.id, envelope=enriched)
+
+
+def test_gateway_enrichment_failure_falls_back_to_unenriched_envelope() -> None:
+    connection = cast(CommunicationConnection, _connection())
+    plugin = _feedback_plugin()
+    plugin.enrich_inbound.side_effect = RuntimeError("Slack directory unavailable")
+    service, deliveries = _service(connection, plugin)
+    deliveries.accept_inbound.return_value = AcceptedCommunicationRead(
+        message_id=uuid4(),
+        delivery_id=uuid4(),
+        status=CommunicationDeliveryStatus.PENDING,
+    )
+
+    with patch(
+        "api.domains.communications.gateway_service.decrypt_token",
+        return_value=json.dumps({"bot_token": "xoxb-token", "app_token": "xapp-token"}),
+    ):
+        accepted = service._accept_admitted_payload(connection, plugin, SlackSettings(), {})
+
+    assert len(accepted) == 1
+    deliveries.accept_inbound.assert_called_once_with(connection_id=connection.id, envelope=_envelope())
 
 
 def test_gateway_marks_claim_and_terminal_runtime_failure_at_lifecycle_seam() -> None:

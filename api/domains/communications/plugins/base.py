@@ -169,6 +169,22 @@ class PlatformPlugin(ABC):
         del context
         return self.normalize_inbound(settings, payload)
 
+    def enrich_inbound(
+        self,
+        settings: PlatformSettings,
+        credentials: PlatformCredentials,
+        envelopes: list[NormalizedCommunicationEnvelope],
+    ) -> list[NormalizedCommunicationEnvelope]:
+        """Best-effort provider lookups to fill sender/location names before persistence.
+
+        Default no-op. Plugins override this to resolve names the provider
+        payload omitted. Lookups must be cached and must never raise past this
+        seam: a failure here must fall back to the envelopes as normalized
+        rather than delay or reject durable message acceptance.
+        """
+        del settings, credentials
+        return envelopes
+
     def processing_feedback(
         self,
         settings: PlatformSettings,

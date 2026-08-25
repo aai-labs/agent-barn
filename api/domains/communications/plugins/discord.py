@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -17,6 +18,8 @@ from api.domains.communications.models import (
 )
 from api.domains.communications.plugins.base import PlatformCredentials, PlatformPlugin, PlatformSettings
 from api.infrastructure.discord.client import DiscordClient
+
+logger = logging.getLogger(__name__)
 
 
 class DiscordValidationConfig(Protocol):
@@ -182,6 +185,65 @@ class DiscordPlatformPlugin(PlatformPlugin):
                 provider_metadata={"guild_id": guild_id},
             )
         ]
+
+    def enrich_inbound(
+        self,
+        settings: PlatformSettings,
+        credentials: PlatformCredentials,
+        envelopes: list[NormalizedCommunicationEnvelope],
+    ) -> list[NormalizedCommunicationEnvelope]:
+        del settings
+        assert isinstance(credentials, DiscordCredentials)
+        client = DiscordClient(credentials.bot_token)
+        return [self._enrich_envelope(client, envelope) for envelope in envelopes]
+
+    def _enrich_envelope(
+        self,
+        client: DiscordClient,
+        envelope: NormalizedCommunicationEnvelope,
+    ) -> NormalizedCommunicationEnvelope:
+        sender = envelope.sender
+        if sender.id and not sender.display_name:
+            name = self._safe_lookup(
+                "resolve sender name",
+                envelope,
+                lambda: client.get_user_display_name(sender.id or ""),
+            )
+            if name:
+                sender = sender.model_copy(update={"display_name": name})
+
+        location = envelope.location
+        if not location.display_name:
+            name = self._safe_lookup(
+                "resolve channel name",
+                envelope,
+                lambda: client.get_channel_display_name(location.id),
+            )
+            if name:
+                location = location.model_copy(update={"display_name": name})
+
+        if sender is envelope.sender and location is envelope.location:
+            return envelope
+        return envelope.model_copy(update={"sender": sender, "location": location})
+
+    @staticmethod
+    def _safe_lookup(
+        action: str,
+        envelope: NormalizedCommunicationEnvelope,
+        callback: Callable[[], str | None],
+    ) -> str | None:
+        try:
+            return callback()
+        except Exception as exc:
+            detail = " ".join(str(exc).split())[:160]
+            logger.warning(
+                "Discord inbound enrichment %s failed for message %s (%s): %s",
+                action,
+                envelope.provider_message_id,
+                type(exc).__name__,
+                detail,
+            )
+            return None
 
     async def run_ingress(
         self,

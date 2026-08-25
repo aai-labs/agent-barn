@@ -59,8 +59,10 @@ class ConversationRepository:
                 index_where=sa.text("connection_id IS NOT NULL"),
                 set_={
                     "thread_id": stmt.excluded.thread_id,
-                    "sender_name": stmt.excluded.sender_name,
-                    "channel_name": stmt.excluded.channel_name,
+                    # COALESCE so a later upsert with no resolved name (NULL)
+                    # never clears a name an earlier upsert already learned.
+                    "sender_name": sa.func.coalesce(col(AgentChatMessage.sender_name), stmt.excluded.sender_name),
+                    "channel_name": sa.func.coalesce(col(AgentChatMessage.channel_name), stmt.excluded.channel_name),
                     "content": stmt.excluded.content,
                     "updated_at": stmt.excluded.updated_at,
                 },

@@ -315,3 +315,41 @@ class SlackClient:
                 }
             )
         return result
+
+    # --- name resolution -----------------------------------------------
+
+    def get_user_display_name(self, user_id: str) -> str | None:
+        """Resolve a Slack user ID to a human name via the cached directory sweep.
+
+        Preference order is display name, then real name, then Slack
+        username, falling back to the raw ID only when the user was found but
+        has none of those set. Returns None when the user isn't in the
+        directory (deleted/inaccessible) or a lookup is not possible.
+        """
+        if not user_id:
+            return None
+        users = cached(self._token_key("users"), self._fetch_all_users)
+        for u in users:
+            if u["id"] == user_id:
+                return u["display_name"] or u["real_name"] or u["name"] or user_id
+        return None
+
+    def get_channel_name(self, channel_id: str) -> str | None:
+        """Resolve a Slack channel ID to its name via the cached directory sweep."""
+        if not channel_id:
+            return None
+        channels = cached(self._token_key("channels"), self._fetch_all_channels)
+        for ch in channels:
+            if ch["id"] == channel_id:
+                return ch["name"] or None
+        return None
+
+    def get_dm_participant_name(self, dm_channel_id: str) -> str | None:
+        """Resolve a Slack DM channel ID to its counterpart user's display name."""
+        if not dm_channel_id:
+            return None
+        dm_channels = cached(self._token_key("dm_channels"), self._fetch_dm_channels)
+        for dm in dm_channels:
+            if dm["id"] == dm_channel_id:
+                return self.get_user_display_name(dm["user"])
+        return None

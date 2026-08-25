@@ -1,3 +1,4 @@
+import hashlib
 import json
 import logging
 
@@ -66,9 +67,15 @@ def _fetch_chat_display_name(bot_token: str, chat_id: str) -> str | None:
 
 
 def get_chat_display_name(bot_token: str, chat_id: str) -> str | None:
-    """Resolve a Telegram chat/user ID to a human-readable name (cached)."""
+    """Resolve a Telegram chat/user ID to a human-readable name (cached).
+
+    The cache key is scoped by a hash of the bot token: Telegram chat/user IDs
+    are provider-global, not bot-scoped, so two different bot credentials
+    resolving the same ID must never share a cached name.
+    """
+    token_key = hashlib.sha256(bot_token.encode()).hexdigest()
     return _cached(
-        f"tg_chat:{chat_id}",
+        f"tg_chat:{token_key}:{chat_id}",
         lambda: _fetch_chat_display_name(bot_token, chat_id),
         ttl=_CHAT_CACHE_TTL_SECONDS,
     )

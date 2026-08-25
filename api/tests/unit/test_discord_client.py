@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, patch
 from hamcrest import assert_that, equal_to, none
 
 from api.infrastructure.discord.client import DiscordClient
+from api.infrastructure.shared.cache import clear_cache
 
 
 @patch("api.infrastructure.discord.client.cached", side_effect=lambda _key, fetch, ttl: fetch())
@@ -26,3 +27,25 @@ def test_discord_client_returns_none_when_resource_is_not_visible(mock_request, 
     client = DiscordClient("discord-token")
 
     assert_that(client.get_channel_display_name("channel-1"), none())
+
+
+@patch("api.infrastructure.discord.client.resilient_request")
+def test_discord_client_cache_does_not_cross_contaminate_different_tokens(mock_request):
+    """Two bots resolving the same Discord user ID must not share a cached
+    name — a shared key would leak one Connection's directory into another.
+    """
+    clear_cache()
+    try:
+        response_one = MagicMock(status_code=200)
+        response_one.json.return_value = {"id": "user-1", "global_name": "Bot One's Alice"}
+        response_two = MagicMock(status_code=200)
+        response_two.json.return_value = {"id": "user-1", "global_name": "Bot Two's Alice"}
+        mock_request.side_effect = [response_one, response_two]
+
+        first = DiscordClient("token-one").get_user_display_name("user-1")
+        second = DiscordClient("token-two").get_user_display_name("user-1")
+
+        assert_that(first, equal_to("Bot One's Alice"))
+        assert_that(second, equal_to("Bot Two's Alice"))
+    finally:
+        clear_cache()

@@ -181,13 +181,44 @@ class CommunicationsGatewayService:
         settings: PlatformSettings,
         payload: dict[str, Any],
     ) -> list[AcceptedCommunicationRead]:
+        envelopes = self._admit_plugin_payload(connection.id, plugin, settings, payload)
+        if envelopes:
+            envelopes = self._enrich_inbound(connection, plugin, settings, envelopes)
         accepted: list[AcceptedCommunicationRead] = []
-        for envelope in self._admit_plugin_payload(connection.id, plugin, settings, payload):
+        for envelope in envelopes:
             result = self.accept_inbound(connection.id, envelope)
             accepted.append(result)
             if not result.duplicate and result.status == CommunicationDeliveryStatus.PENDING:
                 self._notify_processing_feedback(connection, ProcessingFeedbackStage.ACCEPTED, envelope)
         return accepted
+
+    def _enrich_inbound(
+        self,
+        connection: CommunicationConnection,
+        plugin: PlatformPlugin,
+        settings: PlatformSettings,
+        envelopes: list[NormalizedCommunicationEnvelope],
+    ) -> list[NormalizedCommunicationEnvelope]:
+        """Resolve optional provider names before durable persistence.
+
+        Best-effort: any failure (decrypt, validation, or a plugin's own
+        provider lookups) falls back to the envelopes as normalized rather
+        than delaying or rejecting durable acceptance.
+        """
+        try:
+            credentials = plugin.credentials_model.model_validate(
+                json.loads(decrypt_token(connection.credentials_encrypted, self.config.agent_token_encryption_key))
+            )
+            return plugin.enrich_inbound(settings, credentials, envelopes)
+        except Exception as exc:
+            detail = " ".join(str(exc).split())[:160]
+            logger.warning(
+                "Communication inbound enrichment failed for Connection %s (%s): %s",
+                connection.id,
+                type(exc).__name__,
+                detail,
+            )
+            return envelopes
 
     def notify_processing_feedback(self, context: ProcessingFeedbackContext) -> None:
         """Best-effort feedback hook for a provider-owned delivery lifecycle."""

@@ -65,6 +65,7 @@ def _seed_message(
     content="msg",
     occurred_at: datetime | None = None,
     channel_name: str | None = None,
+    sender_name: str | None = None,
     connection: CommunicationConnection | None = None,
 ):
     if connection is None and not hasattr(context, "communication_connection"):
@@ -91,6 +92,7 @@ def _seed_message(
         thread_id=thread_id,
         direction=direction,
         sender_id="U12345" if direction == MessageDirection.INBOUND else None,
+        sender_name=sender_name,
         content=content,
         occurred_at=ts,
     )
@@ -427,3 +429,53 @@ def test_same_provider_channel_id_is_isolated_by_connection() -> None:
             )
             assert_that(first_messages.json()["threads"][0]["root"]["content"], equal_to("first connection"))
             assert_that(second_messages.json()["threads"][0]["root"]["content"], equal_to("second connection"))
+
+
+def test_list_messages_returns_resolved_sender_name():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        client: TestClient = context.client
+        _seed_message(
+            context,
+            direction=MessageDirection.INBOUND,
+            channel_id="CABC",
+            content="hello",
+            sender_name="Person One",
+        )
+
+        with when("I list messages for the channel"):
+            response = client.get(
+                _messages_url(context, "CABC"),
+                headers=_auth(context),
+            )
+
+        with then("the enriched sender name is returned with the message"):
+            body = response.json()
+            assert_that(body["threads"][0]["root"]["sender_name"], equal_to("Person One"))
+
+
+def test_upsert_messages_does_not_erase_a_known_sender_name_on_conflict():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        client: TestClient = context.client
+        occurred_at = datetime(2025, 5, 1, 12, 0, 0, tzinfo=UTC)
+
+        with when("a message with a resolved sender name is upserted, then retried without one"):
+            _seed_message(
+                context,
+                direction=MessageDirection.INBOUND,
+                channel_id="CABC",
+                content="hello",
+                occurred_at=occurred_at,
+                sender_name="Person One",
+            )
+            _seed_message(
+                context,
+                direction=MessageDirection.INBOUND,
+                channel_id="CABC",
+                content="hello",
+                occurred_at=occurred_at,
+                sender_name=None,
+            )
+
+        with then("the sender name is preserved rather than cleared"):
+            response = client.get(_messages_url(context, "CABC"), headers=_auth(context))
+            assert_that(response.json()["threads"][0]["root"]["sender_name"], equal_to("Person One"))

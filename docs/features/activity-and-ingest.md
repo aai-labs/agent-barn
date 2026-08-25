@@ -21,7 +21,7 @@ Conversation Messages and Tool Calls share the Agent Activity UI but have differ
 - Product API conversation and tool-call reads require `activity.read` and are scoped through an accessible, organization-owned, non-deleted Agent. Assigned Members cannot bypass Agent Access through activity endpoints.
 - Runtime Ingest Tool Call writes use Agent identity plus ingest-key authentication rather than a human Membership or Agent Access check. Runtime communication claims/replies use a separate versioned Communications protocol credential.
 - Telemetry Events are runtime-originated operational facts. They are not Domain Events, Outbox Messages, Event Deliveries, or Security Audit Records.
-- Platform Plugins normalize provider-specific identities and optional names into the canonical envelope before persistence.
+- Platform Plugins normalize provider-specific identities into the canonical envelope. Missing sender/location display names are resolved by an optional, best-effort `enrich_inbound` plugin seam that the Communications Gateway invokes centrally — for supervised ingress, driver events, and webhook events alike — after admission and before persistence. Enrichment lookups are cached, credential-scoped, and never delay or reject durable message acceptance on failure.
 
 ## Data flow
 
