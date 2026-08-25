@@ -33,6 +33,7 @@ import {
 import { useUpdateAgent } from "../hooks/use-update-agent";
 import type { Agent, AgentAssignedSkill } from "../schemas";
 import type { AgentConfigurationEditHandle } from "./agent-configuration-utils";
+import { CredentialErrorAlert } from "./credential-error-alert";
 import { IntegrationFields } from "./integration-fields";
 
 interface AgentSkillsTabProps {
@@ -84,6 +85,11 @@ export const AgentSkillsTab = forwardRef<
   const hasPendingChanges =
     pendingAddIds.length > 0 || pendingRemoveIds.length > 0 || pendingPinChanges.length > 0;
   const isValid = !hasIncompleteIntegration(newSecretDrafts);
+  const credentialError = updateAgent.error instanceof Error
+    ? updateAgent.error.message
+    : updateAgent.error
+      ? "Save failed"
+      : null;
 
   useEffect(() => {
     onDirtyChange?.(hasPendingChanges || newSecretDrafts.length > 0, isValid);
@@ -368,6 +374,12 @@ export const AgentSkillsTab = forwardRef<
                     color: "var(--ink-3)",
                   }}
                 >
+                  {credentialError && providerId === newlyRequiredProviderIds[0] && (
+                    <CredentialErrorAlert
+                      title="Could not save credentials"
+                      message={credentialError}
+                    />
+                  )}
                   <span className="font-medium" style={{ color: "var(--ink)" }}>
                     {SKILL_PROVIDER_LABELS[providerId] ?? providerId}
                   </span>{" "}
@@ -378,6 +390,9 @@ export const AgentSkillsTab = forwardRef<
 
             const isSharedEligible = !!SHARED_CREDENTIAL_PROVIDER_LABELS[providerId];
             const useShared = draft.sharedCredentialId !== undefined;
+            const showCredentialError = Boolean(
+              credentialError && providerId === newlyRequiredProviderIds[0],
+            );
 
             return (
               <div
@@ -400,11 +415,19 @@ export const AgentSkillsTab = forwardRef<
                   />
                 )}
 
+                {showCredentialError && useShared && credentialError && (
+                  <CredentialErrorAlert
+                    title="Could not save credentials"
+                    message={credentialError}
+                  />
+                )}
+
                 {!useShared && (
                   <IntegrationFields
                     provider={providerSpec}
                     draft={draft}
                     namePrefix="tab-"
+                    credentialError={showCredentialError ? credentialError : undefined}
                     onFieldChange={(key, value) => setField(providerId, key, value)}
                     onListChange={(key, values) => setRepos(providerId, key, values)}
                     onOAuthConnected={({ refreshToken, clientId, clientSecret, email, scopes }) => {
@@ -454,12 +477,11 @@ export const AgentSkillsTab = forwardRef<
         ))}
       </div>
 
-      {updateAgent.error && (
-        <span className="text-xs" style={{ color: "var(--err)" }}>
-          {updateAgent.error instanceof Error
-            ? updateAgent.error.message
-            : "Save failed"}
-        </span>
+      {credentialError && newlyRequiredProviderIds.length === 0 && (
+        <CredentialErrorAlert
+          title="Could not save changes"
+          message={credentialError}
+        />
       )}
     </div>
   );

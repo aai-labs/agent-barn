@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { mockAgent } from "../pages/data-support/agent-data-support.po";
+import { mockAgent, mockTemplates } from "../pages/data-support/agent-data-support.po";
+import { mockJiraSkill } from "../pages/data-support/skill-data-support.po";
 import { DataSupport } from "../pages/data-support/data-support.po";
 import { DashboardPage } from "../pages/dashboard-page.po";
 
@@ -64,6 +65,107 @@ test.describe("Hire Dialog", () => {
     });
     await startRequest;
     await expect(page.getByText("Aria was hired successfully.")).toBeVisible();
+  });
+
+  test("configures template-required skill credentials before creating the Agent", async ({ page }) => {
+    const jiraRequiredSkill = {
+      id: mockJiraSkill.id,
+      name: mockJiraSkill.name,
+      source: mockJiraSkill.source,
+      required_providers: mockJiraSkill.requiredProviders,
+      tools_pointer: mockJiraSkill.toolsPointer,
+      required: true,
+      created_at: mockJiraSkill.createdAt,
+      updated_at: mockJiraSkill.updatedAt,
+      group_key: null,
+    };
+    await dataSupport.agents.interceptGetTemplatesRequest({
+      body: {
+        page: 1,
+        page_size: 50,
+        total: 1,
+        items: [{ ...mockTemplates[0], required_skills: [jiraRequiredSkill] }],
+      },
+    });
+    await dataSupport.skills.interceptGetSkillsRequest({ body: [mockJiraSkill] });
+    await dataSupport.agents.interceptCreateAgentRequest({
+      body: { ...mockAgent, name: "Aria", status: "STOPPED", agent_type: "hermes" },
+    });
+    await dataSupport.agents.interceptStartAgentRequest();
+
+    // The dialog's initial template query is already cached by the dashboard;
+    // reload so this test-specific template response is consumed.
+    await dashboardPage.goto();
+    await page.getByRole("button", { name: /hire agent/i }).click();
+    await chooseTemplate(page);
+    await expect(page.getByText("Template skills and credentials")).toBeVisible();
+    await expect(page.getByText("jira", { exact: true })).toBeVisible();
+
+    await page.getByPlaceholder("https://your-domain.atlassian.net").fill("https://acme.atlassian.net");
+    await page.getByText("Non-scoped token", { exact: true }).click();
+    await page.getByPlaceholder("you@example.com").fill("user@example.com");
+    await page.locator('input[type="password"]').fill("jira-token");
+
+    const createRequest = page.waitForRequest(
+      (request) => request.url().endsWith("/agents") && request.method() === "POST",
+    );
+    await page.getByRole("button", { name: "Hire Agent", exact: true }).click();
+    const payload = (await createRequest).postDataJSON();
+
+    expect(payload.skill_ids).toEqual([mockJiraSkill.id]);
+    expect(payload.secrets).toEqual([
+      {
+        provider: "jira",
+        content: {
+          site_url: "https://acme.atlassian.net",
+          use_scoped_token: false,
+          email: "user@example.com",
+          api_token: "jira-token",
+        },
+      },
+    ]);
+  });
+
+  test("shows credential validation failures as alerts inside the credential form", async ({ page }) => {
+    const jiraRequiredSkill = {
+      id: mockJiraSkill.id,
+      name: mockJiraSkill.name,
+      source: mockJiraSkill.source,
+      required_providers: mockJiraSkill.requiredProviders,
+      tools_pointer: mockJiraSkill.toolsPointer,
+      required: true,
+      created_at: mockJiraSkill.createdAt,
+      updated_at: mockJiraSkill.updatedAt,
+      group_key: null,
+    };
+    await dataSupport.agents.interceptGetTemplatesRequest({
+      body: {
+        page: 1,
+        page_size: 50,
+        total: 1,
+        items: [{ ...mockTemplates[0], required_skills: [jiraRequiredSkill] }],
+      },
+    });
+    await dataSupport.skills.interceptGetSkillsRequest({ body: [mockJiraSkill] });
+    await dataSupport.agents.interceptCreateAgentRequest({
+      status: 400,
+      detail: "Invalid email or API token",
+    });
+
+    await dashboardPage.goto();
+    await page.getByRole("button", { name: /hire agent/i }).click();
+    await chooseTemplate(page);
+    await expect(page.getByText("Template skills and credentials")).toBeVisible();
+
+    await page.getByPlaceholder("https://your-domain.atlassian.net").fill("https://acme.atlassian.net");
+    await page.getByText("Non-scoped token", { exact: true }).click();
+    await page.getByPlaceholder("you@example.com").fill("user@example.com");
+    await page.locator('input[type="password"]').fill("jira-token");
+    await page.getByRole("button", { name: "Hire Agent", exact: true }).click();
+
+    const credentialsSection = page.locator("section").filter({ hasText: "Template skills and credentials" });
+    await expect(credentialsSection.getByRole("alert")).toContainText("Invalid email or API token");
+    await expect(page.locator("footer").getByRole("alert")).toHaveCount(0);
   });
 
   test("allows choosing a runtime independently of communication platforms", async ({ page }) => {

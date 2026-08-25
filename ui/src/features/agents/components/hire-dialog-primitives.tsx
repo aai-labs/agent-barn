@@ -2,6 +2,7 @@
 
 import React, { useRef, useState } from "react";
 import { EyeIcon, EyeOffIcon, PlusIcon, XIcon } from "@/components/icons";
+import { CredentialErrorAlert } from "./credential-error-alert";
 import { useGoogleOAuth, type GoogleOAuthResult } from "../hooks/use-google-oauth";
 
 export function DialogShell({
@@ -378,9 +379,10 @@ export function GoogleAuthButton({
         </span>
       )}
       {error && (
-        <span className="text-[0.75rem]" style={{ color: "var(--danger, #c53030)" }}>
-          {error}
-        </span>
+        <CredentialErrorAlert
+          title="Google authentication failed"
+          message={error}
+        />
       )}
     </div>
   );

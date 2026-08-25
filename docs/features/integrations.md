@@ -28,7 +28,7 @@ Shared Credentials are org-scoped, admin-managed credential payloads that any me
 
 ## Invariants
 
-- Agent Secret payloads are validated against provider-specific schemas before encryption and again after decryption.
+- Agent Secret payloads are validated against provider-specific schemas before encryption and again after decryption. Agent creation does not trust client-side validation: for providers with a live validator, the service validates the exact submitted manual or shared credential before allocating a LiteLLM key or persisting the Agent. Providers without a live validator remain schema-validated and can be checked through the on-demand validation endpoint.
 - An agent has at most one Agent Secret per provider.
 - Duplicate providers in create/update payloads are rejected.
 - Read APIs return provider and display label, not credential contents.

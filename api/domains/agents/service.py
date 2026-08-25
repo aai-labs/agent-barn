@@ -661,8 +661,10 @@ class AgentService:
         # Prepare Agent Secrets in memory without persisting them yet.
         # Integration credentials are separate from Communication Connections.
         prepared_secrets: list[AgentSecret] = []
+        live_validation_contents: list[tuple[SecretProvider, Any]] = []
         for item in data.secrets:
             content = _enrich_atlassian_content(validate_content(item.provider, item.content))
+            live_validation_contents.append((item.provider, content))
             prepared_secrets.append(
                 AgentSecret(
                     agent_id=agent.id,
@@ -689,6 +691,12 @@ class AgentService:
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Provider {shared_cred.provider} already has a credential in this request",
                 )
+            shared_content = decrypt_content(
+                shared_cred.provider,
+                shared_cred.content,
+                self.config.agent_token_encryption_key,
+            )
+            live_validation_contents.append((shared_cred.provider, shared_content))
             prepared_secrets.append(
                 AgentSecret(
                     agent_id=agent.id,
@@ -707,6 +715,11 @@ class AgentService:
             org_id,
             extra_providers=shared_providers,
         )
+        # Live validation runs only after all deterministic template, skill,
+        # provider-coverage, and shared-credential checks have passed. The list is
+        # built from this request, never from a client-side validation result.
+        for provider, content in live_validation_contents:
+            self._validate_live_integration(provider, content)
 
         # The creator always gets an explicit Owner AgentAccess row, even if they
         # currently have implicit full access as an Org Owner/Admin: it's what keeps
@@ -2194,6 +2207,46 @@ class AgentService:
                 content.client_id = self.config.google_cloud_client_id
             if not content.client_secret:
                 content.client_secret = self.config.google_cloud_client_secret
+
+    def _validate_live_integration(self, provider: SecretProvider, content: Any) -> None:
+        """Validate submitted credentials with the provider before they are persisted.
+
+        The browser can be modified, so any client-side preflight is advisory only. This
+        method receives the exact content from the current request and runs the provider
+        validator before Agent creation allocates a LiteLLM key or opens its persistence
+        transaction. Providers without a live validator still receive schema validation;
+        their credentials remain eligible for the existing on-demand validation endpoint.
+        """
+        validator = PROVIDER_VALIDATORS.get(provider)
+        if validator is None:
+            return
+
+        validation_content = content
+        if provider == SecretProvider.GOOGLE_WORKSPACE and isinstance(content, GoogleWorkspaceContent):
+            # The stored payload may intentionally omit the deployment-owned OAuth client;
+            # validate with the same server-side backfill used during runtime materialization
+            # without changing the caller's encrypted payload.
+            validation_content = content.model_copy(deep=True)
+            self._backfill_google_client_credentials({provider: validation_content})
+
+        try:
+            result = validator(validation_content)
+        except Exception as exc:
+            logger.warning(
+                "Live integration validation raised for provider %s (%s)",
+                provider.value,
+                type(exc).__name__,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"{PROVIDER_DISPLAY_NAMES[provider]} could not be validated; try again.",
+            ) from exc
+
+        if not result.valid:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(result.error or f"{PROVIDER_DISPLAY_NAMES[provider]} credential is invalid."),
+            )
 
     def validate_integration(self, agent_id: UUID, provider: SecretProvider, context: CurrentUserContext) -> dict:
         """Validate an existing secret on demand. Never persists — returns result directly."""

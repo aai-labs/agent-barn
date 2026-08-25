@@ -47,6 +47,7 @@ from api.domains.events.security_audit import SecurityAuditRepository
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.templates.models import AgentTemplate, PlatformTemplate
 from api.domains.templates.repository import TemplateRepository
+from api.infrastructure.integration_validators.result import IntegrationValidationResult
 from api.infrastructure.kubernetes.client import KubernetesClient
 from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
@@ -1581,13 +1582,22 @@ def test_create_agent_rolls_back_initial_resources_before_releasing_key():
         outbox: OutboxMessageRepository = context.injector.get(OutboxMessageRepository)
         litellm: MagicMock = context.injector.get(LiteLLMClient)
 
-        with patch.object(
-            outbox,
-            "stage",
-            side_effect=[
-                None,
-                HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="secret persistence failed"),
-            ],
+        with (
+            patch.dict(
+                "api.domains.agents.service.PROVIDER_VALIDATORS",
+                {SecretProvider.JIRA: lambda _content: IntegrationValidationResult(valid=True)},
+            ),
+            patch.object(
+                outbox,
+                "stage",
+                side_effect=[
+                    None,
+                    HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="secret persistence failed",
+                    ),
+                ],
+            ),
         ):
             response = client.post(
                 _BASE,
@@ -2414,6 +2424,46 @@ def test_create_agent_skill_missing_provider_returns_400():
             litellm.generate_key.assert_not_called()
 
 
+def test_create_agent_rejects_live_invalid_secret_before_persistence():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        litellm: MagicMock = context.injector.get(LiteLLMClient)
+        invalid = IntegrationValidationResult(valid=False, error="Token is invalid or expired")
+        seen_tokens: list[str] = []
+
+        def reject_tampered_token(content) -> IntegrationValidationResult:
+            seen_tokens.append(content.token)
+            return invalid
+
+        payload = {
+            **_VALID_CREATE,
+            "secrets": [
+                {
+                    "provider": "github",
+                    "content": {
+                        "token": "tampered-token",
+                        "owner": "my-org",
+                        "org": "my-org",
+                    },
+                }
+            ],
+        }
+
+        with when("I create an agent with a syntactically valid but invalid credential"):
+            with patch.dict(
+                "api.domains.agents.service.PROVIDER_VALIDATORS",
+                {SecretProvider.GITHUB: reject_tampered_token},
+            ):
+                response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("the final payload is live-validated and nothing is persisted"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], equal_to("Token is invalid or expired"))
+            assert_that(seen_tokens, equal_to(["tampered-token"]))
+            litellm.generate_key.assert_not_called()
+            assert_that(client.get(_BASE, headers=_auth(context)).json()["items"], equal_to([]))
+
+
 def test_create_agent_skill_with_covered_provider_assigns_skill():
     with given(
         [
@@ -2442,7 +2492,11 @@ def test_create_agent_skill_with_covered_provider_assigns_skill():
         }
 
         with when("I create an agent with the required GitHub secret"):
-            response = client.post(_BASE, json=payload, headers=_auth(context))
+            with patch.dict(
+                "api.domains.agents.service.PROVIDER_VALIDATORS",
+                {SecretProvider.GITHUB: lambda _content: IntegrationValidationResult(valid=True)},
+            ):
+                response = client.post(_BASE, json=payload, headers=_auth(context))
 
         with then("it returns 201 and the skill is assigned"):
             assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))

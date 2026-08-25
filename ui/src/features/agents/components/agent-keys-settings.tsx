@@ -25,6 +25,11 @@ export function AgentKeysSettings({ agent, canEdit, editing, onEdit }: {
   const [removedProviders, setRemovedProviders] = useState<string[]>([]);
   const { applyAndRestart } = useAgentApplyAndRestart(agent);
   const configuredSecrets = agent.secrets ?? [];
+  const credentialError = updateAgent.error instanceof Error
+    ? updateAgent.error.message
+    : updateAgent.error
+      ? "Save failed"
+      : null;
   const hasChanges = secretDrafts.length > 0 || removedProviders.length > 0;
 
   async function applyChanges() {
@@ -92,8 +97,11 @@ export function AgentKeysSettings({ agent, canEdit, editing, onEdit }: {
               </div>
             );
           })}
-          <IntegrationsStep integrations={secretDrafts} onChange={setSecretDrafts} />
-          {updateAgent.error && <span className="text-xs" style={{ color: "var(--err)" }}>{updateAgent.error instanceof Error ? updateAgent.error.message : "Save failed"}</span>}
+          <IntegrationsStep
+            integrations={secretDrafts}
+            onChange={setSecretDrafts}
+            credentialError={credentialError}
+          />
         </div>
       )}
     </AgentConfigurationSection>

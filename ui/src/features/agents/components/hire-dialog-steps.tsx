@@ -30,13 +30,10 @@ import {
   isAutoConfiguredProvider,
   type IntegrationDraft,
 } from "../integrations";
-import type {
-  AgentAssignedSkill,
-  AgentTemplateRead,
-  TemplateRequiredSkill,
-} from "../schemas";
+import type { AgentTemplateRead, TemplateRequiredSkill } from "../schemas";
 import { useTemplates } from "../hooks/use-templates";
 import type { RequiredSkillGroup } from "../utils";
+import { CredentialErrorAlert } from "./credential-error-alert";
 import { IntegrationFields } from "./integration-fields";
 import { Pagination } from "./pagination";
 
@@ -333,15 +330,17 @@ export function SkillsStep({
   requiredGroups = [],
   groupChoices = {},
   onGroupChoiceChange,
+  credentialError,
 }: {
   selectedSkillIds: string[];
   skillCredentials: IntegrationDraft[];
   onSkillIdsChange: (ids: string[]) => void;
   onSkillCredentialsChange: (drafts: IntegrationDraft[]) => void;
-  templateRequiredSkills?: AgentAssignedSkill[];
+  templateRequiredSkills?: TemplateRequiredSkill[];
   requiredGroups?: RequiredSkillGroup[];
   groupChoices?: Record<string, string[]>;
   onGroupChoiceChange?: (groupKey: string, skillId: string) => void;
+  credentialError?: string | null;
 }) {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
@@ -361,8 +360,10 @@ export function SkillsStep({
   const groupMemberIds = new Set(
     requiredGroups.flatMap((g) => g.members.map((m) => m.id)),
   );
+  // Required standalone skills come from the selected template and must remain
+  // visible even when they are not on the current paginated catalog page.
   const orderedSkills = [
-    ...skills.filter((s) => requiredSkillIds.has(s.id)),
+    ...templateRequiredSkills,
     ...skills.filter(
       (s) => !requiredSkillIds.has(s.id) && !groupMemberIds.has(s.id),
     ),
@@ -377,7 +378,9 @@ export function SkillsStep({
 
   // Track full Skill objects for selected skills so we can compute requiredProviders
   // across pages. Users can only toggle visible skills, so this stays in sync.
-  const [selectedSkillObjects, setSelectedSkillObjects] = useState<Skill[]>([]);
+  const [selectedSkillObjects, setSelectedSkillObjects] = useState<
+    Array<Skill | TemplateRequiredSkill>
+  >([]);
   const requiredProviderIds: string[] = [
     ...new Set([
       ...templateRequiredSkills.flatMap((s) => s.requiredProviders),
@@ -385,6 +388,7 @@ export function SkillsStep({
       ...selectedSkillObjects.flatMap((s) => s.requiredProviders),
     ]),
   ];
+  const firstCredentialProviderId = requiredProviderIds[0];
 
   function handleSearchChange(value: string) {
     setSearch(value);
@@ -412,7 +416,7 @@ export function SkillsStep({
     onSkillCredentialsChange(newCreds);
   }
 
-  function toggleSkill(skill: Skill) {
+  function toggleSkill(skill: Skill | TemplateRequiredSkill) {
     const isSelected = selectedSkillIds.includes(skill.id);
     const newIds = isSelected
       ? selectedSkillIds.filter((id) => id !== skill.id)
@@ -582,7 +586,7 @@ export function SkillsStep({
             Loading skills…
           </div>
         )}
-        {!isLoading && total === 0 && !search && (
+        {!isLoading && total === 0 && !search && templateRequiredSkills.length === 0 && (
           <div
             className="text-[0.8125rem] py-6 text-center rounded-2xl"
             style={{
@@ -594,7 +598,7 @@ export function SkillsStep({
             <strong>Settings → Skills</strong> first.
           </div>
         )}
-        {!isLoading && total === 0 && search && (
+        {!isLoading && total === 0 && search && templateRequiredSkills.length === 0 && (
           <div
             className="text-[0.8125rem] py-8 text-center"
             style={{ color: "var(--ink-3)" }}
@@ -602,7 +606,7 @@ export function SkillsStep({
             No skills match.
           </div>
         )}
-        {!isLoading && skills.length > 0 && (
+        {!isLoading && (skills.length > 0 || templateRequiredSkills.length > 0) && (
           <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
             {orderedSkills.map((skill) => {
               const isRequired = requiredSkillIds.has(skill.id);
@@ -687,6 +691,9 @@ export function SkillsStep({
                     color: "var(--ink-3)",
                   }}
                 >
+                  {credentialError && providerId === firstCredentialProviderId && (
+                    <CredentialErrorAlert message={credentialError} />
+                  )}
                   <span className="font-medium" style={{ color: "var(--ink)" }}>
                     {SKILL_PROVIDER_LABELS[providerId] ?? providerId}
                   </span>{" "}
@@ -698,6 +705,9 @@ export function SkillsStep({
             const isSharedEligible =
               !!SHARED_CREDENTIAL_PROVIDER_LABELS[providerId];
             const useShared = draft.sharedCredentialId !== undefined;
+            const showCredentialError = Boolean(
+              credentialError && providerId === firstCredentialProviderId,
+            );
 
             return (
               <div
@@ -734,11 +744,16 @@ export function SkillsStep({
                   />
                 )}
 
+                {showCredentialError && useShared && credentialError && (
+                  <CredentialErrorAlert message={credentialError} />
+                )}
+
                 {!useShared && (
                   <IntegrationFields
                     provider={providerSpec}
                     draft={draft}
                     showScopeNote
+                    credentialError={showCredentialError ? credentialError : undefined}
                     onFieldChange={(key, value) =>
                       setField(providerId, key, value)
                     }
@@ -767,6 +782,9 @@ export function SkillsStep({
           })}
         </div>
       )}
+      {credentialError && requiredProviderIds.length === 0 && (
+        <CredentialErrorAlert message={credentialError} />
+      )}
     </div>
   );
 }
@@ -774,9 +792,11 @@ export function SkillsStep({
 export function IntegrationsStep({
   integrations,
   onChange,
+  credentialError,
 }: {
   integrations: IntegrationDraft[];
   onChange: (next: IntegrationDraft[]) => void;
+  credentialError?: string | null;
 }) {
   const { switchToShared, switchToManual, handlePickShared } =
     useSharedManualSwitch(integrations, onChange);
@@ -785,6 +805,7 @@ export function IntegrationsStep({
   const available = INTEGRATION_PROVIDERS.filter(
     (p) => !usedProviders.has(p.id),
   );
+  const firstCredentialProviderId = integrations[0]?.provider;
 
   function addProvider(id: string) {
     onChange([...integrations, { provider: id, content: {} }]);
@@ -837,6 +858,9 @@ export function IntegrationsStep({
         const isSharedEligible =
           !!SHARED_CREDENTIAL_PROVIDER_LABELS[draft.provider];
         const useShared = draft.sharedCredentialId !== undefined;
+        const showCredentialError = Boolean(
+          credentialError && draft.provider === firstCredentialProviderId,
+        );
 
         return (
           <div
@@ -877,11 +901,19 @@ export function IntegrationsStep({
               />
             )}
 
+            {showCredentialError && useShared && credentialError && (
+              <CredentialErrorAlert
+                title="Could not save credentials"
+                message={credentialError}
+              />
+            )}
+
             {!useShared && (
               <IntegrationFields
                 provider={provider}
                 draft={draft}
                 showScopeNote
+                credentialError={showCredentialError ? credentialError : undefined}
                 onFieldChange={(key, value) =>
                   setField(draft.provider, key, value)
                 }
@@ -908,6 +940,13 @@ export function IntegrationsStep({
           </div>
         );
       })}
+
+      {credentialError && integrations.length === 0 && (
+        <CredentialErrorAlert
+          title="Could not save credentials"
+          message={credentialError}
+        />
+      )}
 
       {available.length > 0 && (
         <div className="flex flex-col gap-2">
