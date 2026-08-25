@@ -14,6 +14,7 @@ check() {
 check python3   python3 --version
 check hermes    hermes --version
 check aai-cli   aai-cli --help
+check gog       gog --version
 check jq        jq --version
 check rg        rg --version
 check fd        fd --version

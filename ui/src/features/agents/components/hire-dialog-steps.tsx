@@ -1549,7 +1549,7 @@ export function SkillsStep({
    * functional setState, so successive calls in the same tick all read the same stale
    * value and the last one wins. The OAuth flow writes refreshToken, clientId and
    * clientSecret together, which silently discarded the token. */
-  function setFields(providerId: string, patch: Record<string, string>) {
+  function setFields(providerId: string, patch: Record<string, string | string[]>) {
     onSkillCredentialsChange(
       skillCredentials.map((c) =>
         c.provider === providerId
@@ -1776,9 +1776,9 @@ export function SkillsStep({
                     draft={draft}
                     showScopeNote
                     onFieldChange={(key, value) => setField(providerId, key, value)}
-                    onReposChange={(key, repos) => setRepos(providerId, key, repos)}
-                    onOAuthConnected={({ refreshToken, clientId, clientSecret }) => {
-                      setFields(providerId, { refreshToken, clientId, clientSecret });
+                    onListChange={(key, values) => setRepos(providerId, key, values)}
+                    onOAuthConnected={({ refreshToken, clientId, clientSecret, email, scopes }) => {
+                      setFields(providerId, { refreshToken, clientId, clientSecret, email, scopes });
                     }}
                   />
                 )}
@@ -1819,7 +1819,7 @@ export function IntegrationsStep({
   /** Apply several keys in ONE update — see the note on the sibling step: successive
    * single-key calls in the same tick overwrite each other, which dropped the OAuth
    * refresh token. */
-  function setFields(providerId: string, patch: Record<string, string>) {
+  function setFields(providerId: string, patch: Record<string, string | string[]>) {
     onChange(
       integrations.map((i) =>
         i.provider === providerId
@@ -1888,9 +1888,9 @@ export function IntegrationsStep({
                 draft={draft}
                 showScopeNote
                 onFieldChange={(key, value) => setField(draft.provider, key, value)}
-                onReposChange={(key, repos) => setRepos(draft.provider, key, repos)}
-                onOAuthConnected={({ refreshToken, clientId, clientSecret }) => {
-                  setFields(draft.provider, { refreshToken, clientId, clientSecret });
+                onListChange={(key, values) => setRepos(draft.provider, key, values)}
+                onOAuthConnected={({ refreshToken, clientId, clientSecret, email, scopes }) => {
+                  setFields(draft.provider, { refreshToken, clientId, clientSecret, email, scopes });
                 }}
               />
             )}

@@ -2,16 +2,17 @@ import enum
 import hashlib
 import json
 from datetime import datetime
-from typing import Literal
+from typing import Literal, Self
 from uuid import UUID
 
 import sqlalchemy as sa
 from fastapi import Query
 from pydantic import BaseModel as PydanticBaseModel
-from pydantic import ConfigDict, Field, model_validator
+from pydantic import ConfigDict, Field, field_validator, model_validator
 from sqlmodel import Column, Enum, Index
 from sqlmodel import Field as SqlField
 
+from api.domains.agents.google_workspace_scopes import required_service_scopes
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.users.organization_users.models import OrganizationRole
 from api.infrastructure.crypto import decrypt_token, encrypt_token
@@ -87,14 +88,17 @@ class SecretProvider(str, enum.Enum):
     JIRA = "jira"
     CONFLUENCE = "confluence"
     BITBUCKET = "bitbucket"
-    GMAIL = "gmail"
-    GOOGLE_CALENDAR = "google_calendar"
-    GOOGLE_SHEETS = "google_sheets"
     ZOHO_MAIL = "zoho_mail"
     ZOHO_CALENDAR = "zoho_calendar"
     FIRECRAWL = "firecrawl"
     SLACK = "slack"
     PIPEDRIVE = "pipedrive"
+    GOOGLE_WORKSPACE = "google_workspace"
+
+
+# Google services a google_workspace credential may cover, as named by the gog CLI.
+# The OAuth scope and runtime-policy maps are checked against this allowlist in tests.
+GOOGLE_WORKSPACE_SERVICES: tuple[str, ...] = ("gmail", "calendar", "drive", "sheets")
 
 
 # Predefined display labels — NOT user-entered; the backend stamps these by provider.
@@ -103,14 +107,12 @@ PROVIDER_DISPLAY_NAMES: dict[SecretProvider, str] = {
     SecretProvider.JIRA: "Jira credential",
     SecretProvider.CONFLUENCE: "Confluence credential",
     SecretProvider.BITBUCKET: "Bitbucket credential",
-    SecretProvider.GMAIL: "Gmail credential",
-    SecretProvider.GOOGLE_CALENDAR: "Google Calendar credential",
-    SecretProvider.GOOGLE_SHEETS: "Google Sheets credential",
     SecretProvider.ZOHO_MAIL: "Zoho Mail credential",
     SecretProvider.ZOHO_CALENDAR: "Zoho Calendar credential",
     SecretProvider.FIRECRAWL: "Firecrawl credential",
     SecretProvider.SLACK: "Slack credential",
     SecretProvider.PIPEDRIVE: "Pipedrive credential",
+    SecretProvider.GOOGLE_WORKSPACE: "Google Workspace credential",
 }
 
 
@@ -168,28 +170,50 @@ class BitbucketContent(_RepoListCompat):
     api_token: str
 
 
-class GmailContent(SecretContent):
-    # client_id/client_secret are optional: secrets created via the "Authenticate
-    # with Google" OAuth flow carry only the refresh token, and the app-owned client
-    # id/secret are injected from config at agent-start time (see AgentService.start_agent).
-    # Legacy secrets from the old three-field form still carry all three and validate as-is.
+class GoogleWorkspaceContent(SecretContent):
+    """Credential for the gog CLI: one refresh token covering several Google services.
+
+    Unlike the per-service Google providers above, one consent covers every service in
+    ``services``. ``scopes`` records what Google actually granted (the token response's
+    ``scope``), which is what the validator compares against on re-check — the user can
+    uncheck individual scopes on the consent screen, so requested != granted.
+
+    ``client_id``/``client_secret`` are optional: empty means the
+    server-owned client is backfilled from config at agent-start time.
+    """
+
+    email: str = Field(min_length=1)
+    services: list[str]
+    scopes: list[str] = Field(default_factory=list)
+    refresh_token: str
+    read_only: bool = False
     client_id: str = ""
     client_secret: str = ""
-    refresh_token: str
 
+    @field_validator("services")
+    @classmethod
+    def _validate_services(cls, value: list[str]) -> list[str]:
+        if not value:
+            raise ValueError("at least one service is required")
+        unknown = [s for s in value if s not in GOOGLE_WORKSPACE_SERVICES]
+        if unknown:
+            raise ValueError(
+                f"unsupported service(s): {', '.join(unknown)}. Supported: {', '.join(GOOGLE_WORKSPACE_SERVICES)}"
+            )
+        # Deduplicate while keeping the caller's order so the stored list, the consent
+        # scopes, and GOG_TOKEN_JSON all agree.
+        return list(dict.fromkeys(value))
 
-class GoogleCalendarContent(SecretContent):
-    access_token: str
-    calendar_id: str
-
-
-class GoogleSheetsContent(SecretContent):
-    # Same shape and rationale as GmailContent: the "Authenticate with Google" flow
-    # stores only the refresh token and the app-owned client id/secret are injected
-    # from config at agent-start time. A user's own Google client carries all three.
-    client_id: str = ""
-    client_secret: str = ""
-    refresh_token: str
+    @model_validator(mode="after")
+    def _validate_granted_scopes(self) -> Self:
+        if not self.scopes:
+            return self
+        missing = sorted(required_service_scopes(self.services, self.read_only) - set(self.scopes))
+        if missing:
+            raise ValueError(
+                "scopes do not cover the selected Google services at the configured access level: " + ", ".join(missing)
+            )
+        return self
 
 
 class ZohoMailContent(SecretContent):
@@ -229,14 +253,12 @@ PROVIDER_CONTENT_MODELS: dict[SecretProvider, type[SecretContent]] = {
     SecretProvider.JIRA: JiraContent,
     SecretProvider.CONFLUENCE: ConfluenceContent,
     SecretProvider.BITBUCKET: BitbucketContent,
-    SecretProvider.GMAIL: GmailContent,
-    SecretProvider.GOOGLE_CALENDAR: GoogleCalendarContent,
-    SecretProvider.GOOGLE_SHEETS: GoogleSheetsContent,
     SecretProvider.ZOHO_MAIL: ZohoMailContent,
     SecretProvider.ZOHO_CALENDAR: ZohoCalendarContent,
     SecretProvider.FIRECRAWL: FirecrawlContent,
     SecretProvider.SLACK: SlackContent,
     SecretProvider.PIPEDRIVE: PipedriveContent,
+    SecretProvider.GOOGLE_WORKSPACE: GoogleWorkspaceContent,
 }
 
 
