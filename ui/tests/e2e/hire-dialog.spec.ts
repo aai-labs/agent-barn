@@ -72,6 +72,11 @@ test.describe("Hire Dialog", () => {
     });
     await dataSupport.agents.interceptStartAgentRequest();
 
+    // Pick a non-default approval mode while still on Hermes, then switch to
+    // OpenClaw, to prove the stale value is dropped rather than sent along.
+    await page.getByRole("combobox").nth(2).click();
+    await page.getByRole("option", { name: "Manual" }).click();
+
     await page.getByRole("combobox").first().click();
     await page.getByRole("option", { name: "OpenClaw" }).click();
     await chooseTemplate(page);
@@ -81,10 +86,23 @@ test.describe("Hire Dialog", () => {
     );
     await page.getByRole("button", { name: "Hire Agent", exact: true }).click();
 
-    expect((await createRequest).postDataJSON()).toMatchObject({
+    const payload = (await createRequest).postDataJSON();
+    expect(payload).toMatchObject({
       agent_type: "openclaw",
       template_key: "general-purpose",
     });
+    expect(payload).not.toHaveProperty("approval_mode");
+  });
+
+  test("shows Command approval only for the Hermes runtime", async ({ page }) => {
+    await expect(page.getByText("Command approval", { exact: true })).toBeVisible();
+    await expect(page.getByRole("combobox")).toHaveCount(3);
+
+    await page.getByRole("combobox").first().click();
+    await page.getByRole("option", { name: "OpenClaw" }).click();
+
+    await expect(page.getByText("Command approval", { exact: true })).toHaveCount(0);
+    await expect(page.getByRole("combobox")).toHaveCount(2);
   });
 
   test("keeps hire disabled until a template is selected", async ({ page }) => {

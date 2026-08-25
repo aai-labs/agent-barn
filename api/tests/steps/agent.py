@@ -53,7 +53,7 @@ class MockLiteLLMModule(Module):
     def provide_litellm(self) -> LiteLLMClient:
         mock: Any = MagicMock(spec=LiteLLMClient)
         mock.generate_key.return_value = FAKE_LITELLM_KEY
-        mock.delete_key.return_value = None
+        mock.delete_key.return_value = True
         return mock
 
 

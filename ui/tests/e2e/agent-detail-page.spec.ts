@@ -980,3 +980,46 @@ test.describe("Agent Detail Page — Personality tab (approval mode)", () => {
     expect(body.approval_mode).toBe("off");
   });
 });
+
+test.describe("Agent Detail Page — Personality tab (approval mode, OpenClaw)", () => {
+  test.describe.configure({ mode: "serial" });
+  let agentDetailPage: AgentDetailPage;
+  let dataSupportPage: DataSupport;
+
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  test.beforeEach(async ({ page }) => {
+    agentDetailPage = new AgentDetailPage(page);
+    dataSupportPage = new DataSupport(page);
+
+    await dataSupportPage.auth.interceptRefreshRequest();
+    await dataSupportPage.users.interceptGetUserContextRequest();
+    await dataSupportPage.users.interceptGetOrganizationsRequest();
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, status: "STOPPED", agent_type: "openclaw" },
+    });
+    await dataSupportPage.agents.interceptGetAgentTemplateRequest();
+    await dataSupportPage.agents.interceptGetTemplatesRequest();
+    await dataSupportPage.agents.interceptGetTemplateVersionsRequest();
+    await dataSupportPage.agents.interceptGetAgentConfigurationRequest();
+    await dataSupportPage.agents.interceptUpdateAgentRequest();
+    await dataSupportPage.agents.interceptGetConversationChannelsRequest();
+    await dataSupportPage.agents.interceptGetModelsRequest();
+    await dataSupportPage.agents.interceptStartAgentRequest();
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.configureButton().click();
+    await page.getByRole("button", { name: "Profile", exact: true }).click();
+  });
+
+  test("shows Managed by OpenClaw instead of a command approval value", async ({ page }) => {
+    await expect(page.getByText("Managed by OpenClaw")).toBeVisible();
+    await expect(page.getByRole("combobox", { name: "Command approval" })).toHaveCount(0);
+  });
+
+  test("editing the profile does not offer a command approval control", async ({ page }) => {
+    await agentDetailPage.editButton().click();
+
+    await expect(page.getByRole("combobox", { name: "Command approval" })).toHaveCount(0);
+  });
+});

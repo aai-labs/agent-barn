@@ -329,14 +329,80 @@ def test_create_agent_default_approval_mode_is_auto():
             assert_that(response.json()["approval_mode"], equal_to("auto"))
 
 
-def test_create_agent_with_approval_mode_off():
+def test_create_openclaw_agent_with_approval_mode_off_returns_400():
     with given(_GIVEN) as context:
         client: TestClient = context.client
 
-        with when("I create an agent with approval_mode off"):
+        with when("I create an OpenClaw agent with approval_mode off"):
             response = client.post(
                 _BASE,
                 json={**_VALID_CREATE, "approval_mode": "off"},
+                headers=_auth(context),
+            )
+
+        with then("it returns 400 because OpenClaw does not support command approval"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], contains_string("OpenClaw"))
+
+
+def test_create_openclaw_agent_with_approval_mode_manual_returns_400_and_does_not_persist_agent():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I create an OpenClaw agent with approval_mode manual"):
+            response = client.post(
+                _BASE,
+                json={**_VALID_CREATE, "approval_mode": "manual"},
+                headers=_auth(context),
+            )
+
+        with then("it returns 400 and no agent is persisted"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], contains_string("OpenClaw"))
+            agents = client.get(_BASE, headers=_auth(context)).json()["items"]
+            assert_that(len(agents), equal_to(0))
+
+
+def test_create_hermes_agent_with_approval_mode_manual():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I create a Hermes agent with approval_mode manual"):
+            response = client.post(
+                _BASE,
+                json={**_VALID_CREATE_HERMES, "approval_mode": "manual"},
+                headers=_auth(context),
+            )
+
+        with then("the response has approval_mode set to manual"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(response.json()["approval_mode"], equal_to("manual"))
+
+
+def test_create_hermes_agent_with_approval_mode_auto():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I create a Hermes agent with approval_mode auto"):
+            response = client.post(
+                _BASE,
+                json={**_VALID_CREATE_HERMES, "approval_mode": "auto"},
+                headers=_auth(context),
+            )
+
+        with then("the response has approval_mode set to auto"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(response.json()["approval_mode"], equal_to("auto"))
+
+
+def test_create_hermes_agent_with_approval_mode_off():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I create a Hermes agent with approval_mode off"):
+            response = client.post(
+                _BASE,
+                json={**_VALID_CREATE_HERMES, "approval_mode": "off"},
                 headers=_auth(context),
             )
 
@@ -542,12 +608,12 @@ def test_patch_agent_no_auth_returns_401():
             assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
 
 
-def test_patch_agent_approval_mode():
-    with given([*_GIVEN, there_is_an_agent()]) as context:
+def test_patch_hermes_agent_approval_mode_to_manual():
+    with given([*_GIVEN, there_is_an_agent(agent_type=AgentType.HERMES)]) as context:
         client: TestClient = context.client
         agent_id = str(context.agent.id)
 
-        with when("I update the agent's approval_mode to manual"):
+        with when("I update the Hermes agent's approval_mode to manual"):
             response = client.patch(
                 f"{_BASE}/{agent_id}",
                 json={"approval_mode": "manual"},
@@ -557,6 +623,60 @@ def test_patch_agent_approval_mode():
         with then("the response reflects the new approval_mode"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             assert_that(response.json()["approval_mode"], equal_to("manual"))
+
+
+def test_patch_hermes_agent_approval_mode_to_off():
+    with given([*_GIVEN, there_is_an_agent(agent_type=AgentType.HERMES)]) as context:
+        client: TestClient = context.client
+        agent_id = str(context.agent.id)
+
+        with when("I update the Hermes agent's approval_mode to off"):
+            response = client.patch(
+                f"{_BASE}/{agent_id}",
+                json={"approval_mode": "off"},
+                headers=_auth(context),
+            )
+
+        with then("the response reflects the new approval_mode"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["approval_mode"], equal_to("off"))
+
+
+def test_patch_openclaw_agent_approval_mode_manual_returns_400_and_leaves_agent_unchanged():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        agent_id = str(context.agent.id)
+        original = client.get(f"{_BASE}/{agent_id}", headers=_auth(context)).json()
+
+        with when("I update the OpenClaw agent's approval_mode to manual"):
+            response = client.patch(
+                f"{_BASE}/{agent_id}",
+                json={"approval_mode": "manual"},
+                headers=_auth(context),
+            )
+
+        with then("it returns 400 and the agent is unchanged"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], contains_string("OpenClaw"))
+            current = client.get(f"{_BASE}/{agent_id}", headers=_auth(context)).json()
+            assert_that(current["approval_mode"], equal_to(original["approval_mode"]))
+
+
+def test_patch_openclaw_agent_approval_mode_off_returns_400():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        agent_id = str(context.agent.id)
+
+        with when("I update the OpenClaw agent's approval_mode to off"):
+            response = client.patch(
+                f"{_BASE}/{agent_id}",
+                json={"approval_mode": "off"},
+                headers=_auth(context),
+            )
+
+        with then("it returns 400"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], contains_string("OpenClaw"))
 
 
 _JIRA_CONTENT = {

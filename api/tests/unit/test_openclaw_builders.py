@@ -20,6 +20,15 @@ def test_gateway_config_is_headless_and_exposes_chat_completions() -> None:
     assert config["gateway"]["http"]["endpoints"]["chatCompletions"]["enabled"] is True
 
 
+def test_gateway_config_has_no_command_approval_support() -> None:
+    """OpenClaw has no user-configurable command-approval control (AF-272): the
+    builder takes no approval_mode parameter and must never fabricate one.
+    """
+    config = build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000")
+
+    assert "approvals" not in config
+
+
 def test_config_map_contains_runtime_adapter_and_no_provider_bundle() -> None:
     config_map = build_config_map(
         _AGENT_ID,

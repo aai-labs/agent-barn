@@ -37,13 +37,14 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
     if (!template || !name.trim()) return;
     setError(null);
     try {
+      const approval = agentType === "hermes" ? { approvalMode } : {};
       const agent = await createAgent.mutateAsync({
         name: name.trim(),
         agentType,
         templateKey: template.templateKey,
         templateVersion: template.version,
         model,
-        approvalMode,
+        ...approval,
       });
       await startAgent.mutateAsync(agent.id);
       onHired({ name: agent.name, role: template.templateName });
@@ -82,12 +83,14 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
         <FormField label="Model">
           <ModelSelect value={model} onChange={setModel} disabled={pending} />
         </FormField>
-        <FormField label="Command approval">
-          <Select value={approvalMode} onValueChange={(value) => setApprovalMode(value as "manual" | "auto" | "off")}>
-            <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-            <SelectContent><SelectGroup><SelectItem value="auto">Automatic</SelectItem><SelectItem value="manual">Manual</SelectItem><SelectItem value="off">Off</SelectItem></SelectGroup></SelectContent>
-          </Select>
-        </FormField>
+        {agentType === "hermes" && (
+          <FormField label="Command approval">
+            <Select value={approvalMode} onValueChange={(value) => setApprovalMode(value as "manual" | "auto" | "off")}>
+              <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+              <SelectContent><SelectGroup><SelectItem value="auto">Automatic</SelectItem><SelectItem value="manual">Manual</SelectItem><SelectItem value="off">Off</SelectItem></SelectGroup></SelectContent>
+            </Select>
+          </FormField>
+        )}
         <div className="rounded-xl border border-dashed p-4 text-sm" style={{ color: "var(--ink-3)" }}>
           Communication connections and integration credentials are configured independently after hiring.
         </div>

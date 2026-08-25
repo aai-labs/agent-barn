@@ -66,6 +66,7 @@ from api.domains.agents.models import (
     AgentTemplateSelection,
     AgentType,
     AgentUpdate,
+    CommandApprovalMode,
     ConfluenceContent,
     FirecrawlContent,
     GmailContent,
@@ -239,6 +240,20 @@ class AgentService:
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Model '{model}' is not in the allowed model list",
                 )
+
+    @staticmethod
+    def _ensure_approval_mode_supported(agent_type: AgentType, approval_mode: CommandApprovalMode | None) -> None:
+        """OpenClaw has no user-configurable command-approval control; only Hermes
+        maps approval_mode onto a runtime policy (see builders/hermes.py). An
+        omitted value defers to the AgentCreate/AgentUpdate default of AUTO, which
+        is a no-op for OpenClaw, but an explicit non-AUTO value would silently
+        have no effect, so it is rejected rather than accepted and ignored.
+        """
+        if agent_type == AgentType.OPENCLAW and approval_mode is not None and approval_mode != CommandApprovalMode.AUTO:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="OpenClaw does not support command approval; approval_mode is Hermes-only.",
+            )
 
     @staticmethod
     def _build_skill_pointers(skills: list[Skill]) -> str:
@@ -478,7 +493,10 @@ class AgentService:
             template_pin_type=template_pin_type,
             override_version=override_version,
             model=agent.model,
-            approval_mode=agent.approval_mode,
+            # OpenClaw ignores approval_mode; report the effective AUTO default
+            # instead of a stored value from before this became enforced, so
+            # reads stay truthful even for agents persisted prior to this check.
+            approval_mode=(agent.approval_mode if agent.agent_type == AgentType.HERMES else CommandApprovalMode.AUTO),
             secrets=secrets_read,
             skills=skills_read,
             allowed_actions=allowed_actions or [],
@@ -521,6 +539,7 @@ class AgentService:
         org_id = self._org_id(context)
         self.authorization.require_collection_scope(context, PermissionKey.AGENT_CREATE)
         self._ensure_model_allowed(data.model, org_id)
+        self._ensure_approval_mode_supported(data.agent_type, data.approval_mode)
 
         # Pin to the requested version, or the lineage's latest if unspecified.
         if data.template_version is not None:
@@ -1321,6 +1340,9 @@ class AgentService:
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Agent {agent_id} must be stopped before updating",
             )
+
+        if "approval_mode" in updated:
+            self._ensure_approval_mode_supported(agent.agent_type, updated["approval_mode"])
 
         # Validate every requested skill pin before mutating the Agent, its
         # template pin, or any attached credential.

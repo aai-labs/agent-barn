@@ -22,6 +22,8 @@ Runtime behaviour policies are appended to `AGENTS.md` rather than stored in a t
 
 A Kubernetes/runtime start failure can place the Agent in `ERROR`; successful start clears the prior lifecycle error. Connection validation and provider-session failures instead update that Communication Connection's observed health and do not change Agent lifecycle.
 
+Command approval (the persisted `approval_mode` field) is mapped onto a runtime policy only for Hermes: `builders/hermes.py` maps `manual`→`manual`, `auto`→`smart`, and `off`→`off` into the Hermes `approvals.mode` config. OpenClaw has no user-configurable command-approval control — `build_openclaw_gateway_config` never receives or emits an approvals block — so the API rejects an explicit non-default `approval_mode` for an OpenClaw Agent instead of accepting and silently ignoring it. OpenClaw-specific command approval is tracked as a separate follow-up.
+
 ## Runtime-neutral communications
 
 Both Hermes and OpenClaw consume the same versioned Communications protocol. A sidecar-style runtime adapter claims inbound Communication Deliveries, invokes the runtime's local chat-completions endpoint with a Connection-scoped session key, submits the reply against the source delivery, and completes the delivery. Runtimes never receive provider tokens and contain no Slack, Telegram, or Discord transport configuration.
@@ -32,7 +34,7 @@ Runtime is persisted as `agent_type`. Platform is not an Agent field: an Agent m
 
 ## Platform Plugin boundary
 
-Agent Barn ships a code-owned Platform Plugin registry. Each plugin owns typed settings and credential schemas, external validation, credential uniqueness/fingerprinting, inbound normalization/admission, provider-session behavior, outbound sending, and optional processing-feedback hooks. Slack uses supervised Socket Mode, Telegram uses supervised polling, and Discord uses a supervised Gateway session.
+Agent Barn ships a code-owned Platform Plugin registry. Each plugin owns typed settings and credential schemas, external validation, credential uniqueness/fingerprinting, inbound normalization/admission, optional best-effort inbound name enrichment, provider-session behavior, outbound sending, and optional processing-feedback hooks. Slack uses supervised Socket Mode, Telegram uses supervised polling, and Discord uses a supervised Gateway session.
 
 Adding a shipped platform adds one plugin and provider client plus focused tests. The generic Connection persistence, CRUD routes, schema-driven UI, durable delivery pipeline, runtime protocol, and Agent builders do not gain platform branches. Plugins are trusted release artifacts, not dynamically installed packages.
 
