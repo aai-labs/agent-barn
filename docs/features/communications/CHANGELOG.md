@@ -13,6 +13,10 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-08-25 — Provider setup guidance — PR pending
+
+- Changed: Platform descriptors now expose optional provider-owned setup hints in the schema-driven Connection form. Slack's hint lists the directory scopes needed for channel, DM, and sender-name resolution and reminds users to reinstall the app after changing scopes.
+
 ### 2026-08-25 — AF-272 — Restore communication sender/channel names — PR pending
 
 - Delivered: An optional `enrich_inbound` Platform Plugin seam resolves missing sender and channel/DM display names through cached, credential-scoped provider lookups (Slack user/channel/DM directory, Discord user/channel lookups, Telegram chat lookups) before durable persistence. `CommunicationsGatewayService` invokes it once at the single point all three ingress paths (supervised provider ingress, driver events, webhook events) already share, so no route duplicates the call. A provider payload's own names are always preferred; enrichment only fills what's missing, and any lookup failure falls back to the envelope as normalized rather than delaying or rejecting acceptance.

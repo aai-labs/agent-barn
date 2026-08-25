@@ -63,6 +63,7 @@ class ProcessingFeedbackContext:
 class PlatformPlugin(ABC):
     key: str
     display_name: str
+    setup_hint: str | None = None
     schema_version: int = 1
     capabilities: frozenset[PlatformCapability] = frozenset()
     settings_model: type[PlatformSettings]
@@ -74,6 +75,7 @@ class PlatformPlugin(ABC):
         return PlatformDescriptorRead(
             key=self.key,
             display_name=self.display_name,
+            setup_hint=self.setup_hint,
             schema_version=self.schema_version,
             capabilities=sorted(self.capabilities, key=lambda item: item.value),
             settings_schema=self.settings_model.model_json_schema(),

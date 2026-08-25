@@ -87,6 +87,12 @@ class SlackCredentials(PlatformCredentials):
 class SlackPlatformPlugin(PlatformPlugin):
     key = "slack"
     display_name = "Slack"
+    setup_hint = (
+        "In Slack OAuth & Permissions → Bot Token Scopes, add channels:read for public channel names, groups:read "
+        "for private channel names, im:read and mpim:read for direct-message names, and users:read for sender "
+        "names. Reinstall the Slack app "
+        "after adding scopes, then update the bot token here."
+    )
     capabilities = frozenset(
         {
             PlatformCapability.APPLICATION_PROVISIONING,

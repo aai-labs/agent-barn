@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import {
   Check,
   CircleAlert,
+  Info,
   LockKeyhole,
   MessageCircleWarning,
   Pencil,
@@ -57,6 +58,29 @@ function connectionStatus(connection: CommunicationConnection): { color: string;
 /** Platform icon for a connection, falling back to a generic glyph for platforms without a brand icon yet. */
 function ConnectionIcon({ platformKey, size = 16 }: { platformKey: string; size?: number }) {
   return platformIcon(platformKey, { size }) ?? <Plug size={size} />;
+}
+
+function PlatformSetupHint({ hint }: { hint?: string | null }) {
+  if (!hint) return null;
+  return (
+    <div
+      className="flex items-start gap-2.5 rounded-xl p-3.5"
+      style={{
+        border: "1px solid color-mix(in srgb, var(--accent) 30%, transparent)",
+        background: "var(--accent-soft)",
+      }}
+    >
+      <Info size={16} className="mt-0.5 flex-shrink-0" style={{ color: "var(--accent-ink)" }} />
+      <div>
+        <div className="text-xs font-semibold uppercase tracking-[0.1em]" style={{ color: "var(--accent-ink)" }}>
+          Setup requirements
+        </div>
+        <p className="mb-0 mt-1 text-xs leading-relaxed" style={{ color: "var(--ink-2)" }}>
+          {hint}
+        </p>
+      </div>
+    </div>
+  );
 }
 
 function PlatformOption({
@@ -404,6 +428,7 @@ export function AgentChannelSettings({
                   </label>
                   {platform && (
                     <>
+                      <PlatformSetupHint hint={platform.setupHint} />
                       <div className="grid gap-3 sm:grid-cols-2">
                         <SchemaFields schema={platform.settingsSchema} values={editSettings} onChange={setEditSettings} />
                       </div>
@@ -493,6 +518,7 @@ export function AgentChannelSettings({
                   </div>
 
                   <div className="mt-5 flex flex-col gap-4">
+                    <PlatformSetupHint hint={selectedPlatform.setupHint} />
                     <label className="flex flex-col gap-1.5 text-sm font-medium">
                       Connection name
                       <input

@@ -512,6 +512,21 @@ test.describe("Agent Detail Page — Channels tab", () => {
             },
             required: ["bot_token"],
           },
+        }, {
+          key: "slack",
+          display_name: "Slack",
+          setup_hint: "In Slack OAuth & Permissions → Bot Token Scopes, add channels:read for public channel names, groups:read for private channel names, im:read and mpim:read for direct-message names, and users:read for sender names. Reinstall the Slack app after adding scopes, then update the bot token here.",
+          schema_version: 1,
+          capabilities: ["DIRECTORY_DISCOVERY"],
+          settings_schema: { type: "object", properties: {} },
+          credentials_schema: {
+            type: "object",
+            properties: {
+              bot_token: { title: "Bot token", type: "string" },
+              app_token: { title: "App-level token", type: "string" },
+            },
+            required: ["bot_token", "app_token"],
+          },
         }]),
       });
     });
@@ -611,6 +626,18 @@ test.describe("Agent Detail Page — Channels tab", () => {
       display_name: "Renamed Discord",
       settings: { guild_ids: ["guild-updated"] },
     });
+  });
+
+  test("shows provider setup requirements before connecting", async ({ page }) => {
+    await page.getByRole("button", { name: "Add connection" }).click();
+    await page.getByRole("button", { name: "Select Slack" }).click();
+
+    const hint = page.getByText(/Bot Token Scopes/);
+    await expect(hint).toBeVisible();
+    await expect(hint).toContainText("channels:read");
+    await expect(hint).toContainText("groups:read");
+    await expect(hint).toContainText("users:read");
+    await expect(hint).toContainText("Reinstall the Slack app");
   });
 
   test("creates another same-platform Connection from the plugin schema", async ({ page }) => {

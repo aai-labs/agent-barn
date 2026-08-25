@@ -281,6 +281,7 @@ class PlatformDescriptorRead(PydanticBaseModel):
     capabilities: list[PlatformCapability]
     settings_schema: dict[str, Any]
     credentials_schema: dict[str, Any]
+    setup_hint: str | None = None
 
 
 class CommunicationConnectionCreate(PydanticBaseModel):

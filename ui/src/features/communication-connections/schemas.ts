@@ -9,6 +9,7 @@ export const CommunicationPlatformSchema = z.object({
   capabilities: z.array(z.string()),
   settingsSchema: JsonSchemaSchema,
   credentialsSchema: JsonSchemaSchema,
+  setupHint: z.string().nullable().optional(),
 });
 
 export const CommunicationConnectionSchema = z.object({

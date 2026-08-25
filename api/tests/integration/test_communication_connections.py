@@ -1,7 +1,7 @@
 from uuid import UUID
 
 from fastapi import status
-from hamcrest import assert_that, contains_inanyorder, equal_to, has_entries, has_key, not_
+from hamcrest import all_of, assert_that, contains_inanyorder, contains_string, equal_to, has_entries, has_key, not_
 from starlette.testclient import TestClient
 
 from api.domains.communications.repository import CommunicationConnectionRepository
@@ -80,9 +80,21 @@ def test_platform_catalog_lists_the_shipped_plugins() -> None:
 
         with then("the stable plugin catalogue is returned"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            catalogue = response.json()
             assert_that(
-                [item["key"] for item in response.json()],
+                [item["key"] for item in catalogue],
                 contains_inanyorder("discord", "slack", "telegram"),
+            )
+            slack = next(item for item in catalogue if item["key"] == "slack")
+            assert_that(
+                slack["setup_hint"],
+                all_of(
+                    contains_string("channels:read"),
+                    contains_string("groups:read"),
+                    contains_string("im:read"),
+                    contains_string("mpim:read"),
+                    contains_string("users:read"),
+                ),
             )
 
 
