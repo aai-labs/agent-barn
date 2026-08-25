@@ -32,6 +32,7 @@ export type CreateAgentData = {
   discordAllowedChannelIds?: string[];
   discordAllowedUserIds?: string[];
   discordAllowedRoleIds?: string[];
+  discordAllowAllUsers?: boolean;
   discordHomeChannelId?: string;
   discordRequireMention?: boolean;
   discordGroupPolicy?: "open" | "allowlist";

@@ -511,6 +511,10 @@ class AgentDiscordConfig(BaseModel, table=True):
         default_factory=list,
         sa_column=Column(sa.JSON(), nullable=False, server_default="[]"),
     )
+    allow_all_users: bool = SqlField(
+        default=True,
+        sa_column=Column(sa.Boolean(), nullable=False, server_default=sa.true()),
+    )
     home_channel_id: str | None = SqlField(default=None, nullable=True, max_length=32)
     require_mention: bool = SqlField(
         default=True,
@@ -852,6 +856,7 @@ class AgentCreate(PydanticBaseModel):
     discord_allowed_channel_ids: list[str] = Field(default_factory=list)
     discord_allowed_user_ids: list[str] = Field(default_factory=list)
     discord_allowed_role_ids: list[str] = Field(default_factory=list)
+    discord_allow_all_users: bool = True
     discord_home_channel_id: str | None = Field(default=None, min_length=1)
     discord_require_mention: bool = True
     discord_group_policy: DiscordGroupPolicy = DiscordGroupPolicy.ALLOWLIST
@@ -883,6 +888,15 @@ class AgentCreate(PydanticBaseModel):
             raise ValueError("telegram_bot_token is required for Telegram agents")
         elif self.platform == AgentPlatform.DISCORD and not self.discord_bot_token:
             raise ValueError("discord_bot_token is required for Discord agents")
+        if (
+            self.platform == AgentPlatform.DISCORD
+            and not self.discord_allow_all_users
+            and not any(value.strip() for value in self.discord_allowed_user_ids)
+            and not any(value.strip() for value in self.discord_allowed_role_ids)
+        ):
+            raise ValueError(
+                "Discord access requires at least one allowed user or role when allow all users is disabled"
+            )
         return self
 
     @model_validator(mode="after")
@@ -919,6 +933,7 @@ class AgentUpdate(PydanticBaseModel):
     discord_allowed_channel_ids: list[str] | None = None
     discord_allowed_user_ids: list[str] | None = None
     discord_allowed_role_ids: list[str] | None = None
+    discord_allow_all_users: bool | None = None
     discord_home_channel_id: str | None = Field(default=None, min_length=1)
     discord_require_mention: bool | None = None
     discord_group_policy: DiscordGroupPolicy | None = None
@@ -1172,6 +1187,7 @@ class AgentDiscordConfigRead(PydanticBaseModel):
     allowed_channel_ids: list[str]
     allowed_user_ids: list[str]
     allowed_role_ids: list[str]
+    allow_all_users: bool
     home_channel_id: str | None
     require_mention: bool
     group_policy: DiscordGroupPolicy

@@ -204,6 +204,7 @@ _DISCORD_CONFIG_FIELDS = frozenset(
         "discord_allowed_channel_ids",
         "discord_allowed_user_ids",
         "discord_allowed_role_ids",
+        "discord_allow_all_users",
         "discord_home_channel_id",
         "discord_require_mention",
         "discord_group_policy",
@@ -851,6 +852,7 @@ class AgentService:
                 allowed_channel_ids=data.discord_allowed_channel_ids,
                 allowed_user_ids=data.discord_allowed_user_ids,
                 allowed_role_ids=data.discord_allowed_role_ids,
+                allow_all_users=data.discord_allow_all_users,
                 home_channel_id=data.discord_home_channel_id,
                 require_mention=data.discord_require_mention,
                 group_policy=data.discord_group_policy,
@@ -1850,12 +1852,25 @@ class AgentService:
                     discord_config.allowed_user_ids = updated["discord_allowed_user_ids"]
                 if "discord_allowed_role_ids" in updated:
                     discord_config.allowed_role_ids = updated["discord_allowed_role_ids"]
+                if "discord_allow_all_users" in updated:
+                    discord_config.allow_all_users = updated["discord_allow_all_users"]
                 if "discord_home_channel_id" in updated:
                     discord_config.home_channel_id = updated["discord_home_channel_id"]
                 if "discord_require_mention" in updated:
                     discord_config.require_mention = updated["discord_require_mention"]
                 if "discord_group_policy" in updated:
                     discord_config.group_policy = updated["discord_group_policy"]
+                if (
+                    not discord_config.allow_all_users
+                    and not any(value.strip() for value in discord_config.allowed_user_ids)
+                    and not any(value.strip() for value in discord_config.allowed_role_ids)
+                ):
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail=(
+                            "Discord access requires at least one allowed user or role when allow all users is disabled"
+                        ),
+                    )
                 self.repository.save_discord_config(discord_config)
 
         # Validate skills accessibility and secret coverage
@@ -2323,6 +2338,7 @@ class AgentService:
                     discord_config.allowed_channel_ids,
                     discord_config.allowed_user_ids,
                     discord_config.allowed_role_ids,
+                    discord_config.allow_all_users,
                     discord_config.home_channel_id,
                     discord_config.guild_ids,
                 )
@@ -2337,6 +2353,7 @@ class AgentService:
                     allowed_channel_ids=discord_config.allowed_channel_ids,
                     allowed_user_ids=discord_config.allowed_user_ids,
                     allowed_role_ids=discord_config.allowed_role_ids,
+                    allow_all_users=discord_config.allow_all_users,
                     home_channel_id=discord_config.home_channel_id,
                     require_mention=discord_config.require_mention,
                     group_policy=str(discord_config.group_policy),

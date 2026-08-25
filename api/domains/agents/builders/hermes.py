@@ -345,6 +345,7 @@ def build_secret_hermes_discord(
     allowed_channel_ids: list[str],
     allowed_user_ids: list[str],
     allowed_role_ids: list[str],
+    allow_all_users: bool,
     home_channel_id: str | None,
     guild_ids: list[str],
 ) -> client.V1Secret:
@@ -358,9 +359,7 @@ def build_secret_hermes_discord(
             "DISCORD_ALLOWED_USERS": ",".join(allowed_user_ids),
             "DISCORD_ALLOWED_ROLES": ",".join(allowed_role_ids),
             "DISCORD_GUILD_IDS": ",".join(guild_ids),
-            "DISCORD_ALLOW_ALL_USERS": str(
-                bool(guild_ids and not allowed_channel_ids and not allowed_user_ids and not allowed_role_ids)
-            ).lower(),
+            "DISCORD_ALLOW_ALL_USERS": str(allow_all_users).lower(),
             "DISCORD_HOME_CHANNEL": home_channel_id or _NO_DISCORD_HOME_CHANNEL,
             "DISCORD_HOME_CHANNEL_NAME": home_channel_id or "No Discord Home Channel",
             "DISCORD_ALLOW_BOTS": "none",

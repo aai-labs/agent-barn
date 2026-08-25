@@ -30,6 +30,7 @@ export type UpdateAgentData = {
   discordAllowedChannelIds?: string[];
   discordAllowedUserIds?: string[];
   discordAllowedRoleIds?: string[];
+  discordAllowAllUsers?: boolean;
   discordHomeChannelId?: string | null;
   discordRequireMention?: boolean;
   discordGroupPolicy?: "open" | "allowlist";
