@@ -54,12 +54,34 @@ class TelegramSettings(PlatformSettings):
 
 
 class TelegramCredentials(PlatformCredentials):
-    bot_token: str = Field(min_length=1, title="Bot token", description="From @BotFather in Telegram.")
+    bot_token: str = Field(
+        min_length=1,
+        title="Bot token",
+        description=(
+            "Create a bot with @BotFather using /newbot and paste the token it returns, usually formatted as "
+            "<bot-id>:<secret>. Do not paste the bot username."
+        ),
+    )
 
 
 class TelegramPlatformPlugin(PlatformPlugin):
     key = "telegram"
     display_name = "Telegram"
+    setup_hint = (
+        "Credential\n"
+        "• Bot token: Open @BotFather, run /newbot, and copy the token in the <bot-id>:<secret> format. Keep it "
+        "private; Telegram has no separate app token or OAuth credential for this connection.\n\n"
+        "Telegram setup\n"
+        "• This integration uses long polling through getUpdates. Remove any existing webhook and stop other "
+        "services polling the same bot token before connecting.\n"
+        "• Add the bot to every group or channel it should handle. For all ordinary group messages, use @BotFather "
+        "/setprivacy → Disable; privacy mode otherwise delivers mainly commands, replies, and mentions.\n"
+        "• For channels, make the bot an administrator so it can receive channel posts and send replies.\n\n"
+        "Connection settings\n"
+        "• Direct messages default to Off; set Direct messages to Open or Allowlist when DMs are needed.\n"
+        "• Allowed groups and Allowed DM senders use numeric Telegram IDs, not usernames; group and supergroup IDs "
+        "are often negative."
+    )
     capabilities = frozenset(
         {
             PlatformCapability.ATTACHMENTS,

@@ -499,6 +499,7 @@ test.describe("Agent Detail Page — Channels tab", () => {
         body: JSON.stringify([{
           key: "discord",
           display_name: "Discord",
+          setup_hint: "Credential: Developer Portal → Applications → app → Bot → Token. Enable Message Content Intent; invite with OAuth2 bot scope and View Channels, Send Messages, Read Message History permissions. Use Developer Mode to copy IDs.",
           schema_version: 1,
           capabilities: ["MENTIONS"],
           settings_schema: {
@@ -526,6 +527,20 @@ test.describe("Agent Detail Page — Channels tab", () => {
               app_token: { title: "App-level token", type: "string" },
             },
             required: ["bot_token", "app_token"],
+          },
+        }, {
+          key: "telegram",
+          display_name: "Telegram",
+          setup_hint: "Credential: create a bot with @BotFather /newbot. This integration uses getUpdates long polling, so remove any webhook; disable /setprivacy for all group messages and add the bot as a channel administrator.",
+          schema_version: 1,
+          capabilities: ["THREADS"],
+          settings_schema: { type: "object", properties: {} },
+          credentials_schema: {
+            type: "object",
+            properties: {
+              bot_token: { title: "Bot token", type: "string" },
+            },
+            required: ["bot_token"],
           },
         }]),
       });
@@ -638,6 +653,19 @@ test.describe("Agent Detail Page — Channels tab", () => {
     await expect(hint).toContainText("groups:read");
     await expect(hint).toContainText("users:read");
     await expect(hint).toContainText("Reinstall the Slack app");
+
+    await page.getByRole("button", { name: "Select Discord" }).click();
+    const discordHint = page.getByText(/Message Content Intent/);
+    await expect(discordHint).toBeVisible();
+    await expect(discordHint).toContainText("Read Message History");
+    await expect(discordHint).toContainText("Developer Mode");
+
+    await page.getByRole("button", { name: "Select Telegram" }).click();
+    const telegramHint = page.getByText(/@BotFather/);
+    await expect(telegramHint).toBeVisible();
+    await expect(telegramHint).toContainText("getUpdates");
+    await expect(telegramHint).toContainText("/setprivacy");
+    await expect(telegramHint).toContainText("webhook");
   });
 
   test("creates another same-platform Connection from the plugin schema", async ({ page }) => {

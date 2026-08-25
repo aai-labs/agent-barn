@@ -15,7 +15,7 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ### 2026-08-25 — Provider setup guidance — PR pending
 
-- Changed: Platform descriptors now expose optional provider-owned setup hints in the schema-driven Connection form. Slack's hint lists the directory scopes needed for channel, DM, and sender-name resolution and reminds users to reinstall the app after changing scopes.
+- Changed: Platform descriptors now expose optional provider-owned setup hints in the schema-driven Connection form. Slack, Discord, and Telegram hints now document credential locations/formats, required scopes or Gateway intents, bot membership/visibility requirements, and provider-specific polling or privacy setup.
 
 ### 2026-08-25 — AF-272 — Restore communication sender/channel names — PR pending
 

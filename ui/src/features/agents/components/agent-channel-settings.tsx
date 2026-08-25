@@ -75,7 +75,10 @@ function PlatformSetupHint({ hint }: { hint?: string | null }) {
         <div className="text-xs font-semibold uppercase tracking-[0.1em]" style={{ color: "var(--accent-ink)" }}>
           Setup requirements
         </div>
-        <p className="mb-0 mt-1 text-xs leading-relaxed" style={{ color: "var(--ink-2)" }}>
+        <p
+          className="mb-0 mt-1 text-xs leading-relaxed"
+          style={{ color: "var(--ink-2)", whiteSpace: "pre-line" }}
+        >
           {hint}
         </p>
       </div>

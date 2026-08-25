@@ -85,15 +85,34 @@ def test_platform_catalog_lists_the_shipped_plugins() -> None:
                 [item["key"] for item in catalogue],
                 contains_inanyorder("discord", "slack", "telegram"),
             )
-            slack = next(item for item in catalogue if item["key"] == "slack")
+            hints = {item["key"]: item["setup_hint"] for item in catalogue}
             assert_that(
-                slack["setup_hint"],
+                hints["slack"],
                 all_of(
+                    contains_string("xoxb-"),
+                    contains_string("xapp-"),
+                    contains_string("connections:write"),
                     contains_string("channels:read"),
-                    contains_string("groups:read"),
-                    contains_string("im:read"),
-                    contains_string("mpim:read"),
                     contains_string("users:read"),
+                ),
+            )
+            assert_that(
+                hints["discord"],
+                all_of(
+                    contains_string("Message Content Intent"),
+                    contains_string("View Channels"),
+                    contains_string("Read Message History"),
+                    contains_string("Developer Mode"),
+                ),
+            )
+            assert_that(
+                hints["telegram"],
+                all_of(
+                    contains_string("@BotFather"),
+                    contains_string("/newbot"),
+                    contains_string("getUpdates"),
+                    contains_string("/setprivacy"),
+                    contains_string("webhook"),
                 ),
             )
 

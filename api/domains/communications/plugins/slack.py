@@ -77,10 +77,20 @@ class SlackSettings(PlatformSettings):
 
 class SlackCredentials(PlatformCredentials):
     bot_token: str = Field(
-        min_length=1, title="Bot token", description="Starts with xoxb- — from OAuth & Permissions in your Slack app."
+        min_length=1,
+        title="Bot token",
+        description=(
+            "Starts with xoxb-. Copy it from OAuth & Permissions → OAuth Tokens for Your Workspace after installing "
+            "the Slack app. Reinstall the app after changing Bot Token Scopes."
+        ),
     )
     app_token: str = Field(
-        min_length=1, title="App-level token", description="Starts with xapp- — required for Socket Mode."
+        min_length=1,
+        title="App-level token",
+        description=(
+            "Starts with xapp-. Create it in Basic Information → App-Level Tokens with connections:write, then "
+            "enable Socket Mode."
+        ),
     )
 
 
@@ -88,10 +98,21 @@ class SlackPlatformPlugin(PlatformPlugin):
     key = "slack"
     display_name = "Slack"
     setup_hint = (
-        "In Slack OAuth & Permissions → Bot Token Scopes, add channels:read for public channel names, groups:read "
-        "for private channel names, im:read and mpim:read for direct-message names, and users:read for sender "
-        "names. Reinstall the Slack app "
-        "after adding scopes, then update the bot token here."
+        "Credentials\n"
+        "• Bot token: In OAuth & Permissions → OAuth Tokens for Your Workspace, install/reinstall the app and copy "
+        "the xoxb- token.\n"
+        "• App-level token: In Basic Information → App-Level Tokens, create an xapp- token with connections:write "
+        "and enable Socket Mode.\n\n"
+        "Bot Token Scopes\n"
+        "• Messaging: chat:write, channels:history, groups:history, im:history, and mpim:history.\n"
+        "• Name resolution: channels:read, groups:read, im:read, mpim:read, and users:read.\n"
+        "• Processing feedback is optional but uses reactions:write.\n\n"
+        "Workspace setup\n"
+        "• Subscribe to message.channels, message.groups, message.im, and message.mpim events; the shipped Slack "
+        "manifest includes them.\n"
+        "• Invite the bot to every private channel or conversation it should handle; allowlists use channel IDs, "
+        "not channel names.\n"
+        "• After changing scopes, reinstall the app and replace the stored bot token."
     )
     capabilities = frozenset(
         {

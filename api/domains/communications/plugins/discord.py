@@ -69,13 +69,33 @@ class DiscordSettings(PlatformSettings):
 
 class DiscordCredentials(PlatformCredentials):
     bot_token: str = Field(
-        min_length=1, title="Bot token", description="From the Discord Developer Portal → your application → Bot."
+        min_length=1,
+        title="Bot token",
+        description=(
+            "From Developer Portal → Applications → your app → Bot → Token. Paste the bot token, not the Application "
+            "ID, public key, client secret, or invite URL."
+        ),
     )
 
 
 class DiscordPlatformPlugin(PlatformPlugin):
     key = "discord"
     display_name = "Discord"
+    setup_hint = (
+        "Credential\n"
+        "• Bot token: In Developer Portal → Applications → your app → Bot, reset/copy the Token. Do not use the "
+        "Application ID, public key, client secret, or an OAuth invite URL.\n\n"
+        "Developer Portal setup\n"
+        "• Under Bot → Privileged Gateway Intents, enable Message Content Intent. This integration requests the "
+        "GUILDS, GUILD_MESSAGES, DIRECT_MESSAGES, and MESSAGE_CONTENT intents.\n"
+        "• Under OAuth2 → URL Generator, select the bot scope and invite the bot to each server. Grant View Channels, "
+        "Send Messages, and Read Message History; grant Send Messages in Threads when using threads.\n\n"
+        "Connection settings\n"
+        "• The bot must be a member of every allowed server and able to view each allowed channel. Guild, channel, "
+        "user, and role allowlists use Discord IDs (snowflakes); enable Developer Mode to copy them.\n"
+        "• Direct messages default to Off; set Direct messages to Open or Allowlist when DMs are needed.\n"
+        "• When Require @mention is enabled, mention the bot in server messages."
+    )
     capabilities = frozenset(
         {
             PlatformCapability.ATTACHMENTS,
