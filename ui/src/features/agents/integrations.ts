@@ -30,8 +30,7 @@ export interface IntegrationProvider {
   // refresh token via the popup flow and writes it to content.refreshToken; the
   // provider id selects which scopes Google is asked for.
   authMethod?: "google_oauth";
-  // Shown next to the ✓ once an OAuth provider is connected — describes the access
-  // that was actually granted.
+  // Fallback shown next to the ✓ when an OAuth provider connects without an identity.
   oauthConnectedNote?: string;
 }
 
@@ -114,8 +113,8 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
   },
   // gmail, google_sheets and google_calendar are retired: one google_workspace
   // credential (below) now covers Gmail, Calendar, Drive and Sheets through gog under a
-  // single consent. The backend keeps their enum members so existing secrets still
-  // decrypt, but refuses new ones — so they must not be offered here.
+  // single consent. The retired providers and their rows were deleted by migration;
+  // affected agents must reconnect, so they must not be offered here.
   {
     id: "google_workspace",
     label: "Google Workspace",

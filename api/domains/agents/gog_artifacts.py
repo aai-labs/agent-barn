@@ -6,7 +6,7 @@ nothing with aai-cli's profile/secret-store machinery. These are pure string/dic
 builders consumed by ``start_agent``.
 
 The design that these builders encode (see
-``docs/plans/gogcli-google-workspace-integration.md``): the encrypted Agent Secret is the
+``docs/features/integrations.md``): the encrypted Agent Secret is the
 single source of truth, and the pod's gog state is rebuilt from it on every boot. Nothing
 gog-related is persisted in the pod, so the keyring password is regenerated per start and
 removing the credential removes access at the next restart.

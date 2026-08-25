@@ -2370,22 +2370,21 @@ class AgentService:
             assert ciphertext is not None
             decrypted[provider] = decrypt_content(provider, ciphertext, key)
         self._backfill_google_client_credentials(decrypted)
-        # Only google_workspace is materialized; the retired per-service Google providers
-        # are tombstones (see SecretProvider) and a leftover secret is simply ignored here
-        # rather than blocking start.
-        for google_provider in (SecretProvider.GOOGLE_WORKSPACE,):
-            content = decrypted.get(google_provider)
-            if not isinstance(content, GoogleWorkspaceContent):
-                continue
-            if not content.client_id or not content.client_secret:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=(
-                        f"{PROVIDER_DISPLAY_NAMES[google_provider]} is missing a client id/secret "
-                        "and Google OAuth is not configured on this server. Reconnect via "
-                        "Authenticate with Google, or configure google_cloud_client_id/secret."
-                    ),
-                )
+        # Only google_workspace is materialized. The retired per-service Google providers
+        # and their rows were deleted by migration; affected agents must reconnect through
+        # Google Workspace.
+        gws_content = decrypted.get(SecretProvider.GOOGLE_WORKSPACE)
+        if isinstance(gws_content, GoogleWorkspaceContent) and (
+            not gws_content.client_id or not gws_content.client_secret
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"{PROVIDER_DISPLAY_NAMES[SecretProvider.GOOGLE_WORKSPACE]} is missing a client id/secret "
+                    "and Google OAuth is not configured on this server. Reconnect via "
+                    "Authenticate with Google, or configure google_cloud_client_id/secret."
+                ),
+            )
         store = {p: c for p, c in decrypted.items() if p.value in provider_secrets_map}
         aai_home = "/opt/data" if agent.agent_type == AgentType.HERMES else "/home/node"
         # Gated on providers that actually get an aai-cli profile: an agent whose only
@@ -2400,7 +2399,6 @@ class AgentService:
         # gog (Google Workspace) — its own CLI with its own on-disk state, rebuilt from
         # this secret on every boot. GOG_HOME is deliberately the container filesystem,
         # not the PVC that aai_home points at for Hermes.
-        gws_content = decrypted.get(SecretProvider.GOOGLE_WORKSPACE)
         gog_setup_sh = None
         if isinstance(gws_content, GoogleWorkspaceContent):
             gog_home_dir = "/home/hermes" if agent.agent_type == AgentType.HERMES else "/home/node"
@@ -2942,10 +2940,8 @@ class AgentService:
         """Secrets created via the Google OAuth flow store only the refresh token; inject
         the app-owned client id/secret from config. Backfill only when empty so a
         user-supplied client (the one the refresh token was issued under) keeps working."""
-        for provider in (SecretProvider.GOOGLE_WORKSPACE,):
-            content = decrypted.get(provider)
-            if not isinstance(content, GoogleWorkspaceContent):
-                continue
+        content = decrypted.get(SecretProvider.GOOGLE_WORKSPACE)
+        if isinstance(content, GoogleWorkspaceContent):
             if not content.client_id:
                 content.client_id = self.config.google_cloud_client_id
             if not content.client_secret:

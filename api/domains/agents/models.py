@@ -2,7 +2,7 @@ import enum
 import hashlib
 import json
 from datetime import datetime
-from typing import Literal
+from typing import Literal, Self
 from uuid import UUID
 
 import sqlalchemy as sa
@@ -12,6 +12,7 @@ from pydantic import ConfigDict, Field, field_validator, model_validator
 from sqlmodel import Column, Enum, Index
 from sqlmodel import Field as SqlField
 
+from api.domains.agents.google_workspace_scopes import required_service_scopes
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.users.organization_users.models import OrganizationRole
 from api.infrastructure.crypto import decrypt_token, encrypt_token
@@ -96,8 +97,7 @@ class SecretProvider(str, enum.Enum):
 
 
 # Google services a google_workspace credential may cover, as named by the gog CLI.
-# Single source of truth: the content validator, the OAuth scope derivation, and the
-# gog runtime artifacts all read this.
+# The OAuth scope and runtime-policy maps are checked against this allowlist in tests.
 GOOGLE_WORKSPACE_SERVICES: tuple[str, ...] = ("gmail", "calendar", "drive", "sheets")
 
 
@@ -182,7 +182,7 @@ class GoogleWorkspaceContent(SecretContent):
     server-owned client is backfilled from config at agent-start time.
     """
 
-    email: str
+    email: str = Field(min_length=1)
     services: list[str]
     scopes: list[str] = Field(default_factory=list)
     refresh_token: str
@@ -203,6 +203,17 @@ class GoogleWorkspaceContent(SecretContent):
         # Deduplicate while keeping the caller's order so the stored list, the consent
         # scopes, and GOG_TOKEN_JSON all agree.
         return list(dict.fromkeys(value))
+
+    @model_validator(mode="after")
+    def _validate_granted_scopes(self) -> Self:
+        if not self.scopes:
+            return self
+        missing = sorted(required_service_scopes(self.services, self.read_only) - set(self.scopes))
+        if missing:
+            raise ValueError(
+                "scopes do not cover the selected Google services at the configured access level: " + ", ".join(missing)
+            )
+        return self
 
 
 class ZohoMailContent(SecretContent):

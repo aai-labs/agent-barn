@@ -5357,7 +5357,12 @@ def test_agent_configuration_override_history_retained_after_soft_delete():
 _GWS_CONTENT = {
     "email": "user@example.com",
     "services": ["gmail", "calendar"],
-    "scopes": ["https://www.googleapis.com/auth/gmail.readonly"],
+    "scopes": [
+        "https://www.googleapis.com/auth/gmail.modify",
+        "https://www.googleapis.com/auth/gmail.settings.basic",
+        "https://www.googleapis.com/auth/gmail.settings.sharing",
+        "https://www.googleapis.com/auth/calendar",
+    ],
     "refresh_token": "gws-refresh-token",
     "client_id": "client-id.apps.googleusercontent.com",
     "client_secret": "GOCSPX-secret",
@@ -5393,6 +5398,24 @@ def test_patch_agent_rejects_unsupported_google_workspace_service():
 
         with when("I ask for a service gog's v1 allowlist does not cover"):
             response = _configure_gws(client, context, {**_GWS_CONTENT, "services": ["gmail", "youtube"]})
+
+        with then("it is rejected"):
+            assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_CONTENT))
+
+
+def test_patch_agent_rejects_google_workspace_scopes_missing_selected_service():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("the recorded consent scopes do not cover the selected services"):
+            response = _configure_gws(
+                client,
+                context,
+                {
+                    **_GWS_CONTENT,
+                    "scopes": ["https://www.googleapis.com/auth/gmail.modify"],
+                },
+            )
 
         with then("it is rejected"):
             assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_CONTENT))

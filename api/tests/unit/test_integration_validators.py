@@ -849,7 +849,9 @@ _GWS_TOKEN_MOD = "api.infrastructure.integration_validators.google_workspace.htt
 _GWS_USERINFO_MOD = "api.infrastructure.integration_validators.google_workspace.httpx.get"
 
 _GWS_SCOPES = [
-    "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/gmail.settings.basic",
+    "https://www.googleapis.com/auth/gmail.settings.sharing",
     "https://www.googleapis.com/auth/calendar",
 ]
 _GWS = GoogleWorkspaceContent(
@@ -909,7 +911,7 @@ def test_google_workspace_invalid_grant_mentions_reconnect_and_testing_status():
 
 def test_google_workspace_reports_scopes_revoked_after_consent():
     # The user trimmed the grant at myaccount.google.com; gog will fail on calendar.
-    narrowed = _gws_token_ok(scope="https://www.googleapis.com/auth/gmail.readonly")
+    narrowed = _gws_token_ok(scope=" ".join(_GWS_SCOPES[:-1]))
     with (
         patch(_GWS_TOKEN_MOD, return_value=_resp(narrowed)),
         patch(_GWS_USERINFO_MOD, return_value=_resp({"email": "alice@example.com"})),

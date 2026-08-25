@@ -319,7 +319,14 @@ def test_slack_encrypt_decrypt_round_trip():
 _GOOGLE_WORKSPACE_BASE = {
     "email": "user@example.com",
     "services": ["gmail", "calendar"],
-    "scopes": ["https://www.googleapis.com/auth/gmail.readonly"],
+    "scopes": [
+        "https://www.googleapis.com/auth/gmail.modify",
+        "https://www.googleapis.com/auth/gmail.settings.basic",
+        "https://www.googleapis.com/auth/gmail.settings.sharing",
+        "https://www.googleapis.com/auth/calendar",
+        "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/spreadsheets",
+    ],
     "refresh_token": "rt-123",
 }
 
@@ -346,6 +353,50 @@ def test_google_workspace_rejects_empty_services():
     # A credential covering nothing would consent to nothing and confuse the agent.
     with pytest.raises(ValidationError):
         validate_content(SecretProvider.GOOGLE_WORKSPACE, {**_GOOGLE_WORKSPACE_BASE, "services": []})
+
+
+def test_google_workspace_rejects_scopes_missing_selected_service():
+    with pytest.raises(ValidationError, match="scopes do not cover"):
+        validate_content(
+            SecretProvider.GOOGLE_WORKSPACE,
+            {
+                **_GOOGLE_WORKSPACE_BASE,
+                "services": ["gmail", "calendar"],
+                "scopes": ["https://www.googleapis.com/auth/gmail.modify"],
+            },
+        )
+
+
+def test_google_workspace_rejects_blank_email():
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.GOOGLE_WORKSPACE, {**_GOOGLE_WORKSPACE_BASE, "email": ""})
+
+
+def test_google_workspace_rejects_scopes_for_wrong_access_level():
+    with pytest.raises(ValidationError, match="gmail.readonly"):
+        validate_content(
+            SecretProvider.GOOGLE_WORKSPACE,
+            {
+                **_GOOGLE_WORKSPACE_BASE,
+                "services": ["gmail"],
+                "read_only": True,
+                "scopes": [
+                    "https://www.googleapis.com/auth/gmail.modify",
+                    "https://www.googleapis.com/auth/gmail.settings.basic",
+                    "https://www.googleapis.com/auth/gmail.settings.sharing",
+                ],
+            },
+        )
+    with pytest.raises(ValidationError, match="gmail.modify"):
+        validate_content(
+            SecretProvider.GOOGLE_WORKSPACE,
+            {
+                **_GOOGLE_WORKSPACE_BASE,
+                "services": ["gmail"],
+                "read_only": False,
+                "scopes": ["https://www.googleapis.com/auth/gmail.readonly"],
+            },
+        )
 
 
 def test_google_workspace_deduplicates_services_preserving_order():

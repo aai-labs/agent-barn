@@ -1,32 +1,52 @@
 import json
 
 from api.domains.agents.gog_artifacts import (
+    _SERVICE_GUIDE,
     build_gog_env,
     build_gog_policy_md,
     build_gog_setup_sh,
     gog_home,
 )
-from api.domains.agents.models import GoogleWorkspaceContent
+from api.domains.agents.models import GOOGLE_WORKSPACE_SERVICES, GoogleWorkspaceContent
+from api.domains.integrations.google_oauth.routes import _WORKSPACE_SERVICE_SCOPES
 
-_SCOPES = [
+_FULL_SCOPES = [
+    "openid",
+    "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/gmail.settings.basic",
+    "https://www.googleapis.com/auth/gmail.settings.sharing",
+    "https://www.googleapis.com/auth/calendar",
+    "https://www.googleapis.com/auth/drive",
+    "https://www.googleapis.com/auth/spreadsheets",
+]
+_READ_ONLY_SCOPES = [
     "openid",
     "https://www.googleapis.com/auth/gmail.readonly",
-    "https://www.googleapis.com/auth/calendar",
+    "https://www.googleapis.com/auth/calendar.readonly",
+    "https://www.googleapis.com/auth/drive.readonly",
+    "https://www.googleapis.com/auth/spreadsheets.readonly",
 ]
+_SCOPES = _FULL_SCOPES
 
 
 def _content(**overrides) -> GoogleWorkspaceContent:
-    return GoogleWorkspaceContent.model_validate(
-        {
-            "email": "user@example.com",
-            "services": ["gmail", "calendar"],
-            "scopes": _SCOPES,
-            "refresh_token": "rt-123",
-            "client_id": "client-id.apps.googleusercontent.com",
-            "client_secret": "GOCSPX-secret",
-            **overrides,
-        }
-    )
+    defaults = {
+        "email": "user@example.com",
+        "services": ["gmail", "calendar"],
+        "scopes": _READ_ONLY_SCOPES if overrides.get("read_only", False) else _FULL_SCOPES,
+        "refresh_token": "rt-123",
+        "client_id": "client-id.apps.googleusercontent.com",
+        "client_secret": "GOCSPX-secret",
+    }
+    defaults.update(overrides)
+    return GoogleWorkspaceContent.model_validate(defaults)
+
+
+# --- service maps ---
+
+
+def test_google_workspace_service_maps_have_matching_keys():
+    assert set(GOOGLE_WORKSPACE_SERVICES) == set(_WORKSPACE_SERVICE_SCOPES) == set(_SERVICE_GUIDE)
 
 
 # --- env ---

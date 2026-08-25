@@ -1759,7 +1759,7 @@ export function SkillsStep({
                     draft={draft}
                     showScopeNote
                     onFieldChange={(key, value) => setField(providerId, key, value)}
-                    onReposChange={(key, repos) => setRepos(providerId, key, repos)}
+                    onListChange={(key, values) => setRepos(providerId, key, values)}
                     onOAuthConnected={({ refreshToken, clientId, clientSecret, email, scopes }) => {
                       setFields(providerId, { refreshToken, clientId, clientSecret, email, scopes });
                     }}
@@ -1871,7 +1871,7 @@ export function IntegrationsStep({
                 draft={draft}
                 showScopeNote
                 onFieldChange={(key, value) => setField(draft.provider, key, value)}
-                onReposChange={(key, repos) => setRepos(draft.provider, key, repos)}
+                onListChange={(key, values) => setRepos(draft.provider, key, values)}
                 onOAuthConnected={({ refreshToken, clientId, clientSecret, email, scopes }) => {
                   setFields(draft.provider, { refreshToken, clientId, clientSecret, email, scopes });
                 }}

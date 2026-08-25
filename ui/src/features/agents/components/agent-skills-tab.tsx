@@ -429,7 +429,7 @@ export const AgentSkillsTab = forwardRef<
                     draft={draft}
                     namePrefix="tab-"
                     onFieldChange={(key, value) => setField(providerId, key, value)}
-                    onReposChange={(key, repos) => setRepos(providerId, key, repos)}
+                    onListChange={(key, values) => setRepos(providerId, key, values)}
                     onOAuthConnected={({ refreshToken, clientId, clientSecret, email, scopes }) => {
                       setFields(providerId, { refreshToken, clientId, clientSecret, email, scopes });
                     }}

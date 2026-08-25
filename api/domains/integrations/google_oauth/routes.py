@@ -41,6 +41,7 @@ from jwt.exceptions import InvalidTokenError
 from pydantic import BaseModel
 
 from api.core.config import Config
+from api.domains.agents.google_workspace_scopes import GOOGLE_SCOPE_PREFIX, WORKSPACE_SERVICE_SCOPES
 from api.domains.agents.models import GOOGLE_WORKSPACE_SERVICES, SecretProvider
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.service import JWT_ENCODING_ALGORITHM
@@ -53,36 +54,9 @@ integrations_router = APIRouter(prefix="/integrations", tags=["integrations"])
 # per-service providers (gmail, google_sheets) had fixed scope tuples here.
 DEFAULT_PROVIDER = SecretProvider.GOOGLE_WORKSPACE.value
 
-_SCOPE_PREFIX = "https://www.googleapis.com/auth/"
-
-# Per-service (full, read-only) scope sets for the google_workspace provider, mirroring
-# gog v0.37.0's own derivation (internal/googleauth/service.go: serviceInfoByService plus
-# scopesForServiceWithOptions). They must match, because the services recorded in the
-# credential are re-declared to gog at agent start and it will expect these scopes to be
-# present. Keep in sync when the pinned gog version in the base images changes.
-_WORKSPACE_SERVICE_SCOPES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
-    "gmail": (
-        (
-            f"{_SCOPE_PREFIX}gmail.modify",
-            f"{_SCOPE_PREFIX}gmail.settings.basic",
-            f"{_SCOPE_PREFIX}gmail.settings.sharing",
-        ),
-        (f"{_SCOPE_PREFIX}gmail.readonly",),
-    ),
-    "calendar": (
-        (f"{_SCOPE_PREFIX}calendar",),
-        (f"{_SCOPE_PREFIX}calendar.readonly",),
-    ),
-    "drive": (
-        (f"{_SCOPE_PREFIX}drive",),
-        (f"{_SCOPE_PREFIX}drive.readonly",),
-    ),
-    # gog's sheets service pulls in Drive too (it exports/discovers through Drive).
-    "sheets": (
-        (f"{_SCOPE_PREFIX}drive", f"{_SCOPE_PREFIX}spreadsheets"),
-        (f"{_SCOPE_PREFIX}drive.readonly", f"{_SCOPE_PREFIX}spreadsheets.readonly"),
-    ),
-}
+_SCOPE_PREFIX = GOOGLE_SCOPE_PREFIX
+# Kept as a private route-level alias for the scope derivation tests and callers.
+_WORKSPACE_SERVICE_SCOPES = WORKSPACE_SERVICE_SCOPES
 
 # gog appends these to every authorization; we need them too, because the account email
 # is read out of the resulting id_token (gog keys its stored tokens by email).
@@ -90,8 +64,6 @@ _IDENTITY_SCOPES: tuple[str, ...] = ("openid", "email", f"{_SCOPE_PREFIX}userinf
 
 # Providers a signed state may name.
 _VALID_PROVIDERS: frozenset[str] = frozenset({SecretProvider.GOOGLE_WORKSPACE.value})
-
-GOOGLE_USERINFO_ENDPOINT = "https://openidconnect.googleapis.com/v1/userinfo"
 
 
 def _parse_services(raw: str | None) -> list[str]:

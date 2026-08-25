@@ -137,7 +137,8 @@ function GoogleGlyph({ size = 16 }: { size?: number }) {
  * id/secret/refresh-token entry for the Google integrations.
  *
  * ``provider`` picks which integration is being connected, and so which scopes Google
- * is asked for; ``connectedNote`` describes the access that was granted.
+ * is asked for; ``connectedEmail`` identifies the account when available, with
+ * ``connectedNote`` as the fallback.
  */
 export function GoogleAuthButton({
   connected,
@@ -146,6 +147,7 @@ export function GoogleAuthButton({
   disabledNote,
   provider = "google_workspace",
   connectedNote = "Google account connected",
+  connectedEmail,
   authorizeParams,
   requireEmail = false,
 }: {
@@ -156,6 +158,7 @@ export function GoogleAuthButton({
   disabledNote?: string;
   provider?: string;
   connectedNote?: string;
+  connectedEmail?: string;
   // Extra query params for /authorize-url (google_workspace derives its scopes from
   // the selected services rather than having a fixed per-provider scope list).
   authorizeParams?: Record<string, string>;
@@ -359,7 +362,7 @@ export function GoogleAuthButton({
       </button>
       {connected && !isConnecting && (
         <span className="text-[0.75rem] font-medium" style={{ color: "var(--ok, #2f855a)" }}>
-          ✓ Connected — {connectedNote}
+          {connectedEmail ? `✓ Connected as ${connectedEmail}` : `✓ Connected — ${connectedNote}`}
         </span>
       )}
       {disabled && disabledNote && !isConnecting && (
