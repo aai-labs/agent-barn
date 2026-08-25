@@ -209,13 +209,27 @@ def test_duplicate_delivery_backfills_a_previously_missing_name() -> None:
         with then("the message is stored without a sender name"):
             assert_that(_message(context, first.message_id).sender_name, none())
 
-        with when("the provider retries the same message and a name is now available"):
-            retried = repository.accept_inbound(connection_id=connection_id, envelope=_envelope("provider-1"))
+        resolved = _envelope("provider-1").model_copy(
+            update={
+                "location": ConversationLocation(
+                    id="channel-one",
+                    type="CHANNEL",
+                    thread_id="thread-one",
+                    display_name="general",
+                )
+            }
+        )
 
-        with then("the existing message is backfilled without creating a second message"):
+        with when("the provider retries the same message and names are now available"):
+            retried = repository.accept_inbound(connection_id=connection_id, envelope=resolved)
+
+        with then("the message and runtime envelope are backfilled without a duplicate"):
             assert_that(retried.duplicate, is_(True))
             assert_that(retried.message_id, equal_to(first.message_id))
             assert_that(_message(context, first.message_id).sender_name, equal_to("Person One"))
+            stored_envelope = _delivery(context, first.delivery_id).envelope
+            assert_that(stored_envelope["sender"]["display_name"], equal_to("Person One"))
+            assert_that(stored_envelope["location"]["display_name"], equal_to("general"))
 
 
 def test_duplicate_delivery_does_not_erase_a_known_name_with_null() -> None:

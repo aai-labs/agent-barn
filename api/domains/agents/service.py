@@ -725,7 +725,16 @@ class AgentService:
         # All deterministic, client-visible validation and in-memory preparation
         # is complete. Allocate the LiteLLM key immediately before Agent
         # persistence so a rejected create never allocates one (AF-272); any
-        # failure after allocation releases the unowned key.
+        # failure before the atomic create transaction commits releases the
+        # unowned key.
+        prepared_skills = [
+            AgentSkill(
+                agent_id=agent.id,
+                skill_id=s.id,
+                pinned_version=resolved_pin_by_skill_id[s.id].version,
+            )
+            for s in skills_to_assign
+        ]
         allocated_litellm_key: str | None = None
         try:
             if self.config.litellm_base_url and self.config.litellm_secret_name:
@@ -747,31 +756,11 @@ class AgentService:
                 agent,
                 creator_membership_id,
                 actor=secret_actor,
+                secrets=prepared_secrets,
+                skills=prepared_skills,
+                actor_display=secret_actor_display,
             )
             created_delivery_ids = created.delivery_ids
-
-            secret_delivery_ids: list[UUID] = []
-            for secret in prepared_secrets:
-                secret_delivery_ids += self.repository.save_secret_with_event(
-                    secret,
-                    event_name=AGENT_SECRET_ADDED,
-                    organization_id=org_id,
-                    agent_name=agent.name,
-                    actor=secret_actor,
-                    actor_display=secret_actor_display,
-                )
-
-            if skills_to_assign:
-                self.repository.save_skills(
-                    [
-                        AgentSkill(
-                            agent_id=agent.id,
-                            skill_id=s.id,
-                            pinned_version=resolved_pin_by_skill_id[s.id].version,
-                        )
-                        for s in skills_to_assign
-                    ]
-                )
         except Exception as exc:
             if allocated_litellm_key is not None:
                 self._release_unowned_litellm_key(agent, exc, plaintext_key=allocated_litellm_key)
@@ -781,7 +770,7 @@ class AgentService:
             PinnedSkill(skill=s, version=resolved_pin_by_skill_id[s.id].version) for s in skills_to_assign
         ]
 
-        self.event_delivery_dispatcher.enqueue_immediate(created_delivery_ids + secret_delivery_ids)
+        self.event_delivery_dispatcher.enqueue_immediate(created_delivery_ids)
 
         allowed_actions = self.authorization.allowed_actions(context, [agent])[agent.id]
         return self._build_agent_read(

@@ -700,6 +700,24 @@ def test_patch_openclaw_agent_approval_mode_off_returns_400():
             assert_that(response.json()["detail"], contains_string("OpenClaw"))
 
 
+def test_patch_agent_approval_mode_null_returns_422_and_leaves_agent_unchanged():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        agent_id = str(context.agent.id)
+
+        with when("I update approval_mode to null"):
+            response = client.patch(
+                f"{_BASE}/{agent_id}",
+                json={"approval_mode": None},
+                headers=_auth(context),
+            )
+
+        with then("it rejects null rather than clearing the non-null setting"):
+            assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
+            current = client.get(f"{_BASE}/{agent_id}", headers=_auth(context)).json()
+            assert_that(current["approval_mode"], equal_to("auto"))
+
+
 _JIRA_CONTENT = {
     "site_url": "https://acme.atlassian.net",
     "email": "a@b.com",
@@ -1536,6 +1554,45 @@ def test_create_agent_blocks_key_when_litellm_deletion_raises(caplog):
             litellm.delete_key.assert_called_once_with(FAKE_LITELLM_KEY)
             litellm.block_key.assert_called_once_with(FAKE_LITELLM_KEY)
             assert_that(caplog.text, is_not(contains_string(FAKE_LITELLM_KEY)))
+
+
+def test_create_agent_rolls_back_initial_resources_before_releasing_key():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        outbox: OutboxMessageRepository = context.injector.get(OutboxMessageRepository)
+        litellm: MagicMock = context.injector.get(LiteLLMClient)
+
+        with patch.object(
+            outbox,
+            "stage",
+            side_effect=[
+                None,
+                HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="secret persistence failed"),
+            ],
+        ):
+            response = client.post(
+                _BASE,
+                json={
+                    **_VALID_CREATE,
+                    "secrets": [
+                        {
+                            "provider": "jira",
+                            "content": {
+                                "site_url": "https://acme.atlassian.net",
+                                "email": "a@b.com",
+                                "api_token": "jira-token",
+                            },
+                        }
+                    ],
+                },
+                headers=_auth(context),
+            )
+
+        with then("the failed transaction leaves no Agent before key compensation"):
+            assert_that(response.status_code, equal_to(status.HTTP_500_INTERNAL_SERVER_ERROR))
+            litellm.delete_key.assert_called_once_with(FAKE_LITELLM_KEY)
+            litellm.block_key.assert_not_called()
+            assert_that(client.get(_BASE, headers=_auth(context)).json()["items"], equal_to([]))
 
 
 def test_start_agent_injects_per_agent_key():

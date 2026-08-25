@@ -211,12 +211,13 @@ class CommunicationsGatewayService:
             )
             return plugin.enrich_inbound(settings, credentials, envelopes)
         except Exception as exc:
-            detail = " ".join(str(exc).split())[:160]
+            # Validation errors can include input values. Credentials are
+            # decrypted only for this best-effort lookup and must never appear
+            # in logs, even when a stored payload is malformed.
             logger.warning(
-                "Communication inbound enrichment failed for Connection %s (%s): %s",
+                "Communication inbound enrichment failed for Connection %s (%s)",
                 connection.id,
                 type(exc).__name__,
-                detail,
             )
             return envelopes
 

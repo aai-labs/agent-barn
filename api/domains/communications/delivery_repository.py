@@ -85,6 +85,7 @@ class CommunicationDeliveryRepository:
                 )
             ).one_or_none()
             if existing is not None:
+                self._backfill_delivery_names(existing, envelope)
                 session.commit()
                 return AcceptedCommunicationRead(
                     message_id=message_id,
@@ -509,6 +510,28 @@ class CommunicationDeliveryRepository:
             .returning(cast(Any, AgentChatMessage.id))
         )
         return cast(UUID, session.exec(update).one()[0])
+
+    @staticmethod
+    def _backfill_delivery_names(
+        delivery: CommunicationDelivery,
+        envelope: NormalizedCommunicationEnvelope,
+    ) -> None:
+        """Backfill names in a duplicate delivery's runtime envelope.
+
+        The canonical message row and the delivery envelope are both read by
+        later consumers. Preserve any name already stored and only fill a
+        missing display name from a provider retry.
+        """
+        stored = dict(delivery.envelope)
+        sender = dict(stored.get("sender") or {})
+        location = dict(stored.get("location") or {})
+        if sender.get("display_name") is None and envelope.sender.display_name is not None:
+            sender["display_name"] = envelope.sender.display_name
+        if location.get("display_name") is None and envelope.location.display_name is not None:
+            location["display_name"] = envelope.location.display_name
+        stored["sender"] = sender
+        stored["location"] = location
+        delivery.envelope = stored
 
     @staticmethod
     def _safe_error(message: str | None) -> str | None:

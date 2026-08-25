@@ -141,6 +141,28 @@ def test_gateway_enrichment_failure_falls_back_to_unenriched_envelope() -> None:
     deliveries.accept_inbound.assert_called_once_with(connection_id=connection.id, envelope=_envelope())
 
 
+def test_gateway_enrichment_validation_warning_does_not_log_credential_values(caplog) -> None:
+    connection = cast(CommunicationConnection, _connection())
+    plugin = _feedback_plugin()
+    service, deliveries = _service(connection, plugin)
+    deliveries.accept_inbound.return_value = AcceptedCommunicationRead(
+        message_id=uuid4(),
+        delivery_id=uuid4(),
+        status=CommunicationDeliveryStatus.PENDING,
+    )
+
+    with patch(
+        "api.domains.communications.gateway_service.decrypt_token",
+        return_value=json.dumps({"bot_token": ["super-secret-token"], "app_token": "xapp-token"}),
+    ):
+        with caplog.at_level("WARNING"):
+            accepted = service._accept_admitted_payload(connection, plugin, SlackSettings(), {})
+
+    assert len(accepted) == 1
+    assert "super-secret-token" not in caplog.text
+    deliveries.accept_inbound.assert_called_once_with(connection_id=connection.id, envelope=_envelope())
+
+
 def test_gateway_marks_claim_and_terminal_runtime_failure_at_lifecycle_seam() -> None:
     connection = cast(CommunicationConnection, _connection())
     plugin = _feedback_plugin()

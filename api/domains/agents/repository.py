@@ -28,6 +28,7 @@ from api.domains.events.catalog import (
     AGENT_CREATED,
     AGENT_DELETED,
     AGENT_GENERAL_ACCESS_CHANGED,
+    AGENT_SECRET_ADDED,
     AGENT_SECRET_REMOVED,
     AGENT_UPDATED,
     EVENT_REGISTRY,
@@ -607,7 +608,17 @@ class AgentRepository:
         *,
         actor: ActorIdentity,
         correlation_id: UUID | None = None,
+        secrets: list[AgentSecret] | None = None,
+        skills: list[AgentSkill] | None = None,
+        actor_display: str | None = None,
     ) -> AgentLifecycleEventResult:
+        """Create an Agent and its initial resources in one transaction.
+
+        The LiteLLM key is allocated immediately before this method is called.
+        Keeping the Agent, access row, initial secrets, skills, and their outbox
+        deliveries in one transaction means a failure cannot leave a persisted
+        Agent pointing at a key that create-agent compensation has deleted.
+        """
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             session.add(agent)
             session.flush()
@@ -642,8 +653,29 @@ class AgentRepository:
             )
             self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
             delivery_ids = list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
-            session.commit()
+
+            for secret in secrets or []:
+                delivery_ids.extend(
+                    self._stage_secret_with_event(
+                        session,
+                        secret,
+                        event_name=AGENT_SECRET_ADDED,
+                        organization_id=agent.organization_id,
+                        agent_name=agent.name,
+                        actor=actor,
+                        actor_display=actor_display,
+                    )
+                )
+
+            if skills:
+                session.add_all(skills)
+                session.flush()
+
+            # Refresh before commit so the returned object retains the same
+            # behavior as the previous create method without doing fallible
+            # database work after the transaction has committed.
             session.refresh(agent)
+            session.commit()
             return AgentLifecycleEventResult(agent=agent, delivery_ids=delivery_ids)
 
     def save_with_lifecycle_event(
@@ -834,6 +866,47 @@ class AgentRepository:
             session.commit()
             return AgentLifecycleEventResult(agent=persisted, delivery_ids=delivery_ids)
 
+    def _stage_secret_with_event(
+        self,
+        session: Session,
+        secret: AgentSecret,
+        *,
+        event_name: str,
+        organization_id: UUID,
+        agent_name: str,
+        actor: ActorIdentity,
+        actor_display: str | None = None,
+        correlation_id: UUID | None = None,
+    ) -> list[UUID]:
+        """Stage one AgentSecret and its audit event in an existing transaction."""
+        session.add(secret)
+        session.flush()
+        event = EVENT_REGISTRY.build_event(
+            event_name=event_name,
+            schema_version=1,
+            occurred_at=datetime.now(UTC),
+            organization_id=organization_id,
+            actor=actor,
+            subject=SubjectIdentity(
+                type=SubjectIdentityType.AGENT,
+                id=secret.agent_id,
+                organization_id=organization_id,
+            ),
+            correlation_id=correlation_id or uuid4(),
+            payload={
+                "organization_id": organization_id,
+                "agent_id": secret.agent_id,
+                "record_id": secret.id,
+                "provider": SecretProvider(secret.provider).value,
+                "label": secret.secret_name,
+                "shared_reference_id": secret.shared_credential_id,
+                "actor_display": actor_display or actor.type.value,
+                "subject_display": agent_name,
+            },
+        )
+        self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
+        return list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
+
     def save_secret_with_event(
         self,
         secret: AgentSecret,
@@ -845,39 +918,24 @@ class AgentRepository:
         actor_display: str | None = None,
         correlation_id: UUID | None = None,
     ) -> list[UUID]:
-        """Save an AgentSecret row and stage an agent.secret.added/.updated event in
-        one transaction. `organization_id`/`agent_name` are required explicitly since
-        AgentSecret carries neither. The payload never includes `secret.content`.
-        `secret` is the same object the caller holds, so it picks up any DB-assigned
-        fields (e.g. `id`) in place; no need to return it."""
+        """Save an AgentSecret row and stage its audit event in one transaction.
+
+        `organization_id`/`agent_name` are required explicitly since AgentSecret
+        carries neither. The payload never includes `secret.content`. `secret`
+        is the same object the caller holds, so it picks up DB-assigned fields
+        (e.g. `id`) in place; no need to return it.
+        """
         with Session(self.delegate.engine, expire_on_commit=False) as session:
-            session.add(secret)
-            session.flush()
-            event = EVENT_REGISTRY.build_event(
+            delivery_ids = self._stage_secret_with_event(
+                session,
+                secret,
                 event_name=event_name,
-                schema_version=1,
-                occurred_at=datetime.now(UTC),
                 organization_id=organization_id,
+                agent_name=agent_name,
                 actor=actor,
-                subject=SubjectIdentity(
-                    type=SubjectIdentityType.AGENT,
-                    id=secret.agent_id,
-                    organization_id=organization_id,
-                ),
-                correlation_id=correlation_id or uuid4(),
-                payload={
-                    "organization_id": organization_id,
-                    "agent_id": secret.agent_id,
-                    "record_id": secret.id,
-                    "provider": SecretProvider(secret.provider).value,
-                    "label": secret.secret_name,
-                    "shared_reference_id": secret.shared_credential_id,
-                    "actor_display": actor_display or actor.type.value,
-                    "subject_display": agent_name,
-                },
+                actor_display=actor_display,
+                correlation_id=correlation_id,
             )
-            self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
-            delivery_ids = list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
             session.commit()
             return delivery_ids
 

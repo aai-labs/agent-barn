@@ -705,6 +705,13 @@ class AgentUpdate(PydanticBaseModel):
             raise ValueError("template_slug is no longer supported; use template_key")
         return values
 
+    @model_validator(mode="before")
+    @classmethod
+    def reject_null_approval_mode(cls, values: object) -> object:
+        if isinstance(values, dict) and values.get("approval_mode", ...) is None:
+            raise ValueError("approval_mode must be omitted rather than null")
+        return values
+
     @model_validator(mode="after")
     def validate_skill_operations(self) -> AgentUpdate:
         overlap = set(self.skill_ids) & set(self.removed_skill_ids)
