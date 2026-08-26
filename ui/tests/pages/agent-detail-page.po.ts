@@ -86,7 +86,7 @@ export class AgentDetailPage {
   }
 
   keysTab(): Locator {
-    return this.page.getByRole("button", { name: "Keys & integrations", exact: true });
+    return this.page.getByRole("button", { name: "Integrations", exact: true });
   }
 
   appTokenInput(): Locator {
@@ -99,7 +99,7 @@ export class AgentDetailPage {
 
   saveTokensButton(): Locator {
     return this.page
-      .locator('section[aria-label="Keys & integrations"] footer')
+      .locator('section[aria-label="Integrations"] footer')
       .getByRole("button", { name: /^Apply(?: & Restart)?$/i });
   }
 

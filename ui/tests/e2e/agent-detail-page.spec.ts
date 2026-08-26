@@ -744,6 +744,7 @@ test.describe("Agent Detail Page — Skills tab", () => {
     await expect(page.getByText("Add skills")).toBeVisible();
     await expect(page.getByText(mockPlatformSkill.name, { exact: true })).toBeVisible();
     await expect(page.getByText(mockCustomSkill.name)).toBeVisible();
+    await expect(page.getByRole("link", { name: `View details for ${mockPlatformSkill.name}` })).toBeVisible();
     await expect(agentDetailPage.skillsSearchInput()).toBeVisible();
   });
 
@@ -975,7 +976,7 @@ test.describe("Agent Detail Page — Keys tab", () => {
     await agentDetailPage.applyAndRestartConfirmationButton().click();
 
     await expect(
-      page.locator('section[aria-label="Keys & integrations"]').getByText("Secret is used by a skill"),
+      page.locator('section[aria-label="Integrations"]').getByText("Secret is used by a skill"),
     ).toBeVisible();
     await expect(page.getByText("Will be removed")).toBeVisible();
   });

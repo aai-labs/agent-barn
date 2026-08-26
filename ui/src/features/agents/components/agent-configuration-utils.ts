@@ -51,7 +51,7 @@ export const AGENT_CONFIGURATION_SECTIONS: AgentConfigurationSection[] = [
   },
   {
     key: "keys",
-    label: "Keys & integrations",
+    label: "Integrations",
     description: "Platform tokens and encrypted integration credentials.",
   },
   {

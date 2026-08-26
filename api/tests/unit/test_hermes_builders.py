@@ -44,7 +44,6 @@ def test_gateway_config_maps_approval_mode_onto_approvals_policy() -> None:
     }
 
 
-
 def test_config_map_contains_runtime_adapter_and_no_provider_policy_plugins() -> None:
     config_map = build_hermes_config_map(
         _AGENT_ID,

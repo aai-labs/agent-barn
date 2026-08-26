@@ -94,11 +94,11 @@ export function SkillsPanel({ scope, canManage }: { scope: SkillScopeRef; canMan
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button
-                className="af-input w-full flex items-center gap-2 whitespace-nowrap"
+                className="af-input w-full flex items-center justify-between gap-2 whitespace-nowrap"
                 aria-label="Filter by source"
               >
                 {SOURCE_FILTERS.find((f) => f.value === sourceFilter)?.label ?? "All sources"}
-                <ChevronDownIcon size={13} className="opacity-50 flex-shrink-0" />
+                <ChevronDownIcon size={13} className="ml-auto shrink-0 opacity-50" />
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent>

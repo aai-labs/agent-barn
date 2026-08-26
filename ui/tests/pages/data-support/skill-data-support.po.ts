@@ -11,6 +11,7 @@ export const MOCK_BITBUCKET_SKILL_ID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
 export const mockPlatformSkill = {
   id: MOCK_PLATFORM_SKILL_ID,
   organizationId: null,
+  scope: "platform",
   name: "github",
   slug: "github",
   description: null,
@@ -29,6 +30,7 @@ export const mockPlatformSkill = {
 export const mockCustomSkill = {
   id: MOCK_CUSTOM_SKILL_ID,
   organizationId: "22222222-2222-4222-8222-222222222222",
+  scope: "organization",
   name: "my-tool",
   slug: "my-tool",
   description: null,
@@ -47,6 +49,7 @@ export const mockCustomSkill = {
 export const mockJiraSkill = {
   id: MOCK_JIRA_SKILL_ID,
   organizationId: null,
+  scope: "platform",
   name: "jira",
   slug: "jira",
   description: null,
@@ -84,6 +87,7 @@ export const mockGoogleWorkspaceSkill = {
 export const mockBitbucketSkill = {
   id: MOCK_BITBUCKET_SKILL_ID,
   organizationId: null,
+  scope: "platform",
   name: "bitbucket",
   slug: "bitbucket",
   description: null,

@@ -646,7 +646,19 @@ function AvailableSkillRow({
               .join(", ")}
           </span>
         )}
+        {skill.description && (
+          <p className="m-0 mt-1 text-[0.75rem] leading-5" style={{ color: "var(--ink-4)" }}>
+            {skill.description}
+          </p>
+        )}
       </div>
+      <Link
+        href={href}
+        className="af-btn af-btn-sm af-btn-ghost"
+        aria-label={`View details for ${skill.name}`}
+      >
+        Details
+      </Link>
       <button
         className="af-btn af-btn-sm af-btn-ghost"
         disabled={isRunning}
