@@ -26,6 +26,7 @@ _TEAMS_SERVICE_URL = "https://smba.trafficmanager.net/amer/"
 _TEAMS_USER_ID = "29:1XJKJMvc5GBtc2JwZq0oj8tHZmzrQgFmB39ATiQWA85g"
 _TEAMS_AAD_ID = "7faf8ab2-3d56-4244-b585-20c8a42ed2b8"
 _TEAMS_CHANNEL_ID = "19:aebd0ad4d6ab42c8b9ed19c251c2fc37@thread.skype"
+_TEAMS_TEAM_ID = "19:0f1e2d3c4b5a6978@thread.tacv2"
 
 
 @dataclass
@@ -798,3 +799,113 @@ def test_teams_leaves_text_untouched_without_mention_entities() -> None:
     envelope = plugin.normalize_inbound(settings, payload)[0]
 
     assert envelope.text == "Aria can you help"
+
+
+def _teams_channel_envelope(**overrides: Any) -> NormalizedCommunicationEnvelope:
+    fields: dict[str, Any] = {
+        "provider_message_id": "1485983408511",
+        "occurred_at": datetime(2026, 8, 26, 12, 0, tzinfo=UTC),
+        "location": ConversationLocation(id=_TEAMS_CHANNEL_ID, type="CHANNEL"),
+        "text": "hello",
+        "provider_metadata": {
+            "service_url": _TEAMS_SERVICE_URL,
+            "team_id": _TEAMS_TEAM_ID,
+        },
+    }
+    fields.update(overrides)
+    return NormalizedCommunicationEnvelope(**fields)
+
+
+def _teams_credentials(plugin: TeamsPlatformPlugin):
+    return plugin.credentials_model.model_validate(
+        {"app_id": "app-1", "app_password": "secret", "tenant_id": "tenant-1"}
+    )
+
+
+def test_teams_channel_message_carries_the_team_id_for_enrichment() -> None:
+    plugin = _teams_plugin()
+    settings = plugin.settings_model.model_validate({"group_policy": "open"})
+
+    envelope = plugin.normalize_inbound(settings, _teams_channel_activity())[0]
+
+    assert envelope.provider_metadata["team_id"] == _TEAMS_CHANNEL_ID
+
+
+def test_teams_enrich_resolves_a_channel_name() -> None:
+    plugin = _teams_plugin()
+    envelope = _teams_channel_envelope()
+
+    with (
+        patch("api.domains.communications.plugins.teams.acquire_token", return_value="tok"),
+        patch(
+            "api.domains.communications.plugins.teams.list_team_channels",
+            return_value={_TEAMS_CHANNEL_ID: "Release planning"},
+        ),
+    ):
+        enriched = plugin.enrich_inbound(
+            plugin.settings_model.model_validate({}), _teams_credentials(plugin), [envelope]
+        )
+
+    assert enriched[0].location.display_name == "Release planning"
+
+
+def test_teams_enrich_labels_the_general_channel() -> None:
+    plugin = _teams_plugin()
+    # Teams returns a null name for General, and its channel id equals the team id.
+    envelope = _teams_channel_envelope(
+        location=ConversationLocation(id=_TEAMS_TEAM_ID, type="CHANNEL"),
+    )
+
+    with (
+        patch("api.domains.communications.plugins.teams.acquire_token", return_value="tok"),
+        patch("api.domains.communications.plugins.teams.list_team_channels", return_value={_TEAMS_TEAM_ID: None}),
+    ):
+        enriched = plugin.enrich_inbound(
+            plugin.settings_model.model_validate({}), _teams_credentials(plugin), [envelope]
+        )
+
+    assert enriched[0].location.display_name == "General"
+
+
+def test_teams_enrich_keeps_a_name_the_payload_already_supplied() -> None:
+    plugin = _teams_plugin()
+    envelope = _teams_channel_envelope(
+        location=ConversationLocation(id=_TEAMS_CHANNEL_ID, type="CHANNEL", display_name="From payload"),
+    )
+
+    with patch("api.domains.communications.plugins.teams.list_team_channels") as lookup:
+        enriched = plugin.enrich_inbound(
+            plugin.settings_model.model_validate({}), _teams_credentials(plugin), [envelope]
+        )
+
+    lookup.assert_not_called()
+    assert enriched[0].location.display_name == "From payload"
+
+
+def test_teams_enrich_skips_direct_messages() -> None:
+    plugin = _teams_plugin()
+    envelope = _teams_channel_envelope(location=ConversationLocation(id="a:dm", type="DM"))
+
+    with patch("api.domains.communications.plugins.teams.list_team_channels") as lookup:
+        plugin.enrich_inbound(plugin.settings_model.model_validate({}), _teams_credentials(plugin), [envelope])
+
+    lookup.assert_not_called()
+
+
+def test_teams_enrich_lookup_failure_leaves_the_envelope_intact() -> None:
+    plugin = _teams_plugin()
+    envelope = _teams_channel_envelope()
+
+    with (
+        patch("api.domains.communications.plugins.teams.acquire_token", return_value="tok"),
+        patch(
+            "api.domains.communications.plugins.teams.list_team_channels",
+            side_effect=RuntimeError("Teams unreachable"),
+        ),
+    ):
+        enriched = plugin.enrich_inbound(
+            plugin.settings_model.model_validate({}), _teams_credentials(plugin), [envelope]
+        )
+
+    assert enriched[0].location.id == _TEAMS_CHANNEL_ID
+    assert enriched[0].location.display_name is None

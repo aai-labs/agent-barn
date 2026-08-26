@@ -13,6 +13,12 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-08-26 — AF-118 — Resolve Teams channel names — PR pending
+
+- Delivered: Teams now implements the `enrich_inbound` seam, resolving a channel's display name through the Bot Framework Teams extension (`GET {serviceUrl}/v3/teams/{teamId}/conversations`) when the inbound payload carries none. Results are cached per team, scoped by a hash of the acquired bot token so two Connections can never share a cached name — matching the existing Telegram and Discord scoping. `normalize_inbound` now records `team_id` from `channelData.team.id`, since enrichment sees envelopes rather than the provider payload.
+- Changed: Nothing else. Lookup failures fall back to the envelope as normalized and never delay or reject durable acceptance, per the seam's contract. A name already present in the payload is preferred and never overwritten; direct messages skip the lookup entirely.
+- Notes: This deliberately uses the **agent's own bot credentials, not Microsoft Graph** — the Teams extension requires only that the bot be installed at team scope, which it must be to receive channel messages at all. No admin consent or new permission is involved. Teams reports the default General channel with a null name so callers can localize it, and its channel id always equals the team id; that pair is labelled "General" rather than left blank.
+
 ### 2026-08-26 — AF-118 — Strip the agent's own Teams @mention — PR pending
 
 - Delivered: Teams inbound normalization now removes the agent's own `<at>Name</at>` markup from the message text before persistence, matching Microsoft's documented guidance that the mention be stripped before the message is interpreted. Only the mention whose `mentioned.id` matches the connection's bot is removed; mentions of other people are preserved because they can be meaningful input.

@@ -17,7 +17,12 @@ from api.domains.communications.plugins.base import (
     PlatformPlugin,
     PlatformSettings,
 )
-from api.infrastructure.msteams.client import acquire_token, send_activity, verify_inbound_jwt
+from api.infrastructure.msteams.client import (
+    acquire_token,
+    list_team_channels,
+    send_activity,
+    verify_inbound_jwt,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -160,6 +165,52 @@ class TeamsPlatformPlugin(PlatformPlugin):
         token = acquire_token(credentials.tenant_id, credentials.app_id, credentials.app_password)
         return send_activity(service_url, conversation_id, activity, token)
 
+    def enrich_inbound(
+        self,
+        settings: PlatformSettings,
+        credentials: PlatformCredentials,
+        envelopes: list[NormalizedCommunicationEnvelope],
+    ) -> list[NormalizedCommunicationEnvelope]:
+        del settings
+        assert isinstance(credentials, TeamsCredentials)
+        return [self._enrich_envelope(credentials, envelope) for envelope in envelopes]
+
+    def _enrich_envelope(
+        self,
+        credentials: TeamsCredentials,
+        envelope: NormalizedCommunicationEnvelope,
+    ) -> NormalizedCommunicationEnvelope:
+        location = envelope.location
+        if location.type != "CHANNEL" or location.display_name:
+            return envelope
+
+        service_url = str(envelope.provider_metadata.get("service_url") or "")
+        team_id = str(envelope.provider_metadata.get("team_id") or "")
+        if not service_url or not team_id:
+            return envelope
+
+        try:
+            token = acquire_token(credentials.tenant_id, credentials.app_id, credentials.app_password)
+            channels = list_team_channels(service_url, team_id, token)
+        except Exception as exc:
+            detail = " ".join(str(exc).split())[:160]
+            logger.warning(
+                "Teams inbound enrichment resolve channel name failed for message %s (%s): %s",
+                envelope.provider_message_id,
+                type(exc).__name__,
+                detail,
+            )
+            return envelope
+
+        if location.id not in channels:
+            return envelope
+        # Teams reports the default General channel with a null name so callers
+        # can localize it; its channel id always equals the team id.
+        name = channels[location.id] or ("General" if location.id == team_id else None)
+        if not name:
+            return envelope
+        return envelope.model_copy(update={"location": location.model_copy(update={"display_name": name})})
+
     def normalize_inbound(
         self,
         settings: PlatformSettings,
@@ -222,6 +273,7 @@ class TeamsPlatformPlugin(PlatformPlugin):
                     "conversation_id": raw_conversation_id,
                     "from_id": str(sender.get("id") or ""),
                     "recipient_id": bot_id,
+                    "team_id": str(((payload.get("channelData") or {}).get("team") or {}).get("id") or ""),
                     "tenant_id": str(((payload.get("channelData") or {}).get("tenant") or {}).get("id") or ""),
                 },
             )

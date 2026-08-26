@@ -1,3 +1,4 @@
+import hashlib
 import json
 import logging
 import threading
@@ -8,10 +9,12 @@ import jwt
 from jwt import PyJWKClient
 
 from api.infrastructure.http import resilient_request
+from api.infrastructure.shared.cache import cached as _cached
 
 logger = logging.getLogger(__name__)
 
 _LOGIN_BASE = "https://login.microsoftonline.com"
+_CHANNEL_CACHE_TTL_SECONDS = 600
 _BOT_SCOPE = "https://api.botframework.com/.default"
 _JWKS_URL = "https://login.botframework.com/v1/.well-known/keys"
 _EXPECTED_ISSUER = "https://api.botframework.com"
@@ -77,6 +80,35 @@ def send_activity(service_url: str, conversation_id: str, activity: dict, token:
     )
     response.raise_for_status()
     return str(response.json().get("id") or "")
+
+
+def list_team_channels(service_url: str, team_id: str, token: str) -> dict[str, str | None]:
+    """Map a team's channel ids to names via the Bot Framework Teams extension.
+
+    Uses the agent's own bot credentials, so no Microsoft Graph consent is
+    involved. Requires the bot to be installed at team scope. Teams returns a
+    null name for the default General channel so callers can localize it.
+    """
+    cache_key = f"msteams:channels:{hashlib.sha256(token.encode()).hexdigest()}:{team_id}"
+    return _cached(cache_key, lambda: _fetch_team_channels(service_url, team_id, token), ttl=_CHANNEL_CACHE_TTL_SECONDS)
+
+
+def _fetch_team_channels(service_url: str, team_id: str, token: str) -> dict[str, str | None]:
+    response = resilient_request(
+        "GET",
+        f"{service_url.rstrip('/')}/v3/teams/{quote(team_id, safe='')}/conversations",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=_TIMEOUT_SECONDS,
+        label="Teams channels",
+        retry_server_errors=True,
+    )
+    response.raise_for_status()
+    conversations = response.json().get("conversations") or []
+    return {
+        str(item["id"]): (str(item["name"]) if item.get("name") else None)
+        for item in conversations
+        if isinstance(item, dict) and item.get("id")
+    }
 
 
 def verify_inbound_jwt(authorization: str, app_id: str) -> None:
