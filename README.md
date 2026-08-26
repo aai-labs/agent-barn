@@ -1,19 +1,15 @@
 # Agent Barn
 
-Platform for hiring, managing, and running AI agents on Slack and Microsoft Teams.
+# Agent Barn
 
-Monorepo layout:
+**Six AI coworkers in Slack, Microsoft Teams, Telegram, and Discord, running on your infrastructure.**
 
-- `api/` — FastAPI, SQLModel/SQLAlchemy, Alembic, Injector DI, pytest
-- `ui/` — Next.js App Router, React, TypeScript, TanStack Query
-- `helm/` — Helm chart for Kubernetes deployment
-- `k8s/` — Kubernetes manifests and helper scripts
-- `hermes-base/` — base config for Hermes agents
-- `openclaw-base/` — base config for OpenClaw agents
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
+[![Discord](https://img.shields.io/badge/discord-join-5865F2)](https://discord.gg/A3vJF5ZKnu)
 
-API is served under `/api/v1`; frontend requests to `/api/*` are proxied to the backend.
+[Website](https://agentbarn.dev) · [Docs](https://agentbarn.dev/guide) · [Recipes](https://agentbarn.dev/recipes) · [Discord](https://discord.gg/A3vJF5ZKnu)
 
-## Features
+</div>
 
 **Agents**
 
@@ -117,7 +113,7 @@ database has none.
 | `OPENROUTER_API_KEY`                                                 | passed to LiteLLM; also used for the model picker                                                                                                              |
 | `LITELLM_MASTER_KEY`                                                 | **stable** admin key, e.g. `sk-$(openssl rand -hex 16)` — LiteLLM encrypts stored keys with it, so changing it later breaks agents created under the old value |
 | `OPENCLAW_IMAGE`, `HERMES_IMAGE`                                     | full `name:tag`; the tag must equal the matching `openclaw-base/VERSION` / `hermes-base/VERSION`                                                               |
-| `GH_TOKEN`                                                           | GitHub PAT with read access to [`aai-labs/aai-cli`](https://github.com/aai-labs/aai-cli) — the base-image build clones it                      |
+| `GH_TOKEN`                                                           | GitHub PAT with read access to [`aai-labs/aai-cli`](https://github.com/aai-labs/aai-cli) — the base-image build clones it                                      |
 
 `run.sh` sets `API_K8S_KUBECONFIG_PATH` in `.env` for you once the cluster is up
 — no manual kubeconfig wiring needed.
@@ -160,7 +156,7 @@ blank in `.env.spec`, and unlike the Docker path (where compose always
 overrides it to the in-network LiteLLM service) nothing here fills it in for
 you — `create_agent` silently skips minting a LiteLLM key when it's empty
 (`api/domains/agents/service.py:728`, no error either way), so the agent gets
-created and *looks* fine but can never actually answer.
+created and _looks_ fine but can never actually answer.
 
 See [docs/features/domain-events.md](./docs/features/domain-events.md) for how Domain Event delivery works.
 
@@ -311,7 +307,7 @@ Fix by running `./run.sh` again (it reloads any image missing from the
 cluster), or `bash docker/k3d/k3d-load-images.sh` directly with the same
 `K3D_CLUSTER` as the cluster.
 
-A second, less obvious cause: an image that *was* imported can still
+A second, less obvious cause: an image that _was_ imported can still
 disappear later. Imported images are unreferenced whenever no agent is
 running one, and kubelet garbage-collects unreferenced images under disk
 pressure (seen at `usage=87 highThreshold=85` on a constrained host). With
@@ -354,48 +350,19 @@ Requires Docker Desktop in Linux-container mode (the default).
 
 ## Database Migrations
 
-```bash
-make migrate         # apply latest
-make merge-heads     # merge multiple Alembic heads
-make rollback        # roll back one
-make makemigrations  # create new migration (prompts for message)
-```
+A maintainer responds to every `#support` post within 3 business days.
 
-## Tests
+## Contributing
 
-```bash
-make test-api        # API tests (excludes k8s integration)
-make test-api-k8s    # k8s integration tests
-make test-ui         # UI tests (Playwright)
-make coverage        # API coverage report
-```
+Start with [`good first issue`](https://github.com/aai-labs/agent-farm/labels/good%20first%20issue).
+Setup, conventions, and the review process are in [CONTRIBUTING.md](CONTRIBUTING.md).
+Repository-wide engineering rules live in [AGENTS.md](AGENTS.md) and
+[`docs/INDEX.md`](docs/INDEX.md); domain terminology is in [CONTEXT.md](CONTEXT.md).
 
-UI watch/debug:
+Get a PR merged and you get the Contributor role in Discord.
 
-```bash
-cd ui && pnpm test:watch
-cd ui && pnpm test:debug
-```
+## Licence
 
-## Lint and Type Checks
+Apache 2.0. See [LICENSE](LICENSE).
 
-```bash
-make check-api   # ruff check + format check + ty check
-make fix-api     # ruff autofix + format
-make lint-ui     # ESLint
-make check-ui    # TypeScript type check
-```
-
-## Deployment
-
-Deployed to Kubernetes via Helm + helmfile. See `helm/`, `k8s/`, `helmfile.yaml.gotmpl`, and `deploy.sh`.
-
-## Development Conventions
-
-See [AGENTS.md](./AGENTS.md) for detailed implementation standards:
-
-- how to create new API and UI domains
-- architecture boundaries (routes → services → repositories)
-- query key and API client patterns
-- testing requirements and examples
-- Helm chart versioning and release process
+Built by [AAI Labs](https://aai-labs.com) in Vilnius, Lithuania.
