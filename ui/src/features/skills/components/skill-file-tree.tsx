@@ -214,7 +214,7 @@ function FileTreeRow({
           )}
           {onRemove && (
             <div className="flex items-center gap-0.5 flex-shrink-0 opacity-0 group-hover/row:opacity-100 focus-within:opacity-100 transition-opacity">
-              {onRename && (
+              {onRename && !isEntry && (
                 <button
                   type="button"
                   className="af-btn af-btn-ghost flex-shrink-0 justify-center"
