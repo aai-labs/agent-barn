@@ -67,6 +67,12 @@ Discord guild, channel, and user policies are independent. User access defaults 
 
 Hermes retries retryable platform connection failures with its bounded exponential backoff. If repeated failures open Hermes' platform circuit breaker, the agent's dedicated `/live` probe reports unhealthy and Kubernetes restarts the pod after approximately five minutes, allowing recoverable external configuration changes to take effect without operator intervention. A platform intentionally paused through `/platform pause` remains live and is not automatically restarted.
 
+## Hermes scheduled-run context
+
+Hermes scheduled runs are isolated sessions: they do not inherit Slack thread or interactive-session history unless a job explicitly supplies continuity context. They do load the agent's persistent `MEMORY.md` and `USER.md` stores into the system prompt, using the same enabled memory configuration as interactive runs. This contract requires Hermes `v2026.8.19` or newer and is verified inside the pinned base image because an API-side builder test alone cannot prove runtime behavior.
+
+Cron delivery is automatic. When a scheduled run has nothing actionable to deliver, its final response must be exactly `[SILENT]`; ordinary prose such as `Nothing to flag today.` is a deliverable message, not a private acknowledgement.
+
 ## Telemetry and costs
 
 Agent runtimes report messages and tool-call state to the separate Ingest API using the per-start ingest key. Ingest authentication currently remains valid after stop because status is not checked and the stored key is not cleared. Costs follow a separate path: the API queries LiteLLM and attributes spend through each agent's LiteLLM key identity.
