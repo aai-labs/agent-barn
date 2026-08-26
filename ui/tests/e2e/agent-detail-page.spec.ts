@@ -618,6 +618,103 @@ test.describe("Agent Detail Page — Channels tab", () => {
         }),
       });
     });
+    await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections/*/diagnostics`, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          connection: {
+            id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+            agent_id: MOCK_AGENT_ID,
+            platform_key: "discord",
+            display_name: "Customer Discord",
+            enabled: true,
+            schema_version: 1,
+            settings: { guild_ids: ["guild-one"] },
+            external_identity: "validation-skipped",
+            observed_status: "CONNECTED",
+            last_health_at: "2026-01-01T00:00:00Z",
+            last_error_code: null,
+            last_error_message: null,
+            webhook_url: null,
+            revision: 3,
+            created_at: "2026-01-01T00:00:00Z",
+            updated_at: "2026-01-01T00:00:00Z",
+          },
+          provider_connectivity: "CONNECTED",
+          end_to_end_health: "healthy",
+          pipeline: {
+            provider_observed: 2,
+            policy_admitted: 2,
+            queued: 2,
+            agent_claimed: 2,
+            model_completed: 2,
+            reply_queued: 2,
+            provider_delivered: 2,
+            dead_lettered: 0,
+          },
+          delivery_counts: {
+            total: 2,
+            pending: 0,
+            processing: 0,
+            succeeded: 2,
+            dead_lettered: 0,
+            cancelled: 0,
+            unavailable: 0,
+          },
+          queue_depth: 0,
+          oldest_queued_age_seconds: null,
+          latency: {
+            sample_count: 2,
+            average_ms: 120,
+            p50_ms: 100,
+            latest_ms: 140,
+          },
+          recent_failures: [],
+          latest_transitions: [{
+            id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+            connection_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+            delivery_id: null,
+            occurred_at: "2026-01-01T00:00:00Z",
+            stage: "provider_delivered",
+            disposition: null,
+            attempt_number: 1,
+            duration_ms: 140,
+            error_code: null,
+            error_summary: null,
+          }],
+          window_start: "2025-12-31T00:00:00Z",
+          window_end: "2026-01-01T00:00:00Z",
+        }),
+      });
+    });
+    await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections/*/reconnect`, async (route) => {
+      await route.fulfill({
+        status: 202,
+        contentType: "application/json",
+        body: JSON.stringify({
+          connection: {
+            id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+            agent_id: MOCK_AGENT_ID,
+            platform_key: "discord",
+            display_name: "Customer Discord",
+            enabled: true,
+            schema_version: 1,
+            settings: { guild_ids: ["guild-one"] },
+            external_identity: "validation-skipped",
+            observed_status: "CONNECTING",
+            last_health_at: "2026-01-01T00:00:00Z",
+            last_error_code: null,
+            last_error_message: null,
+            webhook_url: null,
+            revision: 4,
+            created_at: "2026-01-01T00:00:00Z",
+            updated_at: "2026-01-01T00:00:00Z",
+          },
+          requested_at: "2026-01-01T00:00:00Z",
+        }),
+      });
+    });
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();
@@ -628,6 +725,21 @@ test.describe("Agent Detail Page — Channels tab", () => {
     await expect(page.getByText("Customer Discord", { exact: true })).toBeVisible();
     await expect(page.getByText(/Connected as validation-skipped/)).toBeVisible();
     await expect(page.getByText("Connected", { exact: true })).toBeVisible();
+  });
+
+  test("shows separate diagnostics health and confirms a reconnect request", async ({ page }) => {
+    await page.getByRole("button", { name: "Diagnostics", exact: true }).click();
+
+    await expect(page.getByText("Provider connectivity", { exact: true })).toBeVisible();
+    await expect(page.getByText("End-to-end delivery", { exact: true })).toBeVisible();
+    await expect(page.getByText("Latest transitions", { exact: true })).toBeVisible();
+    await expect(page.getByText("Showing up to 50 · no message content", { exact: true })).toBeVisible();
+
+    const reconnect = page.waitForRequest((request) => request.method() === "POST" && request.url().endsWith("/reconnect"));
+    await page.getByRole("button", { name: "Reconnect", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Reconnect this connection?" })).toBeVisible();
+    await page.getByRole("button", { name: "Reconnect", exact: true }).last().click();
+    await reconnect;
   });
 
   test("edits Connection name and plugin settings without resending credentials", async ({ page }) => {

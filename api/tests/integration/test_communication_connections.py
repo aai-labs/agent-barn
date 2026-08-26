@@ -2,10 +2,13 @@ from uuid import UUID
 
 from fastapi import status
 from hamcrest import all_of, assert_that, contains_inanyorder, contains_string, equal_to, has_entries, has_key, not_
+from sqlmodel import Session, col, select
 from starlette.testclient import TestClient
 
 from api.domains.agents.models import AgentType
+from api.domains.communications.models import CommunicationJournalEntry, ConnectionObservedStatus
 from api.domains.communications.repository import CommunicationConnectionRepository
+from api.domains.events.models import OutboxMessage
 from api.domains.rbac.catalog import AGENT_VIEWER_ROLE_ID
 from api.domains.users.organization_users.models import OrganizationRole
 from api.domains.users.organization_users.repository import OrganizationUserRepository
@@ -379,3 +382,83 @@ def test_ingress_lease_allows_only_one_gateway_replica() -> None:
             assert_that(first, equal_to(True))
             assert_that(second, equal_to(False))
             assert_that(after_release, equal_to(True))
+
+
+def test_connection_diagnostics_and_reconnect_preserve_safe_operational_history() -> None:
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        created = client.post(_base(context), json=_discord_payload(), headers=_auth(context)).json()
+        connection_id = UUID(created["id"])
+        repository = context.injector.get(CommunicationConnectionRepository)
+
+        repository.record_health(
+            connection_id,
+            ConnectionObservedStatus.ERROR,
+            error_code="authorization-token",
+            error_message="provider rejected Bearer top-secret-token",
+        )
+
+        with when("I inspect the Connection and request a reconnect"):
+            diagnostics = client.get(f"{_base(context)}/{connection_id}/diagnostics", headers=_auth(context))
+            reconnect = client.post(f"{_base(context)}/{connection_id}/reconnect", headers=_auth(context))
+
+        with then("the API separates health from delivery and records safe recovery history"):
+            assert_that(diagnostics.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(
+                diagnostics.json(),
+                has_entries(
+                    provider_connectivity="ERROR",
+                    end_to_end_health="degraded",
+                    delivery_counts=has_entries(total=0),
+                ),
+            )
+            assert_that(reconnect.status_code, equal_to(status.HTTP_202_ACCEPTED))
+            assert_that(
+                reconnect.json()["connection"],
+                has_entries(observed_status="CONNECTING", revision=2),
+            )
+
+            with Session(context.postgres_delegate.engine) as session:
+                journal = list(
+                    session.exec(
+                        select(CommunicationJournalEntry)
+                        .where(CommunicationJournalEntry.connection_id == connection_id)
+                        .order_by(col(CommunicationJournalEntry.occurred_at))
+                    ).all()
+                )
+                events = list(
+                    session.exec(
+                        select(OutboxMessage)
+                        .where(OutboxMessage.organization_id == context.organization.id)
+                        .order_by(col(OutboxMessage.created_at))
+                    ).all()
+                )
+
+            assert_that(
+                [getattr(entry.stage, "value", entry.stage) for entry in journal],
+                equal_to(["connection_error", "connection_connecting", "reconnect_requested"]),
+            )
+            assert_that(journal[0].error_code, equal_to("REDACTED"))
+            assert_that(journal[0].error_summary, equal_to("Provider error details were redacted"))
+            assert_that(len(events), equal_to(3))
+            assert_that(str(events[0].payload), not_(contains_string("top-secret-token")))
+            assert_that(diagnostics.json()["latest_transitions"][0], not_(has_key("sender_id")))
+            assert_that(str(diagnostics.json()), not_(contains_string("provider rejected")))
+
+
+def test_diagnostics_read_does_not_grant_connection_recovery_permission() -> None:
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        created = client.post(_base(context), json=_discord_payload(), headers=_auth(context)).json()
+        connection_url = f"{_base(context)}/{created['id']}"
+        context.organization_user.role = OrganizationRole.MEMBER
+        context.injector.get(OrganizationUserRepository).save(context.organization_user)
+        there_is_agent_access(access_role_id=AGENT_VIEWER_ROLE_ID)(context)
+
+        with when("a viewer reads diagnostics and attempts a reconnect"):
+            diagnostics = client.get(f"{connection_url}/diagnostics", headers=_auth(context))
+            reconnect = client.post(f"{connection_url}/reconnect", headers=_auth(context))
+
+        with then("read access remains available while recovery requires Agent update"):
+            assert_that(diagnostics.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(reconnect.status_code, equal_to(status.HTTP_403_FORBIDDEN))

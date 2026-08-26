@@ -6,6 +6,7 @@ from uuid import uuid4
 import pytest
 
 from api.domains.communications.models import (
+    CommunicationPolicyDisposition,
     CommunicationSender,
     ConversationLocation,
     NormalizedCommunicationEnvelope,
@@ -190,6 +191,41 @@ def test_slack_plugin_requires_a_direct_bot_mention_for_channel_messages() -> No
     assert len(mentioned) == 1
     assert mentioned[0].mentions == ["bot-1"]
     assert unmentioned == []
+
+
+def test_slack_admission_returns_typed_policy_dispositions() -> None:
+    plugin = SlackPlatformPlugin(ValidationConfig())
+    settings = plugin.settings_model.model_validate({"group_policy": "open"})
+    context = _slack_admission_context(owned=False)
+
+    denied_dm = plugin.admit_inbound(
+        settings,
+        _slack_event("hello", channel_type="im"),
+        context=context,
+    )
+    bot_message = plugin.admit_inbound(
+        settings,
+        _slack_event("hello <@bot-1>", user="bot-1"),
+        context=context,
+    )
+    mention_required = plugin.admit_inbound(
+        settings,
+        _slack_event("hello everyone"),
+        context=context,
+    )
+    malformed = plugin.admit_inbound(settings, {}, context=context)
+    accepted = plugin.admit_inbound(
+        settings,
+        _slack_event("hello <@bot-1>"),
+        context=context,
+    )
+
+    assert denied_dm.disposition == CommunicationPolicyDisposition.USER_DENIED
+    assert bot_message.disposition == CommunicationPolicyDisposition.BOT_IGNORED
+    assert mention_required.disposition == CommunicationPolicyDisposition.MENTION_REQUIRED
+    assert malformed.disposition == CommunicationPolicyDisposition.MALFORMED_PAYLOAD
+    assert accepted.disposition == CommunicationPolicyDisposition.ACCEPTED
+    assert len(accepted) == 1
 
 
 def test_slack_message_identity_uses_timestamp_for_reaction_feedback() -> None:

@@ -51,7 +51,7 @@ Processing feedback is a best-effort Platform Plugin capability, separate from d
 
 ## Connection failure recovery
 
-The gateway supervisor isolates provider ingress per enabled Connection and coordinates replicas with database leases. Setup and session failures set Connection health to `ERROR` and retry without altering Agent lifecycle; unsupported supervised ingress can remain `DEGRADED`. Webhook Connections are marked connected after configuration is loaded, while authenticated provider requests remain independently validated.
+The gateway supervisor isolates provider ingress per enabled Connection and coordinates replicas with database leases. Setup and session failures set Connection health to `ERROR` and retry without altering Agent lifecycle; unsupported supervised ingress can remain `DEGRADED`. An authorized Agent update can request one reconnect, which increments the Connection revision so the supervisor cancels and recreates that provider session. Webhook Connections are marked connected after configuration is loaded, while authenticated provider requests remain independently validated. Connection and Delivery transitions are retained in the content-free Communications operation journal; the Communications metrics endpoint refreshes low-cardinality status, queue, latency, outcome, reconnect, and policy-disposition metrics from the durable rows.
 
 ## Hermes scheduled-run context
 
@@ -98,7 +98,7 @@ Kubernetes `stream()` and `portforward()` temporarily monkey-patch `ApiClient.re
 | Charts and release ordering     | `../../helm/`, `../../helmfile.yaml.gotmpl`                                                 |
 | Deployment workflow             | `../../.github/workflows/deploy.yml`                                                  |
 | Monitoring stack                | `../../helm/monitoring/`                                                               |
-| API metrics                     | `../../api/core/metrics.py`                                                            |
+| API metrics                     | `../../api/core/metrics.py`, `../../api/domains/communications/metrics.py`             |
 
 ## Change impact
 

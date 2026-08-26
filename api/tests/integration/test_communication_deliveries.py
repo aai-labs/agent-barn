@@ -1,8 +1,8 @@
 from datetime import UTC, datetime
 from uuid import UUID
 
-from hamcrest import assert_that, equal_to, is_, none, not_
-from sqlmodel import Session
+from hamcrest import assert_that, contains_string, equal_to, has_entries, is_, none, not_
+from sqlmodel import Session, col, select
 from starlette.testclient import TestClient
 
 from api.domains.agents.models import AgentStatus
@@ -10,11 +10,14 @@ from api.domains.communications.delivery_repository import CommunicationDelivery
 from api.domains.communications.models import (
     CommunicationDelivery,
     CommunicationDeliveryStatus,
+    CommunicationJournalEntry,
     CommunicationSender,
+    ConnectionObservedStatus,
     ConversationLocation,
     NormalizedCommunicationEnvelope,
     RuntimeReplyCreate,
 )
+from api.domains.communications.repository import CommunicationConnectionRepository
 from api.domains.conversations.models import AgentChatMessage
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given, then, when
@@ -275,3 +278,127 @@ def test_outbound_reply_inherits_channel_name_from_source_inbound_location() -> 
         with then("the outbound message carries the source channel's name"):
             outbound_message_id = _delivery(context, outbound_delivery_id).message_id
             assert_that(_message(context, outbound_message_id).channel_name, equal_to("general"))
+
+
+def test_diagnostics_reports_pipeline_transitions_without_message_content() -> None:
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        connection_id = _create_connection(context)
+        repository = context.injector.get(CommunicationDeliveryRepository)
+        connections = context.injector.get(CommunicationConnectionRepository)
+        connections.record_health(connection_id, ConnectionObservedStatus.CONNECTED)
+
+        accepted = repository.accept_inbound(connection_id=connection_id, envelope=_envelope("provider-1"))
+        claimed = repository.claim_next_inbound(agent_id=context.agent.id)
+        assert claimed is not None
+        assert repository.complete_runtime_delivery(
+            claimed.delivery_id,
+            agent_id=context.agent.id,
+            succeeded=True,
+        )
+        outbound_id = repository.enqueue_runtime_reply(
+            agent_id=context.agent.id,
+            source_delivery_id=accepted.delivery_id,
+            reply=RuntimeReplyCreate(idempotency_key="reply-1", text="private response"),
+        )
+        assert repository.claim_next_outbound() is not None
+        assert repository.complete_outbound(outbound_id, provider_message_id="provider-reply")
+
+        with when("I inspect the completed Connection pipeline"):
+            response = context.client.get(
+                f"/api/v1/organizations/{context.organization.id}/agents/{context.agent.id}/connections/{connection_id}/diagnostics",
+                headers=_auth(context),
+            )
+
+        with then("the diagnostics are complete and content-free"):
+            assert_that(response.status_code, equal_to(200))
+            body = response.json()
+            assert_that(body["provider_connectivity"], equal_to("CONNECTED"))
+            assert_that(body["end_to_end_health"], equal_to("healthy"))
+            assert_that(
+                body["pipeline"],
+                equal_to(
+                    {
+                        "provider_observed": 0,
+                        "policy_admitted": 0,
+                        "queued": 1,
+                        "agent_claimed": 1,
+                        "model_completed": 1,
+                        "reply_queued": 1,
+                        "provider_delivered": 1,
+                        "dead_lettered": 0,
+                    }
+                ),
+            )
+            assert_that(body["delivery_counts"]["succeeded"], equal_to(2))
+            assert_that(len(body["latest_transitions"]), not_(equal_to(0)))
+            assert_that(repr(body), not_(contains_string("message provider-1")))
+            assert_that(repr(body), not_(contains_string("private response")))
+
+
+def test_dead_letter_retry_reuses_one_delivery_and_is_idempotent() -> None:
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        client: TestClient = context.client
+        connection_id = _create_connection(context)
+        repository = context.injector.get(CommunicationDeliveryRepository)
+        accepted = repository.accept_inbound(connection_id=connection_id, envelope=_envelope("provider-1"))
+        outbound_id = repository.enqueue_runtime_reply(
+            agent_id=context.agent.id,
+            source_delivery_id=accepted.delivery_id,
+            reply=RuntimeReplyCreate(idempotency_key="reply-1", text="retry me"),
+        )
+        claimed = repository.claim_next_outbound()
+        assert claimed is not None
+        assert repository.complete_outbound(
+            outbound_id,
+            error_code="provider_timeout",
+            error_message="temporary provider failure",
+            max_attempts=1,
+        )
+        original = _delivery(context, outbound_id)
+        original_message_id = original.message_id
+
+        with when("I retry the one dead-lettered delivery"):
+            retried = client.post(
+                f"/api/v1/organizations/{context.organization.id}/agents/{context.agent.id}/connections/{connection_id}/deliveries/{outbound_id}/retry",
+                headers=_auth(context),
+            )
+            duplicate_retry = client.post(
+                f"/api/v1/organizations/{context.organization.id}/agents/{context.agent.id}/connections/{connection_id}/deliveries/{outbound_id}/retry",
+                headers=_auth(context),
+            )
+
+        with then("the existing delivery is requeued once without a duplicate message"):
+            assert_that(retried.status_code, equal_to(202))
+            assert_that(
+                retried.json(),
+                has_entries(
+                    delivery_id=str(outbound_id),
+                    status="PENDING",
+                    attempt_count=0,
+                ),
+            )
+            assert_that(duplicate_retry.status_code, equal_to(409))
+            current = _delivery(context, outbound_id)
+            assert_that(current.message_id, equal_to(original_message_id))
+            assert_that(current.status, equal_to(CommunicationDeliveryStatus.PENDING))
+            assert_that(current.id, equal_to(original.id))
+            with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
+                journal = list(
+                    session.exec(
+                        select(CommunicationJournalEntry)
+                        .where(CommunicationJournalEntry.delivery_id == outbound_id)
+                        .order_by(col(CommunicationJournalEntry.occurred_at), col(CommunicationJournalEntry.id))
+                    ).all()
+                )
+            assert_that(
+                [getattr(entry.stage, "value", entry.stage) for entry in journal],
+                equal_to(
+                    [
+                        "reply_queued",
+                        "provider_delivery_attempted",
+                        "provider_delivery_attempted",
+                        "dead_lettered",
+                        "retry_requested",
+                    ]
+                ),
+            )

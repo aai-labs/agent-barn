@@ -39,6 +39,7 @@ _GIVEN = [
             # Keep the credits probe offline: a developer's real key in the
             # environment would otherwise make /metrics call OpenRouter.
             "OPENROUTER_API_KEY": "",
+            "SKIP_DISCORD_TOKEN_VALIDATION": "true",
         }
     ),
     prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
@@ -98,6 +99,29 @@ def test_metrics_reports_agents_in_error():
 
         with then("the agents-in-error gauge reads 1"):
             assert_that(response.text, contains_string("agentbarn_agents_in_error 1.0"))
+
+
+def test_metrics_reports_communication_connection_status():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        connection = context.client.post(
+            f"/api/v1/organizations/{context.organization.id}/agents/{context.agent.id}/connections",
+            json={
+                "platform_key": "discord",
+                "display_name": "Metrics Discord",
+                "credentials": {"bot_token": "metrics-token"},
+            },
+            headers={"Authorization": f"Bearer {context.access_token}"},
+        )
+
+        with when("I scrape /metrics with one pending Communication Connection"):
+            response = context.client.get("/metrics")
+
+        with then("the low-cardinality Communication status gauge is exposed"):
+            assert_that(connection.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(
+                response.text,
+                contains_string('agentbarn_communication_connection_status{status="PENDING"} 1.0'),
+            )
 
 
 def test_metrics_reports_openrouter_scrape_not_ok_without_key():
