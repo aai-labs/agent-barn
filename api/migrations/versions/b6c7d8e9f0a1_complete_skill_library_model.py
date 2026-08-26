@@ -7,7 +7,7 @@ Agent-owned lineages, immutable version metadata/source provenance, versioned
 Template requirements, normalized SKILL.md paths, and no ZIP storage.
 
 Revision ID: b6c7d8e9f0a1
-Revises: 9b4c7d2e6f10
+Revises: f39d7aa422be
 Create Date: 2026-08-25 10:00:00.000000
 
 """
@@ -25,7 +25,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "b6c7d8e9f0a1"
-down_revision: str | None = "9b4c7d2e6f10"
+down_revision: str | None = "f39d7aa422be"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

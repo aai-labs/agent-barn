@@ -112,3 +112,7 @@ API_LITELLM_BASE_URL=
 # telemetry to; defaults to 8001. (`make dev-api` takes API_DEV_PORT/INGEST_PORT
 # as make variables on the command line, not from here.)
 INGEST_PORT=
+
+# Optional. Host port for the Communications gateway. Agent pods reach it
+# through host.docker.internal; defaults to 8002.
+COMMUNICATIONS_PORT=

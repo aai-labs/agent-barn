@@ -32,7 +32,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 # Auto-source .env so you don't have to export vars manually.
 if [[ -f "${REPO_ROOT}/.env" ]]; then
   set -a
-  # shellcheck disable=SC1090
+  # shellcheck disable=SC1091
   source "${REPO_ROOT}/.env"
   set +a
 fi

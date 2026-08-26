@@ -8,6 +8,7 @@ from sqlmodel import SQLModel
 
 import api.domains.agents.models
 import api.domains.auth.models
+import api.domains.communications.models
 import api.domains.conversations.models
 import api.domains.costs.models
 import api.domains.events.models

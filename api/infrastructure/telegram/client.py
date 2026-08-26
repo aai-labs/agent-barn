@@ -1,3 +1,5 @@
+import hashlib
+import json
 import logging
 
 from api.core.config import get_config
@@ -65,9 +67,38 @@ def _fetch_chat_display_name(bot_token: str, chat_id: str) -> str | None:
 
 
 def get_chat_display_name(bot_token: str, chat_id: str) -> str | None:
-    """Resolve a Telegram chat/user ID to a human-readable name (cached)."""
+    """Resolve a Telegram chat/user ID to a human-readable name (cached).
+
+    The cache key is scoped by a hash of the bot token: Telegram chat/user IDs
+    are provider-global, not bot-scoped, so two different bot credentials
+    resolving the same ID must never share a cached name.
+    """
+    token_key = hashlib.sha256(bot_token.encode()).hexdigest()
     return _cached(
-        f"tg_chat:{chat_id}",
+        f"tg_chat:{token_key}:{chat_id}",
         lambda: _fetch_chat_display_name(bot_token, chat_id),
         ttl=_CHAT_CACHE_TTL_SECONDS,
     )
+
+
+def send_message(bot_token: str, chat_id: str, text: str, *, thread_id: str | None = None) -> str:
+    payload: dict[str, str | int] = {"chat_id": chat_id, "text": text}
+    if thread_id:
+        payload["message_thread_id"] = int(thread_id)
+    response = resilient_request(
+        "POST",
+        f"{_BASE}/bot{bot_token}/sendMessage",
+        content=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"},
+        timeout=_TIMEOUT_SECONDS,
+        label="Telegram sendMessage",
+        retry_server_errors=True,
+    )
+    response.raise_for_status()
+    body = response.json()
+    if not body.get("ok"):
+        raise RuntimeError(f"Telegram sendMessage error: {body.get('description', 'unknown error')}")
+    message_id = body.get("result", {}).get("message_id")
+    if message_id is None:
+        raise RuntimeError("Telegram sendMessage returned no message id")
+    return str(message_id)

@@ -17,9 +17,9 @@ API configuration is read from the repository root `.env`; tests may use `.env.s
 
 ```bash
 make db-up       # PostgreSQL only
-make dev-api     # product API on :8000
+make dev-api     # product API on :8000 plus Ingest :8001 and Communications :8002
 make dev-ui      # UI on :3000
-./run.sh         # full Docker stack (db/redis/api/worker/ui + k3d), including the separately served Ingest app
+./run.sh         # full Docker stack (db/redis/api/worker/ui/communications + k3d), including the separately served Ingest app
 ./stop.sh        # stop it; ./stop.sh --clean also deletes the k3d cluster
 ```
 
@@ -101,5 +101,5 @@ Documentation-only changes do not change a service image and do not require a se
 
 - Treat signing-key and encryption-key rotation as migrations: existing tokens or encrypted values depend on the current keys.
 - Verify migration and secret-hook behavior when changing API chart startup.
-- Keep runtime/platform differences explicit when changing Hermes, OpenClaw, Slack, Teams, or Telegram deployment configuration.
+- Keep runtime/platform differences explicit when changing Hermes, OpenClaw, Slack, Telegram, or Discord deployment configuration.
 - Use the existing deployment workflow rather than manually publishing mutable production tags.

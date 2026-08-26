@@ -1,16 +1,16 @@
 """Integration tests for the per-channel Conversations API."""
 
 from datetime import UTC, datetime, timedelta
-from unittest.mock import patch
 
 from fastapi import status
 from hamcrest import assert_that, equal_to, has_length
 from starlette.testclient import TestClient
 
-from api.domains.agents.models import AgentPlatform, AgentStatus
+from api.domains.agents.models import AgentStatus
+from api.domains.communications.models import CommunicationConnection
 from api.domains.conversations.models import AgentChatMessage, MessageDirection
 from api.domains.conversations.repository import ConversationRepository
-from api.domains.conversations.service import ConversationService
+from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
     create_test_client,
@@ -65,11 +65,26 @@ def _seed_message(
     content="msg",
     occurred_at: datetime | None = None,
     channel_name: str | None = None,
+    sender_name: str | None = None,
+    connection: CommunicationConnection | None = None,
 ):
+    if connection is None and not hasattr(context, "communication_connection"):
+        delegate: PostgresRepositoryDelegate = context.injector.get(PostgresRepositoryDelegate)
+        context.communication_connection = CommunicationConnection(
+            organization_id=context.agent.organization_id,
+            agent_id=context.agent.id,
+            platform_key="slack",
+            display_name="Test Slack",
+            credentials_encrypted="test-credentials",
+            driver_key_encrypted="test-driver-key",
+        )
+        delegate.save(context.communication_connection)
+    connection = connection or context.communication_connection
     repo: ConversationRepository = context.injector.get(ConversationRepository)
     ts = occurred_at or datetime(2025, 5, 1, 12, 0, 0, tzinfo=UTC)
     msg = AgentChatMessage(
         agent_id=context.agent.id,
+        connection_id=connection.id,
         openclaw_msg_id=f"test-{direction}-{channel_id}-{thread_id}-{content[:8]}-{ts.isoformat()}",
         session_key=f"agent:main:slack:channel:{channel_id.lower()}",
         channel_id=channel_id,
@@ -77,11 +92,33 @@ def _seed_message(
         thread_id=thread_id,
         direction=direction,
         sender_id="U12345" if direction == MessageDirection.INBOUND else None,
+        sender_name=sender_name,
         content=content,
         occurred_at=ts,
     )
     repo.upsert_messages([msg])
     return msg
+
+
+def _seed_connection(context, display_name: str) -> CommunicationConnection:
+    connection = CommunicationConnection(
+        organization_id=context.agent.organization_id,
+        agent_id=context.agent.id,
+        platform_key="slack",
+        display_name=display_name,
+        credentials_encrypted="test-credentials",
+        driver_key_encrypted="test-driver-key",
+    )
+    delegate: PostgresRepositoryDelegate = context.injector.get(PostgresRepositoryDelegate)
+    delegate.save(connection)
+    return connection
+
+
+def _messages_url(context, channel_id: str, connection_id=None) -> str:
+    resolved_connection_id = connection_id or context.communication_connection.id
+    return (
+        f"{_BASE}/{context.agent.id}/conversations/connections/{resolved_connection_id}/channels/{channel_id}/messages"
+    )
 
 
 # --- /conversations/channels ---
@@ -137,70 +174,7 @@ def test_list_channels_stopped_agent_returns_db_channels():
             assert_that(ids, equal_to({"CAAA", "CBBB"}))
             general = next(c for c in body if c["channel_id"] == "CAAA")
             assert_that(general["channel_name"], equal_to("general"))
-
-
-def test_list_channels_idle_agent_resolves_null_channel_names_from_directory():
-    # A channel the agent only posted to has no persisted name; an idle agent must
-    # still resolve it from the Slack directory rather than render the raw C... id.
-    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
-        client: TestClient = context.client
-        _seed_message(
-            context,
-            direction=MessageDirection.INBOUND,
-            channel_id="CAAA",
-            content="msg1",
-            channel_name="general",
-        )
-        _seed_message(
-            context,
-            direction=MessageDirection.OUTBOUND,
-            channel_id="CBBB",
-            content="msg2",
-        )
-
-        with (
-            when("I list channels with the directory resolving CBBB"),
-            patch.object(
-                ConversationService,
-                "_platform_maps",
-                return_value=({}, {"CBBB": "ops-alerts"}, {}),
-            ),
-        ):
-            response = client.get(
-                f"{_BASE}/{context.agent.id}/conversations/channels",
-                headers=_auth(context),
-            )
-
-        with then("the null-named channel gets its directory name, others untouched"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            by_id = {c["channel_id"]: c["channel_name"] for c in response.json()}
-            assert_that(by_id["CBBB"], equal_to("ops-alerts"))
-            assert_that(by_id["CAAA"], equal_to("general"))
-
-
-def test_list_channels_resolves_discord_channel_names():
-    with given(
-        [
-            *_GIVEN,
-            there_is_an_agent(platform=AgentPlatform.DISCORD, status=AgentStatus.STOPPED),
-        ]
-    ) as context:
-        _seed_message(
-            context,
-            direction=MessageDirection.OUTBOUND,
-            channel_id="123456789012345678",
-            content="Discord alert",
-        )
-
-        with patch("api.domains.conversations.service.DiscordClient") as client_class:
-            client_class.return_value.get_channel_display_name.return_value = "ops-alerts"
-            response = context.client.get(
-                f"{_BASE}/{context.agent.id}/conversations/channels",
-                headers=_auth(context),
-            )
-
-        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-        assert_that(response.json()[0]["channel_name"], equal_to("ops-alerts"))
+            assert_that(general["connection_id"], equal_to(str(context.communication_connection.id)))
 
 
 def test_list_channels_returns_db_channels():
@@ -227,14 +201,17 @@ def test_list_channels_returns_db_channels():
             assert_that(ids, equal_to({"CDB1"}))
 
 
-# --- /conversations/channels/{channel_id}/messages ---
+# --- /conversations/connections/{connection_id}/channels/{channel_id}/messages ---
 
 
 def test_list_messages_no_auth_returns_401():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         client: TestClient = context.client
         with when("I list messages without auth"):
-            response = client.get(f"{_BASE}/{context.agent.id}/conversations/channels/CABC/messages")
+            response = client.get(
+                f"{_BASE}/{context.agent.id}/conversations/connections/"
+                "00000000-0000-0000-0000-000000000098/channels/CABC/messages"
+            )
         with then("it returns 401"):
             assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
 
@@ -245,7 +222,8 @@ def test_list_messages_unknown_agent_returns_404():
         fake_id = "00000000-0000-0000-0000-000000000099"
         with when("I list messages for a non-existent agent"):
             response = client.get(
-                f"{_BASE}/{fake_id}/conversations/channels/CABC/messages",
+                f"{_BASE}/{fake_id}/conversations/connections/"
+                "00000000-0000-0000-0000-000000000098/channels/CABC/messages",
                 headers=_auth(context),
             )
         with then("it returns 404"):
@@ -267,7 +245,7 @@ def test_list_messages_returns_latest_page_first_with_default_page_size():
 
         with when("I list messages with default page_size=6"):
             response = client.get(
-                f"{_BASE}/{context.agent.id}/conversations/channels/CABC/messages",
+                _messages_url(context, "CABC"),
                 headers=_auth(context),
             )
 
@@ -296,14 +274,14 @@ def test_list_messages_cursor_pagination_returns_older_page():
             )
 
         first = client.get(
-            f"{_BASE}/{context.agent.id}/conversations/channels/CABC/messages",
+            _messages_url(context, "CABC"),
             headers=_auth(context),
         ).json()
         cursor = first["next_cursor"]
 
         with when("I list messages with the cursor"):
             response = client.get(
-                f"{_BASE}/{context.agent.id}/conversations/channels/CABC/messages",
+                _messages_url(context, "CABC"),
                 params={
                     "before_occurred_at": cursor["before_occurred_at"],
                     "before_id": cursor["before_id"],
@@ -335,7 +313,7 @@ def test_list_messages_date_range_filter():
 
         with when("I filter by from_date / to_date for the middle hours"):
             response = client.get(
-                f"{_BASE}/{context.agent.id}/conversations/channels/CABC/messages",
+                _messages_url(context, "CABC"),
                 params={
                     "from_date": (base + timedelta(hours=1)).isoformat(),
                     "to_date": (base + timedelta(hours=4)).isoformat(),
@@ -374,7 +352,7 @@ def test_list_messages_bundles_thread_messages_within_page_window():
 
         with when("I list messages for the channel"):
             response = client.get(
-                f"{_BASE}/{context.agent.id}/conversations/channels/CABC/messages",
+                _messages_url(context, "CABC"),
                 headers=_auth(context),
             )
 
@@ -399,7 +377,7 @@ def test_list_messages_running_agent_submits_sync_does_not_block():
 
         with when("I list messages for a running agent"):
             response = client.get(
-                f"{_BASE}/{context.agent.id}/conversations/channels/CABC/messages",
+                _messages_url(context, "CABC"),
                 headers=_auth(context),
             )
 
@@ -408,3 +386,96 @@ def test_list_messages_running_agent_submits_sync_does_not_block():
             body = response.json()
             assert_that(body["threads"], has_length(1))
             assert_that(body["threads"][0]["root"]["content"], equal_to("cached"))
+
+
+def test_same_provider_channel_id_is_isolated_by_connection() -> None:
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        first_connection = _seed_connection(context, "First Slack")
+        second_connection = _seed_connection(context, "Second Slack")
+        _seed_message(
+            context,
+            connection=first_connection,
+            direction=MessageDirection.INBOUND,
+            channel_id="CSHARED",
+            content="first connection",
+        )
+        _seed_message(
+            context,
+            connection=second_connection,
+            direction=MessageDirection.INBOUND,
+            channel_id="CSHARED",
+            content="second connection",
+        )
+
+        with when("I read the shared provider channel through each Connection"):
+            channels = context.client.get(
+                f"{_BASE}/{context.agent.id}/conversations/channels",
+                headers=_auth(context),
+            )
+            first_messages = context.client.get(
+                _messages_url(context, "CSHARED", first_connection.id),
+                headers=_auth(context),
+            )
+            second_messages = context.client.get(
+                _messages_url(context, "CSHARED", second_connection.id),
+                headers=_auth(context),
+            )
+
+        with then("each Connection has a distinct channel and message history"):
+            assert_that(channels.json(), has_length(2))
+            assert_that(
+                {channel["connection_name"] for channel in channels.json()},
+                equal_to({"First Slack", "Second Slack"}),
+            )
+            assert_that(first_messages.json()["threads"][0]["root"]["content"], equal_to("first connection"))
+            assert_that(second_messages.json()["threads"][0]["root"]["content"], equal_to("second connection"))
+
+
+def test_list_messages_returns_resolved_sender_name():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        client: TestClient = context.client
+        _seed_message(
+            context,
+            direction=MessageDirection.INBOUND,
+            channel_id="CABC",
+            content="hello",
+            sender_name="Person One",
+        )
+
+        with when("I list messages for the channel"):
+            response = client.get(
+                _messages_url(context, "CABC"),
+                headers=_auth(context),
+            )
+
+        with then("the enriched sender name is returned with the message"):
+            body = response.json()
+            assert_that(body["threads"][0]["root"]["sender_name"], equal_to("Person One"))
+
+
+def test_upsert_messages_does_not_erase_a_known_sender_name_on_conflict():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        client: TestClient = context.client
+        occurred_at = datetime(2025, 5, 1, 12, 0, 0, tzinfo=UTC)
+
+        with when("a message with a resolved sender name is upserted, then retried without one"):
+            _seed_message(
+                context,
+                direction=MessageDirection.INBOUND,
+                channel_id="CABC",
+                content="hello",
+                occurred_at=occurred_at,
+                sender_name="Person One",
+            )
+            _seed_message(
+                context,
+                direction=MessageDirection.INBOUND,
+                channel_id="CABC",
+                content="hello",
+                occurred_at=occurred_at,
+                sender_name=None,
+            )
+
+        with then("the sender name is preserved rather than cleared"):
+            response = client.get(_messages_url(context, "CABC"), headers=_auth(context))
+            assert_that(response.json()["threads"][0]["root"]["sender_name"], equal_to("Person One"))

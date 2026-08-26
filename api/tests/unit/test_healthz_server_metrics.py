@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
-from hamcrest import assert_that, contains_string, equal_to
+from hamcrest import assert_that, contains_string, equal_to, not_
 
 _SCRIPT = Path(__file__).resolve().parents[2] / "domains" / "agents" / "scripts" / "hermes" / "healthz-server.py"
 
@@ -25,7 +25,6 @@ def _run_healthz_server(env_overrides: dict[str, str] | None = None):
     port = _free_port()
     env = {
         **os.environ,
-        "SKIP_SLACK_TOKEN_VALIDATION": "1",
         "HEALTHZ_PORT": str(port),
         **(env_overrides or {}),
     }
@@ -71,11 +70,11 @@ def test_metrics_endpoint_returns_prometheus_text(healthz_server):
 
     assert_that(status, equal_to(200))
     assert_that(headers["Content-Type"], contains_string("text/plain"))
-    # Hermes gateway is unreachable in the test, so the agent is not healthy
-    # and has never connected; Slack validation is skipped so tokens read ok.
+    # Hermes runtime is unreachable in the test, so the agent is not healthy
+    # and has never connected.
     assert_that(body, contains_string("agent_healthz_ok 0"))
     assert_that(body, contains_string("agent_healthz_ever_connected 0"))
-    assert_that(body, contains_string("agent_slack_tokens_ok 1"))
+    assert_that(body, not_(contains_string("tokens_ok")))
 
 
 def test_metrics_endpoint_declares_gauge_types(healthz_server):
@@ -83,7 +82,6 @@ def test_metrics_endpoint_declares_gauge_types(healthz_server):
 
     assert_that(body, contains_string("# TYPE agent_healthz_ok gauge"))
     assert_that(body, contains_string("# TYPE agent_healthz_ever_connected gauge"))
-    assert_that(body, contains_string("# TYPE agent_slack_tokens_ok gauge"))
 
 
 def test_healthz_endpoint_still_reports_starting(healthz_server):
@@ -93,30 +91,17 @@ def test_healthz_endpoint_still_reports_starting(healthz_server):
     assert_that(body, contains_string("starting"))
 
 
-def test_live_endpoint_fails_when_platform_circuit_breaker_is_paused(tmp_path):
+def test_live_endpoint_ignores_provider_gateway_state(tmp_path):
     (tmp_path / "gateway_state.json").write_text(
         '{"platforms":{"discord":{"state":"paused","error_message":"connection timed out"}}}',
         encoding="utf-8",
     )
 
-    with _run_healthz_server({"HERMES_HOME": str(tmp_path), "AGENT_PLATFORM": "discord"}) as base:
-        status, _, body = _get(f"{base}/live")
-
-    assert_that(status, equal_to(500))
-    assert_that(body, contains_string("circuit-breaker-paused"))
-
-
-def test_live_endpoint_respects_manual_platform_pause(tmp_path):
-    (tmp_path / "gateway_state.json").write_text(
-        '{"platforms":{"discord":{"state":"paused","error_message":"paused via /platform pause"}}}',
-        encoding="utf-8",
-    )
-
-    with _run_healthz_server({"HERMES_HOME": str(tmp_path), "AGENT_PLATFORM": "discord"}) as base:
+    with _run_healthz_server({"HERMES_HOME": str(tmp_path)}) as base:
         status, _, body = _get(f"{base}/live")
 
     assert_that(status, equal_to(200))
-    assert_that(body, contains_string("manually-paused"))
+    assert_that(body, contains_string('"live": true'))
 
 
 def test_unknown_path_still_returns_404(healthz_server):

@@ -1,815 +1,231 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
-import { XIcon, CheckIcon } from "@/components/icons";
-import { useSlackConfigToken } from "@/features/account/hooks/use-slack-config-token";
-import { useSlackConfigTokenActions } from "@/features/account/hooks/use-slack-config-token-actions";
-import { useCreateAgent } from "../hooks/use-create-agent";
-import { useCreateSlackApp } from "../hooks/use-create-slack-app";
-import { useStartAgent } from "../hooks/use-start-agent";
-import { useTemplateVersions } from "../hooks/use-template-versions";
-import { DialogShell } from "./hire-dialog-primitives";
+import { useState } from "react";
+import { XIcon } from "@/components/icons";
 import {
-  WizardStep, TemplateStep, AgentTypeStep, PlatformChoiceStep, SlackChoiceStep,
-  ConfigTokenStep, BotBuilderStep, SlackTokensStep, TelegramTokenStep, DiscordTokenStep,
-  DetailsStep, SkillsStep,
-} from "./hire-dialog-steps";
-import { SlackConfigPanel } from "./slack-config-panel";
-import { TelegramConfigPanel } from "./telegram-config-panel";
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+
 import {
   coerceBooleanFields,
-  hasIncompleteIntegration,
   expandGithubContent,
+  hasIncompleteIntegration,
   isAutoConfiguredProvider,
   type IntegrationDraft,
 } from "../integrations";
-import type { Agent, AgentTemplateRead } from "../schemas";
+import { useCreateAgent } from "../hooks/use-create-agent";
+import { useStartAgent } from "../hooks/use-start-agent";
+import { useTemplates } from "../hooks/use-templates";
 import { splitRequiredSkills } from "../utils";
+import { CredentialErrorAlert } from "./credential-error-alert";
+import { DialogShell, FormField } from "./hire-dialog-primitives";
+import { SkillsStep } from "./hire-dialog-steps";
+import { ModelSelect } from "./model-select";
 
 const DEFAULT_AGENT_NAME = "Aria";
-const DEFAULT_BOT_DESCRIPTION = "Handles tasks and reduces day-to-day friction.";
 
 interface HireDialogProps {
   onClose: () => void;
   onHired: (info: { name: string; role: string }) => void;
 }
 
-const PROVISION_STEPS = [
-  { at: 14, text: "Validating credentials" },
-  { at: 32, text: "Creating agent profile" },
-  { at: 50, text: "Saving persona and template" },
-  { at: 68, text: "Encrypting and storing tokens" },
-  { at: 84, text: "Saving integrations" },
-  { at: 96, text: "", isPending: true },
-];
-
-function getSteps(
-  agentType: "openclaw" | "hermes",
-  platform: "slack" | "telegram" | "discord",
-  setupNewBot: boolean,
-  configTokenReady: boolean,
-): WizardStep[] {
-  if (platform === "telegram") {
-    return ["template", "agent-type", "platform-choice", "telegram-token", "details", "skills"];
-  }
-  if (platform === "discord") {
-    return ["template", "agent-type", "platform-choice", "discord-token", "details", "skills"];
-  }
-  if (agentType === "hermes") {
-    if (!setupNewBot) {
-      return ["template", "agent-type", "platform-choice", "slack-choice", "slack-tokens", "details", "skills"];
-    }
-    const base: WizardStep[] = ["template", "agent-type", "platform-choice", "slack-choice"];
-    if (!configTokenReady) base.push("config-token");
-    base.push("bot-builder", "slack-tokens", "details", "skills");
-    return base;
-  }
-  if (!setupNewBot) {
-    return ["template", "agent-type", "platform-choice", "slack-choice", "slack-tokens", "details", "skills"];
-  }
-  const base: WizardStep[] = ["template", "agent-type", "platform-choice", "slack-choice"];
-  if (!configTokenReady) base.push("config-token");
-  base.push("bot-builder", "slack-tokens", "details", "skills");
-  return base;
-}
-
-function stepOrdinal(
-  step: WizardStep,
-  agentType: "openclaw" | "hermes",
-  platform: "slack" | "telegram" | "discord",
-  setupNewBot: boolean,
-  configTokenReady: boolean,
-): string {
-  const seq = getSteps(agentType, platform, setupNewBot, configTokenReady);
-  return `step ${seq.indexOf(step) + 1} of ${seq.length}`;
-}
-
-function stepTitle(step: WizardStep): string {
-  switch (step) {
-    case "template": return "What kind of teammate do you need?";
-    case "agent-type": return "Choose your agent runtime";
-    case "platform-choice": return "Choose your platform";
-    case "slack-choice": return "Set up your Slack app";
-    case "config-token": return "Set up Slack app creation";
-    case "bot-builder": return "Build your Slack bot";
-    case "slack-tokens": return "Connect Slack";
-    case "telegram-token": return "Connect your Telegram bot";
-    case "discord-token": return "Connect your Discord bot";
-    case "details": return "A few details and we'll get them set up.";
-    case "skills": return "Assign skills";
-  }
+function credentialsForProviders(
+  providers: string[],
+  existing: IntegrationDraft[],
+): IntegrationDraft[] {
+  const existingByProvider = new Map(existing.map((draft) => [draft.provider, draft]));
+  return providers.map(
+    (provider) =>
+      existingByProvider.get(provider) ?? {
+        provider,
+        content: {},
+      },
+  );
 }
 
 export function HireDialog({ onClose, onHired }: HireDialogProps) {
+  const { templates, isLoading } = useTemplates();
   const createAgent = useCreateAgent();
-  const createSlackApp = useCreateSlackApp();
   const startAgent = useStartAgent();
-  const { hasToken: hasConfigToken, isLoading: isLoadingConfigToken } = useSlackConfigToken();
-  const { saveToken } = useSlackConfigTokenActions();
-
-  const [step, setStep] = useState<WizardStep>("template");
-  const [selectedTemplate, setSelectedTemplate] = useState<AgentTemplateRead | null>(null);
-  const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
-  const [name, setName] = useState<string>(DEFAULT_AGENT_NAME);
-  const [model, setModel] = useState<string>("");
-  const [platform, setPlatform] = useState<"slack" | "telegram" | "discord">("slack");
-  const [setupNewBot, setSetupNewBot] = useState(true);
-  const [botName, setBotName] = useState<string>(DEFAULT_AGENT_NAME);
-  const [botDescription, setBotDescription] = useState<string>(DEFAULT_BOT_DESCRIPTION);
-  const [botColor, setBotColor] = useState("#4A154B");
-  const [slackAppToken, setSlackAppToken] = useState("");
-  const [slackBotToken, setSlackBotToken] = useState("");
-  const [showAppToken, setShowAppToken] = useState(false);
-  const [showBotToken, setShowBotToken] = useState(false);
-  const [tokenError, setTokenError] = useState<string | null>(null);
+  const [name, setName] = useState(DEFAULT_AGENT_NAME);
+  const [templateKey, setTemplateKey] = useState("");
   const [agentType, setAgentType] = useState<"openclaw" | "hermes">("hermes");
-  const [slackGroupPolicy, setSlackGroupPolicy] = useState<"open" | "allowlist">("allowlist");
-  const [slackDmPolicy, setSlackDmPolicy] = useState<"off" | "open" | "allowlist">("off");
-  const [slackVerboseMode, setSlackVerboseMode] = useState(true);
+  const [model, setModel] = useState("");
   const [approvalMode, setApprovalMode] = useState<"manual" | "auto" | "off">("auto");
-  const [telegramBotToken, setTelegramBotToken] = useState("");
-  const [showTelegramToken, setShowTelegramToken] = useState(false);
-  const [telegramTokenError, setTelegramTokenError] = useState<string | null>(null);
-  const [telegramGroupPolicy, setTelegramGroupPolicy] = useState<"open" | "allowlist">("open");
-  const [telegramDmPolicy, setTelegramDmPolicy] = useState<"off" | "open" | "allowlist">("open");
-  const [discordBotToken, setDiscordBotToken] = useState("");
-  const [discordApplicationId, setDiscordApplicationId] = useState("");
-  const [discordGuildIds, setDiscordGuildIds] = useState("");
-  const [discordChannelIds, setDiscordChannelIds] = useState("");
-  const [discordAllowAllUsers, setDiscordAllowAllUsers] = useState(true);
-  const [discordAllowedUserIds, setDiscordAllowedUserIds] = useState("");
-  const [discordAllowedRoleIds, setDiscordAllowedRoleIds] = useState("");
-  const [discordHomeChannelId, setDiscordHomeChannelId] = useState("");
-  const [showDiscordToken, setShowDiscordToken] = useState(false);
-  const [discordTokenError, setDiscordTokenError] = useState<string | null>(null);
-  const [configTokenInput, setConfigTokenInput] = useState("");
-  const [configRefreshInput, setConfigRefreshInput] = useState("");
-  const [showConfigToken, setShowConfigToken] = useState(false);
-  const [showConfigRefresh, setShowConfigRefresh] = useState(false);
-  const [configTokenError, setConfigTokenError] = useState<string | null>(null);
-  const [configTokenSaved, setConfigTokenSaved] = useState(false);
-  const configTokenReady = configTokenSaved || (!isLoadingConfigToken && hasConfigToken);
-  const [slackAppId, setSlackAppId] = useState<string | null>(null);
-  const [botTokenUrl, setBotTokenUrl] = useState<string | null>(null);
-  const [appTokenUrl, setAppTokenUrl] = useState<string | null>(null);
-  const [createAppError, setCreateAppError] = useState<string | null>(null);
   const [selectedSkillIds, setSelectedSkillIds] = useState<string[]>([]);
   const [skillCredentials, setSkillCredentials] = useState<IntegrationDraft[]>([]);
-  // groupKey -> chosen skill ids, for the template's "at least one of"
-  // required skill groups (e.g. GitHub OR Bitbucket). No default choice — the
-  // user must pick at least one, but may pick more than one member.
   const [groupChoices, setGroupChoices] = useState<Record<string, string[]>>({});
-  const [provisioning, setProvisioning] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [provisionError, setProvisionError] = useState<string | null>(null);
-  const [createdAgent, setCreatedAgent] = useState<Agent | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
+  const template = templates.find((candidate) => candidate.templateKey === templateKey);
+  const { standalone, groups } = splitRequiredSkills(template?.requiredSkills ?? []);
+  const missingGroupChoice = groups.some((group) => !(groupChoices[group.key]?.length));
+  const pending = createAgent.isPending || startAgent.isPending;
+  const canHire =
+    Boolean(template) &&
+    !missingGroupChoice &&
+    !hasIncompleteIntegration(skillCredentials);
 
-  const progressRef = useRef(0);
-  const apiDoneRef = useRef(false);
-  const errorRef = useRef(false);
-  const discordCompletionReportedRef = useRef(false);
+  function handleTemplateChange(nextKey: string) {
+    const nextTemplate = templates.find((candidate) => candidate.templateKey === nextKey);
+    setTemplateKey(nextKey);
+    setError(null);
 
-  const effectiveTemplate = selectedTemplate;
-  const { versions, isLoading: versionsLoading } = useTemplateVersions(
-    effectiveTemplate?.templateKey,
-  );
-  // Forks default to the organization's effective version; built-ins and
-  // custom lineages default to their newest available version.
-  const defaultVersion = effectiveTemplate?.forkedFromPlatformTemplateId
-    ? effectiveTemplate.version
-    : versions[0]?.version ?? effectiveTemplate?.version ?? null;
-  const resolvedVersion = selectedVersion ?? defaultVersion;
-  const versionTemplate =
-    versions.find((v) => v.version === resolvedVersion) ?? effectiveTemplate;
-  const roleLabel = effectiveTemplate?.templateName ?? "Agent";
-  const { standalone: standaloneRequiredSkills, groups: requiredSkillGroups } = splitRequiredSkills(
-    versionTemplate?.requiredSkills ?? [],
-  );
+    if (!nextTemplate) {
+      setSelectedSkillIds([]);
+      setSkillCredentials([]);
+      setGroupChoices({});
+      return;
+    }
 
-  function handlePickTemplate(template: AgentTemplateRead) {
-    setSelectedTemplate(template);
-    setSelectedVersion(null); // reset to the new lineage's latest
+    const { standalone: nextStandalone } = splitRequiredSkills(nextTemplate.requiredSkills);
+    const requiredProviders = [
+      ...new Set(nextStandalone.flatMap((skill) => skill.requiredProviders)),
+    ].filter((provider) => !isAutoConfiguredProvider(provider));
+    setSelectedSkillIds(nextStandalone.map((skill) => skill.id));
     setGroupChoices({});
+    setSkillCredentials((current) => credentialsForProviders(requiredProviders, current));
   }
 
-
-  function handleBack() {
-    const steps = getSteps(agentType, platform, setupNewBot, configTokenReady);
-    const idx = steps.indexOf(step);
-    if (idx > 0) setStep(steps[idx - 1]);
+  function handleGroupChoiceChange(groupKey: string, skillId: string) {
+    setGroupChoices((current) => {
+      const selected = current[groupKey] ?? [];
+      const next = selected.includes(skillId)
+        ? selected.filter((id) => id !== skillId)
+        : [...selected, skillId];
+      return { ...current, [groupKey]: next };
+    });
   }
 
-  function handleAgentTypeChange(v: "openclaw" | "hermes") {
-    setAgentType(v);
-  }
+  async function hire() {
+    if (!template || !name.trim() || !canHire) return;
+    setError(null);
 
-  function handlePlatformChange(v: "slack" | "telegram" | "discord") {
-    setPlatform(v);
-  }
-
-  function handleContinueFromTokens() {
-    if (!slackAppToken.trim() || !slackBotToken.trim()) {
-      setTokenError("Both tokens are required to continue.");
-      return;
-    }
-    if (!slackAppToken.trim().startsWith("xapp-")) {
-      setTokenError("App-level token should start with xapp-");
-      return;
-    }
-    if (!slackBotToken.trim().startsWith("xoxb-")) {
-      setTokenError("Bot token should start with xoxb-");
-      return;
-    }
-    setStep("details");
-  }
-
-  async function handleSaveConfigToken() {
-    if (!configTokenInput.trim()) return;
-    setConfigTokenError(null);
-    try {
-      await saveToken.mutateAsync({
-        accessToken: configTokenInput.trim(),
-        refreshToken: configRefreshInput.trim(),
-      });
-      setConfigTokenSaved(true);
-      setConfigTokenInput("");
-      setConfigRefreshInput("");
-      setStep("bot-builder");
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Failed to save token";
-      setConfigTokenError(msg);
-    }
-  }
-
-  async function handleContinueFromBotBuilder() {
-    if (configTokenReady && setupNewBot) {
-      setCreateAppError(null);
-      try {
-        const result = await createSlackApp.mutateAsync({
-          name: botName,
-          description: botDescription,
-          backgroundColor: botColor,
-        });
-        setSlackAppId(result.appId);
-        setBotTokenUrl(result.botTokenUrl);
-        setAppTokenUrl(result.appTokenUrl);
-        setStep("slack-tokens");
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : "Failed to create Slack app";
-        setCreateAppError(msg);
-      }
-    } else {
-      setStep("slack-tokens");
-    }
-  }
-
-  function handleContinueFromTelegramToken() {
-    if (!telegramBotToken.trim()) {
-      setTelegramTokenError("Bot token is required.");
-      return;
-    }
-    if (!/^\d+:[A-Za-z0-9_-]+$/.test(telegramBotToken.trim())) {
-      setTelegramTokenError("Token should look like 123456:ABC-DEF — check it and try again.");
-      return;
-    }
-    setStep("details");
-  }
-
-  function handleContinueFromDiscordToken() {
-    if (!discordBotToken.trim()) {
-      setDiscordTokenError("Bot token is required.");
-      return;
-    }
-    if (
-      !discordAllowAllUsers
-      && !discordAllowedUserIds.split(",").some((id) => id.trim())
-      && !discordAllowedRoleIds.split(",").some((id) => id.trim())
-    ) {
-      setDiscordTokenError(
-        "Add at least one allowed operator or role, or turn on Allow all users.",
-      );
-      return;
-    }
-    setStep("details");
-  }
-
-  async function startHiring() {
-    if (!effectiveTemplate) return;
-    setProvisioning(true);
-    setProvisionError(null);
-    progressRef.current = 0;
-    apiDoneRef.current = false;
-    errorRef.current = false;
+    const skillIds = [
+      ...new Set([
+        ...selectedSkillIds,
+        ...Object.values(groupChoices).flat(),
+      ]),
+    ];
+    const manualSecrets = skillCredentials
+      .filter((draft) => !draft.sharedCredentialId && !isAutoConfiguredProvider(draft.provider))
+      .map((draft) => ({
+        provider: draft.provider,
+        content: coerceBooleanFields(
+          draft.provider === "github"
+            ? expandGithubContent(draft.content)
+            : draft.content,
+        ),
+      }));
+    const sharedCredentials = skillCredentials
+      .filter((draft) => draft.sharedCredentialId)
+      .map((draft) => ({ sharedCredentialId: draft.sharedCredentialId! }));
 
     try {
-      // Templates are stored raw; {{ … }} placeholders render server-side
-      // when the agent starts.
+      const approval = agentType === "hermes" ? { approvalMode } : {};
       const agent = await createAgent.mutateAsync({
-        name, model, platform,
+        name: name.trim(),
         agentType,
-        templateKey: effectiveTemplate.templateKey,
-        ...(resolvedVersion != null ? { templateVersion: resolvedVersion } : {}),
-        skillIds: [
-          ...standaloneRequiredSkills.map((s) => s.id),
-          ...requiredSkillGroups.flatMap((g) => groupChoices[g.key] ?? []),
-          ...selectedSkillIds,
-        ],
-        secrets: skillCredentials
-          .filter((c) => !c.sharedCredentialId)
-          .map((c) => ({
-            provider: c.provider,
-            content: coerceBooleanFields(c.provider === "github" ? expandGithubContent(c.content) : c.content),
-          })),
-        sharedCredentials: skillCredentials
-          .filter((c) => !!c.sharedCredentialId)
-          .map((c) => ({ sharedCredentialId: c.sharedCredentialId! })),
-        approvalMode,
-        ...(platform === "telegram"
-          ? { telegramBotToken, telegramGroupPolicy, telegramDmPolicy }
-          : platform === "discord"
-            ? {
-                discordBotToken,
-                discordGuildIds: discordGuildIds.split(",").map((id) => id.trim()).filter(Boolean),
-                discordAllowedChannelIds: discordChannelIds.split(",").map((id) => id.trim()).filter(Boolean),
-                discordAllowAllUsers,
-                discordAllowedUserIds: discordAllowedUserIds.split(",").map((id) => id.trim()).filter(Boolean),
-                discordAllowedRoleIds: discordAllowedRoleIds.split(",").map((id) => id.trim()).filter(Boolean),
-                ...(discordHomeChannelId.trim() ? { discordHomeChannelId: discordHomeChannelId.trim() } : {}),
-                discordRequireMention: true,
-                discordGroupPolicy: "allowlist" as const,
-              }
-            : { slackBotToken, slackAppToken, slackGroupPolicy, slackDmPolicy, slackVerboseMode }),
+        templateKey: template.templateKey,
+        templateVersion: template.version,
+        model,
+        ...(skillIds.length > 0 ? { skillIds } : {}),
+        ...(manualSecrets.length > 0 ? { secrets: manualSecrets } : {}),
+        ...(sharedCredentials.length > 0 ? { sharedCredentials } : {}),
+        ...approval,
       });
-      setCreatedAgent(agent);
-      apiDoneRef.current = true;
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Something went wrong. Please try again.";
-      errorRef.current = true;
-      progressRef.current = 0;
-      setProgress(0);
-      setProvisionError(msg);
+      await startAgent.mutateAsync(agent.id);
+      onHired({ name: agent.name, role: template.templateName });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not hire the Agent.");
     }
-  }
-
-  useEffect(() => {
-    if (!provisioning) return;
-    const id = setInterval(() => {
-      if (errorRef.current) return;
-      const cap = apiDoneRef.current ? 100 : 88;
-      progressRef.current = Math.min(progressRef.current + 8 + Math.random() * 12, cap);
-      setProgress(progressRef.current);
-      if (progressRef.current >= 100) {
-        clearInterval(id);
-        setTimeout(() => setProvisioning(false), 500);
-      }
-    }, 240);
-    return () => clearInterval(id);
-  }, [provisioning]);
-
-  useEffect(() => {
-    if (
-      platform !== "discord"
-      || provisioning
-      || !createdAgent
-      || discordCompletionReportedRef.current
-    ) return;
-    discordCompletionReportedRef.current = true;
-    onHired({ name, role: roleLabel });
-  }, [createdAgent, name, onHired, platform, provisioning, roleLabel]);
-
-  if (!provisioning && createdAgent) {
-    if (platform === "discord") return null;
-
-    if (platform === "telegram") {
-      return (
-        <DialogShell shadeClick={undefined}>
-          <header
-            className="px-6 pt-6 pb-4 flex items-start justify-between"
-            style={{ borderBottom: "1px solid var(--line)" }}
-          >
-            <div>
-              <div className="text-xs uppercase tracking-[0.08em] font-semibold mb-1" style={{ color: "var(--ink-3)" }}>
-                {name} · configure Telegram
-              </div>
-              <h2 className="text-xl font-semibold tracking-tight m-0" style={{ color: "var(--ink)" }}>
-                Set up Telegram access
-              </h2>
-            </div>
-            <button className="af-btn af-btn-ghost af-btn-icon" onClick={() => onHired({ name, role: roleLabel })}>
-              <XIcon />
-            </button>
-          </header>
-          <div className="flex-1 overflow-y-auto p-6">
-            <p className="text-[0.8125rem] mb-5 leading-[1.5]" style={{ color: "var(--ink-3)" }}>
-              {name} is hired! Configure which group chats and users they can access, or skip to do this later from their settings.
-            </p>
-            <TelegramConfigPanel
-              agent={createdAgent}
-              onSaved={() => {
-                void startAgent.mutateAsync(createdAgent.id).then(() => {
-                  onHired({ name, role: roleLabel });
-                });
-              }}
-            />
-          </div>
-          <footer
-            className="px-6 py-4 flex items-center justify-end flex-shrink-0"
-            style={{ borderTop: "1px solid var(--line)" }}
-          >
-            <button
-              className="af-btn af-btn-ghost"
-              onClick={() => {
-                void startAgent.mutateAsync(createdAgent.id).then(() => {
-                  onHired({ name, role: roleLabel });
-                });
-              }}
-            >
-              Skip for now
-            </button>
-          </footer>
-        </DialogShell>
-      );
-    }
-
-    return (
-      <DialogShell shadeClick={undefined}>
-        <header
-          className="px-6 pt-6 pb-4 flex items-start justify-between"
-          style={{ borderBottom: "1px solid var(--line)" }}
-        >
-          <div>
-            <div className="text-xs uppercase tracking-[0.08em] font-semibold mb-1" style={{ color: "var(--ink-3)" }}>
-              {name} · configure Slack
-            </div>
-            <h2 className="text-xl font-semibold tracking-tight m-0" style={{ color: "var(--ink)" }}>
-              Set up Slack access
-            </h2>
-          </div>
-          <button className="af-btn af-btn-ghost af-btn-icon" onClick={() => onHired({ name, role: roleLabel })}>
-            <XIcon />
-          </button>
-        </header>
-        <div className="flex-1 overflow-y-auto p-6">
-          <p className="text-[0.8125rem] mb-5 leading-[1.5]" style={{ color: "var(--ink-3)" }}>
-            {name} is hired! Configure which channels and users they can access, or skip to do this later from their settings.
-          </p>
-          <SlackConfigPanel
-            agent={createdAgent}
-            onSaved={() => {
-              void startAgent.mutateAsync(createdAgent.id).then(() => {
-                onHired({ name, role: roleLabel });
-              });
-            }}
-          />
-        </div>
-        <footer
-          className="px-6 py-4 flex items-center justify-end flex-shrink-0"
-          style={{ borderTop: "1px solid var(--line)" }}
-        >
-          <button
-            className="af-btn af-btn-ghost"
-            onClick={() => {
-              void startAgent.mutateAsync(createdAgent.id).then(() => {
-                onHired({ name, role: roleLabel });
-              });
-            }}
-          >
-            Skip for now
-          </button>
-        </footer>
-      </DialogShell>
-    );
-  }
-
-  if (provisioning) {
-    return (
-      <DialogShell shadeClick={undefined}>
-        <div className="flex flex-col items-center text-center py-12 px-8">
-          <div className="text-6xl mb-6">🤖</div>
-          <h2 className="text-2xl font-semibold tracking-tight mb-2" style={{ color: "var(--ink)" }}>
-            Hiring {name}…
-          </h2>
-          <p className="text-sm mb-8" style={{ color: "var(--ink-3)" }}>
-            A few moments — provisioning, installing skills, connecting to {platform === "slack" ? "Slack" : platform === "telegram" ? "Telegram" : "Discord"}.
-          </p>
-          <div className="w-full max-w-sm mb-8">
-            <div className="w-full h-1.5 rounded-full overflow-hidden" style={{ background: "var(--bg-soft)" }}>
-              <div
-                className="h-full rounded-full transition-all duration-300"
-                style={{ width: `${progress}%`, background: "var(--ink)" }}
-              />
-            </div>
-          </div>
-          <div className="flex flex-col gap-2.5 text-left w-full max-w-sm">
-            {PROVISION_STEPS.map((s, i) => {
-              const done = progress >= s.at;
-              const pending = s.isPending && done && progress < 100;
-              const text = s.isPending ? "Finishing up…" : s.text;
-              return (
-                <div key={i} className="flex items-center gap-3 text-[0.844rem]">
-                  <div className="w-5 h-5 flex-shrink-0 grid place-items-center">
-                    {pending ? (
-                      <div
-                        className="w-4 h-4 rounded-full border-2 border-t-transparent animate-spin"
-                        style={{ borderColor: "var(--ink-3)", borderTopColor: "transparent" }}
-                      />
-                    ) : done ? (
-                      <CheckIcon style={{ color: "var(--ok)" }} />
-                    ) : (
-                      <div className="w-1.5 h-1.5 rounded-full" style={{ background: "var(--ink-5)" }} />
-                    )}
-                  </div>
-                  <span style={{ color: done ? "var(--ink)" : "var(--ink-4)" }}>{text}</span>
-                </div>
-              );
-            })}
-          </div>
-
-          {provisionError && (
-            <div
-              className="mt-6 w-full max-w-sm rounded-xl px-4 py-3 text-sm text-left"
-              style={{ background: "var(--err-soft, #fef2f2)", color: "var(--err)" }}
-            >
-              <div className="font-semibold mb-1">Something went wrong</div>
-              <div className="text-[0.8125rem]">{provisionError}</div>
-              <button
-                className="af-btn af-btn-sm mt-3"
-                onClick={() => { setProvisioning(false); setProvisionError(null); }}
-              >
-                Go back
-              </button>
-            </div>
-          )}
-        </div>
-      </DialogShell>
-    );
   }
 
   return (
-    <DialogShell shadeClick={onClose}>
-      <header
-        className="px-6 pt-6 pb-4 flex items-start justify-between"
-        style={{ borderBottom: "1px solid var(--line)" }}
-      >
+    <DialogShell shadeClick={pending ? undefined : onClose}>
+      <header className="flex items-start justify-between border-b px-6 py-5" style={{ borderColor: "var(--line)" }}>
         <div>
-          <div className="text-xs uppercase tracking-[0.08em] font-semibold mb-1" style={{ color: "var(--ink-3)" }}>
-            Hire · {stepOrdinal(step, agentType, platform, setupNewBot, configTokenReady)}
-          </div>
-          <h2 className="text-xl font-semibold tracking-tight m-0" style={{ color: "var(--ink)" }}>
-            {stepTitle(step)}
-          </h2>
+          <div className="mb-1 text-xs font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--ink-3)" }}>New Agent</div>
+          <h2 className="m-0 text-xl font-semibold tracking-tight">Hire a headless Agent</h2>
+          <p className="mb-0 mt-1 text-sm" style={{ color: "var(--ink-3)" }}>Start with the runtime. Add a messaging platform or several connections afterward.</p>
         </div>
-        <button className="af-btn af-btn-ghost af-btn-icon" onClick={onClose}>
-          <XIcon />
-        </button>
+        <button type="button" className="af-btn af-btn-ghost af-btn-icon" disabled={pending} onClick={onClose}><XIcon /></button>
       </header>
 
-      <div className="flex-1 overflow-y-auto p-6">
-        {step === "template" && (
-          <TemplateStep
-            selectedKey={effectiveTemplate?.templateKey ?? null}
-            onPick={handlePickTemplate}
-            versions={versions}
-            versionsLoading={versionsLoading}
-            selectedVersion={resolvedVersion}
-            onVersionChange={(v) => { setSelectedVersion(v); setGroupChoices({}); }}
-          />
+      <div className="grid flex-1 gap-5 overflow-y-auto p-6 sm:grid-cols-2">
+        <FormField label="Agent name">
+          <input className="af-input" value={name} onChange={(event) => setName(event.target.value)} autoFocus />
+        </FormField>
+        <FormField label="Runtime">
+          <Select value={agentType} onValueChange={(value) => setAgentType(value as "openclaw" | "hermes")}>
+            <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+            <SelectContent><SelectGroup><SelectItem value="hermes">Hermes</SelectItem><SelectItem value="openclaw">OpenClaw</SelectItem></SelectGroup></SelectContent>
+          </Select>
+        </FormField>
+        <FormField label="Template" hint="Communication connections do not belong to templates or runtimes.">
+          <Select value={templateKey} onValueChange={handleTemplateChange} disabled={isLoading || pending}>
+            <SelectTrigger className="w-full"><SelectValue placeholder={isLoading ? "Loading templates…" : "Choose a template"} /></SelectTrigger>
+            <SelectContent><SelectGroup>{templates.map((item) => <SelectItem key={`${item.templateKey}:${item.version}`} value={item.templateKey}>{item.templateName} · v{item.version}</SelectItem>)}</SelectGroup></SelectContent>
+          </Select>
+        </FormField>
+        <FormField label="Model">
+          <ModelSelect value={model} onChange={setModel} disabled={pending} />
+        </FormField>
+        {agentType === "hermes" && (
+          <FormField label="Command approval">
+            <Select value={approvalMode} onValueChange={(value) => setApprovalMode(value as "manual" | "auto" | "off")} disabled={pending}>
+              <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+              <SelectContent><SelectGroup><SelectItem value="auto">Automatic</SelectItem><SelectItem value="manual">Manual</SelectItem><SelectItem value="off">Off</SelectItem></SelectGroup></SelectContent>
+            </Select>
+          </FormField>
         )}
-        {step === "agent-type" && <AgentTypeStep agentType={agentType} onChange={handleAgentTypeChange} />}
-        {step === "platform-choice" && <PlatformChoiceStep platform={platform} onChange={handlePlatformChange} />}
-        {step === "slack-choice" && <SlackChoiceStep setupNewBot={setupNewBot} onChange={setSetupNewBot} />}
-        {step === "config-token" && (
-          <ConfigTokenStep
-            tokenInput={configTokenInput}
-            onTokenInputChange={(v) => { setConfigTokenInput(v); setConfigTokenError(null); }}
-            showToken={showConfigToken}
-            onToggleToken={() => setShowConfigToken((v) => !v)}
-            refreshInput={configRefreshInput}
-            onRefreshInputChange={(v) => { setConfigRefreshInput(v); setConfigTokenError(null); }}
-            showRefresh={showConfigRefresh}
-            onToggleRefresh={() => setShowConfigRefresh((v) => !v)}
-            isSaving={saveToken.isPending}
-            error={configTokenError}
-          />
-        )}
-        {step === "bot-builder" && (
-          <>
-            <BotBuilderStep
-              botName={botName} onBotNameChange={(v) => { setBotName(v); setName(v); }}
-              botDescription={botDescription} onBotDescriptionChange={setBotDescription}
-              botColor={botColor} onBotColorChange={setBotColor}
+        <div className="rounded-xl border border-dashed p-4 text-sm" style={{ color: "var(--ink-3)" }}>
+          {template?.requiredSkills.length
+            ? "Communication connections are configured after hiring. Credentials required by this template are configured before hiring."
+            : "Communication connections and integration credentials are configured independently after hiring."}
+        </div>
+
+        {template && template.requiredSkills.length > 0 && (
+          <section className="flex flex-col gap-3 border-t pt-5 sm:col-span-2" style={{ borderColor: "var(--line)" }}>
+            <div>
+              <h3 className="m-0 text-base font-semibold" style={{ color: "var(--ink)" }}>Template skills and credentials</h3>
+              <p className="mb-0 mt-1 text-sm" style={{ color: "var(--ink-3)" }}>
+                Required skills are assigned as part of creation. Their credentials are validated by the server before anything is saved.
+              </p>
+            </div>
+            <SkillsStep
+              key={`${template.templateKey}:${template.version}`}
+              selectedSkillIds={selectedSkillIds}
+              skillCredentials={skillCredentials}
+              onSkillIdsChange={setSelectedSkillIds}
+              onSkillCredentialsChange={setSkillCredentials}
+              templateRequiredSkills={standalone}
+              requiredGroups={groups}
+              groupChoices={groupChoices}
+              onGroupChoiceChange={handleGroupChoiceChange}
+              credentialError={error}
             />
-            {createAppError && (
-              <div className="mt-3 text-[0.8125rem]" style={{ color: "var(--err)" }}>
-                {createAppError}
-              </div>
-            )}
-          </>
+          </section>
         )}
-        {step === "slack-tokens" && (
-          <SlackTokensStep
-            slackAppToken={slackAppToken}
-            onAppTokenChange={(v) => { setSlackAppToken(v); setTokenError(null); }}
-            slackBotToken={slackBotToken}
-            onBotTokenChange={(v) => { setSlackBotToken(v); setTokenError(null); }}
-            showAppToken={showAppToken} onToggleAppToken={() => setShowAppToken((v) => !v)}
-            showBotToken={showBotToken} onToggleBotToken={() => setShowBotToken((v) => !v)}
-            error={tokenError}
-            appId={slackAppId}
-            botTokenUrl={botTokenUrl}
-            appTokenUrl={appTokenUrl}
-          />
-        )}
-        {step === "telegram-token" && (
-          <TelegramTokenStep
-            token={telegramBotToken}
-            onTokenChange={(v) => { setTelegramBotToken(v); setTelegramTokenError(null); }}
-            showToken={showTelegramToken}
-            onToggleToken={() => setShowTelegramToken((v) => !v)}
-            error={telegramTokenError}
-          />
-        )}
-        {step === "discord-token" && (
-          <DiscordTokenStep
-            token={discordBotToken}
-            onTokenChange={(v) => { setDiscordBotToken(v); setDiscordTokenError(null); }}
-            applicationId={discordApplicationId}
-            onApplicationIdChange={setDiscordApplicationId}
-            guildIds={discordGuildIds}
-            onGuildIdsChange={setDiscordGuildIds}
-            channelIds={discordChannelIds}
-            onChannelIdsChange={setDiscordChannelIds}
-            allowAllUsers={discordAllowAllUsers}
-            onAllowAllUsersChange={(value) => { setDiscordAllowAllUsers(value); setDiscordTokenError(null); }}
-            allowedUserIds={discordAllowedUserIds}
-            onAllowedUserIdsChange={(value) => { setDiscordAllowedUserIds(value); setDiscordTokenError(null); }}
-            allowedRoleIds={discordAllowedRoleIds}
-            onAllowedRoleIdsChange={(value) => { setDiscordAllowedRoleIds(value); setDiscordTokenError(null); }}
-            homeChannelId={discordHomeChannelId}
-            onHomeChannelIdChange={setDiscordHomeChannelId}
-            showToken={showDiscordToken}
-            onToggleToken={() => setShowDiscordToken((v) => !v)}
-            error={discordTokenError}
-          />
-        )}
-        {step === "details" && versionTemplate && (
-          <DetailsStep
-            template={versionTemplate}
-            platform={platform}
-            agentType={agentType}
-            name={name} onNameChange={setName}
-            model={model} onModelChange={setModel}
-            slackGroupPolicy={slackGroupPolicy} onSlackGroupPolicyChange={(v) => setSlackGroupPolicy(v as "open" | "allowlist")}
-            slackDmPolicy={slackDmPolicy} onSlackDmPolicyChange={(v) => setSlackDmPolicy(v as "off" | "open" | "allowlist")}
-            slackVerboseMode={slackVerboseMode} onSlackVerboseModeChange={setSlackVerboseMode}
-            telegramGroupPolicy={telegramGroupPolicy} onTelegramGroupPolicyChange={(v) => setTelegramGroupPolicy(v as "open" | "allowlist")}
-            telegramDmPolicy={telegramDmPolicy} onTelegramDmPolicyChange={(v) => setTelegramDmPolicy(v as "off" | "open" | "allowlist")}
-            approvalMode={approvalMode} onApprovalModeChange={(v) => setApprovalMode(v as "manual" | "auto" | "off")}
-            onChangeTemplate={() => setStep("template")}
-          />
-        )}
-        {step === "skills" && (
-          <SkillsStep
-            selectedSkillIds={selectedSkillIds}
-            skillCredentials={skillCredentials}
-            onSkillIdsChange={setSelectedSkillIds}
-            onSkillCredentialsChange={setSkillCredentials}
-            templateRequiredSkills={standaloneRequiredSkills}
-            requiredGroups={requiredSkillGroups}
-            groupChoices={groupChoices}
-            onGroupChoiceChange={(groupKey, skillId) =>
-              setGroupChoices((prev) => {
-                const current = prev[groupKey] ?? [];
-                const next = current.includes(skillId)
-                  ? current.filter((id) => id !== skillId)
-                  : [...current, skillId];
-                return { ...prev, [groupKey]: next };
-              })
-            }
-            platform={platform}
+
+        {error && (!template?.requiredSkills.length || skillCredentials.length === 0) && (
+          <CredentialErrorAlert
+            title="Could not hire Agent"
+            message={error}
           />
         )}
       </div>
 
-      <footer
-        className="px-6 py-4 flex items-center justify-between flex-shrink-0"
-        style={{ borderTop: "1px solid var(--line)" }}
-      >
-        {step === "template" ? (
-          <button className="af-btn af-btn-ghost" onClick={onClose}>Cancel</button>
-        ) : (
-          <button className="af-btn" onClick={handleBack}>Back</button>
-        )}
-
-        {step === "template" && (
-          <button
-            className="af-btn af-btn-primary af-btn-lg"
-            disabled={!effectiveTemplate}
-            onClick={() => setStep("agent-type")}
-          >
-            Continue
-          </button>
-        )}
-        {step === "agent-type" && (
-          <button
-            className="af-btn af-btn-primary af-btn-lg"
-            onClick={() => setStep("platform-choice")}
-          >
-            Continue
-          </button>
-        )}
-        {step === "platform-choice" && (
-          <button
-            className="af-btn af-btn-primary af-btn-lg"
-            onClick={() => setStep(
-              platform === "telegram" ? "telegram-token" : platform === "discord" ? "discord-token" : "slack-choice"
-            )}
-          >
-            Continue
-          </button>
-        )}
-        {step === "telegram-token" && (
-          <button className="af-btn af-btn-primary af-btn-lg" onClick={handleContinueFromTelegramToken}>
-            Continue
-          </button>
-        )}
-        {step === "discord-token" && (
-          <button className="af-btn af-btn-primary af-btn-lg" onClick={handleContinueFromDiscordToken}>
-            Continue
-          </button>
-        )}
-        {step === "slack-choice" && (
-          <button
-            className="af-btn af-btn-primary af-btn-lg"
-            onClick={() => {
-              if (!setupNewBot) { setStep("slack-tokens"); return; }
-              setStep(configTokenReady ? "bot-builder" : "config-token");
-            }}
-          >
-            Continue
-          </button>
-        )}
-        {step === "config-token" && (
-          <button
-            className="af-btn af-btn-primary af-btn-lg"
-            disabled={!configTokenInput.trim() || !configRefreshInput.trim() || saveToken.isPending}
-            onClick={() => { void handleSaveConfigToken(); }}
-          >
-            {saveToken.isPending ? "Validating..." : "Save & continue"}
-          </button>
-        )}
-        {step === "bot-builder" && (
-          <button
-            className="af-btn af-btn-primary af-btn-lg"
-            disabled={!botName.trim() || createSlackApp.isPending}
-            onClick={() => { void handleContinueFromBotBuilder(); }}
-          >
-            {createSlackApp.isPending ? "Creating app..." : "Continue"}
-          </button>
-        )}
-        {step === "slack-tokens" && (
-          <button className="af-btn af-btn-primary af-btn-lg" onClick={handleContinueFromTokens}>
-            Continue
-          </button>
-        )}
-        {step === "details" && (
-          <button
-            className="af-btn af-btn-primary af-btn-lg"
-            disabled={!name.trim()}
-            onClick={() => {
-              // Pre-populate credential drafts for standalone required skills
-              // only; group providers appear once the user picks a member.
-              const requiredProviders = [
-                ...new Set(standaloneRequiredSkills.flatMap((s) => s.requiredProviders)),
-              ];
-              setSkillCredentials((prev) => {
-                const existing = new Set(prev.map((c) => c.provider));
-                const toAdd = requiredProviders.filter(
-                  (p) => !isAutoConfiguredProvider(p) && !existing.has(p),
-                );
-                if (toAdd.length === 0) return prev;
-                return [...prev, ...toAdd.map((p) => ({ provider: p, content: {} }))];
-              });
-              setStep("skills");
-            }}
-          >
-            Continue
-          </button>
-        )}
-        {step === "skills" && (
-          <button
-            className="af-btn af-btn-primary af-btn-lg"
-            disabled={
-              !name.trim() ||
-              hasIncompleteIntegration(skillCredentials) ||
-              requiredSkillGroups.some((g) => !groupChoices[g.key]?.length)
-            }
-            onClick={() => { void startHiring(); }}
-          >
-            Hire {name}
-          </button>
-        )}
+      <footer className="flex justify-end gap-2 border-t px-6 py-4" style={{ borderColor: "var(--line)" }}>
+        <button type="button" className="af-btn" disabled={pending} onClick={onClose}>Cancel</button>
+        <button type="button" className="af-btn af-btn-primary" disabled={pending || !template || !name.trim() || !model || !canHire} onClick={() => void hire()}>
+          {pending ? "Hiring…" : "Hire Agent"}
+        </button>
       </footer>
     </DialogShell>
   );

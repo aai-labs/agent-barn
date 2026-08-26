@@ -14,7 +14,7 @@ from uuid import UUID
 from fastapi import HTTPException, Query, status
 from pydantic import BaseModel
 
-from api.domains.agents.models import AgentPlatform
+from api.domains.communications.models import CommunicationPlatform
 
 
 class StatsPeriod(str, enum.Enum):
@@ -178,14 +178,14 @@ class PlatformStatsFilter(BaseModel):
     organization_id: UUID | None = None
     agent_id: UUID | None = None
     created_by_user_id: UUID | None = None
-    platform: AgentPlatform | None = None
+    platform: CommunicationPlatform | None = None
 
 
 def get_platform_stats_filter(
     organization_id: UUID | None = Query(default=None),
     agent_id: UUID | None = Query(default=None),
     created_by_user_id: UUID | None = Query(default=None),
-    platform: AgentPlatform | None = Query(default=None),
+    platform: CommunicationPlatform | None = Query(default=None),
 ) -> PlatformStatsFilter:
     return PlatformStatsFilter(
         organization_id=organization_id,

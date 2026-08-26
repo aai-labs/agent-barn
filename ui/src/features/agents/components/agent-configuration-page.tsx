@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { parseAsStringEnum, useQueryState } from "nuqs";
+import { parseAsBoolean, parseAsStringEnum, useQueryState } from "nuqs";
 import { ArrowLeft, CircleAlert } from "lucide-react";
 
 import { AppErrorState } from "@/components/app-error-state";
@@ -54,6 +54,7 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
       .withDefault("profile")
       .withOptions({ scroll: false, history: "replace" }),
   );
+  const [connect] = useQueryState("connect", parseAsBoolean.withDefault(false));
   const [editingSection, setEditingSection] = useState<AgentConfigurationSectionKey | null>(null);
 
   if (agentLoading || configurationLoading) {
@@ -169,7 +170,6 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
 
         <div className="grid gap-8 lg:grid-cols-[14rem_minmax(0,1fr)] lg:items-start">
           <AgentConfigurationSidebar
-            agent={agent}
             activeSection={activeSection}
             onSectionChange={selectSection}
           />
@@ -177,7 +177,7 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
           <div className="min-w-0">
             <div className="mb-4">
               <h2 className="m-0 text-[1.25rem] font-semibold" style={{ color: "var(--ink)" }}>
-                {configurationSectionLabel(activeSection, agent)}
+                {configurationSectionLabel(activeSection)}
               </h2>
               <p className="mb-0 mt-1 text-[0.84rem]" style={{ color: "var(--ink-3)" }}>
                 {section.description}
@@ -203,8 +203,7 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
               <AgentChannelSettings
                 agent={agent}
                 canEdit={canEdit}
-                editing={editingSection === "channels"}
-                onEdit={() => toggleEditing("channels")}
+                autoOpen={connect}
               />
             )}
             {activeSection === "skills" && (

@@ -37,7 +37,7 @@ export class AgentDetailPage {
   }
 
   channelsTab(): Locator {
-    return this.page.getByRole("button", { name: /^(channels & endpoint|chats & endpoint)$/i });
+    return this.page.getByRole("button", { name: /^messaging$/i });
   }
 
   groupPolicySelect(): Locator {

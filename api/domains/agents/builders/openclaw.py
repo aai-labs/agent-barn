@@ -7,6 +7,7 @@ from kubernetes import client
 from .common import _labels, _resource_name
 
 _SCRIPTS = Path(__file__).parent.parent / "scripts" / "openclaw"
+_COMMON_SCRIPTS = _SCRIPTS.parent
 _TELEMETRY_PUSH = _SCRIPTS / "plugins" / "telemetry-push"
 
 INIT_OPENCLAW_JS: str = (_SCRIPTS / "init-openclaw.js").read_text()
@@ -15,12 +16,13 @@ START_SH: str = (_SCRIPTS / "start.sh").read_text()
 TELEMETRY_PUSH_INDEX_JS: str = (_TELEMETRY_PUSH / "index.js").read_text()
 TELEMETRY_PUSH_PACKAGE_JSON: str = (_TELEMETRY_PUSH / "package.json").read_text()
 TELEMETRY_PUSH_PLUGIN_JSON: str = (_TELEMETRY_PUSH / "openclaw.plugin.json").read_text()
+COMMUNICATIONS_RUNTIME_ADAPTER_PY: str = (_COMMON_SCRIPTS / "communications-runtime-adapter.py").read_text()
 
 
 def _openclaw_config_core(
     model: str,
     litellm_base_url: str,
-    binding_channel: str,
+    binding_channel: str | None,
     channels: dict,
 ) -> dict:
     provider, _, model_name = model.partition("/")
@@ -44,7 +46,9 @@ def _openclaw_config_core(
             }
         },
         "channels": channels,
-        "bindings": [{"type": "route", "agentId": "main", "match": {"channel": binding_channel}}],
+        "bindings": (
+            [{"type": "route", "agentId": "main", "match": {"channel": binding_channel}}] if binding_channel else []
+        ),
         "tools": {
             "profile": "full",
             "exec": {"mode": "full"},
@@ -76,179 +80,15 @@ def _openclaw_config_core(
                 },
             },
         },
-        "gateway": {"auth": {"mode": "none"}},
+        "gateway": {
+            "auth": {"mode": "token"},
+            "http": {"endpoints": {"chatCompletions": {"enabled": True}}},
+        },
     }
 
 
-def build_openclaw_config_overlay(
-    model: str,
-    litellm_base_url: str,
-    slack_channel_ids: list[str] | None = None,
-    slack_dm_user_ids: list[str] | None = None,
-    slack_group_policy: str = "open",
-    slack_dm_policy: str = "open",
-    approval_mode: str = "auto",
-) -> dict:
-    channel_ids = slack_channel_ids or []
-    dm_user_ids = slack_dm_user_ids or []
-
-    if slack_dm_policy == "off":
-        openclaw_dm_policy = "allowlist"
-        allow_from = []
-        direct_reply_mode = "off"
-    elif slack_dm_policy == "open":
-        openclaw_dm_policy = "open"
-        allow_from = ["*"]
-        direct_reply_mode = "all"
-    else:
-        openclaw_dm_policy = slack_dm_policy
-        allow_from = dm_user_ids
-        direct_reply_mode = "all"
-
-    channels_config: dict = {channel_id: {"enabled": True, "requireMention": True} for channel_id in channel_ids}
-
-    return _openclaw_config_core(
-        model,
-        litellm_base_url,
-        binding_channel="slack",
-        channels={
-            "slack": {
-                "enabled": True,
-                "mode": "socket",
-                "webhookPath": "/slack/events",
-                "userTokenReadOnly": True,
-                "groupPolicy": slack_group_policy,
-                "dmPolicy": openclaw_dm_policy,
-                "allowFrom": allow_from,
-                "requireMention": True,
-                "thread": {"requireExplicitMention": True},
-                "replyToModeByChatType": {
-                    "direct": direct_reply_mode,
-                    "group": "all",
-                    "channel": "all",
-                },
-                "streaming": {
-                    "mode": "partial",
-                    "nativeTransport": True,
-                },
-                "channels": channels_config,
-            }
-        },
-    )
-
-
-def build_openclaw_config_overlay_teams(
-    model: str,
-    litellm_base_url: str,
-    approval_mode: str = "auto",
-) -> dict:
-    return _openclaw_config_core(
-        model,
-        litellm_base_url,
-        binding_channel="msteams",
-        channels={
-            "msteams": {
-                "enabled": True,
-                "dmPolicy": "open",
-                "allowFrom": ["*"],
-                "groupPolicy": "open",
-                "requireMention": True,
-                "streaming": {"mode": "off"},
-                "webhook": {"port": 3978, "path": "/api/messages"},
-            }
-        },
-    )
-
-
-def build_openclaw_config_overlay_telegram(
-    model: str,
-    litellm_base_url: str,
-    dm_policy: str = "off",
-    group_policy: str = "allowlist",
-    allowed_user_ids: list[str] | None = None,
-    allowed_chat_ids: list[str] | None = None,
-    approval_mode: str = "auto",
-) -> dict:
-    if dm_policy == "off":
-        openclaw_dm_policy = "allowlist"
-        allow_from: list[str] = []
-    elif dm_policy == "open":
-        openclaw_dm_policy = "open"
-        allow_from = ["*"]
-    else:
-        openclaw_dm_policy = "allowlist"
-        allow_from = list(allowed_user_ids or [])
-
-    return _openclaw_config_core(
-        model,
-        litellm_base_url,
-        binding_channel="telegram",
-        channels={
-            "telegram": {
-                "enabled": True,
-                "groupPolicy": group_policy,
-                "dmPolicy": openclaw_dm_policy,
-                "allowFrom": allow_from,
-                "groups": (
-                    {cid: {"requireMention": True} for cid in (allowed_chat_ids or [])}
-                    if group_policy == "allowlist"
-                    else {"*": {"requireMention": True}}
-                ),
-            }
-        },
-    )
-
-
-def build_openclaw_config_overlay_discord(
-    model: str,
-    litellm_base_url: str,
-    guild_ids: list[str] | None = None,
-    allowed_channel_ids: list[str] | None = None,
-    allowed_user_ids: list[str] | None = None,
-    allowed_role_ids: list[str] | None = None,
-    allow_all_users: bool = True,
-    home_channel_id: str | None = None,
-    require_mention: bool = True,
-    group_policy: str = "allowlist",
-    approval_mode: str = "auto",
-) -> dict:
-    channel_rules = {
-        channel_id: {"enabled": True, "requireMention": require_mention} for channel_id in (allowed_channel_ids or [])
-    }
-    guild_rule: dict = {"requireMention": require_mention}
-    if not allow_all_users and allowed_user_ids:
-        guild_rule["users"] = allowed_user_ids
-    if not allow_all_users and allowed_role_ids:
-        guild_rule["roles"] = allowed_role_ids
-    if channel_rules:
-        guild_rule["channels"] = channel_rules
-    guilds = (
-        {guild_id: dict(guild_rule) for guild_id in (guild_ids or [])}
-        if group_policy == "allowlist"
-        else {"*": guild_rule}
-    )
-    cfg = _openclaw_config_core(
-        model,
-        litellm_base_url,
-        binding_channel="discord",
-        channels={
-            "discord": {
-                "enabled": True,
-                "groupPolicy": group_policy,
-                "dmPolicy": "disabled",
-                "allowFrom": [],
-                "dm": {"enabled": False},
-                "guilds": guilds,
-            }
-        },
-    )
-    if home_channel_id:
-        cfg["agents"]["defaults"]["heartbeat"] = {
-            "target": "discord",
-            "to": f"channel:{home_channel_id}",
-            "directPolicy": "block",
-        }
-    return cfg
+def build_openclaw_gateway_config(model: str, litellm_base_url: str) -> dict:
+    return _openclaw_config_core(model, litellm_base_url, binding_channel=None, channels={})
 
 
 def build_config_map(
@@ -287,6 +127,7 @@ def build_config_map(
         data["telemetry-push-index.js"] = TELEMETRY_PUSH_INDEX_JS
         data["telemetry-push-package.json"] = TELEMETRY_PUSH_PACKAGE_JSON
         data["telemetry-push-plugin.json"] = TELEMETRY_PUSH_PLUGIN_JSON
+        data["communications-runtime-adapter.py"] = COMMUNICATIONS_RUNTIME_ADAPTER_PY
     if aai_cli_config_toml is not None:
         data["aai-cli-config.toml"] = aai_cli_config_toml
     if aai_cli_setup_sh is not None:
@@ -305,12 +146,12 @@ def build_config_map(
     )
 
 
-def build_secret_slack(
+def build_secret_runtime(
     agent_id: UUID,
     org_id: UUID,
     namespace: str,
-    slack_bot_token: str,
-    slack_app_token: str,
+    *,
+    runtime_api_key: str,
     litellm_api_key: str,
     litellm_base_url: str,
 ) -> client.V1Secret:
@@ -321,79 +162,10 @@ def build_secret_slack(
             labels=_labels(agent_id, org_id),
         ),
         string_data={
-            "SLACK_BOT_TOKEN": slack_bot_token,
-            "SLACK_APP_TOKEN": slack_app_token,
-            "LITELLM_API_KEY": litellm_api_key,
-            "LITELLM_BASE_URL": litellm_base_url,
-            "AGENT_PLATFORM": "slack",
-        },
-    )
-
-
-def build_secret_telegram(
-    agent_id: UUID,
-    org_id: UUID,
-    namespace: str,
-    telegram_bot_token: str,
-    litellm_api_key: str,
-    litellm_base_url: str,
-) -> client.V1Secret:
-    return client.V1Secret(
-        metadata=client.V1ObjectMeta(
-            name=_resource_name(agent_id),
-            namespace=namespace,
-            labels=_labels(agent_id, org_id),
-        ),
-        string_data={
-            "TELEGRAM_BOT_TOKEN": telegram_bot_token,
-            "LITELLM_API_KEY": litellm_api_key,
-            "LITELLM_BASE_URL": litellm_base_url,
-            "AGENT_PLATFORM": "telegram",
-        },
-    )
-
-
-def build_secret_discord(
-    agent_id: UUID,
-    org_id: UUID,
-    namespace: str,
-    discord_bot_token: str,
-    litellm_api_key: str,
-    litellm_base_url: str,
-) -> client.V1Secret:
-    return client.V1Secret(
-        metadata=client.V1ObjectMeta(
-            name=_resource_name(agent_id), namespace=namespace, labels=_labels(agent_id, org_id)
-        ),
-        string_data={
-            "DISCORD_BOT_TOKEN": discord_bot_token,
-            "LITELLM_API_KEY": litellm_api_key,
-            "LITELLM_BASE_URL": litellm_base_url,
-            "AGENT_PLATFORM": "discord",
-        },
-    )
-
-
-def build_secret_teams(
-    agent_id: UUID,
-    org_id: UUID,
-    namespace: str,
-    msteams_app_id: str,
-    msteams_app_password: str,
-    msteams_tenant_id: str,
-    litellm_api_key: str,
-    litellm_base_url: str,
-) -> client.V1Secret:
-    return client.V1Secret(
-        metadata=client.V1ObjectMeta(
-            name=_resource_name(agent_id),
-            namespace=namespace,
-            labels=_labels(agent_id, org_id),
-        ),
-        string_data={
-            "MSTEAMS_APP_ID": msteams_app_id,
-            "MSTEAMS_APP_PASSWORD": msteams_app_password,
-            "MSTEAMS_TENANT_ID": msteams_tenant_id,
+            "OPENCLAW_GATEWAY_TOKEN": runtime_api_key,
+            "RUNTIME_API_KEY": runtime_api_key,
+            "RUNTIME_API_URL": "http://127.0.0.1:8080",
+            "RUNTIME_MODEL": "openclaw/default",
             "LITELLM_API_KEY": litellm_api_key,
             "LITELLM_BASE_URL": litellm_base_url,
         },

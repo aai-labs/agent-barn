@@ -37,6 +37,7 @@ import {
 import { useUpdateAgent } from "../hooks/use-update-agent";
 import type { Agent, AgentAssignedSkill } from "../schemas";
 import type { AgentConfigurationEditHandle } from "./agent-configuration-utils";
+import { CredentialErrorAlert } from "./credential-error-alert";
 import { IntegrationFields } from "./integration-fields";
 
 interface AgentSkillsTabProps {
@@ -93,16 +94,19 @@ export const AgentSkillsTab = forwardRef<
   const hasPendingChanges =
     pendingAddIds.length > 0 || pendingRemoveIds.length > 0 || pendingPinChanges.length > 0;
   const isValid = !hasIncompleteIntegration(newSecretDrafts);
+  const credentialError = updateAgent.error instanceof Error
+    ? updateAgent.error.message
+    : updateAgent.error
+      ? "Save failed"
+      : null;
 
   useEffect(() => {
     onDirtyChange?.(hasPendingChanges || newSecretDrafts.length > 0, isValid);
   }, [hasPendingChanges, isValid, newSecretDrafts.length, onDirtyChange]);
 
   function addSkill(skill: Skill) {
-    // Slack is never manually configured — the API derives it from the agent's
-    // gateway bot token, so it must never appear in the secrets payload.
     const needed = skill.requiredProviders.filter(
-      (p) => p !== "slack" && !existingSecretProviders.has(p),
+      (p) => !existingSecretProviders.has(p),
     );
     setPendingAddIds((prev) => [...prev, skill.id]);
     setNewSecretDrafts((prev) => {
@@ -187,14 +191,12 @@ export const AgentSkillsTab = forwardRef<
     const stillNeeded = new Set(survivingSkills.flatMap((s) => s.requiredProviders));
 
     // Secrets whose provider is no longer required by any remaining skill.
-    // Slack is excluded — the API removes/re-syncs it automatically based on
-    // skill membership and rejects an explicit removedSecretProviders entry.
     const orphanedProviders = [
       ...new Set(
         agent.skills
           .filter((s) => pendingRemoveIds.includes(s.id))
           .flatMap((s) => s.requiredProviders)
-          .filter((p) => p !== "slack" && !stillNeeded.has(p)),
+          .filter((p) => !stillNeeded.has(p)),
       ),
     ];
 
@@ -368,25 +370,6 @@ export const AgentSkillsTab = forwardRef<
         <div className="flex flex-col gap-3">
           <SectionLabel>Required credentials</SectionLabel>
           {newlyRequiredProviderIds.map((providerId) => {
-            if (providerId === "slack") {
-              return (
-                <div
-                  key={providerId}
-                  className="px-4 py-3 rounded-2xl text-[0.8125rem]"
-                  style={{
-                    border: "1px solid var(--line)",
-                    background: "var(--bg-soft)",
-                    color: "var(--ink-3)",
-                  }}
-                >
-                  <span className="font-medium" style={{ color: "var(--ink)" }}>
-                    Slack
-                  </span>{" "}
-                  — uses this agent&apos;s existing Slack bot token automatically. No credentials needed here.
-                </div>
-              );
-            }
-
             const providerSpec = getIntegrationProvider(providerId);
             const draft = newSecretDrafts.find((d) => d.provider === providerId);
             if (!draft) return null;
@@ -402,6 +385,12 @@ export const AgentSkillsTab = forwardRef<
                     color: "var(--ink-3)",
                   }}
                 >
+                  {credentialError && providerId === newlyRequiredProviderIds[0] && (
+                    <CredentialErrorAlert
+                      title="Could not save credentials"
+                      message={credentialError}
+                    />
+                  )}
                   <span className="font-medium" style={{ color: "var(--ink)" }}>
                     {SKILL_PROVIDER_LABELS[providerId] ?? providerId}
                   </span>{" "}
@@ -412,6 +401,9 @@ export const AgentSkillsTab = forwardRef<
 
             const isSharedEligible = !!SHARED_CREDENTIAL_PROVIDER_LABELS[providerId];
             const useShared = draft.sharedCredentialId !== undefined;
+            const showCredentialError = Boolean(
+              credentialError && providerId === newlyRequiredProviderIds[0],
+            );
 
             return (
               <div
@@ -434,11 +426,19 @@ export const AgentSkillsTab = forwardRef<
                   />
                 )}
 
+                {showCredentialError && useShared && credentialError && (
+                  <CredentialErrorAlert
+                    title="Could not save credentials"
+                    message={credentialError}
+                  />
+                )}
+
                 {!useShared && (
                   <IntegrationFields
                     provider={providerSpec}
                     draft={draft}
                     namePrefix="tab-"
+                    credentialError={showCredentialError ? credentialError : undefined}
                     onFieldChange={(key, value) => setField(providerId, key, value)}
                     onListChange={(key, values) => setRepos(providerId, key, values)}
                     onOAuthConnected={({ refreshToken, clientId, clientSecret, email, scopes }) => {
@@ -492,18 +492,16 @@ export const AgentSkillsTab = forwardRef<
             skill={skill}
             href={skillDetailHref(scope, agent.organizationId, skill.id)}
             isRunning={isRunning}
-            needsSlackPlatform={skill.requiredProviders.includes("slack") && agent.platform !== "slack"}
             onAdd={() => addSkill(skill)}
           />
         ))}
       </div>
 
-      {updateAgent.error && (
-        <span className="text-xs" style={{ color: "var(--err)" }}>
-          {updateAgent.error instanceof Error
-            ? updateAgent.error.message
-            : "Save failed"}
-        </span>
+      {credentialError && newlyRequiredProviderIds.length === 0 && (
+        <CredentialErrorAlert
+          title="Could not save changes"
+          message={credentialError}
+        />
       )}
     </div>
   );
@@ -620,19 +618,17 @@ function AvailableSkillRow({
   skill,
   href,
   isRunning,
-  needsSlackPlatform,
   onAdd,
 }: {
   skill: Skill;
   href: string;
   isRunning: boolean;
-  needsSlackPlatform: boolean;
   onAdd: () => void;
 }) {
   return (
     <div
       className="flex items-center gap-2 px-3.5 py-2.5 rounded-2xl"
-      style={{ border: "1px solid var(--line)", opacity: needsSlackPlatform ? 0.5 : 1 }}
+      style={{ border: "1px solid var(--line)" }}
     >
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
@@ -642,24 +638,18 @@ function AvailableSkillRow({
           <SkillScopeBadge scope={skill.scope} />
           <SkillSourceBadge source={skill.source} />
         </div>
-        {needsSlackPlatform ? (
+        {skill.requiredProviders.length > 0 && (
           <span className="text-[0.75rem]" style={{ color: "var(--ink-4)" }}>
-            Requires Slack platform
+            Requires:{" "}
+            {skill.requiredProviders
+              .map((p) => SKILL_PROVIDER_LABELS[p] ?? p)
+              .join(", ")}
           </span>
-        ) : (
-          skill.requiredProviders.length > 0 && (
-            <span className="text-[0.75rem]" style={{ color: "var(--ink-4)" }}>
-              Requires:{" "}
-              {skill.requiredProviders
-                .map((p) => SKILL_PROVIDER_LABELS[p] ?? p)
-                .join(", ")}
-            </span>
-          )
         )}
       </div>
       <button
         className="af-btn af-btn-sm af-btn-ghost"
-        disabled={isRunning || needsSlackPlatform}
+        disabled={isRunning}
         onClick={onAdd}
       >
         Add

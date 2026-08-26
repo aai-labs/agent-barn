@@ -1,3 +1,4 @@
+import json
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -154,6 +155,104 @@ def test_list_users_can_include_only_bots_or_only_deleted():
     assert [u["id"] for u in with_deleted] == ["U1", "U2"]
 
 
+# --- name resolution --------------------------------------------------------
+
+
+_NAME_RESOLUTION_USERS_PAGE = {
+    "ok": True,
+    "members": [
+        {"id": "U1", "name": "alice", "real_name": "Alice Smith", "profile": {"display_name": "Ally"}},
+        {"id": "U2", "name": "bob", "real_name": "Bob Jones", "profile": {}},
+        {"id": "U3", "name": "carol", "profile": {}},
+    ],
+    "response_metadata": {"next_cursor": ""},
+}
+
+_NAME_RESOLUTION_CHANNELS_PAGE = {
+    "ok": True,
+    "channels": [{"id": "C1", "name": "ops-alerts", "is_private": False}],
+    "response_metadata": {"next_cursor": ""},
+}
+
+_DM_CHANNELS_PAGE = {
+    "ok": True,
+    "channels": [{"id": "D1", "user": "U1"}],
+    "response_metadata": {"next_cursor": ""},
+}
+
+
+def test_get_user_display_name_prefers_display_name_over_real_name_and_username():
+    with patch("httpx.request", _mock_httpx([_resp(_NAME_RESOLUTION_USERS_PAGE)])):
+        c = SlackClient("xoxb-token")
+        assert c.get_user_display_name("U1") == "Ally"
+        assert c.get_user_display_name("U2") == "Bob Jones"
+        assert c.get_user_display_name("U3") == "carol"
+
+
+def test_get_user_display_name_falls_back_to_id_when_user_has_no_name_fields():
+    page = {
+        "ok": True,
+        "members": [{"id": "U9", "name": "", "profile": {}}],
+        "response_metadata": {"next_cursor": ""},
+    }
+    with patch("httpx.request", _mock_httpx([_resp(page)])):
+        assert SlackClient("xoxb-token").get_user_display_name("U9") == "U9"
+
+
+def test_get_user_display_name_returns_none_when_user_not_found():
+    with patch("httpx.request", _mock_httpx([_resp(_NAME_RESOLUTION_USERS_PAGE)])):
+        assert SlackClient("xoxb-token").get_user_display_name("unknown") is None
+
+
+def test_get_user_display_name_returns_none_for_empty_id():
+    with patch("httpx.request", _mock_httpx([])):
+        assert SlackClient("xoxb-token").get_user_display_name("") is None
+
+
+def test_get_channel_name_resolves_from_cached_directory():
+    with patch("httpx.request", _mock_httpx([_resp(_NAME_RESOLUTION_CHANNELS_PAGE)])):
+        assert SlackClient("xoxb-token").get_channel_name("C1") == "ops-alerts"
+
+
+def test_get_channel_name_returns_none_when_not_found():
+    with patch("httpx.request", _mock_httpx([_resp(_NAME_RESOLUTION_CHANNELS_PAGE)])):
+        assert SlackClient("xoxb-token").get_channel_name("unknown") is None
+
+
+def test_get_dm_participant_name_resolves_via_dm_channel_then_user():
+    responses = [_resp(_DM_CHANNELS_PAGE), _resp(_NAME_RESOLUTION_USERS_PAGE)]
+    with patch("httpx.request", _mock_httpx(responses)):
+        assert SlackClient("xoxb-token").get_dm_participant_name("D1") == "Ally"
+
+
+def test_get_dm_participant_name_returns_none_when_dm_channel_not_found():
+    with patch("httpx.request", _mock_httpx([_resp(_DM_CHANNELS_PAGE)])):
+        assert SlackClient("xoxb-token").get_dm_participant_name("unknown") is None
+
+
+def test_name_resolution_cache_does_not_cross_contaminate_different_tokens():
+    """Two SlackClients authenticated with different bot tokens must never
+    share a cached directory entry, even when resolving the same user ID —
+    each token belongs to a different Slack Connection/workspace.
+    """
+    workspace_one_page = {
+        "ok": True,
+        "members": [{"id": "U1", "name": "alice", "profile": {"display_name": "Workspace One Alice"}}],
+        "response_metadata": {"next_cursor": ""},
+    }
+    workspace_two_page = {
+        "ok": True,
+        "members": [{"id": "U1", "name": "alice", "profile": {"display_name": "Workspace Two Alice"}}],
+        "response_metadata": {"next_cursor": ""},
+    }
+    with patch("httpx.request", _mock_httpx([_resp(workspace_one_page), _resp(workspace_two_page)])):
+        first = SlackClient("xoxb-token-one").get_user_display_name("U1")
+        second = SlackClient("xoxb-token-two").get_user_display_name("U1")
+
+    assert first == "Workspace One Alice"
+    assert second == "Workspace Two Alice"
+
+
 # --- error semantics -------------------------------------------------------
 
 
@@ -236,13 +335,14 @@ def test_get_bot_info_returns_fields_on_success():
     payload = {
         "ok": True,
         "app_id": "ATEST123",
+        "user_id": "UBOT123",
         "user": "my-bot",
         "team": "My Workspace",
     }
     with patch("httpx.request", _mock_httpx([_resp(payload)])):
         info = SlackClient("xoxb-token").get_bot_info()
 
-    assert info == {"app_id": "ATEST123", "bot_name": "my-bot", "team": "My Workspace"}
+    assert info == {"app_id": "ATEST123", "user_id": "UBOT123", "bot_name": "my-bot", "team": "My Workspace"}
 
 
 def test_get_bot_info_returns_empty_dict_on_non_ok():
@@ -258,3 +358,31 @@ def test_get_bot_info_returns_empty_dict_on_network_error():
         info = SlackClient("xoxb-token").get_bot_info()
 
     assert info == {}
+
+
+def test_processing_feedback_calls_are_idempotent_for_reactions_and_status():
+    responses = [
+        _resp({"ok": True}),
+        _resp({"ok": False, "error": "already_reacted"}),
+        _resp({"ok": False, "error": "no_reaction"}),
+        _resp({"ok": True}),
+        _resp({"ok": True}),
+    ]
+    mock = _mock_httpx(responses)
+    with patch("httpx.request", mock):
+        client = SlackClient("xoxb-token")
+        client.add_reaction("C123", "1724264405.531769", "eyes")
+        client.add_reaction("C123", "1724264405.531769", "eyes")
+        client.remove_reaction("C123", "1724264405.531769", "eyes")
+        client.set_thread_status("C123", "1724264405.531769", "is thinking...")
+        client.clear_thread_status("C123", "1724264405.531769")
+
+    assert mock.call_count == 5
+    status_request = mock.call_args_list[-2]
+    clear_request = mock.call_args_list[-1]
+    assert json.loads(status_request.kwargs["content"]) == {
+        "channel_id": "C123",
+        "thread_ts": "1724264405.531769",
+        "status": "is thinking...",
+    }
+    assert json.loads(clear_request.kwargs["content"])["status"] == ""

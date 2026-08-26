@@ -1,5 +1,5 @@
 # Local dev stack only — prod runs via Helm (see helm/, helmfile.yaml.gotmpl).
-# api/worker/ui run with source bind-mounted and dev servers in watch mode, so
+# api/worker/communications/ui run with source bind-mounted and dev servers in watch mode, so
 # ./run.sh (which drives this file) gives you the same hot reload as
 # `make dev-api`/`dev-ui`/`dev-worker`, just fully containerized.
 
@@ -66,6 +66,9 @@ services:
       - .env
     environment:
       <<: *api-env
+      # Agent pods run in k3d, outside this Compose network, so they reach the
+      # Communications gateway through the same host hop as Ingest and LiteLLM.
+      COMMUNICATIONS_BASE_URL: ${COMMUNICATIONS_BASE_URL:-http://host.docker.internal:${COMMUNICATIONS_PORT:-8002}/communications/v1}
       # The rest of the agent config (AGENT_*, LITELLM_SECRET_NAME, OPENCLAW_IMAGE,
       # ...) arrives via env_file above. Only the values that must differ inside
       # the container are overridden here.
@@ -126,6 +129,25 @@ services:
       <<: *api-env
     volumes:
       - ./api:/app/api
+
+  communications:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    container_name: aai_communications
+    restart: unless-stopped
+    command: ["uvicorn", "api.communications_main:app", "--host", "0.0.0.0", "--port", "8002", "--reload"]
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      <<: *api-env
+    volumes:
+      - ./api:/app/api
+    ports:
+      - "${COMMUNICATIONS_PORT:-8002}:8002"
 
   ui:
     build:
