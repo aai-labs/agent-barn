@@ -53,6 +53,7 @@ def _insert_connection(
     fingerprint_material: str,
     external_identity: str | None,
     encryption_key: str,
+    credential_scope_key: str = "global",
 ) -> uuid.UUID:
     connection_id = uuid.uuid4()
     bind.execute(
@@ -67,7 +68,7 @@ def _insert_connection(
                 :id, now(), now(), :organization_id, :agent_id,
                 :platform_key, :display_name, true, 1, CAST(:settings AS json),
                 :credentials_encrypted, :driver_key_encrypted, :external_identity, :credential_fingerprint,
-                'global', 'PENDING', 1
+                :credential_scope_key, 'PENDING', 1
             )
             """
         ),
@@ -82,6 +83,7 @@ def _insert_connection(
             "driver_key_encrypted": encrypt_token(secrets.token_urlsafe(32), encryption_key),
             "external_identity": external_identity,
             "credential_fingerprint": _fingerprint(fingerprint_material),
+            "credential_scope_key": credential_scope_key,
         },
     )
     return connection_id
@@ -105,6 +107,18 @@ def _backfill_connections() -> dict[uuid.UUID, uuid.UUID]:
         raise RuntimeError("AGENT_TOKEN_ENCRYPTION_KEY is required to migrate Communication Connections")
 
     connection_by_agent: dict[uuid.UUID, uuid.UUID] = {}
+    seen_credentials: set[tuple[str, str]] = set()
+
+    def credential_scope_key(platform_key: str, fingerprint_material: str, agent_id: uuid.UUID) -> str:
+        credential_key = (platform_key, _fingerprint(fingerprint_material))
+        if credential_key not in seen_credentials:
+            seen_credentials.add(credential_key)
+            return "global"
+        # Legacy platform configs permitted the same provider credential on
+        # multiple agents. Keep those connections distinct while retaining the
+        # global uniqueness invariant for newly-created connections.
+        return f"legacy-agent:{agent_id}"
+
     slack_rows = bind.execute(
         sa.text(
             """
@@ -137,6 +151,7 @@ def _backfill_connections() -> dict[uuid.UUID, uuid.UUID]:
             fingerprint_material=bot_token,
             external_identity=None,
             encryption_key=encryption_key,
+            credential_scope_key=credential_scope_key("slack", bot_token, row["agent_id"]),
         )
 
     telegram_rows = bind.execute(
@@ -169,6 +184,7 @@ def _backfill_connections() -> dict[uuid.UUID, uuid.UUID]:
             fingerprint_material=bot_token,
             external_identity=f"@{row['bot_username']}" if row["bot_username"] else None,
             encryption_key=encryption_key,
+            credential_scope_key=credential_scope_key("telegram", bot_token, row["agent_id"]),
         )
 
     discord_rows = bind.execute(
@@ -206,6 +222,7 @@ def _backfill_connections() -> dict[uuid.UUID, uuid.UUID]:
             fingerprint_material=bot_token,
             external_identity=None,
             encryption_key=encryption_key,
+            credential_scope_key=credential_scope_key("discord", bot_token, row["agent_id"]),
         )
 
     return connection_by_agent
