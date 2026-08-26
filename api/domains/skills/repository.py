@@ -228,7 +228,7 @@ class SkillRepository:
                     func.max(col(SkillVersion.version)).label("latest_version"),
                 )
                 .where(col(SkillVersion.skill_id).in_(skill_ids))
-                .group_by(SkillVersion.skill_id)
+                .group_by(col(SkillVersion.skill_id))
                 .subquery()
             )
             query = select(SkillVersion).join(
@@ -251,7 +251,7 @@ class SkillRepository:
             query = (
                 select(SkillVersion.skill_id, func.max(col(SkillVersion.version)))
                 .where(col(SkillVersion.skill_id).in_(list(source_baselines)))
-                .group_by(SkillVersion.skill_id)
+                .group_by(col(SkillVersion.skill_id))
             )
             latest_source_versions = dict(session.exec(query).all())
         return {
