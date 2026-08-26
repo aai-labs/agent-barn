@@ -53,6 +53,12 @@ Processing feedback is a best-effort Platform Plugin capability, separate from d
 
 The gateway supervisor isolates provider ingress per enabled Connection and coordinates replicas with database leases. Setup and session failures set Connection health to `ERROR` and retry without altering Agent lifecycle; unsupported supervised ingress can remain `DEGRADED`. Webhook Connections are marked connected after configuration is loaded, while authenticated provider requests remain independently validated.
 
+## Hermes scheduled-run context
+
+Hermes scheduled runs are isolated sessions: they do not inherit Slack thread or interactive-session history unless a job explicitly supplies continuity context. They do load the agent's persistent `MEMORY.md` and `USER.md` stores into the system prompt, using the same enabled memory configuration as interactive runs. This contract requires Hermes `v2026.8.19` or newer and is verified inside the pinned base image because an API-side builder test alone cannot prove runtime behavior.
+
+Cron delivery is automatic. When a scheduled run has nothing actionable to deliver, its final response must be exactly `[SILENT]`; ordinary prose such as `Nothing to flag today.` is a deliverable message, not a private acknowledgement.
+
 ## Telemetry and costs
 
 Agent runtimes report messages and tool-call state to the separate Ingest API using the per-start ingest key. Ingest authentication currently remains valid after stop because status is not checked and the stored key is not cleared. Costs follow a separate path: the API queries LiteLLM and attributes spend through each agent's LiteLLM key identity.

@@ -87,7 +87,7 @@ from api.domains.agents.override_repository import (
 from api.domains.agents.repository import AgentRepository
 from api.domains.agents.runtime_policy import build_chat_commands_policy_md, build_role_scope_policy_md
 from api.domains.auth.models import CurrentUserContext
-from api.domains.events import EventDeliveryDispatcher, resolve_actor_identity
+from api.domains.events import ActorIdentity, ActorIdentityType, EventDeliveryDispatcher, resolve_actor_identity
 from api.domains.events.catalog import (
     AGENT_SECRET_ADDED,
     AGENT_SECRET_UPDATED,
@@ -1654,12 +1654,17 @@ class AgentService:
         return self._get_agent_read(update_result.agent, context)
 
     def start_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
-        org_id = self._org_id(context)
+        agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_LIFECYCLE_MANAGE)
+        started = self._start_agent_unchecked(agent, resolve_actor_identity(context, agent.organization_id))
+        return self._get_agent_read(started, context)
+
+    def _start_agent_unchecked(self, agent: Agent, actor: ActorIdentity) -> Agent:
+        """Start a known Agent after its caller has established authority."""
+        agent_id = agent.id
+        org_id = agent.organization_id
         # Stamped as Service labels for monitoring; resolved here (not in the
         # route) so every start path labels agents consistently.
         org_name = self.organization_lookup.get_name(org_id)
-        agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_LIFECYCLE_MANAGE)
-
         if agent.status == AgentStatus.RUNNING:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -1972,12 +1977,12 @@ class AgentService:
         result = self.repository.save_with_lifecycle_event(
             agent,
             event_name=AGENT_STARTED,
-            actor=resolve_actor_identity(context, org_id),
+            actor=actor,
             previous_status=previous_status,
             new_status=AgentStatus.RUNNING.value,
         )
         self.event_delivery_dispatcher.enqueue_immediate(result.delivery_ids)
-        return self._get_agent_read(result.agent, context)
+        return result.agent
 
     def get_agent_logs(
         self,
@@ -2090,11 +2095,16 @@ class AgentService:
 
     def stop_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_LIFECYCLE_MANAGE)
+        stopped = self._stop_agent_unchecked(agent, resolve_actor_identity(context, agent.organization_id))
+        return self._get_agent_read(stopped, context)
+
+    def _stop_agent_unchecked(self, agent: Agent, actor: ActorIdentity) -> Agent:
+        """Stop a known Agent after its caller has established authority."""
 
         if agent.status != AgentStatus.RUNNING:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=f"Agent {agent_id} is not running",
+                detail=f"Agent {agent.id} is not running",
             )
 
         previous_status = agent.status.value
@@ -2109,12 +2119,39 @@ class AgentService:
         result = self.repository.save_with_lifecycle_event(
             agent,
             event_name=AGENT_STOPPED,
-            actor=resolve_actor_identity(context, agent.organization_id),
+            actor=actor,
             previous_status=previous_status,
             new_status=AgentStatus.STOPPED.value,
         )
         self.event_delivery_dispatcher.enqueue_immediate(result.delivery_ids)
-        return self._get_agent_read(result.agent, context)
+        return result.agent
+
+    def rebuild_running_agents_for_maintenance(
+        self, *, apply: bool
+    ) -> tuple[list[Agent], list[tuple[Agent, Exception]]]:
+        """Sequentially rebuild running Agent workloads for an operator maintenance task.
+
+        This is intentionally an operator-only seam used by the cutover CLI; no HTTP
+        route exposes this cross-Organization lifecycle authority.
+        """
+        agents = self.repository.find_all_running()
+        if not apply:
+            return agents, []
+        actor = ActorIdentity(type=ActorIdentityType.SYSTEM, id="agent-maintenance")
+        restarted: list[Agent] = []
+        failures: list[tuple[Agent, Exception]] = []
+        for agent in agents:
+            try:
+                stopped = self._stop_agent_unchecked(agent, actor)
+                started = self._start_agent_unchecked(stopped, actor)
+                if started.status != AgentStatus.RUNNING:
+                    failures.append((agent, RuntimeError(f"restart completed with status {started.status.value}")))
+                    continue
+                restarted.append(started)
+            except Exception as exc:
+                logger.exception("Maintenance rebuild failed for agent %s", agent.id)
+                failures.append((agent, exc))
+        return restarted, failures
 
     def count_active_agents(self, organization_id: UUID) -> int:
         """Number of non-deleted agents in an org. Used by other domains (e.g. org

@@ -22,6 +22,13 @@ def test_gateway_config_is_headless_and_keeps_telemetry() -> None:
     assert "discord" not in config
 
 
+def test_gateway_config_enables_persistent_memory_for_scheduled_runs() -> None:
+    config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000")
+
+    assert config["memory"]["memory_enabled"] is True
+    assert config["memory"]["user_profile_enabled"] is True
+
+
 def test_gateway_config_maps_approval_mode_onto_approvals_policy() -> None:
     """Hermes is the only runtime that maps approval_mode onto a runtime policy
     (AF-272): manual/auto/off must keep mapping to manual/smart/off.
