@@ -21,7 +21,7 @@ RUN --mount=type=secret,id=gh_token \
       "https://x-access-token:$(cat /run/secrets/gh_token)@github.com/aai-labs/aai-cli.git" repo && \
     cargo install --path repo --root /out --locked
 
-FROM nousresearch/hermes-agent:v2026.5.29.2
+FROM nousresearch/hermes-agent:v2026.8.19
 ARG APT_MIRROR
 
 COPY --from=rust-build /out/bin/ /usr/local/bin/
@@ -50,6 +50,11 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         ca-certificates \
     && ln -sf /usr/bin/fdfind /usr/local/bin/fd \
     && rm -rf /var/lib/apt/lists/*
+
+# Upstream ships a newer libsqlite3 in /usr/local/lib than Debian's sqlite3
+# executable was compiled against. Keep the upstream library available to
+# Hermes, but make the CLI load Debian's matching library explicitly.
+COPY --chmod=0755 sqlite3-wrapper /usr/local/bin/sqlite3
 
 RUN uv pip install --python /opt/hermes/.venv playwright && \
     /opt/hermes/.venv/bin/python -m playwright install chromium --with-deps && \

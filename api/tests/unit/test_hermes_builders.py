@@ -149,6 +149,13 @@ def test_build_hermes_config_sets_model_and_base_url():
     assert_that(cfg["model"]["api_mode"], equal_to("chat_completions"))
 
 
+def test_build_hermes_config_enables_persistent_memory_for_scheduled_runs():
+    cfg = build_hermes_config("litellm/qwen3", "http://litellm:4000")
+
+    assert_that(cfg["memory"]["memory_enabled"], equal_to(True))
+    assert_that(cfg["memory"]["user_profile_enabled"], equal_to(True))
+
+
 def test_build_hermes_config_unauthorized_dm_behavior_is_ignore():
     cfg = build_hermes_config("litellm/qwen3", "http://litellm:4000")
     assert_that(cfg["slack"]["unauthorized_dm_behavior"], equal_to("ignore"))
